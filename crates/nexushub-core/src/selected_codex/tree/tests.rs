@@ -276,3 +276,39 @@ fn archive_and_restore_still_require_a_matching_preview() {
     let p = super::super::preview_archive(&f.paths, ROOT, false).unwrap();
     super::super::execute_archive(&f.paths, ROOT, false, &p.fingerprint).unwrap();
 }
+
+#[test]
+fn estimate_bytes_batch_matches_single_preview_across_rollouts_locks_snapshots_and_visualizations()
+{
+    let f = Fixture::new();
+    let locks_dir = f.paths.home.join("thread-writer-locks");
+    let snapshots_dir = f.paths.home.join("shell_snapshots");
+    let viz_dir = f.paths.home.join("visualizations").join(ROOT);
+    fs::create_dir_all(&locks_dir).unwrap();
+    fs::create_dir_all(&snapshots_dir).unwrap();
+    fs::create_dir_all(&viz_dir).unwrap();
+    fs::write(locks_dir.join(format!("{ROOT}.lock")), b"lock-bytes").unwrap();
+    fs::write(snapshots_dir.join(format!("{ROOT}.sh")), b"snapshot-bytes").unwrap();
+    fs::write(viz_dir.join("chart.json"), b"{\"chart\":true}").unwrap();
+
+    let single_root = preview(&f.paths, ROOT, false).unwrap();
+    let single_child = preview(&f.paths, CHILD, false).unwrap();
+    let single_other = preview(&f.paths, OTHER, false).unwrap();
+
+    let batch = estimate_bytes_batch(
+        &f.paths,
+        &[
+            ROOT.into(),
+            CHILD.into(),
+            OTHER.into(),
+            "../invalid-id".into(),
+            "00000000-0000-4000-8000-999999999999".into(),
+        ],
+    );
+
+    assert_eq!(batch.get(ROOT).copied(), Some(single_root.selected.bytes));
+    assert_eq!(batch.get(CHILD).copied(), Some(single_child.selected.bytes));
+    assert_eq!(batch.get(OTHER).copied(), Some(single_other.selected.bytes));
+    assert!(!batch.contains_key("../invalid-id"));
+    assert!(!batch.contains_key("00000000-0000-4000-8000-999999999999"));
+}

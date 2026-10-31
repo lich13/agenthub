@@ -2249,4 +2249,108 @@ mod tests {
 
         fs::remove_dir_all(home).unwrap();
     }
+
+    #[test]
+    fn dsh_fold_cache_hits_and_invalidates_on_file_change_and_eviction() {
+        let home = std::env::temp_dir().join(format!("nexushub-dsh-fold-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions").join("proj-cache");
+        let id = "11111111-2222-4333-8444-555555555555";
+        fs::create_dir_all(proj.join(id)).unwrap();
+        let log_path = proj.join(id).join("session.v4.jsonl.zstd");
+        write_zstd_frames(
+            &log_path,
+            &[
+                json!({"type":"session","version":4,"id":id,"createdAt":10,"cwd":"/workspace/cache"}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":12,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"初始标题"}]}}),
+                json!({"type":"assistant/message","seq":2,"time":13,"data":{"turn":1,"message":{"content":[{"type":"text","text":"第一次回复"}]}}}),
+                json!({"type":"turn/end","seq":3,"time":14,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+
+        let paths = DshPaths { home: home.clone() };
+        let first = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].last_message.as_deref(), Some("第一次回复"));
+        assert!(DSH_FOLD_CACHE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|m| m.contains_key(&log_path)));
+
+        // Second call hits cache and returns identical summary
+        let second = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(second[0].last_message.as_deref(), Some("第一次回复"));
+
+        // Modifying the file changes size/mtime and invalidates the cached fold entry
+        write_zstd_frames(
+            &log_path,
+            &[
+                json!({"type":"session","version":4,"id":id,"createdAt":10,"cwd":"/workspace/cache"}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":12,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"初始标题"}]}}),
+                json!({"type":"assistant/message","seq":2,"time":13,"data":{"turn":1,"message":{"content":[{"type":"text","text":"更新后的长回复内容"}]}}}),
+                json!({"type":"turn/end","seq":3,"time":15,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        let third = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(third[0].last_message.as_deref(), Some("更新后的长回复内容"));
+
+        evict_idle_fold_cache(std::time::Duration::ZERO);
+        assert!(DSH_FOLD_CACHE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|m| m.is_empty()));
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn load_all_events_settles_multiple_open_tools_across_turns_in_linear_pass() {
+        let home = std::env::temp_dir().join(format!("nexushub-dsh-tools-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions").join("proj-tools");
+        let id = "22222222-3333-4444-8555-666666666666";
+        fs::create_dir_all(proj.join(id)).unwrap();
+        let log_path = proj.join(id).join("session.v4.jsonl.zstd");
+        write_zstd_frames(
+            &log_path,
+            &[
+                json!({"type":"session","version":4,"id":id,"createdAt":10,"cwd":"/workspace/tools"}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"tool/call","seq":1,"time":12,"data":{"callId":"call-a","name":"bash","arguments":{"cmd":"ls"}}}),
+                json!({"type":"tool/call","seq":2,"time":13,"data":{"callId":"call-b","name":"read","arguments":{"path":"a.txt"}}}),
+                json!({"type":"tool/result","seq":3,"time":14,"data":{"callId":"call-a","name":"bash","message":{"content":[{"type":"text","text":"ok"}]}}}),
+                json!({"type":"turn/end","seq":4,"time":15,"data":{"turn":1,"reason":{"kind":"aborted"}}}),
+                json!({"type":"turn/start","seq":5,"time":16,"data":{"turn":2}}),
+                json!({"type":"tool/call","seq":6,"time":17,"data":{"callId":"call-c","name":"bash","arguments":{"cmd":"pwd"}}}),
+                json!({"type":"turn/end","seq":7,"time":18,"data":{"turn":2,"reason":{"kind":"completed"}}}),
+            ],
+        );
+
+        let paths = DshPaths { home: home.clone() };
+        let detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: id.into(),
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        let tools: Vec<_> = detail
+            .events
+            .iter()
+            .filter(|e| e.kind == "tool_call")
+            .collect();
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0].call_id.as_deref(), Some("call-a"));
+        assert_eq!(tools[0].status.as_deref(), Some("completed"));
+        assert_eq!(tools[1].call_id.as_deref(), Some("call-b"));
+        assert_eq!(tools[1].status.as_deref(), Some("failed"));
+        assert_eq!(tools[2].call_id.as_deref(), Some("call-c"));
+        assert_eq!(tools[2].status.as_deref(), Some("completed"));
+
+        fs::remove_dir_all(home).unwrap();
+    }
 }

@@ -4300,6 +4300,12 @@ last_error = "old nexushub request hook"
         assert_eq!(chunks.concat(), value);
     }
 
+    #[test]
+    fn antigravity_stop_allow_output_returns_decision_allow_json() {
+        let out = antigravity_stop_allow_output();
+        assert_eq!(out, json!({"decision": "allow"}));
+    }
+
     pub(super) struct TestHttpServer {
         address: std::net::SocketAddr,
         request: std::sync::mpsc::Receiver<String>,

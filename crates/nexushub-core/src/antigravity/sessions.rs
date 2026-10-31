@@ -3515,4 +3515,30 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn endpoint_cache_skips_negative_cache_on_transient_rpc_error_and_evicts_on_idle() {
+        evict_idle_endpoint_cache(std::time::Duration::ZERO);
+        assert_eq!(get_cached_live_endpoint(), None);
+
+        let sample = DiscoveredAntigravityEndpoint {
+            pid: 99_999,
+            ports: vec![51_234],
+            token: "fixture-csrf".into(),
+        };
+        record_verified_live_endpoint(99_999, 51_234, "fixture-csrf".into());
+        assert_eq!(get_cached_live_endpoint(), Some(Ok(sample)));
+
+        // Transient RPC failure while candidate processes exist clears positive cache without negative-caching Err(())
+        record_endpoint_failure(true);
+        assert_eq!(get_cached_live_endpoint(), None);
+
+        // Failure when no candidate process exists records a 5s negative cache (Some(Err(())))
+        record_endpoint_failure(false);
+        assert_eq!(get_cached_live_endpoint(), Some(Err(())));
+
+        // Idle eviction clears the cache
+        evict_idle_endpoint_cache(std::time::Duration::ZERO);
+        assert_eq!(get_cached_live_endpoint(), None);
+    }
 }

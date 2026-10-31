@@ -1597,4 +1597,37 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ))
     }
+
+    #[test]
+    fn execute_delete_hidden_rejects_unlisted_or_visible_ids_and_reports_partial_failure() {
+        let root = hidden_cleanup_fixture("ok-delete-hidden-bounds");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let valid_subagent = selection(&plan, "hidden-subagent");
+        let valid_internal = selection(&plan, "hidden-internal");
+
+        // First candidate succeeds; second is a visible main thread (rejected by O(K) target set check) and stops early before third
+        let mixed = vec![
+            valid_subagent.clone(),
+            HiddenThreadSelection {
+                id: "main-visible".to_string(),
+                fingerprint: valid_subagent.fingerprint.clone(),
+            },
+            valid_internal,
+        ];
+
+        let result = execute_delete_hidden(&paths, &mixed).unwrap();
+        assert_eq!(result.deleted_threads, 1);
+        assert_eq!(result.failed_threads, 1);
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[0].id, "hidden-subagent");
+        assert_eq!(result.items[0].status, "deleted");
+        assert_eq!(result.items[1].id, "main-visible");
+        assert_eq!(result.items[1].status, "failed");
+        assert_hidden_result_preserved_visible(&result);
+        assert!(!root.join("sessions/rollout-hidden-subagent.jsonl").exists());
+        assert!(root.join("sessions/rollout-hidden-internal.jsonl").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

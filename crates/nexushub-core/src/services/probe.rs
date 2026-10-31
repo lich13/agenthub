@@ -1724,4 +1724,114 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn live_provider_sessions_cache_is_keyed_by_sandbox_root_and_codex_home_and_evicts_on_idle() {
+        super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
+        let root_a = std::env::temp_dir().join(format!(
+            "nexushub-probe-cache-a-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let root_b = std::env::temp_dir().join(format!(
+            "nexushub-probe-cache-b-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        // Seed Grok reply_needed in root_a only
+        let grok_id_a = "aaaaaaaa-2222-4333-8444-555555555555";
+        let grok_dir_a = root_a
+            .join(".grok/sessions/workspace-a")
+            .join(grok_id_a);
+        std::fs::create_dir_all(&grok_dir_a).unwrap();
+        std::fs::write(
+            grok_dir_a.join("summary.json"),
+            serde_json::json!({
+                "info": {
+                    "id": grok_id_a,
+                    "title": "Grok A",
+                    "cwd": "/workspace/a",
+                    "updatedAt": now_rfc3339
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_dir_a.join("events.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "type": "turn_started",
+                    "ts": now_ms - 500,
+                    "session_id": grok_id_a,
+                    "session_relationship": "primary",
+                    "turn_number": 1
+                }),
+                serde_json::json!({
+                    "type": "turn_ended",
+                    "ts": now_ms,
+                    "outcome": "completed"
+                })
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_dir_a.join("updates.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "timestamp": now_ms - 200,
+                    "params": {
+                        "sessionId": grok_id_a,
+                        "_meta": { "promptId": "turn-1", "chunkId": "chunk-1" },
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "type": "text", "text": "请选择需要部署的目标环境：测试环境还是预发环境？" }
+                        }
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": now_ms,
+                    "params": {
+                        "sessionId": grok_id_a,
+                        "update": {
+                            "sessionUpdate": "turn_completed",
+                            "prompt_id": "turn-1",
+                            "stop_reason": "end_turn"
+                        }
+                    }
+                })
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root_b.join(".codex")).unwrap();
+
+        let mut cfg_a = Config::default();
+        cfg_a.codex.home = root_a.join(".codex");
+        cfg_a.paths.db_path = root_a.join("panel.sqlite");
+
+        let mut cfg_b = Config::default();
+        cfg_b.codex.home = root_b.join(".codex");
+        cfg_b.paths.db_path = root_b.join("panel.sqlite");
+
+        let sessions_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[]);
+        assert!(sessions_a.iter().any(|s| s.id == grok_id_a));
+
+        // Querying with cfg_b must NOT hit cfg_a's cached sessions
+        let sessions_b = super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[]);
+        assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
+
+        crate::evict_idle_detail_caches(std::time::Duration::ZERO);
+        assert!(super::LIVE_PROVIDER_SESSIONS_CACHE
+            .lock()
+            .unwrap()
+            .is_none());
+
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
 }
