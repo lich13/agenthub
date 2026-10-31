@@ -207,16 +207,12 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
         }
     }
     for id in ids {
-        result
-            .files_by_id
-            .entry(id.clone())
-            .or_default()
-            .insert(
-                paths
-                    .home
-                    .join("thread-writer-locks")
-                    .join(format!("{id}.lock")),
-            );
+        result.files_by_id.entry(id.clone()).or_default().insert(
+            paths
+                .home
+                .join("thread-writer-locks")
+                .join(format!("{id}.lock")),
+        );
     }
     let snapshots = paths.home.join("shell_snapshots");
     match fs::read_dir(&snapshots) {
@@ -259,11 +255,7 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
         while let Some(entry) = entries.next() {
             match entry {
                 Ok(entry) => {
-                    if let Some(id) = entry
-                        .file_name()
-                        .to_str()
-                        .filter(|id| ids.contains(*id))
-                    {
+                    if let Some(id) = entry.file_name().to_str().filter(|id| ids.contains(*id)) {
                         let id_owned = id.to_owned();
                         result
                             .files_by_id

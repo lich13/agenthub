@@ -1743,9 +1743,7 @@ mod tests {
 
         // Seed Grok reply_needed in root_a only
         let grok_id_a = "aaaaaaaa-2222-4333-8444-555555555555";
-        let grok_dir_a = root_a
-            .join(".grok/sessions/workspace-a")
-            .join(grok_id_a);
+        let grok_dir_a = root_a.join(".grok/sessions/workspace-a").join(grok_id_a);
         std::fs::create_dir_all(&grok_dir_a).unwrap();
         std::fs::write(
             grok_dir_a.join("summary.json"),

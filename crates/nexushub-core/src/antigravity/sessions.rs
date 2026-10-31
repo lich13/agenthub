@@ -374,8 +374,7 @@ fn read_chunked_body<R: BufRead>(reader: &mut R, limit: usize) -> Result<Vec<u8>
 
 type CachedEndpointSlot = (Option<DiscoveredAntigravityEndpoint>, std::time::Instant);
 
-static CACHED_LIVE_RPC: std::sync::Mutex<Option<CachedEndpointSlot>> =
-    std::sync::Mutex::new(None);
+static CACHED_LIVE_RPC: std::sync::Mutex<Option<CachedEndpointSlot>> = std::sync::Mutex::new(None);
 
 pub fn get_cached_live_endpoint() -> Option<Result<DiscoveredAntigravityEndpoint, ()>> {
     let (entry, ts) = CACHED_LIVE_RPC.lock().ok().and_then(|g| g.clone())?;

@@ -645,10 +645,7 @@ mod tests {
         assert!(agy_json.get("hooks").is_none());
         assert_eq!(agy_json["cargo-target-gc"]["enabled"], true);
         assert_eq!(agy_json["nexushub"]["enabled"], true);
-        assert_eq!(
-            agy_json["nexushub"]["Stop"].as_array().unwrap().len(),
-            1
-        );
+        assert_eq!(agy_json["nexushub"]["Stop"].as_array().unwrap().len(), 1);
         assert!(agy_json["nexushub"].get("Notification").is_none());
         assert!(agy_json["nexushub"].get("StopFailure").is_none());
         #[cfg(unix)]

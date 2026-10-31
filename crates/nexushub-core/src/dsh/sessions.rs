@@ -2308,7 +2308,8 @@ mod tests {
 
     #[test]
     fn load_all_events_settles_multiple_open_tools_across_turns_in_linear_pass() {
-        let home = std::env::temp_dir().join(format!("nexushub-dsh-tools-{}", uuid::Uuid::new_v4()));
+        let home =
+            std::env::temp_dir().join(format!("nexushub-dsh-tools-{}", uuid::Uuid::new_v4()));
         let proj = home.join("sessions").join("proj-tools");
         let id = "22222222-3333-4444-8555-666666666666";
         fs::create_dir_all(proj.join(id)).unwrap();

@@ -815,9 +815,7 @@ fn execute_antigravity_archived_scope(
             ));
         }
         if !crate::antigravity::sessions::session_summary(antigravity, id)?.archived {
-            return Ok(TargetStepOutcome::Skipped(
-                "会话已恢复为非归档状态".into(),
-            ));
+            return Ok(TargetStepOutcome::Skipped("会话已恢复为非归档状态".into()));
         }
         Ok(
             match crate::antigravity::sessions::execute_batch_item(
