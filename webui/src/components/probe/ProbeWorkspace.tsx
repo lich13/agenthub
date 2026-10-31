@@ -8,16 +8,14 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ClaudeHookCard, DshHostCard } from "./ClaudeHookCard";
+import { AgentHookHostCard, DshHostCard, ProbeHookCard } from "./AgentHookHostCard";
 import { Panel } from "../common/Panel";
 import { JobList } from "../jobs/JobList";
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
-  probeSections,
   probeSettingsValidation,
   PROBE_NAV_LABEL,
-  type ProbeSectionId,
   type ProbeSettingsDraft,
 } from "../../lib/probeUi";
 import { useProbeActions, useProbeQueries } from "../../lib/query/probe";
@@ -32,16 +30,14 @@ import {
 import {
   ProbeBarkCard,
   ProbeEventsCard,
-  ProbeHookCard,
   ProbeLiveOverviewCard,
   ProbeRuntimeSettingsCard,
   type ProbeSaveStatus,
 } from "./ProbeCards";
 
 export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
-  const [activeSection, setActiveSection] = useState<ProbeSectionId>("settings");
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { status, settings, events, jobs } = useProbeQueries({ section: activeSection, historyOpen });
+  const { status, settings, events, jobs } = useProbeQueries({ section: "settings", historyOpen });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const submittedDraft = useRef<ProbeSettingsDraft | null>(null);
   const saveInFlight = useRef(false);
@@ -122,6 +118,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
     });
   };
   const pendingProbeAction = jobBusy ? probeJobMutation.variables : null;
+  const hostLabel = currentSettings?.codex?.host_label;
 
   useEffect(() => {
     if (!currentSettings || draft) return;
@@ -129,7 +126,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
   }, [currentSettings, draft]);
 
   const hooksHostMatrix = (
-    <div className="probe-hooks-grid">
+    <div className="probe-hooks-grid ws-card-grid">
       <Panel title="Codex Host" icon={<GitFork size={18} />}>
         <ProbeHookCard
           status={data}
@@ -141,184 +138,117 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
         />
       </Panel>
       <Panel title="Claude Code Host" icon={<GitFork size={18} />}>
-        <ClaudeHookCard provider="claude" />
+        <AgentHookHostCard provider="claude" />
       </Panel>
       <Panel title="Grok Build Host" icon={<GitFork size={18} />}>
-        <ClaudeHookCard provider="grok" />
+        <AgentHookHostCard provider="grok" />
       </Panel>
       {capabilities.antigravityNotifications && (
         <Panel title="Antigravity Host" icon={<GitFork size={18} />}>
-          <ClaudeHookCard provider="antigravity" />
+          <AgentHookHostCard provider="antigravity" />
         </Panel>
       )}
       {capabilities.dshNotifications && (
         <Panel title="DeepSeek Harness Host" icon={<GitFork size={18} />}>
-          <DshHostCard />
+          <DshHostCard sessionsPath={data?.dsh_sessions_path} />
         </Panel>
       )}
     </div>
   );
 
-  const activeSectionContent = (() => {
-    switch (activeSection) {
-      case "events":
-        return (
-          <>
-            <Panel title="实时态势" icon={<Activity size={18} />} className="wide-panel">
-              <ProbeLiveOverviewCard
-                status={data}
-                currentSettings={currentSettings}
-                serviceText={probeView.serviceText}
-              />
-            </Panel>
-            <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
-              {events.error && <div role="alert" className="form-error">{events.error.message}</div>}
-              <ProbeEventsCard
-                events={recentEvents}
-                available={events.data?.available ?? false}
-                loading={events.isLoading}
-              />
-            </Panel>
-          </>
-        );
-      case "settings":
-        return (
-          <>
-            <Panel title="通知配置与快捷开关" icon={<SlidersHorizontal size={18} />} className="wide-panel">
-              {settings.error && <div role="alert" className="form-error">{settings.error.message}</div>}
-              {actionStatus && (
-                <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>
-                  {actionStatus.message}
-                </div>
-              )}
-              {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
-              {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
-              {draft ? (
-                <ProbeRuntimeSettingsCard
-                  draft={draft}
-                  setDraft={setDraft}
-                  errors={settingsErrors}
-                  saveStatus={saveStatus}
-                  saving={saveMutation.isPending}
-                  status={data}
-                  settings={currentSettings}
-                  capabilities={capabilities}
-                  onSave={() => saveSettings()}
-                />
-              ) : (
-                <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
-              )}
-            </Panel>
-            <Panel title="Bark" icon={<Cloud size={18} />} className="wide-panel">
-              {draft && (
-                <ProbeBarkCard
-                  draft={draft}
-                  setDraft={setDraft}
-                  configuredDeviceKey={probeView.barkConfigured}
-                  saveStatus={saveStatus}
-                  saving={saveMutation.isPending}
-                  testing={pendingProbeAction === "bark-test"}
-                  testStatus={
-                    probeJobMutation.variables === "bark-test"
-                      ? jobBusy
-                        ? "正在发送，遇到临时故障将自动重试…"
-                        : startedJob.data?.status === "succeeded"
-                          ? "Bark 已受理"
-                          : startedJob.data?.status === "failed"
-                            ? "发送失败，请查看执行记录"
-                            : probeJobMutation.error?.message ?? null
-                      : null
-                  }
-                  onSave={saveSettings}
-                  onTest={() => probeJobMutation.mutate("bark-test")}
-                />
-              )}
-            </Panel>
-            {hooksHostMatrix}
-            <Panel title="实时态势" icon={<Activity size={18} />} className="wide-panel">
-              <ProbeLiveOverviewCard
-                status={data}
-                currentSettings={currentSettings}
-                serviceText={probeView.serviceText}
-              />
-            </Panel>
-            <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
-              {events.error && <div role="alert" className="form-error">{events.error.message}</div>}
-              <ProbeEventsCard
-                events={recentEvents}
-                available={events.data?.available ?? false}
-                loading={events.isLoading}
-              />
-            </Panel>
-            <details
-              className="execution-history"
-              open={historyOpen}
-              onToggle={event => setHistoryOpen(event.currentTarget.open)}
-            >
-              <summary>执行记录</summary>
-              <JobList jobs={probeView.probeJobs} capabilities={capabilities} />
-            </details>
-          </>
-        );
-      case "hooks":
-        return (
-          <>
-            {(actionStatus || startedJob.error || startedJob.data) && (
-              <Panel title="Hook 任务进度" icon={<GitFork size={18} />} className="wide-panel">
-                {actionStatus && (
-                  <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>
-                    {actionStatus.message}
-                  </div>
-                )}
-                {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
-                {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
-              </Panel>
-            )}
-            {hooksHostMatrix}
-          </>
-        );
-      default:
-        return null;
-    }
-  })();
-
   return (
-    <div className="probe-layout">
-      <div className="probe-header">
+    <div className="probe-layout" data-host-label={hostLabel ?? undefined}>
+      <header className="probe-header">
         <div className="probe-header-meta">
           <h1>{PROBE_NAV_LABEL}</h1>
-          <div className="probe-header-pills">
-            <span className={`status-chip tone-${probeView.availability.tone}`}>
-              {probeView.serviceText}
-            </span>
-            {currentSettings?.codex?.host_label && (
-              <span className="status-chip tone-neutral">
-                {currentSettings.codex.host_label}
-              </span>
-            )}
-          </div>
+          <span className="muted-text">全平台会话态势监控、Bark 推送与受管生命周期 Hooks 控制台</span>
         </div>
         <div className="button-row">
           <button className="icon-button" title="刷新 Probe" onClick={probeActions.refresh}>
             <RefreshCw size={17} />
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="segmented" aria-label="Probe sections">
-        {probeSections.map(section => (
-          <button
-            key={section.id}
-            className={activeSection === section.id ? "active" : ""}
-            onClick={() => setActiveSection(section.id)}
-            type="button"
-          >
-            {section.label}
-          </button>
-        ))}
-      </div>
+      <Panel title="通知配置与快捷开关" icon={<SlidersHorizontal size={18} />} className="wide-panel">
+        {settings.error && <div role="alert" className="form-error">{settings.error.message}</div>}
+        {actionStatus && (
+          <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>
+            {actionStatus.message}
+          </div>
+        )}
+        {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
+        {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
+        {draft ? (
+          <ProbeRuntimeSettingsCard
+            draft={draft}
+            setDraft={setDraft}
+            errors={settingsErrors}
+            saveStatus={saveStatus}
+            saving={saveMutation.isPending}
+            status={data}
+            settings={currentSettings}
+            capabilities={capabilities}
+            onSave={() => saveSettings()}
+          />
+        ) : (
+          <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
+        )}
+      </Panel>
 
-      {activeSectionContent}
+      <Panel title="Bark" icon={<Cloud size={18} />} className="wide-panel">
+        {draft && (
+          <ProbeBarkCard
+            draft={draft}
+            setDraft={setDraft}
+            configuredDeviceKey={probeView.barkConfigured}
+            saveStatus={saveStatus}
+            saving={saveMutation.isPending}
+            testing={pendingProbeAction === "bark-test"}
+            testStatus={
+              probeJobMutation.variables === "bark-test"
+                ? jobBusy
+                  ? "正在发送，遇到临时故障将自动重试…"
+                  : startedJob.data?.status === "succeeded"
+                    ? "Bark 已受理"
+                    : startedJob.data?.status === "failed"
+                      ? "发送失败，请查看执行记录"
+                      : probeJobMutation.error?.message ?? null
+                : null
+            }
+            onSave={saveSettings}
+            onTest={() => probeJobMutation.mutate("bark-test")}
+          />
+        )}
+      </Panel>
+
+      {hooksHostMatrix}
+
+      <Panel title="实时态势" icon={<Activity size={18} />} className="wide-panel">
+        <ProbeLiveOverviewCard
+          status={data}
+          currentSettings={currentSettings}
+          serviceText={probeView.serviceText}
+        />
+      </Panel>
+
+      <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+        {events.error && <div role="alert" className="form-error">{events.error.message}</div>}
+        <ProbeEventsCard
+          events={recentEvents}
+          available={events.data?.available ?? false}
+          loading={events.isLoading}
+        />
+      </Panel>
+
+      <details
+        className="execution-history"
+        open={historyOpen}
+        onToggle={event => setHistoryOpen(event.currentTarget.open)}
+      >
+        <summary>执行记录</summary>
+        <JobList jobs={probeView.probeJobs} capabilities={capabilities} />
+      </details>
 
       {probeView.availability.tone === "danger" && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">

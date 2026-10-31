@@ -34,6 +34,9 @@ export function UpdatePanel({ capabilities, status, loading, action, busy, finis
     <Panel title={updatePanelTitle(capabilities)} icon={<RefreshCw size={18} />} className="update-panel">
       <div className="update-panel-row">
         <Metric label="当前版本" value={status ? displayVersion(status.current_version) : loading ? "读取中…" : "未知"} />
+        {status?.update_available && status.latest_version && (
+          <Metric label="可用版本" value={displayVersion(status.latest_version)} tone="info" />
+        )}
         <div className="button-row">
           {opsUpdateActionView(error ? undefined : status, capabilities).map((item) => (
             <button key={item.action}

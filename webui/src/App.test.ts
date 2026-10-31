@@ -9,6 +9,7 @@ import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import unifiedThreadCleanupSource from "./components/ops/UnifiedThreadCleanup.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
 import probeCardsSource from "./components/probe/ProbeCards.tsx?raw";
+import agentHookHostCardSource from "./components/probe/AgentHookHostCard.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -49,8 +50,8 @@ function extractProbeWorkspaceSource(): string {
   const start = source.indexOf("function ProbeWorkspace(");
 
   expect(start).toBeGreaterThanOrEqual(0);
-  // Probe cards now own the markup formerly declared in ProbeWorkspace.
-  return `${source.slice(start)}\n${probeCardsSource}`;
+  // Probe cards and AgentHookHostCard now own the markup formerly declared in ProbeWorkspace.
+  return `${source.slice(start)}\n${probeCardsSource}\n${agentHookHostCardSource}`;
 }
 
 function extractFunctionSource(name: string): string {
@@ -708,7 +709,8 @@ describe("conversation helpers", () => {
     const { grokResumeCommand } = await import("./components/grok/GrokWorkspace");
 
     expect(probeSource).toContain('<Metric label="Codex Hook"');
-    expect(probeSource).toContain("<span>管理 Codex Hook</span>");
+    expect(probeSource).toContain("AgentHookHostCardShell");
+    expect(probeSource).toContain('labelledBy="codex-hooks-confirm"');
     expect(probeSource).toContain("移除 Hook");
     expect(probeSource).toContain('"hooks-remove"');
     expect(probeSource).toContain("平台通知一键开关");

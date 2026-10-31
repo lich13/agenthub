@@ -155,15 +155,32 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
   return (
     <aside className="side-nav">
       <div className="nav-brand">
-        <svg className="nav-brand-logo" viewBox="0 0 24 24" aria-hidden="true">
-          <rect width="24" height="24" rx="6" fill="#171717" />
-          <path d="M12 5.2L12 12M18.5 9.9L12 12M16 17.5L12 12M8 17.5L12 12M5.5 9.9L12 12" stroke="#d4d4d8" strokeOpacity="0.72" strokeWidth="1.35" strokeLinecap="round" />
-          <circle cx="12" cy="5.2" r="1.65" fill="#10a37f" />
-          <circle cx="18.5" cy="9.9" r="1.65" fill="#d97757" />
-          <circle cx="16" cy="17.5" r="1.65" fill="#f4f4f5" />
-          <circle cx="8" cy="17.5" r="1.65" fill="#60a5fa" />
-          <circle cx="5.5" cy="9.9" r="1.65" fill="#4d6bfe" />
-          <circle cx="12" cy="12" r="2.45" fill="#ffffff" />
+        <svg className="nav-brand-logo" viewBox="0 0 28 28" aria-hidden="true">
+          <defs>
+            <linearGradient id="agenthub-core-bg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#0E1320" />
+              <stop offset="100%" stopColor="#070910" />
+            </linearGradient>
+            <linearGradient id="agenthub-orbit-a" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#38BDF8" />
+              <stop offset="100%" stopColor="#818CF8" />
+            </linearGradient>
+            <linearGradient id="agenthub-orbit-b" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#10B981" />
+              <stop offset="100%" stopColor="#38BDF8" />
+            </linearGradient>
+            <linearGradient id="agenthub-orbit-c" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#F97316" />
+              <stop offset="100%" stopColor="#A855F7" />
+            </linearGradient>
+          </defs>
+          <rect width="28" height="28" rx="7" fill="url(#agenthub-core-bg)" />
+          <circle cx="14" cy="14" r="9.8" fill="none" stroke="#94A3B8" strokeOpacity="0.24" strokeWidth="0.75" />
+          <ellipse cx="14" cy="14" rx="9.6" ry="4" transform="rotate(-30 14 14)" fill="none" stroke="url(#agenthub-orbit-a)" strokeWidth="1.35" />
+          <ellipse cx="14" cy="14" rx="9.6" ry="4" transform="rotate(30 14 14)" fill="none" stroke="url(#agenthub-orbit-b)" strokeWidth="1.35" />
+          <ellipse cx="14" cy="14" rx="9.6" ry="4" transform="rotate(90 14 14)" fill="none" stroke="url(#agenthub-orbit-c)" strokeWidth="1.35" />
+          <circle cx="14" cy="14" r="3.1" fill="#0F172A" stroke="#38BDF8" strokeWidth="0.9" />
+          <path d="M14 11.5L14.9 13.1L16.5 14L14.9 14.9L14 16.5L13.1 14.9L11.5 14L13.1 13.1Z" fill="#F8FAFC" />
         </svg>
         <strong>AgentHub</strong>
         <button className="icon-button nav-collapse-button" onClick={onCollapse} title={collapsed ? "展开导航" : "折叠导航"} aria-expanded={!collapsed}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button>

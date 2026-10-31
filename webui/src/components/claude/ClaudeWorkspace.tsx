@@ -1,13 +1,20 @@
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
-import { AgentBrandIcon } from "../common/AgentBrandIcon";
+import {
+  ProviderSessionRowBody,
+  WorkspaceEmptyState,
+  WorkspaceInlineRename,
+  WorkspaceListHeader,
+  WorkspaceSearchInput,
+  WorkspaceSplitShell,
+  WorkspaceStageHeader,
+} from "../common/WorkspaceSplitShell";
 import { ToolOutput, MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { Check, ChevronLeft, Copy, FolderOpen, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useMemo, useState, type ReactNode } from "react";
+import { Copy, FolderOpen, Pencil, Terminal, Trash2 } from "lucide-react";
+import { useCallback, useRef, useMemo, useState, type ReactNode } from "react";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
-import { SessionSize } from "../common/SessionSize";
 import { machineScope, useConnection } from "../../lib/query/connection";
 import { useClaudeActions, useClaudeDetail, useClaudeSessions } from "../../lib/query/claude";
 import type { ClaudeDeletePreview, ClaudeHistoryEvent, ClaudeSessionSummary, SessionSearchResult } from "../../types";
@@ -22,7 +29,6 @@ import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { claudeResumeCommand } from "../../lib/domain/claudeSession";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, buildBatchContextMenuActions } from "../common/SessionBatchControls";
-import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupClaudeProcesses, type ClaudeRenderItem } from "../../lib/domain/claudeProcessGroups";
 import { foldProcessSequence, thinkingStepFromText } from "../../lib/domain/processGroups";
@@ -33,6 +39,7 @@ import { getClaudeSession } from "../../lib/api/claude";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { useSearchWorkspace } from "../common/SessionSearch";
+import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import {
   useNarrowViewport,
   useProviderSearchLocator,
@@ -49,7 +56,7 @@ export function ClaudeWorkspace() {
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<ClaudeDeletePreview | null>(null);
-  const [feedback, setFeedback] = useState("");
+  const { feedback, setFeedback, copy } = useCopyFeedback();
   const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = useClaudeSessions(query);
   const listed = sessions.data?.find((item) => item.sessionKey === selectedKey) ?? sessions.data?.[0];
@@ -155,12 +162,6 @@ export function ClaudeWorkspace() {
     events,
   });
 
-  const copy = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setFeedback("已复制");
-    } catch { setFeedback("复制失败：剪贴板不可用"); }
-  };
   const menuActions = (item: ClaudeSessionSummary): ThreadMenuAction[] => [
     { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => { void copy(item.id); } },
     { id: "copy-path", label: "复制文件路径", icon: <Copy size={15} />, run: () => { void copy(item.path); } },
@@ -172,91 +173,143 @@ export function ClaudeWorkspace() {
   ];
 
   return (
-    <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
-      <aside className="provider-list">
-        <header className="workspace-heading">
-          <div className="workspace-title-brand">
-            <span className="agent-brand-badge" data-agent="claude" aria-hidden="true">
-              <AgentBrandIcon agent="claude" size={16} />
-            </span>
-            <h1>Claude Code</h1>
-            {!sessions.isLoading && sessions.data && (
-              <span className="workspace-count-pill" aria-hidden="true">
-                {sessions.data.length}
-              </span>
-            )}
-          </div>
-          <button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={15} /></button>
-        </header>
-        <label className="search-box">
-          <Search size={15} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、ID 或工作目录" />
-        </label>
-        <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
-          {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-          {sessions.data?.map((item) => (
-            <div key={item.sessionKey} className="selectable-session">
-              <RenameableSession
-                title={claudeSessionLabel(item)}
-                className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`}
-                disabled={batch.busy}
-                selecting={batch.selecting}
-                selected={item.sessionKey === selected?.sessionKey}
-                multiSelected={batch.selection.includes(item.sessionKey)}
-                renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
-                onSelect={event => batch.select(item.sessionKey, event, () => { setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); })}
-                onRename={(next) => actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })}
-                batchMenuActions={batchMenu}
-                menuActions={menuActions(item)}
-              >
-                <strong>{claudeSessionLabel(item)}</strong>
-                <span>{item.id}</span>
-                <span className="provider-session-path">{item.cwd}</span>
-                <span className="session-status-row">
-                  {item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}
-                  <SessionSize size={item.storageSize} />
-                </span>
-              </RenameableSession>
+    <>
+      <WorkspaceSplitShell
+        hasSelection={Boolean(selectedKey)}
+        sidebar={
+          <>
+            <WorkspaceListHeader
+              agent="claude"
+              title="Claude Code"
+              count={!sessions.isLoading && sessions.data ? sessions.data.length : null}
+              onRefresh={() => {
+                void sessions.refetch();
+                if (selected && detailVisible) void detail.refetch();
+              }}
+            />
+            <WorkspaceSearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder="搜索标题、ID 或工作目录"
+            />
+            <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
+              {sessions.error && (
+                <div className="form-error" role="alert">
+                  {sessions.error.message}
+                </div>
+              )}
+              {sessions.data?.map(item => (
+                <div key={item.sessionKey} className="selectable-session">
+                  <RenameableSession
+                    title={claudeSessionLabel(item)}
+                    className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`}
+                    disabled={batch.busy}
+                    selecting={batch.selecting}
+                    selected={item.sessionKey === selected?.sessionKey}
+                    multiSelected={batch.selection.includes(item.sessionKey)}
+                    renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
+                    onSelect={event =>
+                      batch.select(item.sessionKey, event, () => {
+                        setSelectedKey(item.sessionKey);
+                        setRenaming(false);
+                        setPreview(null);
+                        setFeedback("");
+                      })
+                    }
+                    onRename={next =>
+                      actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })
+                    }
+                    batchMenuActions={batchMenu}
+                    menuActions={menuActions(item)}
+                  >
+                    <ProviderSessionRowBody
+                      title={claudeSessionLabel(item)}
+                      idText={item.id}
+                      cwd={item.cwd}
+                      running={item.status === "running"}
+                      statusText={claudeStatusLabel(item)}
+                      storageSize={item.storageSize}
+                    />
+                  </RenameableSession>
+                </div>
+              ))}
+              {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
+              {!sessions.isLoading && !sessions.data?.length && (
+                <div className="muted-row">未发现 Claude Code 会话</div>
+              )}
             </div>
-          ))}
-          {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
-          {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Claude Code 会话</div>}
-        </div>
-        <SessionBatchControls batch={batch} operations={["delete"]} />
-      </aside>
-      <main className="provider-detail">
+            <SessionBatchControls batch={batch} operations={["delete"]} />
+          </>
+        }
+      >
         {!selected && (
-          <div className="empty-state">
-            <span className="empty-brand-badge" data-agent="claude" aria-hidden="true">
-              <AgentBrandIcon agent="claude" size={26} />
-            </span>
-            <strong>选择一个 Claude Code 任务</strong>
-            <small>支持多选清理、重命名与完整思维链及工具调用过程检视</small>
-          </div>
+          <WorkspaceEmptyState
+            agent="claude"
+            title="选择一个 Claude Code 任务"
+            subtitle="支持多选清理、重命名与完整思维链及工具调用过程检视"
+          />
         )}
         {selected && (
           <>
-            <header className="conversation-header" data-timeline-id="session">
-              <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
-              <div className="conversation-title-copy">
-                <h1 className="conversation-title">{claudeSessionLabel(selected)}</h1>
-                {selected.cwd && <span className="conversation-subtitle" title={selected.cwd}>{selected.cwd}</span>}
-              </div>
-              <div className="conversation-header-actions">
-                {selected.status === "running" ? (
+            <WorkspaceStageHeader
+              title={claudeSessionLabel(selected)}
+              subtitle={selected.cwd}
+              onBack={() => setSelectedKey(null)}
+              badges={
+                selected.status === "running" ? (
                   <span className="status-chip tone-info">运行中</span>
                 ) : selected.readError ? (
                   <span className="status-chip tone-danger">异常</span>
-                ) : null}
+                ) : null
+              }
+              actions={
                 <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
-                  <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
-                  <button disabled={!latestReplyText} title={!latestReplyText ? "当前会话暂无可复制的助手答复" : undefined} onClick={() => { void copy(latestReplyText); }}><Copy size={15} />复制答复</button>
+                  <button
+                    disabled={!selected.canRename}
+                    title={selected.renameBlockReason ?? undefined}
+                    onClick={() => {
+                      setTitle(selected.title);
+                      setRenaming(true);
+                      actions.rename.reset();
+                    }}
+                  >
+                    <Pencil size={15} />
+                    改名
+                  </button>
+                  <button
+                    disabled={!latestReplyText}
+                    title={!latestReplyText ? "当前会话暂无可复制的助手答复" : undefined}
+                    onClick={() => {
+                      void copy(latestReplyText);
+                    }}
+                  >
+                    <Copy size={15} />
+                    复制答复
+                  </button>
                   <ThreadMenuItems actions={menuActions(selected)} />
                 </TaskMenu>
+              }
+            />
+            {feedback && (
+              <div role="status" className="task-feedback">
+                {feedback}
               </div>
-            </header>
-            {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-            {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
+            )}
+            {renaming && (
+              <WorkspaceInlineRename
+                ariaLabel="Claude Code 任务名称"
+                value={title}
+                onChange={setTitle}
+                busy={actions.rename.isPending}
+                onSubmit={() =>
+                  actions.rename.mutate(
+                    { sessionKey: selected.sessionKey, title },
+                    { onSuccess: () => setRenaming(false) },
+                  )
+                }
+                onCancel={() => setRenaming(false)}
+              />
+            )}
             {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
             {selected.readWarning && <DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><ActivityDetails className="task-feedback" summary="读取提示" initiallyOpen={false} stateKey="read-warning">{() => <div>{selected.readWarning}</div>}</ActivityDetails></DisclosureScope.Provider>}
             {!selected.readError && selected.renameBlockReason && <div className="task-feedback" role="status">{selected.renameBlockReason}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
@@ -294,7 +347,7 @@ export function ClaudeWorkspace() {
             </div>
           </>
         )}
-      </main>
+      </WorkspaceSplitShell>
       {preview && (
         <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
           <h2 id="claude-delete-title">删除任务文件</h2>
@@ -312,7 +365,7 @@ export function ClaudeWorkspace() {
           </div>
         </ConfirmDialog>
       )}
-    </div>
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
 import { SessionSize } from "../common/SessionSize";
 import { AgentBrandIcon } from "../common/AgentBrandIcon";
+import { WorkspaceEmptyState, WorkspaceSplitShell } from "../common/WorkspaceSplitShell";
 import {
   Archive,
   ArchiveRestore,
@@ -35,6 +36,7 @@ import {
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { useReadOnlyThreadActions } from "../../lib/query/threads";
+import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import { threadResumeCommand } from "../../lib/domain/conversationViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { useSearchWorkspace } from "../common/SessionSearch";
@@ -145,47 +147,49 @@ export function ChatWorkspace({
   );
 
   return (
-    <div className={`chat-layout ${!mobileThreadsOpen && resolvedSelected ? "has-selection" : ""}`}>
-      <aside className="thread-column">{list}</aside>
-      <section className="conversation-column">
-        {resolvedSelected && selectedFallback ? (
-          <Conversation
-            threadId={resolvedSelected}
-            detail={
-              selectedDetail ??
-              threadDetailFromSlot(
-                resolvedSelected,
-                selectedSlot ?? messageStore.getSlot(resolvedSelected),
-                selectedFallback,
-              )
-            }
-            selectedSummary={selectedThreadSummary}
-            archivedView={isSelectedArchived}
-            slot={messageStore.getSlot(resolvedSelected)}
-            messageStore={messageStore}
-            onSelect={id => selectThread(id)}
-            onPanelSelect={setView}
-            nextThreadAfterArchive={nextThreadAfterRemoval}
-            capabilities={capabilities}
-            onBack={() => setMobileThreadsOpen(true)}
-            searchTarget={pendingSearch}
-            searchReady={Boolean(selectedDetail || selectedSlot?.blocks.length)}
-            onSearchResolved={() => setPendingSearch(null)}
-            onSearchMiss={() => {
-              setPendingSearch(null);
-            }}
-          />
-        ) : (
-          <div className="empty-state">
-            <span className="empty-brand-badge" data-agent="codex" aria-hidden="true">
-              <AgentBrandIcon agent="codex" size={26} />
-            </span>
-            <strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong>
-            <small>从左侧选择或新建会话，浏览完整消息流与命令执行时间线</small>
-          </div>
-        )}
-      </section>
-    </div>
+    <WorkspaceSplitShell
+      layoutClass="chat-layout"
+      sidebarClass="thread-column"
+      stageClass="conversation-column"
+      stageTag="section"
+      hasSelection={Boolean(!mobileThreadsOpen && resolvedSelected)}
+      sidebar={list}
+    >
+      {resolvedSelected && selectedFallback ? (
+        <Conversation
+          threadId={resolvedSelected}
+          detail={
+            selectedDetail ??
+            threadDetailFromSlot(
+              resolvedSelected,
+              selectedSlot ?? messageStore.getSlot(resolvedSelected),
+              selectedFallback,
+            )
+          }
+          selectedSummary={selectedThreadSummary}
+          archivedView={isSelectedArchived}
+          slot={messageStore.getSlot(resolvedSelected)}
+          messageStore={messageStore}
+          onSelect={id => selectThread(id)}
+          onPanelSelect={setView}
+          nextThreadAfterArchive={nextThreadAfterRemoval}
+          capabilities={capabilities}
+          onBack={() => setMobileThreadsOpen(true)}
+          searchTarget={pendingSearch}
+          searchReady={Boolean(selectedDetail || selectedSlot?.blocks.length)}
+          onSearchResolved={() => setPendingSearch(null)}
+          onSearchMiss={() => {
+            setPendingSearch(null);
+          }}
+        />
+      ) : (
+        <WorkspaceEmptyState
+          agent="codex"
+          title={detailLoading ? "正在读取任务" : "选择一个任务"}
+          subtitle="从左侧选择或新建会话，浏览完整消息流与命令执行时间线"
+        />
+      )}
+    </WorkspaceSplitShell>
   );
 }
 
@@ -242,19 +246,10 @@ function ThreadList({
     archivedSelectedId,
   );
   const rename = useReadOnlyThreadActions({});
-  const [menuFeedback, setMenuFeedback] = useState("");
-  const copy = async (value: string | null | undefined) => {
-    if (!value) {
-      setMenuFeedback("没有可复制的内容");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(value);
-      setMenuFeedback("已复制");
-    } catch {
-      setMenuFeedback("复制失败：剪贴板不可用");
-    }
-  };
+  const { feedback: menuFeedback, setFeedback: setMenuFeedback, copy: copyWithFeedback } =
+    useCopyFeedback();
+  const copy = (value: string | null | undefined) =>
+    copyWithFeedback(value, "已复制", "没有可复制的内容");
 
   const activeBatchMenu = useMemo(
     () => buildBatchContextMenuActions(batch, ["archive", "delete"]),

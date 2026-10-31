@@ -1,8 +1,8 @@
-import { CheckCircle2, Cloud, TerminalSquare, Trash2 } from "lucide-react";
+import { CheckCircle2, Cloud } from "lucide-react";
 import { useRef, useState } from "react";
 import { AgentBrandIcon, type AgentBrandId } from "../common/AgentBrandIcon";
-import { ConfirmDialog } from "../common/ConfirmDialog";
 import { Metric } from "../common/Panel";
+export { ProbeHookCard } from "./AgentHookHostCard";
 import {
   applyPlatformNotificationToggle,
   isPlatformNotificationEnabled,
@@ -427,110 +427,6 @@ export function ProbeRuntimeSettingsCard({
         <CheckCircle2 size={17} />保存设置
       </button>
     </fieldset>
-  );
-}
-
-export function ProbeHookCard({
-  status,
-  draft,
-  setDraft,
-  busy,
-  onInstall,
-  onRemove,
-}: {
-  status?: ProbeStatus | null;
-  draft?: ProbeSettingsDraft | null;
-  setDraft?: (draft: ProbeSettingsDraft) => void;
-  busy?: boolean;
-  onInstall: () => void;
-  onRemove?: () => void;
-}) {
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const removeButtonRef = useRef<HTMLButtonElement>(null);
-  const hookStatus = status?.hook_status;
-  const managed = hookStatus === "managed";
-  const needsRepair = hookStatus === "stale" || hookStatus === "missing";
-  const configured = managed || draft?.hooks.manage_stop_hook === true;
-  const actualCommandCount = status?.actual_commands?.length ?? 0;
-  const staleCommandCount = status?.stale_command_count ?? 0;
-  const emptyGroupCount = status?.empty_group_count ?? 0;
-  const canRemove = Boolean(onRemove) && (managed || actualCommandCount > 0 || staleCommandCount > 0);
-  const actualSummary = `${actualCommandCount} 条${staleCommandCount > 0 ? ` · 旧 ${staleCommandCount}` : ""}${emptyGroupCount > 0 ? ` · 空 ${emptyGroupCount}` : ""}`;
-
-  return (
-    <>
-      <div className="probe-card-stack probe-host-card">
-        <div className="probe-host-card-head">
-          <span className="agent-brand-badge" data-agent="codex" aria-hidden="true">
-            <AgentBrandIcon agent="codex" size={16} />
-          </span>
-          <div className="probe-host-card-copy">
-            <strong>Codex</strong>
-            <span>Stop · request_user_input 双通道通知 Hook 托管</span>
-          </div>
-          <code className="probe-host-path">~/.codex/config.toml</code>
-        </div>
-        <div className="settings-meta-grid">
-          <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
-          <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
-          <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} wide />
-        </div>
-        {draft && setDraft && (
-          <label className="toggle-row">
-            <span>管理 Codex Hook</span>
-            <input
-              type="checkbox"
-              checked={draft.hooks.manage_stop_hook}
-              onChange={event =>
-                setDraft({ ...draft, hooks: { ...draft.hooks, manage_stop_hook: event.target.checked } })
-              }
-            />
-          </label>
-        )}
-        <div className="button-row">
-          <button className="secondary-button" disabled={busy} onClick={onInstall}>
-            <TerminalSquare size={17} />
-            {needsRepair ? "修复 Hook" : managed ? "重新安装 Hook" : "安装 Hook"}
-          </button>
-          {onRemove && (
-            <button
-              ref={removeButtonRef}
-              className="secondary-button"
-              disabled={busy || !canRemove}
-              onClick={() => setConfirmRemove(true)}
-            >
-              <Trash2 size={17} />移除 Hook
-            </button>
-          )}
-        </div>
-      </div>
-      {confirmRemove && onRemove && (
-        <ConfirmDialog
-          labelledBy="codex-hooks-remove-confirm"
-          busy={Boolean(busy)}
-          returnFocus={removeButtonRef}
-          onCancel={() => setConfirmRemove(false)}
-        >
-          <h3 id="codex-hooks-remove-confirm">移除 Codex Hook</h3>
-          <p>移除 NexusHub 托管的 Codex 通知 Hook 并关闭自动修复，保留其他第三方 Hook 配置。</p>
-          <div className="button-row">
-            <button className="secondary-button" disabled={busy} onClick={() => setConfirmRemove(false)}>
-              取消
-            </button>
-            <button
-              className="danger-button"
-              disabled={busy}
-              onClick={() => {
-                setConfirmRemove(false);
-                onRemove();
-              }}
-            >
-              确认移除
-            </button>
-          </div>
-        </ConfirmDialog>
-      )}
-    </>
   );
 }
 

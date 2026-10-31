@@ -1,4 +1,4 @@
-import { TerminalSquare } from "lucide-react";
+import { RefreshCw, SlidersHorizontal, TerminalSquare } from "lucide-react";
 import { useState } from "react";
 import { OPS_PANEL_TITLES, opsWorkspaceView } from "../../lib/domain/runtimeViewModel";
 import { machineScope } from "../../lib/query/connection";
@@ -23,11 +23,35 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
     Boolean(jobMutation.data?.job_id && !isTerminalJob(startedJob.data?.status));
   const opsView = opsWorkspaceView({
     update: update.data,
-    capabilities
+    capabilities,
   });
 
   return (
-    <div className="ops-grid" data-update-actions={opsView.updateActions.length}>
+    <div className="ops-grid ws-control-stage" data-update-actions={opsView.updateActions.length}>
+      <header className="ops-header probe-header">
+        <div className="probe-header-meta">
+          <div className="workspace-title-brand">
+            <SlidersHorizontal size={18} />
+            <h1>设置与维护</h1>
+          </div>
+          <span className="muted-text">
+            版本更新、跨平台归档与残余会话安全清理、后台作业诊断抽屉
+          </span>
+        </div>
+        <div className="button-row">
+          <button
+            className="icon-button"
+            title="刷新版本与状态"
+            disabled={update.isFetching}
+            onClick={() => {
+              void update.refetch();
+              if (historyOpen) void jobs.refetch();
+            }}
+          >
+            <RefreshCw size={17} />
+          </button>
+        </div>
+      </header>
       <UpdatePanel
         capabilities={capabilities}
         status={update.data}
@@ -37,15 +61,20 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
         finished={jobMutation.isSuccess && startedJob.data?.status === "succeeded"}
         job={startedJob.data}
         error={update.error?.message ?? jobMutation.error?.message ?? startedJob.error?.message}
-        onAction={(action) => jobMutation.mutate({ action })}
+        onAction={action => jobMutation.mutate({ action })}
       />
       <UnifiedThreadCleanup key={machineScope()} capabilities={capabilities} />
       <details
         className="execution-history"
         open={historyOpen}
-        onToggle={(event) => setHistoryOpen(event.currentTarget.open)}
+        onToggle={event => setHistoryOpen(event.currentTarget.open)}
       >
-        <summary>执行记录</summary>
+        <summary>
+          <span>执行记录</span>
+          {jobs.data && jobs.data.length > 0 && (
+            <span className="workspace-count-pill">{jobs.data.length}</span>
+          )}
+        </summary>
         <Panel
           title={OPS_PANEL_TITLES.jobs}
           icon={<TerminalSquare size={18} />}

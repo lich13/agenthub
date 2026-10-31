@@ -28,7 +28,7 @@ export const probeQueryKeys = {
 };
 
 export function useProbeQueries({ section, historyOpen }: { section: ProbeSectionId; historyOpen: boolean }) {
-  const needsSettings = section === "settings" || section === "hooks";
+  const needsSettings = section === "settings";
   return {
     status: useQuery({
       queryKey: probeQueryKeys.status,
@@ -47,7 +47,7 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
     events: useQuery({
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
-      enabled: section === "events" || section === "settings",
+      enabled: section === "settings",
       refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData

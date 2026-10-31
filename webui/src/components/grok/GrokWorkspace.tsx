@@ -1,12 +1,19 @@
-import { SessionSize } from "../common/SessionSize";
-import { AgentBrandIcon } from "../common/AgentBrandIcon";
+import {
+  ProviderSessionRowBody,
+  WorkspaceEmptyState,
+  WorkspaceInlineRename,
+  WorkspaceListHeader,
+  WorkspaceSearchInput,
+  WorkspaceSplitShell,
+  WorkspaceStageHeader,
+} from "../common/WorkspaceSplitShell";
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { Check, ChevronLeft, Copy, FolderOpen, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
+import { Copy, FolderOpen, Pencil, Terminal, Trash2 } from "lucide-react";
 import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
@@ -21,7 +28,6 @@ import { ConfirmDialog } from "../common/ConfirmDialog";
 import type { GrokDeletePreview, GrokHistoryEvent, GrokSessionSummary, SessionSearchResult } from "../../types";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, buildBatchContextMenuActions } from "../common/SessionBatchControls";
-import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupGrokCommandEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
@@ -32,6 +38,7 @@ import { getGrokSession } from "../../lib/api/grok";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { useSearchWorkspace } from "../common/SessionSearch";
+import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import {
   useNarrowViewport,
   useProviderSearchLocator,
@@ -56,7 +63,7 @@ export function GrokWorkspace({}: {}) {
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<GrokDeletePreview | null>(null);
-  const [feedback, setFeedback] = useState("");
+  const { feedback, setFeedback, copy: copyText } = useCopyFeedback();
   const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = useGrokSessions(query);
   const selected = sessions.data?.find((item) => item.id === selectedId) ?? sessions.data?.[0];
@@ -118,15 +125,6 @@ export function GrokWorkspace({}: {}) {
     setFeedback("");
   }, []);
   useSearchWorkspace(useMemo(() => ({ provider: "grok" as const, sessionKey: selected?.id ?? null, selectResult: selectSearchResult }), [selected?.id, selectSearchResult]));
-  const copyText = async (value: string, successText: string) => {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setFeedback(successText);
-    } catch (copyError) {
-      setFeedback(`复制失败：${copyError instanceof Error ? copyError.message : "剪贴板不可用"}`);
-    }
-  };
   const oldestPage = detail.data?.pages[detail.data.pages.length - 1];
   const history = useHistoryScroll({
     scopeKey: `${machineScope()}:grok:${selected?.id ?? ""}:${navigation.generation}`,
@@ -174,128 +172,75 @@ export function GrokWorkspace({}: {}) {
   });
 
   return (
-    <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>
-      <aside className="provider-list">
-        <header className="workspace-heading">
-          <div className="workspace-title-brand">
-            <span className="agent-brand-badge" data-agent="grok" aria-hidden="true">
-              <AgentBrandIcon agent="grok" size={16} />
-            </span>
-            <h1>Grok Build</h1>
-            {!sessions.isLoading && sessions.data && (
-              <span className="workspace-count-pill" aria-hidden="true">
-                {sessions.data.length}
-              </span>
-            )}
-          </div>
-          <button
-            className="icon-button"
-            onClick={() => {
-              void sessions.refetch();
-              if (selected && detailVisible) void detail.refetch();
-            }}
-            title="刷新任务"
-          >
-            <RefreshCw size={15} />
-          </button>
-        </header>
-        <label className="search-box">
-          <Search size={15} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" />
-        </label>
-        <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
-          {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-          {sessions.data?.map((item) => (
-            <div key={item.id} className="selectable-session">
-              <RenameableSession
-                title={grokSessionLabel(item)}
-                className={`provider-session ${item.id === selected?.id ? "selected" : ""}`}
-                disabled={batch.busy}
-                selecting={batch.selecting}
-                selected={item.id === selected?.id}
-                multiSelected={batch.selection.includes(item.id)}
-                onSelect={event => batch.select(item.id, event, () => { setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); })}
-                onRename={(next) => actions.rename.mutateAsync({ id: item.id, title: next })}
-                batchMenuActions={batchMenu}
-                menuActions={[
-                  {
-                    id: "copy-id",
-                    label: "复制线程 ID",
-                    icon: <Copy size={15} />,
-                    run: () => { void copyText(item.id, "已复制线程 ID"); },
-                  },
-                  {
-                    id: "copy-path",
-                    label: "复制路径",
-                    icon: <Copy size={15} />,
-                    run: () => { void copyText(grokHandoffPath(item), "已复制路径"); },
-                  },
-                  {
-                    id: "copy-resume",
-                    label: "复制恢复命令",
-                    icon: <Terminal size={15} />,
-                    run: () => { void copyText(grokResumeCommand(item.cwd, item.id), "已复制恢复命令"); },
-                  },
-                  {
-                    id: "reveal",
-                    label: "在 Finder 中显示",
-                    icon: <FolderOpen size={15} />,
-                    disabled: !canRevealLocalPath(),
-                    reason: canRevealLocalPath() ? null : "仅可在本机 Finder 中显示本机会话",
-                    run: () => {
-                      void revealLocalPath(grokHandoffPath(item)).catch(() =>
-                        setFeedback("无法在 Finder 中显示，请检查文件是否仍存在"),
-                      );
-                    },
-                  },
-                  {
-                    id: "delete",
-                    label: "删除任务文件",
-                    icon: <Trash2 size={15} />,
-                    danger: true,
-                    disabled: actions.preview.isPending,
-                    run: () => { actions.remove.reset(); actions.preview.mutate(item.id, { onSuccess: setPreview }); },
-                  },
-                ]}
-              >
-                <strong>{grokSessionLabel(item)}</strong>
-                <span className="provider-session-path">{item.cwd}</span>
-                <span className="session-status-row">
-                  {item.status === "running" ? (
-                    <RunningIndicator />
-                  ) : (
-                    <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>
-                  )}
-                  <SessionSize size={item.storageSize} />
-                </span>
-              </RenameableSession>
+    <>
+      <WorkspaceSplitShell
+        hasSelection={Boolean(selectedId)}
+        sidebar={
+          <>
+            <WorkspaceListHeader
+              agent="grok"
+              title="Grok Build"
+              count={!sessions.isLoading && sessions.data ? sessions.data.length : null}
+              onRefresh={() => {
+                void sessions.refetch();
+                if (selected && detailVisible) void detail.refetch();
+              }}
+            />
+            <WorkspaceSearchInput value={query} onChange={setQuery} placeholder="搜索任务" />
+            <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
+              {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
+              {sessions.data?.map((item) => (
+                <div key={item.id} className="selectable-session">
+                  <RenameableSession
+                    title={grokSessionLabel(item)}
+                    className={`provider-session ${item.id === selected?.id ? "selected" : ""}`}
+                    disabled={batch.busy}
+                    selecting={batch.selecting}
+                    selected={item.id === selected?.id}
+                    multiSelected={batch.selection.includes(item.id)}
+                    onSelect={event => batch.select(item.id, event, () => { setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); })}
+                    onRename={(next) => actions.rename.mutateAsync({ id: item.id, title: next })}
+                    batchMenuActions={batchMenu}
+                    menuActions={[
+                      { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => { void copyText(item.id, "已复制线程 ID"); } },
+                      { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, run: () => { void copyText(grokHandoffPath(item), "已复制路径"); } },
+                      { id: "copy-resume", label: "复制恢复命令", icon: <Terminal size={15} />, run: () => { void copyText(grokResumeCommand(item.cwd, item.id), "已复制恢复命令"); } },
+                      { id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />, disabled: !canRevealLocalPath(), reason: canRevealLocalPath() ? null : "仅可在本机 Finder 中显示本机会话", run: () => { void revealLocalPath(grokHandoffPath(item)).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); } },
+                      { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending, run: () => { actions.remove.reset(); actions.preview.mutate(item.id, { onSuccess: setPreview }); } },
+                    ]}
+                  >
+                    <ProviderSessionRowBody
+                      title={grokSessionLabel(item)}
+                      cwd={item.cwd}
+                      running={item.status === "running"}
+                      statusText={item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}
+                      storageSize={item.storageSize}
+                    />
+                  </RenameableSession>
+                </div>
+              ))}
+              {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
+              {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">暂无 Grok 任务</div>}
             </div>
-          ))}
-          {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
-          {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">暂无 Grok 任务</div>}
-        </div>
-        <SessionBatchControls batch={batch} operations={["delete"]} />
-      </aside>
-      <main className="provider-detail">
+            <SessionBatchControls batch={batch} operations={["delete"]} />
+          </>
+        }
+      >
         {!selected && (
-          <div className="empty-state">
-            <span className="empty-brand-badge" data-agent="grok" aria-hidden="true">
-              <AgentBrandIcon agent="grok" size={26} />
-            </span>
-            <strong>选择一个 Grok 任务</strong>
-            <small>支持浏览本地会话历史、命令输出分组与任务文件管理</small>
-          </div>
+          <WorkspaceEmptyState
+            agent="grok"
+            title="选择一个 Grok 任务"
+            subtitle="支持浏览本地会话历史、命令输出分组与任务文件管理"
+          />
         )}
         {selected && (
           <>
-            <header className="conversation-header" data-timeline-id="session">
-              <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /></button>
-              <div className="conversation-title-copy">
-                <h1 className="conversation-title">{grokSessionLabel(selected)}</h1>
-                {selected.cwd && <span className="conversation-subtitle" title={selected.cwd}>{selected.cwd}</span>}
-              </div>
-              <div className="conversation-header-actions">
-                {selected.status === "running" && <span className="status-chip tone-info">运行中</span>}
+            <WorkspaceStageHeader
+              title={grokSessionLabel(selected)}
+              subtitle={selected.cwd}
+              onBack={() => setSelectedId(null)}
+              badges={selected.status === "running" ? <span className="status-chip tone-info">运行中</span> : null}
+              actions={
                 <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
                   <button onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
                   <button disabled={!latestReplyText} title={!latestReplyText ? "当前会话暂无可复制的助手答复" : undefined} onClick={() => { void copyText(latestReplyText, "已复制答复"); }}><Copy size={15} />复制答复</button>
@@ -305,15 +250,18 @@ export function GrokWorkspace({}: {}) {
                   <button disabled={!canRevealLocalPath()} title={canRevealLocalPath() ? undefined : "仅可在本机 Finder 中显示本机会话"} onClick={() => { void revealLocalPath(grokHandoffPath(selected)).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); }}><FolderOpen size={15} />在 Finder 中显示</button>
                   <button className="danger-menu-item" disabled={actions.preview.isPending} onClick={() => { actions.remove.reset(); actions.preview.mutate(selected.id, { onSuccess: setPreview }); }}><Trash2 size={15} />删除任务文件</button>
                 </TaskMenu>
-              </div>
-            </header>
+              }
+            />
             {feedback && <div role="status" className="task-feedback">{feedback}</div>}
             {renaming && (
-              <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}>
-                <input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
-                <button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button>
-                <button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button>
-              </form>
+              <WorkspaceInlineRename
+                ariaLabel="Grok 任务名称"
+                value={title}
+                onChange={setTitle}
+                busy={actions.rename.isPending}
+                onSubmit={() => actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) })}
+                onCancel={() => setRenaming(false)}
+              />
             )}
             {error && <div className="form-error" role="alert">{error.message}</div>}
             <div className="timeline-reading-shell">
@@ -342,7 +290,7 @@ export function GrokWorkspace({}: {}) {
             </div>
           </>
         )}
-      </main>
+      </WorkspaceSplitShell>
       {preview && (
         <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
           <h2 id="grok-delete-title">删除任务文件</h2>
@@ -359,7 +307,7 @@ export function GrokWorkspace({}: {}) {
           </div>
         </ConfirmDialog>
       )}
-    </div>
+    </>
   );
 }
 

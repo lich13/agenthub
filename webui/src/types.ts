@@ -522,6 +522,8 @@ export type ProbeStatus = {
   doctor_status?: string | null;
   runtime_version?: string | null;
   codex_home?: string | null;
+  codex_hooks_path?: string | null;
+  dsh_sessions_path?: string | null;
   configured_codex_home?: string | null;
   resolved_codex_home?: string | null;
   codex_home_source?: string | null;
@@ -672,7 +674,7 @@ export type { RemoteMachineSummary, RemoteConnectionView, RemoteConnectionCreden
 
 export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
-export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean };
+export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean; configPath?: string };
 
 export type DshArchiveSelection = { id: string; archiveId: string };
 export type DshArchiveCandidate = DshArchiveSelection & { parentId: string | null; reason: string | null };

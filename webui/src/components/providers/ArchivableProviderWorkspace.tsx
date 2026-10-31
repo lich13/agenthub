@@ -1,20 +1,23 @@
 import {
   Archive,
   ArchiveRestore,
-  Check,
-  ChevronLeft,
   ChevronRight,
   Copy,
   FolderOpen,
   Pencil,
-  RefreshCw,
-  Search,
   Trash2,
-  X,
 } from "lucide-react";
 import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AgentBrandIcon } from "../common/AgentBrandIcon";
+import {
+  ProviderSessionRowBody,
+  WorkspaceEmptyState,
+  WorkspaceInlineRename,
+  WorkspaceListHeader,
+  WorkspaceSearchInput,
+  WorkspaceSplitShell,
+  WorkspaceStageHeader,
+} from "../common/WorkspaceSplitShell";
 import { groupProviderEvents, type ExecutionRenderItem } from "../../lib/domain/executionGroups";
 import { foldProcessSequence, thinkingStepFromText } from "../../lib/domain/processGroups";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
@@ -49,18 +52,17 @@ import { MarkdownContent } from "../common/MarkdownContent";
 import { PlanActions } from "../common/PlanActions";
 import { ProcessGroupView } from "../common/ProcessGroupView";
 import { RenameableSession } from "../common/RenameableSession";
-import { RunningIndicator } from "../common/RunningIndicator";
 import {
   SessionBatchControls,
   buildBatchContextMenuActions,
 } from "../common/SessionBatchControls";
 import { useSearchWorkspace } from "../common/SessionSearch";
+import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import {
   useNarrowViewport,
   useProviderSearchLocator,
   useTimelineNavigator,
 } from "../../lib/useProviderWorkspace";
-import { SessionSize } from "../common/SessionSize";
 import { TaskMenu, ThreadMenuItems, type ThreadMenuAction } from "../common/TaskMenu";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { TimelineRail } from "../common/TimelineRail";
@@ -104,7 +106,7 @@ export function ArchivableProviderWorkspace({
   const narrow = useNarrowViewport();
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
-  const [feedback, setFeedback] = useState("");
+  const { feedback, setFeedback, copy } = useCopyFeedback();
   const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
 
   const sessions = useProviderSessions(provider, { q: query, archived: false }, queryEnabled);
@@ -308,15 +310,6 @@ export function ArchivableProviderWorkspace({
     events,
   });
 
-  const copy = async (value: string, successText = "已复制") => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setFeedback(successText);
-    } catch {
-      setFeedback("复制失败：剪贴板不可用");
-    }
-  };
-
   const handleArchiveToggle = (item: ProviderSessionSummary) => {
     actions.archive.reset();
     actions.restore.reset();
@@ -452,17 +445,14 @@ export function ArchivableProviderWorkspace({
           batchMenuActions={batchMenu}
           menuActions={rowMenuActions(item, targetBatch)}
         >
-          <strong>{providerSessionLabel(item)}</strong>
-          {item.cwd && <span className="provider-session-path">{item.cwd}</span>}
-          <span>{item.id}</span>
-          <span className="session-status-row">
-            {item.status === "running" ? (
-              <RunningIndicator />
-            ) : (
-              <small>{providerStatusLabel(item)}</small>
-            )}
-            <SessionSize size={item.storageSize} />
-          </span>
+          <ProviderSessionRowBody
+            title={providerSessionLabel(item)}
+            idText={item.id}
+            cwd={item.cwd}
+            running={item.status === "running"}
+            statusText={providerStatusLabel(item)}
+            storageSize={item.storageSize}
+          />
         </RenameableSession>
       </div>
     );
@@ -472,157 +462,132 @@ export function ArchivableProviderWorkspace({
   const activeDetailBatch = selected?.archived ? archivedBatch : batch;
 
   return (
-    <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
-      <aside className="provider-list">
-        <header className="workspace-heading">
-          <div className="workspace-title-brand">
-            <span className="agent-brand-badge" data-agent={provider} aria-hidden="true">
-              <AgentBrandIcon agent={provider} size={16} />
-            </span>
-            <h1>{label}</h1>
-            {queryEnabled && !sessions.isLoading && sessions.data && (
-              <span className="workspace-count-pill" aria-hidden="true">
-                {sessions.data.length}
-              </span>
-            )}
-          </div>
-          <button
-            className="icon-button"
-            disabled={!queryEnabled}
-            onClick={() => {
+    <WorkspaceSplitShell
+      hasSelection={Boolean(selectedKey)}
+      sidebar={
+        <>
+          <WorkspaceListHeader
+            agent={provider}
+            title={label}
+            count={queryEnabled && !sessions.isLoading && sessions.data ? sessions.data.length : null}
+            refreshDisabled={!queryEnabled}
+            onRefresh={() => {
               void sessions.refetch();
               if (archivedOpen) void archivedSessions.refetch();
               if (selected && detailVisible) void detail.refetch();
             }}
-            title="刷新任务"
-          >
-            <RefreshCw size={15} />
-          </button>
-        </header>
-        <label className="search-box">
-          <Search size={15} />
-          <input
+          />
+          <WorkspaceSearchInput
             value={query}
             disabled={supported === false}
-            onChange={event => setQuery(event.target.value)}
+            onChange={setQuery}
             placeholder="搜索标题、ID 或工作目录"
           />
-        </label>
-        <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
-          {supported === false ? (
-            <div className="muted-row" role="status">
-              当前连接的远程服务版本较旧，尚未支持 {label} 会话列表。请先在「设置 → 更新与维护」升级远程服务。
-            </div>
-          ) : (
-            <>
-              {sessions.error && (
-                <div className="form-error" role="alert">
-                  {sessions.error.message}
-                </div>
-              )}
-              {sessions.data?.map(item =>
-                renderSessionRow(item, batch, archivedBatch, activeBatchMenu),
-              )}
-              {(supported === undefined || sessions.isLoading) && (
-                <div className="muted-row">正在读取任务...</div>
-              )}
-              {queryEnabled && !sessions.isLoading && !sessions.data?.length && (
-                <div className="muted-row">{`未发现 ${label} 会话`}</div>
-              )}
-              {queryEnabled && (
-                <div className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}>
-                  <button
-                    type="button"
-                    className="archived-toggle"
-                    aria-expanded={archivedOpen}
-                    onClick={() => setArchivedOpen(open => !open)}
-                  >
-                    <ChevronRight size={14} className="archived-chevron" aria-hidden="true" />
-                    <span>已归档</span>
-                    {archivedOpen && !archivedSessions.isLoading && (
-                      <small aria-hidden="true">{archivedSessions.data?.length ?? 0}</small>
-                    )}
-                  </button>
-                  {archivedOpen && (
-                    <div
-                      className="archived-list"
-                      onKeyDown={event => {
-                        event.stopPropagation();
-                        archivedBatch.onListKeyDown(event);
-                      }}
+          <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
+            {supported === false ? (
+              <div className="muted-row" role="status">
+                当前连接的远程服务版本较旧，尚未支持 {label} 会话列表。请先在「设置 → 更新与维护」升级远程服务。
+              </div>
+            ) : (
+              <>
+                {sessions.error && (
+                  <div className="form-error" role="alert">
+                    {sessions.error.message}
+                  </div>
+                )}
+                {sessions.data?.map(item =>
+                  renderSessionRow(item, batch, archivedBatch, activeBatchMenu),
+                )}
+                {(supported === undefined || sessions.isLoading) && (
+                  <div className="muted-row">正在读取任务...</div>
+                )}
+                {queryEnabled && !sessions.isLoading && !sessions.data?.length && (
+                  <div className="muted-row">{`未发现 ${label} 会话`}</div>
+                )}
+                {queryEnabled && (
+                  <div className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}>
+                    <button
+                      type="button"
+                      className="archived-toggle"
+                      aria-expanded={archivedOpen}
+                      onClick={() => setArchivedOpen(open => !open)}
                     >
-                      {archivedSessions.error && (
-                        <div className="form-error" role="alert">
-                          {archivedSessions.error.message}
-                        </div>
+                      <ChevronRight size={14} className="archived-chevron" aria-hidden="true" />
+                      <span>已归档</span>
+                      {archivedOpen && !archivedSessions.isLoading && (
+                        <small aria-hidden="true">{archivedSessions.data?.length ?? 0}</small>
                       )}
-                      {archivedSessions.isLoading && (
-                        <div className="muted-row">正在读取已归档会话...</div>
-                      )}
-                      {archivedSessions.data?.map(item =>
-                        renderSessionRow(item, archivedBatch, batch, archivedBatchMenu),
-                      )}
-                      {!archivedSessions.isLoading &&
-                        !archivedSessions.error &&
-                        !archivedSessions.data?.length && (
-                          <div className="muted-row">{`暂无已归档的 ${label} 会话`}</div>
+                    </button>
+                    {archivedOpen && (
+                      <div
+                        className="archived-list"
+                        onKeyDown={event => {
+                          event.stopPropagation();
+                          archivedBatch.onListKeyDown(event);
+                        }}
+                      >
+                        {archivedSessions.error && (
+                          <div className="form-error" role="alert">
+                            {archivedSessions.error.message}
+                          </div>
                         )}
-                    </div>
-                  )}
-                </div>
+                        {archivedSessions.isLoading && (
+                          <div className="muted-row">正在读取已归档会话...</div>
+                        )}
+                        {archivedSessions.data?.map(item =>
+                          renderSessionRow(item, archivedBatch, batch, archivedBatchMenu),
+                        )}
+                        {!archivedSessions.isLoading &&
+                          !archivedSessions.error &&
+                          !archivedSessions.data?.length && (
+                            <div className="muted-row">{`暂无已归档的 ${label} 会话`}</div>
+                          )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          {supported === true && (
+            <>
+              <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
+              {archivedOpen && (
+                <SessionBatchControls
+                  batch={archivedBatch}
+                  operations={["restore", "delete"]}
+                />
               )}
             </>
           )}
-        </div>
-        {supported === true && (
-          <>
-            <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
-            {archivedOpen && (
-              <SessionBatchControls
-                batch={archivedBatch}
-                operations={["restore", "delete"]}
-              />
-            )}
-          </>
-        )}
-      </aside>
-      <main className="provider-detail">
-        {!selected && (
-          <div className="empty-state">
-            <span className="empty-brand-badge" data-agent={provider} aria-hidden="true">
-              <AgentBrandIcon agent={provider} size={26} />
-            </span>
-            <strong>
-              {supported === false
-                ? `升级远程服务后即可浏览 ${label} 会话`
-                : `选择一个 ${label} 任务`}
-            </strong>
-            <small>支持重命名、归档与恢复、批量清理以及消息时间线定位</small>
-          </div>
-        )}
-        {selected && (
-          <>
-            <header className="conversation-header" data-timeline-id="session">
-              <button
-                className="icon-button mobile-back"
-                title="返回任务列表"
-                onClick={() => setSelectedKey(null)}
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <div className="conversation-title-copy">
-                <h1 className="conversation-title">{providerSessionLabel(selected)}</h1>
-                {selected.cwd && (
-                  <span className="conversation-subtitle" title={selected.cwd}>
-                    {selected.cwd}
-                  </span>
-                )}
-              </div>
-              {selected.archived ? (
+        </>
+      }
+    >
+      {!selected && (
+        <WorkspaceEmptyState
+          agent={provider}
+          title={
+            supported === false
+              ? `升级远程服务后即可浏览 ${label} 会话`
+              : `选择一个 ${label} 任务`
+          }
+          subtitle="支持重命名、归档与恢复、批量清理以及消息时间线定位"
+        />
+      )}
+      {selected && (
+        <>
+          <WorkspaceStageHeader
+            title={providerSessionLabel(selected)}
+            subtitle={selected.cwd}
+            onBack={() => setSelectedKey(null)}
+            badges={
+              selected.archived ? (
                 <span className="status-chip tone-neutral">已归档</span>
               ) : selected.status === "running" ? (
                 <span className="status-chip tone-info">运行中</span>
-              ) : null}
+              ) : null
+            }
+            actions={
               <TaskMenu label={`${label} 任务操作`} triggerRef={menuTrigger}>
                 <button
                   disabled={!selected.canRename || anyBatchBusy}
@@ -723,134 +688,114 @@ export function ArchivableProviderWorkspace({
                   ]}
                 />
               </TaskMenu>
-            </header>
-            {feedback && (
-              <div role="status" className="task-feedback">
-                {feedback}
-              </div>
-            )}
-            {renaming && (
-              <form
-                className="inline-rename"
-                onSubmit={event => {
-                  event.preventDefault();
-                  actions.rename.mutate(
-                    { sessionKey: selected.sessionKey, title },
-                    { onSuccess: () => setRenaming(false) },
-                  );
-                }}
-              >
-                <input
-                  aria-label={`${label} 任务名称`}
-                  maxLength={200}
-                  value={title}
-                  onChange={event => setTitle(event.target.value)}
-                  autoFocus
-                />
-                <button
-                  className="icon-button"
-                  title="保存名称"
-                  disabled={actions.rename.isPending || !title.trim()}
-                >
-                  <Check size={17} />
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  title="取消改名"
-                  onClick={() => setRenaming(false)}
-                >
-                  <X size={17} />
-                </button>
-              </form>
-            )}
-            {selected.readError && (
-              <div className="form-error" role="alert">
-                {selected.readError}
-              </div>
-            )}
-            {selected.readWarning && (
-              <DisclosureScope.Provider value={`${provider}:${selected.sessionKey}`}>
-                <ActivityDetails
-                  className="task-feedback"
-                  summary="读取提示"
-                  initiallyOpen={false}
-                  stateKey="read-warning"
-                >
-                  {() => <div>{selected.readWarning}</div>}
-                </ActivityDetails>
-              </DisclosureScope.Provider>
-            )}
-            {error && (
-              <div className="form-error" role="alert">
-                {error.message}
-              </div>
-            )}
-            <div className="timeline-reading-shell">
-              <TimelineRail
-                entries={timelineEntries}
-                streamRef={stream}
-                onSelect={handleTimelineSelect}
-                loadOlder={
-                  !detail.data?.timeline && detail.hasNextPage
-                    ? () => {
-                        void history.loadOlder("search");
-                      }
-                    : undefined
-                }
-                loading={history.loading}
-              />
-              <div
-                ref={stream}
-                className="provider-events"
-                onScroll={history.onScroll}
-                onScrollCapture={history.onScrollCapture}
-                onWheel={history.onWheel}
-                onTouchStart={history.onTouchStart}
-                onTouchMove={history.onTouchMove}
-                onKeyDown={history.onKeyDown}
-                tabIndex={0}
-              >
-                <HistoryLoading
-                  loading={history.loading}
-                  error={history.error}
-                  retry={history.retry}
-                />
-                <UserMessageScope.Provider
-                  value={{ provider, sessionKey: selected.sessionKey }}
-                >
-                  <MarkdownPathScope.Provider value={selected.cwd}>
-                    <DisclosureScope.Provider value={`${provider}:${selected.sessionKey}`}>
-                      <DisclosureRevealContext.Provider
-                        value={
-                          pendingSearch?.sessionKey === selected.sessionKey
-                            ? pendingSearch.positionKey
-                            : null
-                        }
-                      >
-                        {renderProviderEvents(
-                          groupedEvents,
-                          selected.title,
-                          label,
-                          selected.status === "running",
-                        )}
-                      </DisclosureRevealContext.Provider>
-                    </DisclosureScope.Provider>
-                  </MarkdownPathScope.Provider>
-                </UserMessageScope.Provider>
-                <TimelineHistoryStatus
-                  navigation={{ ...navigation, busy: navigation.busy || history.loading }}
-                />
-                {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
-                {!detail.isLoading && !events.length && (
-                  <div className="muted-row">暂无对话</div>
-                )}
-              </div>
+            }
+          />
+          {feedback && (
+            <div role="status" className="task-feedback">
+              {feedback}
             </div>
-          </>
-        )}
-      </main>
-    </div>
+          )}
+          {renaming && (
+            <WorkspaceInlineRename
+              ariaLabel={`${label} 任务名称`}
+              value={title}
+              onChange={setTitle}
+              busy={actions.rename.isPending}
+              onSubmit={() =>
+                actions.rename.mutate(
+                  { sessionKey: selected.sessionKey, title },
+                  { onSuccess: () => setRenaming(false) },
+                )
+              }
+              onCancel={() => setRenaming(false)}
+            />
+          )}
+          {selected.readError && (
+            <div className="form-error" role="alert">
+              {selected.readError}
+            </div>
+          )}
+          {selected.readWarning && (
+            <DisclosureScope.Provider value={`${provider}:${selected.sessionKey}`}>
+              <ActivityDetails
+                className="task-feedback"
+                summary="读取提示"
+                initiallyOpen={false}
+                stateKey="read-warning"
+              >
+                {() => <div>{selected.readWarning}</div>}
+              </ActivityDetails>
+            </DisclosureScope.Provider>
+          )}
+          {error && (
+            <div className="form-error" role="alert">
+              {error.message}
+            </div>
+          )}
+          <div className="timeline-reading-shell">
+            <TimelineRail
+              entries={timelineEntries}
+              streamRef={stream}
+              onSelect={handleTimelineSelect}
+              loadOlder={
+                !detail.data?.timeline && detail.hasNextPage
+                  ? () => {
+                      void history.loadOlder("search");
+                    }
+                  : undefined
+              }
+              loading={history.loading}
+            />
+            <div
+              ref={stream}
+              className="provider-events"
+              onScroll={history.onScroll}
+              onScrollCapture={history.onScrollCapture}
+              onWheel={history.onWheel}
+              onTouchStart={history.onTouchStart}
+              onTouchMove={history.onTouchMove}
+              onKeyDown={history.onKeyDown}
+              tabIndex={0}
+            >
+              <HistoryLoading
+                loading={history.loading}
+                error={history.error}
+                retry={history.retry}
+              />
+              <UserMessageScope.Provider
+                value={{ provider, sessionKey: selected.sessionKey }}
+              >
+                <MarkdownPathScope.Provider value={selected.cwd}>
+                  <DisclosureScope.Provider value={`${provider}:${selected.sessionKey}`}>
+                    <DisclosureRevealContext.Provider
+                      value={
+                        pendingSearch?.sessionKey === selected.sessionKey
+                          ? pendingSearch.positionKey
+                          : null
+                      }
+                    >
+                      {renderProviderEvents(
+                        groupedEvents,
+                        selected.title,
+                        label,
+                        selected.status === "running",
+                      )}
+                    </DisclosureRevealContext.Provider>
+                  </DisclosureScope.Provider>
+                </MarkdownPathScope.Provider>
+              </UserMessageScope.Provider>
+              <TimelineHistoryStatus
+                navigation={{ ...navigation, busy: navigation.busy || history.loading }}
+              />
+              {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
+              {!detail.isLoading && !events.length && (
+                <div className="muted-row">暂无对话</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </WorkspaceSplitShell>
   );
 }
 

@@ -10,7 +10,7 @@ export function ConfirmDialog({ labelledBy, busy, onCancel, children, returnFocu
       queueMicrotask(() => returnFocus?.current?.focus());
     };
   }, [returnFocus]);
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby={labelledBy} onCancel={(event) => {
+  return <dialog ref={dialog} className="confirm-dialog ws-modal" aria-labelledby={labelledBy} onCancel={(event) => {
     event.preventDefault();
     if (!busy) onCancel();
   }}>{children}</dialog>;

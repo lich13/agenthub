@@ -10,6 +10,7 @@ import { ProcessGroupView } from "../common/ProcessGroupView";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls } from "../common/SessionBatchControls";
 import { TaskMenu } from "../common/TaskMenu";
+import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import { useReadOnlyThreadActions, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
@@ -159,7 +160,7 @@ export function Conversation(props: {
     : detail.summary;
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const { feedback, setFeedback, copy, clear: clearFeedback } = useCopyFeedback();
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [revealedHistory, setRevealedHistory] = useState<{ scope: string; positionKey: string } | null>(null);
   const stream = useRef<HTMLDivElement>(null);
@@ -254,8 +255,8 @@ export function Conversation(props: {
   useEffect(() => {
     setHistoryExpanded(false);
     setRenaming(false);
-    setFeedback(null);
-  }, [props.threadId, machine]);
+    clearFeedback();
+  }, [props.threadId, machine, clearFeedback]);
   useLayoutEffect(() => {
     const anchor = viewportAnchor.current;
     const element = stream.current;
@@ -277,9 +278,9 @@ export function Conversation(props: {
   useEffect(() => {
     if (searchPosition) {
       setRevealedHistory({ scope: historyScope, positionKey: searchPosition });
-      setFeedback(null);
+      clearFeedback();
     }
-  }, [searchPosition, historyScope]);
+  }, [searchPosition, historyScope, clearFeedback]);
   useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.sessionKey !== props.threadId || !props.searchReady || history.loading) return;
@@ -287,7 +288,7 @@ export function Conversation(props: {
     history.follow.current = false;
     if (locateTimelineTarget(target.positionKey, stream.current?.closest(".conversation-main") ?? undefined, "auto")) {
       history.capture();
-      setFeedback(null);
+      clearFeedback();
       props.onSearchResolved?.();
       return;
     }
@@ -298,12 +299,7 @@ export function Conversation(props: {
     }
     setFeedback("结果所在历史未加载，请刷新后重试");
     props.onSearchMiss?.();
-  }, [props.searchTarget, props.threadId, props.searchReady, navigation.active, navigation.latest, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, history.loading, history.error, history.loadOlder, history.capture, history.follow, blocks.length]);
-  const copy = async (text: string | null | undefined) => {
-    if (!text) return;
-    try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
-    catch { setFeedback("复制失败"); }
-  };
+  }, [props.searchTarget, props.threadId, props.searchReady, navigation.active, navigation.latest, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, history.loading, history.error, history.loadOlder, history.capture, history.follow, blocks.length, clearFeedback, setFeedback]);
   const archived = Boolean(props.archivedView) || summary.status === "Archived";
   return <div ref={shell} className="conversation-shell compact-readonly-conversation">
     <main className="conversation-main">

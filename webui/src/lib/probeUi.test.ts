@@ -60,10 +60,10 @@ const settings: ProbeSettings = {
 };
 
 describe("Probe UI helpers", () => {
-  test("uses Chinese probe labels and unified sections including Hooks management", () => {
+  test("uses Chinese probe labels and a single unified settings section without redundant sub-tabs", () => {
     expect(PROBE_NAV_LABEL).toBe("Probe");
-    expect(probeSections.map((section) => section.id)).toEqual(["settings", "hooks", "events"]);
-    expect(probeSections.map((section) => section.label)).toEqual(["通知配置", "Hooks 管理", "最近事件"]);
+    expect(probeSections.map((section) => section.id)).toEqual(["settings"]);
+    expect(probeSections.map((section) => section.label)).toEqual(["通知配置"]);
   });
 
   test("builds readable event display details without exposing secret payload values", () => {

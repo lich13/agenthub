@@ -3,9 +3,7 @@ import type { ProbeEvent, ProbeSettings } from "../types";
 export const PROBE_NAV_LABEL = "Probe";
 
 export const probeSections = [
-  { id: "settings", label: "通知配置" },
-  { id: "hooks", label: "Hooks 管理" },
-  { id: "events", label: "最近事件" }
+  { id: "settings", label: "通知配置" }
 ] as const;
 
 export type ProbeSectionId = typeof probeSections[number]["id"];

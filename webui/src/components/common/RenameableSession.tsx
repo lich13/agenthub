@@ -159,7 +159,7 @@ export function RenameableSession({
       }))
     : [];
 
-  const rowClassName = `${className}${multiSelected ? " multi-selected" : ""}`;
+  const rowClassName = `ws-list-item ${className}${multiSelected ? " multi-selected" : ""}`;
 
   return (
     <div ref={root} className={`renameable-session${multiSelected ? " is-multi-selected" : ""}`}>

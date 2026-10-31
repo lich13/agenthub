@@ -30,7 +30,7 @@ export function Metric({
 }: {
   label: string;
   value: string;
-  tone?: "success" | "warning" | "danger";
+  tone?: "success" | "warning" | "danger" | "info" | "neutral";
   wide?: boolean;
 }) {
   return (
