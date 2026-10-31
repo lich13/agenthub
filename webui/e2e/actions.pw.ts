@@ -7,7 +7,6 @@ test("Probe saves Bark and restricted recovery independently and retains drafts 
   observeCommands(page, (command, args) => { if (command === "probe.settings.save") saved.push(args.settings); });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
-  await page.getByRole("button", { name: "通知配置", exact: true }).click();
   await page.getByLabel("启用 Bark", { exact: true }).uncheck();
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect.poll(() => saved.length).toBe(1);
@@ -42,7 +41,6 @@ test("Probe rejects duplicate save events before pending state renders", async (
   });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
-  await page.getByRole("button", { name: "通知配置", exact: true }).click();
   const save = page.getByRole("button", { name: "保存设置", exact: true });
   await expect(save).toBeEnabled();
   // Dispatch both events in one turn, before React Query's pending notification.

@@ -94,18 +94,15 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(page.locator(".provider-session")).toBeVisible();
       }
       await nav.getByRole("button", { name: "Probe", exact: true }).click();
-      await expect(page.getByRole("button", { name: "最近事件", exact: true })).toBeVisible();
+      await expect(page.getByText("最近事件", { exact: true })).toBeVisible();
       await expect(page.locator(".probe-status-banner")).toHaveCount(0);
       await assertContrast(page, ".probe-live-overview strong, .probe-live-overview span, .probe-event-card .status-chip");
-      await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
       await expect(page.getByText("Bark", { exact: true })).toBeVisible();
       await expect(page.getByLabel("主机标签", { exact: true })).toBeVisible();
       if (info.project.name === "chromium") {
         await expect.poll(() => page.evaluate(() => innerWidth - document.documentElement.clientWidth), { message: "classic scrollbar gutter is present" }).toBeGreaterThan(0);
       }
       await assertContrast(page, ".field-label, .metric span, .metric strong");
-      await assertNoOverflow(page);
-      await page.locator(".probe-layout .segmented").getByRole("button", { name: "Hooks 管理" }).click();
       await expect(page.getByText("Codex Hook", { exact: true }).first()).toBeVisible();
       await assertNoOverflow(page);
       await page.screenshot({ path: info.outputPath("probe.png"), fullPage: true });
@@ -127,7 +124,7 @@ test("theme changes at runtime and 200 percent zoom keeps controls available", a
   const color = () => page.locator("body").evaluate(el => getComputedStyle(el).backgroundColor);
   expect(await color()).toBe("rgb(255, 255, 255)");
   await page.emulateMedia({ colorScheme: "dark" });
-  expect(await color()).toBe("rgb(33, 33, 33)");
+  expect(await color()).toBe("rgb(22, 25, 32)");
   await page.locator(".thread-item").first().click();
   await page.evaluate(() => document.documentElement.style.zoom = "2");
   await assertNoOverflow(page);
@@ -248,7 +245,6 @@ test("hidden histories stop polling while started jobs continue to terminal", as
   await page.clock.fastForward(31000);
   expect(calls.slice(maintenance).filter(name => ["probe.events", "probe.settings.get", "jobs.list", "system.status"].includes(name))).toEqual([]);
   await nav.getByRole("button", { name: "Probe", exact: true }).click();
-  await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
   const barkPanel = page.locator(".panel").filter({ has: page.getByLabel("Device Key", { exact: true }) });
   await barkPanel.getByLabel("Device Key", { exact: true }).fill("isolated-fixture-key");
   await barkPanel.getByRole("button", { name: "保存", exact: true }).click();

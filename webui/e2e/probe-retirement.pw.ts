@@ -53,7 +53,6 @@ async function openBarkSettings(page: Page, mobile: boolean) {
   }));
   await page.goto("/");
   await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
-  await page.getByRole("button", { name: "通知配置", exact: true }).click();
   const panel = page.locator(".panel").filter({ has: page.getByLabel("Device Key", { exact: true }) });
   await expect(panel).toBeVisible();
   return { panel, saved, calls };
