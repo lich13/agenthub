@@ -95,6 +95,7 @@ thread_local! { static TEST_SNAPSHOT: std::cell::RefCell<Option<Snapshot>> = con
 #[cfg(test)]
 pub(super) fn test_owner(id: Option<&str>, cwd: &Path) {
     let date = "Tue Oct 20 08:00:00 2026";
+    invalidate_readonly_snapshot_cache();
     TEST_SNAPSHOT.with(|slot| {
         *slot.borrow_mut() = id.map(|id| Snapshot {
             processes: Some(vec![Process {
@@ -156,37 +157,44 @@ fn started_ms(value: &str) -> Option<i64> {
     .map(|d| d.and_utc().timestamp_millis())
 }
 
-#[cfg(not(test))]
-static READONLY_SNAPSHOT_CACHE: std::sync::Mutex<Option<(PathBuf, Snapshot, std::time::Instant)>> =
+type ReadonlySnapshotCacheEntry = ((PathBuf, PathBuf), Snapshot, std::time::Instant);
+
+static READONLY_SNAPSHOT_CACHE: std::sync::Mutex<Option<ReadonlySnapshotCacheEntry>> =
     std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn invalidate_readonly_snapshot_cache() {
+    if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
+        {
+            *guard = None;
+        }
+    }
+}
 
 impl Snapshot {
     pub(super) fn capture_readonly(paths: &ClaudePaths) -> Self {
-        #[cfg(test)]
-        {
-            Self::capture(paths)
-        }
-        #[cfg(not(test))]
-        {
-            if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
-                if let Some((ref cached_cfg, ref snap, ts)) = *guard {
-                    if *cached_cfg == paths.config
-                        && ts.elapsed() < std::time::Duration::from_secs(2)
-                    {
-                        return snap.clone();
-                    }
+        let key = (paths.config.clone(), paths.projects.clone());
+        if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
+            if let Some((ref cached_key, ref snap, ts)) = *guard {
+                if *cached_key == key && ts.elapsed() < std::time::Duration::from_secs(2) {
+                    return snap.clone();
                 }
             }
-            let snap = Self::capture(paths);
-            if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
-                *guard = Some((
-                    paths.config.clone(),
-                    snap.clone(),
-                    std::time::Instant::now(),
-                ));
-            }
-            snap
         }
+        let snap = Self::capture(paths);
+        if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+            *guard = Some((key, snap.clone(), std::time::Instant::now()));
+        }
+        snap
     }
 
     pub(super) fn capture(paths: &ClaudePaths) -> Self {

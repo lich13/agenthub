@@ -139,13 +139,20 @@ pub fn valid_cascade_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredAntigravityEndpoint {
+    pub pid: u32,
+    pub ports: Vec<u16>,
+    pub token: String,
+}
+
 #[derive(Clone)]
 struct LiveRpc {
     port: u16,
     token: String,
 }
 
-fn discover_host_endpoints() -> Vec<(Vec<u16>, String)> {
+pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     #[cfg(unix)]
     {
         use std::process::Command;
@@ -228,7 +235,11 @@ fn discover_host_endpoints() -> Vec<(Vec<u16>, String)> {
             ports.sort_unstable();
             ports.dedup();
             if !ports.is_empty() && ports.len() <= 8 {
-                candidates.push((ports, token.to_owned()));
+                candidates.push(DiscoveredAntigravityEndpoint {
+                    pid,
+                    ports,
+                    token: token.to_owned(),
+                });
             }
         }
         candidates
@@ -361,8 +372,53 @@ fn read_chunked_body<R: BufRead>(reader: &mut R, limit: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
-static CACHED_LIVE_RPC: std::sync::Mutex<Option<(Option<LiveRpc>, std::time::Instant)>> =
+type CachedEndpointSlot = (Option<DiscoveredAntigravityEndpoint>, std::time::Instant);
+
+static CACHED_LIVE_RPC: std::sync::Mutex<Option<CachedEndpointSlot>> =
     std::sync::Mutex::new(None);
+
+pub fn get_cached_live_endpoint() -> Option<Result<DiscoveredAntigravityEndpoint, ()>> {
+    let (entry, ts) = CACHED_LIVE_RPC.lock().ok().and_then(|g| g.clone())?;
+    match entry {
+        Some(ep) => Some(Ok(ep)),
+        None if ts.elapsed() < Duration::from_secs(5) => Some(Err(())),
+        None => None,
+    }
+}
+
+pub fn record_verified_live_endpoint(pid: u32, port: u16, token: String) {
+    if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+        *guard = Some((
+            Some(DiscoveredAntigravityEndpoint {
+                pid,
+                ports: vec![port],
+                token,
+            }),
+            std::time::Instant::now(),
+        ));
+    }
+}
+
+pub fn record_endpoint_failure(had_candidate_processes: bool) {
+    if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+        if had_candidate_processes {
+            *guard = None;
+        } else {
+            *guard = Some((None, std::time::Instant::now()));
+        }
+    }
+}
+
+pub fn evict_idle_endpoint_cache(max_idle: Duration) {
+    if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|(_, ts)| ts.elapsed() >= max_idle)
+        {
+            *guard = None;
+        }
+    }
+}
 
 fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
     match &paths.rpc_mode {
@@ -384,48 +440,53 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
             ))
         }
         RpcMode::AutoDiscover => {
-            let cached = CACHED_LIVE_RPC.lock().ok().and_then(|g| g.clone());
-            if let Some((entry, ts)) = cached {
-                match entry {
-                    Some(rpc) => {
+            match get_cached_live_endpoint() {
+                Some(Ok(ep)) => {
+                    for &port in &ep.ports {
                         if let Ok(value) = connect_rpc_post(
-                            rpc.port,
-                            &rpc.token,
+                            port,
+                            &ep.token,
                             "GetAllCascadeTrajectories",
                             &json!({"excludeSubtrajectories": false}),
                         ) {
                             if value["trajectorySummaries"].is_object() {
-                                return Some((rpc, value));
+                                return Some((
+                                    LiveRpc {
+                                        port,
+                                        token: ep.token,
+                                    },
+                                    value,
+                                ));
                             }
                         }
                     }
-                    None if ts.elapsed() < Duration::from_secs(5) => {
-                        return None;
-                    }
-                    None => {}
                 }
+                Some(Err(())) => return None,
+                None => {}
             }
-            for (ports, token) in discover_host_endpoints() {
-                for port in ports {
+            let candidates = discover_host_endpoints();
+            for ep in &candidates {
+                for &port in &ep.ports {
                     if let Ok(value) = connect_rpc_post(
                         port,
-                        &token,
+                        &ep.token,
                         "GetAllCascadeTrajectories",
                         &json!({"excludeSubtrajectories": false}),
                     ) {
                         if value["trajectorySummaries"].is_object() {
-                            let live = LiveRpc { port, token };
-                            if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
-                                *guard = Some((Some(live.clone()), std::time::Instant::now()));
-                            }
-                            return Some((live, value));
+                            record_verified_live_endpoint(ep.pid, port, ep.token.clone());
+                            return Some((
+                                LiveRpc {
+                                    port,
+                                    token: ep.token.clone(),
+                                },
+                                value,
+                            ));
                         }
                     }
                 }
             }
-            if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
-                *guard = Some((None, std::time::Instant::now()));
-            }
+            record_endpoint_failure(!candidates.is_empty());
             None
         }
     }

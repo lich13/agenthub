@@ -356,9 +356,18 @@ struct FoldedMetadata {
 }
 
 const DSH_FOLD_CACHE_MAX_ENTRIES: usize = 256;
-static DSH_FOLD_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, (super::FileStamp, FoldedMetadata)>>,
-> = std::sync::Mutex::new(None);
+type DshFoldCacheMap =
+    std::collections::HashMap<PathBuf, (super::FileStamp, FoldedMetadata, std::time::Instant)>;
+static DSH_FOLD_CACHE: std::sync::Mutex<Option<DshFoldCacheMap>> = std::sync::Mutex::new(None);
+
+pub(crate) fn evict_idle_fold_cache(max_idle: std::time::Duration) {
+    if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
+        if let Some(map) = guard.as_mut() {
+            let now = std::time::Instant::now();
+            map.retain(|_, (_, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+        }
+    }
+}
 
 fn extract_content_plain_text(content: &Value) -> String {
     if let Some(s) = content.as_str() {
@@ -441,9 +450,10 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
 fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
     let stamp = file_stamp(&session.log_path).ok();
     if let Some(ref s) = stamp {
-        if let Ok(guard) = DSH_FOLD_CACHE.lock() {
-            if let Some(cached) = guard.as_ref().and_then(|m| m.get(&session.log_path)) {
+        if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
+            if let Some(cached) = guard.as_mut().and_then(|m| m.get_mut(&session.log_path)) {
                 if cached.0 == *s {
+                    cached.2 = std::time::Instant::now();
                     return Ok(cached.1.clone());
                 }
             }
@@ -535,7 +545,10 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
             if map.len() >= DSH_FOLD_CACHE_MAX_ENTRIES && !map.contains_key(&session.log_path) {
                 map.clear();
             }
-            map.insert(session.log_path.clone(), (s, meta.clone()));
+            map.insert(
+                session.log_path.clone(),
+                (s, meta.clone(), std::time::Instant::now()),
+            );
         }
     }
     Ok(meta)
@@ -723,6 +736,9 @@ fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
 pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
     let session = find_root_session(paths, id)?;
     let mut events: Vec<ProviderHistoryEvent> = Vec::new();
+    let mut open_tool_indices: Vec<usize> = Vec::new();
+    let mut open_tool_by_id: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut line_index = 0usize;
     let mut current_turn: Option<String> = None;
 
@@ -757,9 +773,12 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 } else {
                     "failed"
                 };
-                for ev in &mut events {
-                    if ev.kind == "tool_call" && ev.status.as_deref() == Some("running") {
-                        ev.status = Some(settled.into());
+                open_tool_by_id.clear();
+                for call_idx in open_tool_indices.drain(..) {
+                    if let Some(ev) = events.get_mut(call_idx) {
+                        if ev.status.as_deref() == Some("running") {
+                            ev.status = Some(settled.into());
+                        }
                     }
                 }
             }
@@ -889,6 +908,11 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 } else {
                     String::new()
                 };
+                let call_idx = events.len();
+                open_tool_indices.push(call_idx);
+                if let Some(ref cid) = call_id {
+                    open_tool_by_id.insert(cid.clone(), call_idx);
+                }
                 events.push(ProviderHistoryEvent {
                     id: format!("seq-{seq}-toolcall"),
                     timestamp,
@@ -917,6 +941,14 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 let is_error = data["isError"].as_bool() == Some(true)
                     || data["message"]["isError"].as_bool() == Some(true)
                     || data.get("error").is_some_and(|e| !e.is_null());
+                let status_str = if is_error { "failed" } else { "completed" };
+                if let Some(ref cid) = call_id {
+                    if let Some(call_idx) = open_tool_by_id.remove(cid) {
+                        if let Some(ev) = events.get_mut(call_idx) {
+                            ev.status = Some(status_str.into());
+                        }
+                    }
+                }
                 let result_text = if !output.trim().is_empty() {
                     Some(output)
                 } else {
@@ -930,7 +962,7 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                     text: Some(name.to_owned()),
                     call_id,
                     turn_id: current_turn.clone(),
-                    status: Some(if is_error { "failed" } else { "completed" }.into()),
+                    status: Some(status_str.into()),
                     detail: None,
                     result: result_text,
                     user_message: None,

@@ -18,7 +18,7 @@ pub(super) enum Ownership {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Registration {
     id: String,
     pid: Option<u32>,
@@ -33,9 +33,33 @@ struct Process {
     native: Option<bool>,
 }
 
+#[derive(Clone)]
 pub(super) struct Snapshot {
     registrations: Option<Vec<Registration>>,
     processes: Option<HashMap<u32, Process>>,
+}
+
+type ReadonlyGrokSnapshotKey = (PathBuf, Option<(u64, Option<SystemTime>)>);
+type ReadonlyGrokSnapshotEntry = (ReadonlyGrokSnapshotKey, Snapshot, std::time::Instant);
+
+static READONLY_SNAPSHOT_CACHE: Mutex<Option<ReadonlyGrokSnapshotEntry>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn invalidate_readonly_snapshot_cache() {
+    if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
+        {
+            *guard = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -45,12 +69,33 @@ thread_local! {
 
 #[cfg(test)]
 pub(super) fn test_owner(id: Option<&str>, cwd: &str) {
+    invalidate_readonly_snapshot_cache();
     TEST_SNAPSHOT.with(|slot| {
         *slot.borrow_mut() = id.map(|id| (id.to_owned(), cwd.to_owned()));
     });
 }
 
 impl Snapshot {
+    pub(super) fn capture_readonly(paths: &GrokPaths) -> Self {
+        let reg_path = paths.home.join("active_sessions.json");
+        let stamp = fs::metadata(&reg_path)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()));
+        let key = (paths.home.clone(), stamp);
+        if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
+            if let Some((ref cached_key, ref snap, ts)) = *guard {
+                if *cached_key == key && ts.elapsed() < std::time::Duration::from_secs(2) {
+                    return snap.clone();
+                }
+            }
+        }
+        let snap = Self::capture(paths);
+        if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+            *guard = Some((key, snap.clone(), std::time::Instant::now()));
+        }
+        snap
+    }
+
     pub(super) fn capture(paths: &GrokPaths) -> Self {
         #[cfg(test)]
         if let Some((id, cwd)) = TEST_SNAPSHOT.with(|slot| slot.borrow().clone()) {

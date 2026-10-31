@@ -31,7 +31,7 @@ mod integration_tests;
 #[cfg(test)]
 mod legacy_routes_tests;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use claude::{
     claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,

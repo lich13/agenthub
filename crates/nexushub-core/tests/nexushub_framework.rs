@@ -208,12 +208,8 @@ fn local_plugin_catalog_matches_existing_builtin_surface() {
 #[tokio::test]
 async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     let root = temp_dir("nexushub-probe-status");
-    let codex_home = root.join(".codex");
-    fs::create_dir_all(&codex_home).unwrap();
-    seed_codex_logs_db(&codex_home.join("logs_2.sqlite"), &[]);
-    let mut config = Config::default();
-    config.codex.home = codex_home;
-    config.paths.db_path = root.join("nexushub.sqlite");
+    let config = sandboxed_config(&root);
+    seed_codex_logs_db(&config.codex.home.join("logs_2.sqlite"), &[]);
     let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
         .status()
         .await
@@ -238,11 +234,8 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
 #[tokio::test]
 async fn probe_status_exposes_hook_and_bark_config_without_device_key() {
     let root = temp_dir("nexushub-probe-status-bark-config");
-    let codex_home = root.join(".codex");
-    fs::create_dir_all(&codex_home).unwrap();
-    seed_codex_logs_db(&codex_home.join("logs_2.sqlite"), &[]);
-    let mut config = Config::default();
-    config.codex.home = codex_home;
+    let mut config = sandboxed_config(&root);
+    seed_codex_logs_db(&config.codex.home.join("logs_2.sqlite"), &[]);
     config.probe.hooks.manage_stop_hook = true;
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_completion = true;
@@ -282,7 +275,8 @@ fn probe_rejects_unsafe_thread_probe_ids() {
 
 #[test]
 fn probe_action_plans_use_nexushub_commands_and_confirmation_ids() {
-    let config = Config::default();
+    let root = temp_dir("nexushub-probe-action-plans");
+    let config = sandboxed_config(&root);
     let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
 
     let hook_plan = runtime
@@ -300,15 +294,15 @@ fn probe_action_plans_use_nexushub_commands_and_confirmation_ids() {
         .steps
         .iter()
         .any(|step| step.contains("codex-sentinel")));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries() {
     let root = temp_dir("nexushub-probe-hook-managed");
-    let codex_home = root.join(".codex");
-    fs::create_dir_all(&codex_home).unwrap();
+    let mut config = sandboxed_config(&root);
     fs::write(
-        codex_home.join("hooks.json"),
+        config.codex.home.join("hooks.json"),
         json!({
             "hooks": {
                 "Stop": [{
@@ -331,8 +325,6 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
         .to_string(),
     )
     .unwrap();
-    let mut config = Config::default();
-    config.codex.home = codex_home;
     config.probe.notifications.enabled = true;
     let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
 
@@ -396,7 +388,8 @@ fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() 
 
 #[test]
 fn capabilities_response_has_no_status_collection_or_private_paths() {
-    let config = Config::default();
+    let root = temp_dir("nexushub-capabilities-sandbox");
+    let config = sandboxed_config(&root);
     let paths = PlatformPaths::for_kind(PlatformKind::Macos);
     let response =
         nexushub_core::services::use_cases::NexusHubUseCases::with_config(&config, &paths)
@@ -409,12 +402,14 @@ fn capabilities_response_has_no_status_collection_or_private_paths() {
     assert_eq!(json["api_version"], 2);
     assert_eq!(json.as_object().unwrap().len(), 3);
     assert!(json["capabilities"].get("status").is_none());
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() {
+    let root = temp_dir("nexushub-probe-event-model");
     let runtime = ProbeRuntime::new(
-        Config::default(),
+        sandboxed_config(&root),
         PlatformPaths::for_kind(PlatformKind::Linux),
     );
 
@@ -463,11 +458,13 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     assert_eq!(recorded.dedupe_key, completion.dedupe_key);
     let duplicate = ProbeEventOutcome::from_claim(&completion, false);
     assert!(!duplicate.recorded);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
-    let mut config = Config::default();
+    let root = temp_dir("nexushub-bark-test-plan");
+    let mut config = sandboxed_config(&root);
     config.probe.notifications.enabled = true;
     config.probe.notifications.group = "NexusHub Ops".to_string();
     config.probe.notifications.sound = Some("alarm".to_string());
@@ -492,6 +489,20 @@ fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
     assert!(!rendered.contains("secret"));
     assert!(!rendered.contains("alarm"));
     assert!(!rendered.contains("example.com"));
+    let _ = fs::remove_dir_all(root);
+}
+
+fn sandboxed_config(root: &std::path::Path) -> Config {
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    config.codex.workspace = root.join("workspace");
+    config.paths.data_dir = root.join("data");
+    config.paths.db_path = root.join("nexushub.sqlite");
+    config.paths.log_dir = root.join("logs");
+    config.codex.bridge_enabled = false;
+    config
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

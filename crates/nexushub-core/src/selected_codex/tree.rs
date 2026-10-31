@@ -100,14 +100,23 @@ struct Inventory {
     errors: Vec<String>,
 }
 
-fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
-    let mut result = Inventory {
-        files: BTreeSet::new(),
+struct BatchInventory {
+    files_by_id: BTreeMap<String, BTreeSet<PathBuf>>,
+    rollouts: BTreeSet<String>,
+    errors: Vec<String>,
+}
+
+fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchInventory {
+    let mut result = BatchInventory {
+        files_by_id: BTreeMap::new(),
         rollouts: ids.clone(),
         errors: Vec::new(),
     };
+    if ids.is_empty() {
+        return result;
+    }
     let roots = [paths.sessions_dir(), paths.home.join("archived_sessions")];
-    let mut add = |path: PathBuf| {
+    let mut add_for_id = |id: &str, path: PathBuf| {
         if (path.extension().is_some_and(|ext| ext == "jsonl")
             || rollout_file::is_compressed(&path))
             && roots.iter().any(|root| session_delete::within(root, &path))
@@ -115,11 +124,12 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
             if let Some(name) = RolloutName::parse(&path) {
                 result.rollouts.insert(name.rollout_id);
             }
+            let entry = result.files_by_id.entry(id.to_owned()).or_default();
             for sibling in [
                 rollout_file::plain_path(&path),
                 rollout_file::compressed_path(&path),
             ] {
-                result.files.insert(sibling);
+                entry.insert(sibling);
             }
         }
     };
@@ -130,10 +140,13 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
             if crate::archive::table_columns(&conn, "threads")?.contains("rollout_path") {
                 let ids_json = serde_json::to_string(ids)?;
                 let mut stmt = conn.prepare(
-                    "SELECT rollout_path FROM threads WHERE rollout_path IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
+                    "SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
                 )?;
-                for row in stmt.query_map([&ids_json], |r| r.get::<_, String>(0))? {
-                    add(PathBuf::from(row?));
+                for row in stmt.query_map([&ids_json], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })? {
+                    let (id, path) = row?;
+                    add_for_id(&id, PathBuf::from(path));
                 }
             }
             Ok(())
@@ -150,13 +163,13 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
                         continue;
                     }
                     if let Ok(row) = serde_json::from_str::<Value>(&line) {
-                        if row["id"].as_str().is_some_and(|id| ids.contains(id)) {
+                        if let Some(id) = row["id"].as_str().filter(|id| ids.contains(*id)) {
                             if let Some(path) = row
                                 .get("path")
                                 .or_else(|| row.get("rollout_path"))
                                 .and_then(Value::as_str)
                             {
-                                add(path.into());
+                                add_for_id(id, path.into());
                             }
                         }
                     }
@@ -181,7 +194,11 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
                     if let Some(name) = RolloutName::parse(entry.path()) {
                         if ids.contains(&name.thread_id) {
                             result.rollouts.insert(name.rollout_id);
-                            result.files.insert(entry.into_path());
+                            result
+                                .files_by_id
+                                .entry(name.thread_id)
+                                .or_default()
+                                .insert(entry.into_path());
                         }
                     }
                 }
@@ -190,12 +207,16 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
         }
     }
     for id in ids {
-        result.files.insert(
-            paths
-                .home
-                .join("thread-writer-locks")
-                .join(format!("{id}.lock")),
-        );
+        result
+            .files_by_id
+            .entry(id.clone())
+            .or_default()
+            .insert(
+                paths
+                    .home
+                    .join("thread-writer-locks")
+                    .join(format!("{id}.lock")),
+            );
     }
     let snapshots = paths.home.join("shell_snapshots");
     match fs::read_dir(&snapshots) {
@@ -203,13 +224,19 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
             for entry in entries {
                 match entry {
                     Ok(entry) => {
-                        if entry.file_name().to_str().is_some_and(|name| {
-                            ids.iter().any(|id| {
-                                name.strip_prefix(id.as_str())
+                        if let Some(name) = entry.file_name().to_str() {
+                            for id in ids {
+                                if name
+                                    .strip_prefix(id.as_str())
                                     .is_some_and(|suffix| suffix.starts_with('.'))
-                            })
-                        }) {
-                            result.files.insert(entry.path());
+                                {
+                                    result
+                                        .files_by_id
+                                        .entry(id.clone())
+                                        .or_default()
+                                        .insert(entry.path());
+                                }
+                            }
                         }
                     }
                     Err(error) => result
@@ -231,21 +258,35 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
             .into_iter();
         while let Some(entry) = entries.next() {
             match entry {
-                Ok(entry)
-                    if entry
+                Ok(entry) => {
+                    if let Some(id) = entry
                         .file_name()
                         .to_str()
-                        .is_some_and(|id| ids.contains(id)) =>
-                {
-                    result.files.insert(entry.into_path());
-                    entries.skip_current_dir();
+                        .filter(|id| ids.contains(*id))
+                    {
+                        let id_owned = id.to_owned();
+                        result
+                            .files_by_id
+                            .entry(id_owned)
+                            .or_default()
+                            .insert(entry.into_path());
+                        entries.skip_current_dir();
+                    }
                 }
-                Ok(_) => {}
                 Err(e) => result.errors.push(e.to_string()),
             }
         }
     }
     result
+}
+
+fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
+    let batch = collect_inventory_by_id(paths, ids);
+    Inventory {
+        files: batch.files_by_id.into_values().flatten().collect(),
+        rollouts: batch.rollouts,
+        errors: batch.errors,
+    }
 }
 
 const DELETE_RESIDUALS_FILE: &str = ".nexushub-delete-residuals.json";
@@ -475,130 +516,20 @@ pub(crate) fn estimate_bytes_batch(paths: &CodexPaths, ids: &[String]) -> BTreeM
     if target_set.is_empty() {
         return BTreeMap::new();
     }
-    let mut files_by_id: BTreeMap<String, BTreeSet<PathBuf>> = BTreeMap::new();
-    let roots = [paths.sessions_dir(), paths.home.join("archived_sessions")];
-    let mut add_for_id = |id: &str, path: PathBuf| {
-        if (path.extension().is_some_and(|ext| ext == "jsonl")
-            || rollout_file::is_compressed(&path))
-            && roots.iter().any(|root| session_delete::within(root, &path))
-        {
-            let entry = files_by_id.entry(id.to_owned()).or_default();
-            for sibling in [
-                rollout_file::plain_path(&path),
-                rollout_file::compressed_path(&path),
-            ] {
-                entry.insert(sibling);
-            }
-        }
-    };
-    if paths.state_db().exists() {
-        let _ = (|| -> Result<()> {
-            let conn =
-                Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            if crate::archive::table_columns(&conn, "threads")?.contains("rollout_path") {
-                let ids_json = serde_json::to_string(&target_set)?;
-                let mut stmt = conn.prepare(
-                    "SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
-                )?;
-                for row in stmt.query_map([&ids_json], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })? {
-                    let (id, path) = row?;
-                    add_for_id(&id, PathBuf::from(path));
-                }
-            }
-            Ok(())
-        })();
-    }
-    if let Ok(file) = fs::File::open(paths.session_index()) {
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Ok(row) = serde_json::from_str::<Value>(&line) {
-                if let Some(id) = row["id"].as_str().filter(|id| target_set.contains(*id)) {
-                    if let Some(path) = row
-                        .get("path")
-                        .or_else(|| row.get("rollout_path"))
-                        .and_then(Value::as_str)
-                    {
-                        add_for_id(id, path.into());
-                    }
-                }
-            }
-        }
-    }
-    for root in &roots {
-        if !root.exists() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(root)
-            .follow_links(false)
-            .follow_root_links(false)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(name) = RolloutName::parse(entry.path()) {
-                if target_set.contains(&name.thread_id) {
-                    files_by_id
-                        .entry(name.thread_id)
-                        .or_default()
-                        .insert(entry.into_path());
-                }
-            }
-        }
-    }
-    for id in &target_set {
-        let lock = paths
-            .home
-            .join("thread-writer-locks")
-            .join(format!("{id}.lock"));
-        if fs::symlink_metadata(&lock).is_ok() {
-            files_by_id.entry(id.clone()).or_default().insert(lock);
-        }
-    }
-    let snapshots = paths.home.join("shell_snapshots");
-    if let Ok(entries) = fs::read_dir(&snapshots) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Some((prefix, _)) = name.split_once('.') {
-                    if target_set.contains(prefix) {
-                        files_by_id
-                            .entry(prefix.to_owned())
-                            .or_default()
-                            .insert(entry.path());
-                    }
-                }
-            }
-        }
-    }
-    let visualizations = paths.home.join("visualizations");
-    if visualizations.exists() {
-        let mut entries = walkdir::WalkDir::new(&visualizations)
-            .follow_links(false)
-            .follow_root_links(false)
-            .into_iter();
-        while let Some(Ok(entry)) = entries.next() {
-            if let Some(id) = entry
-                .file_name()
-                .to_str()
-                .filter(|id| target_set.contains(*id))
-            {
-                let id_owned = id.to_owned();
-                files_by_id
-                    .entry(id_owned)
-                    .or_default()
-                    .insert(entry.into_path());
-                entries.skip_current_dir();
-            }
-        }
-    }
-    files_by_id
+    collect_inventory_by_id(paths, &target_set)
+        .files_by_id
         .into_iter()
-        .map(|(id, files)| {
+        .filter_map(|(id, files)| {
             let existing: Vec<PathBuf> = files
                 .into_iter()
                 .filter(|p| fs::symlink_metadata(p).is_ok())
                 .collect();
-            let (_, bytes) = session_delete::size(&existing);
-            (id, bytes)
+            if existing.is_empty() {
+                None
+            } else {
+                let (_, bytes) = session_delete::size(&existing);
+                Some((id, bytes))
+            }
         })
         .collect()
 }

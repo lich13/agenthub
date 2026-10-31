@@ -612,6 +612,14 @@ pub(crate) fn notification_snapshots(
     Ok(scan)
 }
 
+pub(crate) fn probe_snapshot_for_path(
+    paths: &ClaudePaths,
+    path: &Path,
+) -> Result<crate::native_probe::NativeStreamSnapshot> {
+    let canonical_root = paths.projects.canonicalize()?;
+    reader::probe_snapshot(path, &canonical_root)
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaudePrompt {
     pub turn_id: String,

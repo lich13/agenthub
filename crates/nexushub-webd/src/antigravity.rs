@@ -61,116 +61,7 @@ pub async fn evict_idle_cache(max_idle: Duration) {
         meta_cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
     }
 }
-#[derive(Clone)]
-struct Endpoint {
-    pid: u32,
-    ports: Vec<u16>,
-    token: String,
-}
-
-static CACHED_ENDPOINT: std::sync::Mutex<Option<(Option<Endpoint>, std::time::Instant)>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(target_os = "macos")]
-fn discover() -> Result<Endpoint> {
-    use std::process::Command;
-    let output = Command::new("/bin/ps")
-        .args(["-ww", "-axo", "pid=,uid=,comm="])
-        .output()?;
-    ensure!(output.status.success(), "Antigravity process unavailable");
-    let processes = String::from_utf8(output.stdout)?;
-    let uid = unsafe { libc_uid() };
-    let mut owners = Vec::new();
-    for line in processes.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(pid) = fields.next().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(owner) = fields.next().and_then(|s| s.trim().parse::<u32>().ok()) else {
-            continue;
-        };
-        let path = fields.collect::<Vec<_>>().join(" ");
-        if owner == uid
-            && path.ends_with("/Antigravity.app/Contents/Resources/bin/language_server")
-            && std::path::Path::new(&path).is_file()
-        {
-            owners.push(pid);
-        }
-    }
-    ensure!(
-        owners.len() == 1,
-        "Antigravity native owner unavailable or ambiguous"
-    );
-    let pid = owners[0];
-    let output = Command::new("/bin/ps")
-        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
-        .output()?;
-    ensure!(
-        output.status.success(),
-        "Antigravity native owner unavailable"
-    );
-    let command = String::from_utf8(output.stdout)?;
-    let args = command.split_whitespace().collect::<Vec<_>>();
-    let token = args
-        .windows(2)
-        .find(|w| w[0] == "--csrf_token")
-        .map(|w| w[1])
-        .context("Antigravity authentication unavailable")?;
-    ensure!(
-        !token.is_empty()
-            && token.len() <= 256
-            && token
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')),
-        "Antigravity authentication unavailable"
-    );
-    let output = Command::new("/usr/sbin/lsof")
-        .args([
-            "-Pan",
-            "-p",
-            &pid.to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-            "-Fn",
-        ])
-        .output()?;
-    ensure!(output.status.success(), "Antigravity listener unavailable");
-    let mut ports = String::from_utf8(output.stdout)?
-        .lines()
-        .filter_map(parse_loopback_listener_port)
-        .collect::<Vec<_>>();
-    ports.sort_unstable();
-    ports.dedup();
-    ensure!(
-        !ports.is_empty() && ports.len() <= 8,
-        "Antigravity loopback listener unavailable"
-    );
-    Ok(Endpoint {
-        pid,
-        ports,
-        token: token.into(),
-    })
-}
-#[cfg(target_os = "macos")]
-unsafe fn libc_uid() -> u32 {
-    unsafe extern "C" {
-        fn getuid() -> u32;
-    }
-    unsafe { getuid() }
-}
-#[cfg(not(target_os = "macos"))]
-fn discover() -> Result<Endpoint> {
-    anyhow::bail!("Antigravity notifications require the local Mac App")
-}
-
-#[cfg(target_os = "macos")]
-fn parse_loopback_listener_port(line: &str) -> Option<u16> {
-    use std::net::Ipv4Addr;
-    let (host, port) = line.strip_prefix('n')?.split_once(':')?;
-    (host.parse::<Ipv4Addr>().ok() == Some(Ipv4Addr::LOCALHOST))
-        .then(|| port.parse::<u16>().ok())
-        .flatten()
-}
+type Endpoint = antigravity::sessions::DiscoveredAntigravityEndpoint;
 
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
@@ -225,42 +116,44 @@ async fn query(
     serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid Antigravity response"))
 }
 async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
+    if !cfg!(target_os = "macos") {
+        anyhow::bail!("Antigravity notifications require the local Mac App");
+    }
     let client = client()?;
-    let cached = CACHED_ENDPOINT.lock().ok().and_then(|g| g.clone());
-    if let Some((entry, ts)) = cached {
-        match entry {
-            Some(endpoint) => {
-                for &port in &endpoint.ports {
-                    if let Ok(value) = query(
-                        &client,
-                        port,
-                        &endpoint.token,
-                        "GetAllCascadeTrajectories",
-                        json!({"excludeSubtrajectories":false}),
-                    )
-                    .await
-                    {
-                        if value["trajectorySummaries"].is_object() {
-                            return Ok((endpoint, client, port, value));
-                        }
+    match antigravity::sessions::get_cached_live_endpoint() {
+        Some(Ok(endpoint)) => {
+            for &port in &endpoint.ports {
+                if let Ok(value) = query(
+                    &client,
+                    port,
+                    &endpoint.token,
+                    "GetAllCascadeTrajectories",
+                    json!({"excludeSubtrajectories":false}),
+                )
+                .await
+                {
+                    if value["trajectorySummaries"].is_object() {
+                        return Ok((endpoint, client, port, value));
                     }
                 }
             }
-            None if ts.elapsed() < Duration::from_secs(5) => {
-                anyhow::bail!("Antigravity native API unavailable");
-            }
-            None => {}
         }
+        Some(Err(())) => {
+            anyhow::bail!("Antigravity native API unavailable");
+        }
+        None => {}
     }
-    let endpoint = match tokio::task::spawn_blocking(discover).await? {
-        Ok(ep) => ep,
-        Err(err) => {
-            if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
-                *guard = Some((None, std::time::Instant::now()));
-            }
-            return Err(err);
-        }
-    };
+    let candidates =
+        tokio::task::spawn_blocking(antigravity::sessions::discover_host_endpoints).await?;
+    if candidates.is_empty() {
+        antigravity::sessions::record_endpoint_failure(false);
+        anyhow::bail!("Antigravity native owner unavailable or ambiguous");
+    }
+    if candidates.len() > 1 {
+        antigravity::sessions::record_endpoint_failure(true);
+        anyhow::bail!("Antigravity native owner unavailable or ambiguous");
+    }
+    let endpoint = candidates.into_iter().next().unwrap();
     for &port in &endpoint.ports {
         if let Ok(value) = query(
             &client,
@@ -272,21 +165,16 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
         .await
         {
             if value["trajectorySummaries"].is_object() {
-                let narrowed = Endpoint {
-                    pid: endpoint.pid,
-                    ports: vec![port],
-                    token: endpoint.token.clone(),
-                };
-                if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
-                    *guard = Some((Some(narrowed), std::time::Instant::now()));
-                }
+                antigravity::sessions::record_verified_live_endpoint(
+                    endpoint.pid,
+                    port,
+                    endpoint.token.clone(),
+                );
                 return Ok((endpoint, client, port, value));
             }
         }
     }
-    if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
-        *guard = Some((None, std::time::Instant::now()));
-    }
+    antigravity::sessions::record_endpoint_failure(true);
     anyhow::bail!("Antigravity native API unavailable")
 }
 

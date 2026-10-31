@@ -149,12 +149,13 @@ pub(super) fn local_event_current(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::test_support::sandboxed_test_config;
     use native_probe::{NativeStreamSnapshot, NativeTurnEvent};
     use serde_json::Value;
 
     #[tokio::test]
     async fn claude_candidate_without_a_readable_source_stays_in_the_bounded_queue() {
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
         let db = PanelDb::open(":memory:").unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
@@ -203,6 +204,7 @@ mod tests {
         db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
             .unwrap();
         assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(sandbox_root);
     }
 
     #[tokio::test]
@@ -213,7 +215,7 @@ mod tests {
             (NativeProvider::Grok, "completion"),
         ] {
             let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
-            let mut config = Config::default();
+            let (mut config, sandbox_root) = sandboxed_test_config();
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.url();
             let db = PanelDb::open(":memory:").unwrap();
@@ -280,6 +282,7 @@ mod tests {
             .unwrap();
             deliver_pending(&config, &db, &[stream]).await.unwrap();
             assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+            let _ = std::fs::remove_dir_all(sandbox_root);
         }
     }
 
@@ -289,7 +292,7 @@ mod tests {
             1,
             "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
         let db = PanelDb::open(":memory:").unwrap();
@@ -349,5 +352,6 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.payload["bark"]["reason"] == "native_identity_or_branch_changed"));
+        let _ = std::fs::remove_dir_all(sandbox_root);
     }
 }

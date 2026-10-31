@@ -125,6 +125,7 @@ static PROBE_CACHE: crate::read_cache::ReadCache<crate::native_probe::NativeStre
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
     PROBE_CACHE.evict_idle(max_idle);
+    super::activity::evict_idle_cache(max_idle);
 }
 
 pub(super) fn probe_snapshot(

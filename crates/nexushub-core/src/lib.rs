@@ -41,4 +41,7 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     grok::evict_idle_detail_cache(max_idle);
     native_probe::evict_idle_cache(max_idle);
     dsh::notifications::evict_idle_cache(max_idle);
+    dsh::sessions::evict_idle_fold_cache(max_idle);
+    services::probe::evict_idle_live_provider_sessions_cache(max_idle);
+    antigravity::sessions::evict_idle_endpoint_cache(max_idle);
 }

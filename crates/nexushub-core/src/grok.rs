@@ -167,7 +167,7 @@ pub fn list_grok_sessions(
         )),)
     });
     result.truncate(limit.clamp(1, 200));
-    let active = activity::Snapshot::capture(paths);
+    let active = activity::Snapshot::capture_readonly(paths);
     for summary in &mut result {
         active.update_summary(summary);
         summary.storage_size = Some(crate::session_storage::directory_size(
@@ -461,6 +461,7 @@ static GROK_LAST_MESSAGE_CACHE: crate::read_cache::ReadCache<Option<String>> =
 pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     GROK_DETAIL_CACHE.evict_idle(max_idle);
     GROK_LAST_MESSAGE_CACHE.evict_idle(max_idle);
+    activity::evict_idle_cache(max_idle);
     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
         let now = std::time::Instant::now();
         cache.retain(|e| now.saturating_duration_since(e.last_accessed) < max_idle);
@@ -1256,7 +1257,7 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
 }
 
 fn resolve_session(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
-    resolve_session_with_activity(paths, id, &activity::Snapshot::capture(paths))
+    resolve_session_with_activity(paths, id, &activity::Snapshot::capture_readonly(paths))
 }
 
 fn resolve_session_with_activity(

@@ -346,10 +346,44 @@ fn native_stream_live_bucket(
     }
 }
 
-#[cfg(not(test))]
-static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<
-    Option<(usize, Vec<probe_core::ProbeLiveSession>, std::time::Instant)>,
-> = std::sync::Mutex::new(None);
+fn is_updated_within_fresh_window(updated_at: &Option<String>, now_ms: i64) -> bool {
+    let Some(ts) = updated_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp_millis())
+    else {
+        return true;
+    };
+    let fresh_ms = PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS.saturating_mul(1000) + 60_000;
+    now_ms.saturating_sub(ts) <= fresh_ms
+}
+
+type LiveProviderSessionsCacheKey = (Option<std::path::PathBuf>, std::path::PathBuf, usize);
+type LiveProviderSessionsCacheEntry = (
+    LiveProviderSessionsCacheKey,
+    Vec<probe_core::ProbeLiveSession>,
+    std::time::Instant,
+);
+
+static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<Option<LiveProviderSessionsCacheEntry>> =
+    std::sync::Mutex::new(None);
+
+pub fn invalidate_live_provider_sessions_cache() {
+    if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Duration) {
+    if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
+        {
+            *guard = None;
+        }
+    }
+}
 
 fn aggregate_active_sessions(
     config: &Config,
@@ -384,21 +418,20 @@ fn aggregate_active_sessions(
     }
 
     let sandbox_root = resolve_provider_sandbox_root(config);
-    #[cfg(not(test))]
-    if sandbox_root.is_none() {
-        if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-            if let Some((cached_limit, ref cached_items, ts)) = *guard {
-                if cached_limit == per_bucket_limit
-                    && ts.elapsed() < std::time::Duration::from_secs(3)
-                {
-                    sessions.extend(cached_items.iter().cloned());
-                    return sessions;
-                }
+    let cache_key = (
+        sandbox_root.clone(),
+        config.codex.home.clone(),
+        per_bucket_limit,
+    );
+    if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+        if let Some((ref cached_key, ref cached_items, ts)) = *guard {
+            if *cached_key == cache_key && ts.elapsed() < std::time::Duration::from_secs(3) {
+                sessions.extend(cached_items.iter().cloned());
+                return sessions;
             }
         }
     }
 
-    #[cfg(not(test))]
     let codex_len = sessions.len();
     let now_ms = Utc::now().timestamp_millis();
 
@@ -410,27 +443,18 @@ fn aggregate_active_sessions(
         None => crate::claude::ClaudePaths::default_for_user(),
     };
     if claude_paths.available() {
-        let stream_buckets: std::collections::HashMap<String, &'static str> =
-            crate::claude::notification_snapshots(&claude_paths)
-                .map(|scan| {
-                    scan.streams
-                        .iter()
-                        .filter_map(|s| {
-                            native_stream_live_bucket(s, now_ms).map(|b| (s.session_key.clone(), b))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
         if let Ok(items) =
             crate::claude::list_claude_sessions(&claude_paths, per_bucket_limit, None)
         {
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
-                } else if let Some(&b) = stream_buckets.get(&item.session_key) {
-                    Some(b)
                 } else if item.read_error.is_some() {
                     Some("recoverable")
+                } else if is_updated_within_fresh_window(&item.updated_at, now_ms) {
+                    crate::claude::probe_snapshot_for_path(&claude_paths, &item.path)
+                        .ok()
+                        .and_then(|s| native_stream_live_bucket(&s, now_ms))
                 } else {
                     None
                 };
@@ -460,18 +484,25 @@ fn aggregate_active_sessions(
         None => crate::grok::GrokPaths::default_for_user(),
     };
     if grok_paths.sessions().is_dir() {
-        let stream_buckets: std::collections::HashMap<String, &'static str> =
-            crate::grok::notification_snapshots(&grok_paths)
-                .map(|scan| {
-                    scan.streams
-                        .iter()
-                        .filter_map(|s| {
-                            native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
         if let Ok(items) = crate::grok::list_grok_sessions(&grok_paths, per_bucket_limit, None) {
+            let needs_stream_scan = items.iter().any(|item| {
+                item.status != "running" && is_updated_within_fresh_window(&item.updated_at, now_ms)
+            });
+            let stream_buckets: std::collections::HashMap<String, &'static str> =
+                if needs_stream_scan {
+                    crate::grok::notification_snapshots(&grok_paths)
+                        .map(|scan| {
+                            scan.streams
+                                .iter()
+                                .filter_map(|s| {
+                                    native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashMap::new()
+                };
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
@@ -548,17 +579,6 @@ fn aggregate_active_sessions(
             None => crate::dsh::DshPaths::default_for_user(),
         };
         if dsh_paths.home.join("sessions").is_dir() {
-            let stream_buckets: std::collections::HashMap<String, &'static str> =
-                crate::dsh::notifications::scan(&dsh_paths)
-                    .map(|scan| {
-                        scan.streams
-                            .iter()
-                            .filter_map(|s| {
-                                native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
             if let Ok(items) = crate::dsh::sessions::list_sessions(
                 &dsh_paths,
                 &crate::provider_sessions::ProviderListRequest {
@@ -567,6 +587,27 @@ fn aggregate_active_sessions(
                     limit: Some(per_bucket_limit),
                 },
             ) {
+                let needs_stream_scan = items.iter().any(|item| {
+                    item.status != "running"
+                        && item.read_error.is_none()
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                });
+                let stream_buckets: std::collections::HashMap<String, &'static str> =
+                    if needs_stream_scan {
+                        crate::dsh::notifications::scan(&dsh_paths)
+                            .map(|scan| {
+                                scan.streams
+                                    .iter()
+                                    .filter_map(|s| {
+                                        native_stream_live_bucket(s, now_ms)
+                                            .map(|b| (s.id.clone(), b))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
                 for item in items {
                     let bucket = if item.status == "running" {
                         Some("running")
@@ -597,15 +638,12 @@ fn aggregate_active_sessions(
         }
     }
 
-    #[cfg(not(test))]
-    if sandbox_root.is_none() {
-        if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-            *guard = Some((
-                per_bucket_limit,
-                sessions[codex_len..].to_vec(),
-                std::time::Instant::now(),
-            ));
-        }
+    if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+        *guard = Some((
+            cache_key,
+            sessions[codex_len..].to_vec(),
+            std::time::Instant::now(),
+        ));
     }
 
     sessions

@@ -7,7 +7,7 @@ use std::{
 
 static SANDBOX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) fn sandboxed_test_config() -> (Config, PathBuf) {
+pub(crate) fn sandboxed_test_config() -> (Config, PathBuf) {
     let idx = SANDBOX_COUNTER.fetch_add(1, Ordering::Relaxed);
     let sandbox_root = std::env::temp_dir().join(format!(
         "nexushub-test-cfg-sandbox-{}-{idx}",

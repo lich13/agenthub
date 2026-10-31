@@ -1694,7 +1694,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_probe_cli_actions_do_not_report_fake_success() {
-        let config = Config::default();
+        let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
 
         for command in [ProbeCommand::LifecycleRepair, ProbeCommand::ServiceRestart] {
             let db = PanelDb::open(":memory:").unwrap();
@@ -1705,6 +1705,7 @@ mod tests {
             assert!(message.contains("unsupported"));
             assert!(!message.contains("\"ok\": true"));
         }
+        let _ = fs::remove_dir_all(sandbox_root);
     }
 
     #[test]
@@ -1786,8 +1787,7 @@ hooks = false
         fs::create_dir_all(&codex_home).unwrap();
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::write(codex_home.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home.clone();
+        let mut config = test_config(codex_home.clone());
         config.probe.hooks.reload_app_server_after_install = false;
 
         let result = install_probe_hooks_for_test(&config, false).await.unwrap();
@@ -1927,8 +1927,7 @@ last_error = "old nexushub request hook"
 "#,
         )
         .unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home.clone();
+        let mut config = test_config(codex_home.clone());
         config.probe.hooks.reload_app_server_after_install = false;
 
         let result = install_probe_hooks_for_test(&config, false).await.unwrap();
@@ -2120,8 +2119,7 @@ last_error = "old nexushub request hook"
         let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home;
+        let mut config = test_config(codex_home);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -2204,8 +2202,7 @@ last_error = "old nexushub request hook"
             .to_string(),
         )
         .unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home;
+        let config = test_config(codex_home);
 
         let payloads = [
             json!({
@@ -2264,8 +2261,7 @@ last_error = "old nexushub request hook"
         let memory_root = codex_home.join("memories");
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::create_dir_all(&memory_root).unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home;
+        let config = test_config(codex_home);
         notification_accuracy_tests::seed_main_task_identities(
             &config.codex.home,
             &["thread-user-question"],
@@ -2312,8 +2308,7 @@ last_error = "old nexushub request hook"
         let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home;
+        let mut config = test_config(codex_home);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -2467,8 +2462,6 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_uses_local_thread_title_for_bark_title_when_payload_omits_title() {
-        let mut config = Config::default();
-        config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let dir = temp_test_dir("nexushub-hook-local-title");
         let codex_home = dir.join(".codex");
@@ -2505,7 +2498,8 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        config.codex.home = codex_home;
+        let mut config = test_config(codex_home);
+        config.probe.notifications.enabled = false;
 
         let selection = hook_stop_last_assistant_message(
             Some(transcript.to_string_lossy().as_ref()),
@@ -3042,10 +3036,10 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_prefers_full_rollout_plan_over_short_stdin_summary() {
-        let mut config = Config::default();
-        config.probe.notifications.enabled = false;
         let dir = temp_test_dir("nexushub-hook-stop-full-plan");
         fs::create_dir_all(&dir).unwrap();
+        let mut config = test_config(dir.join(".codex"));
+        config.probe.notifications.enabled = false;
         let transcript = dir.join("rollout.jsonl");
         let full_plan = format!("# 完整计划\n{}\n末尾唯一完整计划", "计划正文".repeat(1200));
         fs::write(
@@ -3145,7 +3139,8 @@ last_error = "old nexushub request hook"
         assert!(body.contains("选项 2：先调整"));
         assert!(!body.contains("fallback should not be used"));
 
-        let event = probe_runtime(&Config::default()).build_event(
+        let (sandbox_cfg, sandbox_root) = crate::api::test_support::sandboxed_test_config();
+        let event = probe_runtime(&sandbox_cfg).build_event(
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-question"),
                 Some("turn-question"),
@@ -3158,6 +3153,7 @@ last_error = "old nexushub request hook"
             .with_body_source(source.as_deref()),
         );
         assert_eq!(event.bark_title, "等待回复：问题线程");
+        let _ = fs::remove_dir_all(sandbox_root);
         assert_eq!(event.bark_body, body);
         assert!(!event.bark_body.contains("thread-question"));
 
@@ -3534,7 +3530,7 @@ last_error = "old nexushub request hook"
             1,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 39\r\n\r\n{\"code\":400,\"message\":\"bad bark token\"}",
         );
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         config.probe.notifications.server_url = server.url();
         config.probe.notifications.group = "Probe Group".to_string();
         config.probe.notifications.sound = Some("bell".to_string());
@@ -3575,6 +3571,7 @@ last_error = "old nexushub request hook"
         assert!(payload.get("group").is_none());
         assert!(payload.get("sound").is_none());
         assert!(payload.get("url").is_none());
+        let _ = fs::remove_dir_all(sandbox_root);
     }
 
     #[tokio::test]
@@ -3583,7 +3580,7 @@ last_error = "old nexushub request hook"
             20,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         config.probe.notifications.server_url = server.url();
         config.probe.notifications.group = "Probe Group".to_string();
 
@@ -3640,6 +3637,7 @@ last_error = "old nexushub request hook"
             })
             .collect::<String>();
         assert_eq!(combined, request.body);
+        let _ = fs::remove_dir_all(sandbox_root);
     }
 
     #[tokio::test]
@@ -4081,8 +4079,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home.clone();
+        let mut config = test_config(codex_home.clone());
         config.codex.app_server_socket = Some(dir.join("missing.sock"));
         config.codex.bridge_enabled = true;
         config.probe.notifications.enabled = true;
@@ -4154,8 +4151,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home.clone();
+        let mut config = test_config(codex_home.clone());
         config.codex.app_server_socket = Some(dir.join("missing.sock"));
         config.codex.bridge_enabled = true;
         config.probe.notifications.enabled = true;
@@ -4199,7 +4195,7 @@ last_error = "old nexushub request hook"
             1,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
         config.probe.notifications.group = "Probe Group".to_string();
@@ -4229,6 +4225,7 @@ last_error = "old nexushub request hook"
             .unwrap()
             .contains("device-key-secret"));
         let _ = server.request();
+        let _ = fs::remove_dir_all(sandbox_root);
     }
 
     #[tokio::test]
@@ -4237,15 +4234,15 @@ last_error = "old nexushub request hook"
             1,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let dir = temp_test_dir("nexushub-bark-cli");
+        fs::create_dir_all(&dir).unwrap();
+        let mut config = test_config(dir.join(".codex"));
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
         let db = PanelDb::open(":memory:").unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
             .unwrap();
 
-        let dir = temp_test_dir("nexushub-bark-cli");
-        fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
         run_probe_command(ProbeCommand::BarkTest, &config, db, &path)
@@ -4431,8 +4428,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        let mut config = Config::default();
-        config.codex.home = codex_home.clone();
+        let mut config = test_config(codex_home.clone());
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         config.probe.notifications.notify_reply_needed = true;
@@ -4463,6 +4459,18 @@ last_error = "old nexushub request hook"
             .unwrap()
             .contains("等待回复"));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn test_config(codex_home: PathBuf) -> Config {
+        let root = codex_home.parent().unwrap_or(&codex_home).to_path_buf();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.codex.workspace = root.join("workspace");
+        config.paths.data_dir = root.join("data");
+        config.paths.db_path = root.join("data/panel.sqlite");
+        config.paths.log_dir = root.join("logs");
+        config.codex.bridge_enabled = false;
+        config
     }
 
     fn temp_test_dir(prefix: &str) -> PathBuf {
