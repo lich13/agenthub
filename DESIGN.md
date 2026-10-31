@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-AgentHub（底层包标识 `com.lich13.nexushub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier neutral light/dark surface hierarchy (`--bg-rail`, `--bg-list`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
+AgentHub（底层包标识 `com.lich13.nexushub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier canonical surface hierarchy (`--bg-rail`, `--bg-surface`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
 
 ## Layout and interaction
 
@@ -46,9 +46,9 @@ Image attachments sit above the bubble in reserved 96px square thumbnails, with 
 
 ## Visual tokens
 
-Light: `--bg-rail: #f9f9f9`, `--bg-list: #f3f3f3`, `--bg-stage: #ffffff`, `--surface-subtle: #f4f4f4`, `--user-bubble: #f4f4f4`, `--selected: #e6e6e6`, `--text: #0d0d0d`, `--muted: #525252`, `--hairline: #e5e5e5`.
+Light: `--bg-rail: #f8f9fb`, `--bg-surface: #f3f5f8`, `--bg-stage: #ffffff`, `--bg-elevated: #ffffff`, `--user-bubble: #f3f5f8`, `--bg-selected: #e4e8ef`, `--text-primary: #0f172a`, `--text-muted: #64748b`, `--border-subtle: #e2e8f0`.
 
-Dark: `--bg-rail: #171717`, `--bg-list: #1c1c1c`, `--bg-stage: #212121`, `--surface-subtle: #2a2a2a`, `--user-bubble: #2f2f2f`, `--selected: #2f2f2f`, `--text: #ececec`, `--muted: #a8a8a8`, `--hairline: #2e2e2e`.
+Dark: `--bg-rail: #12151c`, `--bg-surface: #171b24`, `--bg-stage: #1b202b`, `--bg-elevated: #222836`, `--user-bubble: #262d3d`, `--bg-selected: #283042`, `--text-primary: #f1f5f9`, `--text-muted: #94a3b8`, `--border-subtle: #283040`.
 
 Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus indicators and essential borders meet 3:1. Long titles and paths wrap; only code and tables scroll horizontally.
 

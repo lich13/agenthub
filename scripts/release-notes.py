@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.0": [
+        "重绘无平台数量限制的「Command Nexus（多轨星枢）」图标，将 styles.css 彻底重写压减至 566 行纯净三层令牌，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 重构全部七大工作区",
+        "修复 Antigravity 顶层 nexushub Stop Hook 契约（stdout 输出 allow 放行决策）与 Grok 重复 Hook 清理，合并 Antigravity 端点缓存并消除存活进程瞬时负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与空闲回收，并将 Probe 扫描 I/O 减半。",
+    ],
     "1.9.0": [
         "品牌正式焕新为 AgentHub（AgentHub.app 与全新钛黑五节点星枢图标），落地 --bg-rail／--bg-list／--bg-stage 三层纯正 ChatGPT macOS 桌面表面，Probe 升级为首屏控制台并新增 Grok Build 与 Antigravity 受管实时 Hooks",
         "修复 DeepSeek Harness 已打开完成线程常亮转圈与派生会话状态，新增五平台热路径内存缓存与 Codex O(K)／单次扫描清理加速，精简统一清理引擎并实现全部测试 100% 沙箱隔离。",
@@ -235,6 +239,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "2.0.0":
+        sections = {
+            "版本概览": [
+                "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 nexushub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "多轨星枢图标与全工作区深度重写：重绘平台无关的「Command Nexus（多轨星枢）」矢量图标并导出全套 macOS／Windows／Web 图标资产；彻底重写 styles.css（从 1,189 行压减至 566 行），废除全部历史兼容别名，确立 --bg-rail、--bg-surface、--bg-stage、--bg-elevated 与 ws-* 核心原语；提取 WorkspaceSplitShell 与 useCopyFeedback 统一重构 Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness、Probe 与设置七大工作区。",
+                "Probe 单视图精简与五平台统一 AgentHookHostCard：移除 Probe 标题下无意义的运行态胶囊行与冗余三栏切换器，hooksHostMatrix 全局只渲染一次；后端直接返回真实宿主 config_path，前端零硬编码路径，五张宿主卡片统一采用轻量弹窗确认流，DSH 卡片改为只读原生直连状态条并移除永久禁用按钮。",
+                "服务端 CPU／内存／磁盘深度减负：合并 core 与 webd 重复的 Antigravity 端点缓存，仅在无 language_server 进程时缓存 5 秒空结果；新增 Grok 进程快照 1 秒短缓存，移除 READONLY_SNAPSHOT_CACHE 与 LIVE_PROVIDER_SESSIONS_CACHE 的 #[cfg(not(test))] 门禁，补齐 sandbox_root／codex_home／paths.home 隔离键并全部纳入 evict_idle_detail_caches；在 aggregate_active_sessions 中单次扫描复用会话与通知快照，磁盘与子进程开销直接减半。",
+            ],
+            "问题修复": [
+                "Antigravity 与 Grok Hook 契约对齐：Antigravity 改用 ~/.gemini/config/hooks.json 标准顶层 nexushub 结构（仅注册 Stop 事件）并自动清理旧版污染的顶层 hooks 键，nexushub-webd antigravity-hook 恒向 stdout 输出 {\"decision\":\"allow\"} 并以退出码 0 结束；Grok 安装／修复时自动清理同属 nexushub-webd 的遗留 claude-hook 重复条目。",
+                "清理执行器、目录枚举与 DSH 复杂度优化：在 cleanup.rs 提炼 run_scope_targets 将五作用域执行段压缩至约 75 行；在 selected_codex/tree.rs 提炼 visit_codex_tree_files 让 inventory 与 estimate_bytes_batch 共享唯一路径发现真相源；DSH load_all_events 改用未决工具下标栈，将复杂度从 O(轮数×事件数) 降至 O(events) 线性时间。",
+                "全仓测试沙箱化与新增单测覆盖：将剩余测试中的 Config::default() 全面切换为 TempDir 沙箱配置，并补齐批量体积估算、O(K) 隐藏删除、各缓存命中／失效／目录隔离及 Antigravity Hook stdout 契约的直接单元测试。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；底层 Bundle ID（com.lich13.nexushub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 nexushub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                "升级后本机守护进程会自动将已安装的旧版 Antigravity／Grok Hook 配置平滑升级为 2.0.0 规范格式，并完整保留用户自定义第三方 hooks。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验多轨星枢图标与七大工作区新界面、Probe 单视图与五平台统一宿主卡片、Antigravity／Grok Hook 正常触发以及全平台线程清理。",
+                "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# AgentHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.9.0":
         sections = {
