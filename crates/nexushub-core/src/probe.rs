@@ -177,6 +177,12 @@ impl ProbeRuntime {
             recoverable_threads: aggregation.recoverable_threads,
             active_sessions: aggregation.active_sessions,
             config_path: self.paths.config_file.clone(),
+            codex_hooks_path: Some(resolved.home.join("hooks.json")),
+            dsh_sessions_path: Some(
+                crate::dsh::DshPaths::default_for_user()
+                    .home
+                    .join("sessions"),
+            ),
             codex_home: resolved.home.clone(),
             configured_codex_home: resolved.configured_codex_home.clone(),
             resolved_codex_home: resolved.home.clone(),
@@ -876,6 +882,10 @@ pub struct ProbeStatus {
     #[serde(default)]
     pub active_sessions: Vec<ProbeLiveSession>,
     pub config_path: PathBuf,
+    #[serde(default)]
+    pub codex_hooks_path: Option<PathBuf>,
+    #[serde(default)]
+    pub dsh_sessions_path: Option<PathBuf>,
     pub codex_home: PathBuf,
     pub configured_codex_home: Option<String>,
     pub resolved_codex_home: PathBuf,

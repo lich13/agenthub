@@ -83,10 +83,15 @@ async fn main() -> Result<()> {
         cli.command,
         Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook
     ) {
-        // A hook never blocks the host Agent, emits decisions, or leaks payloads to logs.
+        let is_antigravity = matches!(cli.command, Command::AntigravityHook);
+        // A hook never blocks the host Agent or leaks payloads to logs.
         // Force exit also bounds any filesystem/stdin work in blocking tasks.
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(5));
+            if is_antigravity {
+                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
+                let _ = io::stdout().flush();
+            }
             std::process::exit(0);
         });
         match cli.command {
@@ -116,6 +121,8 @@ async fn main() -> Result<()> {
                     ),
                 )
                 .await;
+                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
+                let _ = io::stdout().flush();
             }
             _ => unreachable!(),
         }
@@ -901,6 +908,39 @@ fn upgrade_managed_question_hooks_on_start(config: &Config) {
             safe_probe_monitor_error(&error.to_string())
         );
     }
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        let platform = PlatformPaths::current();
+        let binary = platform.daemon_binary();
+        if binary.is_file() {
+            for provider in [
+                nexushub_core::claude::hooks::HookProvider::Grok,
+                nexushub_core::claude::hooks::HookProvider::Antigravity,
+            ] {
+                if let Ok(status) = nexushub_core::claude::hooks::manage_provider(
+                    provider,
+                    &binary,
+                    &platform.config_file,
+                    nexushub_core::claude::hooks::ClaudeHooksRequest {
+                        action: nexushub_core::claude::hooks::ClaudeHooksAction::Status,
+                        confirmed: false,
+                    },
+                ) {
+                    if status.managed_count > 0 && !status.installed {
+                        let _ = nexushub_core::claude::hooks::manage_provider(
+                            provider,
+                            &binary,
+                            &platform.config_file,
+                            nexushub_core::claude::hooks::ClaudeHooksRequest {
+                                action: nexushub_core::claude::hooks::ClaudeHooksAction::Install,
+                                confirmed: true,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1180,6 +1220,12 @@ fn codex_stop_continue_output() -> Value {
     json!({
         "continue": true,
         "suppressOutput": false,
+    })
+}
+
+fn antigravity_stop_allow_output() -> Value {
+    json!({
+        "decision": "allow",
     })
 }
 
