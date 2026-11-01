@@ -619,4 +619,81 @@ mod local_provider_tests {
             0
         );
     }
+
+    #[test]
+    fn unrecorded_event_at_cursor_queues_once_when_post_activation_and_skips_pre_activation_or_before_cursor(
+    ) {
+        let provider = NativeProvider::Antigravity;
+        let c = config();
+        let db = PanelDb::open(":memory:").unwrap();
+
+        // Baseline stream at record_count = 5, settled_count = 5 -> cursor = 5
+        let baseline_scan = NativeScan {
+            errors: 0,
+            streams: vec![NativeStreamSnapshot {
+                provider,
+                session_key: "cursor-boundary".into(),
+                id: "cursor-boundary".into(),
+                title: "Cursor boundary".into(),
+                identity: "source".into(),
+                record_count: 5,
+                settled_count: 5,
+                events: vec![],
+            }],
+        };
+        assert_eq!(
+            db.stage_native_notifications(provider, &baseline_scan, &c)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.native_probe_stream_cursor(provider, "cursor-boundary")
+                .unwrap(),
+            Some(5)
+        );
+
+        let post_activation_ms = chrono::Utc::now().timestamp_millis() + 5_000;
+
+        // 1. Pre-activation event at cursor (position == 5, timestamp_ms < activated_ms) -> skipped (0)
+        let mut at_cursor = baseline_scan.clone();
+        at_cursor.streams[0].events = vec![NativeTurnEvent {
+            prompt_id: None,
+            position: 5,
+            turn_id: "exec-pre-activation".into(),
+            kind: "completion".into(),
+            body: "Old completion at cursor".into(),
+            timestamp_ms: 1,
+        }];
+        assert_eq!(
+            db.stage_native_notifications(provider, &at_cursor, &c)
+                .unwrap(),
+            0
+        );
+
+        // 2. Post-activation event strictly before cursor (position == 4 < 5) -> skipped (0)
+        at_cursor.streams[0].events[0].position = 4;
+        at_cursor.streams[0].events[0].turn_id = "exec-before-cursor".into();
+        at_cursor.streams[0].events[0].timestamp_ms = post_activation_ms;
+        assert_eq!(
+            db.stage_native_notifications(provider, &at_cursor, &c)
+                .unwrap(),
+            0
+        );
+
+        // 3. Post-activation event exactly at cursor (position == 5, timestamp_ms >= activated_ms)
+        // queues 1 on first scan and 0 on repeat scan.
+        at_cursor.streams[0].events[0].position = 5;
+        at_cursor.streams[0].events[0].turn_id = "exec-at-cursor".into();
+        at_cursor.streams[0].events[0].timestamp_ms = post_activation_ms;
+        assert_eq!(
+            db.stage_native_notifications(provider, &at_cursor, &c)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.stage_native_notifications(provider, &at_cursor, &c)
+                .unwrap(),
+            0
+        );
+    }
 }

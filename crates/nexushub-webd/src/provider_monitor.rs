@@ -442,15 +442,110 @@ mod tests {
                 .unwrap();
         assert!(codex_outcome.recorded);
 
-        // 2-5. Claude Code, Grok, Antigravity (via real trajectory parser), and DSH
-        let now_ms = chrono::Utc::now().timestamp_millis() + 2_000;
+        // 2-5. Claude Code, Grok, Antigravity, and DSH via their real parsers and hook inputs
+        let start_ms = chrono::Utc::now().timestamp_millis() + 1_000;
+        let now_ms = start_ms + 1_000;
+        let start_rfc3339 = chrono::DateTime::from_timestamp_millis(start_ms)
+            .unwrap()
+            .to_rfc3339();
         let now_rfc3339 = chrono::DateTime::from_timestamp_millis(now_ms)
             .unwrap()
             .to_rfc3339();
-        let ag_id = "632d506e-5152-49ac-a5b0-a1ecf2db684c";
+
+        // 2. Claude Code: real JSONL transcript + claude::notification_snapshots + claude_hook::parse_with_paths
+        let claude_paths = nexushub_core::claude::ClaudePaths {
+            config: sandbox_root.join("claude"),
+            projects: sandbox_root.join("claude/projects"),
+        };
+        let claude_transcript = claude_paths.projects.join("fixture/session.jsonl");
+        std::fs::create_dir_all(claude_transcript.parent().unwrap()).unwrap();
+        let claude_user = serde_json::json!({
+            "type": "user",
+            "uuid": "msg-user-1",
+            "parentUuid": null,
+            "promptId": "prompt-self-test-1",
+            "sessionId": "00000000-0000-4000-8000-000000000002",
+            "version": "2.1.284",
+            "cwd": "/fixture/project",
+            "timestamp": start_rfc3339,
+            "message": { "role": "user", "content": "Claude self-test prompt" }
+        });
+        let claude_assistant = serde_json::json!({
+            "type": "assistant",
+            "uuid": "msg-assistant-1",
+            "parentUuid": "msg-user-1",
+            "sessionId": "00000000-0000-4000-8000-000000000002",
+            "timestamp": now_rfc3339,
+            "message": {
+                "role": "assistant",
+                "content": "Claude self-test completed.",
+                "stop_reason": "end_turn"
+            }
+        });
+        std::fs::write(
+            &claude_transcript,
+            format!("{claude_user}\n{claude_assistant}\n"),
+        )
+        .unwrap();
+        let claude_hook_event = crate::claude_hook::parse_with_paths(
+            &claude_paths,
+            &serde_json::json!({
+                "session_id": "00000000-0000-4000-8000-000000000002",
+                "prompt_id": "prompt-self-test-1",
+                "transcript_path": claude_transcript,
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Claude self-test completed."
+            }),
+        )
+        .unwrap()
+        .expect("real claude hook parser must accept Stop payload");
+        assert_eq!(claude_hook_event.kind, "completion");
+        let claude_scan = nexushub_core::claude::notification_snapshots(&claude_paths).unwrap();
+        assert_eq!(claude_scan.errors, 0);
+        assert_eq!(claude_scan.streams.len(), 1);
+        assert_eq!(claude_scan.streams[0].events.len(), 1);
+
+        // 3. Grok: real summary.json + events.jsonl + updates.jsonl + grok::notification_snapshots
+        let grok_paths = nexushub_core::grok::GrokPaths {
+            home: sandbox_root.join("grok"),
+        };
+        let grok_id = "00000000-0000-4000-8000-000000000003";
+        let grok_session_dir = grok_paths.home.join("sessions/%2Ffixture").join(grok_id);
+        std::fs::create_dir_all(&grok_session_dir).unwrap();
+        std::fs::write(
+            grok_session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": grok_id, "cwd": "/fixture" },
+                "generated_title": "Grok self-test",
+                "num_messages": 2
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_session_dir.join("events.jsonl"),
+            format!(
+                "{{\"type\":\"turn_started\",\"session_id\":\"{grok_id}\",\"session_relationship\":\"primary\",\"ts\":\"{start_rfc3339}\"}}\n{{\"type\":\"turn_ended\",\"outcome\":\"completed\",\"ts\":\"{now_rfc3339}\"}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_session_dir.join("updates.jsonl"),
+            format!(
+                "{{\"timestamp\":\"{start_rfc3339}\",\"params\":{{\"sessionId\":\"{grok_id}\",\"_meta\":{{\"promptId\":\"p-grok-1\"}},\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{{\"type\":\"text\",\"text\":\"Grok self-test completed.\"}}}}}}}}\n{{\"timestamp\":\"{now_rfc3339}\",\"params\":{{\"sessionId\":\"{grok_id}\",\"update\":{{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p-grok-1\",\"stop_reason\":\"end_turn\"}}}}}}\n"
+            ),
+        )
+        .unwrap();
+        let grok_scan = nexushub_core::grok::notification_snapshots(&grok_paths).unwrap();
+        assert_eq!(grok_scan.errors, 0);
+        assert_eq!(grok_scan.streams.len(), 1);
+        assert_eq!(grok_scan.streams[0].events.len(), 1);
+
+        // 4. Antigravity: real trajectory parser antigravity::snapshot
+        let ag_id = "00000000-0000-4000-8000-000000000005";
         let ag_summary = serde_json::json!({
             "trajectoryId": "traj-self-test",
-            "createdTime": "2026-11-01T10:00:00Z",
+            "createdTime": start_rfc3339,
             "lastModifiedTime": now_rfc3339,
             "summary": "Antigravity self-test",
             "status": "CASCADE_RUN_STATUS_IDLE",
@@ -466,14 +561,14 @@ mod tests {
                     {
                         "type": "CORTEX_STEP_TYPE_USER_INPUT",
                         "status": "CORTEX_STEP_STATUS_DONE",
-                        "metadata": { "executionId": "exec-ag-1", "createdAt": "2026-11-01T10:00:00Z" }
+                        "metadata": { "executionId": "exec-ag-1", "createdAt": start_rfc3339 }
                     },
                     {
                         "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                         "status": "CORTEX_STEP_STATUS_DONE",
                         "metadata": {
                             "executionId": "exec-ag-1",
-                            "createdAt": "2026-11-01T10:00:01Z",
+                            "createdAt": start_rfc3339,
                             "completedAt": now_rfc3339
                         },
                         "plannerResponse": { "response": "Antigravity self-test completed." }
@@ -491,78 +586,47 @@ mod tests {
         let ag_stream =
             nexushub_core::antigravity::snapshot(ag_id, &ag_summary, &ag_response).unwrap();
         assert_eq!(ag_stream.events.len(), 1);
+        let ag_scan = NativeScan {
+            streams: vec![ag_stream],
+            errors: 0,
+        };
 
-        let native_streams = vec![
-            (
-                NativeProvider::Claude,
-                NativeStreamSnapshot {
-                    provider: NativeProvider::Claude,
-                    session_key: "claude-self-test".into(),
-                    id: "claude-self-test".into(),
-                    title: "Claude self-test".into(),
-                    identity: "claude-identity".into(),
-                    record_count: 2,
-                    settled_count: 2,
-                    events: vec![NativeTurnEvent {
-                        prompt_id: None,
-                        position: 2,
-                        turn_id: "claude-turn-1".into(),
-                        kind: "completion".into(),
-                        body: "Claude self-test completed.".into(),
-                        timestamp_ms: now_ms,
-                    }],
-                },
-            ),
-            (
-                NativeProvider::Grok,
-                NativeStreamSnapshot {
-                    provider: NativeProvider::Grok,
-                    session_key: "grok-self-test".into(),
-                    id: "grok-self-test".into(),
-                    title: "Grok self-test".into(),
-                    identity: "grok-identity".into(),
-                    record_count: 2,
-                    settled_count: 2,
-                    events: vec![NativeTurnEvent {
-                        prompt_id: None,
-                        position: 2,
-                        turn_id: "grok-turn-1".into(),
-                        kind: "completion".into(),
-                        body: "Grok self-test completed.".into(),
-                        timestamp_ms: now_ms,
-                    }],
-                },
-            ),
-            (NativeProvider::Antigravity, ag_stream),
-            (
-                NativeProvider::Dsh,
-                NativeStreamSnapshot {
-                    provider: NativeProvider::Dsh,
-                    session_key: "dsh-self-test".into(),
-                    id: "dsh-self-test".into(),
-                    title: "DSH self-test".into(),
-                    identity: "dsh-identity".into(),
-                    record_count: 2,
-                    settled_count: 2,
-                    events: vec![NativeTurnEvent {
-                        prompt_id: None,
-                        position: 2,
-                        turn_id: "dsh-turn-1".into(),
-                        kind: "completion".into(),
-                        body: "DSH self-test completed.".into(),
-                        timestamp_ms: now_ms,
-                    }],
-                },
-            ),
+        // 5. DSH: real v4 session.v4.jsonl + dsh::notifications::scan
+        let dsh_paths = nexushub_core::dsh::DshPaths {
+            home: sandbox_root.join("dsh"),
+        };
+        let dsh_id = "00000000-0000-4000-8000-000000000004";
+        let dsh_dir = dsh_paths.home.join("sessions/fixture").join(dsh_id);
+        std::fs::create_dir_all(&dsh_dir).unwrap();
+        let dsh_lines = [
+            serde_json::json!({"type":"session","version":4,"id":dsh_id,"isSeeded":false}),
+            serde_json::json!({"type":"turn/start","seq":0,"time":start_ms,"data":{"turn":1}}),
+            serde_json::json!({"type":"assistant/message","seq":1,"time":start_ms,"data":{"turn":1,"message":{"content":[{"type":"text","text":"DSH self-test completed."}]}}}),
+            serde_json::json!({"type":"turn/end","seq":2,"time":now_ms,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+        ];
+        std::fs::write(
+            dsh_dir.join("session.v4.jsonl"),
+            dsh_lines
+                .iter()
+                .map(|line| format!("{line}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let dsh_scan = nexushub_core::dsh::notifications::scan(&dsh_paths).unwrap();
+        assert_eq!(dsh_scan.errors, 0);
+        assert_eq!(dsh_scan.streams.len(), 1);
+        assert_eq!(dsh_scan.streams[0].events.len(), 1);
+
+        let native_scans = vec![
+            (NativeProvider::Claude, claude_scan),
+            (NativeProvider::Grok, grok_scan),
+            (NativeProvider::Antigravity, ag_scan),
+            (NativeProvider::Dsh, dsh_scan),
         ];
 
-        for (provider, stream) in native_streams {
+        for (provider, scan) in native_scans {
             db.stage_native_notifications(provider, &NativeScan::default(), &config)
                 .unwrap();
-            let scan = NativeScan {
-                streams: vec![stream.clone()],
-                errors: 0,
-            };
             assert_eq!(
                 db.stage_native_notifications(provider, &scan, &config)
                     .unwrap(),
@@ -570,9 +634,7 @@ mod tests {
                 "provider {} must stage 1 completion notification",
                 provider.as_str()
             );
-            deliver_pending(&config, &db, std::slice::from_ref(&stream))
-                .await
-                .unwrap();
+            deliver_pending(&config, &db, &scan.streams).await.unwrap();
         }
 
         let events = db.list_probe_events(20).unwrap();

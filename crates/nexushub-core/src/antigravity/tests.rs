@@ -502,7 +502,7 @@ fn multi_executor_gap_and_non_terminal_tool_steps_never_fire_early() {
 }
 
 #[test]
-fn untracked_background_task_respects_active_child_processes_past_60s_quiescence() {
+fn untracked_background_task_releases_completion_at_60s_quiescence_cap() {
     let task_id = format!("{ID}/task-long-build");
     let summary = json!({
         "trajectoryId": "fixture-trajectory",
@@ -732,65 +732,111 @@ fn mid_turn_plan_feedback_plaintext_questions_and_first_turn_waiting_emit_reply_
 #[test]
 fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_hook_race_and_turn_switch(
 ) {
-    let cascade_id = "632d506e-5152-49ac-a5b0-a1ecf2db684c";
-    let trajectory_id = "bc4ff77e-6e9e-4bc2-a1bd-e0c0d4da8391";
-    let exec_prev = "8992e0dd-047d-4cc0-8fd8-e64694fb3c88";
-    let exec_done = "f1a85bcb-9e9b-4bf5-9d88-ef4a7d52d275";
+    let cascade_id = "00000000-0000-4000-8000-000000000137";
+    let trajectory_id = "00000000-0000-4000-8000-000000000138";
+    let exec_early = "exec-fixture-1";
+    let exec_prev = "exec-fixture-2";
+    let exec_done = "exec-fixture-3";
+    let bg_task_id = format!("{cascade_id}/task-130");
     let summary = json!({
         "trajectoryId": trajectory_id,
-        "createdTime": "2026-11-01T10:25:00Z",
-        "lastModifiedTime": "2026-11-01T10:50:37.090521Z",
-        "summary": "Sanitized regression fixture 632d506e",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "lastModifiedTime": "2026-01-01T00:02:37.090521Z",
+        "summary": "Sanitized regression fixture",
         "status": "CASCADE_RUN_STATUS_IDLE",
         "stepCount": 137,
-        "lastUserInputStepIndex": 132,
+        "lastUserInputStepIndex": 131,
         "latestExecutorTerminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL",
         "trajectoryMetadata": { "rootConversationId": cascade_id }
     });
-    // Phase 1: During Stop hook or final step transition, steps 132..=136 are DONE,
-    // but f1a85bcb has not yet been committed to executorMetadatas.
+    // Phase 1: Sanitized 7-step window at stepOffset 130 (steps[130..=136]):
+    //   130: GENERIC (run_command moved to background, status DONE)
+    //   131: USER_INPUT (DONE)
+    //   132: PLANNER_RESPONSE (DONE, toolCalls: [manage_task, run_command])
+    //   133: GENERIC (manage_task kill on task-130, DONE)
+    //   134: GENERIC (run_command, DONE)
+    //   135: SYSTEM_MESSAGE (DONE)
+    //   136: PLANNER_RESPONSE (DONE, no toolCalls)
+    // Before Antigravity commits exec_done to executorMetadatas, settled_count is clamped.
     let mut response = json!({
         "status": "CASCADE_RUN_STATUS_IDLE",
-        "stepOffset": 132,
+        "stepOffset": 130,
         "numTotalSteps": 137,
         "trajectory": {
             "cascadeId": cascade_id,
             "trajectoryId": trajectory_id,
             "steps": [
                 {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "taskDetails": {
+                        "id": bg_task_id,
+                        "movedToBackgroundAt": "2026-01-01T00:00:50Z"
+                    },
+                    "generic": {
+                        "name": "run_command",
+                        "arguments": "{\"CommandLine\":\"echo background\",\"IsDaemon\":false}"
+                    },
+                    "metadata": {
+                        "executionId": exec_prev,
+                        "createdAt": "2026-01-01T00:00:45Z"
+                    }
+                },
+                {
                     "type": "CORTEX_STEP_TYPE_USER_INPUT",
                     "status": "CORTEX_STEP_STATUS_DONE",
-                    "metadata": { "createdAt": "2026-11-01T10:49:10Z" }
+                    "metadata": { "createdAt": "2026-01-01T00:01:10Z" }
                 },
                 {
                     "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                     "status": "CORTEX_STEP_STATUS_DONE",
                     "metadata": {
                         "executionId": exec_done,
-                        "createdAt": "2026-11-01T10:49:15Z",
-                        "completedAt": "2026-11-01T10:49:20Z"
+                        "createdAt": "2026-01-01T00:01:15Z",
+                        "completedAt": "2026-01-01T00:01:20Z"
                     },
                     "plannerResponse": {
-                        "response": "Checking status...",
-                        "toolCalls": [{ "id": "call-1", "name": "read_file" }]
+                        "response": "Stopping background task and running check.",
+                        "toolCalls": [
+                            { "id": "call-kill", "name": "manage_task" },
+                            { "id": "call-cmd", "name": "run_command" }
+                        ]
                     }
                 },
                 {
-                    "type": "CORTEX_STEP_TYPE_READ_FILE",
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
                     "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": {
+                        "name": "manage_task",
+                        "arguments": format!("{{\"Action\":\"kill\",\"TaskId\":\"{bg_task_id}\"}}")
+                    },
                     "metadata": {
                         "executionId": exec_done,
-                        "createdAt": "2026-11-01T10:49:20Z",
-                        "completedAt": "2026-11-01T10:49:22Z"
+                        "createdAt": "2026-01-01T00:01:20Z",
+                        "completedAt": "2026-01-01T00:01:22Z"
                     }
                 },
                 {
-                    "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
                     "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": {
+                        "name": "run_command",
+                        "arguments": "{\"CommandLine\":\"echo verify\",\"IsDaemon\":false}"
+                    },
                     "metadata": {
                         "executionId": exec_done,
-                        "createdAt": "2026-11-01T10:50:10Z",
-                        "completedAt": "2026-11-01T10:50:30Z"
+                        "createdAt": "2026-01-01T00:02:10Z",
+                        "completedAt": "2026-01-01T00:02:30Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "systemMessage": { "message": "System status notice" },
+                    "metadata": {
+                        "executionId": exec_done,
+                        "createdAt": "2026-01-01T00:02:31Z",
+                        "completedAt": "2026-01-01T00:02:31Z"
                     }
                 },
                 {
@@ -798,17 +844,17 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
                     "status": "CORTEX_STEP_STATUS_DONE",
                     "metadata": {
                         "executionId": exec_done,
-                        "createdAt": "2026-11-01T10:50:35.095443Z",
-                        "completedAt": "2026-11-01T10:50:37.090521Z"
+                        "createdAt": "2026-01-01T00:02:35.095443Z",
+                        "completedAt": "2026-01-01T00:02:37.090521Z"
                     },
                     "plannerResponse": {
-                        "response": "审计已完成，全部结论如下。"
+                        "response": "Synthetic regression summary."
                     }
                 }
             ],
             "executorMetadatas": [
                 {
-                    "executionId": "4b6a7b1f-9614-4d86-b62c-1cb4d2bc48df",
+                    "executionId": exec_early,
                     "lastStepIdx": 51,
                     "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
                 },
@@ -824,11 +870,11 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     let pre_meta = snapshot(cascade_id, &summary, &response).unwrap();
     assert!(pre_meta.events.is_empty());
     assert_eq!(
-        pre_meta.settled_count, 133,
+        pre_meta.settled_count, 132,
         "unrecorded execution must clamp settled_count so cursor does not advance to 137"
     );
 
-    // Phase 2: ExecutorMetadata for f1a85bcb is committed with NO_TOOL_CALL on PLANNER_RESPONSE without tool calls.
+    // Phase 2: ExecutorMetadata for exec_done is committed with NO_TOOL_CALL on step 136.
     response["trajectory"]["executorMetadatas"]
         .as_array_mut()
         .unwrap()
@@ -850,12 +896,12 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         &summary,
         &response,
         &TrajectoryLivenessContext::default(),
-        Some(133),
+        Some(132),
     )
     .unwrap();
     assert_eq!(diag["recordCount"], json!(137));
     assert_eq!(diag["settledCount"], json!(137));
-    assert_eq!(diag["cursor"], json!(133));
+    assert_eq!(diag["cursor"], json!(132));
     assert_eq!(diag["cascadeActive"]["active"], json!(false));
     assert_eq!(diag["unsettledBackground"]["unsettled"], json!(false));
     assert_eq!(
@@ -863,8 +909,8 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         json!("emitted")
     );
 
-    // Phase 3: If a second USER_INPUT arrives at step 137 before f1a85bcb was staged,
-    // f1a85bcb's completion is still emitted for the previous turn while the new turn is running.
+    // Phase 3: If a second USER_INPUT arrives at step 137 before exec_done was staged,
+    // exec_done's completion is still emitted for the previous turn while the new turn is running.
     let mut turn2_response = response.clone();
     turn2_response["status"] = json!("CASCADE_RUN_STATUS_RUNNING");
     turn2_response["numTotalSteps"] = json!(139);
@@ -874,14 +920,14 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     steps_mut.push(json!({
         "type": "CORTEX_STEP_TYPE_USER_INPUT",
         "status": "CORTEX_STEP_STATUS_DONE",
-        "metadata": { "createdAt": "2026-11-01T10:55:00Z" }
+        "metadata": { "createdAt": "2026-01-01T00:05:00Z" }
     }));
     steps_mut.push(json!({
         "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
         "status": "CORTEX_STEP_STATUS_RUNNING",
         "metadata": {
             "executionId": "exec-turn-2",
-            "createdAt": "2026-11-01T10:55:01Z"
+            "createdAt": "2026-01-01T00:05:01Z"
         }
     }));
     let turn2_snap = snapshot(cascade_id, &summary, &turn2_response).unwrap();
@@ -889,4 +935,35 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     assert_eq!(turn2_snap.events[0].turn_id, exec_done);
     assert_eq!(turn2_snap.events[0].kind, "completion");
     assert_eq!(turn2_snap.settled_count, 138);
+
+    // Phase 4: If the prior turn still had an unsettled background task when USER_INPUT arrived,
+    // settled_count is clamped to 132 (the start of exec_done, below 137) and diagnose reports
+    // skipReason = "prior_turn_has_pending_work".
+    let mut pending_turn2 = turn2_response.clone();
+    pending_turn2["trajectory"]["steps"][4]["taskDetails"] = json!({
+        "id": format!("{cascade_id}/task-134"),
+        "movedToBackgroundAt": "2026-01-01T00:02:15Z"
+    });
+    let pending_snap = snapshot(cascade_id, &summary, &pending_turn2).unwrap();
+    assert!(pending_snap.events.is_empty());
+    assert_eq!(
+        pending_snap.settled_count, 132,
+        "prior turn with pending background work must clamp settled_count below 137"
+    );
+    let pending_diag = diagnose_trajectory(
+        cascade_id,
+        &summary,
+        &pending_turn2,
+        &TrajectoryLivenessContext::default(),
+        Some(132),
+    )
+    .unwrap();
+    assert_eq!(
+        pending_diag["candidates"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["skipReason"],
+        json!("prior_turn_has_pending_work")
+    );
 }

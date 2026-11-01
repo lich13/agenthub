@@ -30,6 +30,10 @@ pub(super) fn installed() -> bool {
 }
 
 fn parse(value: &Value) -> Result<Option<HookEvent>> {
+    parse_with_paths(&ClaudePaths::default_for_user(), value)
+}
+
+pub(super) fn parse_with_paths(paths: &ClaudePaths, value: &Value) -> Result<Option<HookEvent>> {
     let get = |key| value[key].as_str().unwrap_or("");
     let notification = get("notification_type");
     let (kind, body, idle) = match (get("hook_event_name"), notification) {
@@ -72,7 +76,7 @@ fn parse(value: &Value) -> Result<Option<HookEvent>> {
         "invalid hook identity"
     );
     let path = PathBuf::from(get("transcript_path"));
-    let root = ClaudePaths::default_for_user().projects;
+    let root = &paths.projects;
     let canonical_root = root.canonicalize().ok();
     ensure!(
         path.is_absolute()
