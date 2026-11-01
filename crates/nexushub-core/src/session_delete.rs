@@ -78,16 +78,7 @@ impl Outcome {
         }
     }
 
-    #[cfg(test)]
-    pub fn remove(&mut self, path: &Path) {
-        let _ = self.remove_inner(path, false);
-    }
-
     pub fn remove_strict(&mut self, path: &Path) -> bool {
-        self.remove_inner(path, true)
-    }
-
-    fn remove_inner(&mut self, path: &Path, strict: bool) -> bool {
         if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
             return true;
         }
@@ -115,9 +106,7 @@ impl Outcome {
                         Err(e) => {
                             self.residuals
                                 .push(format!("{}: {e}", entry.path().display()));
-                            if strict {
-                                return false;
-                            }
+                            return false;
                         }
                     }
                 }
@@ -126,9 +115,7 @@ impl Outcome {
                         .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {}
                 Err(e) => {
                     self.residuals.push(e.to_string());
-                    if strict {
-                        return false;
-                    }
+                    return false;
                 }
             }
         }
@@ -304,7 +291,7 @@ mod tests {
             fs::File::create(root.join(format!("{index}.fixture"))).unwrap();
         }
         let mut outcome = Outcome::default();
-        outcome.remove(&root);
+        assert!(outcome.remove_strict(&root));
         assert!(outcome.residuals.is_empty(), "{:?}", outcome.residuals);
         assert_eq!(outcome.files, 10_002);
         assert_eq!(outcome.bytes, 513 * 1024 * 1024);
@@ -322,7 +309,7 @@ mod tests {
         let link = root.join("selected");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let mut outcome = Outcome::default();
-        outcome.remove(&link);
+        assert!(outcome.remove_strict(&link));
         assert!(outcome.residuals.is_empty());
         assert!(fs::symlink_metadata(&link).is_err());
         assert_eq!(
@@ -348,8 +335,8 @@ mod tests {
         fs::write(&removable, "fixture").unwrap();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
         let mut outcome = Outcome::default();
-        outcome.remove(&retained);
-        outcome.remove(&removable);
+        assert!(!outcome.remove_strict(&retained));
+        assert!(outcome.remove_strict(&removable));
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
         if unsafe { libc::geteuid() } != 0 {
             assert_eq!(outcome.residuals.len(), 1);
