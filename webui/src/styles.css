@@ -799,6 +799,13 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
   &.is-enabled { background: var(--e); border-color: var(--ab); box-shadow: inset 0 0 0 1px var(--as); }
 }
 .ws-card-grid, .probe-hooks-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.probe-hooks-grid > .panel, .probe-host-card { display: flex; flex-direction: column; }
+.probe-host-card { flex: 1; }
+.probe-host-card > .settings-meta-grid { margin-bottom: 0; }
+.probe-host-card > .button-row { margin-top: auto; }
+.probe-host-card-head { flex-wrap: wrap; padding-bottom: 10px; }
+.probe-host-card-copy { flex: 1 1 calc(100% - 34px); min-width: 0; }
+.probe-host-card-copy span, .metric :is(span, strong) { overflow-wrap: break-word; }
 .probe-host-path { font-size: 11px; padding: 2px 7px; border-radius: 6px; max-width: 100%; }
 .probe-advanced-settings {
   border-top: var(--b1); padding-top: 10px;
@@ -809,11 +816,11 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
 .desktop-outbox li > span, .tool-title, .tool-summary, .plan-header .message-meta, .question-block > strong,
 .choice-option :is(strong, small), .answered-row :is(span, small, strong), .history-collapse-cell strong, .reply-copy-error,
 .grok-tool summary, .task-feedback, .delete-path, .status-chip, .form-success, .form-error, .panel header strong,
-.metric :is(span, strong), .cleanup-panel-head > span, .toggle-row span, .preview-item :is(strong, small, span),
+.cleanup-panel-head > span, .toggle-row span, .preview-item :is(strong, small, span),
 .job-item summary > span:first-child, .job-meta, .hidden-cleanup-candidates li, .unified-scope-copy small,
 .unified-scope-meta, .unified-scope-issue, .file-path-label, .user-message-bubble, .user-instructions-body,
 .attachment-description, .attachment-preview header, .remote-machine-card-main code, .update-feedback, .timeline-rail-preview,
-.probe-live-session-copy :is(strong, span, small), .probe-host-card-copy span {
+.probe-live-session-copy :is(strong, span, small) {
   overflow-wrap: anywhere;
 }
 @keyframes thread-spin {

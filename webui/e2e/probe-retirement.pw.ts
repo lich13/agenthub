@@ -58,6 +58,39 @@ async function openBarkSettings(page: Page, mobile: boolean) {
   return { panel, saved, calls };
 }
 
+async function assertProbeCardGeometry(page: Page, desktop: boolean) {
+  for (const label of ["启用 Probe", "终止错误监控"]) {
+    const box = await page.getByLabel(label, { exact: true }).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThan(60);
+  }
+  const platformBoxes = await page.locator(".probe-platform-switch-card").evaluateAll(cards =>
+    cards.map(card => {
+      const rect = card.getBoundingClientRect();
+      return { top: Math.round(rect.top), height: rect.height };
+    }),
+  );
+  expect(platformBoxes).toHaveLength(5);
+  for (const box of platformBoxes) {
+    expect(box.height).toBeLessThan(80);
+  }
+  if (desktop) {
+    expect(new Set(platformBoxes.map(box => box.top)).size).toBe(1);
+  }
+  const hostBoxes = await page.locator(".probe-host-card").evaluateAll(cards =>
+    cards.map(card => {
+      const rect = card.getBoundingClientRect();
+      const copy = card.querySelector(".probe-host-card-copy")?.getBoundingClientRect();
+      return { height: rect.height, copyWidth: copy?.width ?? 0 };
+    }),
+  );
+  expect(hostBoxes).toHaveLength(5);
+  for (const host of hostBoxes) {
+    expect(host.height).toBeLessThan(320);
+    expect(host.copyWidth).toBeGreaterThan(150);
+  }
+}
+
 for (const colorScheme of ["light", "dark"] as const) {
   test(`retired Gotify controls stay absent while Bark saves and tests in narrow ${colorScheme} windows`, async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 780 });
@@ -71,16 +104,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(page.getByLabel("Codex 通知", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Grok 通知", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Claude Code 通知", { exact: true })).toBeVisible();
-    const enableProbeBox = await page.getByLabel("启用 Probe", { exact: true }).boundingBox();
-    expect(enableProbeBox).not.toBeNull();
-    expect(enableProbeBox!.width).toBeLessThan(60);
-    const cardBoxes = await page.locator(".probe-platform-switch-card").evaluateAll(cards =>
-      cards.map(card => card.getBoundingClientRect().height),
-    );
-    expect(cardBoxes.length).toBeGreaterThanOrEqual(3);
-    for (const height of cardBoxes) {
-      expect(height).toBeLessThan(80);
-    }
+    await assertProbeCardGeometry(page, false);
 
     await page.getByLabel("启用 Bark", { exact: true }).uncheck();
     await panel.getByRole("button", { name: "保存", exact: true }).focus();
@@ -108,15 +132,7 @@ test("Bark save failure retains the draft without restoring retired settings", a
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   const { panel, calls } = await openBarkSettings(page, false);
-  const enableProbeBox = await page.getByLabel("启用 Probe", { exact: true }).boundingBox();
-  expect(enableProbeBox).not.toBeNull();
-  expect(enableProbeBox!.width).toBeLessThan(60);
-  const cardHeights = await page.locator(".probe-platform-switch-card").evaluateAll(cards =>
-    cards.map(card => card.getBoundingClientRect().height),
-  );
-  for (const height of cardHeights) {
-    expect(height).toBeLessThan(80);
-  }
+  await assertProbeCardGeometry(page, true);
   await expect(page.locator('.probe-platform-switch-card[data-agent="codex"]')).toBeVisible();
   await mockCommand(page, "probe.settings.save", () => Promise.reject(new Error("Fixture Bark settings rejected")));
   await panel.getByLabel("Device Key", { exact: true }).fill("fixture-replacement-bark-key");
