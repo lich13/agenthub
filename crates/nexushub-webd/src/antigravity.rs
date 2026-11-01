@@ -624,12 +624,20 @@ pub async fn scan() -> Result<NativeScan> {
 }
 
 pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
+    let (endpoint, client, port, mut summaries) = connect().await?;
     let mut last_scan = NativeScan::default();
     for attempt in 0..4 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(200)).await;
+            summaries = query(
+                &client,
+                port,
+                &endpoint.token,
+                "GetAllCascadeTrajectories",
+                json!({"excludeSubtrajectories": false}),
+            )
+            .await?;
         }
-        let (endpoint, client, port, summaries) = connect().await?;
         let scan = scan_at(
             &client,
             port,
@@ -651,52 +659,44 @@ pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     Ok(last_scan)
 }
 
-pub async fn diagnose(cascade_id: &str, db: &nexushub_core::db::PanelDb) -> Result<Value> {
-    let (endpoint, client, port, value) = connect().await?;
-    let summaries = value["trajectorySummaries"]
-        .as_object()
-        .context("missing Antigravity summaries")?;
-    let summary = summaries
-        .get(cascade_id)
-        .with_context(|| format!("missing Antigravity summary for {cascade_id}"))?;
-    let subagents_by_root = collect_subagents_by_root(summaries);
-    let subagents = subagents_by_root
-        .get(cascade_id)
-        .cloned()
-        .unwrap_or_default();
+async fn load_trajectory_with_context(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    pid: u32,
+    id: &str,
+    summary: &Value,
+    subagents: BTreeMap<String, antigravity::SubagentLiveness>,
+    now_ms: i64,
+    inspect_background: bool,
+) -> Result<(Value, antigravity::TrajectoryLivenessContext)> {
     let has_active_subagents = subagents.values().any(|s| s.active);
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let response =
-        fetch_probe_trajectory(&client, port, &endpoint.token, cascade_id, summary).await?;
+    let response = fetch_probe_trajectory(client, port, token, id, summary).await?;
     let mut tasks = BTreeMap::new();
     let mut has_active_child_processes = false;
-    if let Some(steps) = response["trajectory"]["steps"].as_array() {
-        let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
-        let pending_logs =
-            antigravity::collect_pending_task_logs(cascade_id, summary_traj_id, steps);
-        if !pending_logs.is_empty() {
-            tasks = tokio::task::spawn_blocking(move || {
-                pending_logs
-                    .into_iter()
-                    .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
-                    .collect()
-            })
-            .await
-            .unwrap_or_default();
-        }
-        let untracked_specs = antigravity::collect_untracked_task_commands(
-            cascade_id,
-            summary_traj_id,
-            steps,
-            &tasks,
-        );
-        if !untracked_specs.is_empty() {
-            let pid = endpoint.pid;
-            has_active_child_processes = tokio::task::spawn_blocking(move || {
-                has_matching_active_child_process(pid, &untracked_specs, now_ms)
-            })
-            .await
-            .unwrap_or(false);
+    if inspect_background {
+        if let Some(steps) = response["trajectory"]["steps"].as_array() {
+            let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
+            let pending_logs = antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
+            if !pending_logs.is_empty() {
+                tasks = tokio::task::spawn_blocking(move || {
+                    pending_logs
+                        .into_iter()
+                        .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
+                        .collect()
+                })
+                .await
+                .unwrap_or_default();
+            }
+            let untracked_specs =
+                antigravity::collect_untracked_task_commands(id, summary_traj_id, steps, &tasks);
+            if !untracked_specs.is_empty() {
+                has_active_child_processes = tokio::task::spawn_blocking(move || {
+                    has_matching_active_child_process(pid, &untracked_specs, now_ms)
+                })
+                .await
+                .unwrap_or(false);
+            }
         }
     }
     let ctx = antigravity::TrajectoryLivenessContext {
@@ -706,6 +706,34 @@ pub async fn diagnose(cascade_id: &str, db: &nexushub_core::db::PanelDb) -> Resu
         subagents,
         tasks,
     };
+    Ok((response, ctx))
+}
+
+pub async fn diagnose(cascade_id: &str, db: &nexushub_core::db::PanelDb) -> Result<Value> {
+    let (endpoint, client, port, value) = connect().await?;
+    let summaries = value["trajectorySummaries"]
+        .as_object()
+        .context("missing Antigravity summaries")?;
+    let summary = summaries
+        .get(cascade_id)
+        .with_context(|| format!("missing Antigravity summary for {cascade_id}"))?;
+    let subagents = collect_subagents_by_root(summaries)
+        .get(cascade_id)
+        .cloned()
+        .unwrap_or_default();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let (response, ctx) = load_trajectory_with_context(
+        &client,
+        port,
+        &endpoint.token,
+        endpoint.pid,
+        cascade_id,
+        summary,
+        subagents,
+        now_ms,
+        true,
+    )
+    .await?;
     let db_cursor = db.native_probe_stream_cursor(
         nexushub_core::native_probe::NativeProvider::Antigravity,
         cascade_id,
@@ -786,53 +814,13 @@ async fn scan_at(
             scan.errors += 1;
             continue;
         }
-        let result = match fetch_probe_trajectory(client, port, token, id, summary).await {
-            Ok(response) => {
-                let mut tasks = BTreeMap::new();
-                let mut has_active_child_processes = false;
-                if !is_active {
-                    if let Some(steps) = response["trajectory"]["steps"].as_array() {
-                        let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
-                        let pending_logs =
-                            antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
-                        if !pending_logs.is_empty() {
-                            tasks = tokio::task::spawn_blocking(move || {
-                                pending_logs
-                                    .into_iter()
-                                    .filter_map(|(tid, uri)| {
-                                        inspect_task_log(&uri).map(|l| (tid, l))
-                                    })
-                                    .collect()
-                            })
-                            .await
-                            .unwrap_or_default();
-                        }
-                        let untracked_specs = antigravity::collect_untracked_task_commands(
-                            id,
-                            summary_traj_id,
-                            steps,
-                            &tasks,
-                        );
-                        if !untracked_specs.is_empty() {
-                            has_active_child_processes = tokio::task::spawn_blocking(move || {
-                                has_matching_active_child_process(pid, &untracked_specs, now_ms)
-                            })
-                            .await
-                            .unwrap_or(false);
-                        }
-                    }
-                }
-                let ctx = antigravity::TrajectoryLivenessContext {
-                    has_active_subagents,
-                    has_active_child_processes,
-                    now_ms: Some(now_ms),
-                    subagents,
-                    tasks,
-                };
-                antigravity::snapshot_with_context(id, summary, &response, &ctx)
-            }
-            Err(err) => Err(err),
-        };
+        let result = load_trajectory_with_context(
+            client, port, token, pid, id, summary, subagents, now_ms, !is_active,
+        )
+        .await
+        .and_then(|(response, ctx)| {
+            antigravity::snapshot_with_context(id, summary, &response, &ctx)
+        });
         match result {
             Ok(snapshot) => {
                 let mut cache = CACHE.lock().await;

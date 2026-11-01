@@ -81,16 +81,26 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     if matches!(
         cli.command,
-        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook
+        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook { .. }
     ) {
-        let is_antigravity = matches!(cli.command, Command::AntigravityHook);
+        let is_antigravity_foreground = matches!(
+            cli.command,
+            Command::AntigravityHook {
+                detached: false,
+                ..
+            }
+        );
+        let allow_printed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            !is_antigravity_foreground,
+        ));
+        let watchdog_allow_printed = std::sync::Arc::clone(&allow_printed);
         // A hook never blocks the host Agent or leaks payloads to logs.
         // Force exit also bounds any filesystem/stdin work in blocking tasks.
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(5));
-            if is_antigravity {
-                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
-                let _ = io::stdout().flush();
+            if is_antigravity_foreground {
+                let mut stdout = io::stdout().lock();
+                let _ = print_antigravity_stop_allow_once(&watchdog_allow_printed, &mut stdout);
             }
             std::process::exit(0);
         });
@@ -112,9 +122,12 @@ async fn main() -> Result<()> {
                 )
                 .await;
             }
-            Command::AntigravityHook => {
-                let conversation_id =
-                    read_optional_stdin_json()
+            Command::AntigravityHook {
+                detached,
+                cascade_id,
+            } => {
+                if !detached {
+                    let conversation_id = read_optional_stdin_json()
                         .ok()
                         .flatten()
                         .and_then(|payload| {
@@ -129,21 +142,38 @@ async fn main() -> Result<()> {
                                     "sessionId",
                                 ],
                             )
-                        });
-                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
-                let _ = io::stdout().flush();
-                let _ = tokio::time::timeout(
-                    Duration::from_millis(4800),
-                    provider_monitor::run_antigravity_hook(&cli.config, conversation_id.as_deref()),
-                )
-                .await;
+                        })
+                        .or(cascade_id);
+                    {
+                        let mut stdout = io::stdout().lock();
+                        let _ = print_antigravity_stop_allow_once(&allow_printed, &mut stdout);
+                    }
+                    if spawn_detached_antigravity_hook(&cli.config, conversation_id.as_deref()) {
+                        std::process::exit(0);
+                    }
+                    let _ = tokio::time::timeout(
+                        Duration::from_millis(4800),
+                        provider_monitor::run_antigravity_hook(
+                            &cli.config,
+                            conversation_id.as_deref(),
+                        ),
+                    )
+                    .await;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                    let _ = tokio::time::timeout(
+                        Duration::from_millis(4500),
+                        provider_monitor::run_antigravity_hook(&cli.config, cascade_id.as_deref()),
+                    )
+                    .await;
+                }
             }
             _ => unreachable!(),
         }
         std::process::exit(0);
     }
     match cli.command {
-        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook => unreachable!(),
+        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook { .. } => unreachable!(),
         Command::InitConfig => {
             Config::write_default(&cli.config)?;
             println!("wrote {}", cli.config.display());
@@ -1247,6 +1277,36 @@ fn antigravity_stop_allow_output() -> Value {
     json!({
         "decision": "allow",
     })
+}
+
+fn print_antigravity_stop_allow_once(
+    printed: &std::sync::atomic::AtomicBool,
+    writer: &mut impl Write,
+) -> bool {
+    if printed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    let _ = writeln!(writer, "{}", antigravity_stop_allow_output());
+    let _ = writer.flush();
+    true
+}
+
+fn spawn_detached_antigravity_hook(config_path: &Path, cascade_id: Option<&str>) -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    let mut cmd = ProcessCommand::new(exe);
+    cmd.arg("--config")
+        .arg(config_path)
+        .arg("antigravity-hook")
+        .arg("--detached")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(cascade_id) = cascade_id.map(str::trim).filter(|value| !value.is_empty()) {
+        cmd.arg("--cascade-id").arg(cascade_id);
+    }
+    cmd.spawn().is_ok()
 }
 
 #[cfg(test)]
@@ -4324,6 +4384,15 @@ last_error = "old nexushub request hook"
     fn antigravity_stop_allow_output_returns_decision_allow_json() {
         let out = antigravity_stop_allow_output();
         assert_eq!(out, json!({"decision": "allow"}));
+
+        let printed = std::sync::atomic::AtomicBool::new(false);
+        let mut buffer = Vec::new();
+        assert!(print_antigravity_stop_allow_once(&printed, &mut buffer));
+        assert!(!print_antigravity_stop_allow_once(&printed, &mut buffer));
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "{\"decision\":\"allow\"}\n"
+        );
     }
 
     pub(super) struct TestHttpServer {

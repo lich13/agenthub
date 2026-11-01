@@ -22,7 +22,12 @@ pub(super) enum Command {
     #[command(hide = true)]
     GrokHook,
     #[command(hide = true)]
-    AntigravityHook,
+    AntigravityHook {
+        #[arg(long, hide = true)]
+        detached: bool,
+        #[arg(long, hide = true)]
+        cascade_id: Option<String>,
+    },
     Serve {
         #[arg(long, default_value_t = HostSurface::LinuxServerApi)]
         surface: HostSurface,

@@ -588,6 +588,26 @@ pub fn snapshot_with_context(
     response: &Value,
     ctx: &TrajectoryLivenessContext,
 ) -> Result<NativeStreamSnapshot> {
+    Ok(evaluate_trajectory(id, summary, response, ctx, None)?.0)
+}
+
+pub fn diagnose_trajectory(
+    id: &str,
+    summary: &Value,
+    response: &Value,
+    ctx: &TrajectoryLivenessContext,
+    db_cursor: Option<u64>,
+) -> Result<Value> {
+    Ok(evaluate_trajectory(id, summary, response, ctx, db_cursor)?.1)
+}
+
+fn evaluate_trajectory(
+    id: &str,
+    summary: &Value,
+    response: &Value,
+    ctx: &TrajectoryLivenessContext,
+    db_cursor: Option<u64>,
+) -> Result<(NativeStreamSnapshot, Value)> {
     let identity = identity(id, summary)?;
     let trajectory = &response["trajectory"];
     ensure!(
@@ -612,15 +632,21 @@ pub fn snapshot_with_context(
         .and_then(|e| e["executionId"].as_str())
         .unwrap_or("");
     let summary_trajectory_id = summary["trajectoryId"].as_str().unwrap_or("");
+    let summary_status_active = cascade_status_is_active(summary["status"].as_str());
+    let response_status_active = cascade_status_is_active(response["status"].as_str());
+    let subagents_any_active = ctx.subagents.values().any(|s| s.active);
+    let not_fully_idle = summary["notFullyIdle"].as_bool() == Some(true);
+    let has_running_subagents = summary["hasRunningSubagents"].as_bool() == Some(true);
+    let waiting_steps_non_empty = summary["waitingSteps"]
+        .as_array()
+        .is_some_and(|arr| !arr.is_empty());
     let cascade_active = ctx.has_active_subagents
-        || ctx.subagents.values().any(|s| s.active)
-        || cascade_status_is_active(summary["status"].as_str())
-        || cascade_status_is_active(response["status"].as_str())
-        || summary["notFullyIdle"].as_bool() == Some(true)
-        || summary["hasRunningSubagents"].as_bool() == Some(true)
-        || summary["waitingSteps"]
-            .as_array()
-            .is_some_and(|arr| !arr.is_empty());
+        || subagents_any_active
+        || summary_status_active
+        || response_status_active
+        || not_fully_idle
+        || has_running_subagents
+        || waiting_steps_non_empty;
     let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps, ctx);
     let summary_modified_ms = native_probe::timestamp(&summary["lastModifiedTime"])
         .or_else(|| native_probe::timestamp(&summary["createdTime"]));
@@ -669,33 +695,66 @@ pub fn snapshot_with_context(
             settled_count = settled_count.min(group[0].0 as u64);
         }
     }
+    let mut candidates = Vec::with_capacity(executors.len());
     for meta in executors {
         let exec = meta["executionId"]
             .as_str()
             .context("missing Antigravity execution identity")?;
-        let Some(group) = by_execution.get(exec) else {
-            continue;
-        };
         let end = meta["lastStepIdx"].as_u64();
         let reason = meta["terminationReason"].as_str().unwrap_or("");
+        let actual_last = by_execution
+            .get(exec)
+            .and_then(|group| group.last().map(|(idx, _)| *idx as u64));
+        let position = actual_last.map(|idx| idx + 1);
+        let record_candidate = |candidates: &mut Vec<Value>, skip_reason: Option<&'static str>| {
+            candidates.push(serde_json::json!({
+                    "executionId": exec,
+                    "lastStepIdx": end,
+                    "actualLastStepIdx": actual_last,
+                    "position": position,
+                    "terminationReason": reason,
+                    "status": if skip_reason.is_none() { "emitted" } else { "skipped" },
+                    "skipReason": skip_reason,
+                    "cursorComparison": match (position, db_cursor) {
+                        (Some(pos), Some(cur)) if pos < cur => "position < cursor (already behind cursor)",
+                        (Some(pos), Some(cur)) if pos == cur => "position == cursor (at cursor boundary)",
+                        (Some(_), Some(_)) => "position > cursor (eligible)",
+                        _ => "no_db_cursor",
+                    },
+                }));
+        };
+        let Some(group) = by_execution.get(exec) else {
+            record_candidate(&mut candidates, Some("no_steps_in_window"));
+            continue;
+        };
         if reason.is_empty() || reason == "EXECUTOR_TERMINATION_REASON_UNSPECIFIED" {
             settled_count = settled_count.min(group[0].0 as u64);
+            record_candidate(&mut candidates, Some("termination_reason_unspecified"));
             continue;
         }
-        if meta["proceededWithAutoContinue"] == true || group.iter().any(|(_, step)| !settled(step))
-        {
+        if meta["proceededWithAutoContinue"] == true {
             if exec == latest {
                 settled_count = settled_count.min(group[0].0 as u64);
             }
+            record_candidate(&mut candidates, Some("proceeded_with_auto_continue"));
+            continue;
+        }
+        if group.iter().any(|(_, step)| !settled(step)) {
+            if exec == latest {
+                settled_count = settled_count.min(group[0].0 as u64);
+            }
+            record_candidate(&mut candidates, Some("group_has_unsettled_step"));
             continue;
         }
         let Some((last_global_index, last)) = group.last() else {
+            record_candidate(&mut candidates, Some("no_steps_in_window"));
             continue;
         };
         if end != Some(*last_global_index as u64) {
             if exec == latest {
                 settled_count = settled_count.min(group[0].0 as u64);
             }
+            record_candidate(&mut candidates, Some("end_mismatch_last_global_index"));
             continue;
         }
         let local_last_idx = last_global_index.saturating_sub(step_offset);
@@ -710,6 +769,7 @@ pub fn snapshot_with_context(
             })
             .map(|(idx, _)| idx);
         if next_user_input_idx.is_none() && exec != latest {
+            record_candidate(&mut candidates, Some("not_latest_executor_in_turn"));
             continue;
         }
         let terminal_no_tool_call = (last["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
@@ -721,6 +781,7 @@ pub fn snapshot_with_context(
             if exec == latest {
                 settled_count = settled_count.min(group[0].0 as u64);
             }
+            record_candidate(&mut candidates, Some("no_tool_call_on_non_terminal_step"));
             continue;
         }
         let mut kind = match reason {
@@ -734,30 +795,56 @@ pub fn snapshot_with_context(
             | "EXECUTOR_TERMINATION_REASON_MAX_INVOCATIONS"
             | "EXECUTOR_TERMINATION_REASON_MAX_FORCED_INVOCATIONS"
             | "EXECUTOR_TERMINATION_REASON_MAX_TOKEN_BUDGET_EXCEEDED" => "failure",
-            _ => continue,
+            _ => {
+                record_candidate(&mut candidates, Some("non_notifiable_termination_reason"));
+                continue;
+            }
         };
         if let Some(next_ui_idx) = next_user_input_idx {
-            if kind != "completion"
-                || steps[local_after..next_ui_idx].iter().any(|s| {
-                    !step_is_foreign(id, summary_trajectory_id, s)
-                        && (s["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
-                            || (!execution(s).is_empty() && execution(s) != exec))
-                })
-            {
+            if kind != "completion" {
+                record_candidate(&mut candidates, Some("prior_turn_non_completion"));
                 continue;
             }
-            let prior_pending =
-                collect_turn_pending_work(id, summary_trajectory_id, &steps[..next_ui_idx]);
-            if !prior_pending.pending_tasks.is_empty()
-                || !prior_pending.pending_subagents.is_empty()
-            {
+            if steps[local_after..next_ui_idx].iter().any(|s| {
+                !step_is_foreign(id, summary_trajectory_id, s)
+                    && s["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
+            }) {
+                record_candidate(&mut candidates, Some("intervening_system_message"));
                 continue;
             }
-        } else if kind == "completion"
-            && ((*last_global_index as u64 + 1) < count || cascade_active || unsettled_background)
-        {
-            settled_count = settled_count.min(group[0].0 as u64);
-            continue;
+            if steps[local_after..next_ui_idx].iter().any(|s| {
+                !step_is_foreign(id, summary_trajectory_id, s)
+                    && !execution(s).is_empty()
+                    && execution(s) != exec
+            }) {
+                record_candidate(&mut candidates, Some("intervening_other_executor"));
+                continue;
+            }
+            if has_unsettled_background_work(id, summary_trajectory_id, &steps[..next_ui_idx], ctx)
+            {
+                settled_count = settled_count.min(group[0].0 as u64);
+                record_candidate(&mut candidates, Some("prior_turn_has_pending_work"));
+                continue;
+            }
+        } else if kind == "completion" {
+            if (*last_global_index as u64 + 1) < count {
+                settled_count = settled_count.min(group[0].0 as u64);
+                record_candidate(
+                    &mut candidates,
+                    Some("trailing_steps_after_last_global_index"),
+                );
+                continue;
+            }
+            if cascade_active {
+                settled_count = settled_count.min(group[0].0 as u64);
+                record_candidate(&mut candidates, Some("cascade_active"));
+                continue;
+            }
+            if unsettled_background {
+                settled_count = settled_count.min(group[0].0 as u64);
+                record_candidate(&mut candidates, Some("unsettled_background"));
+                continue;
+            }
         }
         // User cancellation or a new execution invalidates a previous failure.
         if kind == "failure"
@@ -768,11 +855,13 @@ pub fn snapshot_with_context(
             }) || cascade_active)
         {
             settled_count = settled_count.min(group[0].0 as u64);
+            record_candidate(&mut candidates, Some("superseded_failure"));
             continue;
         }
         let timestamp = native_probe::timestamp(&last["metadata"]["completedAt"])
             .or_else(|| native_probe::timestamp(&last["metadata"]["finishedGeneratingAt"]));
         let Some(timestamp_ms) = timestamp else {
+            record_candidate(&mut candidates, Some("missing_timestamp"));
             continue;
         };
         let last_planner_text = group
@@ -828,6 +917,7 @@ pub fn snapshot_with_context(
         } else {
             String::new()
         };
+        record_candidate(&mut candidates, None);
         events.push(NativeTurnEvent {
             prompt_id: None,
             position: *last_global_index as u64 + 1,
@@ -841,7 +931,7 @@ pub fn snapshot_with_context(
     if events.len() > 1024 {
         events.drain(..events.len() - 1024);
     }
-    Ok(NativeStreamSnapshot {
+    let snapshot = NativeStreamSnapshot {
         provider: NativeProvider::Antigravity,
         session_key: id.into(),
         id: id.into(),
@@ -850,64 +940,8 @@ pub fn snapshot_with_context(
         record_count: count,
         settled_count,
         events,
-    })
-}
-
-pub fn diagnose_trajectory(
-    id: &str,
-    summary: &Value,
-    response: &Value,
-    ctx: &TrajectoryLivenessContext,
-    db_cursor: Option<u64>,
-) -> Result<Value> {
-    let snap = snapshot_with_context(id, summary, response, ctx)?;
-    let trajectory = &response["trajectory"];
-    let step_offset = response["stepOffset"].as_u64().unwrap_or(0) as usize;
-    let steps = trajectory["steps"]
-        .as_array()
-        .context("missing Antigravity steps")?;
-    let count = snap.record_count;
-    let executors = trajectory["executorMetadatas"]
-        .as_array()
-        .context("missing Antigravity execution state")?;
-    let latest = executors
-        .last()
-        .and_then(|e| e["executionId"].as_str())
-        .unwrap_or("");
-    let summary_trajectory_id = summary["trajectoryId"].as_str().unwrap_or("");
-    let summary_status_active = cascade_status_is_active(summary["status"].as_str());
-    let response_status_active = cascade_status_is_active(response["status"].as_str());
-    let subagents_any_active = ctx.subagents.values().any(|s| s.active);
-    let not_fully_idle = summary["notFullyIdle"].as_bool() == Some(true);
-    let has_running_subagents = summary["hasRunningSubagents"].as_bool() == Some(true);
-    let waiting_steps_non_empty = summary["waitingSteps"]
-        .as_array()
-        .is_some_and(|arr| !arr.is_empty());
-    let cascade_active = ctx.has_active_subagents
-        || subagents_any_active
-        || summary_status_active
-        || response_status_active
-        || not_fully_idle
-        || has_running_subagents
-        || waiting_steps_non_empty;
+    };
     let pending = collect_turn_pending_work(id, summary_trajectory_id, steps);
-    let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps, ctx);
-
-    let mut by_execution: BTreeMap<&str, Vec<(usize, &Value)>> = BTreeMap::new();
-    for (local_index, step) in steps.iter().enumerate() {
-        let global_index = step_offset + local_index;
-        if step_is_foreign(id, summary_trajectory_id, step) {
-            continue;
-        }
-        let exec = execution(step);
-        if !exec.is_empty() {
-            by_execution
-                .entry(exec)
-                .or_default()
-                .push((global_index, step));
-        }
-    }
-
     let executor_tail: Vec<Value> = executors
         .iter()
         .rev()
@@ -922,97 +956,12 @@ pub fn diagnose_trajectory(
             })
         })
         .collect();
-
-    let mut candidates = Vec::new();
-    for meta in executors {
-        let exec = meta["executionId"].as_str().unwrap_or("");
-        let end = meta["lastStepIdx"].as_u64();
-        let reason = meta["terminationReason"].as_str().unwrap_or("");
-        let Some(group) = by_execution.get(exec) else {
-            candidates.push(serde_json::json!({
-                "executionId": exec,
-                "lastStepIdx": end,
-                "terminationReason": reason,
-                "status": "skipped",
-                "reason": "no_steps_in_window",
-            }));
-            continue;
-        };
-        let actual_last = group.last().map(|(idx, _)| *idx as u64);
-        let skip_reason = if reason.is_empty()
-            || reason == "EXECUTOR_TERMINATION_REASON_UNSPECIFIED"
-        {
-            Some("termination_reason_unspecified")
-        } else if meta["proceededWithAutoContinue"] == true {
-            Some("proceeded_with_auto_continue")
-        } else if group.iter().any(|(_, step)| !settled(step)) {
-            Some("group_has_unsettled_step")
-        } else if end != actual_last {
-            Some("end_mismatch_last_global_index")
-        } else {
-            let (last_global_index, last) = group.last().unwrap();
-            let local_last_idx = last_global_index.saturating_sub(step_offset);
-            let local_after = local_last_idx.saturating_add(1);
-            let next_ui = steps
-                .iter()
-                .enumerate()
-                .skip(local_after)
-                .find(|(_, s)| {
-                    !step_is_foreign(id, summary_trajectory_id, s)
-                        && s["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
-                })
-                .map(|(idx, _)| idx);
-            let terminal_no_tool_call = (last["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
-                && last["plannerResponse"]["toolCalls"]
-                    .as_array()
-                    .is_none_or(Vec::is_empty))
-                || last["type"] == "CORTEX_STEP_TYPE_FINISH";
-            if next_ui.is_none() && exec != latest {
-                Some("not_latest_executor_in_turn")
-            } else if reason == "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" && !terminal_no_tool_call
-            {
-                Some("no_tool_call_on_non_terminal_step")
-            } else if next_ui.is_none() && (*last_global_index as u64 + 1) < count {
-                Some("trailing_steps_after_last_global_index")
-            } else if next_ui.is_none() && cascade_active {
-                Some("cascade_active")
-            } else if next_ui.is_none() && unsettled_background {
-                Some("unsettled_background")
-            } else if native_probe::timestamp(&last["metadata"]["completedAt"])
-                .or_else(|| native_probe::timestamp(&last["metadata"]["finishedGeneratingAt"]))
-                .is_none()
-            {
-                Some("missing_timestamp")
-            } else if snap.events.iter().any(|e| e.turn_id == exec) {
-                None
-            } else {
-                Some("non_notifiable_or_superseded_termination_reason")
-            }
-        };
-        let position = actual_last.map(|idx| idx + 1);
-        candidates.push(serde_json::json!({
-            "executionId": exec,
-            "lastStepIdx": end,
-            "actualLastStepIdx": actual_last,
-            "position": position,
-            "terminationReason": reason,
-            "status": if skip_reason.is_none() { "emitted" } else { "skipped" },
-            "skipReason": skip_reason,
-            "cursorComparison": match (position, db_cursor) {
-                (Some(pos), Some(cur)) if pos < cur => "position < cursor (already behind cursor)",
-                (Some(pos), Some(cur)) if pos == cur => "position == cursor (at cursor boundary)",
-                (Some(_), Some(_)) => "position > cursor (eligible)",
-                _ => "no_db_cursor",
-            },
-        }));
-    }
-
-    Ok(serde_json::json!({
+    let diagnosis = serde_json::json!({
         "cascadeId": id,
         "trajectoryId": summary["trajectoryId"],
         "stepOffset": step_offset,
-        "recordCount": snap.record_count,
-        "settledCount": snap.settled_count,
+        "recordCount": snapshot.record_count,
+        "settledCount": snapshot.settled_count,
         "cursor": db_cursor,
         "executorMetadatasTail": executor_tail,
         "cascadeActive": {
@@ -1036,7 +985,8 @@ pub fn diagnose_trajectory(
             "pendingSubagentsCount": pending.pending_subagents.len(),
         },
         "candidates": candidates,
-    }))
+    });
+    Ok((snapshot, diagnosis))
 }
 
 #[cfg(test)]
