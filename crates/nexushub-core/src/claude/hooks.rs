@@ -638,7 +638,10 @@ mod tests {
                 },
             )
         };
-        assert_eq!(run_grok(ClaudeHooksAction::Status).unwrap().managed_count, 2);
+        assert_eq!(
+            run_grok(ClaudeHooksAction::Status).unwrap().managed_count,
+            2
+        );
         let grok_st = run_grok(ClaudeHooksAction::Install).unwrap();
         assert!(grok_st.installed && grok_st.managed_count == 3);
         assert!(configured_path(&grok_path, &binary, GROK_HANDLER));
@@ -707,7 +710,8 @@ mod tests {
             agy_after.get("nexushub").is_none()
                 && agy_after["cargo-target-gc"]["enabled"] == true
                 && agy_after["cargo-target-gc"]["Stop"][0]["decision"] == "stop"
-                && agy_after["hooks"]["AfterAgent"][0]["hooks"][0]["name"] == "nexushub-third-party"
+                && agy_after["hooks"]["AfterAgent"][0]["hooks"][0]["name"]
+                    == "nexushub-third-party"
         );
         fs::remove_dir_all(dir).unwrap();
     }
@@ -715,7 +719,8 @@ mod tests {
     #[test]
     fn preserves_other_binary_nexushub_named_entries_and_cargo_target_gc_decision_stop_while_cleaning_legacy_residuals(
     ) {
-        let dir = std::env::temp_dir().join(format!("claude-hooks-strict-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("claude-hooks-strict-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let binary = dir.join("nexushub-webd");
         fs::write(&binary, "fixture").unwrap();
@@ -772,7 +777,10 @@ mod tests {
         let after_install: Value = serde_json::from_slice(&fs::read(&agy_path).unwrap()).unwrap();
         // 1. Other binary's nexushub-* entry is preserved
         assert_eq!(
-            after_install["hooks"]["Stop"][0]["hooks"].as_array().unwrap().len(),
+            after_install["hooks"]["Stop"][0]["hooks"]
+                .as_array()
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(
@@ -825,7 +833,10 @@ mod tests {
         assert!(status2.installed);
         let after_clean: Value = serde_json::from_slice(&fs::read(&agy_path).unwrap()).unwrap();
         assert!(after_clean.get("hooks").is_none());
-        assert_eq!(after_clean["cargo-target-gc"]["Stop"][0]["decision"], "stop");
+        assert_eq!(
+            after_clean["cargo-target-gc"]["Stop"][0]["decision"],
+            "stop"
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }

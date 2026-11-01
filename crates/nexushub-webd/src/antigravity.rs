@@ -666,7 +666,8 @@ pub async fn diagnose(cascade_id: &str, db: &nexushub_core::db::PanelDb) -> Resu
         .unwrap_or_default();
     let has_active_subagents = subagents.values().any(|s| s.active);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let response = fetch_probe_trajectory(&client, port, &endpoint.token, cascade_id, summary).await?;
+    let response =
+        fetch_probe_trajectory(&client, port, &endpoint.token, cascade_id, summary).await?;
     let mut tasks = BTreeMap::new();
     let mut has_active_child_processes = false;
     if let Some(steps) = response["trajectory"]["steps"].as_array() {

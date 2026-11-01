@@ -405,7 +405,9 @@ mod tests {
 
         // 1. Codex via notify_completion_context + record_probe_event_with_bark
         let (codex_config, _codex_identity) =
-            crate::notification_accuracy_tests::test_notification_config(&["codex-self-test-thread"]);
+            crate::notification_accuracy_tests::test_notification_config(&[
+                "codex-self-test-thread",
+            ]);
         let mut codex_config = codex_config;
         codex_config.probe = config.probe.clone();
         let codex_transcript = sandbox_root.join("codex-rollout.jsonl");

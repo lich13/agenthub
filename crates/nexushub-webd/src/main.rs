@@ -113,30 +113,28 @@ async fn main() -> Result<()> {
                 .await;
             }
             Command::AntigravityHook => {
-                let conversation_id = read_optional_stdin_json()
-                    .ok()
-                    .flatten()
-                    .and_then(|payload| {
-                        read_string_field(
-                            &payload,
-                            &[
-                                "conversationId",
-                                "conversation_id",
-                                "cascadeId",
-                                "cascade_id",
-                                "session_id",
-                                "sessionId",
-                            ],
-                        )
-                    });
+                let conversation_id =
+                    read_optional_stdin_json()
+                        .ok()
+                        .flatten()
+                        .and_then(|payload| {
+                            read_string_field(
+                                &payload,
+                                &[
+                                    "conversationId",
+                                    "conversation_id",
+                                    "cascadeId",
+                                    "cascade_id",
+                                    "session_id",
+                                    "sessionId",
+                                ],
+                            )
+                        });
                 let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
                 let _ = io::stdout().flush();
                 let _ = tokio::time::timeout(
                     Duration::from_millis(4800),
-                    provider_monitor::run_antigravity_hook(
-                        &cli.config,
-                        conversation_id.as_deref(),
-                    ),
+                    provider_monitor::run_antigravity_hook(&cli.config, conversation_id.as_deref()),
                 )
                 .await;
             }

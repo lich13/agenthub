@@ -1031,7 +1031,10 @@ fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
             .and_then(|item| item.as_str())
             .is_some_and(|group| group.trim().eq_ignore_ascii_case("NexusHub"))
         {
-            table.insert("group", toml_edit::value(default_probe_notification_group()));
+            table.insert(
+                "group",
+                toml_edit::value(default_probe_notification_group()),
+            );
             changed = true;
         }
     }

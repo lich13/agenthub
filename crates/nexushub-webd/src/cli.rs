@@ -109,5 +109,7 @@ pub(super) enum ProbeCommand {
     #[command(hide = true)]
     MonitorErrors,
     #[command(name = "diagnose-antigravity", hide = true)]
-    DiagnoseAntigravity { cascade_id: String },
+    DiagnoseAntigravity {
+        cascade_id: String,
+    },
 }
