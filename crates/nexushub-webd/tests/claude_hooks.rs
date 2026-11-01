@@ -304,7 +304,7 @@ fn real_cli_hooks_and_polling_share_one_claim_per_prompt_category() {
         .collect();
     assert_eq!(statuses, vec!["完成", "需要授权", "需要回复", "失败"]);
     for request in requests.iter() {
-        assert_eq!(request["group"], "NexusHub｜Claude Code");
+        assert_eq!(request["group"], "AgentHub｜Claude Code");
         assert_eq!(request["sound"], "bell");
         assert_eq!(request["url"], "https://example.invalid/thread");
         let body = request["body"].as_str().unwrap();

@@ -50,12 +50,10 @@ impl HookProvider {
                 .home
                 .join("hooks/nexushub.json"),
             Self::Antigravity => {
-                let antigravity_home =
-                    crate::antigravity::sessions::AntigravityPaths::default_for_user().home;
-                let gemini_root = antigravity_home
-                    .parent()
-                    .unwrap_or(antigravity_home.as_path());
-                gemini_root.join("config/hooks.json")
+                let home = crate::antigravity::sessions::AntigravityPaths::default_for_user().home;
+                home.parent()
+                    .unwrap_or(home.as_path())
+                    .join("config/hooks.json")
             }
         }
     }
@@ -100,18 +98,43 @@ fn managed_for_handler(value: &Value, binary: &Path, handler: &str) -> bool {
 }
 
 fn managed_any_nexushub_handler(value: &Value, binary: &Path) -> bool {
-    value["type"] == "command"
+    (value["type"] == "command"
         && value["command"].as_str() == binary.to_str()
         && value["args"].as_array().is_some_and(|args| {
             args.len() == 3
                 && args[0] == "--config"
                 && args[1].is_string()
                 && args[2].as_str().is_some_and(is_any_nexushub_handler_name)
-        })
+        }))
+        || is_managed_antigravity_stop_entry(value, binary)
+        || value["name"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("nexushub-"))
 }
 
 fn expected_for_handler(binary: &Path, config: &Path, handler: &str) -> Value {
-    json!({"type":"command", "command":binary, "args":["--config", config, handler], "async":true})
+    if handler == GROK_HANDLER {
+        json!({"type": "command", "command": binary, "args": ["--config", config, handler]})
+    } else {
+        json!({"type": "command", "command": binary, "args": ["--config", config, handler], "async": true})
+    }
+}
+
+fn expected_group_for_handler(binary: &Path, config: &Path, handler: &str, matcher: &str) -> Value {
+    let hook = expected_for_handler(binary, config, handler);
+    if handler == GROK_HANDLER && matcher.is_empty() {
+        json!({"hooks": [hook]})
+    } else {
+        json!({"matcher": matcher, "hooks": [hook]})
+    }
+}
+
+fn group_matcher_matches(group: &Value, handler: &str, expected_matcher: &str) -> bool {
+    if handler == GROK_HANDLER && expected_matcher.is_empty() {
+        group.get("matcher").is_none()
+    } else {
+        group["matcher"].as_str() == Some(expected_matcher)
+    }
 }
 
 fn antigravity_command_string(binary: &Path, config: &Path) -> String {
@@ -172,6 +195,7 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
         }
     }
 }
+
 fn checked(bytes: Option<&[u8]>) -> Result<Value> {
     let root: Value = bytes
         .map(serde_json::from_slice)
@@ -187,12 +211,11 @@ fn checked(bytes: Option<&[u8]>) -> Result<Value> {
                 .as_array()
                 .context("Claude hook 分组格式错误，未作修改")?
             {
-                ensure!(group.is_object(), "Claude hook 分组格式错误，未作修改");
-                let handlers = group["hooks"]
-                    .as_array()
-                    .context("Claude hook 列表格式错误，未作修改")?;
                 ensure!(
-                    handlers.iter().all(Value::is_object),
+                    group.is_object()
+                        && group["hooks"]
+                            .as_array()
+                            .is_some_and(|hs| hs.iter().all(Value::is_object)),
                     "Claude hook 条目格式错误，未作修改"
                 );
             }
@@ -203,25 +226,18 @@ fn checked(bytes: Option<&[u8]>) -> Result<Value> {
             .as_object()
             .context("Antigravity nexushub hook 配置格式错误，未作修改")?;
         if let Some(stop) = obj.get("Stop") {
-            let items = stop
-                .as_array()
-                .context("Antigravity Stop hook 列表格式错误，未作修改")?;
             ensure!(
-                items.iter().all(Value::is_object),
+                stop.as_array()
+                    .is_some_and(|items| items.iter().all(Value::is_object)),
                 "Antigravity Stop hook 条目格式错误，未作修改"
             );
         }
     }
     Ok(root)
 }
-fn status_for_handler(
-    path: &Path,
-    root: &Value,
-    binary: &Path,
-    config: &Path,
-    handler: &str,
-) -> ClaudeHooksStatus {
-    let legacy_count = root["hooks"]
+
+fn count_legacy_hooks_entries(root: &Value, binary: &Path, handler: &str) -> usize {
+    let in_hooks = root["hooks"]
         .as_object()
         .into_iter()
         .flat_map(|o| o.values())
@@ -229,6 +245,25 @@ fn status_for_handler(
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
         .filter(|h| managed_any_nexushub_handler(h, binary))
         .count();
+    let misplaced_top = if handler == GROK_HANDLER {
+        EVENTS
+            .iter()
+            .filter(|(ev, _)| root.get(*ev).is_some())
+            .count()
+    } else {
+        0
+    };
+    in_hooks + misplaced_top
+}
+
+fn status_for_handler(
+    path: &Path,
+    root: &Value,
+    binary: &Path,
+    config: &Path,
+    handler: &str,
+) -> ClaudeHooksStatus {
+    let legacy_count = count_legacy_hooks_entries(root, binary, handler);
 
     if handler == ANTIGRAVITY_HANDLER {
         let stop_entries = root["nexushub"]["Stop"].as_array();
@@ -257,25 +292,26 @@ fn status_for_handler(
         };
     }
 
-    let count = legacy_count;
-    let installed = count == EVENTS.len()
+    let expected_hook = expected_for_handler(binary, config, handler);
+    let installed = legacy_count == EVENTS.len()
         && EVENTS.iter().all(|(event, matcher)| {
             root["hooks"][event].as_array().is_some_and(|groups| {
                 groups.iter().any(|g| {
-                    g["matcher"] == *matcher
-                        && g["hooks"].as_array().is_some_and(|hs| {
-                            hs.contains(&expected_for_handler(binary, config, handler))
-                        })
+                    group_matcher_matches(g, handler, matcher)
+                        && g["hooks"]
+                            .as_array()
+                            .is_some_and(|hs| hs.contains(&expected_hook))
                 })
             })
         });
     ClaudeHooksStatus {
         installed,
-        managed_count: count,
+        managed_count: legacy_count,
         changed: false,
         config_path: path.display().to_string(),
     }
 }
+
 pub fn installed(paths: &ClaudePaths, binary: &Path, config: &Path) -> bool {
     let settings_path = paths.config.join("settings.json");
     read(&settings_path)
@@ -286,7 +322,7 @@ pub fn installed(paths: &ClaudePaths, binary: &Path, config: &Path) -> bool {
 }
 
 /// The monitor runs the same fixed executable as the hook, including when a
-/// user selected a non-default NexusHub config file.
+/// user selected a non-default AgentHub config file.
 pub fn configured(paths: &ClaudePaths, binary: &Path) -> bool {
     configured_path(&paths.config.join("settings.json"), binary, HANDLER)
 }
@@ -304,15 +340,7 @@ pub fn configured_path(settings_path: &Path, binary: &Path, handler: &str) -> bo
         .and_then(|bytes| checked(bytes.as_deref()))
         .is_ok_and(|root| {
             if handler == ANTIGRAVITY_HANDLER {
-                let legacy_count = root["hooks"]
-                    .as_object()
-                    .into_iter()
-                    .flat_map(|o| o.values())
-                    .flat_map(|v| v.as_array().into_iter().flatten())
-                    .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-                    .filter(|h| managed_any_nexushub_handler(h, binary))
-                    .count();
-                return legacy_count == 0
+                return count_legacy_hooks_entries(&root, binary, handler) == 0
                     && root["nexushub"]["enabled"] == true
                     && root["nexushub"]["Stop"].as_array().is_some_and(|items| {
                         items.len() == 1
@@ -404,10 +432,9 @@ pub fn manage_file(
             let groups = groups.as_array_mut().unwrap();
             groups.retain_mut(|group| {
                 let handlers = group["hooks"].as_array_mut().unwrap();
-                let before = handlers.len();
+                let before_len = handlers.len();
                 handlers.retain(|h| !managed_any_nexushub_handler(h, binary));
-                // Preserve pre-existing empty groups and any user/plugin handlers.
-                before == handlers.len() || !handlers.is_empty()
+                before_len == handlers.len() || !handlers.is_empty()
             });
         }
         if handler == ANTIGRAVITY_HANDLER
@@ -416,6 +443,13 @@ pub fn manage_file(
                 .all(|v| v.as_array().is_some_and(Vec::is_empty))
         {
             root.as_object_mut().unwrap().remove("hooks");
+        }
+    }
+    if handler == GROK_HANDLER {
+        if let Some(obj) = root.as_object_mut() {
+            for (ev, _) in EVENTS {
+                obj.remove(ev);
+            }
         }
     }
     if handler == ANTIGRAVITY_HANDLER {
@@ -445,7 +479,7 @@ pub fn manage_file(
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"matcher":matcher,"hooks":[expected_for_handler(binary,config,handler)]}));
+                .push(expected_group_for_handler(binary, config, handler, matcher));
         }
     }
     let bytes = serde_json::to_vec_pretty(&root)?;
@@ -498,21 +532,22 @@ pub fn manage_file(
 type SettingsHook = Box<dyn FnMut(&Path)>;
 #[cfg(test)]
 thread_local! { static SETTINGS_CHECKPOINT: std::cell::RefCell<Option<SettingsHook>> = const { std::cell::RefCell::new(None) }; }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn merge_repair_remove_preserve_user_hooks_and_reject_conflicts() {
-        let directory = std::env::temp_dir().join(format!("claude-hooks-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&directory).unwrap();
+        let dir = std::env::temp_dir().join(format!("claude-hooks-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
         let paths = ClaudePaths {
-            config: directory.as_path().into(),
-            projects: directory.as_path().join("projects"),
+            config: dir.clone(),
+            projects: dir.join("projects"),
         };
-        let binary = directory.as_path().join("nexushub-webd");
+        let binary = dir.join("nexushub-webd");
         fs::write(&binary, "fixture").unwrap();
-        let config = directory.as_path().join("fixture.toml");
-        let path = directory.as_path().join("settings.json");
+        let config = dir.join("fixture.toml");
+        let path = dir.join("settings.json");
         let original = json!({"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-fixture","args":[]}]}]}});
         fs::write(&path, original.to_string()).unwrap();
         let run = |action| {
@@ -526,9 +561,8 @@ mod tests {
                 },
             )
         };
-        let installed_status = run(ClaudeHooksAction::Install).unwrap();
-        assert!(installed_status.installed);
-        assert_eq!(installed_status.config_path, path.display().to_string());
+        let status = run(ClaudeHooksAction::Install).unwrap();
+        assert!(status.installed && status.config_path == path.display().to_string());
         assert!(!run(ClaudeHooksAction::Install).unwrap().changed);
         let installed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(installed["theme"], "dark");
@@ -537,15 +571,12 @@ mod tests {
             installed["hooks"]["Stop"][1]["hooks"][0]["args"][2],
             HANDLER
         );
-        assert!(installed["hooks"]["Stop"][1]["hooks"][0]
-            .get("timeout")
-            .is_none());
+        assert_eq!(installed["hooks"]["Stop"][1]["hooks"][0]["async"], true);
         assert!(!run(ClaudeHooksAction::Remove).unwrap().installed);
         assert!(!run(ClaudeHooksAction::Remove).unwrap().changed);
+
         SETTINGS_CHECKPOINT.with(|s| {
-            *s.borrow_mut() = Some(Box::new(|path| {
-                fs::write(path, "{\"concurrent\":true}").unwrap();
-            }))
+            *s.borrow_mut() = Some(Box::new(|p| fs::write(p, "{\"concurrent\":true}").unwrap()))
         });
         assert!(run(ClaudeHooksAction::Install).is_err());
         SETTINGS_CHECKPOINT.with(|s| *s.borrow_mut() = None);
@@ -556,142 +587,89 @@ mod tests {
             assert_eq!(fs::read_to_string(&path).unwrap(), broken);
         }
 
-        // Grok hook cleans legacy claude-hook entries and installs 3 grok-hook events.
-        let grok_path = directory.join("grok/hooks/nexushub.json");
+        // Grok hook cleans legacy claude-hook / misplaced top-level keys, omits async and empty matcher.
+        let grok_path = dir.join("grok/hooks/nexushub.json");
         fs::create_dir_all(grok_path.parent().unwrap()).unwrap();
         fs::write(
             &grok_path,
             serde_json::to_vec(&json!({
+                "Stop": [{"matcher": "", "hooks": []}],
                 "hooks": {
-                    "Stop": [
-                        {"matcher": "", "hooks": [expected_for_handler(&binary, &config, HANDLER)]}
-                    ]
+                    "Stop": [{"matcher": "", "hooks": [expected_for_handler(&binary, &config, HANDLER)]}]
                 }
             }))
             .unwrap(),
         )
         .unwrap();
-        let grok_installed = manage_file(
-            &grok_path,
-            HookProvider::Grok.handler(),
-            HookProvider::Grok.label(),
-            &binary,
-            &config,
-            ClaudeHooksRequest {
-                action: ClaudeHooksAction::Install,
-                confirmed: true,
-            },
-        )
-        .unwrap();
-        assert!(grok_installed.installed);
-        assert_eq!(grok_installed.managed_count, 3);
-        assert!(configured_path(
-            &grok_path,
-            &binary,
-            HookProvider::Grok.handler()
-        ));
-        let grok_removed = manage_file(
-            &grok_path,
-            HookProvider::Grok.handler(),
-            HookProvider::Grok.label(),
-            &binary,
-            &config,
-            ClaudeHooksRequest {
-                action: ClaudeHooksAction::Remove,
-                confirmed: true,
-            },
-        )
-        .unwrap();
-        assert!(!grok_removed.installed);
-        assert_eq!(grok_removed.managed_count, 0);
+        let run_grok = |action| {
+            manage_file(
+                &grok_path,
+                GROK_HANDLER,
+                "Grok",
+                &binary,
+                &config,
+                ClaudeHooksRequest {
+                    action,
+                    confirmed: true,
+                },
+            )
+        };
+        let grok_st = run_grok(ClaudeHooksAction::Install).unwrap();
+        assert!(grok_st.installed && grok_st.managed_count == 3);
+        assert!(configured_path(&grok_path, &binary, GROK_HANDLER));
+        let grok_json: Value = serde_json::from_slice(&fs::read(&grok_path).unwrap()).unwrap();
+        assert!(grok_json.get("Stop").is_none());
+        assert!(grok_json["hooks"]["Stop"][0].get("matcher").is_none());
+        assert!(grok_json["hooks"]["Stop"][0]["hooks"][0]
+            .get("async")
+            .is_none());
+        let grok_rem = run_grok(ClaudeHooksAction::Remove).unwrap();
+        assert!(!grok_rem.installed && grok_rem.managed_count == 0);
 
-        // Antigravity hook registers only Stop under top-level "nexushub", cleans legacy "hooks", and preserves user hooks.
-        let agy_path = directory.join("gemini/config/hooks.json");
+        // Antigravity hook registers Stop under top-level "nexushub" and cleans command-style or args-style "hooks".
+        let agy_path = dir.join("gemini/config/hooks.json");
         fs::create_dir_all(agy_path.parent().unwrap()).unwrap();
         fs::write(
             &agy_path,
             serde_json::to_vec(&json!({
                 "cargo-target-gc": {
                     "enabled": true,
-                    "Stop": [{"type": "command", "command": "/bin/true", "timeout": 30}]
+                    "Stop": [{"type": "command", "command": "/bin/true", "timeout": 10}]
                 },
                 "hooks": {
-                    "Stop": [{"matcher": "", "hooks": [expected_for_handler(&binary, &config, ANTIGRAVITY_HANDLER)]}]
+                    "AfterAgent": [{"matcher": "*", "hooks": [{"name": "nexushub-antigravity-hook", "type": "command", "command": antigravity_command_string(&binary, &config), "timeout": 10000}]}]
                 }
             }))
             .unwrap(),
         )
         .unwrap();
-        let agy_installed = manage_file(
-            &agy_path,
-            HookProvider::Antigravity.handler(),
-            HookProvider::Antigravity.label(),
-            &binary,
-            &config,
-            ClaudeHooksRequest {
-                action: ClaudeHooksAction::Install,
-                confirmed: true,
-            },
-        )
-        .unwrap();
-        assert!(agy_installed.installed);
-        assert_eq!(agy_installed.managed_count, 1);
-        assert!(configured_path(
-            &agy_path,
-            &binary,
-            HookProvider::Antigravity.handler()
-        ));
+        let run_agy = |action| {
+            manage_file(
+                &agy_path,
+                ANTIGRAVITY_HANDLER,
+                "Antigravity",
+                &binary,
+                &config,
+                ClaudeHooksRequest {
+                    action,
+                    confirmed: true,
+                },
+            )
+        };
+        assert_eq!(run_agy(ClaudeHooksAction::Status).unwrap().managed_count, 1);
+        let agy_st = run_agy(ClaudeHooksAction::Install).unwrap();
+        assert!(agy_st.installed && agy_st.managed_count == 1);
+        assert!(configured_path(&agy_path, &binary, ANTIGRAVITY_HANDLER));
         let agy_json: Value = serde_json::from_slice(&fs::read(&agy_path).unwrap()).unwrap();
         assert!(agy_json.get("hooks").is_none());
         assert_eq!(agy_json["cargo-target-gc"]["enabled"], true);
         assert_eq!(agy_json["nexushub"]["enabled"], true);
-        assert_eq!(agy_json["nexushub"]["Stop"].as_array().unwrap().len(), 1);
-        assert!(agy_json["nexushub"].get("Notification").is_none());
-        assert!(agy_json["nexushub"].get("StopFailure").is_none());
-        #[cfg(unix)]
-        {
-            let spaced_dir = directory.join("Application Support/NexusHub/bin");
-            fs::create_dir_all(&spaced_dir).unwrap();
-            let spaced_bin = spaced_dir.join("nexushub-webd");
-            fs::write(
-                &spaced_bin,
-                "#!/bin/sh\nif [ \"$1\" = \"--config\" ] && [ \"$3\" = \"antigravity-hook\" ]; then\n  printf '{\"decision\":\"allow\"}\\n'\n  exit 0\nfi\nexit 1\n",
-            )
-            .unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&spaced_bin, fs::Permissions::from_mode(0o755)).unwrap();
-            let spaced_cfg = directory.join("Application Support/NexusHub/config.toml");
-            let entry = expected_for_antigravity(&spaced_bin, &spaced_cfg);
-            let out = std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg(entry["command"].as_str().unwrap())
-                .output()
-                .unwrap();
-            assert!(out.status.success());
-            assert_eq!(
-                String::from_utf8_lossy(&out.stdout).trim(),
-                "{\"decision\":\"allow\"}"
-            );
-        }
-        let agy_removed = manage_file(
-            &agy_path,
-            HookProvider::Antigravity.handler(),
-            HookProvider::Antigravity.label(),
-            &binary,
-            &config,
-            ClaudeHooksRequest {
-                action: ClaudeHooksAction::Remove,
-                confirmed: true,
-            },
-        )
-        .unwrap();
-        assert!(!agy_removed.installed);
-        assert_eq!(agy_removed.managed_count, 0);
-        let agy_after_remove: Value =
-            serde_json::from_slice(&fs::read(&agy_path).unwrap()).unwrap();
-        assert!(agy_after_remove.get("nexushub").is_none());
-        assert_eq!(agy_after_remove["cargo-target-gc"]["enabled"], true);
-
-        fs::remove_dir_all(directory).unwrap();
+        let agy_rem = run_agy(ClaudeHooksAction::Remove).unwrap();
+        assert!(!agy_rem.installed && agy_rem.managed_count == 0);
+        let agy_after: Value = serde_json::from_slice(&fs::read(&agy_path).unwrap()).unwrap();
+        assert!(
+            agy_after.get("nexushub").is_none() && agy_after["cargo-target-gc"]["enabled"] == true
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }
