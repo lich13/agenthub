@@ -71,6 +71,16 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(page.getByLabel("Codex 通知", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Grok 通知", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Claude Code 通知", { exact: true })).toBeVisible();
+    const enableProbeBox = await page.getByLabel("启用 Probe", { exact: true }).boundingBox();
+    expect(enableProbeBox).not.toBeNull();
+    expect(enableProbeBox!.width).toBeLessThan(60);
+    const cardBoxes = await page.locator(".probe-platform-switch-card").evaluateAll(cards =>
+      cards.map(card => card.getBoundingClientRect().height),
+    );
+    expect(cardBoxes.length).toBeGreaterThanOrEqual(3);
+    for (const height of cardBoxes) {
+      expect(height).toBeLessThan(80);
+    }
 
     await page.getByLabel("启用 Bark", { exact: true }).uncheck();
     await panel.getByRole("button", { name: "保存", exact: true }).focus();
@@ -98,6 +108,16 @@ test("Bark save failure retains the draft without restoring retired settings", a
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   const { panel, calls } = await openBarkSettings(page, false);
+  const enableProbeBox = await page.getByLabel("启用 Probe", { exact: true }).boundingBox();
+  expect(enableProbeBox).not.toBeNull();
+  expect(enableProbeBox!.width).toBeLessThan(60);
+  const cardHeights = await page.locator(".probe-platform-switch-card").evaluateAll(cards =>
+    cards.map(card => card.getBoundingClientRect().height),
+  );
+  for (const height of cardHeights) {
+    expect(height).toBeLessThan(80);
+  }
+  await expect(page.locator('.probe-platform-switch-card[data-agent="codex"]')).toBeVisible();
   await mockCommand(page, "probe.settings.save", () => Promise.reject(new Error("Fixture Bark settings rejected")));
   await panel.getByLabel("Device Key", { exact: true }).fill("fixture-replacement-bark-key");
   await panel.getByRole("button", { name: "保存", exact: true }).click();

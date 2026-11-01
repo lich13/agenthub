@@ -322,6 +322,7 @@ export function ProbeRuntimeSettingsCard(props: {
               <label
                 key={platform.id}
                 className={`probe-platform-switch-card ${enabled ? "is-enabled" : ""}`}
+                data-agent={platform.brand}
               >
                 <span className="probe-platform-switch-brand">
                   <span className="agent-brand-badge" data-agent={platform.brand} aria-hidden="true">
