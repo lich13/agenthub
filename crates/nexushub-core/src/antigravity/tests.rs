@@ -888,5 +888,5 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     assert_eq!(turn2_snap.events.len(), 1);
     assert_eq!(turn2_snap.events[0].turn_id, exec_done);
     assert_eq!(turn2_snap.events[0].kind, "completion");
-    assert_eq!(turn2_snap.settled_count, 137);
+    assert_eq!(turn2_snap.settled_count, 138);
 }
