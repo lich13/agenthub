@@ -97,8 +97,11 @@ impl PanelDb {
             if !reset || provider.local_only() {
                 let now = Self::now();
                 for event in &stream.events {
+                    let unrecorded_at_cursor = known_mutable_source
+                        && event.position == cursor
+                        && event.timestamp_ms >= activated_ms;
                     if !reset
-                        && (event.position <= cursor
+                        && ((!unrecorded_at_cursor && event.position <= cursor)
                             || (!known_mutable_source && event.timestamp_ms < activated_ms)
                             || (!provider.local_only()
                                 && !provider.event_enabled(config, &event.kind)))
@@ -142,6 +145,21 @@ impl PanelDb {
         }
         tx.commit()?;
         Ok(queued)
+    }
+
+    pub fn native_probe_stream_cursor(
+        &self,
+        provider: NativeProvider,
+        session_key: &str,
+    ) -> Result<Option<u64>> {
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(conn
+            .query_row(
+                "SELECT cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2",
+                params![provider.as_str(), session_key],
+                |r| r.get::<_, u64>(0),
+            )
+            .optional()?)
     }
 
     pub fn claude_legacy_delivery_keys(

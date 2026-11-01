@@ -699,7 +699,8 @@ impl ProbeConfig {
         self.recent_limit = self.recent_limit.clamp(1, 500);
         // Preserve invalid destinations so send-time validation fails closed. Replacing
         // one with the default service could disclose a key belonging to another server.
-        if self.notifications.group.trim().is_empty() {
+        let group = self.notifications.group.trim();
+        if group.is_empty() || group.eq_ignore_ascii_case("NexusHub") {
             self.notifications.group = default_probe_notification_group();
         }
         self.observability.event_retention_days =
@@ -1018,13 +1019,23 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 /// including credentials and inline or quoted table definitions.
 fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
     let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let removed = doc
+    let mut changed = false;
+    if let Some(table) = doc
         .get_mut("probe")
         .and_then(|item| item.get_mut("notifications"))
         .and_then(|item| item.as_table_like_mut())
-        .and_then(|table| table.remove("gotify"))
-        .is_some();
-    Ok(removed.then(|| doc.to_string()))
+    {
+        changed |= table.remove("gotify").is_some();
+        if table
+            .get("group")
+            .and_then(|item| item.as_str())
+            .is_some_and(|group| group.trim().eq_ignore_ascii_case("NexusHub"))
+        {
+            table.insert("group", toml_edit::value(default_probe_notification_group()));
+            changed = true;
+        }
+    }
+    Ok(changed.then(|| doc.to_string()))
 }
 
 fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
@@ -1553,7 +1564,9 @@ token = "fixture-not-a-real-secret"
         let path = directory.join("config.toml");
         let text = format!(
             "{}\n[probe.logs_db]\nretention_days = 7\n",
-            toml::to_string_pretty(&Config::default()).unwrap()
+            toml::to_string_pretty(&Config::default())
+                .unwrap()
+                .replace("group = \"AgentHub\"", "group = \"NexusHub\"")
         );
         // An explicit existing observability preference takes precedence.
         std::fs::write(&path, text).unwrap();
@@ -1564,8 +1577,11 @@ token = "fixture-not-a-real-secret"
         }
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.probe.observability.event_retention_days, 2);
+        assert_eq!(loaded.probe.notifications.group, "AgentHub");
         let migrated = std::fs::read(&path).unwrap();
-        assert!(!String::from_utf8_lossy(&migrated).contains("[probe.logs_db]"));
+        let migrated_text = String::from_utf8_lossy(&migrated);
+        assert!(!migrated_text.contains("[probe.logs_db]"));
+        assert!(migrated_text.contains("group = \"AgentHub\""));
         Config::load(&path).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), migrated);
         #[cfg(unix)]

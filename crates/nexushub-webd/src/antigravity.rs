@@ -504,8 +504,17 @@ async fn fetch_incremental_turn_trajectory(
     else {
         return Ok(None);
     };
+    let cached_unsettled_offset = {
+        let cache = CACHE.lock().await;
+        cache
+            .iter()
+            .find(|(key, _, _, _)| key == id)
+            .map(|(_, _, s, _)| s.settled_count)
+            .filter(|&settled| settled < turn_offset && turn_offset - settled <= 256)
+    };
+    let start_offset = cached_unsettled_offset.unwrap_or(turn_offset);
     let total_usize = total as usize;
-    let offset_usize = turn_offset as usize;
+    let offset_usize = start_offset as usize;
     let mut steps = Vec::new();
     while offset_usize + steps.len() < total_usize && steps.len() < 50_000 {
         let more = query(
@@ -532,7 +541,7 @@ async fn fetch_incremental_turn_trajectory(
     };
     Ok(Some(json!({
         "status": summary["status"],
-        "stepOffset": turn_offset,
+        "stepOffset": start_offset,
         "numTotalSteps": total,
         "trajectory": {
             "cascadeId": id,
@@ -612,6 +621,95 @@ pub async fn scan() -> Result<NativeScan> {
         None,
     )
     .await
+}
+
+pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
+    let mut last_scan = NativeScan::default();
+    for attempt in 0..4 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let (endpoint, client, port, summaries) = connect().await?;
+        let scan = scan_at(
+            &client,
+            port,
+            &endpoint.token,
+            endpoint.pid,
+            &summaries,
+            Some(cascade_id),
+        )
+        .await?;
+        let settled = scan
+            .streams
+            .first()
+            .is_some_and(|s| !s.events.is_empty() || s.settled_count == s.record_count);
+        last_scan = scan;
+        if settled {
+            break;
+        }
+    }
+    Ok(last_scan)
+}
+
+pub async fn diagnose(cascade_id: &str, db: &nexushub_core::db::PanelDb) -> Result<Value> {
+    let (endpoint, client, port, value) = connect().await?;
+    let summaries = value["trajectorySummaries"]
+        .as_object()
+        .context("missing Antigravity summaries")?;
+    let summary = summaries
+        .get(cascade_id)
+        .with_context(|| format!("missing Antigravity summary for {cascade_id}"))?;
+    let subagents_by_root = collect_subagents_by_root(summaries);
+    let subagents = subagents_by_root
+        .get(cascade_id)
+        .cloned()
+        .unwrap_or_default();
+    let has_active_subagents = subagents.values().any(|s| s.active);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let response = fetch_probe_trajectory(&client, port, &endpoint.token, cascade_id, summary).await?;
+    let mut tasks = BTreeMap::new();
+    let mut has_active_child_processes = false;
+    if let Some(steps) = response["trajectory"]["steps"].as_array() {
+        let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
+        let pending_logs =
+            antigravity::collect_pending_task_logs(cascade_id, summary_traj_id, steps);
+        if !pending_logs.is_empty() {
+            tasks = tokio::task::spawn_blocking(move || {
+                pending_logs
+                    .into_iter()
+                    .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
+                    .collect()
+            })
+            .await
+            .unwrap_or_default();
+        }
+        let untracked_specs = antigravity::collect_untracked_task_commands(
+            cascade_id,
+            summary_traj_id,
+            steps,
+            &tasks,
+        );
+        if !untracked_specs.is_empty() {
+            let pid = endpoint.pid;
+            has_active_child_processes = tokio::task::spawn_blocking(move || {
+                has_matching_active_child_process(pid, &untracked_specs, now_ms)
+            })
+            .await
+            .unwrap_or(false);
+        }
+    }
+    let ctx = antigravity::TrajectoryLivenessContext {
+        has_active_subagents,
+        has_active_child_processes,
+        now_ms: Some(now_ms),
+        subagents,
+        tasks,
+    };
+    let db_cursor = db.native_probe_stream_cursor(
+        nexushub_core::native_probe::NativeProvider::Antigravity,
+        cascade_id,
+    )?;
+    antigravity::diagnose_trajectory(cascade_id, summary, &response, &ctx, db_cursor)
 }
 pub async fn source_current(delivery: &nexushub_core::db::NativeDelivery) -> Result<bool> {
     let (endpoint, client, port, summaries) = connect().await?;

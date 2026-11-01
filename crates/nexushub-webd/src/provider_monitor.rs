@@ -65,6 +65,29 @@ pub async fn run_provider_hook(
     deliver_pending(&config, &db, &scan.streams).await
 }
 
+pub async fn run_antigravity_hook(
+    config_path: &std::path::Path,
+    conversation_id: Option<&str>,
+) -> Result<()> {
+    let provider = NativeProvider::Antigravity;
+    let config = Config::load(config_path)?;
+    if !provider.enabled(&config) {
+        return Ok(());
+    }
+    let db = super::open_panel_db(&config)?;
+    db.recover_interrupted_native_deliveries()?;
+    let scan = match conversation_id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => super::antigravity::scan_one(id).await,
+        None => super::antigravity::scan().await,
+    }
+    .unwrap_or(NativeScan {
+        streams: vec![],
+        errors: 1,
+    });
+    db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
+    deliver_pending(&config, &db, &scan.streams).await
+}
+
 async fn deliver_pending(
     config: &Config,
     db: &PanelDb,
@@ -352,6 +375,220 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.payload["bark"]["reason"] == "native_identity_or_branch_changed"));
+        let _ = std::fs::remove_dir_all(sandbox_root);
+    }
+
+    #[tokio::test]
+    async fn all_five_platforms_produce_probe_events_through_hook_or_poll_pipeline() {
+        let server = crate::tests::TestHttpServer::start_n(
+            5,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let (mut config, sandbox_root) = sandboxed_test_config();
+        config.probe.enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        let n = &mut config.probe.notifications;
+        n.notify_completion = true;
+        n.notify_claude = true;
+        n.notify_claude_completion = true;
+        n.notify_grok = true;
+        n.notify_grok_completion = true;
+        n.notify_antigravity = true;
+        n.notify_antigravity_completion = true;
+        n.notify_dsh = true;
+        n.notify_dsh_completion = true;
+
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+            .unwrap();
+
+        // 1. Codex via notify_completion_context + record_probe_event_with_bark
+        let (codex_config, _codex_identity) =
+            crate::notification_accuracy_tests::test_notification_config(&["codex-self-test-thread"]);
+        let mut codex_config = codex_config;
+        codex_config.probe = config.probe.clone();
+        let codex_transcript = sandbox_root.join("codex-rollout.jsonl");
+        std::fs::write(
+            &codex_transcript,
+            serde_json::json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "codex-self-test-turn",
+                    "last_agent_message": "Codex self-test completion."
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let codex_input = crate::notify_completion_context(
+            &codex_config,
+            Some(&serde_json::json!({
+                "thread_id": "codex-self-test-thread",
+                "turn_id": "codex-self-test-turn",
+                "transcript_path": codex_transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let codex_event = crate::probe_runtime(&codex_config).build_event(codex_input);
+        let (codex_outcome, _) =
+            crate::record_probe_event_with_bark(&codex_config, &db, codex_event)
+                .await
+                .unwrap();
+        assert!(codex_outcome.recorded);
+
+        // 2-5. Claude Code, Grok, Antigravity (via real trajectory parser), and DSH
+        let now_ms = chrono::Utc::now().timestamp_millis() + 2_000;
+        let now_rfc3339 = chrono::DateTime::from_timestamp_millis(now_ms)
+            .unwrap()
+            .to_rfc3339();
+        let ag_id = "632d506e-5152-49ac-a5b0-a1ecf2db684c";
+        let ag_summary = serde_json::json!({
+            "trajectoryId": "traj-self-test",
+            "createdTime": "2026-11-01T10:00:00Z",
+            "lastModifiedTime": now_rfc3339,
+            "summary": "Antigravity self-test",
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "trajectoryMetadata": { "rootConversationId": ag_id }
+        });
+        let ag_response = serde_json::json!({
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "numTotalSteps": 2,
+            "trajectory": {
+                "cascadeId": ag_id,
+                "trajectoryId": "traj-self-test",
+                "steps": [
+                    {
+                        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                        "status": "CORTEX_STEP_STATUS_DONE",
+                        "metadata": { "executionId": "exec-ag-1", "createdAt": "2026-11-01T10:00:00Z" }
+                    },
+                    {
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "status": "CORTEX_STEP_STATUS_DONE",
+                        "metadata": {
+                            "executionId": "exec-ag-1",
+                            "createdAt": "2026-11-01T10:00:01Z",
+                            "completedAt": now_rfc3339
+                        },
+                        "plannerResponse": { "response": "Antigravity self-test completed." }
+                    }
+                ],
+                "executorMetadatas": [
+                    {
+                        "executionId": "exec-ag-1",
+                        "lastStepIdx": 1,
+                        "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                    }
+                ]
+            }
+        });
+        let ag_stream =
+            nexushub_core::antigravity::snapshot(ag_id, &ag_summary, &ag_response).unwrap();
+        assert_eq!(ag_stream.events.len(), 1);
+
+        let native_streams = vec![
+            (
+                NativeProvider::Claude,
+                NativeStreamSnapshot {
+                    provider: NativeProvider::Claude,
+                    session_key: "claude-self-test".into(),
+                    id: "claude-self-test".into(),
+                    title: "Claude self-test".into(),
+                    identity: "claude-identity".into(),
+                    record_count: 2,
+                    settled_count: 2,
+                    events: vec![NativeTurnEvent {
+                        prompt_id: None,
+                        position: 2,
+                        turn_id: "claude-turn-1".into(),
+                        kind: "completion".into(),
+                        body: "Claude self-test completed.".into(),
+                        timestamp_ms: now_ms,
+                    }],
+                },
+            ),
+            (
+                NativeProvider::Grok,
+                NativeStreamSnapshot {
+                    provider: NativeProvider::Grok,
+                    session_key: "grok-self-test".into(),
+                    id: "grok-self-test".into(),
+                    title: "Grok self-test".into(),
+                    identity: "grok-identity".into(),
+                    record_count: 2,
+                    settled_count: 2,
+                    events: vec![NativeTurnEvent {
+                        prompt_id: None,
+                        position: 2,
+                        turn_id: "grok-turn-1".into(),
+                        kind: "completion".into(),
+                        body: "Grok self-test completed.".into(),
+                        timestamp_ms: now_ms,
+                    }],
+                },
+            ),
+            (NativeProvider::Antigravity, ag_stream),
+            (
+                NativeProvider::Dsh,
+                NativeStreamSnapshot {
+                    provider: NativeProvider::Dsh,
+                    session_key: "dsh-self-test".into(),
+                    id: "dsh-self-test".into(),
+                    title: "DSH self-test".into(),
+                    identity: "dsh-identity".into(),
+                    record_count: 2,
+                    settled_count: 2,
+                    events: vec![NativeTurnEvent {
+                        prompt_id: None,
+                        position: 2,
+                        turn_id: "dsh-turn-1".into(),
+                        kind: "completion".into(),
+                        body: "DSH self-test completed.".into(),
+                        timestamp_ms: now_ms,
+                    }],
+                },
+            ),
+        ];
+
+        for (provider, stream) in native_streams {
+            db.stage_native_notifications(provider, &NativeScan::default(), &config)
+                .unwrap();
+            let scan = NativeScan {
+                streams: vec![stream.clone()],
+                errors: 0,
+            };
+            assert_eq!(
+                db.stage_native_notifications(provider, &scan, &config)
+                    .unwrap(),
+                1,
+                "provider {} must stage 1 completion notification",
+                provider.as_str()
+            );
+            deliver_pending(&config, &db, std::slice::from_ref(&stream))
+                .await
+                .unwrap();
+        }
+
+        let events = db.list_probe_events(20).unwrap();
+        assert_eq!(events.len(), 5, "all 5 platforms must record a probe_event");
+        assert!(
+            events
+                .iter()
+                .any(|e| e.thread_id.as_deref() == Some("codex-self-test-thread")),
+            "missing probe_event for provider codex"
+        );
+        for expected_provider in ["claude_code", "grok", "antigravity", "dsh"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.payload["provider"] == expected_provider),
+                "missing probe_event for provider {expected_provider}"
+            );
+        }
         let _ = std::fs::remove_dir_all(sandbox_root);
     }
 }

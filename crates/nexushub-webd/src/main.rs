@@ -113,16 +113,32 @@ async fn main() -> Result<()> {
                 .await;
             }
             Command::AntigravityHook => {
+                let conversation_id = read_optional_stdin_json()
+                    .ok()
+                    .flatten()
+                    .and_then(|payload| {
+                        read_string_field(
+                            &payload,
+                            &[
+                                "conversationId",
+                                "conversation_id",
+                                "cascadeId",
+                                "cascade_id",
+                                "session_id",
+                                "sessionId",
+                            ],
+                        )
+                    });
+                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
+                let _ = io::stdout().flush();
                 let _ = tokio::time::timeout(
                     Duration::from_millis(4800),
-                    provider_monitor::run_provider_hook(
+                    provider_monitor::run_antigravity_hook(
                         &cli.config,
-                        nexushub_core::native_probe::NativeProvider::Antigravity,
+                        conversation_id.as_deref(),
                     ),
                 )
                 .await;
-                let _ = writeln!(io::stdout(), "{}", antigravity_stop_allow_output());
-                let _ = io::stdout().flush();
             }
             _ => unreachable!(),
         }
@@ -336,6 +352,12 @@ async fn run_probe_command(
         }
         ProbeCommand::LegacyImport => {
             anyhow::bail!("unavailable: legacy configuration import is retired");
+        }
+        ProbeCommand::DiagnoseAntigravity { cascade_id } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&antigravity::diagnose(&cascade_id, &db).await?)?
+            );
         }
     }
     Ok(())

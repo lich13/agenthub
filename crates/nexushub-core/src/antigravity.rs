@@ -523,9 +523,6 @@ fn has_unsettled_background_work(
 
     for (task_id, rec) in &pending_tasks {
         if let Some(task) = ctx.tasks.get(task_id) {
-            if task.active {
-                return true;
-            }
             let anchor_ms = [
                 last_root_step_ms,
                 rec.spawn_ms,
@@ -536,14 +533,16 @@ fn has_unsettled_background_work(
             .flatten()
             .max()
             .unwrap_or(now_ms);
-            if now_ms.saturating_sub(anchor_ms) < BACKGROUND_HANDOFF_GRACE_MS {
+            let grace = if task.active {
+                UNTRACKED_TASK_QUIESCENCE_MS
+            } else {
+                BACKGROUND_HANDOFF_GRACE_MS
+            };
+            if now_ms.saturating_sub(anchor_ms) < grace {
                 return true;
             }
         } else {
-            if rec.expected_deadline_ms.is_none() && ctx.has_active_child_processes {
-                return true;
-            }
-            let grace = if rec.expected_deadline_ms.is_some() {
+            let grace = if rec.expected_deadline_ms.is_some() && !ctx.has_active_child_processes {
                 BACKGROUND_HANDOFF_GRACE_MS
             } else {
                 UNTRACKED_TASK_QUIESCENCE_MS
@@ -656,6 +655,20 @@ pub fn snapshot_with_context(
             events.push(event);
         }
     }
+    let known_executors: BTreeSet<&str> = executors
+        .iter()
+        .filter_map(|e| e["executionId"].as_str())
+        .collect();
+    for (exec, group) in &by_execution {
+        if !known_executors.contains(exec)
+            && group.iter().all(|(_, step)| settled(step))
+            && group
+                .last()
+                .is_some_and(|(idx, _)| *idx >= step_offset + local_turn_start)
+        {
+            settled_count = settled_count.min(group[0].0 as u64);
+        }
+    }
     for meta in executors {
         let exec = meta["executionId"]
             .as_str()
@@ -685,8 +698,18 @@ pub fn snapshot_with_context(
             }
             continue;
         }
-        // Only the latest executor can represent the final terminal state of the thread.
-        if exec != latest {
+        let local_last_idx = last_global_index.saturating_sub(step_offset);
+        let local_after = local_last_idx.saturating_add(1);
+        let next_user_input_idx = steps
+            .iter()
+            .enumerate()
+            .skip(local_after)
+            .find(|(_, s)| {
+                !step_is_foreign(id, summary_trajectory_id, s)
+                    && s["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
+            })
+            .map(|(idx, _)| idx);
+        if next_user_input_idx.is_none() && exec != latest {
             continue;
         }
         let terminal_no_tool_call = (last["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
@@ -695,7 +718,9 @@ pub fn snapshot_with_context(
                 .is_none_or(Vec::is_empty))
             || last["type"] == "CORTEX_STEP_TYPE_FINISH";
         if reason == "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" && !terminal_no_tool_call {
-            settled_count = settled_count.min(group[0].0 as u64);
+            if exec == latest {
+                settled_count = settled_count.min(group[0].0 as u64);
+            }
             continue;
         }
         let mut kind = match reason {
@@ -711,15 +736,29 @@ pub fn snapshot_with_context(
             | "EXECUTOR_TERMINATION_REASON_MAX_TOKEN_BUDGET_EXCEEDED" => "failure",
             _ => continue,
         };
-        if kind == "completion"
+        if let Some(next_ui_idx) = next_user_input_idx {
+            if kind != "completion"
+                || steps[local_after..next_ui_idx].iter().any(|s| {
+                    !step_is_foreign(id, summary_trajectory_id, s)
+                        && (s["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
+                            || (!execution(s).is_empty() && execution(s) != exec))
+                })
+            {
+                continue;
+            }
+            let prior_pending =
+                collect_turn_pending_work(id, summary_trajectory_id, &steps[..next_ui_idx]);
+            if !prior_pending.pending_tasks.is_empty()
+                || !prior_pending.pending_subagents.is_empty()
+            {
+                continue;
+            }
+        } else if kind == "completion"
             && ((*last_global_index as u64 + 1) < count || cascade_active || unsettled_background)
         {
             settled_count = settled_count.min(group[0].0 as u64);
             continue;
         }
-        let local_after = last_global_index
-            .saturating_sub(step_offset)
-            .saturating_add(1);
         // User cancellation or a new execution invalidates a previous failure.
         if kind == "failure"
             && (steps.iter().skip(local_after).any(|s| {
@@ -742,9 +781,21 @@ pub fn snapshot_with_context(
             .find(|(_, step)| step["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE")
             .and_then(|(_, step)| step["plannerResponse"]["response"].as_str())
             .unwrap_or("");
-        let local_last_idx = last_global_index.saturating_sub(step_offset);
-        let turn_slice = if local_turn_start <= local_last_idx && local_last_idx < steps.len() {
-            &steps[local_turn_start..=local_last_idx]
+        let exec_turn_start = if next_user_input_idx.is_some() {
+            steps[..=local_last_idx]
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, step)| {
+                    !step_is_foreign(id, summary_trajectory_id, step)
+                        && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
+                })
+                .map_or(0, |(idx, _)| idx + 1)
+        } else {
+            local_turn_start
+        };
+        let turn_slice = if exec_turn_start <= local_last_idx && local_last_idx < steps.len() {
+            &steps[exec_turn_start..=local_last_idx]
         } else {
             &[]
         };
@@ -800,6 +851,192 @@ pub fn snapshot_with_context(
         settled_count,
         events,
     })
+}
+
+pub fn diagnose_trajectory(
+    id: &str,
+    summary: &Value,
+    response: &Value,
+    ctx: &TrajectoryLivenessContext,
+    db_cursor: Option<u64>,
+) -> Result<Value> {
+    let snap = snapshot_with_context(id, summary, response, ctx)?;
+    let trajectory = &response["trajectory"];
+    let step_offset = response["stepOffset"].as_u64().unwrap_or(0) as usize;
+    let steps = trajectory["steps"]
+        .as_array()
+        .context("missing Antigravity steps")?;
+    let count = snap.record_count;
+    let executors = trajectory["executorMetadatas"]
+        .as_array()
+        .context("missing Antigravity execution state")?;
+    let latest = executors
+        .last()
+        .and_then(|e| e["executionId"].as_str())
+        .unwrap_or("");
+    let summary_trajectory_id = summary["trajectoryId"].as_str().unwrap_or("");
+    let summary_status_active = cascade_status_is_active(summary["status"].as_str());
+    let response_status_active = cascade_status_is_active(response["status"].as_str());
+    let subagents_any_active = ctx.subagents.values().any(|s| s.active);
+    let not_fully_idle = summary["notFullyIdle"].as_bool() == Some(true);
+    let has_running_subagents = summary["hasRunningSubagents"].as_bool() == Some(true);
+    let waiting_steps_non_empty = summary["waitingSteps"]
+        .as_array()
+        .is_some_and(|arr| !arr.is_empty());
+    let cascade_active = ctx.has_active_subagents
+        || subagents_any_active
+        || summary_status_active
+        || response_status_active
+        || not_fully_idle
+        || has_running_subagents
+        || waiting_steps_non_empty;
+    let pending = collect_turn_pending_work(id, summary_trajectory_id, steps);
+    let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps, ctx);
+
+    let mut by_execution: BTreeMap<&str, Vec<(usize, &Value)>> = BTreeMap::new();
+    for (local_index, step) in steps.iter().enumerate() {
+        let global_index = step_offset + local_index;
+        if step_is_foreign(id, summary_trajectory_id, step) {
+            continue;
+        }
+        let exec = execution(step);
+        if !exec.is_empty() {
+            by_execution
+                .entry(exec)
+                .or_default()
+                .push((global_index, step));
+        }
+    }
+
+    let executor_tail: Vec<Value> = executors
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .map(|meta| {
+            serde_json::json!({
+                "executionId": meta["executionId"],
+                "lastStepIdx": meta["lastStepIdx"],
+                "terminationReason": meta["terminationReason"],
+                "proceededWithAutoContinue": meta["proceededWithAutoContinue"],
+            })
+        })
+        .collect();
+
+    let mut candidates = Vec::new();
+    for meta in executors {
+        let exec = meta["executionId"].as_str().unwrap_or("");
+        let end = meta["lastStepIdx"].as_u64();
+        let reason = meta["terminationReason"].as_str().unwrap_or("");
+        let Some(group) = by_execution.get(exec) else {
+            candidates.push(serde_json::json!({
+                "executionId": exec,
+                "lastStepIdx": end,
+                "terminationReason": reason,
+                "status": "skipped",
+                "reason": "no_steps_in_window",
+            }));
+            continue;
+        };
+        let actual_last = group.last().map(|(idx, _)| *idx as u64);
+        let skip_reason = if reason.is_empty()
+            || reason == "EXECUTOR_TERMINATION_REASON_UNSPECIFIED"
+        {
+            Some("termination_reason_unspecified")
+        } else if meta["proceededWithAutoContinue"] == true {
+            Some("proceeded_with_auto_continue")
+        } else if group.iter().any(|(_, step)| !settled(step)) {
+            Some("group_has_unsettled_step")
+        } else if end != actual_last {
+            Some("end_mismatch_last_global_index")
+        } else {
+            let (last_global_index, last) = group.last().unwrap();
+            let local_last_idx = last_global_index.saturating_sub(step_offset);
+            let local_after = local_last_idx.saturating_add(1);
+            let next_ui = steps
+                .iter()
+                .enumerate()
+                .skip(local_after)
+                .find(|(_, s)| {
+                    !step_is_foreign(id, summary_trajectory_id, s)
+                        && s["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
+                })
+                .map(|(idx, _)| idx);
+            let terminal_no_tool_call = (last["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                && last["plannerResponse"]["toolCalls"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty))
+                || last["type"] == "CORTEX_STEP_TYPE_FINISH";
+            if next_ui.is_none() && exec != latest {
+                Some("not_latest_executor_in_turn")
+            } else if reason == "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" && !terminal_no_tool_call
+            {
+                Some("no_tool_call_on_non_terminal_step")
+            } else if next_ui.is_none() && (*last_global_index as u64 + 1) < count {
+                Some("trailing_steps_after_last_global_index")
+            } else if next_ui.is_none() && cascade_active {
+                Some("cascade_active")
+            } else if next_ui.is_none() && unsettled_background {
+                Some("unsettled_background")
+            } else if native_probe::timestamp(&last["metadata"]["completedAt"])
+                .or_else(|| native_probe::timestamp(&last["metadata"]["finishedGeneratingAt"]))
+                .is_none()
+            {
+                Some("missing_timestamp")
+            } else if snap.events.iter().any(|e| e.turn_id == exec) {
+                None
+            } else {
+                Some("non_notifiable_or_superseded_termination_reason")
+            }
+        };
+        let position = actual_last.map(|idx| idx + 1);
+        candidates.push(serde_json::json!({
+            "executionId": exec,
+            "lastStepIdx": end,
+            "actualLastStepIdx": actual_last,
+            "position": position,
+            "terminationReason": reason,
+            "status": if skip_reason.is_none() { "emitted" } else { "skipped" },
+            "skipReason": skip_reason,
+            "cursorComparison": match (position, db_cursor) {
+                (Some(pos), Some(cur)) if pos < cur => "position < cursor (already behind cursor)",
+                (Some(pos), Some(cur)) if pos == cur => "position == cursor (at cursor boundary)",
+                (Some(_), Some(_)) => "position > cursor (eligible)",
+                _ => "no_db_cursor",
+            },
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "cascadeId": id,
+        "trajectoryId": summary["trajectoryId"],
+        "stepOffset": step_offset,
+        "recordCount": snap.record_count,
+        "settledCount": snap.settled_count,
+        "cursor": db_cursor,
+        "executorMetadatasTail": executor_tail,
+        "cascadeActive": {
+            "active": cascade_active,
+            "hasActiveSubagents": ctx.has_active_subagents,
+            "subagentsAnyActive": subagents_any_active,
+            "summaryStatus": summary["status"],
+            "summaryStatusActive": summary_status_active,
+            "responseStatus": response["status"],
+            "responseStatusActive": response_status_active,
+            "notFullyIdle": not_fully_idle,
+            "hasRunningSubagents": has_running_subagents,
+            "waitingStepsNonEmpty": waiting_steps_non_empty,
+        },
+        "unsettledBackground": {
+            "unsettled": unsettled_background,
+            "nowMs": ctx.now_ms,
+            "lastRootStepMs": pending.last_root_step_ms,
+            "hasActiveChildProcesses": ctx.has_active_child_processes,
+            "pendingTasksCount": pending.pending_tasks.len(),
+            "pendingSubagentsCount": pending.pending_subagents.len(),
+        },
+        "candidates": candidates,
+    }))
 }
 
 #[cfg(test)]

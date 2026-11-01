@@ -588,18 +588,18 @@ fn untracked_background_task_respects_active_child_processes_past_60s_quiescence
     )
     .is_empty());
 
-    // 3 minutes later (> 60s quiescence), child build process is still alive -> MUST NOT fire early!
+    // Within 60s cap (30s later), ps matching holds completion
     let mut ctx = TrajectoryLivenessContext {
         has_active_child_processes: true,
-        now_ms: Some(base_ms + 180_000),
+        now_ms: Some(base_ms + 30_000),
         ..Default::default()
     };
     let held = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
     assert!(held.events.is_empty());
     assert_eq!(held.settled_count, 0);
 
-    // Child process exits -> past 60s quiescence -> delivers completion cleanly
-    ctx.has_active_child_processes = false;
+    // At 60s cap, ps matching can no longer suppress NO_TOOL_CALL completion indefinitely
+    ctx.now_ms = Some(base_ms + UNTRACKED_TASK_QUIESCENCE_MS);
     let released = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
     assert_eq!(released.events.len(), 1);
     assert_eq!(released.events[0].kind, "completion");
@@ -727,4 +727,166 @@ fn mid_turn_plan_feedback_plaintext_questions_and_first_turn_waiting_emit_reply_
     let snap_plain = snapshot(ID, &s, &plain_q).unwrap();
     assert_eq!(snap_plain.events.len(), 1);
     assert_eq!(snap_plain.events[0].kind, "reply_needed");
+}
+
+#[test]
+fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_hook_race_and_turn_switch(
+) {
+    let cascade_id = "632d506e-5152-49ac-a5b0-a1ecf2db684c";
+    let trajectory_id = "bc4ff77e-6e9e-4bc2-a1bd-e0c0d4da8391";
+    let exec_prev = "8992e0dd-047d-4cc0-8fd8-e64694fb3c88";
+    let exec_done = "f1a85bcb-9e9b-4bf5-9d88-ef4a7d52d275";
+    let summary = json!({
+        "trajectoryId": trajectory_id,
+        "createdTime": "2026-11-01T10:25:00Z",
+        "lastModifiedTime": "2026-11-01T10:50:37.090521Z",
+        "summary": "Sanitized regression fixture 632d506e",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "stepCount": 137,
+        "lastUserInputStepIndex": 132,
+        "latestExecutorTerminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL",
+        "trajectoryMetadata": { "rootConversationId": cascade_id }
+    });
+    // Phase 1: During Stop hook or final step transition, steps 132..=136 are DONE,
+    // but f1a85bcb has not yet been committed to executorMetadatas.
+    let mut response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "stepOffset": 132,
+        "numTotalSteps": 137,
+        "trajectory": {
+            "cascadeId": cascade_id,
+            "trajectoryId": trajectory_id,
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "createdAt": "2026-11-01T10:49:10Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": exec_done,
+                        "createdAt": "2026-11-01T10:49:15Z",
+                        "completedAt": "2026-11-01T10:49:20Z"
+                    },
+                    "plannerResponse": {
+                        "response": "Checking status...",
+                        "toolCalls": [{ "id": "call-1", "name": "read_file" }]
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_READ_FILE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": exec_done,
+                        "createdAt": "2026-11-01T10:49:20Z",
+                        "completedAt": "2026-11-01T10:49:22Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": exec_done,
+                        "createdAt": "2026-11-01T10:50:10Z",
+                        "completedAt": "2026-11-01T10:50:30Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": exec_done,
+                        "createdAt": "2026-11-01T10:50:35.095443Z",
+                        "completedAt": "2026-11-01T10:50:37.090521Z"
+                    },
+                    "plannerResponse": {
+                        "response": "审计已完成，全部结论如下。"
+                    }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "4b6a7b1f-9614-4d86-b62c-1cb4d2bc48df",
+                    "lastStepIdx": 51,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                },
+                {
+                    "executionId": exec_prev,
+                    "lastStepIdx": 130,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_USER_CANCELED"
+                }
+            ]
+        }
+    });
+
+    let pre_meta = snapshot(cascade_id, &summary, &response).unwrap();
+    assert!(pre_meta.events.is_empty());
+    assert_eq!(
+        pre_meta.settled_count, 133,
+        "unrecorded execution must clamp settled_count so cursor does not advance to 137"
+    );
+
+    // Phase 2: ExecutorMetadata for f1a85bcb is committed with NO_TOOL_CALL on PLANNER_RESPONSE without tool calls.
+    response["trajectory"]["executorMetadatas"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "executionId": exec_done,
+            "lastStepIdx": 136,
+            "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL",
+            "proceededWithAutoContinue": false
+        }));
+    let post_meta = snapshot(cascade_id, &summary, &response).unwrap();
+    assert_eq!(post_meta.events.len(), 1);
+    assert_eq!(post_meta.events[0].kind, "completion");
+    assert_eq!(post_meta.events[0].turn_id, exec_done);
+    assert_eq!(post_meta.events[0].position, 137);
+    assert_eq!(post_meta.settled_count, 137);
+
+    let diag = diagnose_trajectory(
+        cascade_id,
+        &summary,
+        &response,
+        &TrajectoryLivenessContext::default(),
+        Some(133),
+    )
+    .unwrap();
+    assert_eq!(diag["recordCount"], json!(137));
+    assert_eq!(diag["settledCount"], json!(137));
+    assert_eq!(diag["cursor"], json!(133));
+    assert_eq!(diag["cascadeActive"]["active"], json!(false));
+    assert_eq!(diag["unsettledBackground"]["unsettled"], json!(false));
+    assert_eq!(
+        diag["candidates"].as_array().unwrap().last().unwrap()["status"],
+        json!("emitted")
+    );
+
+    // Phase 3: If a second USER_INPUT arrives at step 137 before f1a85bcb was staged,
+    // f1a85bcb's completion is still emitted for the previous turn while the new turn is running.
+    let mut turn2_response = response.clone();
+    turn2_response["status"] = json!("CASCADE_RUN_STATUS_RUNNING");
+    turn2_response["numTotalSteps"] = json!(139);
+    let steps_mut = turn2_response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap();
+    steps_mut.push(json!({
+        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": { "createdAt": "2026-11-01T10:55:00Z" }
+    }));
+    steps_mut.push(json!({
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_RUNNING",
+        "metadata": {
+            "executionId": "exec-turn-2",
+            "createdAt": "2026-11-01T10:55:01Z"
+        }
+    }));
+    let turn2_snap = snapshot(cascade_id, &summary, &turn2_response).unwrap();
+    assert_eq!(turn2_snap.events.len(), 1);
+    assert_eq!(turn2_snap.events[0].turn_id, exec_done);
+    assert_eq!(turn2_snap.events[0].kind, "completion");
+    assert_eq!(turn2_snap.settled_count, 137);
 }
