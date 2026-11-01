@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(saved.probe.poll_seconds, 5);
         assert_eq!(saved.probe.recent_limit, 500);
         assert_eq!(saved.probe.notifications.server_url, "https://api.day.app");
-        assert_eq!(saved.probe.notifications.group, "NexusHub");
+        assert_eq!(saved.probe.notifications.group, "AgentHub");
         assert_eq!(
             state
                 .db

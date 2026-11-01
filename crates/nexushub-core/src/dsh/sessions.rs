@@ -14,7 +14,8 @@ use std::{
 
 use super::{
     directory, dsh_command, file_stamp, read_bounded, registry, regular_file, remove_cache,
-    remove_references, save_registry, standard_layout, valid_id, DshPaths, HEADER_LIMIT,
+    remove_dsh_cache_strict, remove_dsh_session_strict, remove_references, save_registry,
+    standard_layout, valid_id, DshPaths, HEADER_LIMIT,
 };
 use crate::{
     provider_sessions::{
@@ -794,19 +795,17 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 if user_msg.text.trim().is_empty() && user_msg.attachments.is_empty() {
                     return Ok(());
                 }
-                events.push(ProviderHistoryEvent {
-                    id: event_id,
+                let mut ev = make_dsh_event(
+                    event_id,
                     timestamp,
-                    kind: "user_message".into(),
-                    role: Some("user".into()),
-                    text: Some(user_msg.text.clone()),
-                    call_id: None,
-                    turn_id: current_turn.clone(),
-                    status: Some("completed".into()),
-                    detail: None,
-                    result: None,
-                    user_message: Some(user_msg),
-                });
+                    "user_message",
+                    "user",
+                    Some(user_msg.text.clone()),
+                    current_turn.clone(),
+                    "completed",
+                );
+                ev.user_message = Some(user_msg);
+                events.push(ev);
             }
             "assistant/message" => {
                 let msg = &data["message"];
@@ -815,19 +814,15 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                     .or_else(|| msg["reasoningContent"].as_str())
                     .filter(|s| !s.trim().is_empty())
                 {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("seq-{seq}-thinking"),
-                        timestamp: timestamp.clone(),
-                        kind: "thinking".into(),
-                        role: Some("assistant".into()),
-                        text: Some(reasoning.to_owned()),
-                        call_id: None,
-                        turn_id: current_turn.clone(),
-                        status: Some("completed".into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                    events.push(make_dsh_event(
+                        format!("seq-{seq}-thinking"),
+                        timestamp.clone(),
+                        "thinking",
+                        "assistant",
+                        Some(reasoning.to_owned()),
+                        current_turn.clone(),
+                        "completed",
+                    ));
                 }
                 if let Some(blocks) = msg["content"].as_array() {
                     let mut text_parts = Vec::new();
@@ -839,19 +834,15 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                                     .or_else(|| block["text"].as_str())
                                     .filter(|s| !s.trim().is_empty())
                                 {
-                                    events.push(ProviderHistoryEvent {
-                                        id: format!("seq-{seq}-thinking-{bi}"),
-                                        timestamp: timestamp.clone(),
-                                        kind: "thinking".into(),
-                                        role: Some("assistant".into()),
-                                        text: Some(t.to_owned()),
-                                        call_id: None,
-                                        turn_id: current_turn.clone(),
-                                        status: Some("completed".into()),
-                                        detail: None,
-                                        result: None,
-                                        user_message: None,
-                                    });
+                                    events.push(make_dsh_event(
+                                        format!("seq-{seq}-thinking-{bi}"),
+                                        timestamp.clone(),
+                                        "thinking",
+                                        "assistant",
+                                        Some(t.to_owned()),
+                                        current_turn.clone(),
+                                        "completed",
+                                    ));
                                 }
                             }
                             "text" => {
@@ -864,35 +855,27 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                     }
                     let joined = text_parts.join("\n");
                     if !joined.trim().is_empty() {
-                        events.push(ProviderHistoryEvent {
-                            id: format!("seq-{seq}-assistant"),
+                        events.push(make_dsh_event(
+                            format!("seq-{seq}-assistant"),
                             timestamp,
-                            kind: "assistant_message".into(),
-                            role: Some("assistant".into()),
-                            text: Some(joined),
-                            call_id: None,
-                            turn_id: current_turn.clone(),
-                            status: Some("completed".into()),
-                            detail: None,
-                            result: None,
-                            user_message: None,
-                        });
+                            "assistant_message",
+                            "assistant",
+                            Some(joined),
+                            current_turn.clone(),
+                            "completed",
+                        ));
                     }
                 } else if let Some(text) = msg["content"].as_str().filter(|s| !s.trim().is_empty())
                 {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("seq-{seq}-assistant"),
+                    events.push(make_dsh_event(
+                        format!("seq-{seq}-assistant"),
                         timestamp,
-                        kind: "assistant_message".into(),
-                        role: Some("assistant".into()),
-                        text: Some(text.to_owned()),
-                        call_id: None,
-                        turn_id: current_turn.clone(),
-                        status: Some("completed".into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                        "assistant_message",
+                        "assistant",
+                        Some(text.to_owned()),
+                        current_turn.clone(),
+                        "completed",
+                    ));
                 }
             }
             "tool/call" => {
@@ -913,19 +896,18 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 if let Some(ref cid) = call_id {
                     open_tool_by_id.insert(cid.clone(), call_idx);
                 }
-                events.push(ProviderHistoryEvent {
-                    id: format!("seq-{seq}-toolcall"),
+                let mut ev = make_dsh_event(
+                    format!("seq-{seq}-toolcall"),
                     timestamp,
-                    kind: "tool_call".into(),
-                    role: Some(name.to_owned()),
-                    text: Some(name.to_owned()),
-                    call_id,
-                    turn_id: current_turn.clone(),
-                    status: Some("running".into()),
-                    detail: (!args.trim().is_empty()).then_some(args),
-                    result: None,
-                    user_message: None,
-                });
+                    "tool_call",
+                    name,
+                    Some(name.to_owned()),
+                    current_turn.clone(),
+                    "running",
+                );
+                ev.call_id = call_id;
+                ev.detail = (!args.trim().is_empty()).then_some(args);
+                events.push(ev);
             }
             "tool/result" => {
                 let call_id = data["callId"]
@@ -954,19 +936,18 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                 } else {
                     data["error"]["message"].as_str().map(str::to_owned)
                 };
-                events.push(ProviderHistoryEvent {
-                    id: format!("seq-{seq}-toolresult"),
+                let mut ev = make_dsh_event(
+                    format!("seq-{seq}-toolresult"),
                     timestamp,
-                    kind: "tool_result".into(),
-                    role: Some(name.to_owned()),
-                    text: Some(name.to_owned()),
-                    call_id,
-                    turn_id: current_turn.clone(),
-                    status: Some(status_str.into()),
-                    detail: None,
-                    result: result_text,
-                    user_message: None,
-                });
+                    "tool_result",
+                    name,
+                    Some(name.to_owned()),
+                    current_turn.clone(),
+                    status_str,
+                );
+                ev.call_id = call_id;
+                ev.result = result_text;
+                events.push(ev);
             }
             "command/run" => {
                 if let Some(cmd) = data["command"]
@@ -974,19 +955,15 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
                     .or_else(|| data["name"].as_str())
                     .filter(|s| !s.trim().is_empty())
                 {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("seq-{seq}-command"),
+                    events.push(make_dsh_event(
+                        format!("seq-{seq}-command"),
                         timestamp,
-                        kind: "system".into(),
-                        role: Some("command".into()),
-                        text: Some(format!("/{cmd}")),
-                        call_id: None,
-                        turn_id: current_turn.clone(),
-                        status: Some("completed".into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                        "system",
+                        "command",
+                        Some(format!("/{cmd}")),
+                        current_turn.clone(),
+                        "completed",
+                    ));
                 }
             }
             _ => {}
@@ -994,6 +971,30 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
         Ok(())
     })?;
     Ok(events)
+}
+
+fn make_dsh_event(
+    id: String,
+    timestamp: Option<String>,
+    kind: &str,
+    role: &str,
+    text: Option<String>,
+    turn_id: Option<String>,
+    status: &str,
+) -> ProviderHistoryEvent {
+    ProviderHistoryEvent {
+        id,
+        timestamp,
+        kind: kind.into(),
+        role: Some(role.into()),
+        text,
+        call_id: None,
+        turn_id,
+        status: Some(status.into()),
+        detail: None,
+        result: None,
+        user_message: None,
+    }
 }
 
 pub fn session_detail(
@@ -1369,99 +1370,6 @@ pub fn preview_batch_item(
     preview_batch_item_checked(paths, key, operation, include_descendants, || {
         check_host_dsh_stopped_for(paths)
     })
-}
-
-fn remove_dsh_cache_strict(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> bool {
-    let root = paths.home.join("storages/session_projcache");
-    match directory(&root) {
-        Ok(true) => {}
-        Ok(false) => return true,
-        Err(err) => {
-            outcome.residuals.push(format!("{}: {err}", root.display()));
-            return false;
-        }
-    }
-    let rows = root.join("sessions");
-    match directory(&rows) {
-        Ok(true) => {}
-        Ok(false) => return true,
-        Err(err) => {
-            outcome.residuals.push(format!("{}: {err}", rows.display()));
-            return false;
-        }
-    }
-    let entries = match fs::read_dir(&rows) {
-        Ok(entries) => entries,
-        Err(err) => {
-            outcome.residuals.push(format!("{}: {err}", rows.display()));
-            return false;
-        }
-    };
-    let name = format!("{id}.json");
-    let backup = format!("{name}.bak.");
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                outcome.residuals.push(format!("{}: {err}", rows.display()));
-                return false;
-            }
-        };
-        let filename = entry.file_name();
-        let filename = filename.to_string_lossy();
-        let matches = filename == name
-            || filename
-                .strip_prefix(&backup)
-                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()));
-        if matches && !outcome.remove_strict(&entry.path()) {
-            return false;
-        }
-    }
-    true
-}
-
-fn remove_dsh_session_strict(path: &Path, outcome: &mut Outcome) -> bool {
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
-        Err(err) => {
-            outcome.residuals.push(format!("{}: {err}", path.display()));
-            return false;
-        }
-    };
-    if meta.file_type().is_symlink() {
-        return outcome.remove_strict(path);
-    }
-    let entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(err) => {
-            outcome.residuals.push(format!("{}: {err}", path.display()));
-            return false;
-        }
-    };
-    let mut headers = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                outcome.residuals.push(format!("{}: {err}", path.display()));
-                return false;
-            }
-        };
-        if entry.file_name().to_string_lossy().starts_with("session.v") {
-            headers.push(entry.path());
-        } else if !outcome.remove_strict(&entry.path()) {
-            return false;
-        }
-    }
-    for header in headers {
-        if !outcome.remove_strict(&header) {
-            return false;
-        }
-    }
-    let before = outcome.residuals.len();
-    outcome.attempt(path, || Ok(fs::remove_dir(path)?));
-    outcome.residuals.len() == before
 }
 
 fn record_remaining_dsh_residuals(

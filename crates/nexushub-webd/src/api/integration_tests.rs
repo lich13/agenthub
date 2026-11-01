@@ -745,17 +745,17 @@ async fn panel_update_routes_require_api_key_and_start_fixed_panel_jobs() {
         (
             "updates.check",
             "nexushub_update_check",
-            "NexusHub update precheck",
+            "AgentHub update precheck",
         ),
         (
             "updates.install",
             "nexushub_update_install",
-            "NexusHub update install",
+            "AgentHub update install",
         ),
         (
             "updates.prune",
             "nexushub_update_prune",
-            "NexusHub update backup prune",
+            "AgentHub update backup prune",
         ),
     ] {
         let (state, api_key) = authenticated_test_state();
@@ -1140,7 +1140,7 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         (
             "probe.barkTest",
             "probe_bark_test",
-            "NexusHub 推送测试",
+            "AgentHub 推送测试",
             "device_key",
         ),
     ] as [(&str, &str, &str, &str); 3]

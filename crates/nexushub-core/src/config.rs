@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DEFAULT_HOST_LABEL: &str = "NexusHub";
+pub const DEFAULT_HOST_LABEL: &str = "AgentHub";
 const DEFAULT_LOOPBACK_PORT: u16 = 15742;
 const LEGACY_LOOPBACK_PORT: u16 = 15732;
 const LEGACY_PRECHECK_COMMAND_SIMPLE: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
@@ -267,7 +267,7 @@ fn default_bark_server_url() -> String {
 }
 
 fn default_probe_notification_group() -> String {
-    "NexusHub".to_string()
+    "AgentHub".to_string()
 }
 
 fn default_hook_event_max_lines() -> usize {
@@ -1701,7 +1701,7 @@ host_label = "old"
     fn default_config_uses_api_auth_and_neutral_host() {
         let config = Config::default();
 
-        assert_eq!(config.codex.host_label, "NexusHub");
+        assert_eq!(config.codex.host_label, "AgentHub");
         assert!(config.security.auth_rate_limit_per_minute > 0);
         let serialized = toml::to_string(&config).unwrap();
         for retired in [

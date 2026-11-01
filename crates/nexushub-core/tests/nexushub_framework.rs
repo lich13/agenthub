@@ -477,7 +477,7 @@ fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
     assert_eq!(plan.kind, "bark-test");
     assert_eq!(plan.payload["configured"], true);
     assert_eq!(plan.payload["device_key"], "[configured]");
-    assert_eq!(plan.payload["bark_payload"]["title"], "NexusHub 推送测试");
+    assert_eq!(plan.payload["bark_payload"]["title"], "AgentHub 推送测试");
     assert_eq!(
         plan.payload["bark_payload"]["body"],
         nexushub_core::probe::bark_test_body()

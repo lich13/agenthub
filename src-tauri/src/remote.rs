@@ -389,7 +389,7 @@ impl RemoteConnections {
                     .is_some_and(|mime| mime.trim() == "application/json")
             })
         {
-            return Err(safe_error("远程地址未返回 NexusHub API 数据"));
+            return Err(safe_error("远程地址未返回 AgentHub API 数据"));
         }
         if response
             .content_length()

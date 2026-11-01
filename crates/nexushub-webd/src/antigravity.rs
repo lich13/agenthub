@@ -178,111 +178,13 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
     anyhow::bail!("Antigravity native API unavailable")
 }
 
-fn is_subtrajectory(id: &str, item: &Value) -> bool {
-    let parent = item["parentConversationId"]
-        .as_str()
-        .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
-        .unwrap_or("");
-    let depth = item["nestingDepth"]
-        .as_i64()
-        .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
-        .unwrap_or(0);
-    let root = item["rootConversationId"]
-        .as_str()
-        .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
-        .unwrap_or("");
-    !parent.is_empty() || depth > 0 || (!root.is_empty() && root != id)
-}
-
-fn summary_is_active(item: &Value) -> bool {
-    item["waitingSteps"]
-        .as_array()
-        .is_some_and(|arr| !arr.is_empty())
-        || matches!(
-            item["status"].as_str(),
-            Some(
-                "CASCADE_RUN_STATUS_RUNNING"
-                    | "CASCADE_RUN_STATUS_BUSY"
-                    | "CASCADE_RUN_STATUS_WAITING"
-                    | "CASCADE_RUN_STATUS_CANCELING"
-            )
-        )
-        || item["notFullyIdle"].as_bool() == Some(true)
-        || item["hasRunningSubagents"].as_bool() == Some(true)
-}
-
-fn collect_subagents_by_root(
-    summaries: &serde_json::Map<String, Value>,
-) -> BTreeMap<String, BTreeMap<String, antigravity::SubagentLiveness>> {
-    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
-    for (cid, item) in summaries {
-        if let Some(pid) = item["parentConversationId"]
-            .as_str()
-            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
-            .filter(|s| !s.is_empty())
-        {
-            parents.insert(cid.as_str(), pid);
-        }
-    }
-    let mut by_root: BTreeMap<String, BTreeMap<String, antigravity::SubagentLiveness>> =
-        BTreeMap::new();
-    for (cid, item) in summaries {
-        if !is_subtrajectory(cid, item) {
-            continue;
-        }
-        let liveness = antigravity::SubagentLiveness {
-            active: summary_is_active(item),
-            last_modified_ms: nexushub_core::native_probe::timestamp(&item["lastModifiedTime"])
-                .or_else(|| nexushub_core::native_probe::timestamp(&item["createdTime"])),
-        };
-        let mut target_roots = BTreeSet::new();
-        if let Some(root) = item["rootConversationId"]
-            .as_str()
-            .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
-            .filter(|s| !s.is_empty() && *s != cid)
-        {
-            target_roots.insert(root.to_owned());
-        }
-        let mut curr = cid.as_str();
-        let mut hops = 0usize;
-        while let Some(&pid) = parents.get(curr) {
-            target_roots.insert(pid.to_owned());
-            curr = pid;
-            hops += 1;
-            if hops >= 16 {
-                break;
-            }
-        }
-        for root in target_roots {
-            by_root
-                .entry(root)
-                .or_default()
-                .insert(cid.clone(), liveness.clone());
-        }
-    }
-    by_root
-}
+use antigravity::sessions::{
+    collect_subagents_by_root, decode_file_uri, is_subtrajectory,
+    live_item_is_running as summary_is_active,
+};
 
 fn decode_local_file_uri(uri: &str) -> Option<std::path::PathBuf> {
-    let raw = uri.trim();
-    let stripped = raw.strip_prefix("file://").unwrap_or(raw);
-    let bytes = stripped.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) =
-                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
-            {
-                out.push(hex);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    let path = std::path::PathBuf::from(String::from_utf8_lossy(&out).into_owned());
+    let path = std::path::PathBuf::from(decode_file_uri(uri));
     path.is_absolute().then_some(path)
 }
 
@@ -576,7 +478,7 @@ async fn fetch_incremental_executor_metadatas(
             cached,
             std::time::Instant::now(),
         ));
-        while cache.len() > 64 {
+        while cache.len() > 32 || cache.iter().map(|(_, _, m, _)| m.len()).sum::<usize>() > 32_768 {
             cache.pop_front();
         }
     }

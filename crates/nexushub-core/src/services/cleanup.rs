@@ -402,6 +402,32 @@ fn scope_meta(scope: &str) -> Result<(&'static str, &'static str)> {
     }
 }
 
+fn push_candidate(
+    out: &mut UnifiedCleanupScopePlan,
+    id: String,
+    title: String,
+    bytes: u64,
+    fingerprint: Option<String>,
+    blocked_reason: Option<String>,
+) {
+    if blocked_reason.is_none() {
+        out.deletable_count += 1;
+        out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
+    }
+    out.candidates.push(UnifiedCleanupCandidate {
+        title: if title.trim().is_empty() {
+            id.clone()
+        } else {
+            title
+        },
+        id,
+        estimated_bytes: bytes,
+        fingerprint,
+        blocked_reason,
+    });
+    out.candidate_count = out.candidates.len();
+}
+
 fn dry_run_single_scope(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
@@ -431,20 +457,11 @@ fn dry_run_single_scope(
                 );
                 for id in plan.archived_ids {
                     let bytes = bytes_map.get(&id).copied().unwrap_or(0);
-                    let fingerprint = archive::codex_thread_fingerprint(&paths.codex, &id)
+                    let fp = archive::codex_thread_fingerprint(&paths.codex, &id)
                         .ok()
                         .flatten();
-                    out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
-                    out.candidates.push(UnifiedCleanupCandidate {
-                        title: id.clone(),
-                        id,
-                        estimated_bytes: bytes,
-                        fingerprint,
-                        blocked_reason: None,
-                    });
+                    push_candidate(&mut out, id.clone(), id, bytes, fp, None);
                 }
-                out.candidate_count = out.candidates.len();
-                out.deletable_count = out.candidate_count;
             }
             Err(err) => out.issues.push(err.to_string()),
         },
@@ -461,26 +478,10 @@ fn dry_run_single_scope(
                     );
                     for c in plan.candidates {
                         let bytes = bytes_map.get(&c.id).copied().unwrap_or(0);
-                        let blocked_reason = (!c.allowed)
+                        let blocked = (!c.allowed)
                             .then(|| c.reason.unwrap_or_else(|| "当前线程暂不可清理".into()));
-                        if blocked_reason.is_none() {
-                            out.deletable_count += 1;
-                            out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
-                        }
-                        let title = if c.title.trim().is_empty() {
-                            c.id.clone()
-                        } else {
-                            c.title
-                        };
-                        out.candidates.push(UnifiedCleanupCandidate {
-                            id: c.id,
-                            title,
-                            estimated_bytes: bytes,
-                            fingerprint: c.fingerprint,
-                            blocked_reason,
-                        });
+                        push_candidate(&mut out, c.id, c.title, bytes, c.fingerprint, blocked);
                     }
-                    out.candidate_count = out.candidates.len();
                 }
                 Err(err) => out.issues.push(err.to_string()),
             }
@@ -509,39 +510,35 @@ fn dry_run_single_scope(
                             true,
                         ) {
                             Ok(preview) => {
-                                let blocked_reason = (!preview.allowed).then(|| {
+                                let blocked = (!preview.allowed).then(|| {
                                     preview.reason.unwrap_or_else(|| "当前无法安全清理".into())
                                 });
-                                if blocked_reason.is_none() {
-                                    out.deletable_count += 1;
-                                    out.estimated_bytes =
-                                        out.estimated_bytes.saturating_add(preview.bytes);
-                                }
-                                out.candidates.push(UnifiedCleanupCandidate {
-                                    id: summary.session_key,
-                                    title: summary.title,
-                                    estimated_bytes: preview.bytes,
-                                    fingerprint: preview.fingerprint,
-                                    blocked_reason,
-                                });
+                                push_candidate(
+                                    &mut out,
+                                    summary.session_key,
+                                    summary.title,
+                                    preview.bytes,
+                                    preview.fingerprint,
+                                    blocked,
+                                );
                             }
                             Err(err) => {
                                 let bytes = summary
                                     .storage_size
                                     .as_ref()
-                                    .and_then(|size| size.bytes)
+                                    .and_then(|s| s.bytes)
                                     .unwrap_or(0);
-                                out.candidates.push(UnifiedCleanupCandidate {
-                                    id: summary.session_key,
-                                    title: summary.title,
-                                    estimated_bytes: bytes,
-                                    fingerprint: None,
-                                    blocked_reason: Some(err.to_string()),
-                                });
+                                push_candidate(
+                                    &mut out,
+                                    summary.session_key,
+                                    summary.title,
+                                    bytes,
+                                    None,
+                                    Some(err.to_string()),
+                                );
                             }
                         }
                     }
-                    out.candidate_count = out.candidates.len();
                 }
                 Err(err) => out.issues.push(err.to_string()),
             }
@@ -551,57 +548,35 @@ fn dry_run_single_scope(
                 out.issues = plan.issues;
                 for c in plan.candidates {
                     let bytes = sizes.get(&c.id).copied().unwrap_or(0);
-                    if c.reason.is_none() {
-                        out.deletable_count += 1;
-                        out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
-                    }
                     let title = match &c.parent_id {
                         Some(parent) => format!("{} (子会话 ← {parent})", c.id),
                         None => c.id.clone(),
                     };
-                    out.candidates.push(UnifiedCleanupCandidate {
-                        id: c.id,
-                        title,
-                        estimated_bytes: bytes,
-                        fingerprint: Some(c.archive_id),
-                        blocked_reason: c.reason,
-                    });
+                    push_candidate(&mut out, c.id, title, bytes, Some(c.archive_id), c.reason);
                 }
-                out.candidate_count = out.candidates.len();
             }
             Err(err) => out.issues.push(err.to_string()),
         },
         SCOPE_CLAUDE_EMPTY => match crate::claude::find_empty_inactive_sessions(&paths.claude) {
             Ok(items) => {
                 for (summary, fp, bytes) in items {
-                    out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
-                    out.candidates.push(UnifiedCleanupCandidate {
-                        id: summary.session_key,
-                        title: summary.title,
-                        estimated_bytes: bytes,
-                        fingerprint: Some(fp),
-                        blocked_reason: None,
-                    });
+                    push_candidate(
+                        &mut out,
+                        summary.session_key,
+                        summary.title,
+                        bytes,
+                        Some(fp),
+                        None,
+                    );
                 }
-                out.candidate_count = out.candidates.len();
-                out.deletable_count = out.candidate_count;
             }
             Err(err) => out.issues.push(err.to_string()),
         },
         SCOPE_GROK_EMPTY => match crate::grok::find_empty_inactive_sessions(&paths.grok) {
             Ok(items) => {
                 for (summary, fp, bytes) in items {
-                    out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
-                    out.candidates.push(UnifiedCleanupCandidate {
-                        id: summary.id,
-                        title: summary.title,
-                        estimated_bytes: bytes,
-                        fingerprint: Some(fp),
-                        blocked_reason: None,
-                    });
+                    push_candidate(&mut out, summary.id, summary.title, bytes, Some(fp), None);
                 }
-                out.candidate_count = out.candidates.len();
-                out.deletable_count = out.candidate_count;
             }
             Err(err) => out.issues.push(err.to_string()),
         },
@@ -734,6 +709,7 @@ fn execute_codex_scope(
     let edge_cols = archive::table_columns(&conn, "thread_spawn_edges")?;
     let has_spawn_edges =
         edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
+    let edges = crate::selected_codex::tree::spawn_edges(codex)?;
 
     run_scope_targets(scope_targets, scope_res, stopped_early, |id, req_fp| {
         let verified_fp = if is_hidden {
@@ -758,7 +734,16 @@ fn execute_codex_scope(
                 ))
             }
         }
-        if let Err(err) = crate::selected_codex::tree::ensure_tree_not_running(codex, id) {
+        let tree_ids =
+            match crate::selected_codex::tree::descendants_from_edges(&edges, &[id.to_owned()]) {
+                Ok(ids) => ids,
+                Err(err) => {
+                    return Ok(TargetStepOutcome::Failed(Some(err.to_string()), Vec::new()))
+                }
+            };
+        if let Err(err) =
+            crate::selected_codex::tree::ensure_ids_not_running(codex, &tree_ids, Some(&conn))
+        {
             return Ok(TargetStepOutcome::Failed(Some(err.to_string()), Vec::new()));
         }
         Ok(

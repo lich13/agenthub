@@ -152,7 +152,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
     let precheck =
         linux_update_job_spec(&config, update_action_plan(&platform, UpdateAction::Check)).unwrap();
     assert_eq!(precheck.kind, "nexushub_update_check");
-    assert_eq!(precheck.title, "NexusHub update precheck");
+    assert_eq!(precheck.title, "AgentHub update precheck");
     assert_eq!(
         precheck.command,
         "/usr/local/bin/nexushub-webd-update --precheck"
@@ -294,12 +294,12 @@ fn linux_update_process_accepts_exact_historical_defaults_and_rejects_shell_vari
 fn macos_updater_job_specs_and_output_markers_are_core_contracts() {
     let check = macos_updater_job_spec(UpdateAction::Check).unwrap();
     assert_eq!(check.kind, "nexushub_update_check");
-    assert_eq!(check.title, "NexusHub app update check");
+    assert_eq!(check.title, "AgentHub app update check");
     assert_eq!(check.initial_output, MACOS_UPDATER_CHECKING_OUTPUT);
 
     let install = macos_updater_job_spec(UpdateAction::Install).unwrap();
     assert_eq!(install.kind, "nexushub_update_install");
-    assert_eq!(install.title, "NexusHub app update install");
+    assert_eq!(install.title, "AgentHub app update install");
     assert_eq!(install.initial_output, MACOS_UPDATER_CHECKING_OUTPUT);
 
     assert_eq!(
@@ -389,7 +389,7 @@ fn job_record(status: &str, output: &str) -> nexushub_core::db::JobRecord {
         id: "job-a".to_string(),
         kind: "nexushub_update_check".to_string(),
         status: status.to_string(),
-        title: "NexusHub app update check".to_string(),
+        title: "AgentHub app update check".to_string(),
         thread_id: None,
         turn_id: None,
         started_at: 10,

@@ -785,7 +785,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
         Source::Test,
         ProbeBarkRequest {
             presentation: None,
-            title: "NexusHub 推送测试".into(),
+            title: "AgentHub 推送测试".into(),
             body: nexushub_core::probe::bark_test_body().into(),
             dedupe_key: key.clone(),
         },

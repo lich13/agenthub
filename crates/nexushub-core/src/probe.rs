@@ -298,7 +298,7 @@ impl ProbeRuntime {
                 plan_id: format!("probe-hooks-{suffix}"),
                 kind: "hooks-install".to_string(),
                 title: "安装探针 Hook".to_string(),
-                summary: "将 Codex Stop Hook 指向 NexusHub 内建 Probe 子命令".to_string(),
+                summary: "将 Codex Stop Hook 指向 AgentHub 内建 Probe 子命令".to_string(),
                 steps: vec![
                     format!(
                         "备份 {} 后写入 Stop Hook",
@@ -324,10 +324,10 @@ impl ProbeRuntime {
                 plan_id: format!("probe-hooks-remove-{suffix}"),
                 kind: "hooks-remove".to_string(),
                 title: "卸载探针 Hook".to_string(),
-                summary: "备份 hooks.json 后精确移除 NexusHub 托管的 Codex Stop 与 PreToolUse Hook，保留用户自定义第三方 Hook".to_string(),
+                summary: "备份 hooks.json 后精确移除 AgentHub 托管的 Codex Stop 与 PreToolUse Hook，保留用户自定义第三方 Hook".to_string(),
                 steps: vec![
                     format!(
-                        "备份 {} 后移除 NexusHub 托管 Hook",
+                        "备份 {} 后移除 AgentHub 托管 Hook",
                         self.resolved_codex_paths()
                             .home
                             .join("hooks.json")
@@ -357,7 +357,7 @@ impl ProbeRuntime {
         ProbeActionPlan {
             plan_id: format!("probe-bark-test-{suffix}"),
             kind: "bark-test".to_string(),
-            title: "NexusHub 推送测试".to_string(),
+            title: "AgentHub 推送测试".to_string(),
             summary: "发送一条固定的 Probe 测试通知，计划和审计记录只保留脱敏配置状态".to_string(),
             steps: vec![
                 if self.config.probe.notifications.enabled {
@@ -377,7 +377,7 @@ impl ProbeRuntime {
                 "server_url": self.config.probe.notifications.server_url,
                 "device_key": if device_key_configured { "[configured]" } else { "[missing]" },
                 "bark_payload": {
-                    "title": "NexusHub 推送测试",
+                    "title": "AgentHub 推送测试",
                     "body": bark_test_body()
                 },
                 "redacted_fields": ["device_key", "sound", "group", "url"]
@@ -1263,6 +1263,7 @@ fn is_probe_stop_hook_system_message(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("Codex Sentinel Lite 检测到")
         || trimmed.starts_with("NexusHub Probe 检测到")
+        || trimmed.starts_with("AgentHub Probe 检测到")
 }
 
 pub fn is_probe_machine_control_payload(text: &str) -> bool {

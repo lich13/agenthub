@@ -624,7 +624,7 @@ fn normalize_probe_notifications_patch(
     if let Some(group) = patch.group.take() {
         let group = group.trim();
         patch.group = Some(if group.is_empty() {
-            "NexusHub".to_string()
+            "AgentHub".to_string()
         } else {
             group.to_string()
         });
@@ -711,7 +711,7 @@ mod tests {
             notifications.server_url.as_deref(),
             Some("https://api.day.app")
         );
-        assert_eq!(notifications.group.as_deref(), Some("NexusHub"));
+        assert_eq!(notifications.group.as_deref(), Some("AgentHub"));
         assert!(plan.config_write.is_some());
     }
 

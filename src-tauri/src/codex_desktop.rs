@@ -53,7 +53,7 @@ pub async fn diagnostics(
     remote.require_local(request.revision)?;
     if request.copy == Some(true) {
         if window.label() != "main" || !window.is_focused().unwrap_or(false) {
-            return Err("请在 NexusHub 中重试复制诊断".into());
+            return Err("请在 AgentHub 中重试复制诊断".into());
         }
         clipboard::copy_diagnostics(&result).map_err(str::to_owned)?;
     }
@@ -112,7 +112,7 @@ impl CodexDesktopBridge {
         let home = state.codex_paths().home;
         let (lease, home, existing) = nexushub_core::read_tasks::spawn_blocking(move || {
             let lease = DesktopLedger::lock_database(&db)
-                .map_err(|_| "另一个 NexusHub 正在使用本机发送队列")?;
+                .map_err(|_| "另一个 AgentHub 正在使用本机发送队列")?;
             let existing = DesktopLedger::has_encrypted_messages(&db)
                 .map_err(|_| "无法读取本机发送队列")?
                 || match std::fs::symlink_metadata(existing_root) {

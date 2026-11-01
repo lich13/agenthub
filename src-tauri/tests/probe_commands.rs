@@ -254,7 +254,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         .create_job(
             "desktop-update-check-test",
             "nexushub_update_check",
-            "NexusHub app update check",
+            "AgentHub app update check",
         )
         .unwrap();
     state
@@ -290,7 +290,7 @@ async fn desktop_update_status_ignores_stale_older_signed_check_result() {
         .create_job(
             "desktop-update-check-old",
             "nexushub_update_check",
-            "NexusHub app update check",
+            "AgentHub app update check",
         )
         .unwrap();
     state
@@ -325,7 +325,7 @@ async fn desktop_update_status_remembers_recent_signed_no_update_result() {
         .create_job(
             "desktop-update-check-no-update",
             "nexushub_update_check",
-            "NexusHub app update check",
+            "AgentHub app update check",
         )
         .unwrap();
     state

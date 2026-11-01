@@ -11207,6 +11207,7 @@
         "fn dry_run_hidden_with_capability (platform : & PlatformPaths , paths : & CodexPaths ,) -> Result < HiddenThreadDeletePlan >",
         "fn execute_hidden_with_capability (platform : & PlatformPaths , paths : & CodexPaths , candidates : & [archive :: HiddenThreadSelection] ,) -> Result < HiddenThreadDeleteResult >",
         "fn scope_meta (scope : & str) -> Result < (& 'static str , & 'static str) >",
+        "fn push_candidate (out : & mut UnifiedCleanupScopePlan , id : String , title : String , bytes : u64 , fingerprint : Option < String > , blocked_reason : Option < String > ,)",
         "fn dry_run_single_scope (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , scope : & str , scan_hidden : bool ,) -> Result < UnifiedCleanupScopePlan >",
         "fn dry_run_unified_with_capability (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , request : UnifiedCleanupDryRunRequest ,) -> Result < UnifiedCleanupPlan >",
         "fn validate_unified_target_id (scope : & str , id : & str) -> Result < () >",
@@ -11290,6 +11291,8 @@
         "fn is_updated_within_fresh_window (updated_at : & Option < String > , now_ms : i64) -> bool",
         "fn invalidate_live_provider_sessions_cache ()",
         "fn evict_idle_live_provider_sessions_cache (max_idle : std :: time :: Duration)",
+        "fn push_live_session (sessions : & mut Vec < probe_core :: ProbeLiveSession > , provider : & str , id : String , session_key : String , title : String , bucket : & str , updated_at : Option < String > , cwd : Option < String > ,)",
+        "fn stream_live_buckets (streams : & [crate :: native_probe :: NativeStreamSnapshot] , now_ms : i64 ,) -> std :: collections :: HashMap < String , & 'static str >",
         "fn aggregate_active_sessions (config : & Config , limit : usize , running_threads : & [ThreadSummary] , reply_needed_threads : & [ThreadSummary] , recoverable_threads : & [ThreadSummary] ,) -> Vec < probe_core :: ProbeLiveSession >",
         "fn probe_codex_buckets (config : & Config , limit : usize ,) -> (Vec < ThreadSummary > , Vec < ThreadSummary > , Vec < ThreadSummary >)",
         "fn aggregate_probe_status (config : & Config) -> ProbeStatusAggregation",
@@ -11303,6 +11306,7 @@
         "fn probe_event_record_plan (mut event : probe_core :: ProbeBuiltEvent) -> ProbeEventRecordPlan",
         "fn probe_event_record_write_plan (event : & probe_core :: ProbeBuiltEvent , claimed : bool , bark : & impl Serialize , bark_status : & str ,) -> Result < ProbeEventRecordWritePlan >",
         "fn normalize_probe_event_dedupe_key (event : & mut probe_core :: ProbeBuiltEvent)",
+        "fn event_action_keys (event : & probe_core :: ProbeBuiltEvent , is_plan : bool , prefer_item_id : bool ,) -> (String , String , String , String)",
         "fn probe_passive_unresolved_action_marker_key (event : & probe_core :: ProbeBuiltEvent ,) -> Option < String >",
         "fn probe_action_capability (action : ProbeAction) -> Capability",
         "fn merge_probe_bark_payload (payload : & mut Value , bark : & impl Serialize) -> Result < () >",
@@ -11993,17 +11997,16 @@
   },
   "typescript": {
     "webui/src/lib/api/antigravity.ts": {
-      "types": {},
       "calls": [
         "callCommand(\"antigravity.list\",{request})",
         "callCommand(\"antigravity.detail\",{request})",
         "callCommand(\"antigravity.rename\",{request})",
         "callCommand(\"antigravity.archive\",{request})",
         "callCommand(\"antigravity.restore\",{request})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/claude.ts": {
-      "types": {},
       "calls": [
         "callCommand(\"claude.list\",query)",
         "callCommand(\"claude.detail\",{sessionKey,limit:160,before})",
@@ -12011,45 +12014,10 @@
         "callCommand(\"claude.deletePreview\",{sessionKey})",
         "invokeNative<ClaudeOwnershipDiagnostics>(\"claude.ownershipDiagnostics\",{sessionKey})",
         "callCommand(\"claude.deleteExecute\",{request})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/desktop.ts": {
-      "types": {
-        "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
-        "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number;copy?:boolean|null};",
-        "DesktopDiagnostic": "exporttypeDesktopDiagnostic={timestamp:number;source:string;method:string;version:number|null;code:number|null;category:string;hint:string};",
-        "DesktopDiagnostics": "exporttypeDesktopDiagnostics={records:DesktopDiagnostic[];desktopBuild:string|null;bundledCliVersion:string|null};",
-        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={confirmOwner?:boolean;revision:number;threadId:string};",
-        "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
-        "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
-        "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
-        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean;decision?:string}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
-        "DesktopActionRequest": "exporttypeDesktopActionRequest=DesktopSessionRequest&{action:DesktopAction};",
-        "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
-        "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
-        "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",
-        "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
-        "DesktopPermissionsReview": "exporttypeDesktopPermissionsReview={network:string|null;fileSystem:string|null};",
-        "DesktopReview": "exporttypeDesktopReview={command:string|null;cwd:string|null;reason:string|null;changes:DesktopFileReview[];permissions:DesktopPermissionsReview|null;extra:string|null;truncated:boolean};",
-        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",
-        "DesktopGoal": "exporttypeDesktopGoal={objective:string;status:string;truncated:boolean};",
-        "DesktopView": "exporttypeDesktopView={connectionPhase?:string|null;desktopBuild?:string|null;goal?:DesktopGoal|null;sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};",
-        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={forceRefetch?:boolean;revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
-        "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
-        "DesktopCatalog": "exporttypeDesktopCatalog={items:DesktopCatalogItem[];nextCursor:string|null};",
-        "DesktopChooseRequest": "exporttypeDesktopChooseRequest={revision:number;sessionId:string|null;kind:string};",
-        "DesktopChosenItem": "exporttypeDesktopChosenItem={handle:string;name:string;kind:string};",
-        "DesktopChoice": "exporttypeDesktopChoice={item:DesktopChosenItem|null};",
-        "DesktopAttachmentBounds": "exporttypeDesktopAttachmentBounds={x:number;y:number;width:number;height:number};",
-        "DesktopAttachmentAction": "exporttypeDesktopAttachmentAction=|{type:\"bind\";bounds:DesktopAttachmentBounds;handles:string[]}|{type:\"bounds\";bindingId:string;bounds:DesktopAttachmentBounds;handles:string[]}|{type:\"paste\";bindingId:string}|{type:\"release\";bindingId:string;handles:string[]}|{type:\"unbind\";bindingId:string};",
-        "DesktopAttachmentRequest": "exporttypeDesktopAttachmentRequest=DesktopSessionRequest&{action:DesktopAttachmentAction};",
-        "DesktopAttachmentEvent": "exporttypeDesktopAttachmentEvent={bindingId:string;items:DesktopChosenItem[];error:string|null};",
-        "DesktopPasteDisposition": "exporttypeDesktopPasteDisposition=\"attachments\"|\"text\"|\"unsupported\";",
-        "DesktopAttachmentResult": "exporttypeDesktopAttachmentResult={bindingId:string;pasteDisposition?:DesktopPasteDisposition|null};",
-        "DesktopCreateRequest": "exporttypeDesktopCreateRequest={revision:number;projectHandle:string};",
-        "DesktopCreatedThread": "exporttypeDesktopCreatedThread={threadId:string};",
-        "DesktopAck": "exporttypeDesktopAck={ok:boolean};"
-      },
       "calls": [
         "runtimeRpc<DesktopView>(\"codex.desktop.attach\",{request:{revision,threadId,confirmOwner}satisfiesDesktopThreadRequest,onEvent:channel.value},true)",
         "invokeNative<DesktopAck>(\"codex.desktop.detach\",{request})",
@@ -12062,36 +12030,71 @@
         "runtimeRpc<DesktopAttachmentResult>(\"codex.desktop.attachments\",{request:{revision,sessionId,action}satisfiesDesktopAttachmentRequest,onEvent:channel.value},true)",
         "runtimeRpc<DesktopAttachmentResult>(\"codex.desktop.attachments\",{request:{revision,sessionId,action:{type:\"bind\",bounds,handles}}satisfiesDesktopAttachmentRequest,onEvent:channel.value},true)",
         "invokeNative<DesktopAttachmentResult>(\"codex.desktop.attachments\",{request:{revision,sessionId,action:{type:\"unbind\",bindingId:result.bindingId}}satisfiesDesktopAttachmentRequest,onEvent:channel.value})"
-      ]
+      ],
+      "types": {
+        "DesktopAck": "exporttypeDesktopAck={ok:boolean};",
+        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean;decision?:string}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
+        "DesktopActionRequest": "exporttypeDesktopActionRequest=DesktopSessionRequest&{action:DesktopAction};",
+        "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
+        "DesktopAttachmentAction": "exporttypeDesktopAttachmentAction=|{type:\"bind\";bounds:DesktopAttachmentBounds;handles:string[]}|{type:\"bounds\";bindingId:string;bounds:DesktopAttachmentBounds;handles:string[]}|{type:\"paste\";bindingId:string}|{type:\"release\";bindingId:string;handles:string[]}|{type:\"unbind\";bindingId:string};",
+        "DesktopAttachmentBounds": "exporttypeDesktopAttachmentBounds={x:number;y:number;width:number;height:number};",
+        "DesktopAttachmentEvent": "exporttypeDesktopAttachmentEvent={bindingId:string;items:DesktopChosenItem[];error:string|null};",
+        "DesktopAttachmentRequest": "exporttypeDesktopAttachmentRequest=DesktopSessionRequest&{action:DesktopAttachmentAction};",
+        "DesktopAttachmentResult": "exporttypeDesktopAttachmentResult={bindingId:string;pasteDisposition?:DesktopPasteDisposition|null};",
+        "DesktopCatalog": "exporttypeDesktopCatalog={items:DesktopCatalogItem[];nextCursor:string|null};",
+        "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
+        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={forceRefetch?:boolean;revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
+        "DesktopChoice": "exporttypeDesktopChoice={item:DesktopChosenItem|null};",
+        "DesktopChooseRequest": "exporttypeDesktopChooseRequest={revision:number;sessionId:string|null;kind:string};",
+        "DesktopChosenItem": "exporttypeDesktopChosenItem={handle:string;name:string;kind:string};",
+        "DesktopCreateRequest": "exporttypeDesktopCreateRequest={revision:number;projectHandle:string};",
+        "DesktopCreatedThread": "exporttypeDesktopCreatedThread={threadId:string};",
+        "DesktopDiagnostic": "exporttypeDesktopDiagnostic={timestamp:number;source:string;method:string;version:number|null;code:number|null;category:string;hint:string};",
+        "DesktopDiagnostics": "exporttypeDesktopDiagnostics={records:DesktopDiagnostic[];desktopBuild:string|null;bundledCliVersion:string|null};",
+        "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number;copy?:boolean|null};",
+        "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
+        "DesktopGoal": "exporttypeDesktopGoal={objective:string;status:string;truncated:boolean};",
+        "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
+        "DesktopPasteDisposition": "exporttypeDesktopPasteDisposition=\"attachments\"|\"text\"|\"unsupported\";",
+        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",
+        "DesktopPermissionsReview": "exporttypeDesktopPermissionsReview={network:string|null;fileSystem:string|null};",
+        "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",
+        "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
+        "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
+        "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
+        "DesktopReview": "exporttypeDesktopReview={command:string|null;cwd:string|null;reason:string|null;changes:DesktopFileReview[];permissions:DesktopPermissionsReview|null;extra:string|null;truncated:boolean};",
+        "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
+        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={confirmOwner?:boolean;revision:number;threadId:string};",
+        "DesktopView": "exporttypeDesktopView={connectionPhase?:string|null;desktopBuild?:string|null;goal?:DesktopGoal|null;sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
+      }
     },
     "webui/src/lib/api/dsh.ts": {
-      "types": {},
       "calls": [
         "callCommand(\"dsh.list\",{request})",
         "callCommand(\"dsh.detail\",{request})",
         "callCommand(\"dsh.rename\",{request})",
         "callCommand(\"dsh.archive\",{request})",
         "callCommand(\"dsh.restore\",{request})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/filePaths.ts": {
-      "types": {},
       "calls": [
         "invokeNative(\"plugin:opener|reveal_item_in_dir\",{paths:[path]})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/grok.ts": {
-      "types": {},
       "calls": [
         "callCommand<GrokSessionSummary[]>(\"grok.list\",query)",
         "callCommand(\"grok.rename\",{id,title})",
         "callCommand(\"grok.deletePreview\",{id})",
         "callCommand(\"grok.deleteExecute\",{request})",
         "callCommand<GrokSessionDetail>(\"grok.detail\",{id,...options})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/jobs.ts": {
-      "types": {},
       "calls": [
         "callCommand<ArchiveDeletePlan>(\"cleanup.archiveDryRun\",{})",
         "callCommand<ArchiveDeleteResult>(\"cleanup.archiveExecute\",{request:confirmation})",
@@ -12103,21 +12106,19 @@
         "callCommand<DshArchiveDeleteResult>(\"cleanup.dshArchiveExecute\",{request})",
         "callCommand<UnifiedCleanupPlan>(\"cleanup.unifiedDryRun\",request?{request}:{})",
         "callCommand<UnifiedCleanupResult>(\"cleanup.unifiedExecute\",{request})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/plans.ts": {
+      "calls": [
+        "invokeNative<PlanSaveResult>(\"plans.save\",{request})"
+      ],
       "types": {
         "PlanSaveRequest": "exporttypePlanSaveRequest={filename:string;markdown:string};",
         "PlanSaveResult": "exporttypePlanSaveResult={filename:string};"
-      },
-      "calls": [
-        "invokeNative<PlanSaveResult>(\"plans.save\",{request})"
-      ]
+      }
     },
     "webui/src/lib/api/probe.ts": {
-      "types": {
-        "HookProviderId": "exporttypeHookProviderId=\"claude\"|\"grok\"|\"antigravity\";"
-      },
       "calls": [
         "callCommand<ProbeStatus|OptionalResult<ProbeStatus>>(\"probe.status\")",
         "callCommand<ProbeSettings|OptionalResult<ProbeSettings>>(\"probe.settings.get\")",
@@ -12128,49 +12129,49 @@
         "startProbeCommand(\"probe.removeHooks\",\"probe-hooks-remove\")",
         "callCommand<{job_id?:string|null;jobId?:string|null}>(command,{})",
         "callCommand(\"claude.hooks\",provider===\"claude\"?{request:{action,confirmed}}:{request:{action,confirmed},provider})"
-      ]
+      ],
+      "types": {
+        "HookProviderId": "exporttypeHookProviderId=\"claude\"|\"grok\"|\"antigravity\";"
+      }
     },
     "webui/src/lib/api/search.ts": {
-      "types": {},
       "calls": [
         "callCommand<SessionSearchResponse>(\"sessions.search\",{request})"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/sessions.ts": {
-      "types": {
-        "SessionProvider": "exporttypeSessionProvider=\"codex\"|\"grok\"|\"claude_code\"|\"antigravity\"|\"dsh\";",
-        "SessionOperation": "exporttypeSessionOperation=\"archive\"|\"restore\"|\"delete\";",
-        "SessionBatchRequest": "exporttypeSessionBatchRequest={provider:SessionProvider;operation:SessionOperation;sessionKeys:string[];includeDescendants?:boolean};",
-        "SessionBatchItem": "exporttypeSessionBatchItem={sessionKey:string;id:string;title:string;paths:string[];bytes:number;allowed:boolean;reason:string|null;fingerprint:string|null;descendants?:string[];warnings?:string[]};",
-        "SessionBatchPreview": "exporttypeSessionBatchPreview={provider:SessionProvider;operation:SessionOperation;items:SessionBatchItem[]};",
-        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint?:string;descendants?:string[]}>;confirmed:boolean;includeDescendants?:boolean};",
-        "SessionBatchResult": "exporttypeSessionBatchResult={items:Array<{sessionKey:string;status:\"succeeded\"|\"blocked\"|\"failed\";message:string|null;deletedIds?:string[];residuals?:string[]}>};",
-        "SessionAttachmentRequest": "exporttypeSessionAttachmentRequest={rootThreadId?:string;provider:SessionProvider;sessionKey:string;messageId:string;attachmentId:string};",
-        "SessionAttachmentResponse": "exporttypeSessionAttachmentResponse={mimeType:string;base64:string};"
-      },
       "calls": [
         "callCommand(\"sessions.bulkPreview\",{request})",
         "callCommand(\"sessions.bulkExecute\",{request})",
         "callCommand(\"sessions.attachmentRead\",{request})"
-      ]
+      ],
+      "types": {
+        "SessionAttachmentRequest": "exporttypeSessionAttachmentRequest={rootThreadId?:string;provider:SessionProvider;sessionKey:string;messageId:string;attachmentId:string};",
+        "SessionAttachmentResponse": "exporttypeSessionAttachmentResponse={mimeType:string;base64:string};",
+        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint?:string;descendants?:string[]}>;confirmed:boolean;includeDescendants?:boolean};",
+        "SessionBatchItem": "exporttypeSessionBatchItem={sessionKey:string;id:string;title:string;paths:string[];bytes:number;allowed:boolean;reason:string|null;fingerprint:string|null;descendants?:string[];warnings?:string[]};",
+        "SessionBatchPreview": "exporttypeSessionBatchPreview={provider:SessionProvider;operation:SessionOperation;items:SessionBatchItem[]};",
+        "SessionBatchRequest": "exporttypeSessionBatchRequest={provider:SessionProvider;operation:SessionOperation;sessionKeys:string[];includeDescendants?:boolean};",
+        "SessionBatchResult": "exporttypeSessionBatchResult={items:Array<{sessionKey:string;status:\"succeeded\"|\"blocked\"|\"failed\";message:string|null;deletedIds?:string[];residuals?:string[]}>};",
+        "SessionOperation": "exporttypeSessionOperation=\"archive\"|\"restore\"|\"delete\";",
+        "SessionProvider": "exporttypeSessionProvider=\"codex\"|\"grok\"|\"claude_code\"|\"antigravity\"|\"dsh\";"
+      }
     },
     "webui/src/lib/api/shared.ts": {
-      "types": {},
-      "calls": []
+      "calls": [],
+      "types": {}
     },
     "webui/src/lib/api/system.ts": {
-      "types": {},
       "calls": [
         "callCommand<SystemCapabilitiesResponse>(\"system.capabilities\")",
         "callCommand<SystemVersion>(\"system.version\")",
         "callCommand<AgentProviderInfo[]>(\"system.providers\")",
         "callCommand<PlatformOverview>(\"system.platform\")"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/threads.ts": {
-      "types": {
-        "ThreadDetailOptions": "exporttypeThreadDetailOptions={limit?:number;before?:string|null;full?:boolean;};"
-      },
       "calls": [
         "callCommand<SubagentDetailResponse>(\"threads.subagentDetail\",{request})",
         "callCommand<ThreadSummary[]>(\"threads.list\",{archived,q,limit:120})",
@@ -12179,41 +12180,31 @@
         "callCommand(\"threads.archive\",{threadId})",
         "callCommand(\"threads.restore\",{threadId})",
         "callCommand(\"threads.rename\",{threadId,name})"
-      ]
+      ],
+      "types": {
+        "ThreadDetailOptions": "exporttypeThreadDetailOptions={limit?:number;before?:string|null;full?:boolean;};"
+      }
     },
     "webui/src/lib/api/transport.ts": {
-      "types": {},
       "calls": [
         "runtimeRpc<T>(command,args)"
-      ]
+      ],
+      "types": {}
     },
     "webui/src/lib/api/updates.ts": {
-      "types": {
-        "UnifiedUpdateAction": "exporttypeUnifiedUpdateAction=\"check\"|\"install\"|\"prune\";",
-        "UpdateActionResult": "exporttypeUpdateActionResult={job_id:string;status?:UpdateStatus;};"
-      },
       "calls": [
         "callCommand<UpdateStatus>(\"updates.status\")",
         "callCommand<{job_id?:string|null;jobId?:string|null;status?:UpdateStatus}>(command,{})",
         "runTypedUpdateCommand(\"updates.check\",\"update-check\")",
         "runTypedUpdateCommand(\"updates.install\",\"update-install\")",
         "runTypedUpdateCommand(\"updates.prune\",\"update-prune\")"
-      ]
+      ],
+      "types": {
+        "UnifiedUpdateAction": "exporttypeUnifiedUpdateAction=\"check\"|\"install\"|\"prune\";",
+        "UpdateActionResult": "exporttypeUpdateActionResult={job_id:string;status?:UpdateStatus;};"
+      }
     },
     "webui/src/lib/runtime.ts": {
-      "types": {
-        "MachineTarget": "exporttypeMachineTarget=\"local\"|\"remote\";",
-        "RemoteMachineSummary": "exporttypeRemoteMachineSummary={id:string;name:string;baseUrl:string};",
-        "RemoteConnectionView": "exporttypeRemoteConnectionView={target:MachineTarget;revision:number;baseUrl:string|null;configured:boolean;activeMachineId?:string|null;activeMachineName?:string|null;machines?:RemoteMachineSummary[];};",
-        "RemoteConnectionCredentials": "exporttypeRemoteConnectionCredentials={revision:number;baseUrl:string;apiKey?:string;id?:string;name?:string;};",
-        "RemoteRevisionRequest": "exporttypeRemoteRevisionRequest={revision:number;machineId?:string};",
-        "RemoteSelectionRequest": "exporttypeRemoteSelectionRequest=RemoteRevisionRequest&{target:MachineTarget};",
-        "RemoteInvokeRequest": "exporttypeRemoteInvokeRequest={revision:number;command:string;args:Record<string,unknown>};",
-        "RemoteInvokeResponse": "exporttypeRemoteInvokeResponse=unknown;",
-        "RuntimeContext": "exporttypeRuntimeContext={kind:\"desktop\"};",
-        "RpcArgs": "typeRpcArgs=Record<string,unknown>|undefined;",
-        "RuntimeGlobal": "typeRuntimeGlobal=typeofglobalThis&{__TAURI_INTERNALS__?:{invoke?:(command:string,args?:RpcArgs)=>Promise<unknown>;transformCallback?:(callback:(frame:{index:number;message?:unknown;end?:boolean})=>void)=>number;unregisterCallback?:(id:number)=>void;};__NEXUSHUB_DESKTOP_RUNTIME__?:boolean;__NEXUSHUB_TEST_INVOKE__?:(command:string,args?:RpcArgs)=>Promise<unknown>|unknown;};"
-      },
       "calls": [
         "invokeNative<RemoteConnectionView>(\"remote.get\")",
         "invokeNative<T>(command,{request})",
@@ -12223,107 +12214,120 @@
         "changeConnection<RemoteConnectionView>(\"remote.select\",payload)",
         "invokeNative<T>(\"remote.invoke\",{request})",
         "invokeNative<T>(command,args)"
-      ]
+      ],
+      "types": {
+        "MachineTarget": "exporttypeMachineTarget=\"local\"|\"remote\";",
+        "RemoteConnectionCredentials": "exporttypeRemoteConnectionCredentials={revision:number;baseUrl:string;apiKey?:string;id?:string;name?:string;};",
+        "RemoteConnectionView": "exporttypeRemoteConnectionView={target:MachineTarget;revision:number;baseUrl:string|null;configured:boolean;activeMachineId?:string|null;activeMachineName?:string|null;machines?:RemoteMachineSummary[];};",
+        "RemoteInvokeRequest": "exporttypeRemoteInvokeRequest={revision:number;command:string;args:Record<string,unknown>};",
+        "RemoteInvokeResponse": "exporttypeRemoteInvokeResponse=unknown;",
+        "RemoteMachineSummary": "exporttypeRemoteMachineSummary={id:string;name:string;baseUrl:string};",
+        "RemoteRevisionRequest": "exporttypeRemoteRevisionRequest={revision:number;machineId?:string};",
+        "RemoteSelectionRequest": "exporttypeRemoteSelectionRequest=RemoteRevisionRequest&{target:MachineTarget};",
+        "RpcArgs": "typeRpcArgs=Record<string,unknown>|undefined;",
+        "RuntimeContext": "exporttypeRuntimeContext={kind:\"desktop\"};",
+        "RuntimeGlobal": "typeRuntimeGlobal=typeofglobalThis&{__TAURI_INTERNALS__?:{invoke?:(command:string,args?:RpcArgs)=>Promise<unknown>;transformCallback?:(callback:(frame:{index:number;message?:unknown;end?:boolean})=>void)=>number;unregisterCallback?:(id:number)=>void;};__NEXUSHUB_DESKTOP_RUNTIME__?:boolean;__NEXUSHUB_TEST_INVOKE__?:(command:string,args?:RpcArgs)=>Promise<unknown>|unknown;};"
+      }
     },
     "webui/src/types.ts": {
+      "calls": [],
       "types": {
-        "TimelineEntry": "exporttypeTimelineEntry={id:string;title:string;preview?:string};",
-        "HistoryMetadata": "exporttypeHistoryMetadata={epoch:string;revision:string;changedIds?:string[];reset?:boolean;changes?:{revision:string;changedIds:string[];reset?:boolean}[]};",
-        "UserAttachment": "exporttypeUserAttachment={id:string;name:string;kind:\"image\"|\"file\";path?:string|null;reason?:string|null};",
-        "UserContextBlock": "exporttypeUserContextBlock={kind:\"instructions\"|\"environment\"|\"runtime\"|\"files\";text:string};",
-        "UserMessageContent": "exporttypeUserMessageContent={id:string;text:string;attachments:UserAttachment[];contextBlocks?:UserContextBlock[]};",
-        "ThreadStatus": "exporttypeThreadStatus=\"Recent\"|\"Running\"|\"ReplyNeeded\"|\"Recoverable\"|\"Archived\";",
-        "SessionStorageSize": "exporttypeSessionStorageSize={bytes:number|null;scope:\"file\"|\"directory\";status:\"complete\"|\"partial\"|\"pending\"|\"unavailable\"};",
-        "GrokSessionSummary": "exporttypeGrokSessionSummary={deletionEligibility?:{allowed:boolean;reason:string|null}|null;storageSize?:SessionStorageSize|null;handoffPath?:string|null;id:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;};",
-        "GrokHistoryEvent": "exporttypeGrokHistoryEvent={id?:string;userMessage?:UserMessageContent|null;callId?:string;status?:string;detail?:string;timestamp?:string|null;kind:string;text?:string|null;method?:string|null;};",
-        "GrokSessionDetail": "exporttypeGrokSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;totalEvents?:number;hasMore?:boolean;beforeCursor?:string|null;summary:GrokSessionSummary;events:GrokHistoryEvent[]};",
-        "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
-        "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
-        "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",
-        "ClaudeSessionSummary": "exporttypeClaudeSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;readWarning?:string|null;canRename:boolean;renameBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;};",
-        "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null;assistantPhase?:\"intermediate\"|\"final\"|null};",
-        "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
-        "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
-        "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
-        "ClaudeOwnershipProcess": "exporttypeClaudeOwnershipProcess={pid:number;role:string;registrationVerified:boolean;mismatchedFields:string[]};",
-        "ClaudeOwnershipDiagnostics": "exporttypeClaudeOwnershipDiagnostics={ownership:string;reasonCodes:string[];processes:ClaudeOwnershipProcess[]};",
-        "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint?:string};",
-        "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number;residuals?:string[]};",
-        "ProviderListRequest": "exporttypeProviderListRequest={q?:string;archived?:boolean;limit?:number};",
-        "ProviderDetailRequest": "exporttypeProviderDetailRequest={sessionKey:string;limit?:number;before?:string};",
-        "ProviderRenameRequest": "exporttypeProviderRenameRequest={sessionKey:string;title:string};",
-        "ProviderSessionRequest": "exporttypeProviderSessionRequest={sessionKey:string};",
-        "ProviderSessionSummary": "exporttypeProviderSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;archived:boolean;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;canRename:boolean;renameBlockReason?:string|null;canArchive:boolean;archiveBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;readWarning?:string|null;};",
-        "ProviderHistoryEvent": "exporttypeProviderHistoryEvent={id:string;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;turnId?:string|null;status?:string|null;detail?:string|null;result?:string|null;userMessage?:UserMessageContent|null;};",
-        "ProviderSessionDetail": "exporttypeProviderSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ProviderSessionSummary;events:ProviderHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null;};",
-        "ProviderListResponse": "exporttypeProviderListResponse=ProviderSessionSummary[];",
-        "ProviderDetailResponse": "exporttypeProviderDetailResponse=ProviderSessionDetail;",
-        "ProviderMutationResponse": "exporttypeProviderMutationResponse=ProviderSessionSummary;",
-        "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",
-        "CodexMessage": "exporttypeCodexMessage={role:string;kind:string;text:string;created_at?:string|null;};",
-        "UserInputOption": "exporttypeUserInputOption={label:string;description?:string|null;};",
-        "UserInputQuestion": "exporttypeUserInputQuestion={id:string;header?:string|null;question:string;options:UserInputOption[];};",
-        "PendingElicitation": "exporttypePendingElicitation={turn_id?:string|null;item_id?:string|null;questions:UserInputQuestion[];};",
-        "MessageBlock": "exporttypeMessageBlock={subagent?:SubagentActivity|null;user_message?:UserMessageContent|null;id:string;role:string;kind:string;display_kind?:string|null;status?:string|null;text?:string|null;summary?:string|null;input?:string|null;truncated?:boolean|null;resolved?:boolean|null;answers?:UserInputAnswer[];plan_status?:string|null;group_id?:string|null;tool_name?:string|null;call_id?:string|null;turn_id?:string|null;item_id?:string|null;created_at?:string|null;questions:UserInputQuestion[];payload?:unknown;};",
-        "SubagentActivity": "exporttypeSubagentActivity={eventKind?:\"started\"|\"completed\"|\"interrupted\"|\"interacted\"|null;eventId?:string|null;agentId?:string|null;name:string;role?:string|null;status:\"creating\"|\"running\"|\"completed\"|\"failed\"|\"interrupted\"|\"unknown\";available:boolean;unavailableReason?:string|null;delegation?:string|null;};",
-        "SubagentCollection": "exporttypeSubagentCollection={agents:SubagentActivity[];counts:Record<SubagentActivity[\"status\"],number>;complete:boolean;warning?:string|null;};",
-        "SubagentDetailRequest": "exporttypeSubagentDetailRequest={rootThreadId:string;agentId:string;limit?:number;before?:string|null;};",
-        "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
-        "UserInputAnswer": "exporttypeUserInputAnswer={question_id:string;answers:string[];note?:string|null;};",
-        "ThreadDetail": "exporttypeThreadDetail={timeline?:TimelineEntry[];after_cursor?:string|null;history?:HistoryMetadata|null;subagents?:SubagentCollection|null;subagent_updates?:Record<string,SubagentActivity>;summary:ThreadSummary;messages:CodexMessage[];blocks:MessageBlock[];raw_event_count:number;total_blocks?:number;has_more_blocks?:boolean;before_cursor?:string|null;};",
-        "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",
-        "SearchProvider": "exporttypeSearchProvider=\"codex\"|\"claude_code\"|\"grok\"|\"antigravity\"|\"dsh\";",
-        "SearchScope": "exporttypeSearchScope=\"thread\"|\"provider\";",
-        "SessionSearchRequest": "exporttypeSessionSearchRequest={provider:SearchProvider;scope:SearchScope;sessionKey?:string|null;query:string;cursor?:string|null;limit?:number;};",
-        "SessionSearchResult": "exporttypeSessionSearchResult={resultId:string;sessionKey:string;nativeId:string;title:string;cwd?:string|null;matchKind:string;positionKey:string;snippet:string;timestamp?:string|null;};",
-        "SessionSearchResponse": "exporttypeSessionSearchResponse={provider:SearchProvider;scope:SearchScope;query:string;results:SessionSearchResult[];nextCursor?:string|null;truncated:boolean;warnings?:string[];};",
-        "HostSurface": "exporttypeHostSurface=\"linux_server_api\"|\"desktop_embedded_tauri\";",
-        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;dsh_archive_cleanup?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;codex_delete_tree?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
-        "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
-        "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
-        "UpdateExecutionMethod": "exporttypeUpdateExecutionMethod=\"linux_systemd_job\"|\"macos_tauri_updater\"|\"unsupported\";",
-        "UpdateState": "exporttypeUpdateState=\"idle\"|\"checking\"|\"ready\"|\"installing\"|\"succeeded\"|\"failed\"|\"unsupported\";",
-        "UpdateStatus": "exporttypeUpdateStatus={current_version:string;latest_version?:string|null;update_available?:boolean|null;channel:string;method:UpdateExecutionMethod;state:UpdateState;failure_category?:string|null;recommended_action:string;capabilities:string[];};",
-        "JobRecord": "exporttypeJobRecord={id:string;kind:string;status:string;title:string;thread_id?:string|null;turn_id?:string|null;started_at:number;finished_at?:number|null;exit_code?:number|null;output:string;error?:string|null;analysis?:string|null;explanation?:string|null;failure_analysis?:{category:string;explanation:string;suggestions:string[];}|null;};",
+        "AgentProviderInfo": "exporttypeAgentProviderInfo={id:\"codex\"|\"grok_build\"|\"cursor\"|\"gemini\"|string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;description?:string;capabilities?:string[];safety?:string;};",
         "ArchiveDeletePlan": "exporttypeArchiveDeletePlan={total_threads:number;active_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;archived_ids:string[];integrity:string;};",
         "ArchiveDeleteResult": "exporttypeArchiveDeleteResult={items?:HiddenThreadItemResult[];before:ArchiveDeletePlan;after_total_threads:number;after_active_threads:number;after_archived_threads:number;after_integrity:string;deleted_rollout_files:number;};",
-        "HiddenThreadSelection": "exporttypeHiddenThreadSelection={id:string;fingerprint?:string|null};",
-        "HiddenThreadCandidate": "exporttypeHiddenThreadCandidate=HiddenThreadSelection&{title:string;allowed:boolean;reason:string|null};",
-        "HiddenThreadItemResult": "exporttypeHiddenThreadItemResult={id:string;status:\"deleted\"|\"skipped\"|\"failed\";reason:string|null;residuals?:string[]};",
-        "CleanupExecuteRequest": "exporttypeCleanupExecuteRequest={confirmed:boolean;expectedCount?:number;candidates?:HiddenThreadSelection[]};",
-        "HiddenThreadDeletePlan": "exporttypeHiddenThreadDeletePlan={scan?:HiddenScanProgress|null;total_threads:number;visible_threads:number;hidden_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;hidden_ids:string[];candidates:HiddenThreadCandidate[];hidden_source_counts:Record<string,number>;integrity:string;};",
-        "HiddenScanRequest": "exporttypeHiddenScanRequest={mode?:\"start\"|\"poll\"|\"cancel\";scanId?:string;cursor?:number;limit?:number};",
-        "HiddenScanProgress": "exporttypeHiddenScanProgress={id:string;phase:\"preparing\"|\"scanning\"|\"complete\"|\"stopping\"|\"stopped\"|\"failed\";processed:number;total:number;cursor:number;nextCursor:number;hasMore:boolean;error:string|null;};",
-        "HiddenThreadDeleteResult": "exporttypeHiddenThreadDeleteResult={skipped_threads:number;failed_threads:number;items:HiddenThreadItemResult[];before:HiddenThreadDeletePlan;deleted_threads:number;after_total_threads:number;after_visible_threads:number;after_hidden_threads:number;after_archived_threads:number;after_integrity:string;visible_threads:number;hidden_threads:number;integrity:string;deleted_rollout_files:number;};",
-        "OptionalResult": "exporttypeOptionalResult<T>={available:boolean;data?:T;error?:string;reason?:string|null;};",
-        "AgentProviderInfo": "exporttypeAgentProviderInfo={id:\"codex\"|\"grok_build\"|\"cursor\"|\"gemini\"|string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;description?:string;capabilities?:string[];safety?:string;};",
-        "PlatformOverview": "exporttypePlatformOverview={kind:\"linux\"|\"macos\"|\"windows\"|string;data_dir:string;config_file:string;log_dir:string;service_name:string;service_kind:string;};",
-        "PluginInfo": "exporttypePluginInfo={id:string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;kind:\"builtin\"|\"external\"|string;description?:string|null;unavailable_reason?:string|null;invocation_template?:string|null;};",
-        "ProbeLiveSession": "exporttypeProbeLiveSession={provider:\"codex\"|\"claude_code\"|\"grok\"|\"antigravity\"|\"dsh\"|string;id:string;session_key:string;title:string;bucket:\"running\"|\"reply_needed\"|\"recoverable\"|string;updated_at?:string|null;cwd?:string|null;};",
-        "ProbeStatus": "exporttypeProbeStatus={provider_notifications?:{provider:\"grok\"|\"claude_code\";enabled:boolean;last_scan_at:number;streams:number;read_errors:number;failed_deliveries:number;pending_deliveries:number;failure_supported:boolean}[];label?:string|null;enabled:boolean;available?:boolean|null;platform:\"linux\"|\"macos\"|\"windows\"|string;service_kind:string;service_name:string;flavor?:string|null;hook_status:string;hook_command?:string|null;actual_commands?:string[]|null;stale_command_count?:number|null;empty_group_count?:number|null;bark_status:string;recent_event_count:number;running_count:number;reply_needed_count:number;recoverable_count:number;running_threads?:ThreadSummary[];reply_needed_threads?:ThreadSummary[];recoverable_threads?:ThreadSummary[];active_sessions?:ProbeLiveSession[];config_path:string;lifecycle_status?:string|null;doctor_status?:string|null;runtime_version?:string|null;codex_home?:string|null;codex_hooks_path?:string|null;dsh_sessions_path?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;host_label?:string|null;snapshot_age_seconds?:number|null;is_refreshing?:boolean|null;snapshot_status?:string|null;error_monitor_enabled?:boolean|null;error_monitor_status?:string|null;error_monitor_last_scan_at?:string|number|null;error_monitor_last_error?:string|null;error_monitor_incident_count?:number|null;};",
-        "ProbeEvent": "exporttypeProbeEvent={id:string;kind:string;thread_id?:string|null;title?:string|null;message?:string|null;dedupe_key?:string|null;source:string;payload:Record<string,unknown>;created_at:string|number;handled_at?:string|number|null;};",
-        "ProbeEventsResponse": "exporttypeProbeEventsResponse={events:ProbeEvent[];limit?:number|null;};",
-        "ProbeJobAction": "exporttypeProbeJobAction=\"bark-test\"|\"hooks-install\"|\"hooks-remove\";",
-        "ProbeSettings": "exporttypeProbeSettings={codex:{home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;workspace?:string|null;host_label:string;};probe:Record<string,unknown>&{enabled?:boolean;poll_seconds?:number;recent_limit?:number;hooks?:Record<string,unknown>&{manage_stop_hook?:boolean;};error_monitor?:Record<string,unknown>&{enabled?:boolean;};notifications?:Record<string,unknown>&{enabled?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};observability?:Record<string,unknown>&{event_retention_days?:number;hook_event_max_lines?:number;hook_cooldown_max_lines?:number;log_max_bytes?:number;};};discovery_warnings?:string[]|null;notifications:Record<string,unknown>&{enabled?:boolean;device_key?:string;device_key_configured?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};};",
-        "CodexConfig": "exporttypeCodexConfig={model?:string|null;service_tier?:string|null;reasoning_effort?:string|null;cwd?:string|null;permission_profile?:string|null;approval_policy?:string|null;sandbox_mode?:string|null;network_access?:boolean|null;collaboration_mode?:string|null;};",
+        "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
+        "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint?:string};",
+        "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number;residuals?:string[]};",
+        "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
+        "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null;assistantPhase?:\"intermediate\"|\"final\"|null};",
         "ClaudeHooksAction": "exporttypeClaudeHooksAction=\"status\"|\"install\"|\"remove\";",
         "ClaudeHooksRequest": "exporttypeClaudeHooksRequest={action:ClaudeHooksAction;confirmed?:boolean};",
         "ClaudeHooksStatus": "exporttypeClaudeHooksStatus={installed:boolean;managedCount:number;changed:boolean;configPath?:string};",
-        "DshArchiveSelection": "exporttypeDshArchiveSelection={id:string;archiveId:string};",
+        "ClaudeOwnershipDiagnostics": "exporttypeClaudeOwnershipDiagnostics={ownership:string;reasonCodes:string[];processes:ClaudeOwnershipProcess[]};",
+        "ClaudeOwnershipProcess": "exporttypeClaudeOwnershipProcess={pid:number;role:string;registrationVerified:boolean;mismatchedFields:string[]};",
+        "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
+        "ClaudeSessionSummary": "exporttypeClaudeSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;readWarning?:string|null;canRename:boolean;renameBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;};",
+        "CleanupExecuteRequest": "exporttypeCleanupExecuteRequest={confirmed:boolean;expectedCount?:number;candidates?:HiddenThreadSelection[]};",
+        "CodexConfig": "exporttypeCodexConfig={model?:string|null;service_tier?:string|null;reasoning_effort?:string|null;cwd?:string|null;permission_profile?:string|null;approval_policy?:string|null;sandbox_mode?:string|null;network_access?:boolean|null;collaboration_mode?:string|null;};",
+        "CodexMessage": "exporttypeCodexMessage={role:string;kind:string;text:string;created_at?:string|null;};",
         "DshArchiveCandidate": "exporttypeDshArchiveCandidate=DshArchiveSelection&{parentId:string|null;reason:string|null};",
         "DshArchiveDeletePlan": "exporttypeDshArchiveDeletePlan={available:boolean;archivedThreads:number;candidates:DshArchiveCandidate[];issues:string[]};",
         "DshArchiveDeleteRequest": "exporttypeDshArchiveDeleteRequest={confirmed:boolean;targets:DshArchiveSelection[]};",
         "DshArchiveDeleteResult": "exporttypeDshArchiveDeleteResult={items:HiddenThreadItemResult[];deletedThreads:number;deletedBytes:number};",
-        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[];includeCodexHidden?:boolean};",
+        "DshArchiveSelection": "exporttypeDshArchiveSelection={id:string;archiveId:string};",
+        "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
+        "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
+        "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",
+        "GrokHistoryEvent": "exporttypeGrokHistoryEvent={id?:string;userMessage?:UserMessageContent|null;callId?:string;status?:string;detail?:string;timestamp?:string|null;kind:string;text?:string|null;method?:string|null;};",
+        "GrokSessionDetail": "exporttypeGrokSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;totalEvents?:number;hasMore?:boolean;beforeCursor?:string|null;summary:GrokSessionSummary;events:GrokHistoryEvent[]};",
+        "GrokSessionSummary": "exporttypeGrokSessionSummary={deletionEligibility?:{allowed:boolean;reason:string|null}|null;storageSize?:SessionStorageSize|null;handoffPath?:string|null;id:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;};",
+        "HiddenScanProgress": "exporttypeHiddenScanProgress={id:string;phase:\"preparing\"|\"scanning\"|\"complete\"|\"stopping\"|\"stopped\"|\"failed\";processed:number;total:number;cursor:number;nextCursor:number;hasMore:boolean;error:string|null;};",
+        "HiddenScanRequest": "exporttypeHiddenScanRequest={mode?:\"start\"|\"poll\"|\"cancel\";scanId?:string;cursor?:number;limit?:number};",
+        "HiddenThreadCandidate": "exporttypeHiddenThreadCandidate=HiddenThreadSelection&{title:string;allowed:boolean;reason:string|null};",
+        "HiddenThreadDeletePlan": "exporttypeHiddenThreadDeletePlan={scan?:HiddenScanProgress|null;total_threads:number;visible_threads:number;hidden_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;hidden_ids:string[];candidates:HiddenThreadCandidate[];hidden_source_counts:Record<string,number>;integrity:string;};",
+        "HiddenThreadDeleteResult": "exporttypeHiddenThreadDeleteResult={skipped_threads:number;failed_threads:number;items:HiddenThreadItemResult[];before:HiddenThreadDeletePlan;deleted_threads:number;after_total_threads:number;after_visible_threads:number;after_hidden_threads:number;after_archived_threads:number;after_integrity:string;visible_threads:number;hidden_threads:number;integrity:string;deleted_rollout_files:number;};",
+        "HiddenThreadItemResult": "exporttypeHiddenThreadItemResult={id:string;status:\"deleted\"|\"skipped\"|\"failed\";reason:string|null;residuals?:string[]};",
+        "HiddenThreadSelection": "exporttypeHiddenThreadSelection={id:string;fingerprint?:string|null};",
+        "HistoryMetadata": "exporttypeHistoryMetadata={epoch:string;revision:string;changedIds?:string[];reset?:boolean;changes?:{revision:string;changedIds:string[];reset?:boolean}[]};",
+        "HostSurface": "exporttypeHostSurface=\"linux_server_api\"|\"desktop_embedded_tauri\";",
+        "JobRecord": "exporttypeJobRecord={id:string;kind:string;status:string;title:string;thread_id?:string|null;turn_id?:string|null;started_at:number;finished_at?:number|null;exit_code?:number|null;output:string;error?:string|null;analysis?:string|null;explanation?:string|null;failure_analysis?:{category:string;explanation:string;suggestions:string[];}|null;};",
+        "MessageBlock": "exporttypeMessageBlock={subagent?:SubagentActivity|null;user_message?:UserMessageContent|null;id:string;role:string;kind:string;display_kind?:string|null;status?:string|null;text?:string|null;summary?:string|null;input?:string|null;truncated?:boolean|null;resolved?:boolean|null;answers?:UserInputAnswer[];plan_status?:string|null;group_id?:string|null;tool_name?:string|null;call_id?:string|null;turn_id?:string|null;item_id?:string|null;created_at?:string|null;questions:UserInputQuestion[];payload?:unknown;};",
+        "OptionalResult": "exporttypeOptionalResult<T>={available:boolean;data?:T;error?:string;reason?:string|null;};",
+        "PendingElicitation": "exporttypePendingElicitation={turn_id?:string|null;item_id?:string|null;questions:UserInputQuestion[];};",
+        "PlatformOverview": "exporttypePlatformOverview={kind:\"linux\"|\"macos\"|\"windows\"|string;data_dir:string;config_file:string;log_dir:string;service_name:string;service_kind:string;};",
+        "PluginInfo": "exporttypePluginInfo={id:string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;kind:\"builtin\"|\"external\"|string;description?:string|null;unavailable_reason?:string|null;invocation_template?:string|null;};",
+        "ProbeEvent": "exporttypeProbeEvent={id:string;kind:string;thread_id?:string|null;title?:string|null;message?:string|null;dedupe_key?:string|null;source:string;payload:Record<string,unknown>;created_at:string|number;handled_at?:string|number|null;};",
+        "ProbeEventsResponse": "exporttypeProbeEventsResponse={events:ProbeEvent[];limit?:number|null;};",
+        "ProbeJobAction": "exporttypeProbeJobAction=\"bark-test\"|\"hooks-install\"|\"hooks-remove\";",
+        "ProbeLiveSession": "exporttypeProbeLiveSession={provider:\"codex\"|\"claude_code\"|\"grok\"|\"antigravity\"|\"dsh\"|string;id:string;session_key:string;title:string;bucket:\"running\"|\"reply_needed\"|\"recoverable\"|string;updated_at?:string|null;cwd?:string|null;};",
+        "ProbeSettings": "exporttypeProbeSettings={codex:{home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;workspace?:string|null;host_label:string;};probe:Record<string,unknown>&{enabled?:boolean;poll_seconds?:number;recent_limit?:number;hooks?:Record<string,unknown>&{manage_stop_hook?:boolean;};error_monitor?:Record<string,unknown>&{enabled?:boolean;};notifications?:Record<string,unknown>&{enabled?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};observability?:Record<string,unknown>&{event_retention_days?:number;hook_event_max_lines?:number;hook_cooldown_max_lines?:number;log_max_bytes?:number;};};discovery_warnings?:string[]|null;notifications:Record<string,unknown>&{enabled?:boolean;device_key?:string;device_key_configured?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};};",
+        "ProbeStatus": "exporttypeProbeStatus={provider_notifications?:{provider:\"grok\"|\"claude_code\";enabled:boolean;last_scan_at:number;streams:number;read_errors:number;failed_deliveries:number;pending_deliveries:number;failure_supported:boolean}[];label?:string|null;enabled:boolean;available?:boolean|null;platform:\"linux\"|\"macos\"|\"windows\"|string;service_kind:string;service_name:string;flavor?:string|null;hook_status:string;hook_command?:string|null;actual_commands?:string[]|null;stale_command_count?:number|null;empty_group_count?:number|null;bark_status:string;recent_event_count:number;running_count:number;reply_needed_count:number;recoverable_count:number;running_threads?:ThreadSummary[];reply_needed_threads?:ThreadSummary[];recoverable_threads?:ThreadSummary[];active_sessions?:ProbeLiveSession[];config_path:string;lifecycle_status?:string|null;doctor_status?:string|null;runtime_version?:string|null;codex_home?:string|null;codex_hooks_path?:string|null;dsh_sessions_path?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;host_label?:string|null;snapshot_age_seconds?:number|null;is_refreshing?:boolean|null;snapshot_status?:string|null;error_monitor_enabled?:boolean|null;error_monitor_status?:string|null;error_monitor_last_scan_at?:string|number|null;error_monitor_last_error?:string|null;error_monitor_incident_count?:number|null;};",
+        "ProviderDetailRequest": "exporttypeProviderDetailRequest={sessionKey:string;limit?:number;before?:string};",
+        "ProviderDetailResponse": "exporttypeProviderDetailResponse=ProviderSessionDetail;",
+        "ProviderHistoryEvent": "exporttypeProviderHistoryEvent={id:string;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;turnId?:string|null;status?:string|null;detail?:string|null;result?:string|null;userMessage?:UserMessageContent|null;};",
+        "ProviderListRequest": "exporttypeProviderListRequest={q?:string;archived?:boolean;limit?:number};",
+        "ProviderListResponse": "exporttypeProviderListResponse=ProviderSessionSummary[];",
+        "ProviderMutationResponse": "exporttypeProviderMutationResponse=ProviderSessionSummary;",
+        "ProviderRenameRequest": "exporttypeProviderRenameRequest={sessionKey:string;title:string};",
+        "ProviderSessionDetail": "exporttypeProviderSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ProviderSessionSummary;events:ProviderHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null;};",
+        "ProviderSessionRequest": "exporttypeProviderSessionRequest={sessionKey:string};",
+        "ProviderSessionSummary": "exporttypeProviderSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;archived:boolean;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;canRename:boolean;renameBlockReason?:string|null;canArchive:boolean;archiveBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;readWarning?:string|null;};",
+        "SearchProvider": "exporttypeSearchProvider=\"codex\"|\"claude_code\"|\"grok\"|\"antigravity\"|\"dsh\";",
+        "SearchScope": "exporttypeSearchScope=\"thread\"|\"provider\";",
+        "SessionSearchRequest": "exporttypeSessionSearchRequest={provider:SearchProvider;scope:SearchScope;sessionKey?:string|null;query:string;cursor?:string|null;limit?:number;};",
+        "SessionSearchResponse": "exporttypeSessionSearchResponse={provider:SearchProvider;scope:SearchScope;query:string;results:SessionSearchResult[];nextCursor?:string|null;truncated:boolean;warnings?:string[];};",
+        "SessionSearchResult": "exporttypeSessionSearchResult={resultId:string;sessionKey:string;nativeId:string;title:string;cwd?:string|null;matchKind:string;positionKey:string;snippet:string;timestamp?:string|null;};",
+        "SessionStorageSize": "exporttypeSessionStorageSize={bytes:number|null;scope:\"file\"|\"directory\";status:\"complete\"|\"partial\"|\"pending\"|\"unavailable\"};",
+        "SubagentActivity": "exporttypeSubagentActivity={eventKind?:\"started\"|\"completed\"|\"interrupted\"|\"interacted\"|null;eventId?:string|null;agentId?:string|null;name:string;role?:string|null;status:\"creating\"|\"running\"|\"completed\"|\"failed\"|\"interrupted\"|\"unknown\";available:boolean;unavailableReason?:string|null;delegation?:string|null;};",
+        "SubagentCollection": "exporttypeSubagentCollection={agents:SubagentActivity[];counts:Record<SubagentActivity[\"status\"],number>;complete:boolean;warning?:string|null;};",
+        "SubagentDetailRequest": "exporttypeSubagentDetailRequest={rootThreadId:string;agentId:string;limit?:number;before?:string|null;};",
+        "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
+        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;dsh_archive_cleanup?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;codex_delete_tree?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
+        "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
+        "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
+        "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",
+        "ThreadDetail": "exporttypeThreadDetail={timeline?:TimelineEntry[];after_cursor?:string|null;history?:HistoryMetadata|null;subagents?:SubagentCollection|null;subagent_updates?:Record<string,SubagentActivity>;summary:ThreadSummary;messages:CodexMessage[];blocks:MessageBlock[];raw_event_count:number;total_blocks?:number;has_more_blocks?:boolean;before_cursor?:string|null;};",
+        "ThreadStatus": "exporttypeThreadStatus=\"Recent\"|\"Running\"|\"ReplyNeeded\"|\"Recoverable\"|\"Archived\";",
+        "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",
+        "TimelineEntry": "exporttypeTimelineEntry={id:string;title:string;preview?:string};",
         "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;fingerprint?:string|null;blockedReason:string|null;};",
-        "UnifiedCleanupTargetSelection": "exporttypeUnifiedCleanupTargetSelection={scope:string;id:string;fingerprint?:string|null;};",
-        "UnifiedCleanupScopePlan": "exporttypeUnifiedCleanupScopePlan={scope:string;provider:string;label:string;supported:boolean;scanned:boolean;unavailableReason:string|null;candidateCount:number;deletableCount:number;estimatedBytes:number;candidates:UnifiedCleanupCandidate[];issues:string[];};",
-        "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
+        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[];includeCodexHidden?:boolean};",
         "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[];targets?:UnifiedCleanupTargetSelection[];};",
+        "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
+        "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};",
+        "UnifiedCleanupScopePlan": "exporttypeUnifiedCleanupScopePlan={scope:string;provider:string;label:string;supported:boolean;scanned:boolean;unavailableReason:string|null;candidateCount:number;deletableCount:number;estimatedBytes:number;candidates:UnifiedCleanupCandidate[];issues:string[];};",
         "UnifiedCleanupScopeResult": "exporttypeUnifiedCleanupScopeResult={scope:string;provider:string;label:string;deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;residuals:string[];issues:string[];};",
-        "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};"
-      },
-      "calls": []
+        "UnifiedCleanupTargetSelection": "exporttypeUnifiedCleanupTargetSelection={scope:string;id:string;fingerprint?:string|null;};",
+        "UpdateExecutionMethod": "exporttypeUpdateExecutionMethod=\"linux_systemd_job\"|\"macos_tauri_updater\"|\"unsupported\";",
+        "UpdateState": "exporttypeUpdateState=\"idle\"|\"checking\"|\"ready\"|\"installing\"|\"succeeded\"|\"failed\"|\"unsupported\";",
+        "UpdateStatus": "exporttypeUpdateStatus={current_version:string;latest_version?:string|null;update_available?:boolean|null;channel:string;method:UpdateExecutionMethod;state:UpdateState;failure_category?:string|null;recommended_action:string;capabilities:string[];};",
+        "UserAttachment": "exporttypeUserAttachment={id:string;name:string;kind:\"image\"|\"file\";path?:string|null;reason?:string|null};",
+        "UserContextBlock": "exporttypeUserContextBlock={kind:\"instructions\"|\"environment\"|\"runtime\"|\"files\";text:string};",
+        "UserInputAnswer": "exporttypeUserInputAnswer={question_id:string;answers:string[];note?:string|null;};",
+        "UserInputOption": "exporttypeUserInputOption={label:string;description?:string|null;};",
+        "UserInputQuestion": "exporttypeUserInputQuestion={id:string;header?:string|null;question:string;options:UserInputOption[];};",
+        "UserMessageContent": "exporttypeUserMessageContent={id:string;text:string;attachments:UserAttachment[];contextBlocks?:UserContextBlock[]};"
+      }
     }
   },
   "typescriptFiles": [

@@ -581,14 +581,14 @@ fn save_registry(
     result
 }
 
-fn remove_cache(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> Result<()> {
+fn remove_cache(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> Result<bool> {
     let root = paths.home.join("storages/session_projcache");
     if !directory(&root)? {
-        return Ok(());
+        return Ok(true);
     }
     let rows = root.join("sessions");
     if !directory(&rows)? {
-        return Ok(());
+        return Ok(true);
     }
     let name = format!("{id}.json");
     let backup = format!("{name}.bak.");
@@ -596,44 +596,61 @@ fn remove_cache(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> Result<()>
         let entry = entry?;
         let filename = entry.file_name();
         let filename = filename.to_string_lossy();
-        if filename == name
+        if (filename == name
             || filename
                 .strip_prefix(&backup)
-                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
+                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())))
+            && !outcome.remove_strict(&entry.path())
         {
-            outcome.remove(&entry.path());
+            return Ok(false);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
-fn remove_session(path: &Path, outcome: &mut Outcome) -> Result<()> {
+pub(super) fn remove_dsh_cache_strict(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> bool {
+    let root = paths.home.join("storages/session_projcache");
+    let rows = root.join("sessions");
+    remove_cache(paths, id, outcome).unwrap_or_else(|err| {
+        let dir = if root.is_dir() { rows } else { root };
+        outcome.residuals.push(format!("{}: {err}", dir.display()));
+        false
+    })
+}
+
+fn remove_session(path: &Path, outcome: &mut Outcome) -> Result<bool> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
         Err(error) => return Err(error.into()),
     };
     if meta.file_type().is_symlink() {
-        outcome.remove(path);
-        return Ok(());
+        return Ok(outcome.remove_strict(path));
     }
     let mut headers = Vec::new();
-    let before = outcome.residuals.len();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         if entry.file_name().to_string_lossy().starts_with("session.v") {
             headers.push(entry.path());
-        } else {
-            outcome.remove(&entry.path());
+        } else if !outcome.remove_strict(&entry.path()) {
+            return Ok(false);
         }
     }
-    if outcome.residuals.len() == before {
-        for header in headers {
-            outcome.remove(&header);
+    for header in headers {
+        if !outcome.remove_strict(&header) {
+            return Ok(false);
         }
-        outcome.attempt(path, || Ok(fs::remove_dir(path)?));
     }
-    Ok(())
+    let before = outcome.residuals.len();
+    outcome.attempt(path, || Ok(fs::remove_dir(path)?));
+    Ok(outcome.residuals.len() == before)
+}
+
+pub(super) fn remove_dsh_session_strict(path: &Path, outcome: &mut Outcome) -> bool {
+    remove_session(path, outcome).unwrap_or_else(|err| {
+        outcome.residuals.push(format!("{}: {err}", path.display()));
+        false
+    })
 }
 
 pub fn execute(

@@ -26,72 +26,84 @@ fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-pub(crate) fn descendants(paths: &CodexPaths, roots: &[String]) -> Result<Vec<String>> {
+pub(crate) fn spawn_edges(paths: &CodexPaths) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if !paths.state_db().exists() {
+        return Ok(edges);
+    }
+    let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let available = crate::archive::table_columns(&conn, "threads")?;
+    let selected = ["id", "parent_thread_id", "parentThreadId", "source"]
+        .into_iter()
+        .filter(|column| available.contains(*column))
+        .map(quoted)
+        .collect::<Vec<_>>();
+    let mut statement = conn.prepare(&format!("SELECT {} FROM threads", selected.join(",")))?;
+    let names: Vec<_> = statement
+        .column_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let value = read_row_value(row, &names)?;
+        let Some(id) = value["id"].as_str() else {
+            continue;
+        };
+        let source = value["source"]
+            .as_str()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null);
+        for parent in [
+            value.get("parent_thread_id"),
+            value.get("parentThreadId"),
+            source.pointer("/subagent/thread_spawn/parent_thread_id"),
+            source.pointer("/parent_thread_id"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        {
+            edges.entry(parent.into()).or_default().insert(id.into());
+        }
+    }
+    let columns = crate::archive::table_columns(&conn, "thread_spawn_edges")?;
+    if columns.contains("parent_thread_id") && columns.contains("child_thread_id") {
+        let mut stmt =
+            conn.prepare("SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (parent, child) = row?;
+            edges.entry(parent).or_default().insert(child);
+        }
+    }
+    Ok(edges)
+}
+
+pub(crate) fn descendants_from_edges(
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    roots: &[String],
+) -> Result<Vec<String>> {
     for id in roots {
         session_delete::valid_id(id)?;
-    }
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if paths.state_db().exists() {
-        let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let available = crate::archive::table_columns(&conn, "threads")?;
-        let selected = ["id", "parent_thread_id", "parentThreadId", "source"]
-            .into_iter()
-            .filter(|column| available.contains(*column))
-            .map(quoted)
-            .collect::<Vec<_>>();
-        let mut statement = conn.prepare(&format!("SELECT {} FROM threads", selected.join(",")))?;
-        let names: Vec<_> = statement
-            .column_names()
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
-            let value = read_row_value(row, &names)?;
-            let Some(id) = value["id"].as_str() else {
-                continue;
-            };
-            let source = value["source"]
-                .as_str()
-                .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                .unwrap_or(Value::Null);
-            for parent in [
-                value.get("parent_thread_id"),
-                value.get("parentThreadId"),
-                source.pointer("/subagent/thread_spawn/parent_thread_id"),
-                source.pointer("/parent_thread_id"),
-            ]
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            {
-                edges.entry(parent.into()).or_default().insert(id.into());
-            }
-        }
-        let columns = crate::archive::table_columns(&conn, "thread_spawn_edges")?;
-        if columns.contains("parent_thread_id") && columns.contains("child_thread_id") {
-            let mut stmt =
-                conn.prepare("SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")?;
-            for row in
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-            {
-                let (parent, child) = row?;
-                edges.entry(parent).or_default().insert(child);
-            }
-        }
     }
     let mut pending = roots.to_vec();
     let mut seen = BTreeSet::new();
     while let Some(id) = pending.pop() {
         session_delete::valid_id(&id)?;
-        if !seen.insert(id.clone()) {
-            continue;
-        }
-        if let Some(children) = edges.get(&id) {
-            pending.extend(children.iter().cloned());
+        if seen.insert(id.clone()) {
+            if let Some(children) = edges.get(&id) {
+                pending.extend(children.iter().cloned());
+            }
         }
     }
     Ok(seen.into_iter().collect())
+}
+
+pub(crate) fn descendants(paths: &CodexPaths, roots: &[String]) -> Result<Vec<String>> {
+    for id in roots {
+        session_delete::valid_id(id)?;
+    }
+    descendants_from_edges(&spawn_edges(paths)?, roots)
 }
 
 struct Inventory {
@@ -404,64 +416,81 @@ pub(crate) fn is_writer_locked(paths: &CodexPaths, id: &str) -> bool {
 
 pub(crate) fn ensure_tree_not_running(paths: &CodexPaths, root_id: &str) -> Result<()> {
     let tree_ids = descendants(paths, &[root_id.to_string()])?;
-    for id in &tree_ids {
+    let conn = paths
+        .state_db()
+        .exists()
+        .then(|| Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY))
+        .transpose()?;
+    ensure_ids_not_running(paths, &tree_ids, conn.as_ref())
+}
+
+pub(crate) fn ensure_ids_not_running(
+    paths: &CodexPaths,
+    tree_ids: &[String],
+    conn: Option<&Connection>,
+) -> Result<()> {
+    for id in tree_ids {
         ensure!(
             !is_writer_locked(paths, id),
             "线程 {id} 仍持有写入锁，无法清理"
         );
     }
-    if paths.state_db().exists() {
-        let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        for id in &tree_ids {
-            if let Some(row) = row_value(&conn, "threads", "id", id)? {
-                for field in [
-                    "active_turn_id",
-                    "activeTurnId",
-                    "active_job_id",
-                    "activeJobId",
-                    "running_job_id",
-                    "runningJobId",
-                ] {
-                    ensure!(
-                        row.get(field).is_none_or(|v| {
-                            v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())
-                        }),
-                        "线程 {id} 仍有活动任务，无法清理"
-                    );
-                }
-                for field in ["status", "state"] {
-                    ensure!(
-                        !row.get(field).and_then(Value::as_str).is_some_and(|s| {
-                            matches!(
-                                s.to_ascii_lowercase().as_str(),
-                                "running"
-                                    | "active"
-                                    | "in_progress"
-                                    | "inprogress"
-                                    | "pending"
-                                    | "submitting"
-                            )
-                        }),
-                        "线程 {id} 正在运行，无法清理"
-                    );
-                }
-            }
-            for (table, key) in [
-                ("jobs", "thread_id"),
-                ("agent_job_items", "assigned_thread_id"),
+    let Some(conn) = conn else {
+        return Ok(());
+    };
+    let active_job_tables: Vec<(&str, &str)> = [
+        ("jobs", "thread_id"),
+        ("agent_job_items", "assigned_thread_id"),
+    ]
+    .into_iter()
+    .filter(|(table, key)| {
+        crate::archive::table_columns(conn, table)
+            .is_ok_and(|cols| cols.contains(*key) && cols.contains("status"))
+    })
+    .collect();
+    for id in tree_ids {
+        if let Some(row) = row_value(conn, "threads", "id", id)? {
+            for field in [
+                "active_turn_id",
+                "activeTurnId",
+                "active_job_id",
+                "activeJobId",
+                "running_job_id",
+                "runningJobId",
             ] {
-                let cols = crate::archive::table_columns(&conn, table)?;
-                if cols.contains(key) && cols.contains("status") {
-                    let active: bool = conn.query_row(
-                        &format!(
-                            "SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"
-                        ),
-                        [id],
-                        |r| r.get(0),
-                    )?;
-                    ensure!(!active, "线程 {id} 仍有关联的运行任务，无法清理");
-                }
+                ensure!(
+                    row.get(field).is_none_or(|v| {
+                        v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())
+                    }),
+                    "线程 {id} 仍有活动任务，无法清理"
+                );
             }
+            for field in ["status", "state"] {
+                ensure!(
+                    !row.get(field).and_then(Value::as_str).is_some_and(|s| {
+                        matches!(
+                            s.to_ascii_lowercase().as_str(),
+                            "running"
+                                | "active"
+                                | "in_progress"
+                                | "inprogress"
+                                | "pending"
+                                | "submitting"
+                        )
+                    }),
+                    "线程 {id} 正在运行，无法清理"
+                );
+            }
+        }
+        for &(table, key) in &active_job_tables {
+            let active: bool = conn.query_row(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"
+                ),
+                [id],
+                |r| r.get(0),
+            )?;
+            ensure!(!active, "线程 {id} 仍有关联的运行任务，无法清理");
         }
     }
     Ok(())

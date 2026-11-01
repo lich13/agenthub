@@ -352,7 +352,7 @@ mod tests {
             id: "job-1".to_string(),
             kind: "nexushub_update_check".to_string(),
             status: status.to_string(),
-            title: "NexusHub app update check".to_string(),
+            title: "AgentHub app update check".to_string(),
             thread_id: None,
             turn_id: None,
             started_at: 1,

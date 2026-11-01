@@ -488,107 +488,60 @@ struct Parser {
 }
 impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
-        let Self {
-            mut parsed,
-            custom_title,
-            auto_title,
-            first_user,
-            turn,
-            calls,
-            pending,
-            questions,
-            permission_calls,
-            mut seen,
-            last_assistant_text,
-            last_stop_reason,
-            last_assistant_events,
-            last_assistant_message_id,
-        } = std::mem::take(self);
-        for (position, record) in std::iter::once((position, record)) {
-            if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
-            let kind = field(record, "type");
-            let uuid = field(record, "uuid");
-            if matches!(kind, "user" | "assistant")
-                && !uuid.is_empty()
-                && allowed.is_some_and(|allowed| !allowed.contains(uuid))
-            {
-                continue;
-            }
-            if alias_conflict(record, &["sessionId", "session_id"]) {
-                warning(&mut parsed, "会话包含不同的身份字段，已按原生会话身份读取");
-            }
-            if alias_conflict(record, &["version", "claude_code_version"]) {
-                warning(&mut parsed, "会话包含不同的版本字段，已按原生记录版本读取");
-            }
-            let session = alias_field(record, &["sessionId", "session_id"]);
-            if !session.is_empty() {
-                if parsed.id.is_empty() {
-                    parsed.id = session.into();
-                } else if parsed.id != session {
-                    issue(&mut parsed, "会话身份冲突，改名已禁用");
-                    continue;
-                }
-            }
-            if !field(record, "cwd").is_empty() {
-                parsed.cwd = field(record, "cwd").into();
-            }
-            let version = alias_field(record, &["version", "claude_code_version"]);
-            if !version.is_empty() {
-                parsed.version = version.into();
-            }
-            let key = if uuid.is_empty() {
-                format!("record-{}", position + 1)
-            } else {
-                uuid.into()
-            };
-            if !uuid.is_empty() {
-                let hash = digest(record.to_string());
-                if let Some(prior) = seen.insert(uuid.into(), hash.clone()) {
-                    if prior != hash {
-                        issue(&mut parsed, "记录 ID 冲突，改名已禁用");
-                    }
-                    continue;
-                }
-            }
-            *self = Self {
-                parsed,
-                custom_title,
-                auto_title,
-                first_user,
-                turn,
-                calls,
-                pending,
-                questions,
-                permission_calls,
-                seen,
-                last_assistant_text,
-                last_stop_reason,
-                last_assistant_events,
-                last_assistant_message_id,
-            };
-
-            self.read_kind(record, position, key, kind, uuid);
+        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             return;
         }
-
-        *self = Self {
-            parsed,
-            custom_title,
-            auto_title,
-            first_user,
-            turn,
-            calls,
-            pending,
-            questions,
-            permission_calls,
-            seen,
-            last_assistant_text,
-            last_stop_reason,
-            last_assistant_events,
-            last_assistant_message_id,
+        let kind = field(record, "type");
+        let uuid = field(record, "uuid");
+        if matches!(kind, "user" | "assistant")
+            && !uuid.is_empty()
+            && allowed.is_some_and(|allowed| !allowed.contains(uuid))
+        {
+            return;
+        }
+        if alias_conflict(record, &["sessionId", "session_id"]) {
+            warning(
+                &mut self.parsed,
+                "会话包含不同的身份字段，已按原生会话身份读取",
+            );
+        }
+        if alias_conflict(record, &["version", "claude_code_version"]) {
+            warning(
+                &mut self.parsed,
+                "会话包含不同的版本字段，已按原生记录版本读取",
+            );
+        }
+        let session = alias_field(record, &["sessionId", "session_id"]);
+        if !session.is_empty() {
+            if self.parsed.id.is_empty() {
+                self.parsed.id = session.into();
+            } else if self.parsed.id != session {
+                issue(&mut self.parsed, "会话身份冲突，改名已禁用");
+                return;
+            }
+        }
+        if !field(record, "cwd").is_empty() {
+            self.parsed.cwd = field(record, "cwd").into();
+        }
+        let version = alias_field(record, &["version", "claude_code_version"]);
+        if !version.is_empty() {
+            self.parsed.version = version.into();
+        }
+        let key = if uuid.is_empty() {
+            format!("record-{}", position + 1)
+        } else {
+            uuid.into()
         };
+        if !uuid.is_empty() {
+            let hash = digest(record.to_string());
+            if let Some(prior) = self.seen.insert(uuid.into(), hash.clone()) {
+                if prior != hash {
+                    issue(&mut self.parsed, "记录 ID 冲突，改名已禁用");
+                }
+                return;
+            }
+        }
+        self.read_kind(record, position, key, kind, uuid);
     }
     fn read_kind(&mut self, record: &Value, position: usize, key: String, kind: &str, uuid: &str) {
         for key in std::iter::once(key) {

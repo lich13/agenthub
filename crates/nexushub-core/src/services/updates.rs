@@ -418,8 +418,8 @@ pub fn plan_update_action_for_surface(
 
 pub fn macos_updater_job_spec(action: UpdateAction) -> Result<MacosUpdaterJobSpec> {
     let (kind, title) = match action {
-        UpdateAction::Check => ("nexushub_update_check", "NexusHub app update check"),
-        UpdateAction::Install => ("nexushub_update_install", "NexusHub app update install"),
+        UpdateAction::Check => ("nexushub_update_check", "AgentHub app update check"),
+        UpdateAction::Install => ("nexushub_update_install", "AgentHub app update install"),
         UpdateAction::Prune => anyhow::bail!("native updater does not support backup prune"),
     };
     Ok(MacosUpdaterJobSpec {
@@ -448,19 +448,19 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
     let spec = match plan.action {
         UpdateAction::Check => LinuxUpdateJobSpec {
             kind: "nexushub_update_check".to_string(),
-            title: "NexusHub update precheck".to_string(),
+            title: "AgentHub update precheck".to_string(),
             command: config.update.panel_precheck_command.clone(),
             exclusive_group,
         },
         UpdateAction::Install => LinuxUpdateJobSpec {
             kind: "nexushub_update_install".to_string(),
-            title: "NexusHub update install".to_string(),
+            title: "AgentHub update install".to_string(),
             command: update::panel_update_command(&config.update.panel_update_command),
             exclusive_group,
         },
         UpdateAction::Prune => LinuxUpdateJobSpec {
             kind: "nexushub_update_prune".to_string(),
-            title: "NexusHub update backup prune".to_string(),
+            title: "AgentHub update backup prune".to_string(),
             command: update::panel_prune_command(),
             exclusive_group,
         },

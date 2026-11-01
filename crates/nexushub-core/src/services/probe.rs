@@ -385,6 +385,41 @@ pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Durat
     }
 }
 
+fn push_live_session(
+    sessions: &mut Vec<probe_core::ProbeLiveSession>,
+    provider: &str,
+    id: String,
+    session_key: String,
+    title: String,
+    bucket: &str,
+    updated_at: Option<String>,
+    cwd: Option<String>,
+) {
+    sessions.push(probe_core::ProbeLiveSession {
+        provider: provider.to_string(),
+        title: if title.trim().is_empty() {
+            id.clone()
+        } else {
+            title
+        },
+        id,
+        session_key,
+        bucket: bucket.to_string(),
+        updated_at,
+        cwd: cwd.filter(|c| !c.is_empty()),
+    });
+}
+
+fn stream_live_buckets(
+    streams: &[crate::native_probe::NativeStreamSnapshot],
+    now_ms: i64,
+) -> std::collections::HashMap<String, &'static str> {
+    streams
+        .iter()
+        .filter_map(|s| native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b)))
+        .collect()
+}
+
 fn aggregate_active_sessions(
     config: &Config,
     limit: usize,
@@ -400,20 +435,16 @@ fn aggregate_active_sessions(
         ("recoverable", recoverable_threads),
     ] {
         for thread in threads.iter().take(per_bucket_limit) {
-            let title = if thread.title.trim().is_empty() {
-                thread.id.clone()
-            } else {
-                thread.title.clone()
-            };
-            sessions.push(probe_core::ProbeLiveSession {
-                provider: "codex".to_string(),
-                id: thread.id.clone(),
-                session_key: thread.id.clone(),
-                title,
-                bucket: bucket.to_string(),
-                updated_at: thread.updated_at.clone(),
-                cwd: thread.cwd.clone(),
-            });
+            push_live_session(
+                &mut sessions,
+                "codex",
+                thread.id.clone(),
+                thread.id.clone(),
+                thread.title.clone(),
+                bucket,
+                thread.updated_at.clone(),
+                thread.cwd.clone(),
+            );
         }
     }
 
@@ -459,19 +490,16 @@ fn aggregate_active_sessions(
                     None
                 };
                 if let Some(bucket) = bucket {
-                    sessions.push(probe_core::ProbeLiveSession {
-                        provider: "claude_code".to_string(),
-                        id: item.id.clone(),
-                        session_key: item.session_key,
-                        title: if item.title.trim().is_empty() {
-                            item.id
-                        } else {
-                            item.title
-                        },
-                        bucket: bucket.to_string(),
-                        updated_at: item.updated_at,
-                        cwd: (!item.cwd.is_empty()).then_some(item.cwd),
-                    });
+                    push_live_session(
+                        &mut sessions,
+                        "claude_code",
+                        item.id,
+                        item.session_key,
+                        item.title,
+                        bucket,
+                        item.updated_at,
+                        Some(item.cwd),
+                    );
                 }
             }
         }
@@ -485,24 +513,15 @@ fn aggregate_active_sessions(
     };
     if grok_paths.sessions().is_dir() {
         if let Ok(items) = crate::grok::list_grok_sessions(&grok_paths, per_bucket_limit, None) {
-            let needs_stream_scan = items.iter().any(|item| {
+            let stream_buckets = if items.iter().any(|item| {
                 item.status != "running" && is_updated_within_fresh_window(&item.updated_at, now_ms)
-            });
-            let stream_buckets: std::collections::HashMap<String, &'static str> =
-                if needs_stream_scan {
-                    crate::grok::notification_snapshots(&grok_paths)
-                        .map(|scan| {
-                            scan.streams
-                                .iter()
-                                .filter_map(|s| {
-                                    native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                } else {
-                    std::collections::HashMap::new()
-                };
+            }) {
+                crate::grok::notification_snapshots(&grok_paths)
+                    .map(|scan| stream_live_buckets(&scan.streams, now_ms))
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashMap::new()
+            };
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
@@ -510,19 +529,16 @@ fn aggregate_active_sessions(
                     stream_buckets.get(&item.id).copied()
                 };
                 if let Some(bucket) = bucket {
-                    sessions.push(probe_core::ProbeLiveSession {
-                        provider: "grok".to_string(),
-                        id: item.id.clone(),
-                        session_key: item.id.clone(),
-                        title: if item.title.trim().is_empty() {
-                            item.id
-                        } else {
-                            item.title
-                        },
-                        bucket: bucket.to_string(),
-                        updated_at: item.updated_at,
-                        cwd: (!item.cwd.is_empty()).then_some(item.cwd),
-                    });
+                    push_live_session(
+                        &mut sessions,
+                        "grok",
+                        item.id.clone(),
+                        item.id,
+                        item.title,
+                        bucket,
+                        item.updated_at,
+                        Some(item.cwd),
+                    );
                 }
             }
         }
@@ -530,6 +546,11 @@ fn aggregate_active_sessions(
 
     #[cfg(target_os = "macos")]
     {
+        let list_req = crate::provider_sessions::ProviderListRequest {
+            archived: Some(false),
+            q: None,
+            limit: Some(per_bucket_limit),
+        };
         let ag_paths = match &sandbox_root {
             Some(root) => crate::antigravity::sessions::AntigravityPaths::offline(
                 root.join(".gemini/antigravity"),
@@ -537,14 +558,7 @@ fn aggregate_active_sessions(
             None => crate::antigravity::sessions::AntigravityPaths::default_for_user(),
         };
         if ag_paths.available() {
-            if let Ok(items) = crate::antigravity::sessions::list_sessions(
-                &ag_paths,
-                &crate::provider_sessions::ProviderListRequest {
-                    archived: Some(false),
-                    q: None,
-                    limit: Some(per_bucket_limit),
-                },
-            ) {
+            if let Ok(items) = crate::antigravity::sessions::list_sessions(&ag_paths, &list_req) {
                 for item in items {
                     let bucket = match item.status.as_str() {
                         "running" => Some("running"),
@@ -554,19 +568,16 @@ fn aggregate_active_sessions(
                         _ => None,
                     };
                     if let Some(bucket) = bucket {
-                        sessions.push(probe_core::ProbeLiveSession {
-                            provider: "antigravity".to_string(),
-                            id: item.id.clone(),
-                            session_key: item.session_key,
-                            title: if item.title.trim().is_empty() {
-                                item.id
-                            } else {
-                                item.title
-                            },
-                            bucket: bucket.to_string(),
-                            updated_at: item.updated_at,
-                            cwd: (!item.cwd.is_empty()).then_some(item.cwd),
-                        });
+                        push_live_session(
+                            &mut sessions,
+                            "antigravity",
+                            item.id,
+                            item.session_key,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        );
                     }
                 }
             }
@@ -579,35 +590,18 @@ fn aggregate_active_sessions(
             None => crate::dsh::DshPaths::default_for_user(),
         };
         if dsh_paths.home.join("sessions").is_dir() {
-            if let Ok(items) = crate::dsh::sessions::list_sessions(
-                &dsh_paths,
-                &crate::provider_sessions::ProviderListRequest {
-                    archived: Some(false),
-                    q: None,
-                    limit: Some(per_bucket_limit),
-                },
-            ) {
-                let needs_stream_scan = items.iter().any(|item| {
+            if let Ok(items) = crate::dsh::sessions::list_sessions(&dsh_paths, &list_req) {
+                let stream_buckets = if items.iter().any(|item| {
                     item.status != "running"
                         && item.read_error.is_none()
                         && is_updated_within_fresh_window(&item.updated_at, now_ms)
-                });
-                let stream_buckets: std::collections::HashMap<String, &'static str> =
-                    if needs_stream_scan {
-                        crate::dsh::notifications::scan(&dsh_paths)
-                            .map(|scan| {
-                                scan.streams
-                                    .iter()
-                                    .filter_map(|s| {
-                                        native_stream_live_bucket(s, now_ms)
-                                            .map(|b| (s.id.clone(), b))
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        std::collections::HashMap::new()
-                    };
+                }) {
+                    crate::dsh::notifications::scan(&dsh_paths)
+                        .map(|scan| stream_live_buckets(&scan.streams, now_ms))
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashMap::new()
+                };
                 for item in items {
                     let bucket = if item.status == "running" {
                         Some("running")
@@ -619,19 +613,16 @@ fn aggregate_active_sessions(
                         None
                     };
                     if let Some(bucket) = bucket {
-                        sessions.push(probe_core::ProbeLiveSession {
-                            provider: "dsh".to_string(),
-                            id: item.id.clone(),
-                            session_key: item.session_key,
-                            title: if item.title.trim().is_empty() {
-                                item.id
-                            } else {
-                                item.title
-                            },
-                            bucket: bucket.to_string(),
-                            updated_at: item.updated_at,
-                            cwd: (!item.cwd.is_empty()).then_some(item.cwd),
-                        });
+                        push_live_session(
+                            &mut sessions,
+                            "dsh",
+                            item.id,
+                            item.session_key,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        );
                     }
                 }
             }
@@ -914,6 +905,55 @@ pub fn normalize_probe_event_dedupe_key(event: &mut probe_core::ProbeBuiltEvent)
     }
 }
 
+fn event_action_keys(
+    event: &probe_core::ProbeBuiltEvent,
+    is_plan: bool,
+    prefer_item_id: bool,
+) -> (String, String, String, String) {
+    let thread_id = event
+        .thread_id
+        .as_deref()
+        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+    let turn_id = event
+        .turn_id
+        .as_deref()
+        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+    let (primary, secondary) = if prefer_item_id {
+        ("item_id", "call_id")
+    } else {
+        ("call_id", "item_id")
+    };
+    let action_id = event
+        .payload
+        .get(primary)
+        .and_then(Value::as_str)
+        .or_else(|| event.payload.get(secondary).and_then(Value::as_str))
+        .unwrap_or(&turn_id)
+        .to_string();
+    let content_key = if is_plan {
+        proposed_plan_hash_from_text(&event.bark_body)
+    } else {
+        event.payload["question_content_hash"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| request_user_input_hash_from_text(&event.bark_body))
+    }
+    .or_else(|| {
+        event
+            .payload
+            .get("body_sha256")
+            .and_then(Value::as_str)
+            .and_then(|value| value.get(..16))
+            .map(str::to_owned)
+    })
+    .unwrap_or_else(|| "unknown".to_string());
+    (thread_id, turn_id, action_id, content_key)
+}
+
 pub fn probe_passive_unresolved_action_marker_key(
     event: &probe_core::ProbeBuiltEvent,
 ) -> Option<String> {
@@ -930,54 +970,14 @@ pub fn probe_passive_unresolved_action_marker_key(
     if !matches!(body_source, "proposed_plan" | "request_user_input") {
         return None;
     }
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown");
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown");
-    let action_id = event
-        .payload
-        .get("item_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .unwrap_or(turn_id);
-    let content_key = if body_source == "proposed_plan" {
-        proposed_plan_hash_from_text(&event.bark_body)
-            .or_else(|| {
-                event
-                    .payload
-                    .get("body_sha256")
-                    .and_then(Value::as_str)
-                    .and_then(|value| value.get(..16))
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_else(|| "unknown".to_string())
-    } else {
-        event.payload["question_content_hash"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| request_user_input_hash_from_text(&event.bark_body))
-            .unwrap_or_else(|| {
-                event
-                    .payload
-                    .get("body_sha256")
-                    .and_then(Value::as_str)
-                    .and_then(|value| value.get(..16))
-                    .unwrap_or("unknown")
-                    .to_string()
-            })
-    };
+    let (thread_id, turn_id, action_id, content_key) =
+        event_action_keys(event, body_source == "proposed_plan", true);
     Some(format!(
         "probe_passive_sent_marker:{}:{}:{}:{}:{}:{}",
         dedupe_component(body_source),
-        dedupe_component(thread_id),
-        dedupe_component(turn_id),
-        dedupe_component(action_id),
+        dedupe_component(&thread_id),
+        dedupe_component(&turn_id),
+        dedupe_component(&action_id),
         dedupe_component(&content_key),
         dedupe_component(&event.kind),
     ))
@@ -1191,34 +1191,7 @@ fn format_proposed_plan_reply_needed(raw: &str) -> String {
 }
 
 fn normalize_proposed_plan_dedupe_key(event: &mut probe_core::ProbeBuiltEvent) {
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let item_or_call_id = event
-        .payload
-        .get("item_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .unwrap_or(turn_id.as_str())
-        .to_string();
-    let plan_hash = proposed_plan_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-        event
-            .payload
-            .get("body_sha256")
-            .and_then(Value::as_str)
-            .and_then(|value| value.get(..16))
-            .unwrap_or("unknown")
-            .to_string()
-    });
+    let (thread_id, turn_id, item_or_call_id, plan_hash) = event_action_keys(event, true, true);
     event.dedupe_key = format!(
         "{}:{}:{}:{}:{}",
         dedupe_component(&event.kind),
@@ -1232,38 +1205,7 @@ fn normalize_proposed_plan_dedupe_key(event: &mut probe_core::ProbeBuiltEvent) {
 }
 
 fn normalize_request_user_input_dedupe_key(event: &mut probe_core::ProbeBuiltEvent) {
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let call_id = event
-        .payload
-        .get("call_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("item_id").and_then(Value::as_str))
-        .unwrap_or(turn_id.as_str())
-        .to_string();
-    let input_hash = event.payload["question_content_hash"]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| request_user_input_hash_from_text(&event.bark_body))
-        .unwrap_or_else(|| {
-            event
-                .payload
-                .get("body_sha256")
-                .and_then(Value::as_str)
-                .and_then(|value| value.get(..16))
-                .unwrap_or("unknown")
-                .to_string()
-        });
+    let (thread_id, turn_id, call_id, input_hash) = event_action_keys(event, false, false);
     event.dedupe_key = format!(
         "{}:{}:{}:{}:{}",
         dedupe_component(&event.kind),
@@ -1348,7 +1290,7 @@ fn probe_fixed_job_spec(
     let (kind, title, args, exclusive_group) = match action {
         ProbeAction::BarkTest => (
             "probe_bark_test",
-            "NexusHub 推送测试",
+            "AgentHub 推送测试",
             vec!["probe", "bark-test"],
             "probe_bark",
         ),

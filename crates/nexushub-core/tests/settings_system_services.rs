@@ -180,7 +180,7 @@ fn probe_settings_patch_validation_rejects_bad_url_and_clamps_numeric_ranges() {
         notifications.server_url.as_deref(),
         Some("http://127.0.0.1:8080")
     );
-    assert_eq!(notifications.group.as_deref(), Some("NexusHub"));
+    assert_eq!(notifications.group.as_deref(), Some("AgentHub"));
     let observability = normalized.observability.unwrap();
     assert_eq!(observability.hook_event_max_lines, Some(10));
     assert_eq!(observability.hook_cooldown_max_lines, Some(10_000));
@@ -252,7 +252,7 @@ fn notification_patch_merge_preserves_existing_fields_when_source_omits_them() {
         Some("https://api.day.app")
     );
     assert_eq!(normalized.sound, Some(Some("alarm".to_string())));
-    assert_eq!(normalized.group.as_deref(), Some("NexusHub"));
+    assert_eq!(normalized.group.as_deref(), Some("AgentHub"));
 }
 
 #[test]

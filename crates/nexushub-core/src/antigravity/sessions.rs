@@ -707,7 +707,7 @@ fn invalidate_proto_cache(paths: &AntigravityPaths) {
     }
 }
 
-fn decode_file_uri(uri: &str) -> String {
+pub fn decode_file_uri(uri: &str) -> String {
     let raw = uri.trim();
     let stripped = raw.strip_prefix("file://").unwrap_or(raw);
     let bytes = stripped.as_bytes();
@@ -727,6 +727,71 @@ fn decode_file_uri(uri: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+pub fn is_subtrajectory(id: &str, item: &Value) -> bool {
+    let parent = item["parentConversationId"]
+        .as_str()
+        .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+        .unwrap_or("");
+    let depth = item["nestingDepth"]
+        .as_i64()
+        .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
+        .unwrap_or(0);
+    let root = item["rootConversationId"]
+        .as_str()
+        .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+        .unwrap_or("");
+    !parent.is_empty() || depth > 0 || (!root.is_empty() && root != id)
+}
+
+pub fn collect_subagents_by_root(
+    summaries: &serde_json::Map<String, Value>,
+) -> BTreeMap<String, BTreeMap<String, super::SubagentLiveness>> {
+    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+    for (cid, item) in summaries {
+        if let Some(pid) = item["parentConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+            .filter(|s| !s.is_empty())
+        {
+            parents.insert(cid.as_str(), pid);
+        }
+    }
+    let mut by_root: BTreeMap<String, BTreeMap<String, super::SubagentLiveness>> = BTreeMap::new();
+    for (cid, item) in summaries {
+        if !is_subtrajectory(cid, item) {
+            continue;
+        }
+        let liveness = super::SubagentLiveness {
+            active: live_item_is_running(item),
+            last_modified_ms: crate::native_probe::timestamp(&item["lastModifiedTime"])
+                .or_else(|| crate::native_probe::timestamp(&item["createdTime"])),
+        };
+        let mut target_roots = BTreeSet::new();
+        if let Some(root) = item["rootConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+            .filter(|s| !s.is_empty() && *s != cid)
+        {
+            target_roots.insert(root.to_owned());
+        }
+        let mut curr = cid.as_str();
+        for _ in 0..16 {
+            let Some(&pid) = parents.get(curr) else {
+                break;
+            };
+            target_roots.insert(pid.to_owned());
+            curr = pid;
+        }
+        for root in target_roots {
+            by_root
+                .entry(root)
+                .or_default()
+                .insert(cid.clone(), liveness.clone());
+        }
+    }
+    by_root
 }
 
 fn attach_storage_size(paths: &AntigravityPaths, summary: &mut ProviderSessionSummary) {
@@ -758,52 +823,61 @@ fn attach_storage_size(paths: &AntigravityPaths, summary: &mut ProviderSessionSu
     summary.storage_size = Some(size);
 }
 
+#[allow(clippy::too_many_arguments)]
+fn make_summary(
+    paths: &AntigravityPaths,
+    id: String,
+    title: String,
+    cwd: String,
+    archived: bool,
+    updated_at: Option<String>,
+    message_count: usize,
+    last_message: Option<String>,
+    running: bool,
+    format_version: &'static str,
+) -> ProviderSessionSummary {
+    let status = if archived {
+        "archived"
+    } else if running {
+        "running"
+    } else {
+        "idle"
+    };
+    let mut summary = ProviderSessionSummary {
+        storage_size: None,
+        session_key: id.clone(),
+        path: paths.canonical_path(&id),
+        id,
+        title,
+        cwd,
+        archived,
+        updated_at,
+        message_count,
+        last_message,
+        status: status.into(),
+        format_version: format_version.into(),
+        can_rename: true,
+        rename_block_reason: None,
+        can_archive: true,
+        archive_block_reason: None,
+        can_delete: !running,
+        delete_block_reason: running
+            .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
+        read_error: None,
+        read_warning: None,
+    };
+    attach_storage_size(paths, &mut summary);
+    summary
+}
+
 fn active_subagent_roots_from_summaries(
     summaries: &serde_json::Map<String, Value>,
 ) -> BTreeSet<String> {
-    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
-    for (cid, item) in summaries {
-        if let Some(pid) = item["parentConversationId"]
-            .as_str()
-            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
-            .filter(|s| !s.is_empty())
-        {
-            parents.insert(cid.as_str(), pid);
-        }
-    }
-    let mut active_roots = BTreeSet::new();
-    for (cid, item) in summaries {
-        let parent = item["parentConversationId"]
-            .as_str()
-            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
-            .unwrap_or("");
-        let depth = item["nestingDepth"]
-            .as_i64()
-            .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
-            .unwrap_or(0);
-        let root = item["rootConversationId"]
-            .as_str()
-            .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
-            .unwrap_or("");
-        let is_sub = !parent.is_empty() || depth > 0 || (!root.is_empty() && root != cid);
-        if !is_sub || !live_item_is_running(item) {
-            continue;
-        }
-        if !root.is_empty() && root != cid {
-            active_roots.insert(root.to_owned());
-        }
-        let mut curr = cid.as_str();
-        let mut hops = 0usize;
-        while let Some(&pid) = parents.get(curr) {
-            active_roots.insert(pid.to_owned());
-            curr = pid;
-            hops += 1;
-            if hops >= 16 {
-                break;
-            }
-        }
-    }
-    active_roots
+    collect_subagents_by_root(summaries)
+        .into_iter()
+        .filter(|(_, m)| m.values().any(|s| s.active))
+        .map(|(root, _)| root)
+        .collect()
 }
 
 fn summary_from_live_json(
@@ -812,21 +886,7 @@ fn summary_from_live_json(
     item: &Value,
     has_active_subagents: bool,
 ) -> Option<ProviderSessionSummary> {
-    if uuid::Uuid::parse_str(id).is_err() {
-        return None;
-    }
-    let parent = item["parentConversationId"]
-        .as_str()
-        .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
-        .unwrap_or("");
-    let depth = item["nestingDepth"]
-        .as_i64()
-        .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
-        .unwrap_or(0);
-    let root = item["trajectoryMetadata"]["rootConversationId"]
-        .as_str()
-        .unwrap_or("");
-    if !parent.is_empty() || depth > 0 || (!root.is_empty() && root != id) {
+    if uuid::Uuid::parse_str(id).is_err() || is_subtrajectory(id, item) {
         return None;
     }
     let overlay = read_annotation_overlay(paths, id);
@@ -868,41 +928,24 @@ fn summary_from_live_json(
         .map(str::to_owned);
     let step_count = item["stepCount"].as_u64().unwrap_or(0) as usize;
     let running = !archived && (live_item_is_running(item) || has_active_subagents);
-    let status = if archived {
-        "archived"
-    } else if running {
-        "running"
-    } else {
-        "idle"
-    };
-    let mut summary = ProviderSessionSummary {
-        storage_size: None,
-        id: id.to_owned(),
-        session_key: id.to_owned(),
+    Some(make_summary(
+        paths,
+        id.to_owned(),
         title,
         cwd,
-        path: paths.canonical_path(id),
         archived,
         updated_at,
-        message_count: step_count,
-        last_message: fallback_summary,
-        status: status.into(),
-        format_version: "cascade-v2".into(),
-        can_rename: true,
-        rename_block_reason: None,
-        can_archive: true,
-        archive_block_reason: None,
-        can_delete: !running,
-        delete_block_reason: running
-            .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
-        read_error: None,
-        read_warning: None,
-    };
-    attach_storage_size(paths, &mut summary);
-    Some(summary)
+        step_count,
+        fallback_summary,
+        running,
+        "cascade-v2",
+    ))
 }
 
-fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessionSummary>> {
+fn list_offline_summaries(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+) -> Result<Vec<ProviderSessionSummary>> {
     if !paths.home.is_dir() {
         return Ok(Vec::new());
     }
@@ -923,9 +966,9 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                         row.get::<_, ValueOrString>(1).ok(),
                     ))
                 }) {
-                    for row in rows.flatten() {
-                        if let Some(flag) = row.1 {
-                            fts_archived.insert(row.0, flag.0);
+                    for (cid, flag) in rows.flatten() {
+                        if let Some(flag) = flag {
+                            fts_archived.insert(cid, flag.0);
                         }
                     }
                 }
@@ -949,9 +992,14 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                         row.get::<_, i64>(7)?,
                     ))
                 }) {
-                    for row in rows.flatten() {
-                        let (id, db_title, preview, steps, modified, ws_raw, parent, depth) = row;
-                        if uuid::Uuid::parse_str(&id).is_err() || !parent.is_empty() || depth > 0 {
+                    for (id, db_title, preview, steps, modified, ws_raw, parent, depth) in
+                        rows.flatten()
+                    {
+                        if filter_id.is_some_and(|target| target != id)
+                            || uuid::Uuid::parse_str(&id).is_err()
+                            || !parent.is_empty()
+                            || depth > 0
+                        {
                             continue;
                         }
                         let overlay = read_annotation_overlay(paths, &id);
@@ -976,29 +1024,18 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             .and_then(|uris| uris.into_iter().next())
                             .map(|uri| decode_file_uri(&uri))
                             .unwrap_or_default();
-                        let mut summary = ProviderSessionSummary {
-                            storage_size: None,
-                            id: id.clone(),
-                            session_key: id.clone(),
+                        let summary = make_summary(
+                            paths,
+                            id.clone(),
                             title,
                             cwd,
-                            path: paths.canonical_path(&id),
                             archived,
-                            updated_at: (!modified.trim().is_empty()).then_some(modified),
-                            message_count: steps.max(0) as usize,
-                            last_message: (!preview.trim().is_empty()).then_some(preview),
-                            status: if archived { "archived" } else { "idle" }.into(),
-                            format_version: "sqlite-offline".into(),
-                            can_rename: true,
-                            rename_block_reason: None,
-                            can_archive: true,
-                            archive_block_reason: None,
-                            can_delete: true,
-                            delete_block_reason: None,
-                            read_error: None,
-                            read_warning: None,
-                        };
-                        attach_storage_size(paths, &mut summary);
+                            (!modified.trim().is_empty()).then_some(modified),
+                            steps.max(0) as usize,
+                            (!preview.trim().is_empty()).then_some(preview),
+                            false,
+                            "sqlite-offline",
+                        );
                         by_id.insert(id, summary);
                     }
                 }
@@ -1006,12 +1043,14 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
         }
     }
 
-    // Fallback scan of brain/<uuid> when conversation_summaries.db is absent or incomplete
     if by_id.is_empty() && paths.brain_dir().is_dir() {
         if let Ok(entries) = fs::read_dir(paths.brain_dir()) {
             for entry in entries.flatten() {
                 let id = entry.file_name().to_string_lossy().into_owned();
-                if uuid::Uuid::parse_str(&id).is_err() || by_id.contains_key(&id) {
+                if filter_id.is_some_and(|target| target != id)
+                    || uuid::Uuid::parse_str(&id).is_err()
+                    || by_id.contains_key(&id)
+                {
                     continue;
                 }
                 let overlay = read_annotation_overlay(paths, &id);
@@ -1021,29 +1060,18 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339());
-                let mut summary = ProviderSessionSummary {
-                    storage_size: None,
-                    id: id.clone(),
-                    session_key: id.clone(),
-                    title: overlay.title.unwrap_or_else(|| id.clone()),
-                    cwd: String::new(),
-                    path: paths.canonical_path(&id),
+                let summary = make_summary(
+                    paths,
+                    id.clone(),
+                    overlay.title.unwrap_or_else(|| id.clone()),
+                    String::new(),
                     archived,
                     updated_at,
-                    message_count: 0,
-                    last_message: None,
-                    status: if archived { "archived" } else { "idle" }.into(),
-                    format_version: "brain-offline".into(),
-                    can_rename: true,
-                    rename_block_reason: None,
-                    can_archive: true,
-                    archive_block_reason: None,
-                    can_delete: true,
-                    delete_block_reason: None,
-                    read_error: None,
-                    read_warning: None,
-                };
-                attach_storage_size(paths, &mut summary);
+                    0,
+                    None,
+                    false,
+                    "brain-offline",
+                );
                 by_id.insert(id, summary);
             }
         }
@@ -1067,6 +1095,13 @@ impl rusqlite::types::FromSql for ValueOrString {
 }
 
 fn list_all_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessionSummary>> {
+    list_summaries_filtered(paths, None)
+}
+
+fn list_summaries_filtered(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+) -> Result<Vec<ProviderSessionSummary>> {
     let mut items = if let Some((_, payload)) = connect_endpoint(paths) {
         let map = payload["trajectorySummaries"].as_object();
         let active_roots = map
@@ -1074,12 +1109,13 @@ fn list_all_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessionSum
             .unwrap_or_default();
         map.into_iter()
             .flatten()
+            .filter(|(id, _)| filter_id.is_none_or(|target| target == id.as_str()))
             .filter_map(|(id, item)| {
                 summary_from_live_json(paths, id, item, active_roots.contains(id))
             })
             .collect::<Vec<_>>()
     } else {
-        list_offline_summaries(paths)?
+        list_offline_summaries(paths, filter_id)?
     };
     items.sort_by(|a, b| {
         b.updated_at
@@ -1110,9 +1146,9 @@ pub fn list_sessions(
 
 pub fn session_summary(paths: &AntigravityPaths, key: &str) -> Result<ProviderSessionSummary> {
     valid_cascade_id(key)?;
-    list_all_summaries(paths)?
+    list_summaries_filtered(paths, Some(key))?
         .into_iter()
-        .find(|item| item.id == key)
+        .next()
         .with_context(|| format!("未找到 Antigravity 会话：{key}"))
 }
 
@@ -1219,6 +1255,57 @@ fn format_artifact_comment(entry: &Value) -> Option<String> {
     }
 }
 
+fn make_history_event(
+    id: String,
+    timestamp: Option<String>,
+    kind: &str,
+    role: &str,
+    text: Option<String>,
+    turn_id: Option<String>,
+    status: &str,
+) -> ProviderHistoryEvent {
+    ProviderHistoryEvent {
+        id,
+        timestamp,
+        kind: kind.into(),
+        role: Some(role.into()),
+        text,
+        call_id: None,
+        turn_id,
+        status: Some(status.into()),
+        detail: None,
+        result: None,
+        user_message: None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_tool_event(
+    id: String,
+    timestamp: Option<String>,
+    kind: &str,
+    name: &str,
+    call_id: Option<String>,
+    turn_id: Option<String>,
+    status: &str,
+    detail: Option<String>,
+    result: Option<String>,
+) -> ProviderHistoryEvent {
+    let mut ev = make_history_event(
+        id,
+        timestamp,
+        kind,
+        name,
+        Some(name.to_owned()),
+        turn_id,
+        status,
+    );
+    ev.call_id = call_id;
+    ev.detail = detail;
+    ev.result = result;
+    ev
+}
+
 fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEvent> {
     let mut has_later_planner = vec![false; steps.len()];
     let mut seen_planner_in_turn = false;
@@ -1231,9 +1318,7 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
             continue;
         }
         match step["type"].as_str().unwrap_or("") {
-            "CORTEX_STEP_TYPE_USER_INPUT" => {
-                seen_planner_in_turn = false;
-            }
+            "CORTEX_STEP_TYPE_USER_INPUT" => seen_planner_in_turn = false,
             "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
                 has_later_planner[idx] = seen_planner_in_turn;
                 seen_planner_in_turn = true;
@@ -1320,38 +1405,31 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                     continue;
                 }
                 turn_seq = turn_seq.saturating_add(1);
-                let turn_id = Some(format!("turn-{turn_seq}"));
-                events.push(ProviderHistoryEvent {
-                    id: event_id,
+                let mut ev = make_history_event(
+                    event_id,
                     timestamp,
-                    kind: "user_message".into(),
-                    role: Some("user".into()),
-                    text: Some(user_msg.text.clone()),
-                    call_id: None,
-                    turn_id,
-                    status: Some(status.into()),
-                    detail: None,
-                    result: None,
-                    user_message: Some(user_msg),
-                });
+                    "user_message",
+                    "user",
+                    Some(user_msg.text.clone()),
+                    Some(format!("turn-{turn_seq}")),
+                    status,
+                );
+                ev.user_message = Some(user_msg);
+                events.push(ev);
             }
             "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 let pr = &step["plannerResponse"];
                 if let Some(thinking) = pr["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("step-{index}-thinking"),
-                        timestamp: timestamp.clone(),
-                        kind: "thinking".into(),
-                        role: Some("assistant".into()),
-                        text: Some(thinking.to_owned()),
-                        call_id: None,
-                        turn_id: turn_id.clone(),
-                        status: Some(status.into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                    events.push(make_history_event(
+                        format!("step-{index}-thinking"),
+                        timestamp.clone(),
+                        "thinking",
+                        "assistant",
+                        Some(thinking.to_owned()),
+                        turn_id.clone(),
+                        status,
+                    ));
                 }
                 let reply = pr["modifiedResponse"]
                     .as_str()
@@ -1360,19 +1438,15 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                 let is_intermediate = has_later_planner[index];
                 if is_intermediate {
                     if let Some(text) = reply {
-                        events.push(ProviderHistoryEvent {
-                            id: format!("step-{index}-commentary"),
-                            timestamp: timestamp.clone(),
-                            kind: "thinking".into(),
-                            role: Some("assistant".into()),
-                            text: Some(text.to_owned()),
-                            call_id: None,
-                            turn_id: turn_id.clone(),
-                            status: Some(status.into()),
-                            detail: None,
-                            result: None,
-                            user_message: None,
-                        });
+                        events.push(make_history_event(
+                            format!("step-{index}-commentary"),
+                            timestamp.clone(),
+                            "thinking",
+                            "assistant",
+                            Some(text.to_owned()),
+                            turn_id.clone(),
+                            status,
+                        ));
                     }
                 }
                 if let Some(calls) = pr["toolCalls"].as_array() {
@@ -1390,36 +1464,30 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                             .filter(|s| !s.is_empty())
                             .map(str::to_owned)
                             .unwrap_or_else(|| format!("step-{index}-call-{ci}"));
-                        events.push(ProviderHistoryEvent {
-                            id: format!("step-{index}-toolcall-{ci}"),
-                            timestamp: timestamp.clone(),
-                            kind: "tool_call".into(),
-                            role: Some(name.to_owned()),
-                            text: Some(name.to_owned()),
-                            call_id: Some(call_id),
-                            turn_id: turn_id.clone(),
-                            status: Some(status.into()),
-                            detail: (!args.trim().is_empty()).then_some(args),
-                            result: None,
-                            user_message: None,
-                        });
+                        events.push(make_tool_event(
+                            format!("step-{index}-toolcall-{ci}"),
+                            timestamp.clone(),
+                            "tool_call",
+                            name,
+                            Some(call_id),
+                            turn_id.clone(),
+                            status,
+                            (!args.trim().is_empty()).then_some(args),
+                            None,
+                        ));
                     }
                 }
                 if !is_intermediate {
                     if let Some(text) = reply {
-                        events.push(ProviderHistoryEvent {
-                            id: format!("step-{index}-assistant"),
+                        events.push(make_history_event(
+                            format!("step-{index}-assistant"),
                             timestamp,
-                            kind: "assistant_message".into(),
-                            role: Some("assistant".into()),
-                            text: Some(text.to_owned()),
-                            call_id: None,
+                            "assistant_message",
+                            "assistant",
+                            Some(text.to_owned()),
                             turn_id,
-                            status: Some(status.into()),
-                            detail: None,
-                            result: None,
-                            user_message: None,
-                        });
+                            status,
+                        ));
                     }
                 }
             }
@@ -1453,19 +1521,17 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                 } else {
                     "tool_call"
                 };
-                events.push(ProviderHistoryEvent {
-                    id: format!("step-{index}-tool"),
+                events.push(make_tool_event(
+                    format!("step-{index}-tool"),
                     timestamp,
-                    kind: kind.into(),
-                    role: Some(tool_name.clone()),
-                    text: Some(tool_name),
+                    kind,
+                    &tool_name,
                     call_id,
                     turn_id,
-                    status: Some(status.into()),
+                    status,
                     detail,
                     result,
-                    user_message: None,
-                });
+                ));
             }
         }
     }
@@ -1626,53 +1692,43 @@ fn read_offline_transcript_events(
                 let event_id = format!("transcript-{step_index}-user");
                 let user_msg =
                     crate::user_message::parse_user_message(&event_id, &Value::Array(parts));
-                events.push(ProviderHistoryEvent {
-                    id: event_id,
+                let mut ev = make_history_event(
+                    event_id,
                     timestamp,
-                    kind: "user_message".into(),
-                    role: Some("user".into()),
-                    text: Some(user_msg.text.clone()),
-                    call_id: None,
+                    "user_message",
+                    "user",
+                    Some(user_msg.text.clone()),
                     turn_id,
-                    status: Some(status.into()),
-                    detail: None,
-                    result: None,
-                    user_message: Some(user_msg),
-                });
+                    status,
+                );
+                ev.user_message = Some(user_msg);
+                events.push(ev);
             } else if step_type == "PLANNER_RESPONSE" {
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 if let Some(thinking) = row["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("transcript-{step_index}-thinking"),
-                        timestamp: timestamp.clone(),
-                        kind: "thinking".into(),
-                        role: Some("assistant".into()),
-                        text: Some(thinking.to_owned()),
-                        call_id: None,
-                        turn_id: turn_id.clone(),
-                        status: Some(status.into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                    events.push(make_history_event(
+                        format!("transcript-{step_index}-thinking"),
+                        timestamp.clone(),
+                        "thinking",
+                        "assistant",
+                        Some(thinking.to_owned()),
+                        turn_id.clone(),
+                        status,
+                    ));
                 }
                 let is_intermediate = has_later_planner[idx];
                 if is_intermediate {
                     if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
                     {
-                        events.push(ProviderHistoryEvent {
-                            id: format!("transcript-{step_index}-commentary"),
-                            timestamp: timestamp.clone(),
-                            kind: "thinking".into(),
-                            role: Some("assistant".into()),
-                            text: Some(content.to_owned()),
-                            call_id: None,
-                            turn_id: turn_id.clone(),
-                            status: Some(status.into()),
-                            detail: None,
-                            result: None,
-                            user_message: None,
-                        });
+                        events.push(make_history_event(
+                            format!("transcript-{step_index}-commentary"),
+                            timestamp.clone(),
+                            "thinking",
+                            "assistant",
+                            Some(content.to_owned()),
+                            turn_id.clone(),
+                            status,
+                        ));
                     }
                 }
                 if let Some(calls) = row["tool_calls"].as_array() {
@@ -1704,37 +1760,31 @@ fn read_offline_transcript_events(
                         if result.is_none() {
                             pending_calls.push_back((call_id.clone(), name.to_owned()));
                         }
-                        events.push(ProviderHistoryEvent {
-                            id: format!("transcript-{step_index}-tool-{ci}"),
-                            timestamp: timestamp.clone(),
-                            kind: "tool_call".into(),
-                            role: Some(name.to_owned()),
-                            text: Some(name.to_owned()),
-                            call_id: Some(call_id),
-                            turn_id: turn_id.clone(),
-                            status: Some(status.into()),
-                            detail: args,
+                        events.push(make_tool_event(
+                            format!("transcript-{step_index}-tool-{ci}"),
+                            timestamp.clone(),
+                            "tool_call",
+                            name,
+                            Some(call_id),
+                            turn_id.clone(),
+                            status,
+                            args,
                             result,
-                            user_message: None,
-                        });
+                        ));
                     }
                 }
                 if !is_intermediate {
                     if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
                     {
-                        events.push(ProviderHistoryEvent {
-                            id: format!("transcript-{step_index}-assistant"),
+                        events.push(make_history_event(
+                            format!("transcript-{step_index}-assistant"),
                             timestamp,
-                            kind: "assistant_message".into(),
-                            role: Some("assistant".into()),
-                            text: Some(content.to_owned()),
-                            call_id: None,
+                            "assistant_message",
+                            "assistant",
+                            Some(content.to_owned()),
                             turn_id,
-                            status: Some(status.into()),
-                            detail: None,
-                            result: None,
-                            user_message: None,
-                        });
+                            status,
+                        ));
                     }
                 }
             } else if matches!(
@@ -1749,34 +1799,30 @@ fn read_offline_transcript_events(
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_owned);
                 if let Some((call_id, tool_name)) = pending_calls.pop_front() {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("transcript-{step_index}-toolresult"),
+                    events.push(make_tool_event(
+                        format!("transcript-{step_index}-toolresult"),
                         timestamp,
-                        kind: "tool_result".into(),
-                        role: Some(tool_name.clone()),
-                        text: Some(tool_name),
-                        call_id: Some(call_id),
+                        "tool_result",
+                        &tool_name,
+                        Some(call_id),
                         turn_id,
-                        status: Some(status.into()),
-                        detail: None,
-                        result: content,
-                        user_message: None,
-                    });
+                        status,
+                        None,
+                        content,
+                    ));
                 } else if let Some(content) = content {
                     let name = step_type.to_ascii_lowercase();
-                    events.push(ProviderHistoryEvent {
-                        id: format!("transcript-{step_index}-step"),
+                    events.push(make_tool_event(
+                        format!("transcript-{step_index}-step"),
                         timestamp,
-                        kind: "tool_call".into(),
-                        role: Some(name.clone()),
-                        text: Some(name),
-                        call_id: None,
+                        "tool_call",
+                        &name,
+                        None,
                         turn_id,
-                        status: Some(status.into()),
-                        detail: None,
-                        result: Some(content),
-                        user_message: None,
-                    });
+                        status,
+                        None,
+                        Some(content),
+                    ));
                 }
             }
         }
@@ -1803,10 +1849,9 @@ fn read_offline_transcript_events(
                     ))
                 }) {
                     let mut events = Vec::new();
-                    for row in rows.flatten() {
-                        let (idx, step_type, blob) = row;
-                        let strings = extract_protobuf_utf8_strings(&blob);
-                        let joined = strings.join("\n").trim().to_owned();
+                    for (idx, step_type, blob) in rows.flatten() {
+                        let joined = extract_protobuf_utf8_strings(&blob).join("\n");
+                        let joined = joined.trim().to_owned();
                         if joined.is_empty() {
                             continue;
                         }
@@ -1816,33 +1861,27 @@ fn read_offline_transcript_events(
                                 &event_id,
                                 &Value::String(joined.clone()),
                             );
-                            events.push(ProviderHistoryEvent {
-                                id: event_id,
-                                timestamp: None,
-                                kind: "user_message".into(),
-                                role: Some("user".into()),
-                                text: Some(user_msg.text.clone()),
-                                call_id: None,
-                                turn_id: None,
-                                status: Some("completed".into()),
-                                detail: None,
-                                result: None,
-                                user_message: Some(user_msg),
-                            });
+                            let mut ev = make_history_event(
+                                event_id,
+                                None,
+                                "user_message",
+                                "user",
+                                Some(user_msg.text.clone()),
+                                None,
+                                "completed",
+                            );
+                            ev.user_message = Some(user_msg);
+                            events.push(ev);
                         } else if step_type == 15 {
-                            events.push(ProviderHistoryEvent {
-                                id: format!("db-{idx}-assistant"),
-                                timestamp: None,
-                                kind: "assistant_message".into(),
-                                role: Some("assistant".into()),
-                                text: Some(joined),
-                                call_id: None,
-                                turn_id: None,
-                                status: Some("completed".into()),
-                                detail: None,
-                                result: None,
-                                user_message: None,
-                            });
+                            events.push(make_history_event(
+                                format!("db-{idx}-assistant"),
+                                None,
+                                "assistant_message",
+                                "assistant",
+                                Some(joined),
+                                None,
+                                "completed",
+                            ));
                         }
                     }
                     return Ok(events);
@@ -2121,7 +2160,7 @@ fn is_presence_locked_shared(paths: &AntigravityPaths, id: &str) -> bool {
     }
 }
 
-fn live_item_is_running(item: &Value) -> bool {
+pub fn live_item_is_running(item: &Value) -> bool {
     let waiting = item["waitingSteps"]
         .as_array()
         .is_some_and(|arr| !arr.is_empty());
@@ -2136,20 +2175,6 @@ fn live_item_is_running(item: &Value) -> bool {
         )
         || item["notFullyIdle"].as_bool() == Some(true)
         || item["hasRunningSubagents"].as_bool() == Some(true)
-}
-
-fn live_all_trajectories(rpc: &LiveRpc) -> Result<Value> {
-    let value = connect_rpc_post(
-        rpc.port,
-        &rpc.token,
-        "GetAllCascadeTrajectories",
-        &json!({ "excludeSubtrajectories": false }),
-    )?;
-    ensure!(
-        value["trajectorySummaries"].is_object(),
-        "Antigravity 返回了无效的轨迹摘要列表"
-    );
-    Ok(value)
 }
 
 fn is_cascade_running(all_live: Option<&Value>, id: &str) -> bool {
@@ -2264,14 +2289,12 @@ pub fn preview_batch_item(
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
     let summary = session_summary(paths, key)?;
-    let live_rpc = connect_endpoint(paths).map(|(rpc, _)| rpc);
-    let all_live = if operation == SessionOperation::Delete {
-        match &live_rpc {
-            Some(rpc) => Some(live_all_trajectories(rpc)?),
-            None => None,
-        }
-    } else {
-        None
+    let (live_rpc, all_live) = match connect_endpoint(paths) {
+        Some((rpc, live)) => (
+            Some(rpc),
+            (operation == SessionOperation::Delete).then_some(live),
+        ),
+        None => (None, None),
     };
     if operation == SessionOperation::Delete
         && (summary.status == "running" || is_cascade_running(all_live.as_ref(), &summary.id))
@@ -2374,10 +2397,9 @@ pub fn execute_batch_item(
         }
         SessionOperation::Delete => {
             let summary = session_summary(paths, key)?;
-            let live_rpc = connect_endpoint(paths).map(|(rpc, _)| rpc);
-            let all_live = match &live_rpc {
-                Some(rpc) => Some(live_all_trajectories(rpc)?),
-                None => None,
+            let (live_rpc, all_live) = match connect_endpoint(paths) {
+                Some((rpc, live)) => (Some(rpc), Some(live)),
+                None => (None, None),
             };
             let verified_descendants =
                 find_descendant_ids_with_live(paths, all_live.as_ref(), key)?;

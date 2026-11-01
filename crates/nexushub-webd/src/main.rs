@@ -3538,7 +3538,7 @@ last_error = "old nexushub request hook"
 
         let request = ProbeBarkRequest {
             presentation: None,
-            title: "NexusHub 推送测试".to_string(),
+            title: "AgentHub 推送测试".to_string(),
             body: "来自本机的测试通知。".to_string(),
             dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
         };
@@ -3564,7 +3564,7 @@ last_error = "old nexushub request hook"
         let body = raw.split("\r\n\r\n").nth(1).unwrap();
         let payload: Value = serde_json::from_str(body).unwrap();
         assert_eq!(payload["device_key"], "device key/with spaces");
-        assert_eq!(payload["title"], "NexusHub 推送测试");
+        assert_eq!(payload["title"], "AgentHub 推送测试");
         assert_eq!(payload["body"], "来自本机的测试通知。");
         assert_eq!(payload.as_object().unwrap().len(), 4);
         assert!(payload["id"].is_string());
@@ -3690,7 +3690,7 @@ last_error = "old nexushub request hook"
         assert!(summary.ends_with('…'));
         assert_eq!(summary.chars().count(), 300);
         assert!(!summary.contains("末尾唯一完整反馈"));
-        assert_eq!(payload["group"], "NexusHub｜Codex");
+        assert_eq!(payload["group"], "AgentHub｜Codex");
         assert_eq!(payload["level"], "active");
         let stored = db.list_probe_events(10).unwrap();
         let stored_json = serde_json::to_string(&stored[0]).unwrap();
@@ -4205,7 +4205,7 @@ last_error = "old nexushub request hook"
             b"device-key-secret",
             &ProbeBarkRequest {
                 presentation: None,
-                title: "NexusHub 推送测试".to_string(),
+                title: "AgentHub 推送测试".to_string(),
                 body: "ok".to_string(),
                 dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
             },
@@ -4255,7 +4255,7 @@ last_error = "old nexushub request hook"
         let body = raw.split("\r\n\r\n").nth(1).unwrap();
         let payload: Value = serde_json::from_str(body).unwrap();
         assert_eq!(payload["device_key"], "device-key");
-        assert_eq!(payload["title"], "NexusHub 推送测试");
+        assert_eq!(payload["title"], "AgentHub 推送测试");
         assert_eq!(payload["body"], nexushub_core::probe::bark_test_body());
     }
 
