@@ -533,7 +533,7 @@ export function probeLiveSessionsByBucket(
 export function probeJobActionLabel(action: ProbeJobAction | undefined): string {
   switch (action) {
     case "bark-test":
-      return "NexusHub 推送测试";
+      return "AgentHub 推送测试";
     case "hooks-install":
       return "Hook 安装";
     case "hooks-remove":

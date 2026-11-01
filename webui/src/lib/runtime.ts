@@ -50,14 +50,14 @@ export async function invokeNative<T = unknown>(command: string, args?: RpcArgs)
   } catch (reason) {
     throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "桌面操作失败");
   }
-  throw new RuntimeUnavailableError("请使用 NexusHub App", command);
+  throw new RuntimeUnavailableError("请使用 AgentHub App", command);
 }
 
 /** Channel frames are full views. Drop late/out-of-order fetches so an old
  * native state cannot restore a completed question or approval. */
 export function createNativeChannel<T>(receive: (view: T) => void) {
   const runtime = (globalThis as RuntimeGlobal).__TAURI_INTERNALS__;
-  if (!runtime?.transformCallback || !runtime.unregisterCallback) throw new Error("当前入口不支持桌面协作，请使用 NexusHub App");
+  if (!runtime?.transformCallback || !runtime.unregisterCallback) throw new Error("当前入口不支持桌面协作，请使用 AgentHub App");
   const unregister = runtime.unregisterCallback;
   let closed = false;
   let last = -1;

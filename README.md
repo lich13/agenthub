@@ -79,7 +79,7 @@ sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/
 
 ## 发布资产
 
-当前源码版本为 **2.0.0**；[查看 GitHub Releases](https://github.com/lich13/nexushub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.0.1**；[查看 GitHub Releases](https://github.com/lich13/nexushub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `nexushub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；

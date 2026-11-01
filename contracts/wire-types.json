@@ -11291,7 +11291,7 @@
         "fn is_updated_within_fresh_window (updated_at : & Option < String > , now_ms : i64) -> bool",
         "fn invalidate_live_provider_sessions_cache ()",
         "fn evict_idle_live_provider_sessions_cache (max_idle : std :: time :: Duration)",
-        "fn push_live_session (sessions : & mut Vec < probe_core :: ProbeLiveSession > , provider : & str , id : String , session_key : String , title : String , bucket : & str , updated_at : Option < String > , cwd : Option < String > ,)",
+        "fn live_session (provider : & str , id : String , session_key : String , title : String , bucket : & str , updated_at : Option < String > , cwd : Option < String > ,) -> probe_core :: ProbeLiveSession",
         "fn stream_live_buckets (streams : & [crate :: native_probe :: NativeStreamSnapshot] , now_ms : i64 ,) -> std :: collections :: HashMap < String , & 'static str >",
         "fn aggregate_active_sessions (config : & Config , limit : usize , running_threads : & [ThreadSummary] , reply_needed_threads : & [ThreadSummary] , recoverable_threads : & [ThreadSummary] ,) -> Vec < probe_core :: ProbeLiveSession >",
         "fn probe_codex_buckets (config : & Config , limit : usize ,) -> (Vec < ThreadSummary > , Vec < ThreadSummary > , Vec < ThreadSummary >)",

@@ -121,7 +121,7 @@ class WorkspaceErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("NexusHub workspace render failed", error, info.componentStack);
+    console.error("AgentHub workspace render failed", error, info.componentStack);
   }
 
   componentDidUpdate(previous: { resetKey: string }) {

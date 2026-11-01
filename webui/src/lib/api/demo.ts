@@ -190,7 +190,7 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-api"): ProbeS
       enabled: false,
       device_key_configured: false,
       server_url: "https://api.day.app",
-      group: "NexusHub"
+      group: "AgentHub"
     },
   };
 }
@@ -290,7 +290,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           kind: "hook-stop",
           thread_id: "019e95a0-demo",
           title: "Codex Stop Hook",
-          message: "Stop Hook event recorded by NexusHub Probe",
+          message: "Stop Hook event recorded by AgentHub Probe",
           dedupe_key: "hook-stop:019e95a0-demo:turn-demo",
           source: "nexushub-webd probe hook-stop",
           payload: {
@@ -299,7 +299,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             thread_id: "019e95a0-demo",
             turn_id: "turn-demo",
             reason_label: "Stop Hook",
-            body_summary: "Stop Hook event recorded by NexusHub Probe",
+            body_summary: "Stop Hook event recorded by AgentHub Probe",
             body_sha256: "d9a8",
             body_length: 212,
             body_source: "default",
@@ -586,8 +586,8 @@ export function demoUnifiedCleanupResult(request?: UnifiedCleanupExecuteRequest)
 
 export function demoJobs(): JobRecord[] {
   return [
-    { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "NexusHub 推送测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "NexusHub 推送测试\n来自本机的测试通知。\nBark 已受理" },
-    { id: "job-demo", kind: "nexushub_update_check", status: "succeeded", title: "NexusHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
+    { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "AgentHub 推送测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "AgentHub 推送测试\n来自本机的测试通知。\nBark 已受理" },
+    { id: "job-demo", kind: "nexushub_update_check", status: "succeeded", title: "AgentHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
     { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
   ];
 }

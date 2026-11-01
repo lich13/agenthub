@@ -3,7 +3,7 @@ import indexHtml from "../index.html?raw";
 import bootGuardSource from "../public/nexushub-boot.js?raw";
 import mainSource from "./main.tsx?raw";
 
-describe("NexusHub WebUI bootstrap", () => {
+describe("AgentHub WebUI bootstrap", () => {
   test("installs a visible boot error guard before the module bundle runs", () => {
     const guardIndex = indexHtml.indexOf("window.__NEXUSHUB_BOOT__");
     const guardScriptIndex = indexHtml.indexOf("nexushub-boot.js");
@@ -12,7 +12,7 @@ describe("NexusHub WebUI bootstrap", () => {
     expect(guardScriptIndex).toBeGreaterThanOrEqual(0);
     expect(moduleIndex).toBeGreaterThan(guardScriptIndex);
     expect(bootGuardSource).toContain("window.__NEXUSHUB_BOOT__");
-    expect(bootGuardSource).toContain("NexusHub 界面载入失败");
+    expect(bootGuardSource).toContain("AgentHub 界面载入失败");
     expect(bootGuardSource).toContain("window.addEventListener(\"error\"");
     expect(bootGuardSource).toContain("window.addEventListener(\"unhandledrejection\"");
     expect(guardIndex).toBe(-1);

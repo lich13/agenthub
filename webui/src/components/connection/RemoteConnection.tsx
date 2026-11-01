@@ -10,9 +10,7 @@ import {
 } from "../../lib/query/connection";
 
 function resolvedMachines(connection: ReturnType<typeof useConnection>): RemoteMachineSummary[] {
-  if (connection.machines && connection.machines.length > 0) {
-    return connection.machines;
-  }
+  if (connection.machines && connection.machines.length > 0) return connection.machines;
   if (connection.configured && connection.baseUrl) {
     return [
       {
@@ -25,6 +23,18 @@ function resolvedMachines(connection: ReturnType<typeof useConnection>): RemoteM
   return [];
 }
 
+function resolveActiveMachine(
+  connection: ReturnType<typeof useConnection>,
+  machines: RemoteMachineSummary[],
+): RemoteMachineSummary | null {
+  return (
+    machines.find(m => m.id === connection.activeMachineId) ??
+    machines.find(m => m.baseUrl === connection.baseUrl) ??
+    machines[0] ??
+    null
+  );
+}
+
 export function MachineButton({
   collapsed = false,
   onConfigure,
@@ -35,14 +45,7 @@ export function MachineButton({
   const connection = useConnection();
   const [error, setError] = useState("");
   const machines = useMemo(() => resolvedMachines(connection), [connection]);
-  const activeMachine = useMemo(
-    () =>
-      machines.find(m => m.id === connection.activeMachineId) ??
-      machines.find(m => m.baseUrl === connection.baseUrl) ??
-      machines[0] ??
-      null,
-    [connection.activeMachineId, connection.baseUrl, machines],
-  );
+  const activeMachine = useMemo(() => resolveActiveMachine(connection, machines), [connection, machines]);
   const multiMode = machines.length >= 2;
   const currentLabel =
     connection.target === "local"
@@ -54,6 +57,15 @@ export function MachineButton({
       : multiMode && activeMachine
         ? `machine:${activeMachine.id}`
         : "remote";
+
+  const runSelect = async (target: "local" | "remote", machineId?: string) => {
+    setError("");
+    try {
+      await remoteSelect(target, machineId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
 
   return (
     <div className="machine-control">
@@ -71,42 +83,14 @@ export function MachineButton({
           aria-label="当前机器"
           value={selectValue}
           disabled={Boolean(connection.writes || connection.changing)}
-          onChange={async event => {
+          onChange={event => {
             const value = event.target.value;
-            if (value === "__configure__") {
+            if (value === "__configure__" || (value === "remote" && !connection.configured)) {
               onConfigure();
-              return;
-            }
-            if (value === "local") {
-              setError("");
-              try {
-                await remoteSelect("local");
-              } catch (err) {
-                setError((err as Error).message);
-              }
-              return;
-            }
-            if (value === "remote") {
-              if (!connection.configured) {
-                onConfigure();
-                return;
-              }
-              setError("");
-              try {
-                await remoteSelect("remote");
-              } catch (err) {
-                setError((err as Error).message);
-              }
-              return;
-            }
-            if (value.startsWith("machine:")) {
-              const targetId = value.slice("machine:".length);
-              setError("");
-              try {
-                await remoteSelect("remote", targetId);
-              } catch (err) {
-                setError((err as Error).message);
-              }
+            } else if (value === "local" || value === "remote") {
+              void runSelect(value);
+            } else if (value.startsWith("machine:")) {
+              void runSelect("remote", value.slice("machine:".length));
             }
           }}
         >
@@ -137,18 +121,9 @@ export function MachineButton({
 export function RemoteConnectionSettings() {
   const connection = useConnection();
   const machines = useMemo(() => resolvedMachines(connection), [connection]);
-  const activeMachine = useMemo(
-    () =>
-      machines.find(m => m.id === connection.activeMachineId) ??
-      machines.find(m => m.baseUrl === connection.baseUrl) ??
-      machines[0] ??
-      null,
-    [connection.activeMachineId, connection.baseUrl, machines],
-  );
+  const activeMachine = useMemo(() => resolveActiveMachine(connection, machines), [connection, machines]);
 
-  const [mode, setMode] = useState<"edit" | "create">(() =>
-    machines.length > 0 ? "edit" : "create",
-  );
+  const [mode, setMode] = useState<"edit" | "create">(() => (machines.length > 0 ? "edit" : "create"));
   const [editingId, setEditingId] = useState<string | null>(() => activeMachine?.id ?? null);
   const [name, setName] = useState(() => activeMachine?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(() => activeMachine?.baseUrl ?? connection.baseUrl ?? "");
@@ -173,24 +148,23 @@ export function RemoteConnectionSettings() {
     }
   }, [activeMachine, editingId, machines, mode]);
 
-  const startCreate = () => {
-    setMode("create");
-    setEditingId(null);
-    setName("");
-    setBaseUrl("");
+  const applyDraft = (nextMode: "create" | "edit", machine?: RemoteMachineSummary | null) => {
+    setMode(nextMode);
+    setEditingId(machine?.id ?? null);
+    setName(machine?.name ?? "");
+    setBaseUrl(machine?.baseUrl ?? "");
     setApiKey("");
     setError("");
     setSaved(false);
   };
 
-  const startEdit = (machine: RemoteMachineSummary) => {
-    setMode("edit");
-    setEditingId(machine.id);
-    setName(machine.name);
-    setBaseUrl(machine.baseUrl);
-    setApiKey("");
+  const runAction = async (work: () => Promise<void>) => {
     setError("");
-    setSaved(false);
+    try {
+      await work();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   };
 
   const isEditingExisting = mode === "edit" && Boolean(editingId) && machines.some(m => m.id === editingId);
@@ -212,7 +186,7 @@ export function RemoteConnectionSettings() {
               type="button"
               className="secondary-button"
               disabled={busy}
-              onClick={startCreate}
+              onClick={() => applyDraft("create", null)}
             >
               <Plus size={16} />新增远程机器
             </button>
@@ -240,44 +214,35 @@ export function RemoteConnectionSettings() {
                     <code>{machine.baseUrl}</code>
                   </div>
                   <div className="button-row remote-machine-actions">
-                    {isConnected ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={busy}
-                        onClick={async () => {
-                          setError("");
-                          try {
-                            await remoteSelect("local");
-                          } catch (err) {
-                            setError((err as Error).message);
-                          }
-                        }}
-                      >
-                        <Power size={15} />切回本机
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={busy}
-                        onClick={async () => {
-                          setError("");
-                          try {
-                            await remoteSelect("remote", machines.length >= 2 ? machine.id : undefined);
-                          } catch (err) {
-                            setError((err as Error).message);
-                          }
-                        }}
-                      >
-                        <Check size={15} />连接此机器
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="secondary-button"
                       disabled={busy}
-                      onClick={() => startEdit(machine)}
+                      onClick={() =>
+                        void runAction(() =>
+                          isConnected
+                            ? remoteSelect("local").then(() => undefined)
+                            : remoteSelect("remote", machines.length >= 2 ? machine.id : undefined).then(
+                                () => undefined,
+                              ),
+                        )
+                      }
+                    >
+                      {isConnected ? (
+                        <>
+                          <Power size={15} />切回本机
+                        </>
+                      ) : (
+                        <>
+                          <Check size={15} />连接此机器
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={() => applyDraft("edit", machine)}
                     >
                       <Pencil size={15} />编辑
                     </button>
@@ -285,24 +250,14 @@ export function RemoteConnectionSettings() {
                       type="button"
                       className="danger-button soft"
                       disabled={busy}
-                      onClick={async () => {
-                        setError("");
-                        setSaved(false);
-                        try {
-                          const view = await remoteRemove(
-                            machines.length >= 2 ? machine.id : undefined,
-                          );
+                      onClick={() =>
+                        void runAction(async () => {
+                          setSaved(false);
+                          const view = await remoteRemove(machines.length >= 2 ? machine.id : undefined);
                           setApiKey("");
-                          if (!view.configured) {
-                            setMode("create");
-                            setEditingId(null);
-                            setName("");
-                            setBaseUrl("");
-                          }
-                        } catch (err) {
-                          setError((err as Error).message);
-                        }
-                      }}
+                          if (!view.configured) applyDraft("create", null);
+                        })
+                      }
                     >
                       <Trash2 size={15} />移除连接
                     </button>
@@ -316,11 +271,10 @@ export function RemoteConnectionSettings() {
 
       <form
         className="panel remote-connection-form"
-        onSubmit={async event => {
+        onSubmit={event => {
           event.preventDefault();
-          setError("");
           setSaved(false);
-          try {
+          void runAction(async () => {
             const payload: RemoteConnectionCredentials = {
               revision: connection.revision,
               baseUrl,
@@ -332,15 +286,9 @@ export function RemoteConnectionSettings() {
             setApiKey("");
             setSaved(true);
             setMode("edit");
-            if (view.activeMachineId) {
-              setEditingId(view.activeMachineId);
-            }
-            if (view.activeMachineName && !name.trim()) {
-              setName(view.activeMachineName);
-            }
-          } catch (err) {
-            setError((err as Error).message);
-          }
+            if (view.activeMachineId) setEditingId(view.activeMachineId);
+            if (view.activeMachineName && !name.trim()) setName(view.activeMachineName);
+          });
         }}
       >
         <div className="remote-form-heading">
@@ -348,7 +296,7 @@ export function RemoteConnectionSettings() {
           <span>
             {isEditingExisting
               ? "可随时修改自定义名称或更新地址；API Key 留空将沿用钥匙串中已保存的凭据"
-              : "连接前将自动校验 HTTPS 证书与 NexusHub API 协议兼容性"}
+              : "连接前将自动校验 HTTPS 证书与 AgentHub API 协议兼容性"}
           </span>
         </div>
         <label>
@@ -396,9 +344,7 @@ export function RemoteConnectionSettings() {
               type="button"
               className="secondary-button"
               disabled={busy}
-              onClick={() => {
-                if (activeMachine) startEdit(activeMachine);
-              }}
+              onClick={() => activeMachine && applyDraft("edit", activeMachine)}
             >
               取消新增
             </button>

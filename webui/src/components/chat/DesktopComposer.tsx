@@ -195,7 +195,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     </>}
     {(localError || writable && desktop.error) && <p className="form-error" role="alert">{localError || desktop.error}</p>}
     {discard && <ConfirmDialog labelledBy="desktop-discard-title" busy={busy} onCancel={() => setDiscard(null)} returnFocus={discardTrigger}>
-      <h3 id="desktop-discard-title">已在 Codex 中核对发送结果？</h3><p>移除此记录后，NexusHub 不会重新发送它。请先确认 Codex 中是否已有这条消息。</p>
+      <h3 id="desktop-discard-title">已在 Codex 中核对发送结果？</h3><p>移除此记录后，AgentHub 不会重新发送它。请先确认 Codex 中是否已有这条消息。</p>
       <div className="dialog-actions"><button disabled={busy} onClick={() => setDiscard(null)}>返回</button><button disabled={busy} onClick={() => { void desktop.act({ type: "dismissUnknown", messageId: discard }).then(() => setDiscard(null)).catch(() => {}); }}>已核对，移除记录</button></div>
     </ConfirmDialog>}
   </section>;

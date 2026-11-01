@@ -9,7 +9,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await page.goto("/");
       await page.locator(".thread-item").first().click();
       await expect(page.locator(".conversation-title")).toBeVisible();
-      expect(await page.locator(".conversation-shell").evaluate((el) => getComputedStyle(el).getPropertyValue("--text").trim())).not.toBe("");
+      expect(await page.locator(".conversation-shell").evaluate((el) => getComputedStyle(el).getPropertyValue("--text-primary").trim())).not.toBe("");
       await assertContrast(page, ".conversation-title, .chat-meta span, .tool-title");
       await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
       await page.locator(".execution-history > summary").click();

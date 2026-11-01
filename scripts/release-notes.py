@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.1": [
+        "全面统一 AgentHub 品牌文案，将 styles.css 深度重构并真实减半至 47.8 KB（单行最长 136 字符），提取 useProviderWorkspace、StandardProviderEventView 与 SessionDeleteConfirmDialog 精简全部七大工作区",
+        "修复并自愈 Antigravity 顶层 nexushub Stop Hook 与 Grok Hook 宿主配置，消除 Antigravity／DSH／Grok／Claude 跨模块重复代码，并将 Codex 清理预扫描与 Probe 活跃扫描优化为单次流式读取。",
+    ],
     "2.0.0": [
         "重绘无平台数量限制的「Command Nexus（多轨星枢）」图标，将 styles.css 彻底重写压减至 566 行纯净三层令牌，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 重构全部七大工作区",
         "修复 Antigravity 顶层 nexushub Stop Hook 契约（stdout 输出 allow 放行决策）与 Grok 重复 Hook 清理，合并 Antigravity 端点缓存并消除存活进程瞬时负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与空闲回收，并将 Probe 扫描 I/O 减半。",
@@ -240,7 +244,7 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version == "2.0.0":
+    if version in ("2.0.1", "2.0.0"):
         sections = {
             "版本概览": [
                 "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 nexushub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"

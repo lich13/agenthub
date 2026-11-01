@@ -13,7 +13,7 @@
     showError(error) {
       const root = document.getElementById("root");
       if (!root || this.mounted) return;
-      root.innerHTML = "<main class=\"fatal-screen\"><section class=\"panel wide-panel\"><header><strong>NexusHub 界面载入失败</strong></header><div class=\"form-error\"></div></section></main>";
+      root.innerHTML = "<main class=\"fatal-screen\"><section class=\"panel wide-panel\"><header><strong>AgentHub 界面载入失败</strong></header><div class=\"form-error\"></div></section></main>";
       const target = root.querySelector(".form-error");
       if (target) target.textContent = messageFrom(error);
     }

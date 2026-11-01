@@ -55,8 +55,8 @@ export type ThreadMenuAction = {
   run: () => void;
 };
 
-export function ThreadMenuItems({ actions }: { actions: ThreadMenuAction[] }) {
-  return <>{actions.map(action => <button key={action.id} type="button" role="menuitem"
+export function ThreadMenuItems({ actions, itemRole = "menuitem" }: { actions: ThreadMenuAction[]; itemRole?: "menuitem" | "button" }) {
+  return <>{actions.map(action => <button key={action.id} type="button" role={itemRole === "menuitem" ? "menuitem" : undefined}
     disabled={action.disabled} title={action.reason ?? undefined}
     className={action.danger ? "danger-menu-item" : undefined} onClick={action.run}>
     {action.icon}{action.label}

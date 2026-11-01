@@ -33,7 +33,7 @@ const settings: ProbeSettings = {
       enabled: true,
       server_url: "https://api.day.app",
       sound: "bell",
-      group: "NexusHub",
+      group: "AgentHub",
       url: "https://panel.example.com/nexushub/",
       notify_completion: true,
       notify_reply_needed: true,
@@ -51,7 +51,7 @@ const settings: ProbeSettings = {
     device_key_configured: true,
     server_url: "https://api.day.app",
     sound: "bell",
-    group: "NexusHub",
+    group: "AgentHub",
     url: "https://panel.example.com/nexushub/",
     notify_completion: true,
     notify_reply_needed: true,
@@ -392,7 +392,7 @@ describe("Probe UI helpers", () => {
           enabled: true,
           server_url: "https://api.day.app",
           sound: "bell",
-          group: "NexusHub",
+          group: "AgentHub",
           url: "https://panel.example.com/nexushub/",
           notify_completion: true,
           notify_reply_needed: true,
@@ -526,7 +526,7 @@ describe("Probe UI helpers", () => {
         enabled: false,
         device_key_configured: false,
         server_url: "https://api.day.app",
-        group: "NexusHub"
+        group: "AgentHub"
       },
     });
   });

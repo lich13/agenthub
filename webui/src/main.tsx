@@ -42,7 +42,7 @@ class RootErrorBoundary extends Component<
     } catch {
       // ignore storage failures
     }
-    console.error("NexusHub render failed", error, info.componentStack);
+    console.error("AgentHub render failed", error, info.componentStack);
   }
 
   render() {

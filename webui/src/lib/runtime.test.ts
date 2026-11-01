@@ -170,7 +170,7 @@ describe("native machine connection", () => {
     vi.resetModules(); vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", undefined);
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     const { runtimeRpc } = await import("./runtime");
-    await expect(runtimeRpc("threads.list")).rejects.toThrow("请使用 NexusHub App");
+    await expect(runtimeRpc("threads.list")).rejects.toThrow("请使用 AgentHub App");
     expect(fetch).not.toHaveBeenCalled();
   });
 

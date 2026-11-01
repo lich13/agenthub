@@ -1,30 +1,19 @@
 import type { ProbeEvent, ProbeSettings } from "../types";
 
 export const PROBE_NAV_LABEL = "Probe";
-
-export const probeSections = [
-  { id: "settings", label: "通知配置" }
-] as const;
-
-export type ProbeSectionId = typeof probeSections[number]["id"];
+export const probeSections = [{ id: "settings", label: "通知配置" }] as const;
+export type ProbeSectionId = (typeof probeSections)[number]["id"];
+export type ProbeNumericDraftValue = number | "";
 
 export type ProbeSettingsDraft = {
-  codex: {
-    home: string;
-    workspace: string;
-    host_label: string;
-  };
+  codex: { home: string; workspace: string; host_label: string };
   probe: {
     enabled: boolean;
     poll_seconds: ProbeNumericDraftValue;
     recent_limit: ProbeNumericDraftValue;
-    error_monitor: {
-      enabled: boolean;
-    };
+    error_monitor: { enabled: boolean };
   };
-  hooks: {
-    manage_stop_hook: boolean;
-  };
+  hooks: { manage_stop_hook: boolean };
   notifications: {
     enabled: boolean;
     device_key: string;
@@ -55,8 +44,6 @@ export type ProbeSettingsDraft = {
     notify_dsh_failure: boolean;
     notify_dsh_reply_needed: boolean;
     notify_dsh_authorization: boolean;
-
-
   };
   observability: {
     event_retention_days: ProbeNumericDraftValue;
@@ -66,156 +53,146 @@ export type ProbeSettingsDraft = {
   };
 };
 
-export type ProbeNumericDraftValue = number | "";
-
 export const PROBE_MAC_DEFAULTS = {
   observability: {
     event_retention_days: 2,
     hook_event_max_lines: 500,
     hook_cooldown_max_lines: 1000,
-    log_max_bytes: 5 * 1024 * 1024
+    log_max_bytes: 5 * 1024 * 1024,
   },
 } as const;
 
 export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsDraft {
   const codex = settings.codex ?? {};
   const probe = settings.probe ?? {};
-  const notifications = settings.notifications ?? {};
+  const n = settings.notifications ?? {};
+  const obs = probe.observability;
+  const def = PROBE_MAC_DEFAULTS.observability;
   return {
     codex: {
       home: configuredCodexHomeDraftValue(settings),
       workspace: stringOrEmpty(codex.workspace),
-      host_label: stringOrEmpty(codex.host_label)
+      host_label: stringOrEmpty(codex.host_label),
     },
     probe: {
       enabled: Boolean(probe.enabled),
       poll_seconds: toBoundedInteger(probe.poll_seconds, 15) ?? 15,
       recent_limit: toBoundedInteger(probe.recent_limit, 50) ?? 50,
-      error_monitor: {
-        enabled: probe.error_monitor?.enabled !== false
-      }
+      error_monitor: { enabled: probe.error_monitor?.enabled !== false },
     },
-    hooks: {
-      manage_stop_hook: probe.hooks?.manage_stop_hook !== false
-    },
+    hooks: { manage_stop_hook: probe.hooks?.manage_stop_hook !== false },
     notifications: {
-      enabled: Boolean(notifications.enabled),
+      enabled: Boolean(n.enabled),
       device_key: "",
-      device_key_configured: Boolean(notifications.device_key_configured),
-      server_url: notifications.server_url ?? "https://api.day.app",
-      sound: stringOrEmpty(notifications.sound),
-      group: typeof notifications.group === "string" ? notifications.group : "NexusHub",
-      url: stringOrEmpty(notifications.url),
-      notify_completion: notifications.notify_completion !== false,
-      notify_reply_needed: notifications.notify_reply_needed !== false,
-      notify_recoverable: notifications.notify_recoverable !== false,
-      notify_codex: notifications.notify_codex !== false,
-      notify_grok: notifications.notify_grok !== false,
-      notify_grok_completion: notifications.notify_grok_completion !== false,
-      notify_grok_failure: notifications.notify_grok_failure !== false,
-      notify_grok_reply_needed: notifications.notify_grok_reply_needed !== false,
-      notify_claude: notifications.notify_claude !== false,
-      notify_claude_completion: notifications.notify_claude_completion !== false,
-      notify_claude_failure: notifications.notify_claude_failure !== false,
-      notify_claude_reply_needed: notifications.notify_claude_reply_needed !== false,
-      notify_antigravity: notifications.notify_antigravity === true,
-      notify_antigravity_completion: notifications.notify_antigravity_completion === true,
-      notify_antigravity_failure: notifications.notify_antigravity_failure === true,
-      notify_antigravity_reply_needed: notifications.notify_antigravity_reply_needed === true,
-      notify_antigravity_authorization: notifications.notify_antigravity_authorization === true,
-      notify_dsh: notifications.notify_dsh === true,
-      notify_dsh_completion: notifications.notify_dsh_completion === true,
-      notify_dsh_failure: notifications.notify_dsh_failure === true,
-      notify_dsh_reply_needed: notifications.notify_dsh_reply_needed === true,
-      notify_dsh_authorization: notifications.notify_dsh_authorization === true
+      device_key_configured: Boolean(n.device_key_configured),
+      server_url: n.server_url ?? "https://api.day.app",
+      sound: stringOrEmpty(n.sound),
+      group: typeof n.group === "string" ? n.group : "AgentHub",
+      url: stringOrEmpty(n.url),
+      notify_completion: n.notify_completion !== false,
+      notify_reply_needed: n.notify_reply_needed !== false,
+      notify_recoverable: n.notify_recoverable !== false,
+      notify_codex: n.notify_codex !== false,
+      notify_grok: n.notify_grok !== false,
+      notify_grok_completion: n.notify_grok_completion !== false,
+      notify_grok_failure: n.notify_grok_failure !== false,
+      notify_grok_reply_needed: n.notify_grok_reply_needed !== false,
+      notify_claude: n.notify_claude !== false,
+      notify_claude_completion: n.notify_claude_completion !== false,
+      notify_claude_failure: n.notify_claude_failure !== false,
+      notify_claude_reply_needed: n.notify_claude_reply_needed !== false,
+      notify_antigravity: n.notify_antigravity === true,
+      notify_antigravity_completion: n.notify_antigravity_completion === true,
+      notify_antigravity_failure: n.notify_antigravity_failure === true,
+      notify_antigravity_reply_needed: n.notify_antigravity_reply_needed === true,
+      notify_antigravity_authorization: n.notify_antigravity_authorization === true,
+      notify_dsh: n.notify_dsh === true,
+      notify_dsh_completion: n.notify_dsh_completion === true,
+      notify_dsh_failure: n.notify_dsh_failure === true,
+      notify_dsh_reply_needed: n.notify_dsh_reply_needed === true,
+      notify_dsh_authorization: n.notify_dsh_authorization === true,
     },
     observability: {
-      event_retention_days: toBoundedInteger(probe.observability?.event_retention_days, 2) ?? 2,
-      hook_event_max_lines: toBoundedInteger(probe.observability?.hook_event_max_lines, PROBE_MAC_DEFAULTS.observability.hook_event_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_event_max_lines,
-      hook_cooldown_max_lines: toBoundedInteger(probe.observability?.hook_cooldown_max_lines, PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines,
-      log_max_bytes: toBoundedInteger(probe.observability?.log_max_bytes, PROBE_MAC_DEFAULTS.observability.log_max_bytes) ?? PROBE_MAC_DEFAULTS.observability.log_max_bytes
+      event_retention_days: toBoundedInteger(obs?.event_retention_days, 2) ?? 2,
+      hook_event_max_lines: toBoundedInteger(obs?.hook_event_max_lines, def.hook_event_max_lines) ?? def.hook_event_max_lines,
+      hook_cooldown_max_lines:
+        toBoundedInteger(obs?.hook_cooldown_max_lines, def.hook_cooldown_max_lines) ?? def.hook_cooldown_max_lines,
+      log_max_bytes: toBoundedInteger(obs?.log_max_bytes, def.log_max_bytes) ?? def.log_max_bytes,
     },
   };
 }
 
 export type ProbeSettingsPayload = {
   codex: ProbeSettings["codex"];
-  probe: Pick<ProbeSettings["probe"], "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "error_monitor" | "notifications" | "observability">;
+  probe: Pick<
+    ProbeSettings["probe"],
+    "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "error_monitor" | "notifications" | "observability"
+  >;
   notifications?: Pick<ProbeSettings["notifications"], "device_key">;
 };
 
 export function buildProbeSettingsPayload(
   draft: ProbeSettingsDraft,
   _current?: ProbeSettings | null,
-  submittedDeviceKey?: string | null
+  submittedDeviceKey?: string | null,
 ): ProbeSettingsPayload {
   const errors = probeSettingsValidation(draft);
-  if (errors.length) {
-    throw new Error(errors[0]);
-  }
-  const deviceKey = (submittedDeviceKey ?? draft.notifications.device_key).trim();
+  if (errors.length) throw new Error(errors[0]);
+  const n = draft.notifications;
+  const deviceKey = (submittedDeviceKey ?? n.device_key).trim();
   const notifications: NonNullable<ProbeSettingsPayload["probe"]["notifications"]> & { device_key?: string } = {
-    enabled: draft.notifications.enabled || Boolean(deviceKey),
-    server_url: draft.notifications.server_url.trim(),
-    sound: optionalString(draft.notifications.sound),
-    group: draft.notifications.group.trim(),
-    url: optionalString(draft.notifications.url),
-    notify_completion: draft.notifications.notify_completion,
-    notify_reply_needed: draft.notifications.notify_reply_needed,
-    notify_recoverable: draft.notifications.notify_recoverable,
-    notify_codex: draft.notifications.notify_codex,
-    notify_grok: draft.notifications.notify_grok,
-    notify_grok_completion: draft.notifications.notify_grok_completion,
-    notify_grok_failure: draft.notifications.notify_grok_failure,
-    notify_grok_reply_needed: draft.notifications.notify_grok_reply_needed,
-    notify_claude: draft.notifications.notify_claude,
-    notify_claude_completion: draft.notifications.notify_claude_completion,
-    notify_claude_failure: draft.notifications.notify_claude_failure,
-    notify_claude_reply_needed: draft.notifications.notify_claude_reply_needed,
-    notify_antigravity: draft.notifications.notify_antigravity,
-    notify_antigravity_completion: draft.notifications.notify_antigravity_completion,
-    notify_antigravity_failure: draft.notifications.notify_antigravity_failure,
-    notify_antigravity_reply_needed: draft.notifications.notify_antigravity_reply_needed,
-    notify_antigravity_authorization: draft.notifications.notify_antigravity_authorization,
-    notify_dsh: draft.notifications.notify_dsh,
-    notify_dsh_completion: draft.notifications.notify_dsh_completion,
-    notify_dsh_failure: draft.notifications.notify_dsh_failure,
-    notify_dsh_reply_needed: draft.notifications.notify_dsh_reply_needed,
-    notify_dsh_authorization: draft.notifications.notify_dsh_authorization
+    enabled: n.enabled || Boolean(deviceKey),
+    server_url: n.server_url.trim(),
+    sound: optionalString(n.sound),
+    group: n.group.trim(),
+    url: optionalString(n.url),
+    notify_completion: n.notify_completion,
+    notify_reply_needed: n.notify_reply_needed,
+    notify_recoverable: n.notify_recoverable,
+    notify_codex: n.notify_codex,
+    notify_grok: n.notify_grok,
+    notify_grok_completion: n.notify_grok_completion,
+    notify_grok_failure: n.notify_grok_failure,
+    notify_grok_reply_needed: n.notify_grok_reply_needed,
+    notify_claude: n.notify_claude,
+    notify_claude_completion: n.notify_claude_completion,
+    notify_claude_failure: n.notify_claude_failure,
+    notify_claude_reply_needed: n.notify_claude_reply_needed,
+    notify_antigravity: n.notify_antigravity,
+    notify_antigravity_completion: n.notify_antigravity_completion,
+    notify_antigravity_failure: n.notify_antigravity_failure,
+    notify_antigravity_reply_needed: n.notify_antigravity_reply_needed,
+    notify_antigravity_authorization: n.notify_antigravity_authorization,
+    notify_dsh: n.notify_dsh,
+    notify_dsh_completion: n.notify_dsh_completion,
+    notify_dsh_failure: n.notify_dsh_failure,
+    notify_dsh_reply_needed: n.notify_dsh_reply_needed,
+    notify_dsh_authorization: n.notify_dsh_authorization,
+    ...(deviceKey ? { device_key: deviceKey } : {}),
   };
-  if (deviceKey) {
-    notifications.device_key = deviceKey;
-  }
 
-  const payload: ProbeSettingsPayload = {
+  return {
     codex: {
       home: codexHomePatchValue(draft.codex.home),
       workspace: draft.codex.workspace.trim() || null,
-      host_label: draft.codex.host_label.trim()
+      host_label: draft.codex.host_label.trim(),
     },
     probe: {
       enabled: draft.probe.enabled,
       poll_seconds: requiredDraftNumber(draft.probe.poll_seconds),
       recent_limit: requiredDraftNumber(draft.probe.recent_limit),
-      error_monitor: {
-        enabled: draft.probe.error_monitor.enabled
-      },
-      hooks: {
-        manage_stop_hook: draft.hooks.manage_stop_hook
-      },
+      error_monitor: { enabled: draft.probe.error_monitor.enabled },
+      hooks: { manage_stop_hook: draft.hooks.manage_stop_hook },
       notifications,
       observability: {
         event_retention_days: requiredDraftNumber(draft.observability.event_retention_days),
         hook_event_max_lines: requiredDraftNumber(draft.observability.hook_event_max_lines),
         hook_cooldown_max_lines: requiredDraftNumber(draft.observability.hook_cooldown_max_lines),
-        log_max_bytes: requiredDraftNumber(draft.observability.log_max_bytes)
+        log_max_bytes: requiredDraftNumber(draft.observability.log_max_bytes),
       },
-    }
+    },
+    ...(deviceKey ? { notifications: { device_key: deviceKey } } : {}),
   };
-  if (deviceKey) {
-    payload.notifications = { device_key: deviceKey };
-  }
-  return payload;
 }
 
 export type ProbeNotificationPlatformId = "codex" | "claude_code" | "grok" | "antigravity" | "dsh";
@@ -231,12 +208,12 @@ export const PROBE_NOTIFICATION_PLATFORMS: readonly {
   { id: "claude_code", brand: "claude", label: "Claude Code", subtitle: "完成 · 待回复 · 失败" },
   { id: "grok", brand: "grok", label: "Grok Build", subtitle: "完成 · 待回复 · 失败" },
   { id: "antigravity", brand: "antigravity", label: "Antigravity", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true },
-  { id: "dsh", brand: "dsh", label: "DeepSeek Harness", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true }
+  { id: "dsh", brand: "dsh", label: "DeepSeek Harness", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true },
 ];
 
 export function isPlatformNotificationEnabled(
   draft: ProbeSettingsDraft,
-  platform: ProbeNotificationPlatformId
+  platform: ProbeNotificationPlatformId,
 ): boolean {
   const n = draft.notifications;
   switch (platform) {
@@ -247,91 +224,75 @@ export function isPlatformNotificationEnabled(
     case "grok":
       return n.notify_grok && (n.notify_grok_completion || n.notify_grok_failure || n.notify_grok_reply_needed);
     case "antigravity":
-      return n.notify_antigravity && (n.notify_antigravity_completion || n.notify_antigravity_failure || n.notify_antigravity_reply_needed || n.notify_antigravity_authorization);
+      return (
+        n.notify_antigravity &&
+        (n.notify_antigravity_completion ||
+          n.notify_antigravity_failure ||
+          n.notify_antigravity_reply_needed ||
+          n.notify_antigravity_authorization)
+      );
     case "dsh":
-      return n.notify_dsh && (n.notify_dsh_completion || n.notify_dsh_failure || n.notify_dsh_reply_needed || n.notify_dsh_authorization);
+      return (
+        n.notify_dsh &&
+        (n.notify_dsh_completion || n.notify_dsh_failure || n.notify_dsh_reply_needed || n.notify_dsh_authorization)
+      );
   }
 }
 
 export function applyPlatformNotificationToggle(
   draft: ProbeSettingsDraft,
   platform: ProbeNotificationPlatformId,
-  enabled: boolean
+  enabled: boolean,
 ): ProbeSettingsDraft {
-  switch (platform) {
-    case "codex":
-      return {
-        ...draft,
-        probe: {
-          ...draft.probe,
-          error_monitor: { ...draft.probe.error_monitor, enabled }
-        },
-        notifications: {
-          ...draft.notifications,
-          notify_codex: enabled,
-          notify_completion: enabled,
-          notify_reply_needed: enabled,
-          notify_recoverable: enabled
-        }
-      };
-    case "claude_code":
-      return {
-        ...draft,
-        notifications: {
-          ...draft.notifications,
-          notify_claude: enabled,
-          notify_claude_completion: enabled,
-          notify_claude_failure: enabled,
-          notify_claude_reply_needed: enabled
-        }
-      };
-    case "grok":
-      return {
-        ...draft,
-        notifications: {
-          ...draft.notifications,
-          notify_grok: enabled,
-          notify_grok_completion: enabled,
-          notify_grok_failure: enabled,
-          notify_grok_reply_needed: enabled
-        }
-      };
-    case "antigravity":
-      return {
-        ...draft,
-        notifications: {
-          ...draft.notifications,
-          notify_antigravity: enabled,
-          notify_antigravity_completion: enabled,
-          notify_antigravity_failure: enabled,
-          notify_antigravity_reply_needed: enabled,
-          notify_antigravity_authorization: enabled
-        }
-      };
-    case "dsh":
-      return {
-        ...draft,
-        notifications: {
-          ...draft.notifications,
-          notify_dsh: enabled,
-          notify_dsh_completion: enabled,
-          notify_dsh_failure: enabled,
-          notify_dsh_reply_needed: enabled,
-          notify_dsh_authorization: enabled
-        }
-      };
-  }
+  const patchMap: Record<ProbeNotificationPlatformId, Partial<ProbeSettingsDraft["notifications"]>> = {
+    codex: {
+      notify_codex: enabled,
+      notify_completion: enabled,
+      notify_reply_needed: enabled,
+      notify_recoverable: enabled,
+    },
+    claude_code: {
+      notify_claude: enabled,
+      notify_claude_completion: enabled,
+      notify_claude_failure: enabled,
+      notify_claude_reply_needed: enabled,
+    },
+    grok: {
+      notify_grok: enabled,
+      notify_grok_completion: enabled,
+      notify_grok_failure: enabled,
+      notify_grok_reply_needed: enabled,
+    },
+    antigravity: {
+      notify_antigravity: enabled,
+      notify_antigravity_completion: enabled,
+      notify_antigravity_failure: enabled,
+      notify_antigravity_reply_needed: enabled,
+      notify_antigravity_authorization: enabled,
+    },
+    dsh: {
+      notify_dsh: enabled,
+      notify_dsh_completion: enabled,
+      notify_dsh_failure: enabled,
+      notify_dsh_reply_needed: enabled,
+      notify_dsh_authorization: enabled,
+    },
+  };
+  return {
+    ...draft,
+    probe:
+      platform === "codex"
+        ? { ...draft.probe, error_monitor: { ...draft.probe.error_monitor, enabled } }
+        : draft.probe,
+    notifications: { ...draft.notifications, ...patchMap[platform] },
+  };
 }
 
 export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   const errors: string[] = [];
   if (!draft.codex.host_label.trim()) errors.push("主机标签不能为空");
-  if (!isIntegerInRange(draft.probe.poll_seconds, 5, 3600)) {
-    errors.push("轮询间隔必须在 5 到 3600 秒之间");
-  }
-  if (!isIntegerInRange(draft.probe.recent_limit, 1, 500)) {
-    errors.push("最近事件数量必须在 1 到 500 之间");
-  }
+  if (!isIntegerInRange(draft.probe.poll_seconds, 5, 3600)) errors.push("轮询间隔必须在 5 到 3600 秒之间");
+  if (!isIntegerInRange(draft.probe.recent_limit, 1, 500)) errors.push("最近事件数量必须在 1 到 500 之间");
   if (!isIntegerInRange(draft.observability.hook_event_max_lines, 1, 5000)) {
     errors.push("Hook 事件行数必须在 1 到 5000 之间");
   }
@@ -341,7 +302,9 @@ export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   if (!isIntegerInRange(draft.observability.log_max_bytes, 1024, 10485760)) {
     errors.push("日志读取上限必须在 1024 到 10485760 字节之间");
   }
-  if (!isIntegerInRange(draft.observability.event_retention_days, 1, 3650)) errors.push("通知事件保留天数必须在 1 到 3650 天之间");
+  if (!isIntegerInRange(draft.observability.event_retention_days, 1, 3650)) {
+    errors.push("通知事件保留天数必须在 1 到 3650 天之间");
+  }
   if (!draft.notifications.server_url.trim()) errors.push("Bark 服务 URL 不能为空");
   return errors;
 }
@@ -389,7 +352,7 @@ export function probeEventDisplay(event: ProbeEvent): ProbeEventDisplay {
     bark: card.bark.label,
     dedupe: card.dedupe.label,
     source: card.source,
-    time: card.time
+    time: card.time,
   };
 }
 
@@ -421,8 +384,8 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
         bodyLength !== null ? `${bodyLength} bytes` : "",
         bodySha ? `sha256 ${bodySha}` : "",
         bodyTruncated ? "已截断" : "",
-        bodySource
-      ].filter(Boolean).join(" · ")
+        bodySource,
+      ].filter(Boolean).join(" · "),
     });
   }
   const barkDetail = probeEventBarkDetail(bark);
@@ -431,18 +394,19 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
 
   return {
     title: probeEventKindLabel(eventType || event.kind),
-    headline: cleanProbeEventText(stringFromRecord(payload, "thread_title"))
-      || cleanProbeEventText(event.title)
-      || eventType
-      || cleanProbeEventText(event.kind)
-      || "Probe 事件",
+    headline:
+      cleanProbeEventText(stringFromRecord(payload, "thread_title")) ||
+      cleanProbeEventText(event.title) ||
+      eventType ||
+      cleanProbeEventText(event.kind) ||
+      "Probe 事件",
     summary,
     reason,
     source,
     time: cleanProbeEventText(stringFromRecord(payload, "beijing_time")) || probeEventTimeLabel(event.created_at),
     bark: probeEventBarkBadge(event),
     dedupe: probeEventDedupeBadge(event),
-    details
+    details,
   };
 }
 
@@ -456,38 +420,19 @@ function probeEventBarkDetail(bark: Record<string, unknown> | null): string {
   const next = numberFromRecord(bark, "next_retry_ms");
   return [
     title,
-    chunkCount !== null && chunkCount > 1 ? (confirmed !== null ? `${confirmed}/${chunkCount} 段已受理` : `${chunkCount} 段`) : "",
+    chunkCount !== null && chunkCount > 1
+      ? confirmed !== null
+        ? `${confirmed}/${chunkCount} 段已受理`
+        : `${chunkCount} 段`
+      : "",
     attempt !== null && attempt > 1 ? `第 ${attempt} 次尝试` : "",
     next !== null ? `下次重试 ${new Date(next).toLocaleTimeString()}` : "",
-    requestCount !== null && requestCount > 1 ? `${requestCount} 请求` : ""
+    requestCount !== null && requestCount > 1 ? `${requestCount} 请求` : "",
   ].filter(Boolean).join(" · ");
 }
 
 export function probeEventReadableSummary(event: ProbeEvent): string {
-  const payload = probeEventPayload(event);
-  const structured = structuredProbeEventSummary(event, payload);
-  if (structured) return structured;
-  const message = cleanProbeEventText(event.message);
-  if (message) return message;
-  const candidates = [
-    stringFromRecord(payload, "summary"),
-    stringFromRecord(payload, "status"),
-    stringFromRecord(payload, "reason"),
-    stringFromRecord(payload, "kind"),
-    event.title
-  ];
-  const kind = cleanProbeEventText(event.kind).toLowerCase();
-  const kindLabel = probeEventKindLabel(event.kind).toLowerCase();
-  const summary = candidates
-    .map(cleanProbeEventText)
-    .find((candidate) => {
-      if (!candidate) return false;
-      const normalized = candidate.toLowerCase();
-      return normalized !== kind && normalized !== kindLabel;
-    });
-  if (summary) return summary;
-  if (event.thread_id) return `线程 ${event.thread_id}`;
-  return "Probe 事件已记录";
+  return structuredProbeEventSummary(event, probeEventPayload(event));
 }
 
 export function probeEventBarkStatus(event: ProbeEvent): string {
@@ -503,16 +448,35 @@ export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: P
   if (bark.sent === true || status === "sent") return { label: "Bark 已受理", tone: "success" };
   if (bark.skipped === true || status === "skipped") return { label: "Bark 已跳过", tone: "muted" };
   const reason = stringFromRecord(bark, "reason") ?? "";
-  const unknown = status === "unknown" || (!status && ["request_error", "network_unknown", "timeout", "response_decode", "response_read", "delivery_interrupted_outcome_unknown"].includes(reason));
+  const unknown =
+    status === "unknown" ||
+    (!status &&
+      [
+        "request_error",
+        "network_unknown",
+        "timeout",
+        "response_decode",
+        "response_read",
+        "delivery_interrupted_outcome_unknown",
+      ].includes(reason));
   const categories: Record<string, string> = {
-    dns: "域名解析失败", connection: "连接失败", tls: "TLS 连接失败", certificate_validation: "证书验证失败",
-    timeout: "请求超时", response_decode: "响应无法确认", response_read: "响应读取失败", redirect_rejected: "重定向已拒绝",
-    http_status: "HTTP 拒绝", bark_response_code: "服务拒绝", apns_permanent_rejection: "推送服务永久拒绝",
-    invalid_server_url: "地址无效", network_unknown: "网络错误", request_error: "网络错误"
+    dns: "域名解析失败",
+    connection: "连接失败",
+    tls: "TLS 连接失败",
+    certificate_validation: "证书验证失败",
+    timeout: "请求超时",
+    response_decode: "响应无法确认",
+    response_read: "响应读取失败",
+    redirect_rejected: "重定向已拒绝",
+    http_status: "HTTP 拒绝",
+    bark_response_code: "服务拒绝",
+    apns_permanent_rejection: "推送服务永久拒绝",
+    invalid_server_url: "地址无效",
+    network_unknown: "网络错误",
+    request_error: "网络错误",
   };
   const detail = categories[reason];
   return { label: `Bark ${unknown ? "结果未确认" : "发送失败"}${detail ? ` · ${detail}` : ""}`, tone: "warning" };
-
 }
 
 export function probeEventDedupeStatus(event: ProbeEvent): string {
@@ -525,7 +489,9 @@ export function probeEventDedupeBadge(event: ProbeEvent): { label: string; tone:
   if (dedupe?.duplicate === true) return { label: "重复事件", tone: "warning" };
   if (dedupe?.claimed === true) return { label: "已认领", tone: "success" };
   const dedupeStatus = cleanProbeEventText(stringFromRecord(dedupe ?? {}, "status"));
-  if (dedupeStatus) return { label: dedupeStatus, tone: dedupeStatus.toLowerCase().includes("duplicate") ? "warning" : "muted" };
+  if (dedupeStatus) {
+    return { label: dedupeStatus, tone: dedupeStatus.toLowerCase().includes("duplicate") ? "warning" : "muted" };
+  }
   if (payload.duplicate === true) return { label: "重复事件", tone: "warning" };
   const outcome = recordFromRecord(payload, "probe_event") ?? recordFromRecord(payload, "outcome");
   if (outcome?.duplicate === true) return { label: "重复事件", tone: "warning" };
@@ -544,7 +510,7 @@ export function probeEventKindLabel(kind?: string | null): string {
     reply_needed: "需回复",
     recoverable: "异常/可恢复",
     running: "运行中",
-    "bark-test": "Bark 测试"
+    "bark-test": "Bark 测试",
   };
   return normalized ? labels[normalized] ?? normalized : "Probe 事件";
 }
@@ -554,9 +520,7 @@ function isIntegerInRange(value: ProbeNumericDraftValue, min: number, max: numbe
 }
 
 function requiredDraftNumber(value: ProbeNumericDraftValue): number {
-  if (typeof value !== "number") {
-    throw new Error("探针数字设置无效");
-  }
+  if (typeof value !== "number") throw new Error("探针数字设置无效");
   return value;
 }
 
@@ -588,7 +552,7 @@ function probeEventPayload(event: ProbeEvent): Record<string, unknown> {
 
 function recordFromRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
   const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function stringFromRecord(record: Record<string, unknown>, key: string): string | null {
@@ -616,14 +580,15 @@ function structuredProbeEventSummary(event: ProbeEvent, payload: Record<string, 
     stringFromRecord(payload, "summary"),
     stringFromRecord(payload, "status"),
     stringFromRecord(payload, "reason"),
+    stringFromRecord(payload, "kind"),
     event.message,
-    event.title
+    event.title,
   ];
   const kind = cleanProbeEventText(stringFromRecord(payload, "event_type") || event.kind).toLowerCase();
   const kindLabel = probeEventKindLabel(kind).toLowerCase();
   const summary = candidates
     .map(cleanProbeEventText)
-    .find((candidate) => {
+    .find(candidate => {
       if (!candidate) return false;
       const normalized = candidate.toLowerCase();
       return normalized !== kind && normalized !== kindLabel;

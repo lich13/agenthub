@@ -296,7 +296,7 @@ describe("archive delete API compatibility", () => {
     const retiredClaudeJobTitle = ["Claude Code", "update"].join(" ");
 
     expect(jobs.some((job) => job.kind.startsWith("probe_"))).toBe(true);
-    expect(jobs.some((job) => job.title.includes("NexusHub 推送测试"))).toBe(true);
+    expect(jobs.some((job) => job.title.includes("AgentHub 推送测试"))).toBe(true);
     expect(serialized).not.toContain(retiredCodexJobTitle);
     expect(serialized).not.toContain(retiredClaudeJobTitle);
   });

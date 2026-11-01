@@ -385,8 +385,7 @@ pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Durat
     }
 }
 
-fn push_live_session(
-    sessions: &mut Vec<probe_core::ProbeLiveSession>,
+fn live_session(
     provider: &str,
     id: String,
     session_key: String,
@@ -394,8 +393,8 @@ fn push_live_session(
     bucket: &str,
     updated_at: Option<String>,
     cwd: Option<String>,
-) {
-    sessions.push(probe_core::ProbeLiveSession {
+) -> probe_core::ProbeLiveSession {
+    probe_core::ProbeLiveSession {
         provider: provider.to_string(),
         title: if title.trim().is_empty() {
             id.clone()
@@ -407,7 +406,7 @@ fn push_live_session(
         bucket: bucket.to_string(),
         updated_at,
         cwd: cwd.filter(|c| !c.is_empty()),
-    });
+    }
 }
 
 fn stream_live_buckets(
@@ -435,8 +434,7 @@ fn aggregate_active_sessions(
         ("recoverable", recoverable_threads),
     ] {
         for thread in threads.iter().take(per_bucket_limit) {
-            push_live_session(
-                &mut sessions,
+            sessions.push(live_session(
                 "codex",
                 thread.id.clone(),
                 thread.id.clone(),
@@ -444,7 +442,7 @@ fn aggregate_active_sessions(
                 bucket,
                 thread.updated_at.clone(),
                 thread.cwd.clone(),
-            );
+            ));
         }
     }
 
@@ -490,8 +488,7 @@ fn aggregate_active_sessions(
                     None
                 };
                 if let Some(bucket) = bucket {
-                    push_live_session(
-                        &mut sessions,
+                    sessions.push(live_session(
                         "claude_code",
                         item.id,
                         item.session_key,
@@ -499,7 +496,7 @@ fn aggregate_active_sessions(
                         bucket,
                         item.updated_at,
                         Some(item.cwd),
-                    );
+                    ));
                 }
             }
         }
@@ -529,8 +526,7 @@ fn aggregate_active_sessions(
                     stream_buckets.get(&item.id).copied()
                 };
                 if let Some(bucket) = bucket {
-                    push_live_session(
-                        &mut sessions,
+                    sessions.push(live_session(
                         "grok",
                         item.id.clone(),
                         item.id,
@@ -538,7 +534,7 @@ fn aggregate_active_sessions(
                         bucket,
                         item.updated_at,
                         Some(item.cwd),
-                    );
+                    ));
                 }
             }
         }
@@ -568,8 +564,7 @@ fn aggregate_active_sessions(
                         _ => None,
                     };
                     if let Some(bucket) = bucket {
-                        push_live_session(
-                            &mut sessions,
+                        sessions.push(live_session(
                             "antigravity",
                             item.id,
                             item.session_key,
@@ -577,7 +572,7 @@ fn aggregate_active_sessions(
                             bucket,
                             item.updated_at,
                             Some(item.cwd),
-                        );
+                        ));
                     }
                 }
             }
@@ -613,8 +608,7 @@ fn aggregate_active_sessions(
                         None
                     };
                     if let Some(bucket) = bucket {
-                        push_live_session(
-                            &mut sessions,
+                        sessions.push(live_session(
                             "dsh",
                             item.id,
                             item.session_key,
@@ -622,7 +616,7 @@ fn aggregate_active_sessions(
                             bucket,
                             item.updated_at,
                             Some(item.cwd),
-                        );
+                        ));
                     }
                 }
             }

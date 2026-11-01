@@ -46,7 +46,7 @@ async function openBarkSettings(page: Page, mobile: boolean) {
     ...demo.demoJob(args.id),
     id: args.id,
     kind: "probe_bark_test",
-    title: "NexusHub 推送测试",
+    title: "AgentHub 推送测试",
     status: "succeeded",
     output: "HTTP 200",
     error: undefined
@@ -87,7 +87,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(saved[1].probe.notifications.enabled).toBe(true);
     await panel.getByRole("button", { name: "测试推送", exact: true }).click();
     await expect.poll(() => calls.filter(command => command === "probe.barkTest").length).toBe(1);
-    await expect(page.getByText("NexusHub 推送测试", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("AgentHub 推送测试", { exact: true }).first()).toBeVisible();
     expect(calls.filter(command => /gotify/i.test(command))).toEqual([]);
     await assertContrast(page, ".probe-card-stack .field-label");
     await assertNoOverflow(page);
@@ -155,9 +155,9 @@ test("Bark test status separates retrying, failed, and accepted job states", asy
       ...demo.demoJob(id),
       id,
       kind: "probe_bark_test",
-      title: "NexusHub 推送测试",
+      title: "AgentHub 推送测试",
       status,
-      output: status === "failed" ? "NexusHub 推送测试\n发送失败" : "",
+      output: status === "failed" ? "AgentHub 推送测试\n发送失败" : "",
       error: status === "failed" ? "fixture delivery failed" : undefined
     };
   });
