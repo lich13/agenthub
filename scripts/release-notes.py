@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.3": [
+        "修复 Probe 五张宿主卡片标题栏与路径徽标挤压导致文案逐字竖排高度失衡问题，并收紧 E2E 卡片数量、单行与高度几何断言",
+        "统一 Antigravity 判定与诊断逻辑、消除 Stop Hook 双重 allow 竞态并改为分离后台扫描，补齐游标边界与五平台真实解析器／Hook 自检，并将全仓、本机与远端底层包名、二进制、服务与路径全面统一为 AgentHub／agenthub。",
+    ],
     "2.0.2": [
         "修复 Probe 工作台边框令牌自引用、胶囊开关样式、全局 overflow-wrap 逐字竖排及 13 个缺失样式类回归，为 Codex 补齐黑白品牌令牌并将全局默认强调色切换为 AgentHub 星轨蓝",
         "根治 Antigravity Stop Hook 同步门禁期间 settled_count 游标抢跑导致的结尾通知漏发，新增 diagnose-antigravity 诊断命令、五平台通知端到端自检、通知分组自动迁移及 Hook 归属严格校验。",
@@ -248,7 +252,7 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version in ("2.0.2", "2.0.1", "2.0.0"):
+    if version in ("2.0.3", "2.0.2", "2.0.1", "2.0.0"):
         sections = {
             "版本概览": [
                 "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 agenthub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"

@@ -44,6 +44,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "agenthub-core"
+version = "2.0.3"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "chrono",
+ "dirs",
+ "hex",
+ "libc",
+ "quote",
+ "rand 0.8.6",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "syn",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "url",
+ "uuid",
+ "walkdir",
+ "zstd",
+]
+
+[[package]]
+name = "agenthub-webd"
+version = "2.0.3"
+dependencies = [
+ "agenthub-core",
+ "anyhow",
+ "axum",
+ "chrono",
+ "clap",
+ "hex",
+ "rand 0.8.6",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1074,59 +1127,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "agenthub-core"
-version = "2.0.2"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64",
- "chrono",
- "dirs",
- "hex",
- "libc",
- "quote",
- "rand 0.8.6",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "syn",
- "tokio",
- "toml",
- "toml_edit",
- "url",
- "uuid",
- "walkdir",
- "zstd",
-]
-
-[[package]]
-name = "agenthub-webd"
-version = "2.0.2"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "clap",
- "hex",
- "agenthub-core",
- "rand 0.8.6",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

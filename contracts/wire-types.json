@@ -11867,7 +11867,7 @@
       "signatures": [
         "fn default_local_desktop_workspace () -> Option < PathBuf >",
         "fn agenthub_paths_for_home (home : impl Into < PathBuf >) -> AgentHubPaths",
-        "fn agenthub_paths_for_platform_home (kind : PlatformKind , home : impl Into < PathBuf >) -> AgentHubPaths",
+        "fn agenthub_paths_for_platform_home (kind : PlatformKind , home : impl Into < PathBuf > ,) -> AgentHubPaths",
         "fn agenthub_paths_for_platform (platform : & PlatformPaths) -> AgentHubPaths",
         "fn load_desktop_config (platform : & PlatformPaths) -> Config",
         "fn open_panel_db (config : & Config) -> Result < PanelDb >"

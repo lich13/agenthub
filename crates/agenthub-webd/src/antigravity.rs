@@ -659,6 +659,7 @@ pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     Ok(last_scan)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_trajectory_with_context(
     client: &reqwest::Client,
     port: u16,

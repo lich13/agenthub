@@ -1567,9 +1567,7 @@ token = "fixture-not-a-real-secret"
         let path = directory.join("config.toml");
         let text = format!(
             "{}\n[probe.logs_db]\nretention_days = 7\n",
-            toml::to_string_pretty(&Config::default())
-                .unwrap()
-                .replace("group = \"AgentHub\"", "group = \"AgentHub\"")
+            toml::to_string_pretty(&Config::default()).unwrap()
         );
         // An explicit existing observability preference takes precedence.
         std::fs::write(&path, text).unwrap();

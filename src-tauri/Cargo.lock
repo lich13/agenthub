@@ -44,6 +44,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "agenthub-core"
+version = "2.0.3"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "hex",
+ "libc",
+ "rand 0.8.6",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "toml 0.8.2",
+ "toml_edit 0.22.27",
+ "url",
+ "uuid",
+ "walkdir",
+ "zstd",
+]
+
+[[package]]
+name = "agenthub-desktop"
+version = "2.0.3"
+dependencies = [
+ "agenthub-core",
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "keyring",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tauri-plugin-updater",
+ "tempfile",
+ "tokio",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2373,56 +2423,6 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
-
-[[package]]
-name = "agenthub-core"
-version = "2.0.2"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "dirs 5.0.1",
- "hex",
- "libc",
- "rand 0.8.6",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "toml 0.8.2",
- "toml_edit 0.22.27",
- "url",
- "uuid",
- "walkdir",
- "zstd",
-]
-
-[[package]]
-name = "agenthub-desktop"
-version = "2.0.2"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs 5.0.1",
- "keyring",
- "agenthub-core",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tauri-plugin-updater",
- "tempfile",
- "tokio",
- "toml 0.8.2",
-]
 
 [[package]]
 name = "num-conv"
