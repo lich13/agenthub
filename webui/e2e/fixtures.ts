@@ -120,7 +120,23 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
       if (name === "remote.invoke") return dispatch(args.request.command, args.request.args, "remote");
       if (name === "grok.detail" && !grok.length) throw new Error("Grok session not found");
       const responses: Record<string, () => unknown> = {
-        "system.capabilities": () => demo.demoSystemCapabilities(fixture()),
+        "system.capabilities": () => {
+          const view = demo.demoSystemCapabilities(fixture());
+          return {
+            ...view,
+            capabilities: {
+              ...view.capabilities,
+              antigravity_notifications: view.capabilities.antigravity_notifications,
+              dsh_notifications: view.capabilities.dsh_notifications,
+            },
+          };
+        },
+        "claude.hooks": () => ({
+          installed: true,
+          managedCount: 3,
+          changed: false,
+          configPath: `/isolated/${args.provider ?? "claude"}/hooks.json`,
+        }),
         "system.version": demo.demoSystemVersion,
         "system.platform": () => demo.demoPlatformOverview(fixture()),
         "threads.list": () => {
