@@ -547,7 +547,7 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
   gap: 8px; margin-bottom: 12px;
   > .metric {
     grid-template-columns: 1fr; gap: 3px; padding: 8px 10px; border-radius: 8px; border: var(--b1); background: var(--e);
-    &.wide { grid-column: 1 / -1; }
+    &:is(.wide, .metric-wide) { grid-column: 1 / -1; }
   }
 }
 .cleanup-panel-head { gap: 10px; margin-bottom: 12px; }
@@ -800,10 +800,10 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
 }
 .ws-card-grid, .probe-hooks-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .probe-hooks-grid > .panel, .probe-host-card { display: flex; flex-direction: column; }
-.probe-host-card { flex: 1; }
-.probe-host-card > .settings-meta-grid { margin-bottom: 0; }
+.probe-host-card { flex: 1; gap: 10px; }
+.probe-host-card > .settings-meta-grid { margin-bottom: 0; > .metric { padding: 6px 10px; strong { font-size: 12px; } } }
 .probe-host-card > .button-row { margin-top: auto; }
-.probe-host-card-head { flex-wrap: wrap; padding-bottom: 10px; }
+.probe-host-card-head { flex-wrap: wrap; gap: 6px 10px; padding-bottom: 8px; }
 .probe-host-card-copy { flex: 1 1 calc(100% - 34px); min-width: 0; }
 .probe-host-card-copy span, .metric :is(span, strong) { overflow-wrap: break-word; }
 .probe-host-path { font-size: 11px; padding: 2px 7px; border-radius: 6px; max-width: 100%; }
