@@ -18,7 +18,7 @@ spec.loader.exec_module(privacy)
 
 class PrivacyChecks(unittest.TestCase):
     def test_reserved_examples_and_public_repository_are_allowed(self):
-        self.assertEqual(privacy.problems(b"https://panel.example.com/nexushub/ 192.0.2.10 /Users/example/project author@users.noreply.github.com https://github.com/lich13/nexushub", []), [])
+        self.assertEqual(privacy.problems(b"https://panel.example.com/agenthub/ 192.0.2.10 /Users/example/project author@users.noreply.github.com https://github.com/lich13/agenthub", []), [])
 
     def test_unknown_endpoint_private_home_and_secret_are_rejected(self):
         data = b"https://" + b"personal" + b".invalid-host/ /Users/" + b"synthetic-person/project ghp_" + b"a" * 36
@@ -47,7 +47,7 @@ class PrivacyCommandChecks(unittest.TestCase):
     """Run the real CLI against isolated repositories and synthetic payloads."""
 
     def setUp(self):
-        sandbox = tempfile.TemporaryDirectory(prefix="nexushub-privacy-test-")
+        sandbox = tempfile.TemporaryDirectory(prefix="agenthub-privacy-test-")
         self.addCleanup(sandbox.cleanup)
         self.base = Path(sandbox.name).resolve()
         self.root = self.base / "repository"

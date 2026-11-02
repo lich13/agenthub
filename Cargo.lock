@@ -1077,7 +1077,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexushub-core"
+name = "agenthub-core"
 version = "2.0.2"
 dependencies = [
  "aes-gcm",
@@ -1105,7 +1105,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexushub-webd"
+name = "agenthub-webd"
 version = "2.0.2"
 dependencies = [
  "anyhow",
@@ -1113,7 +1113,7 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "nexushub-core",
+ "agenthub-core",
  "rand 0.8.6",
  "reqwest",
  "rusqlite",

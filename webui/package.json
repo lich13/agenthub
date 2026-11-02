@@ -1,5 +1,5 @@
 {
-  "name": "nexushub-webui",
+  "name": "agenthub-webui",
   "private": true,
   "version": "2.0.2",
   "packageManager": "pnpm@12.11.2",

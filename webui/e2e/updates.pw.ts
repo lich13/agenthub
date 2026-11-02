@@ -7,7 +7,7 @@ const settings = (page: Page) => page.locator(".side-nav, .mobile-tabs").getByRo
 const status = { ...demoUpdateStatus("macos-tauri"), current_version: "1.2.2", latest_version: "v1.2.2", update_available: false };
 
 test("one update panel follows the current machine and only checks its selected endpoint", async ({ page }) => {
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/nexushub/" } });
+  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
   const remoteCalls: string[] = [];
   observeCommands(page, (name, args) => { if (name === "remote.invoke") remoteCalls.push(args.request.command); });
   await mockCommand(page, "updates.status", () => status);
@@ -38,7 +38,7 @@ test("one update panel follows the current machine and only checks its selected 
 test("update errors, new releases and jobs show accurate inline state and block switching", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 820 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/nexushub/" } });
+  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
   let current = { ...status, latest_version: null as string | null, update_available: null as boolean | null };
   let fail = true;
   let finish = false;
@@ -69,7 +69,7 @@ test("update errors, new releases and jobs show accurate inline state and block 
 });
 
 test("a late local update read cannot leak a local version into the remote panel", async ({ page }) => {
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/nexushub/" } });
+  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
   let remote = false;
   let started = false;
   let release!: () => void;

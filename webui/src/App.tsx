@@ -67,12 +67,12 @@ export default function App() {
   const [settingsSection, setSettingsSectionState] = useState<"maintenance" | "remote">(lastSettingsSection);
   const setSettingsSection = (next: "maintenance" | "remote") => { lastSettingsSection = next; setSettingsSectionState(next); };
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(true);
-  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("agenthub.nav-collapsed") === "1");
 
   const toggleNavCollapsed = () => {
     setNavCollapsed((current) => {
       const next = !current;
-      localStorage.setItem("nexushub.nav-collapsed", next ? "1" : "0");
+      localStorage.setItem("agenthub.nav-collapsed", next ? "1" : "0");
       return next;
     });
   };

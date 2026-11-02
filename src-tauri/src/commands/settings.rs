@@ -10,8 +10,8 @@ use crate::{
         },
     },
 };
+use agenthub_core::services::{probe as probe_service, settings::ProbeSettingsSaveRequest};
 use anyhow::Result;
-use nexushub_core::services::{probe as probe_service, settings::ProbeSettingsSaveRequest};
 
 #[tauri::command(rename = "probe.settings.get")]
 pub fn getProbeSettings(
@@ -65,7 +65,7 @@ pub fn getProbeEvents(
 #[tauri::command(rename = "cleanup.archiveDryRun")]
 pub fn dryRunArchiveDelete(
     state: tauri::State<'_, DesktopState>,
-) -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
+) -> Result<agenthub_core::archive::ArchiveDeletePlan, String> {
     settings_service::archive_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
 }
 
@@ -73,7 +73,7 @@ pub fn dryRunArchiveDelete(
 pub fn startArchiveDelete(
     state: tauri::State<'_, DesktopState>,
     request: DesktopCleanupExecuteRequest,
-) -> Result<nexushub_core::archive::ArchiveDeleteResult, String> {
+) -> Result<agenthub_core::archive::ArchiveDeleteResult, String> {
     settings_service::archive_delete_execute_with_state(&state, request)
         .map_err(|err| err.to_string())
 }
@@ -81,9 +81,9 @@ pub fn startArchiveDelete(
 #[tauri::command(rename = "cleanup.hiddenDryRun")]
 pub async fn dryRunHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
-    request: Option<nexushub_core::archive::hidden_scan::HiddenScanRequest>,
-) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
-    nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+    request: Option<agenthub_core::archive::hidden_scan::HiddenScanRequest>,
+) -> Result<agenthub_core::archive::HiddenThreadDeletePlan, String> {
+    agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
         .cleanup()
         .scan_hidden(
             state.codex_paths(),
@@ -98,9 +98,9 @@ pub async fn dryRunHiddenThreadDelete(
 pub async fn startHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
     request: DesktopCleanupExecuteRequest,
-) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
+) -> Result<agenthub_core::archive::HiddenThreadDeleteResult, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         settings_service::hidden_delete_execute_with_state(&state, request)
             .map_err(|err| err.to_string())
     })
@@ -111,14 +111,14 @@ pub async fn startHiddenThreadDelete(
 #[tauri::command(rename = "claude.hooks")]
 pub async fn claudeHooks(
     state: tauri::State<'_, DesktopState>,
-    request: nexushub_core::claude::hooks::ClaudeHooksRequest,
-    provider: Option<nexushub_core::claude::hooks::HookProvider>,
-) -> Result<nexushub_core::claude::hooks::ClaudeHooksStatus, String> {
+    request: agenthub_core::claude::hooks::ClaudeHooksRequest,
+    provider: Option<agenthub_core::claude::hooks::HookProvider>,
+) -> Result<agenthub_core::claude::hooks::ClaudeHooksStatus, String> {
     let state = state.inner().clone();
     let provider = provider.unwrap_or_default();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         let config = state.config();
-        nexushub_core::services::use_cases::NexusHubUseCases::with_config(&config, state.platform())
+        agenthub_core::services::use_cases::AgentHubUseCases::with_config(&config, state.platform())
             .probe()?
             .provider_hooks(provider, request)
     })
@@ -130,12 +130,12 @@ pub async fn claudeHooks(
 #[tauri::command(rename = "cleanup.dshArchiveDryRun")]
 pub async fn dryRunDshArchiveDelete(
     state: tauri::State<'_, DesktopState>,
-) -> Result<nexushub_core::dsh::DshArchiveDeletePlan, String> {
+) -> Result<agenthub_core::dsh::DshArchiveDeletePlan, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
             .cleanup()
-            .dsh_archive_dry_run(&nexushub_core::dsh::DshPaths::default_for_user())
+            .dsh_archive_dry_run(&agenthub_core::dsh::DshPaths::default_for_user())
             .map_err(|err| err.to_string())
     })
     .await
@@ -145,13 +145,13 @@ pub async fn dryRunDshArchiveDelete(
 #[tauri::command(rename = "cleanup.dshArchiveExecute")]
 pub async fn startDshArchiveDelete(
     state: tauri::State<'_, DesktopState>,
-    request: nexushub_core::dsh::DshArchiveDeleteRequest,
-) -> Result<nexushub_core::dsh::DshArchiveDeleteResult, String> {
+    request: agenthub_core::dsh::DshArchiveDeleteRequest,
+) -> Result<agenthub_core::dsh::DshArchiveDeleteResult, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
             .cleanup()
-            .dsh_archive_execute(&nexushub_core::dsh::DshPaths::default_for_user(), request)
+            .dsh_archive_execute(&agenthub_core::dsh::DshPaths::default_for_user(), request)
             .map_err(|err| err.to_string())
     })
     .await
@@ -161,14 +161,14 @@ pub async fn startDshArchiveDelete(
 #[tauri::command(rename = "cleanup.unifiedDryRun")]
 pub async fn dryRunUnifiedCleanup(
     state: tauri::State<'_, DesktopState>,
-    request: Option<nexushub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
-) -> Result<nexushub_core::services::cleanup::UnifiedCleanupPlan, String> {
+    request: Option<agenthub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
+) -> Result<agenthub_core::services::cleanup::UnifiedCleanupPlan, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        let paths = agenthub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
             state.codex_paths(),
         );
-        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
             .cleanup()
             .unified_dry_run(&paths, request.unwrap_or_default())
             .map_err(|err| err.to_string())
@@ -180,14 +180,14 @@ pub async fn dryRunUnifiedCleanup(
 #[tauri::command(rename = "cleanup.unifiedExecute")]
 pub async fn startUnifiedCleanup(
     state: tauri::State<'_, DesktopState>,
-    request: nexushub_core::services::cleanup::UnifiedCleanupExecuteRequest,
-) -> Result<nexushub_core::services::cleanup::UnifiedCleanupResult, String> {
+    request: agenthub_core::services::cleanup::UnifiedCleanupExecuteRequest,
+) -> Result<agenthub_core::services::cleanup::UnifiedCleanupResult, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        let paths = agenthub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
             state.codex_paths(),
         );
-        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
             .cleanup()
             .unified_execute(&paths, request)
             .map_err(|err| err.to_string())

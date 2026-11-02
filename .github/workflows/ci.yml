@@ -45,13 +45,13 @@ jobs:
       - run: pnpm --dir webui exec playwright install --with-deps chromium webkit
       - run: pnpm --dir webui exec playwright test --grep-invert @desktop-performance
         env:
-          NEXUSHUB_BROWSER_PREVIEW: "1"
-          NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
+          AGENTHUB_BROWSER_PREVIEW: "1"
+          AGENTHUB_TEST_OUTPUT: ${{ runner.temp }}/agenthub-browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: frontend-browser-failures
-          path: ${{ runner.temp }}/nexushub-browser
+          path: ${{ runner.temp }}/agenthub-browser
 
       - name: Enforce pnpm advisory policy
         run: node scripts/security-audit.mjs pnpm "${RUNNER_TEMP}/pnpm-audit.json"
@@ -163,12 +163,12 @@ jobs:
         # frame scheduler can exceed this budget even on about:blank.
         run: pnpm --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
         env:
-          NEXUSHUB_BROWSER_PREVIEW: "1"
-          NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance
+          AGENTHUB_BROWSER_PREVIEW: "1"
+          AGENTHUB_TEST_OUTPUT: ${{ runner.temp }}/agenthub-desktop-performance
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: desktop-performance-failures
-          path: ${{ runner.temp }}/nexushub-desktop-performance
+          path: ${{ runner.temp }}/agenthub-desktop-performance
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings

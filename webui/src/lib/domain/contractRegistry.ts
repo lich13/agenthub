@@ -1,4 +1,4 @@
-import registry from "../../../../contracts/nexushub-contract.json";
+import registry from "../../../../contracts/agenthub-contract.json";
 import type { HostSurface } from "../../types";
 
 export type ContractActionScope = "shared" | "host_only" | "transport";
@@ -35,7 +35,7 @@ export type ContractVisual = {
   };
 };
 
-export type NexusHubContractRegistry = {
+export type AgentHubContractRegistry = {
   schemaVersion: number;
   hostSurfaces: HostSurface[];
   capabilities: string[];
@@ -54,7 +54,7 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim().length > 0);
 }
 
-function assertContractRegistry(value: unknown): asserts value is NexusHubContractRegistry {
+function assertContractRegistry(value: unknown): asserts value is AgentHubContractRegistry {
   if (!isObject(value)) {
     throw new Error("contract registry must be an object");
   }

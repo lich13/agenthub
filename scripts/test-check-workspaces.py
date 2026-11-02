@@ -68,7 +68,7 @@ def make_fixture(root, desktop_versions=None, extra_desktop_packages=()):
     )
     write(root / "Cargo.toml", f'''\
 [workspace]
-members = ["crates/nexushub-core", "crates/nexushub-webd"]
+members = ["crates/agenthub-core", "crates/agenthub-webd"]
 
 [workspace.package]
 rust-version = "1.99"
@@ -78,40 +78,40 @@ rust-version = "1.99"
 ''')
     write(root / "src-tauri/Cargo.toml", f'''\
 [package]
-name = "nexushub-desktop"
+name = "agenthub-desktop"
 rust-version = "1.99"
 
 [dependencies]
 {desktop_deps}
-nexushub-core = {{ path = "../crates/nexushub-core" }}
+agenthub-core = {{ path = "../crates/agenthub-core" }}
 ''')
     core_names = [name for name in names if name != "reqwest"]
     core_deps = "\n".join(f"{name} = {{ workspace = true }}" for name in core_names)
-    write(root / "crates/nexushub-core/Cargo.toml", f'''\
+    write(root / "crates/agenthub-core/Cargo.toml", f'''\
 [package]
-name = "nexushub-core"
+name = "agenthub-core"
 
 [dependencies]
 {core_deps}
 ''')
-    write(root / "crates/nexushub-webd/Cargo.toml", '''\
+    write(root / "crates/agenthub-webd/Cargo.toml", '''\
 [package]
-name = "nexushub-webd"
+name = "agenthub-webd"
 
 [dependencies]
 reqwest = { workspace = true }
 ''')
 
     core_entries = [
-        package_entry("nexushub-core", "1.2.21", local_dependency_entries({name: SHARED_VERSIONS[name] for name in core_names}), local=True),
-        package_entry("nexushub-webd", "1.2.21", [f'reqwest {SHARED_VERSIONS["reqwest"]}'], local=True),
+        package_entry("agenthub-core", "1.2.21", local_dependency_entries({name: SHARED_VERSIONS[name] for name in core_names}), local=True),
+        package_entry("agenthub-webd", "1.2.21", [f'reqwest {SHARED_VERSIONS["reqwest"]}'], local=True),
     ]
     core_entries.extend(package_entry(name, version) for name, version in SHARED_VERSIONS.items())
     write(root / "Cargo.lock", "version = 4\n\n" + "\n\n".join(core_entries) + "\n")
 
     desktop_entries = [
-        package_entry("nexushub-core", "1.2.21", local_dependency_entries({name: desktop_versions[name] for name in core_names}), local=True),
-        package_entry("nexushub-desktop", "1.2.21", local_dependency_entries(desktop_versions), local=True),
+        package_entry("agenthub-core", "1.2.21", local_dependency_entries({name: desktop_versions[name] for name in core_names}), local=True),
+        package_entry("agenthub-desktop", "1.2.21", local_dependency_entries(desktop_versions), local=True),
     ]
     desktop_entries.extend(package_entry(name, version) for name, version in desktop_versions.items())
     desktop_entries.extend(package_entry(name, version) for name, version in extra_desktop_packages)
@@ -120,7 +120,7 @@ reqwest = { workspace = true }
 
 class WorkspaceCheckTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="nexushub-workspace-check-")
+        temporary = tempfile.TemporaryDirectory(prefix="agenthub-workspace-check-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         make_fixture(self.root)

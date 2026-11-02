@@ -30,8 +30,8 @@ type RuntimeGlobal = typeof globalThis & {
     transformCallback?: (callback: (frame: { index: number; message?: unknown; end?: boolean }) => void) => number;
     unregisterCallback?: (id: number) => void;
   };
-  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
-  __NEXUSHUB_TEST_INVOKE__?: (command: string, args?: RpcArgs) => Promise<unknown> | unknown;
+  __AGENTHUB_DESKTOP_RUNTIME__?: boolean;
+  __AGENTHUB_TEST_INVOKE__?: (command: string, args?: RpcArgs) => Promise<unknown> | unknown;
 };
 export class RuntimeUnavailableError extends Error {
   constructor(message: string, readonly feature: string) { super(message); this.name = "RuntimeUnavailableError"; }
@@ -39,13 +39,13 @@ export class RuntimeUnavailableError extends Error {
 export function runtimeContext(): RuntimeContext { return { kind: "desktop" }; }
 export function hasNativeRuntime() {
   const runtime = globalThis as RuntimeGlobal;
-  return Boolean(runtime.__TAURI_INTERNALS__?.invoke || runtime.__NEXUSHUB_TEST_INVOKE__);
+  return Boolean(runtime.__TAURI_INTERNALS__?.invoke || runtime.__AGENTHUB_TEST_INVOKE__);
 }
 
 export async function invokeNative<T = unknown>(command: string, args?: RpcArgs): Promise<T> {
   const runtime = globalThis as RuntimeGlobal;
   try {
-    const invoke = runtime.__NEXUSHUB_TEST_INVOKE__ ?? runtime.__TAURI_INTERNALS__?.invoke;
+    const invoke = runtime.__AGENTHUB_TEST_INVOKE__ ?? runtime.__TAURI_INTERNALS__?.invoke;
     if (invoke) return await invoke(command, args) as T;
   } catch (reason) {
     throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "桌面操作失败");

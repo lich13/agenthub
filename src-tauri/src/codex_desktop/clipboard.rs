@@ -2,8 +2,8 @@
 //! URLs and complete path text are resolved here, never accepted from WebUI.
 //! Never read HTML, fetch remote content, or evaluate shell syntax.
 //! ImageIO metadata bounds decoding before AppKit converts TIFF/JPEG to PNG.
-use nexushub_core::codex::desktop::attachments::MAX_IMAGE_BYTES;
-use nexushub_core::codex::desktop::references::NativeReference;
+use agenthub_core::codex::desktop::attachments::MAX_IMAGE_BYTES;
+use agenthub_core::codex::desktop::references::NativeReference;
 use objc2::{rc::autoreleasepool, runtime::AnyObject};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL,
@@ -177,14 +177,14 @@ pub(super) fn selected_files(paths: Vec<PathBuf>) -> Result<Vec<NativeReference>
 }
 
 pub(super) fn copy_diagnostics(
-    diagnostics: &nexushub_core::services::codex_desktop::DesktopDiagnostics,
+    diagnostics: &agenthub_core::services::codex_desktop::DesktopDiagnostics,
 ) -> Result<(), &'static str> {
     autoreleasepool(|_| write_diagnostics(&NSPasteboard::generalPasteboard(), diagnostics))
 }
 
 fn write_diagnostics(
     pasteboard: &NSPasteboard,
-    diagnostics: &nexushub_core::services::codex_desktop::DesktopDiagnostics,
+    diagnostics: &agenthub_core::services::codex_desktop::DesktopDiagnostics,
 ) -> Result<(), &'static str> {
     let text = serde_json::to_string_pretty(diagnostics).map_err(|_| "无法复制诊断，请重试")?;
     if text.len() > 64 * 1024 {
@@ -359,7 +359,7 @@ fn check_dimensions(bytes: &[u8]) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexushub_core::services::codex_desktop::{DesktopDiagnostic, DesktopDiagnostics};
+    use agenthub_core::services::codex_desktop::{DesktopDiagnostic, DesktopDiagnostics};
     pub(super) const PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
         0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 96, 96, 96, 248, 15,

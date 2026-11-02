@@ -5,15 +5,15 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 cd "${ROOT}"
 
 required=(
-  deploy/nexushub-webd/install.sh
-  deploy/nexushub-webd/update.sh
-  deploy/nexushub-webd/rollback.sh
+  deploy/agenthub-webd/install.sh
+  deploy/agenthub-webd/update.sh
+  deploy/agenthub-webd/rollback.sh
   scripts/package-darwin-arm64.sh
   scripts/package-webd-linux-x86_64.sh
   scripts/package-linux.sh
   scripts/deploy-cloud.sh
-  contracts/nexushub-contract.json
-  contracts/nexushub-contract.schema.json
+  contracts/agenthub-contract.json
+  contracts/agenthub-contract.schema.json
   docs/ARCHITECTURE.md
   docs/cloud-deploy-runbook.md
   docs/progress/MASTER.md
@@ -46,8 +46,8 @@ for name in ["webui/package.json", "src-tauri/tauri.conf.json"]:
 if f'version = "{version}"' not in (root / "Cargo.toml").read_text():
     raise SystemExit("Cargo workspace version mismatch")
 config = json.loads((root / "src-tauri/tauri.conf.json").read_text())
-unit = (root / "deploy/nexushub-webd/systemd.service").read_text()
-for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/nexushub-webd/grok-leader.sock", "ProtectHome=read-only", "ProtectSystem=full", "PrivateTmp=true"]:
+unit = (root / "deploy/agenthub-webd/systemd.service").read_text()
+for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/agenthub-webd/grok-leader.sock", "ProtectHome=read-only", "ProtectSystem=full", "PrivateTmp=true"]:
     if boundary not in unit:
         raise SystemExit("native Grok runtime isolation boundary missing")
 write_paths = next(line for line in unit.splitlines() if line.startswith("ReadWritePaths="))
@@ -58,7 +58,7 @@ for provider in (".grok", ".claude"):
 import importlib.util
 import sys
 sys.dont_write_bytecode = True
-spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/nexushub-webd/provider-session-write-paths.py")
+spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/agenthub-webd/provider-session-write-paths.py")
 provider_paths = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(provider_paths)
 for key, provider in (("GROK_HOME", ".grok"), ("CLAUDE_CONFIG_DIR", ".claude")):
@@ -71,7 +71,7 @@ if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
     raise SystemExit("default Claude root must use optional unit entry")
 if ".pi" in unit or provider_paths.custom_session_roots({"PI_CODING_AGENT_DIR": "/srv/fixture-pi", "PI_CODING_AGENT_SESSION_DIR": "/srv/fixture-pi-sessions"}):
     raise SystemExit("retired provider must not gain writable session paths")
-for name in ["crates/nexushub-core/src/pi.rs", "crates/nexushub-webd/src/api/pi.rs", "src-tauri/src/commands/pi.rs", "webui/src/components/pi/PiWorkspace.tsx"]:
+for name in ["crates/agenthub-core/src/pi.rs", "crates/agenthub-webd/src/api/pi.rs", "src-tauri/src/commands/pi.rs", "webui/src/components/pi/PiWorkspace.tsx"]:
     if (root / name).exists():
         raise SystemExit("retired provider implementation remains")
 if config["bundle"]["targets"] != ["dmg", "app"]:
@@ -84,26 +84,26 @@ if "linux-tauri:" in ci or "linux-tauri" in release:
 for stale in ["AppImage", ".deb", ".rpm", '"linux-x86_64"', "xvfb-run", "package-linux-tauri-x86_64.sh"]:
     if stale in release:
         raise SystemExit(f"Release retains retired marker: {stale}")
-for marker in ["webd-linux:", "macos:", "nexushub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected eight release assets"]:
+for marker in ["webd-linux:", "macos:", "agenthub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected eight release assets"]:
     if marker not in release:
         raise SystemExit(f"Release missing marker: {marker}")
 
 package = (root / "scripts/package-webd-linux-x86_64.sh").read_text()
 if "--dir" in package or "SKIP_WEBUI" in package:
     raise SystemExit("Linux packaging must not build front-end resources")
-if (root / "deploy/nexushub-webd/web-update.sh").exists():
+if (root / "deploy/agenthub-webd/web-update.sh").exists():
     raise SystemExit("retired web updater remains")
-update = (root / "deploy/nexushub-webd/update.sh").read_text()
-for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart nexushub-webd"]:
+update = (root / "deploy/agenthub-webd/update.sh").read_text()
+for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart agenthub-webd"]:
     if marker not in update:
         raise SystemExit(f"server updater missing isolated restart marker: {marker}")
-nginx = (root / "deploy/nexushub-webd/nginx.conf").read_text()
+nginx = (root / "deploy/agenthub-webd/nginx.conf").read_text()
 if "api/rpc/" not in nginx or "healthz" not in nginx or "return 404" not in nginx:
     raise SystemExit("API-only ingress boundary missing")
 if "proxy_pass http://127.0.0.1:15742/;" in nginx:
     raise SystemExit("retired root web proxy remains")
 
-contract = json.loads((root / "contracts/nexushub-contract.json").read_text())
+contract = json.loads((root / "contracts/agenthub-contract.json").read_text())
 active = {action.get("id") for action in contract.get("actions", [])}
 if any(action.startswith("threads.goal.") for action in active):
     raise SystemExit("Goal action is still active in the contract")
@@ -113,17 +113,17 @@ if not {"threads.goal.get", "threads.goal.save", "threads.goal.clear", "threads.
 
 if any(action.startswith("pi.") for action in active) or not {"pi.list", "pi.detail", "pi.rename", "pi.deletePreview", "pi.deleteExecute"} <= retired:
     raise SystemExit("retired provider contract boundary is incomplete")
-if "pub const API_VERSION: u32 = 2;" not in (root / "crates/nexushub-core/src/services/system.rs").read_text():
+if "pub const API_VERSION: u32 = 2;" not in (root / "crates/agenthub-core/src/services/system.rs").read_text():
     raise SystemExit("preview-bound cleanup requires API protocol 2")
 notes = subprocess.check_output([sys.executable, str(root / "scripts/release-notes.py"), version], text=True)
 for title in ["版本概览", "功能调整", "问题修复", "兼容性与迁移", "支持平台与资产", "升级提示"]:
     if f"## {title}" not in notes:
         raise SystemExit("release notes are missing a required Chinese section")
 
-print(f"NexusHub {version} install/release boundary checks: ok")
+print(f"AgentHub {version} install/release boundary checks: ok")
 PY
 
-shellcheck deploy/nexushub-webd/install.sh deploy/nexushub-webd/update.sh deploy/nexushub-webd/rollback.sh scripts/deploy-cloud.sh
+shellcheck deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh deploy/agenthub-webd/rollback.sh scripts/deploy-cloud.sh
 python3 scripts/test-install-safety.py
 python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py

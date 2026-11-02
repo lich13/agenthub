@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const contractPath = resolve(root, "contracts/nexushub-contract.json");
+const contractPath = resolve(root, "contracts/agenthub-contract.json");
 const contract = JSON.parse(readFileSync(contractPath, "utf8"));
 const requestedActionId = process.argv[2] ?? null;
 
@@ -31,11 +31,11 @@ function dtoLine(action) {
 }
 
 function printGlobalChecklist() {
-  console.log("NexusHub contract-driven next action checklist");
+  console.log("AgentHub contract-driven next action checklist");
   console.log(`Source: ${contractPath}`);
   console.log("");
   console.log("Default order for new or changed functionality:");
-  console.log("1. Update contracts/nexushub-contract.json first.");
+  console.log("1. Update contracts/agenthub-contract.json first.");
   console.log("2. Add or update core use-case, DTO, and plan ownership.");
   console.log("3. Update WebUI query/domain/runtime wrappers and visual/capability rules.");
   console.log("4. Add thin Linux RPC and Tauri invoke adapter mappings.");
@@ -56,7 +56,7 @@ function printActionChecklist(action) {
   console.log("Required sync points:");
   if (action.scope === "shared") {
     console.log("- contract registry: action id, scope=shared, DTO owner, requestDto, responseDto, capability/visual rule if user-facing.");
-    console.log("- core use-case/DTO: expose the shared plan through NexusHubUseCases and register DTO names in contract_dtos.");
+    console.log("- core use-case/DTO: expose the shared plan through AgentHubUseCases and register DTO names in contract_dtos.");
     console.log("- Linux RPC: keep /api/rpc/:command mapped to the same action id.");
     console.log("- Tauri command: register the typed invoke command and keep bundled-helper behavior thin.");
     console.log("- WebUI wrapper: update query/domain/runtime wrapper and contractDtoMap marker.");

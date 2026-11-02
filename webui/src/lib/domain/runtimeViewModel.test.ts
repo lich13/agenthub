@@ -240,7 +240,7 @@ describe("runtime view-model helpers", () => {
         method: "linux_systemd_job",
         state: "idle",
         failure_category: "systemd_failure",
-        recommended_action: "/usr/local/bin/nexushub-webd-update",
+        recommended_action: "/usr/local/bin/agenthub-webd-update",
         capabilities: ["prune_backups"]
       },
       archivePlan: null,

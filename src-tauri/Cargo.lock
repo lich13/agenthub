@@ -2375,7 +2375,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
-name = "nexushub-core"
+name = "agenthub-core"
 version = "2.0.2"
 dependencies = [
  "aes-gcm",
@@ -2401,14 +2401,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexushub-desktop"
+name = "agenthub-desktop"
 version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
  "dirs 5.0.1",
  "keyring",
- "nexushub-core",
+ "agenthub-core",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

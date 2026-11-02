@@ -1,25 +1,25 @@
 use std::path::Path;
 
-const NEXUSHUB_WEBD_RESOURCE_NAME: &str = "nexushub-webd";
-const NEXUSHUB_WEBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
+const AGENTHUB_WEBD_RESOURCE_NAME: &str = "agenthub-webd";
+const AGENTHUB_WEBD_HELPER_PLACEHOLDER: &[u8] = b"AGENTHUB_HELPER_PLACEHOLDER";
 
-pub(crate) fn sync_nexushub_webd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
-    let source = resource_dir.join(NEXUSHUB_WEBD_RESOURCE_NAME);
+pub(crate) fn sync_agenthub_webd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
+    let source = resource_dir.join(AGENTHUB_WEBD_RESOURCE_NAME);
     if !source.is_file() {
         return Ok(());
     }
-    if is_nexushub_webd_helper_placeholder(&source).map_err(|err| err.to_string())? {
+    if is_agenthub_webd_helper_placeholder(&source).map_err(|err| err.to_string())? {
         return Ok(());
     }
-    let platform = nexushub_core::platform::PlatformPaths::desktop_current();
+    let platform = agenthub_core::platform::PlatformPaths::desktop_current();
     let target = platform.daemon_binary();
-    sync_nexushub_webd_helper_file(&source, &target).map_err(|err| err.to_string())
+    sync_agenthub_webd_helper_file(&source, &target).map_err(|err| err.to_string())
 }
 
 pub(crate) fn repair_probe_error_monitor_launch_agent(
-    config: &nexushub_core::config::Config,
-    platform: &nexushub_core::platform::PlatformPaths,
-) -> Result<nexushub_core::probe_error_monitor::ProbeErrorMonitorLaunchAgentStatus, String> {
+    config: &agenthub_core::config::Config,
+    platform: &agenthub_core::platform::PlatformPaths,
+) -> Result<agenthub_core::probe_error_monitor::ProbeErrorMonitorLaunchAgentStatus, String> {
     if !platform.config_file.is_file() {
         if let Some(parent) = platform.config_file.parent() {
             std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -27,7 +27,7 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
         let text = toml::to_string_pretty(config).map_err(|err| err.to_string())?;
         std::fs::write(&platform.config_file, text).map_err(|err| err.to_string())?;
     }
-    nexushub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
+    agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
         platform,
         config.probe.enabled
             && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
@@ -35,12 +35,12 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
     .map_err(|err| err.to_string())
 }
 
-fn is_nexushub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
+fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
     let bytes = std::fs::read(path)?;
-    Ok(bytes.starts_with(NEXUSHUB_WEBD_HELPER_PLACEHOLDER))
+    Ok(bytes.starts_with(AGENTHUB_WEBD_HELPER_PLACEHOLDER))
 }
 
-fn sync_nexushub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
+fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
     let should_copy = match (std::fs::metadata(source), std::fs::metadata(target)) {
         (Ok(source_meta), Ok(target_meta)) => {
             source_meta.len() != target_meta.len()
@@ -80,15 +80,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sync_nexushub_webd_helper_file_copies_and_marks_executable() {
+    fn sync_agenthub_webd_helper_file_copies_and_marks_executable() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushub-webd");
+        let source = temp.path().join("agenthub-webd");
         let target = temp
             .path()
-            .join("Application Support/NexusHub/bin/nexushub-webd");
+            .join("Application Support/AgentHub/bin/agenthub-webd");
         std::fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
 
-        sync_nexushub_webd_helper_file(&source, &target).unwrap();
+        sync_agenthub_webd_helper_file(&source, &target).unwrap();
 
         assert_eq!(std::fs::read(&target).unwrap(), b"#!/bin/sh\nexit 0\n");
         #[cfg(unix)]
@@ -102,19 +102,19 @@ mod tests {
     #[test]
     fn helper_placeholder_detection_prevents_dev_resource_sync() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushub-webd");
-        std::fs::write(&source, b"NEXUSHUB_HELPER_PLACEHOLDER\nnot a binary\n").unwrap();
+        let source = temp.path().join("agenthub-webd");
+        std::fs::write(&source, b"AGENTHUB_HELPER_PLACEHOLDER\nnot a binary\n").unwrap();
 
-        assert!(is_nexushub_webd_helper_placeholder(&source).unwrap());
+        assert!(is_agenthub_webd_helper_placeholder(&source).unwrap());
     }
 
     #[test]
     fn error_monitor_launch_agent_contract_uses_helper_only_and_has_no_listener() {
-        let plist = nexushub_core::probe_error_monitor::probe_error_monitor_launch_agent_plist(
-            Path::new("/Users/test/Library/Application Support/NexusHub/bin/nexushub-webd"),
-            Path::new("/Users/test/Library/Application Support/NexusHub/config.toml"),
-            Path::new("/Users/test/Library/Logs/NexusHub/probe-error-monitor.out.log"),
-            Path::new("/Users/test/Library/Logs/NexusHub/probe-error-monitor.err.log"),
+        let plist = agenthub_core::probe_error_monitor::probe_error_monitor_launch_agent_plist(
+            Path::new("/Users/test/Library/Application Support/AgentHub/bin/agenthub-webd"),
+            Path::new("/Users/test/Library/Application Support/AgentHub/config.toml"),
+            Path::new("/Users/test/Library/Logs/AgentHub/probe-error-monitor.out.log"),
+            Path::new("/Users/test/Library/Logs/AgentHub/probe-error-monitor.err.log"),
         );
         assert!(plist.contains("<string>monitor-errors</string>"));
         assert!(!plist.contains("<string>serve</string>"));
@@ -124,7 +124,7 @@ mod tests {
 }
 
 pub(crate) fn retire_legacy_desktop_web_service(
-    platform: &nexushub_core::platform::PlatformPaths,
+    platform: &agenthub_core::platform::PlatformPaths,
 ) -> anyhow::Result<()> {
     let pid_path = platform.data_dir.join("desktop-webui.pid");
     if let Ok(text) = std::fs::read_to_string(&pid_path) {
@@ -160,7 +160,7 @@ pub(crate) fn retire_legacy_desktop_web_service(
 
 fn legacy_web_service_matches(
     arguments: &str,
-    platform: &nexushub_core::platform::PlatformPaths,
+    platform: &agenthub_core::platform::PlatformPaths,
 ) -> bool {
     arguments
         == format!(
@@ -181,7 +181,7 @@ fn audited_static_copy(path: &Path) -> std::io::Result<bool> {
     let Ok(text) = std::fs::read_to_string(&index) else {
         return Ok(false);
     };
-    if !text.contains("<title>NexusHub</title>") && !text.contains("<title>AgentHub</title>") {
+    if !text.contains("<title>AgentHub</title>") && !text.contains("<title>AgentHub</title>") {
         return Ok(false);
     }
     for entry in std::fs::read_dir(path)? {
@@ -216,13 +216,13 @@ mod retirement_tests {
     #[test]
     fn desktop_retirement_preserves_unknown_files_and_monitor() {
         let home = tempfile::tempdir().unwrap();
-        let platform = nexushub_core::platform::PlatformPaths::for_kind_with_home(
-            nexushub_core::platform::PlatformKind::Macos,
+        let platform = agenthub_core::platform::PlatformPaths::for_kind_with_home(
+            agenthub_core::platform::PlatformKind::Macos,
             home.path(),
         );
         let assets = platform.data_dir.join("desktop-assets");
         std::fs::create_dir_all(assets.join("assets")).unwrap();
-        std::fs::write(assets.join("index.html"), "<title>NexusHub</title>").unwrap();
+        std::fs::write(assets.join("index.html"), "<title>AgentHub</title>").unwrap();
         std::fs::write(assets.join("assets/index-hash.js"), "generated").unwrap();
         assert!(audited_static_copy(&assets).unwrap());
         std::fs::write(assets.join("user.txt"), "preserve").unwrap();

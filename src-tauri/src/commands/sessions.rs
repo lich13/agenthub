@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 use crate::overview::DesktopState;
-use nexushub_core::services::{
+use agenthub_core::services::{
     search::{SessionSearchRequest, SessionSearchResponse},
     sessions::{
         SessionBatchExecuteRequest, SessionBatchPreview, SessionBatchRequest, SessionBatchResult,
     },
-    use_cases::NexusHubUseCases,
+    use_cases::AgentHubUseCases,
 };
 
 #[tauri::command(rename = "sessions.search")]
@@ -14,8 +14,8 @@ pub async fn searchSessions(
     request: SessionSearchRequest,
 ) -> Result<SessionSearchResponse, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(state.platform())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(state.platform())
             .search(state.codex_paths())
             .search(request)
     })
@@ -27,11 +27,11 @@ pub async fn searchSessions(
 #[tauri::command(rename = "sessions.attachmentRead")]
 pub async fn readSessionAttachment(
     state: tauri::State<'_, DesktopState>,
-    request: nexushub_core::user_message::SessionAttachmentRequest,
-) -> Result<nexushub_core::user_message::SessionAttachmentResponse, String> {
+    request: agenthub_core::user_message::SessionAttachmentRequest,
+) -> Result<agenthub_core::user_message::SessionAttachmentResponse, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(state.platform())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .attachment_read(request)
     })
@@ -46,8 +46,8 @@ pub async fn previewSessionBatch(
     request: SessionBatchRequest,
 ) -> Result<SessionBatchPreview, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(state.platform())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .bulk_preview(request)
     })
@@ -63,7 +63,7 @@ pub async fn executeSessionBatch(
 ) -> Result<SessionBatchResult, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        NexusHubUseCases::new(state.platform())
+        AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .bulk_execute(request)
     })

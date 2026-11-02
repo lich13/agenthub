@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import * as demo from "../src/lib/api/demo";
 import { mockApi, mockCommand, observeCommands } from "./fixtures";
 
-const baseUrl = "https://api.example.com/nexushub/";
+const baseUrl = "https://api.example.com/agenthub/";
 const sharedId = "same-machine-thread";
 const machinePicker = (page: Page) => page.getByRole("combobox", { name: "当前机器" });
 const settings = async (page: Page) => {

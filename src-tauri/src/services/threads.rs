@@ -1,5 +1,4 @@
-use anyhow::Result;
-use nexushub_core::{
+use agenthub_core::{
     codex::{
         archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
         set_thread_title, thread_detail_page, ThreadDetail, ThreadSummary,
@@ -8,9 +7,10 @@ use nexushub_core::{
     services::{
         jobs as job_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
-        use_cases::NexusHubUseCases,
+        use_cases::AgentHubUseCases,
     },
 };
+use anyhow::Result;
 
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 
@@ -26,7 +26,7 @@ pub(crate) fn thread_summaries_with_query(
     query: ThreadsQuery,
 ) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    let use_cases = NexusHubUseCases::new(state.platform()).threads();
+    let use_cases = AgentHubUseCases::new(state.platform()).threads();
     let plan = use_cases.list_read(query)?;
     let hidden_thread_ids = if plan.include_hidden_thread_ids {
         hidden_thread_ids(&paths).unwrap_or_default()
@@ -80,7 +80,7 @@ pub(crate) fn thread_detail_with_state(
     state: &DesktopState,
     request: ThreadDetailRequest,
 ) -> Result<Option<ThreadDetail>> {
-    let plan = NexusHubUseCases::new(state.platform())
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .detail_read(thread_service::ThreadDetailRequest {
             id: request.id,
@@ -101,7 +101,7 @@ pub(crate) fn thread_blocks_with_state(
     state: &DesktopState,
     request: ThreadBlocksRequest,
 ) -> Result<Option<ThreadBlocksPage>> {
-    let plan = NexusHubUseCases::new(state.platform())
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .blocks_read(&request.id, request.limit, request.before)?;
     let Some(detail) = load_thread_detail_read_model(state, &plan.detail)? else {
@@ -117,7 +117,7 @@ pub(crate) fn archive_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = NexusHubUseCases::new(state.platform())
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .archive(&request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, true)?;
@@ -128,7 +128,7 @@ pub(crate) fn restore_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = NexusHubUseCases::new(state.platform())
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .restore(&request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, false)?;
@@ -139,7 +139,7 @@ pub(crate) async fn rename_thread_with_state(
     state: &DesktopState,
     request: DesktopRenameThreadRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = NexusHubUseCases::new(state.platform()).threads().rename(
+    let plan = AgentHubUseCases::new(state.platform()).threads().rename(
         job_service::ThreadRenameRequest {
             thread_id: request.thread_id,
             name: request.name,
@@ -168,7 +168,7 @@ fn load_thread_detail_read_model(
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
     let view = thread_service::thread_detail_read_model(state.platform(), detail, active_job)?;
     let mut detail = view.detail;
-    nexushub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
+    agenthub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
     Ok(Some(detail))
 }
 

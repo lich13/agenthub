@@ -88,8 +88,8 @@ export function current(fixture) {
 export function check({update=false}={}) {
   const fixture=JSON.parse(readFileSync(fixturePath,"utf8"));
   const actual=current(fixture);
-  const registry=JSON.parse(readFileSync(resolve(root,"contracts/nexushub-contract.json"),"utf8"));
-  assertRegistrySchema(registry,JSON.parse(readFileSync(resolve(root,"contracts/nexushub-contract.schema.json"),"utf8")));
+  const registry=JSON.parse(readFileSync(resolve(root,"contracts/agenthub-contract.json"),"utf8"));
+  assertRegistrySchema(registry,JSON.parse(readFileSync(resolve(root,"contracts/agenthub-contract.schema.json"),"utf8")));
   assertCatalog(fixture,registry,actual);
   if (update) {fixture.typescript=actual;writeFileSync(fixturePath,JSON.stringify(fixture,null,2)+"\n");}
   assert.deepEqual(actual,fixture.typescript,"actual TypeScript DTO, optional/null, enum, or wrapper shape drift; follow Shared changes");

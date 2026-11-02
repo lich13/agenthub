@@ -32,7 +32,7 @@ mod tests {
     }
 
     fn contract_actions() -> Vec<serde_json::Value> {
-        let raw = include_str!("../../contracts/nexushub-contract.json");
+        let raw = include_str!("../../contracts/agenthub-contract.json");
         let value: serde_json::Value =
             serde_json::from_str(raw).expect("contract registry must be valid JSON");
         value
@@ -81,7 +81,7 @@ mod tests {
         let boot_source = include_str!("desktop_boot.rs");
 
         for required in [
-            "resources::sync_nexushub_webd_helper_from_resource(&resource_dir)",
+            "resources::sync_agenthub_webd_helper_from_resource(&resource_dir)",
             "resources::repair_probe_error_monitor_launch_agent(",
             "desktop_boot::initialize_main_window(&window)",
             "desktop_boot::schedule_desktop_boot_probe(&window)",
@@ -92,7 +92,7 @@ mod tests {
             );
         }
         for forbidden in [
-            "fn sync_nexushub_webd_helper_file",
+            "fn sync_agenthub_webd_helper_file",
             "fn sync_directory",
             "fn migrate_desktop_webui_dir_config",
             "fn reveal_main_window",
@@ -107,9 +107,9 @@ mod tests {
             );
         }
         assert!(
-            resources_source.contains("fn sync_nexushub_webd_helper_file")
+            resources_source.contains("fn sync_agenthub_webd_helper_file")
                 && resources_source
-                    .contains("pub(crate) fn sync_nexushub_webd_helper_from_resource"),
+                    .contains("pub(crate) fn sync_agenthub_webd_helper_from_resource"),
             "resources.rs must own helper resource sync implementation"
         );
         assert!(
@@ -187,7 +187,7 @@ mod tests {
 
         assert_eq!(
             registered, expected,
-            "Tauri invoke registration must be declared by contracts/nexushub-contract.json"
+            "Tauri invoke registration must be declared by contracts/agenthub-contract.json"
         );
     }
 
@@ -367,7 +367,7 @@ mod tests {
             "Tauri cleanup execute payload must reuse the shared core confirmation request"
         );
         assert!(
-            source.contains("NexusHubUseCases::new(state.platform()).cleanup()")
+            source.contains("AgentHubUseCases::new(state.platform()).cleanup()")
                 && source.contains(".execute_confirmed(")
                 && source.contains(".dry_run_archived(")
                 && source.contains(".execute_archived(")
@@ -463,7 +463,7 @@ mod tests {
             "thread_detail_read_model",
             "window_thread_detail_for_plan",
             "thread_blocks_page_for_plan",
-            "NexusHubUseCases::new(state.platform()).threads()",
+            "AgentHubUseCases::new(state.platform()).threads()",
         ] {
             assert!(
                 threads_source.contains(required),
@@ -538,7 +538,7 @@ mod tests {
             .expect("settings service source must include production section");
 
         for required in [
-            "NexusHubUseCases::with_config",
+            "AgentHubUseCases::with_config",
             ".settings()?",
             ".probe_settings_view(",
             ".save_probe_settings(",
@@ -589,7 +589,7 @@ mod tests {
             .unwrap_or(include_str!("services/probe.rs"));
 
         assert!(
-            probe_source.contains("NexusHubUseCases::with_config")
+            probe_source.contains("AgentHubUseCases::with_config")
                 && probe_source.contains(".probe()?")
                 && probe_source.contains(".status()?")
                 && probe_source.contains("probe_service::probe_status_with_runtime_read_model"),
@@ -618,7 +618,7 @@ mod tests {
             .expect("settings service source must include production section");
 
         for required in [
-            "NexusHubUseCases::with_config",
+            "AgentHubUseCases::with_config",
             ".probe()?",
             ".action_with_device_key(",
             "probe_fixed_shell_job_with_state(state, action, plan)",
@@ -646,10 +646,10 @@ mod tests {
             "commands/system.rs must delegate native work to services/system.rs"
         );
         for forbidden in [
-            "nexushub_core::local::local_plugin_catalog",
-            "nexushub_core::local::default_codex_models",
-            "nexushub_core::local::default_permission_profiles",
-            "nexushub_core::local::local_codex_config",
+            "agenthub_core::local::local_plugin_catalog",
+            "agenthub_core::local::default_codex_models",
+            "agenthub_core::local::default_permission_profiles",
+            "agenthub_core::local::local_codex_config",
         ] {
             assert!(
                 !system_commands_source.contains(forbidden),
@@ -900,7 +900,7 @@ mod tests {
                 "Nginx",
                 "nginx",
                 "sudo ",
-                "/opt/nexushub",
+                "/opt/agenthub",
             ] {
                 assert!(
                     !source.contains(forbidden),
@@ -951,7 +951,7 @@ mod tests {
         let boot_source = include_str!("desktop_boot.rs");
 
         assert!(
-            boot_source.contains("__NEXUSHUB_DESKTOP_RUNTIME__"),
+            boot_source.contains("__AGENTHUB_DESKTOP_RUNTIME__"),
             "Tauri must inject a desktop runtime marker before the WebUI bootstraps so macOS does not render the Web login gate"
         );
         assert!(

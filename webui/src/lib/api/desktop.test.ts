@@ -34,7 +34,7 @@ function installBridge(handler?: InvokeHandler) {
     return {};
   });
   vi.stubGlobal("__TAURI_INTERNALS__", { transformCallback, unregisterCallback });
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   return { callbacks, transformCallback, unregisterCallback, invoke };
 }
 

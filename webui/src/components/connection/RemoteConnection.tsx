@@ -320,7 +320,7 @@ export function RemoteConnectionSettings() {
             onChange={event => setBaseUrl(event.target.value)}
             autoComplete="off"
             disabled={busy}
-            placeholder="https://api.example.com/nexushub/"
+            placeholder="https://api.example.com/agenthub/"
           />
         </label>
         <label>

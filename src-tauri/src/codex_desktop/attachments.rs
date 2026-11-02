@@ -1,7 +1,7 @@
 //! OS attachment ingress. A receiver is scoped to one visible main-window
 //! composer, machine revision and desktop session. Channels never carry paths.
 use super::*;
-use nexushub_core::codex::desktop::references::NativeReference;
+use agenthub_core::codex::desktop::references::NativeReference;
 use tauri::{Manager, WebviewWindow};
 
 #[derive(Clone)]
@@ -97,7 +97,7 @@ async fn references(
 
 async fn release(runtime: &BridgeRuntime, references: Vec<NativeReference>) -> Result<(), String> {
     let store = runtime.attachments.clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         store
             .lock()
             .map_err(|_| "无法释放粘贴附件")?
@@ -163,7 +163,7 @@ pub(super) async fn handle(
         // owns a channel; other actions keep using the stored receiver.
         let channel = channel.channel_on(window.as_ref().clone());
         let receiver = Receiver {
-            id: nexushub_core::security::hash_token(&SecretBox::random_key_material()),
+            id: agenthub_core::security::hash_token(&SecretBox::random_key_material()),
             revision: request.revision,
             intent: bridge.intent.load(Ordering::SeqCst),
             session: request.session_id.clone(),
@@ -244,7 +244,7 @@ pub(super) async fn handle(
             }
             let store = runtime.attachments.clone();
             let (count, disposition, values) =
-                nexushub_core::read_tasks::spawn_blocking(move || {
+                agenthub_core::read_tasks::spawn_blocking(move || {
                     let capture = super::clipboard::capture()?;
                     use super::clipboard::PasteContent;
                     let (disposition, values) = match capture.content {
@@ -441,7 +441,7 @@ pub(super) fn drop_files(
             context(&window, &bridge, &remote, &runtime, &receiver).await?;
             let remaining = 32usize.saturating_sub(receiver.handles.len());
             let values =
-                nexushub_core::read_tasks::spawn_blocking(move || capture_drop(paths, remaining))
+                agenthub_core::read_tasks::spawn_blocking(move || capture_drop(paths, remaining))
                     .await
                     .map_err(|_| "无法读取拖入附件")??;
             deliver(

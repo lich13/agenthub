@@ -1,7 +1,7 @@
 //! Native selection grants: the WebUI receives opaque handles, never a path it
 //! can modify and ask Rust to read. Grants are bound to the machine revision and
 //! (for attachments) the current desktop selection.
-use nexushub_core::{codex::desktop::DesktopError, crypto::SecretBox, security::hash_token};
+use agenthub_core::{codex::desktop::DesktopError, crypto::SecretBox, security::hash_token};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -21,7 +21,7 @@ pub(super) enum GrantValue {
         device: u64,
         inode: u64,
     },
-    Reference(nexushub_core::codex::desktop::references::NativeReference),
+    Reference(agenthub_core::codex::desktop::references::NativeReference),
 }
 
 struct Grant {

@@ -413,7 +413,7 @@ fn pixel_budget_rejects_an_image_before_appkit_conversion() {
 
 #[test]
 fn attachment_paste_disposition_is_optional_for_old_responses() {
-    use nexushub_core::services::codex_desktop::{
+    use agenthub_core::services::codex_desktop::{
         DesktopAttachmentResult, DesktopPasteDisposition,
     };
     let old = serde_json::json!({"bindingId": "fixture-binding"});

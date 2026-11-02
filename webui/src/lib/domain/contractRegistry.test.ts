@@ -34,7 +34,7 @@ type ContractAction = {
   hostOnlyReason?: string;
 };
 
-type NexusHubContract = {
+type AgentHubContract = {
   hostSurfaces: string[];
   visual: {
     navigation: string[];
@@ -51,9 +51,9 @@ type NexusHubContract = {
   dtoCatalog: Record<string, { core: string; webui: string }>;
 };
 
-function contract(): NexusHubContract {
-  const url = new URL("../../../../contracts/nexushub-contract.json", import.meta.url);
-  return JSON.parse(readFileSync(fileURLToPath(url), "utf8")) as NexusHubContract;
+function contract(): AgentHubContract {
+  const url = new URL("../../../../contracts/agenthub-contract.json", import.meta.url);
+  return JSON.parse(readFileSync(fileURLToPath(url), "utf8")) as AgentHubContract;
 }
 
 function repositoryFile(path: string): string {
@@ -107,12 +107,12 @@ function apiCommandLiterals(): Set<string> {
 
 describe("contract registry", () => {
   test("has a schema and architecture audit that describe the supported parity boundary", () => {
-    const schema = JSON.parse(repositoryFile("contracts/nexushub-contract.schema.json")) as {
+    const schema = JSON.parse(repositoryFile("contracts/agenthub-contract.schema.json")) as {
       $id?: string;
       required?: string[];
       properties?: Record<string, unknown>;
     };
-    expect(schema.$id).toBe("https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json");
+    expect(schema.$id).toBe("https://github.com/lich13/agenthub/contracts/agenthub-contract.schema.json");
     expect(schema.required).toEqual([
       "schemaVersion",
       "hostSurfaces",
@@ -138,9 +138,9 @@ describe("contract registry", () => {
     for (const required of [
       "macOS ARM64",
       "Linux x86_64",
-      "nexushub-webd-linux-x86_64.tar.gz",
+      "agenthub-webd-linux-x86_64.tar.gz",
       "darwin-aarch64",
-      "contracts/nexushub-contract.json"
+      "contracts/agenthub-contract.json"
     ]) {
       expect(audit, `audit missing ${required}`).toContain(required);
     }

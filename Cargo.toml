@@ -1,7 +1,7 @@
 [workspace]
 members = [
-  "crates/nexushub-core",
-  "crates/nexushub-webd",
+  "crates/agenthub-core",
+  "crates/agenthub-webd",
 ]
 resolver = "2"
 
@@ -9,7 +9,7 @@ resolver = "2"
 version = "2.0.2"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/lich13/nexushub"
+repository = "https://github.com/lich13/agenthub"
 rust-version = "1.99"
 
 [workspace.dependencies]

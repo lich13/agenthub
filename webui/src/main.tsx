@@ -8,7 +8,7 @@ import { clearAttachmentCache } from "./lib/query/attachments";
 
 declare global {
   interface Window {
-    __NEXUSHUB_BOOT__?: {
+    __AGENTHUB_BOOT__?: {
       mounted: boolean;
       showError: (error: unknown) => void;
     };
@@ -38,7 +38,7 @@ class RootErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     try {
-      localStorage.setItem("nexushub.lastRenderError", error.message);
+      localStorage.setItem("agenthub.lastRenderError", error.message);
     } catch {
       // ignore storage failures
     }
@@ -65,6 +65,6 @@ createRoot(document.getElementById("root")!).render(
     <RootErrorBoundary><MachineWorkspace /></RootErrorBoundary>
   </React.StrictMode>
 );
-if (window.__NEXUSHUB_BOOT__) {
-  window.__NEXUSHUB_BOOT__.mounted = true;
+if (window.__AGENTHUB_BOOT__) {
+  window.__AGENTHUB_BOOT__.mounted = true;
 }

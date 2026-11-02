@@ -121,7 +121,7 @@ test("Claude paging retains the visible anchor and command expansion", async ({ 
 });
 
 test("Claude attachments and disclosure cache stay isolated between machines", async ({ page }) => {
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/nexushub/" } });
+  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
   let machine = "local";
   const reads: string[] = [];
   await mockCommand(page, "remote.select", async (args, next) => { const result = await next(); machine = args.request.target; return result; });

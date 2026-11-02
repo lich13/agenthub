@@ -118,14 +118,14 @@ async function loadRealApi() {
 async function loadDesktopApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
   vi.resetModules();
-  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
   return import("./api");
 }
 
 async function loadDesktopDemoApi() {
   vi.stubEnv("VITE_USE_REAL_API", "0");
   vi.resetModules();
-  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
   return import("./api");
 }
 
@@ -140,15 +140,15 @@ describe("archive delete API compatibility", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
-    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
-    delete globalThis.__NEXUSHUB_TEST_INVOKE__;
+    delete globalThis.__AGENTHUB_DESKTOP_RUNTIME__;
+    delete globalThis.__AGENTHUB_TEST_INVOKE__;
     vi.resetModules();
   });
 
   test("uses a typed confirmation payload with explicit archive targets", async () => {
     const { startArchiveDelete } = await loadRealApi();
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({}));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     await startArchiveDelete({ candidates: [{ id: "archive-fixture" }] });
 
@@ -195,7 +195,7 @@ describe("archive delete API compatibility", () => {
           integrity: "ok",
           deleted_rollout_files: 2
         }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     const plan = await dryRunHiddenThreadDelete();
     const result = await startHiddenThreadDelete({ expectedCount: plan.hidden_threads });
@@ -222,7 +222,7 @@ describe("archive delete API compatibility", () => {
       has_more_blocks: true,
       before_cursor: "b:120"
     }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     const detail = await getThread("thread-a", { limit: 120, before: "b:240", full: true });
 
@@ -241,7 +241,7 @@ describe("archive delete API compatibility", () => {
       events: [{ id: "event-1", kind: "hook-stop", source: "test", payload: {}, created_at: "2026-06-15T00:00:00Z" }],
       limit: 10
     }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     const result = await getProbeEvents(10);
 
@@ -310,7 +310,7 @@ describe("archive delete API compatibility", () => {
       hasMoreBlocks: true,
       beforeCursor: "b:120"
     }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
 
@@ -330,7 +330,7 @@ describe("archive delete API compatibility", () => {
     const { getThreadBlocks } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+    globalThis.__AGENTHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       expect(command).toBe("threads.blocks");
       expect(args).toEqual({
         id: "thread-a",
@@ -352,10 +352,10 @@ describe("archive delete API compatibility", () => {
     expect(page.before_cursor).toBe("b:120");
   });
 
-  test("routes NexusHub updates to typed runtime command endpoints", async () => {
+  test("routes AgentHub updates to typed runtime command endpoints", async () => {
     const { getUpdateStatus, updates } = await loadRealApi();
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "panel-job" }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     invokeMock.mockResolvedValueOnce(({
       current_version: "0.1.100",
@@ -364,7 +364,7 @@ describe("archive delete API compatibility", () => {
       channel: "stable",
       method: "linux_systemd_job",
       state: "idle",
-      recommended_action: "/usr/local/bin/nexushub-webd-update",
+      recommended_action: "/usr/local/bin/agenthub-webd-update",
       capabilities: ["job_history"]
     }));
     const status = await getUpdateStatus();
@@ -383,7 +383,7 @@ describe("archive delete API compatibility", () => {
   test("does not export legacy update job helper or codex update targets", async () => {
     const api = await loadRealApi();
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "unexpected" }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     expect("startUpdateJob" in api).toBe(false);
     expect(apiSource).not.toContain("codex/update");
@@ -392,7 +392,7 @@ describe("archive delete API compatibility", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  test("Probe demo data labels the builtin NexusHub service consistently", async () => {
+  test("Probe demo data labels the builtin AgentHub service consistently", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     const { getProbeStatus } = await import("./api");
@@ -406,7 +406,7 @@ describe("archive delete API compatibility", () => {
   test("desktop demo platform data reflects macOS Tauri instead of Linux WebUI", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
-    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
     const { getPlatformOverview, getProbeStatus } = await import("./api");
 
     await expect(getPlatformOverview()).resolves.toMatchObject({
@@ -427,7 +427,7 @@ describe("archive delete API compatibility", () => {
   test("desktop demo fixtures are built from macOS-only data", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
-    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
     const { getPlatformOverview, getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
 
     const systemCapabilities = await getSystemCapabilities();
@@ -450,13 +450,13 @@ describe("archive delete API compatibility", () => {
       linux_update_job: false,
       prune_backups: false
     });
-    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/agenthub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
   });
 
   test("Probe fixed jobs use typed runtime command endpoints and maintenance is retired", async () => {
     const api = await loadRealApi();
     const invokeMock = vi.fn(async () => ({ job_id: "bark-job-1" }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
     await expect(api.runProbeBarkTest()).resolves.toEqual({ job_id: "bark-job-1" });
     await expect(api.runProbeHooksInstall()).resolves.toEqual({ job_id: "bark-job-1" });
     await expect(api.runProbeHooksRemove()).resolves.toEqual({ job_id: "bark-job-1" });
@@ -472,7 +472,7 @@ describe("archive delete API compatibility", () => {
       available: true,
       platform: "linux",
       service_kind: "systemd",
-      service_name: "nexushub-webd",
+      service_name: "agenthub-webd",
       flavor: "builtin",
       hook_status: "managed",
       bark_status: "configured",
@@ -483,7 +483,7 @@ describe("archive delete API compatibility", () => {
       running_threads: [],
       reply_needed_threads: [],
       recoverable_threads: [],
-      config_path: "/etc/nexushub-webd/config.toml",
+      config_path: "/etc/agenthub-webd/config.toml",
       codex_home: "/root/.codex",
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
@@ -494,7 +494,7 @@ describe("archive delete API compatibility", () => {
     const responses: Record<string, unknown> = {
       "probe.status": probeStatus,
     };
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
@@ -527,7 +527,7 @@ describe("archive delete API compatibility", () => {
       running_threads: [],
       reply_needed_threads: [],
       recoverable_threads: [],
-      config_path: "/Users/example/Library/Application Support/NexusHub/config.toml"
+      config_path: "/Users/example/Library/Application Support/AgentHub/config.toml"
     };
     const responses: Record<string, unknown> = {
       "probe.status": probeStatus,
@@ -549,7 +549,7 @@ describe("archive delete API compatibility", () => {
         }
       }
     };
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
@@ -574,7 +574,7 @@ describe("archive delete API compatibility", () => {
       available: true,
       data: [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1, output: "" }]
     }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     await expect(listJobs()).resolves.toEqual([
       expect.objectContaining({ id: "job-a", kind: "probe" })
@@ -590,7 +590,7 @@ describe("archive delete API compatibility", () => {
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
       codex_home_source: "auto",
-      panel_db: "/var/lib/nexushub-webd/nexushub.sqlite"
+      panel_db: "/var/lib/agenthub-webd/agenthub.sqlite"
     };
 
     expect(app.codexHomeStatusValue(status)).toBe("/home/codex/.codex · auto");
@@ -707,7 +707,7 @@ describe("archive delete API compatibility", () => {
   test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
     const { saveProbeSettings } = await loadRealApi();
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ saved: true }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     await saveProbeSettings({
       codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
@@ -736,7 +736,7 @@ describe("archive delete API compatibility", () => {
   test("retired provider job helper is no longer exported", async () => {
     const api = await loadRealApi() as Record<string, unknown>;
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "unexpected" }));
-    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
 
     expect(api[["startClaude", "CodeJob"].join("")]).toBeUndefined();
     expect(api[["claudeCode", "JobRoutes"].join("")]).toBeUndefined();
@@ -755,7 +755,7 @@ describe("archive delete API compatibility", () => {
     const { getUpdateStatus, updates, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+    globalThis.__AGENTHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       if (command === "updates.install") {
         return { job_id: "desktop-native-job", installed: false };
       }
@@ -808,16 +808,16 @@ describe("archive delete API compatibility", () => {
     }
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.check", {});
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.install", {});
+    expect(globalThis.__AGENTHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
+    expect(globalThis.__AGENTHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.check", {});
+    expect(globalThis.__AGENTHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.install", {});
   });
 
   test("update prune is gated by capability matrix instead of runtime kind", async () => {
     const { updates, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args, job_id: "desktop-prune-job" }));
+    globalThis.__AGENTHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args, job_id: "desktop-prune-job" }));
 
     const desktopWithPrune = {
       ...runtimeCapabilitiesForRuntime("desktop"),
@@ -825,7 +825,7 @@ describe("archive delete API compatibility", () => {
     };
 
     await expect(updates.prune(desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.prune", {});
+    expect(globalThis.__AGENTHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.prune", {});
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -833,7 +833,7 @@ describe("archive delete API compatibility", () => {
     const { startArchiveDelete } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+    globalThis.__AGENTHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       expect(command).toBe("cleanup.archiveExecute");
       expect(args).toEqual({ request: { confirmed: true, candidates: [] } });
       return {
@@ -996,7 +996,7 @@ describe("archive delete API compatibility", () => {
       "`/api/",
       "new EventSource",
       "__TAURI_INTERNALS__",
-      "__NEXUSHUB_DESKTOP_RUNTIME__"
+      "__AGENTHUB_DESKTOP_RUNTIME__"
     ];
     const queryOnlyTokens = [
       "useQueryClient",
@@ -1079,7 +1079,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("macOS demo fixtures do not include Linux-only rendered copy or paths", async () => {
-    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
     const {
       buildDemoFixture,
       buildDemoPlatformOverview,
@@ -1105,7 +1105,7 @@ describe("archive delete API compatibility", () => {
     ];
     const serialized = JSON.stringify(macosFixtures);
 
-    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/nexushub|192\.0\.2\.10|panel\.example\.com|\/home\/ubuntu|\/root\/\.codex/i);
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/agenthub|192\.0\.2\.10|panel\.example\.com|\/home\/ubuntu|\/root\/\.codex/i);
   });
 
   test("production source files keep transport, domain API, and query cache boundaries explicit", () => {
@@ -1206,7 +1206,7 @@ describe("archive delete API compatibility", () => {
     expect(archived.every((thread) => thread.status === "Archived")).toBe(true);
   });
 
-  test("NexusHub navigation exposes the slim provider workspaces", async () => {
+  test("AgentHub navigation exposes the slim provider workspaces", async () => {
     const app = await import("../test/domain");
 
     expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual([

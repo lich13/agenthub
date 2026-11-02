@@ -2,15 +2,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 describe("file path runtime adapter", () => {
   afterEach(() => {
-    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
-    delete globalThis.__NEXUSHUB_TEST_INVOKE__;
+    delete globalThis.__AGENTHUB_DESKTOP_RUNTIME__;
+    delete globalThis.__AGENTHUB_TEST_INVOKE__;
     vi.resetModules();
   });
 
   test("desktop reveals a validated path through the existing opener plugin", async () => {
-    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
     const invoke = vi.fn(async (command: string, args: unknown) => ({ command, args }));
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = invoke;
+    globalThis.__AGENTHUB_TEST_INVOKE__ = invoke;
     const { revealLocalPath } = await import("./filePaths");
     await revealLocalPath("/workspace/中文 文件.md");
     expect(invoke).toHaveBeenCalledWith("plugin:opener|reveal_item_in_dir", { paths: ["/workspace/中文 文件.md"] });
@@ -24,7 +24,7 @@ describe("file path runtime adapter", () => {
 
   test("remote paths never invoke the local opener even when a native bridge exists", async () => {
     const invoke = vi.fn(async () => ({ target: "remote", revision: 1, baseUrl: "https://api.example.com/", configured: true }));
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = invoke;
+    globalThis.__AGENTHUB_TEST_INVOKE__ = invoke;
     const { remoteSelect } = await import("../runtime");
     await remoteSelect("remote");
     const { canRevealLocalPath, revealLocalPath } = await import("./filePaths");

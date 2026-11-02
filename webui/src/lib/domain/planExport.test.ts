@@ -17,9 +17,9 @@ test.each(["local", "remote"] as const)("saving a %s Plan sends cleaned Markdown
   vi.resetModules();
   const saved = { filename: "Visible Plan (2).md" };
   const invoke = vi.fn((command: string) => command === "remote.get"
-    ? { target, revision: 7, baseUrl: "https://api.example.com/nexushub/", configured: true }
+    ? { target, revision: 7, baseUrl: "https://api.example.com/agenthub/", configured: true }
     : saved);
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   const runtime = await import("../runtime");
   await runtime.initializeConnection();
   const { downloadPlanMarkdown } = await import("./planExport");
@@ -35,7 +35,7 @@ test.each(["local", "remote"] as const)("saving a %s Plan sends cleaned Markdown
 
 test("native save failure rejects so the Plan can show failure and allow retry", async () => {
   const invoke = vi.fn().mockRejectedValue(new Error("Downloads is not writable"));
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   const { downloadPlanMarkdown } = await import("./planExport");
   await expect(downloadPlanMarkdown("# Plan", "Plan.md")).rejects.toThrow("Downloads is not writable");
   expect(invoke).toHaveBeenCalledTimes(1);

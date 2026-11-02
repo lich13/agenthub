@@ -92,7 +92,7 @@ test("running and failed AGENTS tools stay folded inside mixed Grok activity", a
 
 for (const provider of ["codex", "grok"]) {
   test(`${provider} remote file Markdown copies the source path without navigation`, async ({ page }) => {
-    await mockApi(page, { connection: { target: "remote", revision: 1, baseUrl: "https://api.example.com/nexushub/", configured: true } });
+    await mockApi(page, { connection: { target: "remote", revision: 1, baseUrl: "https://api.example.com/agenthub/", configured: true } });
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copiedPath = value; } } });
     });

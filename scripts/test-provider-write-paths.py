@@ -12,7 +12,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 parser = argparse.ArgumentParser()
-parser.add_argument("--module", type=Path, default=Path(__file__).resolve().parents[1] / "deploy/nexushub-webd/provider-session-write-paths.py")
+parser.add_argument("--module", type=Path, default=Path(__file__).resolve().parents[1] / "deploy/agenthub-webd/provider-session-write-paths.py")
 parser.add_argument("--systemd", action="store_true")
 args = parser.parse_args()
 spec = importlib.util.spec_from_file_location("provider_paths", args.module)
@@ -78,7 +78,7 @@ class ProviderWritePathsTests(unittest.TestCase):
 
 def systemd_fixture():
     # Every write belongs to this temporary fixture, never a native provider.
-    with tempfile.TemporaryDirectory(prefix="nexushub-provider-test-", dir=Path.home()) as temporary:
+    with tempfile.TemporaryDirectory(prefix="agenthub-provider-test-", dir=Path.home()) as temporary:
         root = Path(temporary)
         values = {"GROK_HOME": str(root / "grok"), "CLAUDE_CONFIG_DIR": str(root / "claude"), "CODEX_HOME": str(root / "codex")}
         for key, value in values.items():
@@ -97,7 +97,7 @@ roots=json.loads(sys.argv[1]); protected=json.loads(sys.argv[2]); legacy=sys.arg
 for key, value in roots.items():
     root=Path(value)
     index=root/'active_sessions.json'
-    temporary=root/'.nexushub-index-fixture'
+    temporary=root/'.agenthub-index-fixture'
     try:
         temporary.write_text(json.dumps([row for row in json.loads(index.read_text()) if row['id']!='selected']))
         os.replace(temporary,index)

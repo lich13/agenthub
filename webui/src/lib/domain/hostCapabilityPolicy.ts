@@ -37,7 +37,7 @@ export function redactHostCopy(value: string, fallback: string): string {
     .replace(/https?:\/\/[^\s)"']+/gi, "本机入口")
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "本机地址")
     .replace(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/gi, "本机域名")
-    .replace(/\/opt\/nexushub[^\s)"']*/gi, "本机路径")
+    .replace(/\/opt\/agenthub[^\s)"']*/gi, "本机路径")
     .replace(/\/root\/\.codex[^\s)"']*/gi, "本机 Codex 目录")
     .replace(/\/home\/[^/\s]+[^\s)"']*/gi, "本机工作区")
     .replace(/公网入口/g, "本机入口")
@@ -48,7 +48,7 @@ export function redactHostCopy(value: string, fallback: string): string {
     .replace(/\bLinux\b/g, "当前宿主")
     .replace(/\bsudo\b/gi, "权限")
     .trim();
-  return /systemd|nginx|Linux prune|Linux update|sudo|\/opt\/nexushub|\/root\/\.codex|\/home\/[^/\s]+/i.test(sanitized)
+  return /systemd|nginx|Linux prune|Linux update|sudo|\/opt\/agenthub|\/root\/\.codex|\/home\/[^/\s]+/i.test(sanitized)
     ? fallback
     : sanitized || fallback;
 }

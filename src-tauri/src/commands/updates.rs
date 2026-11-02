@@ -6,7 +6,7 @@ use crate::{
         self as update_service, DesktopUpdateCheckResponse, DesktopUpdateInstallResponse,
     },
 };
-use nexushub_core::services::updates::UpdateStatus;
+use agenthub_core::services::updates::UpdateStatus;
 use tauri::AppHandle;
 
 #[tauri::command(rename = "updates.status")]

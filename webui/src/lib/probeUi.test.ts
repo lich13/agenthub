@@ -34,7 +34,7 @@ const settings: ProbeSettings = {
       server_url: "https://api.day.app",
       sound: "bell",
       group: "AgentHub",
-      url: "https://panel.example.com/nexushub/",
+      url: "https://panel.example.com/agenthub/",
       notify_completion: true,
       notify_reply_needed: true,
       notify_recoverable: true
@@ -52,7 +52,7 @@ const settings: ProbeSettings = {
     server_url: "https://api.day.app",
     sound: "bell",
     group: "AgentHub",
-    url: "https://panel.example.com/nexushub/",
+    url: "https://panel.example.com/agenthub/",
     notify_completion: true,
     notify_reply_needed: true,
     notify_recoverable: true
@@ -74,7 +74,7 @@ describe("Probe UI helpers", () => {
       title: "Codex Reply Needed",
       message: "Need operator input",
       dedupe_key: "reply-needed:thread-a:turn-a",
-      source: "nexushub-webd probe passive-scan",
+      source: "agenthub-webd probe passive-scan",
       payload: {
         bark: {
           sent: false,
@@ -96,7 +96,7 @@ describe("Probe UI helpers", () => {
     expect(display.summary).toContain("Need operator input");
     expect(display.bark).toBe("Bark 已跳过");
     expect(display.dedupe).toBe("重复事件");
-    expect(display.source).toBe("nexushub-webd probe passive-scan");
+    expect(display.source).toBe("agenthub-webd probe passive-scan");
     expect(display.time).toContain("2026-06-15");
     expect(JSON.stringify(display)).not.toContain("secret-device-key");
   });
@@ -109,7 +109,7 @@ describe("Probe UI helpers", () => {
       title: "reply-needed",
       message: "",
       dedupe_key: "reply-needed:thread-a:turn-a",
-      source: "nexushub-webd probe passive-scan",
+      source: "agenthub-webd probe passive-scan",
       payload: {
         summary: "Plan Mode 等待用户确认",
         status: "reply-needed"
@@ -139,7 +139,7 @@ describe("Probe UI helpers", () => {
         body_summary: "Plan Mode 等待用户确认",
         body_sha256: "abc123",
         body_length: 324,
-        source: "nexushub-webd probe passive-scan",
+        source: "agenthub-webd probe passive-scan",
         bark: {
           title: "等待回复：Plan Mode 修复",
           sent: true,
@@ -168,7 +168,7 @@ describe("Probe UI helpers", () => {
       headline: "Plan Mode 修复",
       summary: "Plan Mode 等待用户确认",
       reason: "等待用户确认",
-      source: "nexushub-webd probe passive-scan",
+      source: "agenthub-webd probe passive-scan",
       time: "2026-06-16 09:30:00 北京时间",
       bark: { label: "Bark 已受理", tone: "success" },
       dedupe: { label: "已认领", tone: "success" }
@@ -190,7 +190,7 @@ describe("Probe UI helpers", () => {
       id: "event-bark-body",
       kind: "completion",
       thread_id: "thread-safe",
-      source: "nexushub-webd probe notify-completion",
+      source: "agenthub-webd probe notify-completion",
       payload: {
         event_type: "completion",
         thread_title: "完整反馈测试",
@@ -226,7 +226,7 @@ describe("Probe UI helpers", () => {
       id: "event-long-summary",
       kind: "completion",
       thread_id: "thread-a",
-      source: "nexushub-webd probe notify-completion",
+      source: "agenthub-webd probe notify-completion",
       payload: {
         event_type: "completion",
         body_summary: "长正文片段 ".repeat(80),
@@ -393,7 +393,7 @@ describe("Probe UI helpers", () => {
           server_url: "https://api.day.app",
           sound: "bell",
           group: "AgentHub",
-          url: "https://panel.example.com/nexushub/",
+          url: "https://panel.example.com/agenthub/",
           notify_completion: true,
           notify_reply_needed: true,
           notify_codex: true,

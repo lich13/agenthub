@@ -1,7 +1,7 @@
 //! The only desktop mutation entrypoint. It is not registered with webd or the
 //! remote bridge. Paths and credentials originate in Rust/native choosers.
 use crate::{overview::DesktopState, remote::RemoteConnections};
-use nexushub_core::{
+use agenthub_core::{
     codex::{
         self,
         desktop::{helper::DesktopHelper, worker::DesktopWorker, DesktopError, DesktopSession},
@@ -33,7 +33,7 @@ mod diagnostics;
 mod selection;
 use selection::{GrantValue, Grants};
 
-const KEY_SERVICE: &str = "com.lich13.nexushub.codex-desktop";
+const KEY_SERVICE: &str = "com.lich13.agenthub.codex-desktop";
 const KEY_ACCOUNT: &str = "submission-encryption-v1";
 const MAX_WORKERS: usize = 4;
 
@@ -78,7 +78,7 @@ struct BridgeRuntime {
     workers: Mutex<HashMap<String, DesktopWorker>>,
     connecting: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     selection: Mutex<Option<Selection>>,
-    attachments: Arc<std::sync::Mutex<nexushub_core::codex::desktop::attachments::AttachmentStore>>,
+    attachments: Arc<std::sync::Mutex<agenthub_core::codex::desktop::attachments::AttachmentStore>>,
 }
 
 struct Selection {
@@ -107,10 +107,10 @@ impl CodexDesktopBridge {
         }
         let db = state.db.clone();
         let attachment_root =
-            nexushub_core::codex::desktop::attachments::root_for_database(db.path());
+            agenthub_core::codex::desktop::attachments::root_for_database(db.path());
         let existing_root = attachment_root.clone();
         let home = state.codex_paths().home;
-        let (lease, home, existing) = nexushub_core::read_tasks::spawn_blocking(move || {
+        let (lease, home, existing) = agenthub_core::read_tasks::spawn_blocking(move || {
             let lease = DesktopLedger::lock_database(&db)
                 .map_err(|_| "另一个 AgentHub 正在使用本机发送队列")?;
             let existing = DesktopLedger::has_encrypted_messages(&db)
@@ -152,10 +152,10 @@ impl CodexDesktopBridge {
             })
             .await
             .map_err(|_| "钥匙串未及时响应，请检查系统授权")??;
-        let source = nexushub_core::security::hash_token(&home.to_string_lossy());
+        let source = agenthub_core::security::hash_token(&home.to_string_lossy());
         let attachment_crypto = crypto.clone();
-        let (attachments, lease) = nexushub_core::read_tasks::spawn_blocking(move || {
-            let attachments = nexushub_core::codex::desktop::attachments::AttachmentStore::open(
+        let (attachments, lease) = agenthub_core::read_tasks::spawn_blocking(move || {
+            let attachments = agenthub_core::codex::desktop::attachments::AttachmentStore::open(
                 attachment_root,
                 attachment_crypto,
                 chrono::Utc::now().timestamp().max(0) as u64,
@@ -168,7 +168,7 @@ impl CodexDesktopBridge {
         let recovery = ledger.clone();
         let recovery_source = source.clone();
         let recovery_lease = lease.clone();
-        nexushub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::read_tasks::spawn_blocking(move || {
             let _lease = recovery_lease;
             recovery.recover(&recovery_source)
         })
@@ -290,8 +290,8 @@ fn session_token(subscription: &str, epoch: &str) -> String {
 }
 
 pub(crate) fn desktop_error(error: DesktopError) -> String {
-    nexushub_core::codex::desktop::diagnostics::record(
-        nexushub_core::codex::desktop::diagnostics::Source::Local,
+    agenthub_core::codex::desktop::diagnostics::record(
+        agenthub_core::codex::desktop::diagnostics::Source::Local,
         "connect",
         None,
         None,
@@ -304,7 +304,7 @@ pub(crate) fn desktop_error(error: DesktopError) -> String {
 async fn verify_thread(state: &DesktopState, thread_id: &str) -> Result<(), String> {
     let paths = state.codex_paths();
     let id = thread_id.to_owned();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         let summary = codex::local_thread_summary(&paths, &id)
             .map_err(|_| "无法核对本机线程")?
             .ok_or("此线程当前不可用于桌面协作")?;
@@ -373,7 +373,7 @@ pub async fn attach(
     if bridge.intent.load(Ordering::SeqCst) != intent {
         return Err("所选线程已变化，已丢弃旧连接".into());
     }
-    let token = nexushub_core::security::hash_token(&SecretBox::random_key_material());
+    let token = agenthub_core::security::hash_token(&SecretBox::random_key_material());
     let mut updates = worker.subscribe();
     // Read the initial value from this subscription so a change between the
     // snapshot and subscription cannot be missed while native Codex is idle.
@@ -450,7 +450,7 @@ pub async fn action(
             .collect::<Result<Vec<_>, String>>()?
     };
     let attachments = runtime.attachments.clone();
-    let references = nexushub_core::read_tasks::spawn_blocking(move || {
+    let references = agenthub_core::read_tasks::spawn_blocking(move || {
         // The same mutex serializes draft cleanup and handoff retention. A file
         // cannot be released between capture and the durable retention marker.
         let mut store = attachments.lock().map_err(|_| "无法核对粘贴附件")?;
@@ -627,11 +627,11 @@ pub async fn choose(
         .and_then(|name| name.to_str())
         .unwrap_or("所选目录")
         .to_owned();
-    let value = nexushub_core::read_tasks::spawn_blocking(move || {
+    let value = agenthub_core::read_tasks::spawn_blocking(move || {
         if directory {
             selection::project(path)
         } else {
-            nexushub_core::codex::desktop::references::NativeReference::selected_file_detailed(path)
+            agenthub_core::codex::desktop::references::NativeReference::selected_file_detailed(path)
                 .map(GrantValue::Reference)
                 .map_err(|(_, message)| message.to_owned())
         }
@@ -673,7 +673,7 @@ pub async fn create(
             .lock()
             .await
             .resolve(request.revision, None, &request.project_handle)?;
-    let cwd = nexushub_core::read_tasks::spawn_blocking(move || selection::project_path(value))
+    let cwd = agenthub_core::read_tasks::spawn_blocking(move || selection::project_path(value))
         .await
         .map_err(|_| "无法读取所选目录")??;
     let helper = DesktopHelper::installed(state.codex_paths().home)

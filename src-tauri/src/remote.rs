@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use nexushub_core::services::{
+use agenthub_core::services::{
     commands::{is_allowed_rpc_command, is_mutating_rpc_command},
     remote::{
         credentials::{CredentialAccess, CredentialAccessError},
@@ -22,9 +22,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const KEYCHAIN_SERVICE: &str = "com.lich13.nexushub.remote";
+const KEYCHAIN_SERVICE: &str = "com.lich13.agenthub.remote";
 const LEGACY_MACHINE_ID: &str = "m-legacy";
-use nexushub_core::resource_limits::{
+use agenthub_core::resource_limits::{
     CREDENTIAL_WAIT, REMOTE_RESPONSE_BYTES as MAX_RESPONSE_BYTES,
 };
 
@@ -414,7 +414,7 @@ impl RemoteConnections {
             return Err(value
                 .get("error")
                 .and_then(Value::as_str)
-                .map(nexushub_core::security::redact_output)
+                .map(agenthub_core::security::redact_output)
                 .unwrap_or_else(|| format!("远程操作失败，HTTP {}", status.as_u16())));
         }
         Ok(value)
@@ -997,7 +997,7 @@ mod tests {
             &legacy_path,
             serde_json::to_vec(&json!({
                 "target": "remote",
-                "baseUrl": "https://api.example.com/nexus",
+                "baseUrl": "https://api.example.com/agenthub",
                 "revision": 8
             }))
             .unwrap(),
@@ -1011,7 +1011,7 @@ mod tests {
         assert!(view.configured);
         assert_eq!(
             view.base_url.as_deref(),
-            Some("https://api.example.com/nexus/")
+            Some("https://api.example.com/agenthub/")
         );
         assert_eq!(view.active_machine_id.as_deref(), Some(LEGACY_MACHINE_ID));
         assert_eq!(view.active_machine_name.as_deref(), Some("api.example.com"));
@@ -1022,7 +1022,7 @@ mod tests {
             .apply_saved_profile_in_prefs(
                 "m-second".to_string(),
                 "构建节点 B".to_string(),
-                "https://build-b.example.com/nexushub/".to_string(),
+                "https://build-b.example.com/agenthub/".to_string(),
             )
             .unwrap();
         assert_eq!(view_b.machines.len(), 2);
@@ -1030,14 +1030,14 @@ mod tests {
         assert_eq!(view_b.active_machine_name.as_deref(), Some("构建节点 B"));
         assert_eq!(
             view_b.base_url.as_deref(),
-            Some("https://build-b.example.com/nexushub/")
+            Some("https://build-b.example.com/agenthub/")
         );
 
         let view_renamed = loaded
             .apply_saved_profile_in_prefs(
                 LEGACY_MACHINE_ID.to_string(),
                 "主力节点 A".to_string(),
-                "https://api.example.com/nexus/".to_string(),
+                "https://api.example.com/agenthub/".to_string(),
             )
             .unwrap();
         assert_eq!(
@@ -1059,7 +1059,7 @@ mod tests {
         assert_eq!(switched.active_machine_id.as_deref(), Some("m-second"));
         assert_eq!(
             switched.base_url.as_deref(),
-            Some("https://build-b.example.com/nexushub/")
+            Some("https://build-b.example.com/agenthub/")
         );
 
         // Removing the active machine safely falls back to Local while keeping remaining machines.
@@ -1089,11 +1089,11 @@ mod tests {
     #[test]
     fn connection_addresses_and_names_validate_cleanly() {
         assert_eq!(
-            normalized_base_url("https://api.example.com/nexus").unwrap(),
-            "https://api.example.com/nexus/"
+            normalized_base_url("https://api.example.com/agenthub").unwrap(),
+            "https://api.example.com/agenthub/"
         );
         assert_eq!(
-            normalized_machine_name(None, "https://api.example.com:8443/nexus/").unwrap(),
+            normalized_machine_name(None, "https://api.example.com:8443/agenthub/").unwrap(),
             "api.example.com:8443"
         );
         assert_eq!(

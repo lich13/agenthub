@@ -5,11 +5,11 @@ use std::{
 
 use tauri::{PhysicalPosition, PhysicalSize, Runtime, Size, WebviewWindow};
 
-use nexushub_core::platform::PlatformPaths;
+use agenthub_core::platform::PlatformPaths;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
-window.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+window.__AGENTHUB_DESKTOP_RUNTIME__ = true;
 "#;
 
 const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
@@ -19,8 +19,8 @@ const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
   return {
     readyState: document.readyState,
     title: document.title,
-    desktopRuntime: window.__NEXUSHUB_DESKTOP_RUNTIME__ === true,
-    bootMounted: Boolean(window.__NEXUSHUB_BOOT__ && window.__NEXUSHUB_BOOT__.mounted),
+    desktopRuntime: window.__AGENTHUB_DESKTOP_RUNTIME__ === true,
+    bootMounted: Boolean(window.__AGENTHUB_BOOT__ && window.__AGENTHUB_BOOT__.mounted),
     rootChildren: root ? root.children.length : -1,
     rootClass: root && root.firstElementChild ? root.firstElementChild.className : "",
     bodyTextLength: bodyText.length,
@@ -85,7 +85,7 @@ fn append_desktop_app_log(message: &str) {
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(paths.log_dir.join("nexushub.log"))
+        .open(paths.log_dir.join("agenthub.log"))
     else {
         return;
     };

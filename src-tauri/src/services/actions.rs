@@ -1,4 +1,4 @@
-use nexushub_core::services::jobs as job_service;
+use agenthub_core::services::jobs as job_service;
 use serde::Serialize;
 use serde_json::Value;
 

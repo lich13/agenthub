@@ -1,14 +1,14 @@
 use crate::overview::DesktopState;
-use anyhow::Result;
-use nexushub_core::{
+use agenthub_core::{
     probe::{ProbeRuntime, ProbeStatus},
-    services::{probe as probe_service, use_cases::NexusHubUseCases},
+    services::{probe as probe_service, use_cases::AgentHubUseCases},
 };
+use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
     let config = state.config();
     let limit = config.probe.recent_limit.clamp(1, 200);
-    let facade_status = NexusHubUseCases::with_config(&config, state.platform())
+    let facade_status = AgentHubUseCases::with_config(&config, state.platform())
         .probe()?
         .status()?
         .status;
@@ -17,7 +17,7 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
         .await?;
     if let Some(raw) = state.db.get_setting("probe_error_monitor_status")? {
         if let Ok(runtime) = serde_json::from_str::<
-            nexushub_core::probe_error_monitor::ProbeErrorMonitorRuntimeStatus,
+            agenthub_core::probe_error_monitor::ProbeErrorMonitorRuntimeStatus,
         >(&raw)
         {
             status.error_monitor_status = runtime.status;

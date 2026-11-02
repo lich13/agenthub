@@ -6,8 +6,8 @@ export type DemoFixture = {
   system: SystemCapabilitiesResponse;
 };
 
-const macApplicationSupport = "~/Library/Application Support/NexusHub";
-const linuxDemoRoot = "/srv/nexushub-demo";
+const macApplicationSupport = "~/Library/Application Support/AgentHub";
+const linuxDemoRoot = "/srv/agenthub-demo";
 
 type CapabilityFieldValues = Record<DemoFixtureKey, boolean>;
 
@@ -75,8 +75,8 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
       kind: desktop ? "macos" : "linux",
       data_dir: root,
       config_file: `${root}/config.toml`,
-      log_dir: desktop ? "~/Library/Logs/NexusHub" : `${root}/logs`,
-      service_name: desktop ? "AgentHub.app" : "nexushub-webd",
+      log_dir: desktop ? "~/Library/Logs/AgentHub" : `${root}/logs`,
+      service_name: desktop ? "AgentHub.app" : "agenthub-webd",
       service_kind: desktop ? "tauri" : "systemd"
     },
     system: {

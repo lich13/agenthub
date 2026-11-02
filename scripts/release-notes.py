@@ -14,11 +14,11 @@ HIGHLIGHTS: dict[str, list[str]] = {
     ],
     "2.0.1": [
         "全面统一 AgentHub 品牌文案，将 styles.css 深度重构并真实减半至 47.8 KB（单行最长 136 字符），提取 useProviderWorkspace、StandardProviderEventView 与 SessionDeleteConfirmDialog 精简全部七大工作区",
-        "修复并自愈 Antigravity 顶层 nexushub Stop Hook 与 Grok Hook 宿主配置，消除 Antigravity／DSH／Grok／Claude 跨模块重复代码，并将 Codex 清理预扫描与 Probe 活跃扫描优化为单次流式读取。",
+        "修复并自愈 Antigravity 顶层 agenthub Stop Hook 与 Grok Hook 宿主配置，消除 Antigravity／DSH／Grok／Claude 跨模块重复代码，并将 Codex 清理预扫描与 Probe 活跃扫描优化为单次流式读取。",
     ],
     "2.0.0": [
         "重绘无平台数量限制的「Command Nexus（多轨星枢）」图标，将 styles.css 彻底重写压减至 566 行纯净三层令牌，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 重构全部七大工作区",
-        "修复 Antigravity 顶层 nexushub Stop Hook 契约（stdout 输出 allow 放行决策）与 Grok 重复 Hook 清理，合并 Antigravity 端点缓存并消除存活进程瞬时负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与空闲回收，并将 Probe 扫描 I/O 减半。",
+        "修复 Antigravity 顶层 agenthub Stop Hook 契约（stdout 输出 allow 放行决策）与 Grok 重复 Hook 清理，合并 Antigravity 端点缓存并消除存活进程瞬时负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与空闲回收，并将 Probe 扫描 I/O 减半。",
     ],
     "1.9.0": [
         "品牌正式焕新为 AgentHub（AgentHub.app 与全新钛黑五节点星枢图标），落地 --bg-rail／--bg-list／--bg-stage 三层纯正 ChatGPT macOS 桌面表面，Probe 升级为首屏控制台并新增 Grok Build 与 Antigravity 受管实时 Hooks",
@@ -126,7 +126,7 @@ HIGHLIGHTS: dict[str, list[str]] = {
     ],
     "1.2.15": [
         "Bark 网络异常后有限重试，重启继续未确认分段，减少漏推。",
-        "细分安全错误与中文投递状态，统一 NexusHub 测试文案并移除旧配置导入。",
+        "细分安全错误与中文投递状态，统一 AgentHub 测试文案并移除旧配置导入。",
     ],
     "1.2.14": [
         "移除 Gotify 设置和推送能力，通知统一使用 Bark。",
@@ -159,7 +159,7 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "完成隐私清理和仓库结构整理，远程部署参数继续从仓库外提供。",
     ],
     "1.1.0": [
-        "移除 NexusHub 自有 Goal 与自动恢复链路。",
+        "移除 AgentHub 自有 Goal 与自动恢复链路。",
         "Codex、Grok、Pi 统一显示运行状态，并将连续命令整理为可折叠执行组。",
         "发布资产收敛为 macOS App、updater 和 Linux webd 服务包。",
     ],
@@ -230,7 +230,7 @@ HIGHLIGHTS: dict[str, list[str]] = {
     "1.2.8": [
         "线程右键直接打开操作菜单，Codex 普通与归档线程支持预览后永久删除。",
         "隐藏线程清理逐项跳过受保护项目，修复列表宽度并优化一次性启动窗口适配。",
-        "移除 NexusHub 的 Pi 集成，保留原生 Pi 程序与用户数据；远程 API 协议升级为 2。",
+        "移除 AgentHub 的 Pi 集成，保留原生 Pi 程序与用户数据；远程 API 协议升级为 2。",
     ],
     "1.2.7": [
         "左侧时间线只标记用户发送指令的位置，滚动时高亮对应指令；助手回复和工具内容仍可搜索定位。",
@@ -251,7 +251,7 @@ def render(version: str, *, updater: bool = False) -> str:
     if version in ("2.0.2", "2.0.1", "2.0.0"):
         sections = {
             "版本概览": [
-                "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 nexushub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"
+                "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 agenthub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"
             ],
             "功能调整": [
                 "多轨星枢图标与全工作区深度重写：重绘平台无关的「Command Nexus（多轨星枢）」矢量图标并导出全套 macOS／Windows／Web 图标资产；彻底重写 styles.css（从 1,189 行压减至 566 行），废除全部历史兼容别名，确立 --bg-rail、--bg-surface、--bg-stage、--bg-elevated 与 ws-* 核心原语；提取 WorkspaceSplitShell 与 useCopyFeedback 统一重构 Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness、Probe 与设置七大工作区。",
@@ -259,12 +259,12 @@ def render(version: str, *, updater: bool = False) -> str:
                 "服务端 CPU／内存／磁盘深度减负：合并 core 与 webd 重复的 Antigravity 端点缓存，仅在无 language_server 进程时缓存 5 秒空结果；新增 Grok 进程快照 1 秒短缓存，移除 READONLY_SNAPSHOT_CACHE 与 LIVE_PROVIDER_SESSIONS_CACHE 的 #[cfg(not(test))] 门禁，补齐 sandbox_root／codex_home／paths.home 隔离键并全部纳入 evict_idle_detail_caches；在 aggregate_active_sessions 中单次扫描复用会话与通知快照，磁盘与子进程开销直接减半。",
             ],
             "问题修复": [
-                "Antigravity 与 Grok Hook 契约对齐：Antigravity 改用 ~/.gemini/config/hooks.json 标准顶层 nexushub 结构（仅注册 Stop 事件）并自动清理旧版污染的顶层 hooks 键，nexushub-webd antigravity-hook 恒向 stdout 输出 {\"decision\":\"allow\"} 并以退出码 0 结束；Grok 安装／修复时自动清理同属 nexushub-webd 的遗留 claude-hook 重复条目。",
+                "Antigravity 与 Grok Hook 契约对齐：Antigravity 改用 ~/.gemini/config/hooks.json 标准顶层 agenthub 结构（仅注册 Stop 事件）并自动清理旧版污染的顶层 hooks 键，agenthub-webd antigravity-hook 恒向 stdout 输出 {\"decision\":\"allow\"} 并以退出码 0 结束；Grok 安装／修复时自动清理同属 agenthub-webd 的遗留 claude-hook 重复条目。",
                 "清理执行器、目录枚举与 DSH 复杂度优化：在 cleanup.rs 提炼 run_scope_targets 将五作用域执行段压缩至约 75 行；在 selected_codex/tree.rs 提炼 visit_codex_tree_files 让 inventory 与 estimate_bytes_batch 共享唯一路径发现真相源；DSH load_all_events 改用未决工具下标栈，将复杂度从 O(轮数×事件数) 降至 O(events) 线性时间。",
                 "全仓测试沙箱化与新增单测覆盖：将剩余测试中的 Config::default() 全面切换为 TempDir 沙箱配置，并补齐批量体积估算、O(K) 隐藏删除、各缓存命中／失效／目录隔离及 Antigravity Hook stdout 契约的直接单元测试。",
             ],
             "兼容性与迁移": [
-                "API 协议保持 2；底层 Bundle ID（com.lich13.nexushub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 nexushub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
                 "升级后本机守护进程会自动将已安装的旧版 Antigravity／Grok Hook 配置平滑升级为 2.0.0 规范格式，并完整保留用户自定义第三方 hooks。",
             ],
             "支持平台与资产": [
@@ -290,18 +290,18 @@ def render(version: str, *, updater: bool = False) -> str:
                 "品牌正式焕新为 AgentHub（应用包 AgentHub.app 与全新 macOS Sequoia 钛黑五节点星枢图标），修复 DeepSeek Harness 已完成线程转圈误判并落地五平台热路径内存缓存，将 Probe 重构为首屏控制台并新增 Grok Build 与 Antigravity 受管实时 Hooks，瘦身统一清理引擎并实现 Codex 隐藏／归档清理 O(K) 定向校验与 O(N) 单次目录扫描，落地 --bg-rail／--bg-list／--bg-stage 三层纯正 ChatGPT macOS App 表面体系；API 协议保持 2。"
             ],
             "功能调整": [
-                "AgentHub 品牌焕新与三层 ChatGPT macOS 界面重写：正式更名为 AgentHub（macOS 应用包 AgentHub.app、安装包 AgentHub-1.9.0-darwin-arm64.dmg，底层标识保持 com.lich13.nexushub 零迁移），重新设计高清深空钛黑五节点星枢图标；完整重写 styles.css 引入 --bg-rail、--bg-list、--bg-stage 三层纯正中性灰阶表面并收敛工作区共享 Hooks。",
-                "Probe 首屏控制台与五平台统一 Hooks／Host 矩阵：进入 Probe 默认首屏直接呈现主控开关、五大 Agent 平台级通知开关、Bark 配置与测试推送、五平台统一 Hooks／Host 管理卡片、实时态势与最近事件；新增 Grok Build（~/.grok/hooks/nexushub.json）与 Antigravity（~/.gemini/config/hooks.json）受管 Hooks 一键安装／修复／移除与毫秒级实时通知接入，与 Codex、Claude Code 及 DSH 原生流形成统一管理体验。",
+                "AgentHub 品牌焕新与三层 ChatGPT macOS 界面重写：正式更名为 AgentHub（macOS 应用包 AgentHub.app、安装包 AgentHub-1.9.0-darwin-arm64.dmg，底层标识保持 com.lich13.agenthub 零迁移），重新设计高清深空钛黑五节点星枢图标；完整重写 styles.css 引入 --bg-rail、--bg-list、--bg-stage 三层纯正中性灰阶表面并收敛工作区共享 Hooks。",
+                "Probe 首屏控制台与五平台统一 Hooks／Host 矩阵：进入 Probe 默认首屏直接呈现主控开关、五大 Agent 平台级通知开关、Bark 配置与测试推送、五平台统一 Hooks／Host 管理卡片、实时态势与最近事件；新增 Grok Build（~/.grok/hooks/agenthub.json）与 Antigravity（~/.gemini/config/hooks.json）受管 Hooks 一键安装／修复／移除与毫秒级实时通知接入，与 Codex、Claude Code 及 DSH 原生流形成统一管理体验。",
                 "服务端热路径缓存与清理引擎提速：新增 DSH .zstd 折叠元数据内存缓存、Antigravity 本地进程端口探测缓存、Claude 活动快照 2 秒短缓存与 canonicalize 循环外提、probe.status 3 秒会话快照缓存；精简 execute_unified_with_capability 消除约 260 行重复代码，并将 Codex 清理预览与隐藏删除优化为 O(K) 定向校验与 O(N) 单次子树体积扫描。",
             ],
             "问题修复": [
                 "DeepSeek Harness 状态精准识别：移除 dsh/sessions.rs 中 || locked 冗余分支，消除在桌面端保持打开但早已 turn/end 的完成线程持续转圈的问题；对齐 Seeded 派生会话事件边界并在 turn/end 时收口未闭合工具调用状态。",
-                "测试 100% 沙箱隔离与前端后台轮询收口：将 nexushub-webd 全部剩余裸 Config::default() 测试调用统一替换为独立 TempDir 沙箱配置；统一在 shared.ts 收口页面可见性感知轮询，窗口隐藏时自动暂停轮询。",
+                "测试 100% 沙箱隔离与前端后台轮询收口：将 agenthub-webd 全部剩余裸 Config::default() 测试调用统一替换为独立 TempDir 沙箱配置；统一在 shared.ts 收口页面可见性感知轮询，窗口隐藏时自动暂停轮询。",
                 "文档全面重写与校准：从零重写 README.md 修正八处历史失实描述，同步更新 DESIGN.md 与 MASTER.md（修正 DETAIL_CACHE_IDLE_TTL 300 秒与五平台能力对齐记录）。",
             ],
             "兼容性与迁移": [
-                "API 协议保持 2；底层 Bundle ID（com.lich13.nexushub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 nexushub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
-                "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/NexusHub.app，不保留旧版副本。",
+                "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/AgentHub.app，不保留旧版副本。",
             ],
             "支持平台与资产": [
                 "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
@@ -349,7 +349,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -385,7 +385,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -421,7 +421,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -457,7 +457,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -492,7 +492,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -525,7 +525,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -557,7 +557,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -591,7 +591,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -625,7 +625,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "本机不安装或启动 Chrome、Chrome for Testing 或 Playwright；浏览器回归和 macOS 有头检查由 GitHub Actions 执行。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -659,7 +659,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "功能、视觉、原生选择器和真实会话删除仍待用户验收；浏览器回归和 macOS 有头性能由对应 GitHub Actions 运行。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -693,7 +693,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "功能、视觉、原生选择器和真实会话删除仍待用户验收；本轮测试使用合成 fixture，不发送真实 Bark 通知。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -730,7 +730,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "Bark 已受理表示服务端确认，设备实收仍需核对；网络结果未知时有限重试仍可能重复。macOS 包未使用 Developer ID 签名或 Apple 公证。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -765,7 +765,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证正式归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -804,7 +804,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证正式归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -838,7 +838,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -873,7 +873,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -882,11 +882,11 @@ def render(version: str, *, updater: bool = False) -> str:
 
     if version == "1.3.0":
         sections = {
-            "版本概览": ["本版接入本机 Codex 桌面协作，在 NexusHub 中继续对话，由原生桌面执行。现有三个 Provider 的阅读、通知与管理功能继续保留。"],
+            "版本概览": ["本版接入本机 Codex 桌面协作，在 AgentHub 中继续对话，由原生桌面执行。现有三个 Provider 的阅读、通知与管理功能继续保留。"],
             "功能调整": [
                 "本机普通主线程可新建、续聊、排队发送、补充当前回合或停止；模型、推理强度和模式沿用原生桌面可用选项。",
                 "支持选择文件、图片及可用的技能、应用和插件引用；已支持的问题和审批可在面板处理，无法安全表达的请求回到原生桌面处理。",
-                "NexusHub 独立保存待发送队列，在线程空闲且原生桌面持有该线程时逐项交付；不覆盖原生桌面的队列。",
+                "AgentHub 独立保存待发送队列，在线程空闲且原生桌面持有该线程时逐项交付；不覆盖原生桌面的队列。",
             ],
             "问题修复": [
                 "兼容当前原生 App 内置 CLI 的目录布局，处理连接取消、迟到响应及机器切换，避免旧线程状态覆盖当前页面。",
@@ -895,7 +895,7 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "兼容性与迁移": [
                 "API 协议保持 2，新增协作命令仅供本机 macOS App 使用；远程、归档、子线程及 Claude Code、Grok 不提供协作输入。",
-                "队列存储在 NexusHub 自有数据库并使用独立钥匙串密钥加密；升级保留既有连接、凭据、通知状态与原生会话。",
+                "队列存储在 AgentHub 自有数据库并使用独立钥匙串密钥加密；升级保留既有连接、凭据、通知状态与原生会话。",
                 "原生桌面协议不兼容、线程未由桌面持有或身份无法核验时停止协作，不回退为后台 CLI 执行。",
             ],
             "支持平台与资产": [
@@ -908,7 +908,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -943,7 +943,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -965,7 +965,7 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "兼容性与迁移": [
                 "API 协议保持 2，现有 DTO 语义不变；不新增 RPC、数据库表、设置项或 UI 入口。",
-                "保留协议 tombstone、旧服务回退、连接、Bark、通知状态和原生会话；仅迁移 NexusHub 自有数据。",
+                "保留协议 tombstone、旧服务回退、连接、Bark、通知状态和原生会话；仅迁移 AgentHub 自有数据。",
                 "缓存预算不等于进程 RSS 硬上界；安装回滚不回滚业务数据库，也不新增崩溃自动恢复。",
             ],
             "支持平台与资产": [
@@ -978,7 +978,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1012,7 +1012,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1045,7 +1045,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1070,7 +1070,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1098,7 +1098,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1132,7 +1132,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1168,7 +1168,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1186,7 +1186,7 @@ def render(version: str, *, updater: bool = False) -> str:
             "问题修复": [
                 "网络故障不再统一折叠为 request_error；按 DNS、连接、TLS、超时、响应读取、HTTP 或 Bark 拒绝分类，诊断不记录地址、Key 或通知正文。",
                 "每次重试重新核对事件、开关与投递目标，等待期间修改配置也会停止失效通知；恢复成功更新原事件。",
-                "测试统一使用“NexusHub 推送测试”和本机／远程服务器来源正文，等待真实受理结果；移除旧程序配置导入实现与旧产品文案。",
+                "测试统一使用“AgentHub 推送测试”和本机／远程服务器来源正文，等待真实受理结果；移除旧程序配置导入实现与旧产品文案。",
             ],
             "兼容性与迁移": [
                 "API 协议保持 2，不新增公共命令或数据库表；保留现有会话、Keychain 连接、管理员 API Key、Bark 凭据及通知基线。",
@@ -1200,11 +1200,11 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "升级提示": [
                 "先升级远程 API，再安装本机 App；分别发送一次推送测试，在设备上确认收到。Bark 已受理只表示服务端确认。",
-                "沿用现有通知设置；自有 monitor 日志过滤目标应为 nexushub_webd。旧配置导入入口不再执行。",
+                "沿用现有通知设置；自有 monitor 日志过滤目标应为 agenthub_webd。旧配置导入入口不再执行。",
                 "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1223,7 +1223,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "保留 AGENTS.md 结束标签与环境标签同行时的完整折叠，内部标题不再把正文拆到用户气泡。",
             ],
             "兼容性与迁移": [
-                "自动清理 NexusHub 自有的旧通道配置、加密 Token、待投递记录及专属测试任务，并清理 SQLite 遗留页。",
+                "自动清理 AgentHub 自有的旧通道配置、加密 Token、待投递记录及专属测试任务，并清理 SQLite 遗留页。",
                 "保留 Bark 凭据、成功记录、去重状态和启用基线，不补发历史通知；未知投递结果不自动重发。",
                 "API 协议保持 2，原有会话、Keychain 连接、管理员 API Key 与后台 monitor 继续使用。旧测试 RPC 不再执行。",
             ],
@@ -1233,11 +1233,11 @@ def render(version: str, *, updater: bool = False) -> str:
                 "不提供 Linux 桌面包、网页版或安卓安装包。",
             ],
             "升级提示": [
-                "先升级远程 API，再安装本机 App。单独部署的 Gotify 服务需由管理员卸载；NexusHub 不自动删除外部服务数据。",
+                "先升级远程 API，再安装本机 App。单独部署的 Gotify 服务需由管理员卸载；AgentHub 不自动删除外部服务数据。",
                 "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 不能替代系统代码签名。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1265,7 +1265,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "安装前核对校验和与 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，现有资源封装的系统签名校验限制仍在；Minisign 签名用于验证更新归档来源。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1291,7 +1291,7 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "支持平台与资产": [
                 "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
-                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "Linux x86_64：agenthub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
                 "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
             ],
             "升级提示": [
@@ -1300,7 +1300,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "覆盖安装若触发钥匙串授权，请在系统对话框完成验证。部署参数继续从仓库外提供。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1325,7 +1325,7 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "支持平台与资产": [
                 "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
-                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "Linux x86_64：agenthub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
                 "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
             ],
             "升级提示": [
@@ -1334,7 +1334,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "若系统请求钥匙串授权，请在 macOS 对话框完成验证。连接失败时查看当前操作反馈，不需要删除原有凭据或会话。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1361,7 +1361,7 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "支持平台与资产": [
                 "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
-                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "Linux x86_64：agenthub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
                 "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
             ],
             "升级提示": [
@@ -1370,7 +1370,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "覆盖安装若触发钥匙串授权，请在系统对话框完成验证，无需重建远程连接。部署参数继续从仓库外提供。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1392,12 +1392,12 @@ def render(version: str, *, updater: bool = False) -> str:
             ],
             "兼容性与迁移": [
                 "远程 API 协议升级为 2。旧服务不能执行新版隐藏清理，App 会提示更新。",
-                "移除 NexusHub 的 Pi 导航、读取、管理、通知与专属配置；仅清理 NexusHub 自有 Pi 记录，不卸载 Pi，不修改其原生配置、会话或工作目录。",
+                "移除 AgentHub 的 Pi 导航、读取、管理、通知与专属配置；仅清理 AgentHub 自有 Pi 记录，不卸载 Pi，不修改其原生配置、会话或工作目录。",
                 "Codex、Claude Code 与 Grok 的搜索、附件、时间线、Plan 导出、Bark、Keychain 连接和机器隔离继续保留。",
             ],
             "支持平台与资产": [
                 "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
-                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "Linux x86_64：agenthub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
                 "latest.json 仅映射 darwin-aarch64；以上共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
             ],
             "升级提示": [
@@ -1406,7 +1406,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "部署主机、域名和凭据继续由仓库外提供。发布前检查源码、可达历史与资产；平台保留的不可达对象不属于可达历史审计覆盖范围。",
             ],
         }
-        lines = [f"# NexusHub {version}", ""]
+        lines = [f"# AgentHub {version}", ""]
         for heading, paragraphs in sections.items():
             lines.extend([f"## {heading}", ""])
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
@@ -1418,7 +1418,7 @@ def render(version: str, *, updater: bool = False) -> str:
     has_linux_desktop = version_parts < (1, 1, 0)
     assets = [
         "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
-        "Linux x86_64：nexushub-webd 服务包与 SHA-256 校验文件。",
+        "Linux x86_64：agenthub-webd 服务包与 SHA-256 校验文件。",
     ]
     if has_linux_desktop:
         assets.extend([
@@ -1446,13 +1446,13 @@ def render(version: str, *, updater: bool = False) -> str:
             "新安装建议使用当前稳定版。升级前核对校验文件，并阅读目标版本的迁移说明。",
         ]
     sections = {
-        "版本概览": [f"NexusHub {version}，本版主要调整如下。"],
+        "版本概览": [f"AgentHub {version}，本版主要调整如下。"],
         "功能调整": highlights(version),
         "兼容性与迁移": migration,
         "支持平台与资产": assets,
         "升级提示": upgrade,
     }
-    lines = [f"# NexusHub {version}", ""]
+    lines = [f"# AgentHub {version}", ""]
     for heading, paragraphs in sections.items():
         lines.extend([f"## {heading}", ""])
         lines.extend(f"- {paragraph}" for paragraph in paragraphs)

@@ -1,9 +1,8 @@
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
-use anyhow::Result;
 #[cfg(test)]
-use nexushub_core::services::cleanup::HiddenThreadDeletePlan;
-use nexushub_core::services::use_cases::NexusHubUseCases;
-use nexushub_core::{
+use agenthub_core::services::cleanup::HiddenThreadDeletePlan;
+use agenthub_core::services::use_cases::AgentHubUseCases;
+use agenthub_core::{
     config::{patch_probe_config_toml, Config},
     probe::redact_probe_event_for_output,
     services::{
@@ -15,6 +14,7 @@ use nexushub_core::{
         settings::{self as settings_service, ProbeSettingsSaveRequest},
     },
 };
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -24,7 +24,7 @@ pub(crate) type DesktopCleanupExecuteRequest = cleanup_service::CleanupExecuteRe
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopProbeSettings {
     pub codex: Value,
-    pub probe: nexushub_core::config::ProbeConfig,
+    pub probe: agenthub_core::config::ProbeConfig,
     pub notifications: Value,
 }
 
@@ -41,7 +41,7 @@ impl From<settings_service::SettingsView> for DesktopProbeSettings {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopProbeEventsResponse {
-    pub events: Vec<nexushub_core::db::ProbeEvent>,
+    pub events: Vec<agenthub_core::db::ProbeEvent>,
     pub limit: u32,
 }
 
@@ -59,7 +59,7 @@ pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopP
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    let plan = NexusHubUseCases::with_config(&config, state.platform())
+    let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()?
         .probe_settings_view(secret_state)?;
     Ok(DesktopProbeSettings::from(plan.settings))
@@ -79,10 +79,10 @@ pub(crate) fn probe_save_settings_with_state(
 fn probe_save_settings_with_state_and_repair(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
-    repair_error_monitor: impl FnOnce(&Config, &nexushub_core::platform::PlatformPaths) -> Result<()>,
+    repair_error_monitor: impl FnOnce(&Config, &agenthub_core::platform::PlatformPaths) -> Result<()>,
 ) -> Result<DesktopProbeSettings> {
     let config = state.config();
-    let plan = NexusHubUseCases::with_config(&config, state.platform())
+    let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()?
         .save_probe_settings(request)?;
     let config_path = state.platform().config_file.clone();
@@ -121,7 +121,7 @@ pub(crate) fn probe_action_with_state(
         .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
     let config = state.config();
-    let plan = NexusHubUseCases::with_config(&config, state.platform())
+    let plan = AgentHubUseCases::with_config(&config, state.platform())
         .probe()?
         .action_with_device_key(action, device_key_configured)?;
     match plan.execution {
@@ -147,7 +147,7 @@ pub(crate) fn probe_fixed_shell_job_with_state(
         return Ok(unavailable_action(
             command,
             &format!(
-                "Probe action requires local nexushub-webd binary; plan is available but job cannot start: {}",
+                "Probe action requires local agenthub-webd binary; plan is available but job cannot start: {}",
                 binary.display()
             ),
         )
@@ -177,7 +177,7 @@ pub(crate) fn probe_fixed_shell_job_with_state(
 }
 
 pub(crate) fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
-    NexusHubUseCases::new(state.platform())
+    AgentHubUseCases::new(state.platform())
         .cleanup()
         .dry_run_archived(&state.codex_paths())
 }
@@ -187,9 +187,9 @@ pub(crate) fn archive_delete_execute_with_state(
     request: DesktopCleanupExecuteRequest,
 ) -> Result<ArchiveDeleteResult> {
     let paths = state.codex_paths();
-    let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
+    let cleanup = AgentHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Archived, request)?;
-    let candidates = nexushub_core::services::cleanup::hidden_candidates(&plan)?;
+    let candidates = agenthub_core::services::cleanup::hidden_candidates(&plan)?;
     cleanup.execute_archived(&paths, &candidates)
 }
 
@@ -197,7 +197,7 @@ pub(crate) fn archive_delete_execute_with_state(
 pub(crate) fn hidden_delete_dry_run_with_state(
     state: &DesktopState,
 ) -> Result<HiddenThreadDeletePlan> {
-    NexusHubUseCases::new(state.platform())
+    AgentHubUseCases::new(state.platform())
         .cleanup()
         .dry_run_hidden(&state.codex_paths())
 }
@@ -207,7 +207,7 @@ pub(crate) fn hidden_delete_execute_with_state(
     request: DesktopCleanupExecuteRequest,
 ) -> Result<HiddenThreadDeleteResult> {
     let paths = state.codex_paths();
-    let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
+    let cleanup = AgentHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Hidden, request)?;
     let candidates = cleanup_service::hidden_candidates(&plan)?;
     cleanup.execute_hidden(&paths, &candidates)
@@ -247,7 +247,7 @@ fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexushub_core::{
+    use agenthub_core::{
         crypto::SecretBox,
         db::PanelDb,
         platform::{PlatformKind, PlatformPaths},

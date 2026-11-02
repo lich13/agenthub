@@ -8,8 +8,8 @@ const QUEUE_TIMEOUT: Duration = Duration::from_millis(40);
 const FIXTURE_REVISION: u64 = 731;
 const FIXTURE_MACHINE_ID: &str = "m-fixture";
 const CHANGED_MACHINE_ID: &str = "m-changed";
-const FIXTURE_BASE: &str = "https://credential-fixture.example.invalid/nexus/";
-const CHANGED_BASE: &str = "https://changed-fixture.example.invalid/nexus/";
+const FIXTURE_BASE: &str = "https://credential-fixture.example.invalid/agenthub/";
+const CHANGED_BASE: &str = "https://changed-fixture.example.invalid/agenthub/";
 
 fn fixture_connection() -> RemoteConnections {
     RemoteConnections {

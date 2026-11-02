@@ -52,7 +52,7 @@ test('missing/invalid reports, inconsistent counts and tool failures cannot pass
 });
 
 test('scanner errors are blocking and raw diagnostic text never reaches logs or artifacts', () => {
-  const root = mkdtempSync(join(tmpdir(), 'nexushub-audit-test-'));
+  const root = mkdtempSync(join(tmpdir(), 'agenthub-audit-test-'));
   try {
     const executable = join(root, 'cargo');
     const report = join(root, 'result.json');

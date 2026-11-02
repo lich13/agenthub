@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { assertManagedExecutable, launchOptionsForProject, verifyProjectBrowser } from "../webui/playwright-browser-guard.mjs";
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "nexushub-browser-"));
+  const root = mkdtempSync(join(tmpdir(), "agenthub-browser-"));
   t.after(() => rmSync(root, { recursive: true }));
   const file = relative => {
     const path = join(root, relative);

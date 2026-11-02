@@ -33,14 +33,14 @@ def lock_package(name, version, source=False):
 def make_fixture(root):
     write(root / "Cargo.toml", '''\
 [workspace]
-members = ["crates/nexushub-core", "crates/nexushub-webd"]
+members = ["crates/agenthub-core", "crates/agenthub-webd"]
 
 [workspace.package]
 version = "1.2.21"
 ''')
     for path, name in (
-        ("crates/nexushub-core/Cargo.toml", "nexushub-core"),
-        ("crates/nexushub-webd/Cargo.toml", "nexushub-webd"),
+        ("crates/agenthub-core/Cargo.toml", "agenthub-core"),
+        ("crates/agenthub-webd/Cargo.toml", "agenthub-webd"),
     ):
         write(root / path, f'''\
 [package]
@@ -49,30 +49,30 @@ version = {{ workspace = true }}
 ''')
     write(root / "src-tauri/Cargo.toml", '''\
 [package]
-name = "nexushub-desktop"
+name = "agenthub-desktop"
 version = "1.2.21"
 ''')
     for path in ("package.json", "webui/package.json", "src-tauri/tauri.conf.json"):
         write(root / path, json.dumps({"version": VERSION}))
     write(root / "Cargo.lock", "\n\n".join([
         "version = 4",
-        lock_package("nexushub-core", VERSION),
-        lock_package("nexushub-webd", VERSION),
+        lock_package("agenthub-core", VERSION),
+        lock_package("agenthub-webd", VERSION),
     ]) + "\n")
     write(root / "src-tauri/Cargo.lock", "\n\n".join([
         "version = 4",
-        lock_package("nexushub-core", VERSION),
-        lock_package("nexushub-desktop", VERSION),
+        lock_package("agenthub-core", VERSION),
+        lock_package("agenthub-desktop", VERSION),
     ]) + "\n")
-    write(root / "contracts/nexushub-contract.json", json.dumps({"schemaVersion": 4}))
-    write(root / "contracts/nexushub-contract.schema.json", json.dumps({
+    write(root / "contracts/agenthub-contract.json", json.dumps({"schemaVersion": 4}))
+    write(root / "contracts/agenthub-contract.schema.json", json.dumps({
         "properties": {"schemaVersion": {"const": 4}},
     }))
 
 
 class VersionCheckTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="nexushub-version-check-")
+        temporary = tempfile.TemporaryDirectory(prefix="agenthub-version-check-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         make_fixture(self.root)
@@ -96,8 +96,8 @@ class VersionCheckTests(unittest.TestCase):
     def test_wrong_local_lock_package_is_not_masked_by_unrelated_correct_version(self):
         lock = self.root / "Cargo.lock"
         contents = lock.read_text(encoding="utf-8").replace(
-            'name = "nexushub-core"\nversion = "1.2.21"',
-            'name = "nexushub-core"\nversion = "9.9.9"',
+            'name = "agenthub-core"\nversion = "1.2.21"',
+            'name = "agenthub-core"\nversion = "9.9.9"',
         )
         lock.write_text(contents + "\n" + lock_package("unrelated-package", VERSION, source=True) + "\n", encoding="utf-8")
         with self.assertRaises(ValueError):
@@ -106,7 +106,7 @@ class VersionCheckTests(unittest.TestCase):
     def test_duplicate_local_lock_identity_is_rejected(self):
         lock = self.root / "Cargo.lock"
         lock.write_text(
-            lock.read_text(encoding="utf-8") + "\n" + lock_package("nexushub-core", VERSION) + "\n",
+            lock.read_text(encoding="utf-8") + "\n" + lock_package("agenthub-core", VERSION) + "\n",
             encoding="utf-8",
         )
         with self.assertRaises(ValueError):
@@ -115,15 +115,15 @@ class VersionCheckTests(unittest.TestCase):
     def test_registry_source_on_local_lock_package_is_rejected(self):
         lock = self.root / "src-tauri/Cargo.lock"
         contents = lock.read_text(encoding="utf-8").replace(
-            'name = "nexushub-desktop"\nversion = "1.2.21"',
-            'name = "nexushub-desktop"\nversion = "1.2.21"\nsource = "registry+https://example.invalid/index"',
+            'name = "agenthub-desktop"\nversion = "1.2.21"',
+            'name = "agenthub-desktop"\nversion = "1.2.21"\nsource = "registry+https://example.invalid/index"',
         )
         lock.write_text(contents, encoding="utf-8")
         with self.assertRaises(ValueError):
             check_versions.check(self.root)
 
     def test_workspace_member_must_inherit_version(self):
-        member = self.root / "crates/nexushub-webd/Cargo.toml"
+        member = self.root / "crates/agenthub-webd/Cargo.toml"
         member.write_text(member.read_text(encoding="utf-8").replace(
             "version = { workspace = true }", f'version = "{VERSION}"',
         ), encoding="utf-8")
@@ -131,7 +131,7 @@ class VersionCheckTests(unittest.TestCase):
             check_versions.check(self.root)
 
     def test_contract_registry_schema_version_must_match_schema(self):
-        registry = self.root / "contracts/nexushub-contract.json"
+        registry = self.root / "contracts/agenthub-contract.json"
         registry.write_text(json.dumps({"schemaVersion": 3}), encoding="utf-8")
         with self.assertRaises(ValueError):
             check_versions.check(self.root)

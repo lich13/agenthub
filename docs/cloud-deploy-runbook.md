@@ -1,6 +1,6 @@
 # Linux API 部署手册
 
-NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code 或 Linux 桌面 App。
+AgentHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code 或 Linux 桌面 App。
 
 部署时从仓库外显式提供 SSH 主机、HTTPS 域名和归档路径。域名、主机、API Key、用户会话和配置不写入 Git。
 
@@ -8,16 +8,16 @@ NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网�
 
 ## 服务与隔离
 
-- 程序：`/usr/local/bin/nexushub-webd`
-- systemd 单元：`/etc/systemd/system/nexushub-webd.service`
-- 配置：`/etc/nexushub-webd/config.toml` 和 `/etc/nexushub-webd/env`
-- 数据：`/var/lib/nexushub-webd/`
-- 日志：`/var/log/nexushub-webd/`
+- 程序：`/usr/local/bin/agenthub-webd`
+- systemd 单元：`/etc/systemd/system/agenthub-webd.service`
+- 配置：`/etc/agenthub-webd/config.toml` 和 `/etc/agenthub-webd/env`
+- 数据：`/var/lib/agenthub-webd/`
+- 日志：`/var/log/agenthub-webd/`
 - 监听：仅回环地址；反向代理只转发 `api/rpc/` 和 `healthz`，其他路径返回 404
 
 保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude／Antigravity／DSH 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`ANTIGRAVITY_HOME`、`DSH_HOME`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
 
-Grok 原生 leader 使用 `/var/lib/nexushub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
+Grok 原生 leader 使用 `/var/lib/agenthub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
 
 ## 安装与升级
 
@@ -28,18 +28,18 @@ Grok 原生 leader 使用 `/var/lib/nexushub-webd/grok-leader.sock`。凭据和 
 使用明确的外部参数部署：
 
 ```bash
-NEXUSHUB_DOMAIN=panel.example.invalid \
-  bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
+AGENTHUB_DOMAIN=panel.example.invalid \
+  bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ```
 
-升级前先核对校验文件和当前服务状态。远程 API 协议为 2，必须先升级服务，再安装新版 App。协议不兼容时会提示更新并拒绝远程操作，本机仍可使用。升级会清除 NexusHub 自有的 Pi 提供方、流、投递和 Pi 专属事件，以及三项 notify_pi 设置和 Pi 路径变量；其余业务数据库内容、Bark 加密材料、通知游标、任务记录和审计数据保留；原生 Provider 会话和 Codex 数据库不迁移、不改写。
+升级前先核对校验文件和当前服务状态。远程 API 协议为 2，必须先升级服务，再安装新版 App。协议不兼容时会提示更新并拒绝远程操作，本机仍可使用。升级会清除 AgentHub 自有的 Pi 提供方、流、投递和 Pi 专属事件，以及三项 notify_pi 设置和 Pi 路径变量；其余业务数据库内容、Bark 加密材料、通知游标、任务记录和审计数据保留；原生 Provider 会话和 Codex 数据库不迁移、不改写。
 
 ## 管理员 API Key
 
 在服务器生成 Key：
 
 ```bash
-sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/api-key
+sudo /usr/local/bin/agenthub-webd admin key-generate --output /absolute/private/api-key
 ```
 
 输出文件必须不存在，权限为 `0600`。将 Key 输入 App 的“设置 → 远程连接”后立即删除临时文件。服务器只保存摘要，不保存原文。
@@ -47,8 +47,8 @@ sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/
 轮换或撤销：
 
 ```bash
-sudo /usr/local/bin/nexushub-webd admin key-rotate --output /absolute/private/new-api-key
-sudo /usr/local/bin/nexushub-webd admin key-revoke
+sudo /usr/local/bin/agenthub-webd admin key-rotate --output /absolute/private/new-api-key
+sudo /usr/local/bin/agenthub-webd admin key-revoke
 ```
 
 轮换会立即使旧 Key 失效；撤销或未配置 Key 会拒绝业务 RPC。Key 不得出现在 URL、命令参数、日志、浏览器请求或仓库文件中。旧网页 Cookie、登录入口和 Turnstile 配置不再生效。
@@ -64,9 +64,9 @@ App 的“更新与维护”页面在本机目标显示“本机 App 更新”�
 ## 部署后检查
 
 ```bash
-sudo /usr/local/bin/nexushub-webd --version
-sudo systemctl is-active nexushub-webd
-sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths -p ReadOnlyPaths
+sudo /usr/local/bin/agenthub-webd --version
+sudo systemctl is-active agenthub-webd
+sudo systemctl show agenthub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths -p ReadOnlyPaths
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
@@ -84,17 +84,17 @@ Claude hooks 仅由本机 macOS 设置页明确安装，发布和安装 App 不�
 
 Claude 过程折叠仅在本机详情显示：同一原生回合的思考、明确的过程说明和工具活动按原顺序收起，最终答复单独显示。旧服务缺少阶段字段时采用保守展示；过程折叠状态按机器、会话和回合身份保存在内存中，不写入会话或远端服务。
 
-关闭桌面 App 后两台机器继续独立监测；停止远程服务会同时停止该服务内的远程监测。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 NexusHub 无关的服务文件。
+关闭桌面 App 后两台机器继续独立监测；停止远程服务会同时停止该服务内的远程监测。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 AgentHub 无关的服务文件。
 
 ## 上下文与时间线兼容
 
 1.2.21 的可选 contextBlocks、timeline 和较新页游标仍使用 API 协议 2；旧客户端忽略新增字段，新客户端连接旧服务时本地整理原始包装并保留逐页加载。先升级 API 才能在远程使用完整时间线索引和有界跳转。升级不改写原生记录，也不新增客户端文件路径权限。
 
-`codex_desktop` 能力与九个协作命令只在 macOS Tauri 提供，不注册到 Linux RPC，诊断入口也不远程开放。服务器可建立 NexusHub 自有 schema 2 发送记录表，但远程 API 不调度桌面对话；升级不重复 schema 1 的退役清理。本机加密发送队列使用独立 Keychain 项，不迁移到服务器。正式发布先升级 API、再安装 App。
+`codex_desktop` 能力与九个协作命令只在 macOS Tauri 提供，不注册到 Linux RPC，诊断入口也不远程开放。服务器可建立 AgentHub 自有 schema 2 发送记录表，但远程 API 不调度桌面对话；升级不重复 schema 1 的退役清理。本机加密发送队列使用独立 Keychain 项，不迁移到服务器。正式发布先升级 API、再安装 App。
 
 本机桌面契约包括可选引用区间、会话审批与只读审批 review 字段，附件接收命令只接受会话、接收区和 handle，仍使用协议 2；Linux 不开放这些写入入口。旧加密队列正文保持兼容，不重发结果不明项。普通文件仍保留兼容编码，文件 cancel 与未来不兼容协议未核实；粘贴图片和加密归属索引只存于本机私有目录，覆盖安装和清理必须保留；不迁移到远程服务。详见[桌面协作证据与限制](ARCHITECTURE.md#证据与未核实项)。
 
-1.3.4 已在本机修复候选完成[附件与发送验收](https://github.com/lich13/nexushub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。正式发布要求对应提交三项 CI 通过，安装复用发布包，先升级远程 API，再原地替换原 bundle 身份的 macOS App，不保留旧版 App 副本。安装后检查版本、健康与启动，保留 Keychain、私有附件和原生会话。可选粘贴结果与加密文件身份摘要仅服务本机附件流程，Linux allowlist 和协议 2 不变。owner 变化只恢复阅读，必须在现有连接入口确认写入。
+1.3.4 已在本机修复候选完成[附件与发送验收](https://github.com/lich13/agenthub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。正式发布要求对应提交三项 CI 通过，安装复用发布包，先升级远程 API，再原地替换原 bundle 身份的 macOS App，不保留旧版 App 副本。安装后检查版本、健康与启动，保留 Keychain、私有附件和原生会话。可选粘贴结果与加密文件身份摘要仅服务本机附件流程，Linux allowlist 和协议 2 不变。owner 变化只恢复阅读，必须在现有连接入口确认写入。
 
 ## 升级验收
 
@@ -116,10 +116,10 @@ Claude 过程折叠仅在本机详情显示：同一原生回合的思考、明�
 
 ## 迁移与通知保护
 
-迁移只清理 NexusHub 自有的旧 web、Goal、Pi 与 Gotify 配置、Token、队列和专属记录；保留不可执行的兼容 tombstone。SQLite 遗留页与 WAL 清理可在中断后继续。不得删除原生 Provider 程序、会话或其他应用数据库。
+迁移只清理 AgentHub 自有的旧 web、Goal、Pi 与 Gotify 配置、Token、队列和专属记录；保留不可执行的兼容 tombstone。SQLite 遗留页与 WAL 清理可在中断后继续。不得删除原生 Provider 程序、会话或其他应用数据库。
 
 Bark 保留成功记录、游标和启用基线，不补发历史失败或未知事件；结果未知仍可能重复提醒。重试参数见[通知与监测](ARCHITECTURE.md#通知与监测)。故障与重启验证使用隔离 HTTP 服务，不能破坏生产网络。
 
-monitor 日志目标使用 `nexushub_webd`，只输出安全分类、状态码、耗时、次数和匿名标识。外部退休服务的卸载属于独立运维操作，需要明确归属；不修改共用 Nginx、TLS 或其他服务。
+monitor 日志目标使用 `agenthub_webd`，只输出安全分类、状态码、耗时、次数和匿名标识。外部退休服务的卸载属于独立运维操作，需要明确归属；不修改共用 Nginx、TLS 或其他服务。
 
 验收结束关闭本轮预览和转发，仅清理确认归属的下载、测试和部署暂存；保留正式服务、用户数据、连接、凭据与共享缓存。性能收益与实际回收空间分别计量。

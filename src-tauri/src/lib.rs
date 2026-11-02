@@ -9,7 +9,7 @@ mod services;
 
 use tauri::{Manager, WebviewWindowBuilder};
 
-pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
+pub use overview::{agenthub_paths_for_home, AgentHubPaths, DesktopState};
 pub use services::probe::desktop_probe_status_with_state;
 pub use services::updates::desktop_update_status_with_state;
 
@@ -94,7 +94,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(move |invoke| {
-            if nexushub_core::services::commands::is_retired_tauri_command(invoke.message.command())
+            if agenthub_core::services::commands::is_retired_tauri_command(invoke.message.command())
             {
                 invoke.resolver.reject("unavailable: retired command");
                 return true;
@@ -123,12 +123,12 @@ pub fn run() {
         })
         .setup(|app| {
             if let Err(err) = resources::retire_legacy_desktop_web_service(
-                &nexushub_core::platform::PlatformPaths::desktop_current(),
+                &agenthub_core::platform::PlatformPaths::desktop_current(),
             ) {
                 eprintln!("Legacy desktop WebUI retirement incomplete: {err}");
             }
             if let Ok(resource_dir) = app.path().resource_dir() {
-                resources::sync_nexushub_webd_helper_from_resource(&resource_dir)?;
+                resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             if let Err(err) = resources::repair_probe_error_monitor_launch_agent(
@@ -159,7 +159,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build NexusHub desktop app")
+        .expect("failed to build AgentHub desktop app")
         .run(|app, event| match event {
             tauri::RunEvent::Ready => {
                 if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {

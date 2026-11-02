@@ -11,8 +11,8 @@ use crate::{
     },
 };
 
+use agenthub_core::services::threads::ThreadBlocksPage;
 use anyhow::Result;
-use nexushub_core::services::threads::ThreadBlocksPage;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -30,12 +30,12 @@ fn thread_id_request(thread_id: String) -> DesktopThreadIdRequest {
 #[tauri::command(rename = "threads.subagentDetail")]
 pub async fn getSubagentDetail(
     state: tauri::State<'_, DesktopState>,
-    request: nexushub_core::codex::subagents::SubagentDetailRequest,
-) -> Result<nexushub_core::codex::subagents::SubagentDetailResponse, String> {
+    request: agenthub_core::codex::subagents::SubagentDetailRequest,
+) -> Result<agenthub_core::codex::subagents::SubagentDetailResponse, String> {
     let paths = state.codex_paths();
     let platform = state.platform().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        nexushub_core::services::use_cases::NexusHubUseCases::new(&platform)
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(&platform)
             .threads()
             .subagent_detail(&paths, &request)
     })
@@ -50,9 +50,9 @@ pub async fn listThreads(
     archived: Option<bool>,
     q: Option<String>,
     limit: Option<usize>,
-) -> Result<Vec<nexushub_core::codex::ThreadSummary>, String> {
+) -> Result<Vec<agenthub_core::codex::ThreadSummary>, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         thread_service::threads_with_state(
             &state,
             ThreadListRequest {
@@ -71,9 +71,9 @@ pub async fn getThread(
     state: tauri::State<'_, DesktopState>,
     id: String,
     options: Option<ThreadDetailOptions>,
-) -> Result<Option<nexushub_core::codex::ThreadDetail>, String> {
+) -> Result<Option<agenthub_core::codex::ThreadDetail>, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         let options = options.unwrap_or_default();
         thread_service::thread_detail_with_state(
             &state,
@@ -96,7 +96,7 @@ pub async fn getThreadBlocks(
     options: Option<ThreadDetailOptions>,
 ) -> Result<Option<ThreadBlocksPage>, String> {
     let state = state.inner().clone();
-    nexushub_core::read_tasks::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         let options = options.unwrap_or_default();
         thread_service::thread_blocks_with_state(
             &state,

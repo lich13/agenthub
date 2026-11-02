@@ -22,10 +22,10 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAFETY_PATH = ROOT / "deploy/nexushub-webd/install-safety.py"
-INSTALL_PATH = ROOT / "deploy/nexushub-webd/install.sh"
-UPDATE_PATH = ROOT / "deploy/nexushub-webd/update.sh"
-UPDATER_PUB_PATH = ROOT / "deploy/nexushub-webd/updater.pub"
+SAFETY_PATH = ROOT / "deploy/agenthub-webd/install-safety.py"
+INSTALL_PATH = ROOT / "deploy/agenthub-webd/install.sh"
+UPDATE_PATH = ROOT / "deploy/agenthub-webd/update.sh"
+UPDATER_PUB_PATH = ROOT / "deploy/agenthub-webd/updater.pub"
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("install_safety", SAFETY_PATH)
 if spec is None or spec.loader is None:
@@ -59,9 +59,9 @@ def elf64_header(machine: int = 62) -> bytes:
 
 
 class InstallSafetyTests(unittest.TestCase):
-    PAYLOAD_NAME = "nexushub-webd-linux-x86_64"
+    PAYLOAD_NAME = "agenthub-webd-linux-x86_64"
     REQUIRED_PAYLOAD_FILES = (
-        "bin/nexushub-webd",
+        "bin/agenthub-webd",
         "deploy/install.sh",
         "deploy/update.sh",
         "deploy/install-safety.py",
@@ -69,7 +69,7 @@ class InstallSafetyTests(unittest.TestCase):
     )
 
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="nexushub-install-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="agenthub-install-test-")
         self.root = Path(self.temp.name)
 
     def tearDown(self) -> None:
@@ -98,7 +98,7 @@ class InstallSafetyTests(unittest.TestCase):
                 continue
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(header if relative == "bin/nexushub-webd" and header is not None else b"fixture\n")
+            path.write_bytes(header if relative == "bin/agenthub-webd" and header is not None else b"fixture\n")
         return root
 
     def assert_payload_rejected_before_binary(
@@ -114,8 +114,8 @@ class InstallSafetyTests(unittest.TestCase):
 
     def test_validate_payload_accepts_elf64_le_x86_64_and_signed_version(self) -> None:
         root = self.make_payload(header=elf64_header())
-        binary = root / "bin/nexushub-webd"
-        result = mock.Mock(returncode=0, stdout=b"nexushub-webd 1.2.23\n")
+        binary = root / "bin/agenthub-webd"
+        result = mock.Mock(returncode=0, stdout=b"agenthub-webd 1.2.23\n")
 
         with mock.patch.object(safety.subprocess, "run", return_value=result) as run:
             safety.validate_payload(root, "1.2.23")
@@ -156,8 +156,8 @@ class InstallSafetyTests(unittest.TestCase):
 
     def test_validate_payload_rejects_binary_version_mismatch(self) -> None:
         root = self.make_payload(header=elf64_header())
-        binary = root / "bin/nexushub-webd"
-        result = mock.Mock(returncode=0, stdout=b"nexushub-webd 1.2.24\n")
+        binary = root / "bin/agenthub-webd"
+        result = mock.Mock(returncode=0, stdout=b"agenthub-webd 1.2.24\n")
 
         with mock.patch.object(safety.subprocess, "run", return_value=result) as run:
             with self.assertRaisesRegex(ValueError, "release binary version mismatch"):
@@ -216,18 +216,18 @@ class InstallSafetyTests(unittest.TestCase):
         make_archive(
             archive,
             [
-                ("nexushub-webd-linux-x86_64", tarfile.DIRTYPE, b"", 0o4777, ""),
-                ("nexushub-webd-linux-x86_64/bin/nexushub-webd", tarfile.REGTYPE, payload, 0o4751, ""),
-                ("nexushub-webd-linux-x86_64/deploy/update.sh", tarfile.REGTYPE, b"#!/bin/sh\n", 0o0750, ""),
-                ("nexushub-webd-linux-x86_64/deploy/config.example.toml", tarfile.REGTYPE, b"fixture\n", 0o2640, ""),
+                ("agenthub-webd-linux-x86_64", tarfile.DIRTYPE, b"", 0o4777, ""),
+                ("agenthub-webd-linux-x86_64/bin/agenthub-webd", tarfile.REGTYPE, payload, 0o4751, ""),
+                ("agenthub-webd-linux-x86_64/deploy/update.sh", tarfile.REGTYPE, b"#!/bin/sh\n", 0o0750, ""),
+                ("agenthub-webd-linux-x86_64/deploy/config.example.toml", tarfile.REGTYPE, b"fixture\n", 0o2640, ""),
             ],
         )
         destination = self.root / "extract"
         destination.mkdir()
         destination.chmod(0o700)
         safety.extract(archive, destination)
-        root = destination / "nexushub-webd-linux-x86_64"
-        binary = destination / "nexushub-webd-linux-x86_64/bin/nexushub-webd"
+        root = destination / "agenthub-webd-linux-x86_64"
+        binary = destination / "agenthub-webd-linux-x86_64/bin/agenthub-webd"
         self.assertEqual(binary.read_bytes(), payload)
         self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o755)
@@ -304,25 +304,25 @@ class InstallSafetyTests(unittest.TestCase):
         data_dir = managed / "data"
         log_dir = managed / "log"
         systemd_dir = managed / "systemd"
-        dropin_dir = systemd_dir / "nexushub-webd.service.d"
+        dropin_dir = systemd_dir / "agenthub-webd.service.d"
         legacy_dir = managed / "legacy"
         for directory in (bin_dir, share_dir, config_dir, data_dir, log_dir, dropin_dir, legacy_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
-        install_bin = bin_dir / "nexushub-webd"
-        update_bin = bin_dir / "nexushub-webd-update"
+        install_bin = bin_dir / "agenthub-webd"
+        update_bin = bin_dir / "agenthub-webd-update"
         config = config_dir / "config.toml"
         env_file = config_dir / "env"
-        unit = systemd_dir / "nexushub-webd.service"
+        unit = systemd_dir / "agenthub-webd.service"
         dropin = dropin_dir / "20-provider-session-paths.conf"
         safety_copy = share_dir / "install-safety.py"
         updater_key = share_dir / "updater.pub"
         wrappers = [
-            bin_dir / "nexushub-codex-precheck",
-            bin_dir / "nexushub-codex-update",
-            bin_dir / "nexushub-codex-prune",
+            bin_dir / "agenthub-codex-precheck",
+            bin_dir / "agenthub-codex-update",
+            bin_dir / "agenthub-codex-prune",
         ]
-        database = data_dir / "nexushub.sqlite"
+        database = data_dir / "agenthub.sqlite"
         database.write_bytes(b"business database fixture")
         database.chmod(0o600)
 
@@ -343,7 +343,7 @@ class InstallSafetyTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
         binary = self.root / "new-binary"
-        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'nexushub-webd 1.2.3'\n", encoding="utf-8")
+        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'agenthub-webd 1.2.3'\n", encoding="utf-8")
         binary.chmod(0o755)
         next_config = self.root / "next-config"
         next_config.write_text('[codex]\nhome = "auto"\n', encoding="utf-8")
@@ -370,7 +370,7 @@ class InstallSafetyTests(unittest.TestCase):
             "CODEX_UPDATE_WRAPPER_BIN": wrappers[1],
             "CODEX_PRUNE_WRAPPER_BIN": wrappers[2],
             "LEGACY_DIR": legacy_dir,
-            "NGINX_SNIPPET": managed / "nginx/snippets/nexushub.conf",
+            "NGINX_SNIPPET": managed / "nginx/snippets/agenthub.conf",
             "INSTALL_CONFIG_SOURCE": next_config,
             "INSTALL_ENV_SOURCE": next_env,
             "TEST_SYSTEMCTL_LOG": call_log,
@@ -396,9 +396,9 @@ install_config() {{
 systemctl() {{
   printf '%s\\n' "$*" >> "${{TEST_SYSTEMCTL_LOG}}"
   case "$*" in
-    "is-active --quiet nexushub-webd.service") return 1 ;;
-    "list-unit-files nexushub.service") return 1 ;;
-    "restart nexushub-webd.service") return 77 ;;
+    "is-active --quiet agenthub-webd.service") return 1 ;;
+    "list-unit-files agenthub.service") return 1 ;;
+    "restart agenthub-webd.service") return 77 ;;
   esac
   return 0
 }}
@@ -419,7 +419,7 @@ main --binary {shlex.quote(str(binary))}
 
         self.assertEqual(result.returncode, 77, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
         calls = call_log.read_text(encoding="utf-8").splitlines()
-        self.assertIn("restart nexushub-webd.service", calls)
+        self.assertIn("restart agenthub-webd.service", calls)
         replaced_targets = replacement_log.read_text(encoding="utf-8").splitlines()
         self.assertIn(str(updater_key), replaced_targets)
         for path, (content, mode) in preserved.items():
@@ -477,8 +477,8 @@ main --binary {shlex.quote(str(self.root / 'unused-binary'))} --domain example.i
                 public_key.write_text("fixture public key\n", encoding="utf-8")
                 update_text = UPDATE_PATH.read_text(encoding="utf-8")
                 for name, installed, replacement in (
-                    ("SAFETY", '/usr/share/nexushub-webd/install-safety.py', helper),
-                    ("PUBLIC_KEY", '/usr/share/nexushub-webd/updater.pub', public_key),
+                    ("SAFETY", '/usr/share/agenthub-webd/install-safety.py', helper),
+                    ("PUBLIC_KEY", '/usr/share/agenthub-webd/updater.pub', public_key),
                 ):
                     line = f'{name}="{installed}"'
                     self.assertEqual(update_text.count(line), 1)
@@ -527,8 +527,8 @@ main --binary {shlex.quote(str(self.root / 'unused-binary'))} --domain example.i
                 environment.update(
                     {
                         "PATH": f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}",
-                        "NEXUSHUB_WEBD_UPDATE_TRANSIENT": "1",
-                        "NEXUSHUB_WEBD_REPO": "example.invalid/fixture",
+                        "AGENTHUB_WEBD_UPDATE_TRANSIENT": "1",
+                        "AGENTHUB_WEBD_REPO": "example.invalid/fixture",
                         "TEST_FAKE_CALL_LOG": str(call_log),
                         "TEST_FAIL_CURL_AT": str(fail_at),
                     }

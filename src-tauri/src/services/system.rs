@@ -1,10 +1,10 @@
 use crate::overview::DesktopState;
-use anyhow::Result;
-use nexushub_core::{
+use agenthub_core::{
     local::{local_plugin_catalog, LocalPluginInfo},
     platform::PlatformPaths,
-    services::{system::SystemCapabilitiesResponse, use_cases::NexusHubUseCases},
+    services::{system::SystemCapabilitiesResponse, use_cases::AgentHubUseCases},
 };
+use anyhow::Result;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,7 +20,7 @@ pub struct DesktopSystemVersion {
 pub(crate) fn system_capabilities(state: &DesktopState) -> Result<SystemCapabilitiesResponse> {
     let config = state.config();
     Ok(
-        NexusHubUseCases::with_config_for_surface(&config, state.platform(), state.host_surface())
+        AgentHubUseCases::with_config_for_surface(&config, state.platform(), state.host_surface())
             .system()?
             .runtime_capabilities(),
     )

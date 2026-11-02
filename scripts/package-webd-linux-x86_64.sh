@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 DIST="${ROOT}/dist"
-ASSET="nexushub-webd-linux-x86_64.tar.gz"
-ARCHIVE_ROOT="nexushub-webd-linux-x86_64"
+ASSET="agenthub-webd-linux-x86_64.tar.gz"
+ARCHIVE_ROOT="agenthub-webd-linux-x86_64"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 CHECK_ONLY=0
@@ -26,20 +26,20 @@ fi
 
 mkdir -p "${DIST}"
 
-cargo build --release --package nexushub-webd --locked
+cargo build --release --package agenthub-webd --locked
 
 TMP="$(mktemp -d)"
 trap '[[ -n "${TMP}" && -d "${TMP}" ]] && rm -r -- "${TMP}"' EXIT
 mkdir -p "${TMP}/${ARCHIVE_ROOT}/bin" "${TMP}/${ARCHIVE_ROOT}/deploy"
-cp "${CARGO_TARGET_DIR:-${ROOT}/target}/release/nexushub-webd" "${TMP}/${ARCHIVE_ROOT}/bin/"
-cp -a "${ROOT}/deploy/nexushub-webd/." "${TMP}/${ARCHIVE_ROOT}/deploy/"
+cp "${CARGO_TARGET_DIR:-${ROOT}/target}/release/agenthub-webd" "${TMP}/${ARCHIVE_ROOT}/bin/"
+cp -a "${ROOT}/deploy/agenthub-webd/." "${TMP}/${ARCHIVE_ROOT}/deploy/"
 cp "${ROOT}/README.md" "${ROOT}/DESIGN.md" "${TMP}/${ARCHIVE_ROOT}/"
-chmod 0755 "${TMP}/${ARCHIVE_ROOT}/bin/nexushub-webd"
+chmod 0755 "${TMP}/${ARCHIVE_ROOT}/bin/agenthub-webd"
 chmod 0755 "${TMP}/${ARCHIVE_ROOT}/deploy/"*.sh
-chmod 0755 "${TMP}/${ARCHIVE_ROOT}/deploy/nexushub-codex-"*
+chmod 0755 "${TMP}/${ARCHIVE_ROOT}/deploy/agenthub-codex-"*
 
 "${TMP}/${ARCHIVE_ROOT}/deploy/install.sh" --check
-"${TMP}/${ARCHIVE_ROOT}/bin/nexushub-webd" --version | grep -Eq '^nexushub-webd [0-9]+\.[0-9]+\.[0-9]+'
+"${TMP}/${ARCHIVE_ROOT}/bin/agenthub-webd" --version | grep -Eq '^agenthub-webd [0-9]+\.[0-9]+\.[0-9]+'
 
 python3 "${ROOT}/scripts/privacy-check.py" --payload "${TMP}/${ARCHIVE_ROOT}"
 
@@ -54,7 +54,7 @@ tar -C "${TMP}" -czf "${DIST}/${ASSET}" "${ARCHIVE_ROOT}"
 )
 
 if [[ "${CHECK_ONLY}" -eq 1 ]]; then
-  tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/bin/nexushub-webd"
+  tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/bin/agenthub-webd"
   if tar -tzf "${DIST}/${ASSET}" | grep -Eq "(/webui/|\.html$)"; then die "server archive contains retired web assets"; fi
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/deploy/install.sh"
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/deploy/provider-session-write-paths.py"
@@ -64,6 +64,6 @@ TAURI_CLI="${TAURI_CLI:-${ROOT}/webui/node_modules/.bin/tauri}"
 [[ -x "${TAURI_CLI}" && -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]] || die "release signing tool and key are required"
 VERSION="$(python3 -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"])')"
 "${TAURI_CLI}" signer sign --app-version "${VERSION}" "${DIST}/${ASSET}" >/dev/null
-python3 "${ROOT}/deploy/nexushub-webd/install-safety.py" verify "${DIST}/${ASSET}" "${DIST}/${ASSET}.sha256" "${DIST}/${ASSET}.sig" "${ROOT}/deploy/nexushub-webd/updater.pub" "${VERSION}" >/dev/null
+python3 "${ROOT}/deploy/agenthub-webd/install-safety.py" verify "${DIST}/${ASSET}" "${DIST}/${ASSET}.sha256" "${DIST}/${ASSET}.sig" "${ROOT}/deploy/agenthub-webd/updater.pub" "${VERSION}" >/dev/null
 
 echo "${DIST}/${ASSET}"

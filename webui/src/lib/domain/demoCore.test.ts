@@ -13,7 +13,7 @@ describe("machine demo fixtures", () => {
       expect(view).not.toHaveProperty("security");
       expect(view.platform).not.toHaveProperty("webui_dir");
       for (const field of retiredKeys) expect(view.system.capabilities).not.toHaveProperty(field);
-      expect(JSON.stringify(view)).not.toMatch(/192\.0\.2\.10|panel\.example\.com|\/opt\/nexushub/i);
+      expect(JSON.stringify(view)).not.toMatch(/192\.0\.2\.10|panel\.example\.com|\/opt\/agenthub/i);
     }
   });
 
@@ -31,7 +31,7 @@ describe("machine demo fixtures", () => {
     expect(view.host_surface).toBe("linux_server_api");
     expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "antigravity_notifications", "dsh_notifications", "hidden_cleanup_scan", "codex_delete_tree"].sort());
     expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
-    expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/nexushub-demo", config_file: "/srv/nexushub-demo/config.toml", log_dir: "/srv/nexushub-demo/logs", service_kind: "systemd", service_name: "nexushub-webd" });
+    expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/agenthub-demo", config_file: "/srv/agenthub-demo/config.toml", log_dir: "/srv/agenthub-demo/logs", service_kind: "systemd", service_name: "agenthub-webd" });
   });
 
   test("retired standalone and LAN browser fixtures are unavailable", () => {

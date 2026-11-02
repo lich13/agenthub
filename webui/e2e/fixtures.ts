@@ -267,9 +267,9 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
     const override = state.overrides.get(name);
     return override ? override(args, respond) : respond();
   };
-  await page.exposeFunction("__nexushubInvoke", dispatch);
+  await page.exposeFunction("__agenthubInvoke", dispatch);
   await page.addInitScript(() => {
-    (globalThis as any).__NEXUSHUB_TEST_INVOKE__ = (command: string, args?: Record<string, unknown>) => (globalThis as any).__nexushubInvoke(command, args);
+    (globalThis as any).__AGENTHUB_TEST_INVOKE__ = (command: string, args?: Record<string, unknown>) => (globalThis as any).__agenthubInvoke(command, args);
   });
   return calls;
 }

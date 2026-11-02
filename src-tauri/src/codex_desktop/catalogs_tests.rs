@@ -2,7 +2,7 @@ use super::{
     hash_token, limit, next, plugin_item, CatalogCache, Catalogs, Item, Snapshot, CACHE_AGE,
     MAX_BYTES, MAX_ENTRIES, MAX_ITEMS, PAGE_SIZE,
 };
-use nexushub_core::services::codex_desktop::{DesktopCatalogRequest, DesktopMode};
+use agenthub_core::services::codex_desktop::{DesktopCatalogRequest, DesktopMode};
 use serde_json::json;
 use std::{
     collections::HashSet,

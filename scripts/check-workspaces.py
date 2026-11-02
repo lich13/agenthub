@@ -39,15 +39,15 @@ def check(root):
         raise ValueError("Tauri and core must declare the same MSRV")
     core_lock = load(root, "Cargo.lock")["package"]
     desktop_lock = load(root, "src-tauri/Cargo.lock")["package"]
-    core_deps = load(root, "crates/nexushub-core/Cargo.toml")["dependencies"]
+    core_deps = load(root, "crates/agenthub-core/Cargo.toml")["dependencies"]
     shared = workspace["dependencies"].keys() & desktop["dependencies"].keys()
     observed = {}
     for name in sorted(shared):
         if requirement(workspace["dependencies"][name]) != requirement(desktop["dependencies"][name]):
             raise ValueError(f"shared dependency requirement differs: {name}")
-        versions = (direct_version(core_lock, "nexushub-core" if name in core_deps else "nexushub-webd", name), direct_version(desktop_lock, "nexushub-desktop", name))
+        versions = (direct_version(core_lock, "agenthub-core" if name in core_deps else "agenthub-webd", name), direct_version(desktop_lock, "agenthub-desktop", name))
         # The core crate is also compiled in Tauri's independent graph.
-        if name in core_deps and direct_version(desktop_lock, "nexushub-core", name) != versions[1]:
+        if name in core_deps and direct_version(desktop_lock, "agenthub-core", name) != versions[1]:
             raise ValueError(f"desktop and embedded core resolve different direct versions: {name}")
         if versions[0] != versions[1]:
             observed[name] = versions

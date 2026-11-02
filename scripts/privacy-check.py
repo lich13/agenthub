@@ -13,9 +13,9 @@ PUBLIC_HOSTS = {
     "api.day.app", "challenges.cloudflare.com", "registry.npmjs.org", "registry.yarnpkg.com",
     "schema.tauri.app", "json-schema.org", "schemas.android.com", "www.apple.com", "www.w3.org",
     "docs.github.com", "docs.x.ai", "x.ai", "docs.rs", "crates.io", "static.crates.io",
-    "localhost", "ipc.localhost", "tauri.localhost", "demo.nexushub.local",
+    "localhost", "ipc.localhost", "tauri.localhost", "demo.agenthub.local",
 }
-EXAMPLE_HOSTS = ("example.com", "example.org", "example.net", "example.invalid", "localhost", "test")
+EXAMPLE_HOSTS = ("example.com", "example.org", "example.net", "example.invalid", "localhost", "local", "test")
 RULES = {
     "private_home": re.compile(r"/(?:Users|home)/([^/\s\"'<>`]+)"),
     "ipv4": re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"),

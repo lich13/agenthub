@@ -6,7 +6,7 @@ test("ownership diagnostics are local reads and never forwarded remotely", async
   const result = { ownership: "inactive", reasonCodes: [], processes: [] };
   const invoke = vi.fn(async (command: string) => command === "remote.select"
     ? { target: "remote", revision: 1, configured: true, baseUrl: "https://api.example.invalid/" } : result);
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   const { getClaudeOwnershipDiagnostics } = await import("./claude");
   const runtime = await import("../runtime");
   expect(await getClaudeOwnershipDiagnostics("fixture-key")).toEqual(result);
@@ -19,7 +19,7 @@ test("ownership diagnostics are local reads and never forwarded remotely", async
 
 test("a pending local diagnostic is discarded after the selected machine changes", async () => {
   let finish!: (value: unknown) => void;
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", vi.fn(async (command: string) => command === "remote.select"
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", vi.fn(async (command: string) => command === "remote.select"
     ? { target: "remote", revision: 1, configured: true, baseUrl: "https://api.example.invalid/" }
     : new Promise(resolve => { finish = resolve; })));
   const { getClaudeOwnershipDiagnostics } = await import("./claude");

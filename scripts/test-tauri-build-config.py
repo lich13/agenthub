@@ -22,7 +22,7 @@ class BuildConfigTests(unittest.TestCase):
         original_updater = original["plugins"]["updater"]
         self.assertEqual(original["bundle"]["macOS"]["signingIdentity"], "-")
 
-        with tempfile.TemporaryDirectory(prefix="nexushub-build-config-") as directory:
+        with tempfile.TemporaryDirectory(prefix="agenthub-build-config-") as directory:
             output = Path(directory) / "output.json"
             webui = source.parent.parent / "webui"
             fixture_identity = "fixture-apple-signing-identity"
@@ -49,7 +49,7 @@ class BuildConfigTests(unittest.TestCase):
             self.assertEqual(json.loads(source.read_text()), original)
 
     def test_hook_and_reuse_contract(self):
-        with tempfile.TemporaryDirectory(prefix="nexushub-build-config-") as directory:
+        with tempfile.TemporaryDirectory(prefix="agenthub-build-config-") as directory:
             root = Path(directory).resolve()
             source, output = root / "source.json", root / "output.json"
             original = {"build": {"beforeBuildCommand": "pnpm build:tauri", "frontendDist": "../wrong-server/dist"}, "bundle": {"createUpdaterArtifacts": True}, "plugins": {"updater": {"pubkey": "fixture"}}}
@@ -73,7 +73,7 @@ class BuildConfigTests(unittest.TestCase):
                         self.assertEqual("updater" in result["plugins"], signed)
                         self.assertEqual(result["bundle"]["createUpdaterArtifacts"], signed)
                         self.assertEqual(json.loads(source.read_text()), original)
-            for asset in ("/nexushub/assets/main.js", "/assets/main.js", "./assets/missing.js", "./../source.json", "https://example.com/main.js"):
+            for asset in ("/agenthub/assets/main.js", "/assets/main.js", "./assets/missing.js", "./../source.json", "https://example.com/main.js"):
                 with self.subTest(asset=asset):
                     index.write_text(f'<script src="{asset}"></script>')
                     with self.assertRaises(ValueError):

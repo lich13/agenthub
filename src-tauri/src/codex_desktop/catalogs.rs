@@ -4,7 +4,7 @@ use super::{
     desktop_error,
     selection::{GrantValue, Grants},
 };
-use nexushub_core::{
+use agenthub_core::{
     codex::desktop::{
         helper::{CatalogQuery, CatalogReader, DesktopHelper},
         references::NativeReference,
@@ -323,7 +323,7 @@ impl CatalogCache {
             revision: request.revision,
             thread: thread.into(),
             kind: request.kind.clone(),
-            nonce: hash_token(&nexushub_core::crypto::SecretBox::random_key_material()),
+            nonce: hash_token(&agenthub_core::crypto::SecretBox::random_key_material()),
             created: Instant::now(),
             items,
             modes,

@@ -7,7 +7,7 @@ use std::{
 
 fn fixture_reference() -> GrantValue {
     GrantValue::Reference(
-        nexushub_core::codex::desktop::references::NativeReference::app(
+        agenthub_core::codex::desktop::references::NativeReference::app(
             "fixture-app".into(),
             "app://fixture-app".into(),
         )

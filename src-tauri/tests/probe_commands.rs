@@ -1,10 +1,10 @@
-use nexushub_core::{
+use agenthub_core::{
     config::Config,
     crypto::SecretBox,
     db::PanelDb,
     platform::{PlatformKind, PlatformPaths},
 };
-use nexushub_desktop_lib::{
+use agenthub_desktop_lib::{
     desktop_probe_status_with_state, desktop_update_status_with_state, DesktopState,
 };
 use serde_json::json;
@@ -232,7 +232,7 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
 
     assert_eq!(
         status.method,
-        nexushub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater
+        agenthub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater
     );
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
     assert!(status
@@ -241,7 +241,7 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
         .any(|capability| capability == "signature_verification"));
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
-    assert!(!serialized.contains("/opt/nexushub"));
+    assert!(!serialized.contains("/opt/agenthub"));
 }
 
 #[tokio::test]
@@ -253,7 +253,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         .db
         .create_job(
             "desktop-update-check-test",
-            "nexushub_update_check",
+            "agenthub_update_check",
             "AgentHub app update check",
         )
         .unwrap();
@@ -275,7 +275,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
     assert_eq!(status.update_available, Some(true));
     assert_eq!(
         status.state,
-        nexushub_core::services::updates::UpdateState::Ready
+        agenthub_core::services::updates::UpdateState::Ready
     );
     assert!(status.recommended_action.contains("Tauri updater"));
 }
@@ -289,7 +289,7 @@ async fn desktop_update_status_ignores_stale_older_signed_check_result() {
         .db
         .create_job(
             "desktop-update-check-old",
-            "nexushub_update_check",
+            "agenthub_update_check",
             "AgentHub app update check",
         )
         .unwrap();
@@ -311,7 +311,7 @@ async fn desktop_update_status_ignores_stale_older_signed_check_result() {
     assert_eq!(status.update_available, Some(false));
     assert_eq!(
         status.state,
-        nexushub_core::services::updates::UpdateState::Idle
+        agenthub_core::services::updates::UpdateState::Idle
     );
 }
 
@@ -324,7 +324,7 @@ async fn desktop_update_status_remembers_recent_signed_no_update_result() {
         .db
         .create_job(
             "desktop-update-check-no-update",
-            "nexushub_update_check",
+            "agenthub_update_check",
             "AgentHub app update check",
         )
         .unwrap();
@@ -349,6 +349,6 @@ async fn desktop_update_status_remembers_recent_signed_no_update_result() {
     assert_eq!(status.update_available, Some(false));
     assert_eq!(
         status.state,
-        nexushub_core::services::updates::UpdateState::Idle
+        agenthub_core::services::updates::UpdateState::Idle
     );
 }

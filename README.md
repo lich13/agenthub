@@ -1,6 +1,6 @@
 # AgentHub
 
-AgentHub（底层包标识 `com.lich13.nexushub`，服务端守护进程 `nexushub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过加密 API Key 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
+AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过加密 API Key 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
 ## 核心能力
 
@@ -8,7 +8,7 @@ AgentHub（底层包标识 `com.lich13.nexushub`，服务端守护进程 `nexush
 - **无框流式排版与过程折叠**：保持文本与工具调用的原始时序；同一回合内连续的思考、过渡说明与命令／工具执行自动收敛为单行轻量披露块（`<details>`），最终答复独立清晰展示；`AGENTS.md`、环境与自动上下文默认合并为单行“上下文”入口，搜索命中时自动展开对应折叠块并保留用户手动展开状态。
 - **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
-- **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、五大 Agent 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/nexushub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
+- **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、五大 Agent 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
 - **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；每台机器的管理员 API Key 按 `machine_id` 独立保存在 macOS Keychain 中，旧版单远程配置首次启动时自动无损迁移，切换机器时自动隔离查询缓存、分页与写操作状态。
 
@@ -49,8 +49,8 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 - **四平台实时 Hooks + DSH 原生流**：
   - **Codex**：管理 `~/.codex/hooks.json` 的 Stop Hook，并保留逐问题识别与去重；
   - **Claude Code**：管理 `~/.claude/settings.json` 的 `Stop`、`Notification`、`StopFailure` Hooks；
-  - **Grok Build**：管理 `~/.grok/hooks/nexushub.json`，将完成、失败与待回复延迟从 15 秒轮询降至 `<1 秒` 实时回调，同时保留 15 秒轮询兜底；
-  - **Antigravity**：管理 `~/.gemini/config/hooks.json` 中 `"nexushub"` 命名空间的 `Stop` Hook（立即返回 `{"decision":"allow"}` 不阻塞 IDE），实现回合结束瞬间实时推送，并与 15 秒原生 Language Server 轮询共享去重；
+  - **Grok Build**：管理 `~/.grok/hooks/agenthub.json`，将完成、失败与待回复延迟从 15 秒轮询降至 `<1 秒` 实时回调，同时保留 15 秒轮询兜底；
+  - **Antigravity**：管理 `~/.gemini/config/hooks.json` 中 `"agenthub"` 命名空间的 `Stop` Hook（立即返回 `{"decision":"allow"}` 不阻塞 IDE），实现回合结束瞬间实时推送，并与 15 秒原生 Language Server 轮询共享去重；
   - **DeepSeek Harness**：直接通过原生 `session.lock` 与 `.zstd`／v4 JSONL 增量流及 `turn/end` 精确结算，无需外部 Hook 文件即可零侵入实时监测。
 - **安全校验与有限重试**：Bark 仅允许 HTTPS 服务或 HTTP 本机回环地址；临时网络故障按既有退避策略有限重试，重启后继续未确认分段，升级或首次启用只建立基线、不补发历史通知。
 
@@ -58,33 +58,33 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 
 ### 本机 macOS App
 
-下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.nexushub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app`（若存在旧版 `/Applications/NexusHub.app` 会一并无损迁移清理）并校验签名与版本号。
+下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.agenthub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app`（若存在旧版 `/Applications/AgentHub.app` 会一并无损迁移清理）并校验签名与版本号。
 
 ### 远程 Linux API 服务
 
-Linux `nexushub-webd` 仅提供受管理员 API Key（`x-api-key`）保护的 `/api/rpc/*` 管理接口与 `/healthz` 健康检查，仅绑定回环地址，由前置 HTTPS 反向代理对外提供服务。部署参数须从仓库外提供：
+Linux `agenthub-webd` 仅提供受管理员 API Key（`x-api-key`）保护的 `/api/rpc/*` 管理接口与 `/healthz` 健康检查，仅绑定回环地址，由前置 HTTPS 反向代理对外提供服务。部署参数须从仓库外提供：
 
 ```bash
-NEXUSHUB_DOMAIN=panel.example.invalid \
-  bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
+AGENTHUB_DOMAIN=panel.example.invalid \
+  bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ```
 
 在远端服务器生成独立管理员 API Key 并填入桌面端「设置 → 远程连接」：
 
 ```bash
-sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/api-key
+sudo /usr/local/bin/agenthub-webd admin key-generate --output /absolute/private/api-key
 ```
 
 保存成功后立即删除临时 Key 文件。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
 
 ## 发布资产
 
-当前源码版本为 **2.0.1**；[查看 GitHub Releases](https://github.com/lich13/nexushub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.0.1**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
-- `nexushub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
+- `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
 - 仅包含 `darwin-aarch64` 平台映射的 `latest.json`；
-- `nexushub-webd-linux-x86_64.tar.gz`、`.tar.gz.sha256` 与 `.tar.gz.sig`。
+- `agenthub-webd-linux-x86_64.tar.gz`、`.tar.gz.sha256` 与 `.tar.gz.sig`。
 
 ## 开发与验证
 

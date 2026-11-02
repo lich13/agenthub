@@ -19,11 +19,11 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAFETY_PATH = ROOT / "deploy/nexushub-webd/install-safety.py"
-UPDATE_PATH = ROOT / "deploy/nexushub-webd/update.sh"
+SAFETY_PATH = ROOT / "deploy/agenthub-webd/install-safety.py"
+UPDATE_PATH = ROOT / "deploy/agenthub-webd/update.sh"
 TAURI_CLI = ROOT / "webui/node_modules/.bin/tauri"
 TAURI_CONFIG = ROOT / "src-tauri/tauri.conf.json"
-UPDATER_PUB = ROOT / "deploy/nexushub-webd/updater.pub"
+UPDATER_PUB = ROOT / "deploy/agenthub-webd/updater.pub"
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("install_safety", SAFETY_PATH)
 if spec is None or spec.loader is None:
@@ -61,7 +61,7 @@ class TauriMinisignVerificationTests(unittest.TestCase):
         if shutil.which("minisign") is None:
             raise RuntimeError("installed minisign is required for signature tests")
 
-        cls.temp = tempfile.TemporaryDirectory(prefix="nexushub-signature-tests-")
+        cls.temp = tempfile.TemporaryDirectory(prefix="agenthub-signature-tests-")
         cls.root = Path(cls.temp.name)
         try:
             cls.private_key, cls.public_key_bytes = cls.generate_keypair("trusted")
@@ -70,7 +70,7 @@ class TauriMinisignVerificationTests(unittest.TestCase):
             cls.public_key.write_bytes(cls.public_key_bytes)
             cls.wrong_public_key = cls.root / "wrong.pub"
             cls.wrong_public_key.write_bytes(cls.wrong_public_key_bytes)
-            cls.archive = cls.root / "nexushub-webd-linux-x86_64.tar.gz"
+            cls.archive = cls.root / "agenthub-webd-linux-x86_64.tar.gz"
             cls.archive.write_bytes(b"synthetic release archive used only for signature testing\n")
             cls.checksum = cls.root / f"{cls.archive.name}.sha256"
             write_checksum(cls.archive, cls.checksum)
@@ -147,7 +147,7 @@ class TauriMinisignVerificationTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="nexushub-signature-case-")
+        self.temp = tempfile.TemporaryDirectory(prefix="agenthub-signature-case-")
         self.root = Path(self.temp.name)
         self.archive = self.root / TauriMinisignVerificationTests.archive.name
         shutil.copyfile(self.__class__.archive, self.archive)
@@ -287,8 +287,8 @@ class TauriMinisignVerificationTests(unittest.TestCase):
 
         update_text = UPDATE_PATH.read_text(encoding="utf-8")
         for name, installed, replacement in (
-            ("SAFETY", "/usr/share/nexushub-webd/install-safety.py", SAFETY_PATH),
-            ("PUBLIC_KEY", "/usr/share/nexushub-webd/updater.pub", self.public_key),
+            ("SAFETY", "/usr/share/agenthub-webd/install-safety.py", SAFETY_PATH),
+            ("PUBLIC_KEY", "/usr/share/agenthub-webd/updater.pub", self.public_key),
         ):
             line = f'{name}="{installed}"'
             self.assertEqual(update_text.count(line), 1)
@@ -312,8 +312,8 @@ class TauriMinisignVerificationTests(unittest.TestCase):
             {
                 "PATH": f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}",
                 "TMPDIR": str(private_tmp),
-                "NEXUSHUB_WEBD_UPDATE_TRANSIENT": "1",
-                "NEXUSHUB_WEBD_REPO": "example.invalid/fixture",
+                "AGENTHUB_WEBD_UPDATE_TRANSIENT": "1",
+                "AGENTHUB_WEBD_REPO": "example.invalid/fixture",
                 "TEST_FIXTURE_ARCHIVE": str(fixture_archive),
                 "TEST_FIXTURE_CHECKSUM": str(fixture_checksum),
                 "TEST_FIXTURE_SIGNATURE": str(fixture_signature),

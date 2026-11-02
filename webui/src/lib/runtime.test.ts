@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { RemoteConnectionView } from "./runtime";
 
 const local: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false };
-const remote: RemoteConnectionView = { target: "remote", revision: 1, baseUrl: "https://api.example.com/nexushub/", configured: true };
+const remote: RemoteConnectionView = { target: "remote", revision: 1, baseUrl: "https://api.example.com/agenthub/", configured: true };
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -12,7 +12,7 @@ const deferred = <T>() => {
 async function loadRuntime(handler: (command: string, args?: Record<string, unknown>) => unknown = () => local) {
   vi.resetModules();
   const invoke = vi.fn(handler);
-  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   const runtime = await import("./runtime");
   return { ...runtime, invoke };
 }
@@ -26,7 +26,7 @@ describe("native machine connection", () => {
     expect(runtime.invoke).toHaveBeenCalledExactlyOnceWith("remote.get", undefined);
     expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, ready: true, writes: 0 });
     expect(runtime.connectionSnapshot()).not.toHaveProperty("apiKey");
-    expect(runtime.machineScope()).toBe("remote:https://api.example.com/nexushub/");
+    expect(runtime.machineScope()).toBe("remote:https://api.example.com/agenthub/");
   });
 
   test("local business calls retain the typed native command and never use browser fetch", async () => {
@@ -167,7 +167,7 @@ describe("native machine connection", () => {
   });
 
   test("an uninitialized browser refuses business calls without a native bridge", async () => {
-    vi.resetModules(); vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", undefined);
+    vi.resetModules(); vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", undefined);
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     const { runtimeRpc } = await import("./runtime");
     await expect(runtimeRpc("threads.list")).rejects.toThrow("请使用 AgentHub App");
@@ -176,8 +176,8 @@ describe("native machine connection", () => {
 
   test("switches across multiple named remote machines and isolates machineScope per machineId", async () => {
     const machines = [
-      { id: "m-alpha", name: "主力节点", baseUrl: "https://alpha.example.com/nexushub/" },
-      { id: "m-beta", name: "构建节点", baseUrl: "https://beta.example.com/nexushub/" },
+      { id: "m-alpha", name: "主力节点", baseUrl: "https://alpha.example.com/agenthub/" },
+      { id: "m-beta", name: "构建节点", baseUrl: "https://beta.example.com/agenthub/" },
     ];
     let currentView: RemoteConnectionView = {
       target: "remote",
@@ -221,7 +221,7 @@ describe("native machine connection", () => {
     });
 
     await runtime.initializeConnection();
-    expect(runtime.machineScope()).toBe("remote:m-alpha:https://alpha.example.com/nexushub/");
+    expect(runtime.machineScope()).toBe("remote:m-alpha:https://alpha.example.com/agenthub/");
 
     // Selecting the already-active machineId is a no-op.
     await runtime.remoteSelect("remote", "m-alpha");
@@ -232,7 +232,7 @@ describe("native machine connection", () => {
     expect(runtime.invoke).toHaveBeenLastCalledWith("remote.select", {
       request: { revision: 1, target: "remote", machineId: "m-beta" },
     });
-    expect(runtime.machineScope()).toBe("remote:m-beta:https://beta.example.com/nexushub/");
+    expect(runtime.machineScope()).toBe("remote:m-beta:https://beta.example.com/agenthub/");
 
     // Removing a specific machine passes machineId and resets to local when active was removed.
     await runtime.remoteRemove("m-beta");

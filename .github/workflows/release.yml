@@ -80,11 +80,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: nexushub-webd-linux-x86_64
+          name: agenthub-webd-linux-x86_64
           path: |
-            dist/nexushub-webd-linux-x86_64.tar.gz
-            dist/nexushub-webd-linux-x86_64.tar.gz.sha256
-            dist/nexushub-webd-linux-x86_64.tar.gz.sig
+            dist/agenthub-webd-linux-x86_64.tar.gz
+            dist/agenthub-webd-linux-x86_64.tar.gz.sha256
+            dist/agenthub-webd-linux-x86_64.tar.gz.sig
 
   macos:
     name: macOS arm64 assets
@@ -123,10 +123,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: nexushub-darwin-arm64
+          name: agenthub-darwin-arm64
           path: |
-            dist/nexushub-darwin-arm64.tar.gz
-            dist/nexushub-darwin-arm64.tar.gz.sig
+            dist/agenthub-darwin-arm64.tar.gz
+            dist/agenthub-darwin-arm64.tar.gz.sig
             dist/AgentHub-*-darwin-arm64.dmg
             dist/AgentHub-*-darwin-arm64.dmg.sha256
 
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: nexushub-*
+          pattern: agenthub-*
           path: dist
           merge-multiple: true
       - name: Generate darwin updater manifest
@@ -151,7 +151,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           python3 scripts/release-notes.py "${version}" > "${RUNNER_TEMP}/release-notes.md"
-          python3 - "${version}" "${tag}" "$(cat dist/nexushub-darwin-arm64.tar.gz.sig)" <<'PY'
+          python3 - "${version}" "${tag}" "$(cat dist/agenthub-darwin-arm64.tar.gz.sig)" <<'PY'
           import json, os, pathlib, subprocess, sys
           version, tag, signature = sys.argv[1:]
           notes = subprocess.check_output([sys.executable, "scripts/release-notes.py", version, "--updater"], text=True).strip()
@@ -161,7 +161,7 @@ jobs:
               "pub_date": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat().replace("+00:00", "Z"),
               "platforms": {"darwin-aarch64": {
                   "signature": signature,
-                  "url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}/nexushub-darwin-arm64.tar.gz"
+                  "url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}/agenthub-darwin-arm64.tar.gz"
               }}
           }
           pathlib.Path("dist/latest.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -178,9 +178,9 @@ jobs:
           files: |
             dist/AgentHub-*-darwin-arm64.dmg
             dist/AgentHub-*-darwin-arm64.dmg.sha256
-            dist/nexushub-darwin-arm64.tar.gz
-            dist/nexushub-darwin-arm64.tar.gz.sig
+            dist/agenthub-darwin-arm64.tar.gz
+            dist/agenthub-darwin-arm64.tar.gz.sig
             dist/latest.json
-            dist/nexushub-webd-linux-x86_64.tar.gz
-            dist/nexushub-webd-linux-x86_64.tar.gz.sha256
-            dist/nexushub-webd-linux-x86_64.tar.gz.sig
+            dist/agenthub-webd-linux-x86_64.tar.gz
+            dist/agenthub-webd-linux-x86_64.tar.gz.sha256
+            dist/agenthub-webd-linux-x86_64.tar.gz.sig

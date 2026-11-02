@@ -54,7 +54,7 @@ const forbiddenCommandPattern = new RegExp(
   String.raw`\b(?:callCommand|startProbeCommand|runTypedUpdateCommand|runtimeRpc|webJsonRpc|invokeDesktop)(?:<[^>]+>)?\(\s*["'](?:${forbiddenCommandNames.join("|")})["']`
 );
 
-const productionLeakPattern = /\/Users\/(?!example(?:\/|\b)|test(?:\/|\b))[^/\s"\']+|\/opt\/nexushub/i;
+const productionLeakPattern = /\/Users\/(?!example(?:\/|\b)|test(?:\/|\b))[^/\s"\']+|\/opt\/agenthub/i;
 
 const productionComponentSources = import.meta.glob([
   "../../App.tsx",
@@ -121,7 +121,7 @@ describe("production business source scan", () => {
   test("runtime globals are read only by runtime transport/context modules", () => {
     for (const [path, source] of Object.entries(productionBusinessSources)) {
       if (path.endsWith("../runtime.ts")) continue;
-      expect(source, `${path} must not read runtime globals directly`).not.toMatch(/__TAURI_INTERNALS__|__NEXUSHUB_DESKTOP_RUNTIME__/);
+      expect(source, `${path} must not read runtime globals directly`).not.toMatch(/__TAURI_INTERNALS__|__AGENTHUB_DESKTOP_RUNTIME__/);
     }
   });
 });

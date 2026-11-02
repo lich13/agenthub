@@ -146,7 +146,7 @@ describe("conversation helpers", () => {
 
     const view = app.jobFailureAnalysisView?.({
       category: "nginx_failure",
-      explanation: "Nginx reload failed after systemd restart; 执行 Linux prune，公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
+      explanation: "Nginx reload failed after systemd restart; 执行 Linux prune，公网入口 https://panel.example.com/agenthub/ 192.0.2.10",
       suggestions: ["检查 Nginx", "systemd restart", "使用 sudo", "Linux prune", "panel.example.com"]
     }, desktopCapabilities);
     const rendered = [view?.label, view?.explanation, ...(view?.suggestions ?? [])].join("\n");
@@ -154,7 +154,7 @@ describe("conversation helpers", () => {
     expect(rendered).not.toMatch(/systemd|Nginx|Linux prune|公网入口|panel\.example\.com|192\.0\.2\.10/i);
     expect(rendered).toContain("更新失败");
     expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 执行 Linux prune with sudo; 公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
+      "nginx reload failed after systemd restart; 执行 Linux prune with sudo; 公网入口 https://panel.example.com/agenthub/ 192.0.2.10",
       desktopCapabilities
     )).not.toMatch(/systemd|nginx|Linux prune|sudo|公网入口|panel\.example\.com|192\.0\.2\.10/i);
     expect(app.jobOutputView?.(
@@ -547,7 +547,7 @@ describe("conversation helpers", () => {
       thread_id: "thread-a",
       title: "Codex Stop Hook",
       message: "done",
-      source: "nexushub-webd probe hook-stop",
+      source: "agenthub-webd probe hook-stop",
       payload: {
         session_id: "session-a",
         transcript_path: "/tmp/transcript.jsonl",
@@ -584,7 +584,7 @@ describe("conversation helpers", () => {
         body_summary: "Plan Mode 等待用户确认",
         body_sha256: "abc123",
         body_length: 324,
-        source: "nexushub-webd probe passive-scan",
+        source: "agenthub-webd probe passive-scan",
         bark: { sent: true, skipped: false, http_status: 200, dedupe_hit: false },
         dedupe: { claimed: true, duplicate: false, status: "claimed" },
         device_key: "secret-device-key"
@@ -606,7 +606,7 @@ describe("conversation helpers", () => {
     const card = app.probeEventCard?.({
       id: "event-fallback",
       kind: "hook-stop",
-      source: "nexushub-webd probe hook-stop",
+      source: "agenthub-webd probe hook-stop",
       payload: { session_id: "session-a" },
       created_at: "2026-06-16T00:00:00Z"
     });
@@ -614,7 +614,7 @@ describe("conversation helpers", () => {
     expect(card?.headline).toBe("hook-stop");
     expect(card?.summary).toContain("Probe 事件已记录");
     expect(card?.details).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: "来源", value: "nexushub-webd probe hook-stop" })
+      expect.objectContaining({ label: "来源", value: "agenthub-webd probe hook-stop" })
     ]));
   });
 

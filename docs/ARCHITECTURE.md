@@ -1,10 +1,10 @@
-# NexusHub 架构说明（维护者文档）
+# AgentHub 架构说明（维护者文档）
 
 本文描述当前实现及维护边界。用户操作与下载见 [README](../README.md)，视觉规则见 [DESIGN](../DESIGN.md)，部署步骤见[部署手册](cloud-deploy-runbook.md)，交付状态见[当前进度](progress/MASTER.md)。
 
 ## 运行架构与模块
 
-`desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `NexusHubUseCases`；Provider 读取与受控写操作位于共享核心，HTTP/Tauri 只做薄适配。
+`desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，HTTP/Tauri 只做薄适配。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -14,7 +14,7 @@
 | Antigravity | 本机在线 Connect-RPC 与离线 SQLite／pbtxt／transcript 双模会话列表、分页详情、改名、归档恢复与含子代理后代的清理 |
 | DeepSeek Harness | `workspace.json` v2 与明文／多帧 Zstandard 会话读取、`session.lock` 并发保护改名，以及要求退出运行中 DSH 后的归档恢复与永久删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
-| NexusHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
+| AgentHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
 | WebUI | 展示契约、查询状态、执行分组、搜索、附件、Plan 导出及本机 Codex 协作输入区 |
 | 打包 | macOS ARM64 Tauri App/updater 与 Linux x86_64 无界面 webd |
 
@@ -24,7 +24,7 @@
 
 API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力矩阵。产品版本、协议版本和契约文件的 `schemaVersion` 是不同概念，不互相替代。
 
-1. 同步 `contracts/nexushub-contract.json` 及其 schema，明确 action、DTO 归属和宿主能力。
+1. 同步 `contracts/agenthub-contract.json` 及其 schema，明确 action、DTO 归属和宿主能力。
 2. 同步 Rust 核心 DTO/use case 与 Linux/Tauri 适配层。
 3. 同步 WebUI 的类型、query/domain 和对应测试。
 4. 执行契约、Rust、WebUI、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
@@ -39,7 +39,7 @@ API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力
 
 IPC 通过私有 Unix socket 连接原生桌面，校验同 UID、文件身份、权限和 peer；逐次发现 owner，跟随精确本机线程。长度前缀帧上限 64MiB，连接及普通请求等待 10 秒，start 为 90 秒、steer 为 30 秒；原生 timeoutMs 与本地期限一致，等待时继续处理状态补丁。状态快照与补丁严格检查修订号、路径和预算，失步暂停写入。每个 App 最多四个会话 worker；只按需释放无队列的空闲 worker。独立的短生命周期 bundled helper 只读取模型/模式/技能/应用/插件目录或创建空线程，不执行 turn、resume 或队列；helper 串行许可最多等待 60 秒，繁忙与原生读取超时分别提示。取得许可后，同一个 helper 完成一个目录的全部分页：应用整体 60 秒，其他目录整体 20 秒；分页不重启进程。应用请求固定 threadId:null，不 resume 原线程，可用性按全局配置评估，线程级门控【未核实】。退出或取消时仅回收自有 helper。
 
-原生执行使用 `desktop/protocol.rs` 中固定的白名单，对照的桌面 build 20586 与 20770 方法表一致：stream=11、queue=2，start=2、steer=1、interrupt=4、settings=2、审批/问答/elicitation=1；initialize=0、owner discovery/follow=1。没有猜测或探测新的写入方法。协议不支持、owner 不可用、修订失步、超时分别返回固定中文提示；协议不兼容只停止对应操作并提供原生处理入口，owner/失步提示打开同一线程或重连，不按 build 号禁止发送，不探测新的协议；历史阅读仍可使用，不启用其他执行器。发送前重验线程存在、未归档、当前 owner 与状态；补充/停止绑定当前回合。NexusHub 自有发送队列独立于原生整表队列，不覆盖原生排队内容。只在已核验空闲状态时发送，并等待返回的确切回合终态才发送下一项；原生界面并发操作仍由原生桌面处理，IPC 不提供跨界面的原子空闲锁。
+原生执行使用 `desktop/protocol.rs` 中固定的白名单，对照的桌面 build 20586 与 20770 方法表一致：stream=11、queue=2，start=2、steer=1、interrupt=4、settings=2、审批/问答/elicitation=1；initialize=0、owner discovery/follow=1。没有猜测或探测新的写入方法。协议不支持、owner 不可用、修订失步、超时分别返回固定中文提示；协议不兼容只停止对应操作并提供原生处理入口，owner/失步提示打开同一线程或重连，不按 build 号禁止发送，不探测新的协议；历史阅读仍可使用，不启用其他执行器。发送前重验线程存在、未归档、当前 owner 与状态；补充/停止绑定当前回合。AgentHub 自有发送队列独立于原生整表队列，不覆盖原生排队内容。只在已核验空闲状态时发送，并等待返回的确切回合终态才发送下一项；原生界面并发操作仍由原生桌面处理，IPC 不提供跨界面的原子空闲锁。
 
 自有数据库 schema 2 增加加密发送记录，schema 1 退役迁移保持独立完成标记。专属 Keychain 密钥通过 `CredentialAccess` 访问，没有开发密钥回退；缺失密钥时保留已有密文。跨进程私有文件锁限制唯一调度者。认领先落盘，只有原生确认或匹配 client message ID 后清除正文；断线/重启的未发项暂停，正在发送项标记结果不明，不自动重发。普通补充失败保留待取消，不能在恢复队列时改成新回合。新增非空引用区间以已解析引用索引保存，不依赖会过期的界面 handle；新提交同时记录内部 nativeMentions 标记，缺失时读取旧文本与 text_elements 编码，不重写已有密文。没有区间时沿用旧加密正文的逐字节格式，client message ID 仍按原正文判等，格式变化不能绕过幂等检查。停止先暂停本线程未发队列，移除结果不明记录需要明确核对。
 
@@ -57,7 +57,7 @@ WebUI 仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段�
 
 附件命令的 onEvent 始终使用同一回调标识；Tauri 入口只解析标识，仅 bind 创建并持有 Channel，其他操作复用已有接收区。不能在每次 bounds、paste 或 release 调用中重建 Channel：临时实例释放会发送结束帧，提前关闭仍在使用的附件通知通道。解绑与切换会话仍关闭原通道，迟到事件不得恢复旧附件。
 
-粘贴图片写入 NexusHub 数据库旁的私有附件目录（目录 0700、文件 0600、随机名、独占创建），写完并同步后捕获原有 `NativeReference::File` 身份，之后不改名或改写。图片为原生 owner 可读取的明文私有文件；归属和生命周期索引使用现有专属 Keychain 密钥加密，索引上限 1MiB，图片总量最多 512MiB/256 项。沿用跨进程 worker 锁，初始化/恢复后台工作取消也不提前释放锁。未提交草稿可显式释放或在 30 分钟后清理；隐藏/重连在授权有效期内保留草稿。发送前先原子持久化并同步保留标记，再交给原有队列，成功、失败、取消或结果不明均不自动删除这些图片，避免破坏原生历史。容量满时拒绝新粘贴，可继续使用文件选择器。启动只清理有完整归属证据的过期草稿，`Released` 标记允许接续草稿删除；密钥缺失、损坏/缺失索引、未知遗留文件或身份变化时保留文件并停止操作，不猜测崩溃后的归属，不新增数据库表或旧队列格式。
+粘贴图片写入 AgentHub 数据库旁的私有附件目录（目录 0700、文件 0600、随机名、独占创建），写完并同步后捕获原有 `NativeReference::File` 身份，之后不改名或改写。图片为原生 owner 可读取的明文私有文件；归属和生命周期索引使用现有专属 Keychain 密钥加密，索引上限 1MiB，图片总量最多 512MiB/256 项。沿用跨进程 worker 锁，初始化/恢复后台工作取消也不提前释放锁。未提交草稿可显式释放或在 30 分钟后清理；隐藏/重连在授权有效期内保留草稿。发送前先原子持久化并同步保留标记，再交给原有队列，成功、失败、取消或结果不明均不自动删除这些图片，避免破坏原生历史。容量满时拒绝新粘贴，可继续使用文件选择器。启动只清理有完整归属证据的过期草稿，`Released` 标记允许接续草稿删除；密钥缺失、损坏/缺失索引、未知遗留文件或身份变化时保留文件并停止操作，不猜测崩溃后的归属，不新增数据库表或旧队列格式。
 
 审批 key 包含完整原生请求；文件审批另外绑定对应 turn/item 的实际 changes。展示不完整、未知权限/表单约束均不得批准，保留原生处理入口。命令与文件审批在 `supportedDecisions` 可选字段明确声明后，才显示“允许本次会话”；新增可选 `decision` 保留原 `allow` 布尔兼容，只接受已核验的 accept/decline/acceptForSession 及一致布尔值。未知决策为 UnsupportedProtocol，过期 key 为 RequestExpired；权限仍限 turn scope，不创建永久授权。问答只提交当前请求的精确 ID；原生另一侧完成请求后以新的原生状态撤下原请求。
 
@@ -79,17 +79,17 @@ Tauri 频道最多每秒十次投影视图，初值取自同一订阅；前端�
 
 ### 证据与未核实项
 
-1.3.4 的隔离文件样本已复现 macOS 扩展属性更新只改变 ctime、内容与其他身份不变时被误拒；摘要复核覆盖此情形，不能据此确认用户截图中那次失败的唯一原因。新增 Finder、路径文本、PNG/TIFF/JPEG 使用专用 pasteboard 测试，不触碰真实剪贴板；修复候选真实粘贴与发送由用户确认，覆盖范围见[1.3.4 验收记录](https://github.com/lich13/nexushub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。
+1.3.4 的隔离文件样本已复现 macOS 扩展属性更新只改变 ctime、内容与其他身份不变时被误拒；摘要复核覆盖此情形，不能据此确认用户截图中那次失败的唯一原因。新增 Finder、路径文本、PNG/TIFF/JPEG 使用专用 pasteboard 测试，不触碰真实剪贴板；修复候选真实粘贴与发送由用户确认，覆盖范围见[1.3.4 验收记录](https://github.com/lich13/agenthub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。
 
 1.3.3 修复前已只读复现：带线程 ID 的临时 helper 返回 -32600/thread not found；threadId:null 的应用冷读约 29–32 秒，同一 helper 第二页约 108ms；model/list 实际包含 max。当时桌面 build 为 20586、bundled CLI 为 0.163.0-alpha.10.2；这些目录探测不是回合或两端功能验收。
 
-1.3.1 的只读核对依据桌面 build 20586 应用源码；`crates/nexushub-core/tests/fixtures/desktop-native-input/source-derived.json` 保存源文件标识、SHA-256 和脱敏合成输入，**不是桌面采集快照**。`conversation-turn-mutations` 确认内联字段为 camelCase `byteRange`；审批面板的 Qr / $r 与 follower 转发实现共同确认命令和文件的 `acceptForSession`。未复制原生源码到运行时代码，也未采集真实用户消息。
+1.3.1 的只读核对依据桌面 build 20586 应用源码；`crates/agenthub-core/tests/fixtures/desktop-native-input/source-derived.json` 保存源文件标识、SHA-256 和脱敏合成输入，**不是桌面采集快照**。`conversation-turn-mutations` 确认内联字段为 camelCase `byteRange`；审批面板的 Qr / $r 与 follower 转发实现共同确认命令和文件的 `acceptForSession`。未复制原生源码到运行时代码，也未采集真实用户消息。
 
 1.3.3 对照 build 20586 的 composer dG/uG/getPersistedText，确认已解析技能、应用和插件使用 Markdown 链接；原生 Ej 从 context 读取 attachments。`mention-links-source-derived.json` 仅为脱敏源码派生 fixture，不是 liveCaptured。只读 Goal 依据同一构建的 Jg 投影及目标面板状态枚举；参考项目的独立 Goal 元数据通道未采用。原生应用目录冷读仍可能等待约 30 秒，缓存和独立展示不能等同于降低原生网络耗时。
 
 Goal 仅支持状态显示与原生操作入口，直接创建、修改、暂停和恢复不在当前范围内。build 20770 所带 CLI 0.163.0-alpha.10.2 的实际 schema 包含 `thread/goal/get`、`thread/goal/set`、`thread/goal/clear`，但它们不是已核验的 follower 方法。`origin: user` 用于明确的用户操作；缺失来源不能代表用户授权。[参考项目的 GoalRPC](https://github.com/try2love/codex-mobile-bridge/blob/70a275b0eabea6f3bda333f35ef925741927bd11/bridge/features/sessions/goal.py) 另开元数据 app-server，写入未携带该来源，再经桌面启动消息激活目标，不能据此认定与当前原生操作等价。隔离双进程验证中，owner 先创建 paused Goal 后，第二个进程可读目标，但携带 `origin: user` 的修改和清除返回 -32603（记录用户目标指令失败）；关闭 owner 后同样的修改与清除成功。未触发 turn，未操作真实会话。该结果不支持在保持当前 owner 写入边界时直接复用此通道，也没有证明跨进程写入能同步桌面内存状态；不得省略用户来源、关闭用户 owner、直接写原生数据库或模拟 follower 方法来绕过。
 
-2026-10-18 用户诊断显示桌面已为 build 20770，bundled CLI 版本不变。只读核对其 `src-DsLVGakC.js` 的 SHA-256 与上述 fixture 所记源文件一致，现用连接、订阅与写入方法版本均未漂移。用户在目标线程尚未由桌面打开时点击“连接”得到 Timeout，按先打开同一线程的流程操作后确认连接正常，随后明确确认其余候选验收项目通过，范围见 [1.3.3 验收记录](https://github.com/lich13/nexushub/blob/cfb1be16f2f49200db8db6cfae6eab9ea797597d/docs/progress/MASTER.md#候选与十项用户验收)。该轮没有完成独立只读 socket 探测，不把用户验收写成助手实机测量。兼容检查依据方法版本、状态形状和身份，不以桌面 build 数字拒绝连接；新增未知字段不自动成为可写能力，未知方法版本仍停止对应操作，不能保证未来不兼容协议无需适配。
+2026-10-18 用户诊断显示桌面已为 build 20770，bundled CLI 版本不变。只读核对其 `src-DsLVGakC.js` 的 SHA-256 与上述 fixture 所记源文件一致，现用连接、订阅与写入方法版本均未漂移。用户在目标线程尚未由桌面打开时点击“连接”得到 Timeout，按先打开同一线程的流程操作后确认连接正常，随后明确确认其余候选验收项目通过，范围见 [1.3.3 验收记录](https://github.com/lich13/agenthub/blob/cfb1be16f2f49200db8db6cfae6eab9ea797597d/docs/progress/MASTER.md#候选与十项用户验收)。该轮没有完成独立只读 socket 探测，不把用户验收写成助手实机测量。兼容检查依据方法版本、状态形状和身份，不以桌面 build 数字拒绝连接；新增未知字段不自动成为可写能力，未知方法版本仍停止对应操作，不能保证未来不兼容协议无需适配。
 
 - **【未核实】** 桌面原生文件引用的完整 wire 形状。1.3.2 未采集 liveCaptured snapshot，N0/N1 按批准范围跳过；因此普通文件兼容前缀和旧加密正文保持，不宣称与原生气泡完全一致。
 - **【未核实】** 文件审批 `cancel`、永久授权、策略修订和其他未列举决策；未暴露按钮或发送这些字符串。
@@ -215,7 +215,7 @@ claude.hooks 是仅限本机的 status／install／remove 操作。安装须设�
 
 hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成还须具备对应回合终态，保留有效分支上较早回合的完成补发。StopFailure 为 API 错误结束的候选；Hook 首次处理、首次发送与每次重试均核验当前主回合、执行活动及终态，轮询失败使用相同规则。新回合、同回合恢复、成功或取消使旧失败过期并清空待投递正文；普通元数据追加和仍打开的进程不表示恢复执行，独立后台任务不阻挡主回合提醒。身份或终态未写完整时沿用有限重试。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
 
-所有通知来源共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 NexusHub 深链。
+所有通知来源共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 AgentHub 深链。
 
 Bark 保存和发送前共用 URL 校验。HTTPS 拒绝回环、未指定、链路本地、IPv4 私网、IPv6 ULA 及对应映射地址；拒绝数字 IP 别名、非法 authority 和 URL 凭据。保留普通 HTTPS 主机名与真实 HTTP 回环服务，不作 DNS 解析。无效配置保留原值并停止投递，不改用默认服务携带原密钥发送。
 
@@ -265,7 +265,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 不删除 tombstone、回退或有效迁移。tombstone 至少保留整个协议 2 生命周期；移除回退需明确提高最低服务版本；数据库迁移按历史数据库升级支持范围保留，不能仅因服务版本提高而移除。
 
-迁移只打开 NexusHub 自有数据库。schema 版本标记成功完成的升级，重复打开跳过退役 JSON 扫描；跨进程迁移锁覆盖含 VACUUM 的全过程。完成所有迁移后才推进版本，失败保留原有 pending 标记，下次可重入；退役阶段不新增业务表或用户设置。桌面发送记录通过后续 schema 2 独立建立，不重复退役扫描。
+迁移只打开 AgentHub 自有数据库。schema 版本标记成功完成的升级，重复打开跳过退役 JSON 扫描；跨进程迁移锁覆盖含 VACUUM 的全过程。完成所有迁移后才推进版本，失败保留原有 pending 标记，下次可重入；退役阶段不新增业务表或用户设置。桌面发送记录通过后续 schema 2 独立建立，不重复退役扫描。
 
 退役范围限于 Goal 表/恢复列、旧网页 admins/sessions/Turnstile、Pi 自有提供方/流/投递/事件/设置，以及 Gotify 配置、密钥、通道、队列、Probe 字段和专属任务。Pi 队列先于 JSON 解码清理；涉及退役秘密时使用 secure_delete、VACUUM 和 WAL 截断，保留 Bark 密钥、成功/未知记录、基线、任务、业务审计及其他设置。配置迁移只删明确退役键，不卸载外部服务，不打开或迁移原生会话数据库。
 
@@ -277,7 +277,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 CI 保留 Frontend checks、Backend checks、macOS Tauri checks。第三方 Action 固定 SHA，权限按作业收敛；Frontend/Backend/Tauri 超时为 30/45/60 分钟。Cargo test、clippy 和正式构建均使用 --locked，包括 Tauri 传递的 Cargo 参数。缓存区分平台、架构、工具版本、锁文件与构建参数，覆盖 Cargo、pnpm、固定版本 cargo-audit 和 Playwright 浏览器；Linux 浏览器系统依赖仍正常安装。cargo audit/pnpm audit 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。定向修复必须审阅两份锁文件，不自动批量升级。交互性能预算使用生产构建、可见 macOS 窗口、串行 Chromium/WebKit 和关闭 trace 的命令；单一阈值与 JSON 测量结果由既有 `@desktop-performance` 测试提供，复现见 README。
 
-Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`nexushub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
+Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`agenthub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
 
 macOS App 在 Tauri 生成 DMG 和 updater 归档前完成代码签名，默认 ad-hoc；原有 `MACOS_CODESIGN_IDENTITY` 覆盖传入打包配置，Tauri 的 `APPLE_SIGNING_IDENTITY` 优先级保持。打包检查完整 App 的 deep/strict 签名，不能仅重签临时归档副本。代码签名与 updater Minisign 独立，ad-hoc 不代表 Developer ID 或 Apple 公证。桌面 updater 只启用 rustls，macOS tar.gz 支持由其平台依赖保留，不引入未发布的 Windows ZIP 更新特性。
 

@@ -1,5 +1,4 @@
-use anyhow::{anyhow, Result};
-use nexushub_core::{
+use agenthub_core::{
     codex::{resolve_codex_paths, CodexPaths},
     config::Config,
     crypto::SecretBox,
@@ -8,6 +7,7 @@ use nexushub_core::{
     platform::{PlatformKind, PlatformPaths},
     services::system::HostSurface,
 };
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::{
     path::PathBuf,
@@ -16,7 +16,7 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NexusPaths {
+pub struct AgentHubPaths {
     pub app_support_dir: PathBuf,
     pub config_file: PathBuf,
     pub database_file: PathBuf,
@@ -39,7 +39,7 @@ impl DesktopState {
         let mut config = load_desktop_config(&platform);
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
-        if nexushub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
+        if agenthub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
             config.codex.workspace = default_local_desktop_workspace()
                 .ok_or_else(|| anyhow!("cannot resolve local desktop workspace"))?;
         }
@@ -67,7 +67,7 @@ impl DesktopState {
         *self.config.write().expect("desktop config rwlock") = config;
     }
 
-    pub fn resolved_codex_paths(&self) -> nexushub_core::codex::ResolvedCodexPaths {
+    pub fn resolved_codex_paths(&self) -> agenthub_core::codex::ResolvedCodexPaths {
         let config = self.config();
         resolve_codex_paths(&config.codex.home)
     }
@@ -86,23 +86,26 @@ impl DesktopState {
 }
 
 fn default_local_desktop_workspace() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("nexushub-workspace"))
+    dirs::home_dir().map(|home| home.join("agenthub-workspace"))
 }
 
-pub fn nexus_paths_for_home(home: impl Into<PathBuf>) -> NexusPaths {
-    nexus_paths_for_platform_home(PlatformKind::Macos, home)
+pub fn agenthub_paths_for_home(home: impl Into<PathBuf>) -> AgentHubPaths {
+    agenthub_paths_for_platform_home(PlatformKind::Macos, home)
 }
 
-pub fn nexus_paths_for_platform_home(kind: PlatformKind, home: impl Into<PathBuf>) -> NexusPaths {
+pub fn agenthub_paths_for_platform_home(
+    kind: PlatformKind,
+    home: impl Into<PathBuf>,
+) -> AgentHubPaths {
     let platform = PlatformPaths::for_desktop_kind_with_home(kind, home);
-    nexus_paths_for_platform(&platform)
+    agenthub_paths_for_platform(&platform)
 }
 
-fn nexus_paths_for_platform(platform: &PlatformPaths) -> NexusPaths {
-    NexusPaths {
+fn agenthub_paths_for_platform(platform: &PlatformPaths) -> AgentHubPaths {
+    AgentHubPaths {
         config_file: platform.config_file.clone(),
-        database_file: platform.data_dir.join("nexushub.sqlite"),
-        app_log_file: platform.log_dir.join("nexushub.log"),
+        database_file: platform.data_dir.join("agenthub.sqlite"),
+        app_log_file: platform.log_dir.join("agenthub.log"),
         app_support_dir: platform.data_dir.clone(),
         log_dir: platform.log_dir.clone(),
     }
@@ -127,7 +130,7 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexushub_core::services::{jobs as job_service, settings as settings_service};
+    use agenthub_core::services::{jobs as job_service, settings as settings_service};
 
     fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {
         let temp = tempfile::tempdir().unwrap();
@@ -160,24 +163,24 @@ mod tests {
     }
 
     #[test]
-    fn mac_style_paths_use_nexushub_application_support_and_logs() {
-        let paths = nexus_paths_for_home("/Users/example");
+    fn mac_style_paths_use_agenthub_application_support_and_logs() {
+        let paths = agenthub_paths_for_home("/Users/example");
 
         assert_eq!(
             paths.app_support_dir,
-            PathBuf::from("/Users/example/Library/Application Support/NexusHub")
+            PathBuf::from("/Users/example/Library/Application Support/AgentHub")
         );
         assert_eq!(
             paths.log_dir,
-            PathBuf::from("/Users/example/Library/Logs/NexusHub")
+            PathBuf::from("/Users/example/Library/Logs/AgentHub")
         );
         assert_eq!(
             paths.config_file,
-            PathBuf::from("/Users/example/Library/Application Support/NexusHub/config.toml")
+            PathBuf::from("/Users/example/Library/Application Support/AgentHub/config.toml")
         );
         assert_eq!(
             paths.app_log_file,
-            PathBuf::from("/Users/example/Library/Logs/NexusHub/nexushub.log")
+            PathBuf::from("/Users/example/Library/Logs/AgentHub/agenthub.log")
         );
     }
 
@@ -288,21 +291,21 @@ mod tests {
     fn fixed_probe_command_uses_platform_daemon_path() {
         let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
         let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
-        let plan = nexushub_core::services::probe::plan_probe_action(
+        let plan = agenthub_core::services::probe::plan_probe_action(
             &config,
             &platform,
-            nexushub_core::services::probe::ProbeAction::BarkTest,
+            agenthub_core::services::probe::ProbeAction::BarkTest,
         )
         .unwrap();
         let command = plan.job.unwrap().command;
 
         assert!(
             command.contains(
-                "'/Users/example/Library/Application Support/NexusHub/bin/nexushub-webd'"
+                "'/Users/example/Library/Application Support/AgentHub/bin/agenthub-webd'"
             ),
             "{command}"
         );
-        assert!(!command.contains("/opt/nexushub/bin/nexushub-webd"));
+        assert!(!command.contains("/opt/agenthub/bin/agenthub-webd"));
     }
 
     #[test]
@@ -312,7 +315,7 @@ mod tests {
         assert!(config
             .update
             .panel_update_command
-            .contains("nexushub-webd-update"));
+            .contains("agenthub-webd-update"));
         assert!(!config.update.panel_precheck_command.contains("systemctl"));
         assert!(!config
             .update
@@ -321,10 +324,10 @@ mod tests {
         assert!(!config
             .update
             .panel_precheck_command
-            .contains("/opt/nexushub"));
+            .contains("/opt/agenthub"));
         assert!(config
             .update
             .panel_precheck_command
-            .contains("Library/Application Support/NexusHub"));
+            .contains("Library/Application Support/AgentHub"));
     }
 }

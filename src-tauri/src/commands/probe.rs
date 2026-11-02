@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::{overview::DesktopState, services::probe as probe_service};
-use nexushub_core::probe::ProbeStatus;
+use agenthub_core::probe::ProbeStatus;
 
 #[tauri::command(rename = "probe.status")]
 pub async fn getProbeStatus(

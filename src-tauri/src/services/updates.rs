@@ -1,8 +1,8 @@
 use crate::overview::DesktopState;
+use agenthub_core::config::Config;
+use agenthub_core::platform::PlatformPaths;
+use agenthub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
 use anyhow::Result;
-use nexushub_core::config::Config;
-use nexushub_core::platform::PlatformPaths;
-use nexushub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -30,7 +30,7 @@ pub fn desktop_update_status_with_state(
             .db
             .list_jobs(25)?
             .into_iter()
-            .find(|job| job.kind == "nexushub_update_check")
+            .find(|job| job.kind == "agenthub_update_check")
     } else {
         None
     };
@@ -88,7 +88,7 @@ pub(crate) async fn install_update_and_restart(
 fn update_job_id(spec: &updates::MacosUpdaterJobSpec) -> String {
     let action = spec
         .kind
-        .strip_prefix("nexushub_update_")
+        .strip_prefix("agenthub_update_")
         .unwrap_or(spec.kind.as_str());
     format!(
         "desktop-update-{action}-{}-{}",
@@ -147,7 +147,7 @@ fn native_update_job_plan_for_action(
     let plan = updates::plan_update_action_for_surface(
         config,
         platform,
-        nexushub_core::services::system::HostSurface::DesktopEmbeddedTauri,
+        agenthub_core::services::system::HostSurface::DesktopEmbeddedTauri,
         action,
     )?;
     let _native = plan
@@ -236,7 +236,7 @@ async fn install_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexushub_core::{
+    use agenthub_core::{
         db::JobRecord,
         platform::{PlatformKind, PlatformPaths},
     };
@@ -248,12 +248,12 @@ mod tests {
 
         let check =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Check).unwrap();
-        assert_eq!(check.spec.kind, "nexushub_update_check");
+        assert_eq!(check.spec.kind, "agenthub_update_check");
         assert!(update_job_id(&check.spec).starts_with("desktop-update-check-"));
 
         let install =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
-        assert_eq!(install.spec.kind, "nexushub_update_install");
+        assert_eq!(install.spec.kind, "agenthub_update_install");
         assert!(update_job_id(&install.spec).starts_with("desktop-update-install-"));
     }
 
@@ -350,7 +350,7 @@ mod tests {
     fn job_record(status: &str, output: &str) -> JobRecord {
         JobRecord {
             id: "job-1".to_string(),
-            kind: "nexushub_update_check".to_string(),
+            kind: "agenthub_update_check".to_string(),
             status: status.to_string(),
             title: "AgentHub app update check".to_string(),
             thread_id: None,

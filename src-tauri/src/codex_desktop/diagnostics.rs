@@ -1,4 +1,4 @@
-use nexushub_core::services::codex_desktop::DesktopDiagnostics;
+use agenthub_core::services::codex_desktop::DesktopDiagnostics;
 use std::{process::Stdio, time::Duration};
 
 pub async fn metadata() -> DesktopDiagnostics {
@@ -22,7 +22,7 @@ pub async fn metadata() -> DesktopDiagnostics {
         ),
     );
     DesktopDiagnostics {
-        records: nexushub_core::codex::desktop::diagnostics::snapshot(),
+        records: agenthub_core::codex::desktop::diagnostics::snapshot(),
         desktop_build,
         bundled_cli_version,
     }

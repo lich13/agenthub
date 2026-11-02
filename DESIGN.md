@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-AgentHub（底层包标识 `com.lich13.nexushub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier canonical surface hierarchy (`--bg-rail`, `--bg-surface`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
+AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier canonical surface hierarchy (`--bg-rail`, `--bg-surface`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
 
 ## Layout and interaction
 

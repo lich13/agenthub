@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use nexushub_core::services::plans::{PlanSaveRequest, PlanSaveResult};
+use agenthub_core::services::plans::{PlanSaveRequest, PlanSaveResult};
 use std::{fs::OpenOptions, io::Write, path::Path};
 
 #[tauri::command(rename = "plans.save")]

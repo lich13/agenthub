@@ -1,8 +1,8 @@
 use crate::overview::DesktopState;
-use anyhow::Result;
-use nexushub_core::{
-    db::JobRecord, services::use_cases::NexusHubUseCases, update::JobFailureAnalysis,
+use agenthub_core::{
+    db::JobRecord, services::use_cases::AgentHubUseCases, update::JobFailureAnalysis,
 };
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ pub(crate) fn jobs_with_state(
     state: &DesktopState,
     request: DesktopJobsRequest,
 ) -> Result<Vec<DesktopJobResponse>> {
-    let use_cases = NexusHubUseCases::new(state.platform());
+    let use_cases = AgentHubUseCases::new(state.platform());
     let plan = use_cases.jobs().list(request.limit)?;
     Ok(state
         .db
@@ -45,7 +45,7 @@ pub(crate) fn job_detail_with_state(
     state: &DesktopState,
     request: DesktopJobDetailRequest,
 ) -> Result<Option<DesktopJobResponse>> {
-    let use_cases = NexusHubUseCases::new(state.platform());
+    let use_cases = AgentHubUseCases::new(state.platform());
     let plan = use_cases.jobs().detail(&request.id)?;
     Ok(state
         .db
@@ -53,8 +53,8 @@ pub(crate) fn job_detail_with_state(
         .map(|job| use_cases.jobs().response(job).into()))
 }
 
-impl From<nexushub_core::services::use_cases::JobResponse> for DesktopJobResponse {
-    fn from(value: nexushub_core::services::use_cases::JobResponse) -> Self {
+impl From<agenthub_core::services::use_cases::JobResponse> for DesktopJobResponse {
+    fn from(value: agenthub_core::services::use_cases::JobResponse) -> Self {
         Self {
             job: value.job,
             failure_analysis: value.failure_analysis,

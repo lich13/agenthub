@@ -1,31 +1,31 @@
 {
   "catalog": {
     "ClaudeDeletePreview": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeDeletePreview",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeletePreview",
       "ts": "webui/src/types.ts#ClaudeDeletePreview"
     },
     "ClaudeDeleteRequest": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeDeleteRequest",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeleteRequest",
       "ts": "webui/src/types.ts#ClaudeDeleteRequest"
     },
     "ClaudeDetailRequest": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeDetailRequest",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDetailRequest",
       "ts": "webui/src/types.ts#ClaudeDetailRequest"
     },
     "ClaudeDetailResponse": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeSessionDetail",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeSessionDetail",
       "ts": "webui/src/types.ts#ClaudeSessionDetail"
     },
     "ClaudeHooksAction": {
-      "rust": "crates/nexushub-core/src/claude/hooks.rs#ClaudeHooksAction",
+      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksAction",
       "ts": "webui/src/types.ts#ClaudeHooksAction"
     },
     "ClaudeHooksRequest": {
-      "rust": "crates/nexushub-core/src/claude/hooks.rs#ClaudeHooksRequest",
+      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksRequest",
       "ts": "webui/src/types.ts#ClaudeHooksRequest"
     },
     "ClaudeHooksStatus": {
-      "rust": "crates/nexushub-core/src/claude/hooks.rs#ClaudeHooksStatus",
+      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksStatus",
       "ts": "webui/src/types.ts#ClaudeHooksStatus"
     },
     "ClaudeListRequest": {
@@ -33,19 +33,19 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "ClaudeListResponse": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeSessionSummary",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeSessionSummary",
       "ts": "webui/src/types.ts#ClaudeSessionSummary"
     },
     "ClaudeMutationResponse": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeSessionSummary",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeSessionSummary",
       "ts": "webui/src/types.ts#ClaudeSessionSummary"
     },
     "ClaudeOwnershipDiagnostics": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeOwnershipDiagnostics",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeOwnershipDiagnostics",
       "ts": "webui/src/types.ts#ClaudeOwnershipDiagnostics"
     },
     "ClaudeOwnershipProcess": {
-      "rust": "crates/nexushub-core/src/claude.rs#ClaudeOwnershipProcess",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeOwnershipProcess",
       "ts": "webui/src/types.ts#ClaudeOwnershipProcess"
     },
     "ClaudeRenameRequest": {
@@ -57,191 +57,191 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "CleanupArchiveDryRunResponse": {
-      "rust": "crates/nexushub-core/src/archive.rs#ArchiveDeletePlan",
+      "rust": "crates/agenthub-core/src/archive.rs#ArchiveDeletePlan",
       "ts": "webui/src/types.ts#ArchiveDeletePlan"
     },
     "CleanupArchiveExecuteResponse": {
-      "rust": "crates/nexushub-core/src/archive.rs#ArchiveDeleteResult",
+      "rust": "crates/agenthub-core/src/archive.rs#ArchiveDeleteResult",
       "ts": "webui/src/types.ts#ArchiveDeleteResult"
     },
     "CleanupExecuteRequest": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#CleanupExecuteRequest",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#CleanupExecuteRequest",
       "ts": "webui/src/types.ts#CleanupExecuteRequest"
     },
     "CleanupHiddenDryRunResponse": {
-      "rust": "crates/nexushub-core/src/archive.rs#HiddenThreadDeletePlan",
+      "rust": "crates/agenthub-core/src/archive.rs#HiddenThreadDeletePlan",
       "ts": "webui/src/types.ts#HiddenThreadDeletePlan"
     },
     "CleanupHiddenExecuteResponse": {
-      "rust": "crates/nexushub-core/src/archive.rs#HiddenThreadDeleteResult",
+      "rust": "crates/agenthub-core/src/archive.rs#HiddenThreadDeleteResult",
       "ts": "webui/src/types.ts#HiddenThreadDeleteResult"
     },
     "DesktopAck": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAck",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAck",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAck"
     },
     "DesktopAction": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAction",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAction",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAction"
     },
     "DesktopActionRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopActionRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopActionRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopActionRequest"
     },
     "DesktopAnswer": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAnswer",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAnswer",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAnswer"
     },
     "DesktopAttachmentAction": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAttachmentAction",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentAction",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAttachmentAction"
     },
     "DesktopAttachmentBounds": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAttachmentBounds",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentBounds",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAttachmentBounds"
     },
     "DesktopAttachmentEvent": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAttachmentEvent",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentEvent",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAttachmentEvent"
     },
     "DesktopAttachmentRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAttachmentRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAttachmentRequest"
     },
     "DesktopAttachmentResult": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopAttachmentResult",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentResult",
       "ts": "webui/src/lib/api/desktop.ts#DesktopAttachmentResult"
     },
     "DesktopCatalog": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCatalog",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCatalog",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCatalog"
     },
     "DesktopCatalogItem": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCatalogItem",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCatalogItem",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCatalogItem"
     },
     "DesktopCatalogRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCatalogRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCatalogRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCatalogRequest"
     },
     "DesktopChoice": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopChoice",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChoice",
       "ts": "webui/src/lib/api/desktop.ts#DesktopChoice"
     },
     "DesktopChooseRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopChooseRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChooseRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopChooseRequest"
     },
     "DesktopChosenItem": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopChosenItem",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChosenItem",
       "ts": "webui/src/lib/api/desktop.ts#DesktopChosenItem"
     },
     "DesktopCreateRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCreateRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCreateRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCreateRequest"
     },
     "DesktopCreatedThread": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCreatedThread",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCreatedThread",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCreatedThread"
     },
     "DesktopDiagnostic": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnostic",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopDiagnostic",
       "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnostic"
     },
     "DesktopDiagnostics": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnostics",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopDiagnostics",
       "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnostics"
     },
     "DesktopDiagnosticsRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnosticsRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopDiagnosticsRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnosticsRequest"
     },
     "DesktopFileReview": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopFileReview",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopFileReview",
       "ts": "webui/src/lib/api/desktop.ts#DesktopFileReview"
     },
     "DesktopGoal": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopGoal",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopGoal",
       "ts": "webui/src/lib/api/desktop.ts#DesktopGoal"
     },
     "DesktopMode": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopMode",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopMode",
       "ts": "webui/src/lib/api/desktop.ts#DesktopMode"
     },
     "DesktopPasteDisposition": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPasteDisposition",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPasteDisposition",
       "ts": "webui/src/lib/api/desktop.ts#DesktopPasteDisposition"
     },
     "DesktopPendingRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPendingRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPendingRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopPendingRequest"
     },
     "DesktopPermissionsReview": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPermissionsReview",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPermissionsReview",
       "ts": "webui/src/lib/api/desktop.ts#DesktopPermissionsReview"
     },
     "DesktopQuestion": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopQuestion",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopQuestion",
       "ts": "webui/src/lib/api/desktop.ts#DesktopQuestion"
     },
     "DesktopQuestionOption": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopQuestionOption",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopQuestionOption",
       "ts": "webui/src/lib/api/desktop.ts#DesktopQuestionOption"
     },
     "DesktopQueuedMessage": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopQueuedMessage",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopQueuedMessage",
       "ts": "webui/src/lib/api/desktop.ts#DesktopQueuedMessage"
     },
     "DesktopReferenceSpan": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopReferenceSpan",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopReferenceSpan",
       "ts": "webui/src/lib/api/desktop.ts#DesktopReferenceSpan"
     },
     "DesktopReview": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopReview",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopReview",
       "ts": "webui/src/lib/api/desktop.ts#DesktopReview"
     },
     "DesktopSessionRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopSessionRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopSessionRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopSessionRequest"
     },
     "DesktopThreadRequest": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopThreadRequest",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopThreadRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopThreadRequest"
     },
     "DesktopView": {
-      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopView",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopView",
       "ts": "webui/src/lib/api/desktop.ts#DesktopView"
     },
     "DshArchiveCandidate": {
-      "rust": "crates/nexushub-core/src/dsh.rs#DshArchiveCandidate",
+      "rust": "crates/agenthub-core/src/dsh.rs#DshArchiveCandidate",
       "ts": "webui/src/types.ts#DshArchiveCandidate"
     },
     "DshArchiveDeletePlan": {
-      "rust": "crates/nexushub-core/src/dsh.rs#DshArchiveDeletePlan",
+      "rust": "crates/agenthub-core/src/dsh.rs#DshArchiveDeletePlan",
       "ts": "webui/src/types.ts#DshArchiveDeletePlan"
     },
     "DshArchiveDeleteRequest": {
-      "rust": "crates/nexushub-core/src/dsh.rs#DshArchiveDeleteRequest",
+      "rust": "crates/agenthub-core/src/dsh.rs#DshArchiveDeleteRequest",
       "ts": "webui/src/types.ts#DshArchiveDeleteRequest"
     },
     "DshArchiveDeleteResult": {
-      "rust": "crates/nexushub-core/src/dsh.rs#DshArchiveDeleteResult",
+      "rust": "crates/agenthub-core/src/dsh.rs#DshArchiveDeleteResult",
       "ts": "webui/src/types.ts#DshArchiveDeleteResult"
     },
     "DshArchiveSelection": {
-      "rust": "crates/nexushub-core/src/dsh.rs#DshArchiveSelection",
+      "rust": "crates/agenthub-core/src/dsh.rs#DshArchiveSelection",
       "ts": "webui/src/types.ts#DshArchiveSelection"
     },
     "GrokDeletePreview": {
-      "rust": "crates/nexushub-core/src/grok.rs#GrokDeletePreview",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokDeletePreview",
       "ts": "webui/src/types.ts#GrokDeletePreview"
     },
     "GrokDeleteRequest": {
-      "rust": "crates/nexushub-core/src/grok.rs#GrokDeleteRequest",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokDeleteRequest",
       "ts": "webui/src/types.ts#GrokDeleteRequest"
     },
     "GrokDetailResponse": {
-      "rust": "crates/nexushub-core/src/grok.rs#GrokSessionDetail",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokSessionDetail",
       "ts": "webui/src/types.ts#GrokSessionDetail"
     },
     "GrokListRequest": {
@@ -249,11 +249,11 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "GrokListResponse": {
-      "rust": "crates/nexushub-core/src/grok.rs#GrokSessionSummary",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokSessionSummary",
       "ts": "webui/src/types.ts#GrokSessionSummary"
     },
     "GrokMutationResponse": {
-      "rust": "crates/nexushub-core/src/grok.rs#GrokSessionSummary",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokSessionSummary",
       "ts": "webui/src/types.ts#GrokSessionSummary"
     },
     "GrokRenameRequest": {
@@ -265,15 +265,15 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "HiddenScanRequest": {
-      "rust": "crates/nexushub-core/src/archive/hidden_scan.rs#HiddenScanRequest",
+      "rust": "crates/agenthub-core/src/archive/hidden_scan.rs#HiddenScanRequest",
       "ts": "webui/src/types.ts#HiddenScanRequest"
     },
     "JobsDetailResponse": {
-      "rust": "crates/nexushub-core/src/services/use_cases.rs#JobResponse",
+      "rust": "crates/agenthub-core/src/services/use_cases.rs#JobResponse",
       "ts": "webui/src/types.ts#JobRecord"
     },
     "JobsListResponse": {
-      "rust": "crates/nexushub-core/src/services/use_cases.rs#JobResponse",
+      "rust": "crates/agenthub-core/src/services/use_cases.rs#JobResponse",
       "ts": "webui/src/types.ts#JobRecord"
     },
     "NoRequest": {
@@ -281,11 +281,11 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "PlanSaveRequest": {
-      "rust": "crates/nexushub-core/src/services/plans.rs#PlanSaveRequest",
+      "rust": "crates/agenthub-core/src/services/plans.rs#PlanSaveRequest",
       "ts": "webui/src/lib/api/plans.ts#PlanSaveRequest"
     },
     "PlanSaveResult": {
-      "rust": "crates/nexushub-core/src/services/plans.rs#PlanSaveResult",
+      "rust": "crates/agenthub-core/src/services/plans.rs#PlanSaveResult",
       "ts": "webui/src/lib/api/plans.ts#PlanSaveResult"
     },
     "ProbeBarkTestResponse": {
@@ -305,15 +305,15 @@
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
     "ProbeSettingsGetResponse": {
-      "rust": "crates/nexushub-core/src/services/settings.rs#SettingsView",
+      "rust": "crates/agenthub-core/src/services/settings.rs#SettingsView",
       "ts": "webui/src/types.ts#ProbeSettings"
     },
     "ProbeSettingsSaveRequest": {
-      "rust": "crates/nexushub-core/src/services/settings.rs#ProbeSettingsSaveRequest",
+      "rust": "crates/agenthub-core/src/services/settings.rs#ProbeSettingsSaveRequest",
       "ts": "webui/src/types.ts#ProbeSettings"
     },
     "ProbeSettingsSaveResponse": {
-      "rust": "crates/nexushub-core/src/services/settings.rs#SettingsView",
+      "rust": "crates/agenthub-core/src/services/settings.rs#SettingsView",
       "ts": "webui/src/types.ts#ProbeSettings"
     },
     "ProbeStatusResponse": {
@@ -321,43 +321,43 @@
       "ts": "webui/src/types.ts#ProbeStatus"
     },
     "ProviderDetailRequest": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderDetailRequest",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderDetailRequest",
       "ts": "webui/src/types.ts#ProviderDetailRequest"
     },
     "ProviderDetailResponse": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderSessionDetail",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionDetail",
       "ts": "webui/src/types.ts#ProviderSessionDetail"
     },
     "ProviderListRequest": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderListRequest",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderListRequest",
       "ts": "webui/src/types.ts#ProviderListRequest"
     },
     "ProviderListResponse": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderSessionSummary",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionSummary",
       "ts": "webui/src/types.ts#ProviderSessionSummary"
     },
     "ProviderMutationResponse": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderSessionSummary",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionSummary",
       "ts": "webui/src/types.ts#ProviderSessionSummary"
     },
     "ProviderRenameRequest": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderRenameRequest",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderRenameRequest",
       "ts": "webui/src/types.ts#ProviderRenameRequest"
     },
     "ProviderSessionRequest": {
-      "rust": "crates/nexushub-core/src/provider_sessions.rs#ProviderSessionRequest",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionRequest",
       "ts": "webui/src/types.ts#ProviderSessionRequest"
     },
     "RemoteConnectionCredentials": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteConnectionCredentials",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteConnectionCredentials",
       "ts": "webui/src/lib/runtime.ts#RemoteConnectionCredentials"
     },
     "RemoteConnectionView": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteConnectionView",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteConnectionView",
       "ts": "webui/src/lib/runtime.ts#RemoteConnectionView"
     },
     "RemoteInvokeRequest": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteInvokeRequest",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteInvokeRequest",
       "ts": "webui/src/lib/runtime.ts#RemoteInvokeRequest"
     },
     "RemoteInvokeResponse": {
@@ -365,71 +365,71 @@
       "ts": "webui/src/lib/runtime.ts#RemoteInvokeResponse"
     },
     "RemoteMachineSummary": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteMachineSummary",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteMachineSummary",
       "ts": "webui/src/lib/runtime.ts#RemoteMachineSummary"
     },
     "RemoteRevisionRequest": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteRevisionRequest",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteRevisionRequest",
       "ts": "webui/src/lib/runtime.ts#RemoteRevisionRequest"
     },
     "RemoteSelectionRequest": {
-      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteSelectionRequest",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteSelectionRequest",
       "ts": "webui/src/lib/runtime.ts#RemoteSelectionRequest"
     },
     "SessionAttachmentRequest": {
-      "rust": "crates/nexushub-core/src/user_message.rs#SessionAttachmentRequest",
+      "rust": "crates/agenthub-core/src/user_message.rs#SessionAttachmentRequest",
       "ts": "webui/src/lib/api/sessions.ts#SessionAttachmentRequest"
     },
     "SessionAttachmentResponse": {
-      "rust": "crates/nexushub-core/src/user_message.rs#SessionAttachmentResponse",
+      "rust": "crates/agenthub-core/src/user_message.rs#SessionAttachmentResponse",
       "ts": "webui/src/lib/api/sessions.ts#SessionAttachmentResponse"
     },
     "SessionBatchExecuteRequest": {
-      "rust": "crates/nexushub-core/src/services/sessions.rs#SessionBatchExecuteRequest",
+      "rust": "crates/agenthub-core/src/services/sessions.rs#SessionBatchExecuteRequest",
       "ts": "webui/src/lib/api/sessions.ts#SessionBatchExecuteRequest"
     },
     "SessionBatchPreview": {
-      "rust": "crates/nexushub-core/src/services/sessions.rs#SessionBatchPreview",
+      "rust": "crates/agenthub-core/src/services/sessions.rs#SessionBatchPreview",
       "ts": "webui/src/lib/api/sessions.ts#SessionBatchPreview"
     },
     "SessionBatchRequest": {
-      "rust": "crates/nexushub-core/src/services/sessions.rs#SessionBatchRequest",
+      "rust": "crates/agenthub-core/src/services/sessions.rs#SessionBatchRequest",
       "ts": "webui/src/lib/api/sessions.ts#SessionBatchRequest"
     },
     "SessionBatchResult": {
-      "rust": "crates/nexushub-core/src/services/sessions.rs#SessionBatchResult",
+      "rust": "crates/agenthub-core/src/services/sessions.rs#SessionBatchResult",
       "ts": "webui/src/lib/api/sessions.ts#SessionBatchResult"
     },
     "SessionSearchRequest": {
-      "rust": "crates/nexushub-core/src/services/search.rs#SessionSearchRequest",
+      "rust": "crates/agenthub-core/src/services/search.rs#SessionSearchRequest",
       "ts": "webui/src/types.ts#SessionSearchRequest"
     },
     "SessionSearchResponse": {
-      "rust": "crates/nexushub-core/src/services/search.rs#SessionSearchResponse",
+      "rust": "crates/agenthub-core/src/services/search.rs#SessionSearchResponse",
       "ts": "webui/src/types.ts#SessionSearchResponse"
     },
     "SessionStorageSize": {
-      "rust": "crates/nexushub-core/src/session_storage.rs#SessionStorageSize",
+      "rust": "crates/agenthub-core/src/session_storage.rs#SessionStorageSize",
       "ts": "webui/src/types.ts#SessionStorageSize"
     },
     "SubagentActivity": {
-      "rust": "crates/nexushub-core/src/codex/subagents.rs#SubagentActivity",
+      "rust": "crates/agenthub-core/src/codex/subagents.rs#SubagentActivity",
       "ts": "webui/src/types.ts#SubagentActivity"
     },
     "SubagentCollection": {
-      "rust": "crates/nexushub-core/src/codex/subagents.rs#SubagentCollection",
+      "rust": "crates/agenthub-core/src/codex/subagents.rs#SubagentCollection",
       "ts": "webui/src/types.ts#SubagentCollection"
     },
     "SubagentDetailRequest": {
-      "rust": "crates/nexushub-core/src/codex/subagents.rs#SubagentDetailRequest",
+      "rust": "crates/agenthub-core/src/codex/subagents.rs#SubagentDetailRequest",
       "ts": "webui/src/types.ts#SubagentDetailRequest"
     },
     "SubagentDetailResponse": {
-      "rust": "crates/nexushub-core/src/codex/subagents.rs#SubagentDetailResponse",
+      "rust": "crates/agenthub-core/src/codex/subagents.rs#SubagentDetailResponse",
       "ts": "webui/src/types.ts#SubagentDetailResponse"
     },
     "SystemCapabilitiesResponse": {
-      "rust": "crates/nexushub-core/src/services/system.rs#SystemCapabilitiesResponse",
+      "rust": "crates/agenthub-core/src/services/system.rs#SystemCapabilitiesResponse",
       "ts": "webui/src/types.ts#SystemCapabilitiesResponse"
     },
     "SystemPlatformResponse": {
@@ -437,7 +437,7 @@
       "ts": "webui/src/types.ts#PlatformOverview"
     },
     "SystemProvidersResponse": {
-      "rust": "crates/nexushub-core/src/providers.rs#AgentProviderInfo",
+      "rust": "crates/agenthub-core/src/providers.rs#AgentProviderInfo",
       "ts": "webui/src/types.ts#AgentProviderInfo"
     },
     "SystemVersionResponse": {
@@ -446,58 +446,58 @@
     },
     "ThreadsArchiveResponse": {
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry.",
-      "rust": "crates/nexushub-core/src/services/jobs.rs#ActionResponse"
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "ThreadsBlocksResponse": {
-      "rust": "crates/nexushub-core/src/services/threads.rs#ThreadBlocksPage",
+      "rust": "crates/agenthub-core/src/services/threads.rs#ThreadBlocksPage",
       "ts": "webui/src/types.ts#ThreadBlockPage"
     },
     "ThreadsDetailResponse": {
-      "rust": "crates/nexushub-core/src/codex/types.rs#ThreadDetail",
+      "rust": "crates/agenthub-core/src/codex/types.rs#ThreadDetail",
       "ts": "webui/src/types.ts#ThreadDetail"
     },
     "ThreadsListResponse": {
-      "rust": "crates/nexushub-core/src/codex/types.rs#ThreadSummary",
+      "rust": "crates/agenthub-core/src/codex/types.rs#ThreadSummary",
       "ts": "webui/src/types.ts#ThreadSummary"
     },
     "ThreadsRenameResponse": {
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry.",
-      "rust": "crates/nexushub-core/src/services/jobs.rs#ActionResponse"
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "ThreadsRestoreResponse": {
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry.",
-      "rust": "crates/nexushub-core/src/services/jobs.rs#ActionResponse"
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "UnifiedCleanupCandidate": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupCandidate",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupCandidate",
       "ts": "webui/src/types.ts#UnifiedCleanupCandidate"
     },
     "UnifiedCleanupDryRunRequest": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupDryRunRequest",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupDryRunRequest",
       "ts": "webui/src/types.ts#UnifiedCleanupDryRunRequest"
     },
     "UnifiedCleanupExecuteRequest": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupExecuteRequest",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupExecuteRequest",
       "ts": "webui/src/types.ts#UnifiedCleanupExecuteRequest"
     },
     "UnifiedCleanupPlan": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupPlan",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupPlan",
       "ts": "webui/src/types.ts#UnifiedCleanupPlan"
     },
     "UnifiedCleanupResult": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupResult",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupResult",
       "ts": "webui/src/types.ts#UnifiedCleanupResult"
     },
     "UnifiedCleanupScopePlan": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupScopePlan",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupScopePlan",
       "ts": "webui/src/types.ts#UnifiedCleanupScopePlan"
     },
     "UnifiedCleanupScopeResult": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupScopeResult",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupScopeResult",
       "ts": "webui/src/types.ts#UnifiedCleanupScopeResult"
     },
     "UnifiedCleanupTargetSelection": {
-      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupTargetSelection",
+      "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupTargetSelection",
       "ts": "webui/src/types.ts#UnifiedCleanupTargetSelection"
     },
     "UpdatesCheckResponse": {
@@ -509,12 +509,12 @@
       "ts": "webui/src/lib/api/updates.ts#UpdateActionResult"
     },
     "UpdatesStatusResponse": {
-      "rust": "crates/nexushub-core/src/services/updates.rs#UpdateStatus",
+      "rust": "crates/agenthub-core/src/services/updates.rs#UpdateStatus",
       "ts": "webui/src/types.ts#UpdateStatus"
     }
   },
   "rust": {
-    "crates/nexushub-core/src/archive.rs": {
+    "crates/agenthub-core/src/archive.rs": {
       "ArchiveDeletePlan": {
         "fields": [
           {
@@ -820,7 +820,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/archive/hidden_scan.rs": {
+    "crates/agenthub-core/src/archive/hidden_scan.rs": {
       "HiddenScanMode": {
         "kind": "enum",
         "serde": [
@@ -959,7 +959,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/claude.rs": {
+    "crates/agenthub-core/src/claude.rs": {
       "ClaudeAssistantPhase": {
         "kind": "enum",
         "serde": [
@@ -1388,7 +1388,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/claude/activity.rs": {
+    "crates/agenthub-core/src/claude/activity.rs": {
       "Registration": {
         "fields": [
           {
@@ -1428,7 +1428,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/claude/hooks.rs": {
+    "crates/agenthub-core/src/claude/hooks.rs": {
       "ClaudeHooksAction": {
         "kind": "enum",
         "serde": [
@@ -1526,7 +1526,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/codex/desktop/attachments.rs": {
+    "crates/agenthub-core/src/codex/desktop/attachments.rs": {
       "Entry": {
         "fields": [
           {
@@ -1597,7 +1597,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/codex/desktop/references.rs": {
+    "crates/agenthub-core/src/codex/desktop/references.rs": {
       "FileContentProof": {
         "fields": [
           {
@@ -1785,7 +1785,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/codex/paths.rs": {
+    "crates/agenthub-core/src/codex/paths.rs": {
       "ResolvedCodexPaths": {
         "fields": [
           {
@@ -1853,7 +1853,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/codex/subagents.rs": {
+    "crates/agenthub-core/src/codex/subagents.rs": {
       "SubagentActivity": {
         "fields": [
           {
@@ -2102,7 +2102,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/codex/types.rs": {
+    "crates/agenthub-core/src/codex/types.rs": {
       "CodexMessage": {
         "fields": [
           {
@@ -2538,7 +2538,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/config.rs": {
+    "crates/agenthub-core/src/config.rs": {
       "CodexConfig": {
         "fields": [
           {
@@ -3319,7 +3319,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/db.rs": {
+    "crates/agenthub-core/src/db.rs": {
       "JobRecord": {
         "fields": [
           {
@@ -3570,7 +3570,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/db/native_probe.rs": {
+    "crates/agenthub-core/src/db/native_probe.rs": {
       "NativeDelivery": {
         "fields": [
           {
@@ -3608,7 +3608,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/db/notification_channels.rs": {
+    "crates/agenthub-core/src/db/notification_channels.rs": {
       "NotificationChannel": {
         "kind": "enum",
         "serde": [
@@ -3623,7 +3623,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/dsh.rs": {
+    "crates/agenthub-core/src/dsh.rs": {
       "DshArchiveCandidate": {
         "fields": [
           {
@@ -3740,7 +3740,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/grok.rs": {
+    "crates/agenthub-core/src/grok.rs": {
       "GrokDeletePreview": {
         "fields": [
           {
@@ -4045,7 +4045,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/history_navigation.rs": {
+    "crates/agenthub-core/src/history_navigation.rs": {
       "TimelineEntry": {
         "fields": [
           {
@@ -4070,7 +4070,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/jobs.rs": {
+    "crates/agenthub-core/src/jobs.rs": {
       "JobEvent": {
         "fields": [
           {
@@ -4093,7 +4093,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/jsonl_cache.rs": {
+    "crates/agenthub-core/src/jsonl_cache.rs": {
       "HistoryChange": {
         "fields": [
           {
@@ -4157,7 +4157,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/local.rs": {
+    "crates/agenthub-core/src/local.rs": {
       "LocalPluginInfo": {
         "fields": [
           {
@@ -4202,7 +4202,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/native_probe.rs": {
+    "crates/agenthub-core/src/native_probe.rs": {
       "NativeProvider": {
         "kind": "enum",
         "serde": [
@@ -4318,7 +4318,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/platform.rs": {
+    "crates/agenthub-core/src/platform.rs": {
       "PlatformKind": {
         "kind": "enum",
         "serde": [
@@ -4384,7 +4384,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/probe.rs": {
+    "crates/agenthub-core/src/probe.rs": {
       "ProbeActionPlan": {
         "fields": [
           {
@@ -5164,7 +5164,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/probe_error_monitor.rs": {
+    "crates/agenthub-core/src/probe_error_monitor.rs": {
       "CodexTurnErrorClass": {
         "kind": "enum",
         "serde": [
@@ -5404,7 +5404,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/provider_sessions.rs": {
+    "crates/agenthub-core/src/provider_sessions.rs": {
       "ProviderDetailRequest": {
         "fields": [
           {
@@ -5726,7 +5726,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/providers.rs": {
+    "crates/agenthub-core/src/providers.rs": {
       "AgentProviderId": {
         "kind": "enum",
         "serde": [
@@ -5807,7 +5807,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/selected_codex.rs": {
+    "crates/agenthub-core/src/selected_codex.rs": {
       "SelectedCodexPreview": {
         "fields": [
           {
@@ -5842,7 +5842,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/cleanup.rs": {
+    "crates/agenthub-core/src/services/cleanup.rs": {
       "CleanupAction": {
         "kind": "enum",
         "serde": [],
@@ -6356,7 +6356,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/codex_desktop.rs": {
+    "crates/agenthub-core/src/services/codex_desktop.rs": {
       "DesktopAck": {
         "fields": [
           {
@@ -7506,7 +7506,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/jobs.rs": {
+    "crates/agenthub-core/src/services/jobs.rs": {
       "ActionResponse": {
         "fields": [
           {
@@ -7604,7 +7604,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/plans.rs": {
+    "crates/agenthub-core/src/services/plans.rs": {
       "PlanSaveRequest": {
         "fields": [
           {
@@ -7635,7 +7635,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/services/probe.rs": {
+    "crates/agenthub-core/src/services/probe.rs": {
       "ProbeAction": {
         "kind": "enum",
         "serde": [],
@@ -7892,7 +7892,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/remote.rs": {
+    "crates/agenthub-core/src/services/remote.rs": {
       "MachineTarget": {
         "kind": "enum",
         "serde": [
@@ -8091,7 +8091,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/search.rs": {
+    "crates/agenthub-core/src/services/search.rs": {
       "SearchScope": {
         "kind": "enum",
         "serde": [
@@ -8245,7 +8245,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/sessions.rs": {
+    "crates/agenthub-core/src/services/sessions.rs": {
       "SessionBatchExecuteRequest": {
         "fields": [
           {
@@ -8534,7 +8534,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/settings.rs": {
+    "crates/agenthub-core/src/services/settings.rs": {
       "CodexSettingsView": {
         "fields": [
           {
@@ -9070,7 +9070,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/services/system.rs": {
+    "crates/agenthub-core/src/services/system.rs": {
       "Capability": {
         "kind": "enum",
         "serde": [
@@ -9344,7 +9344,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/services/threads.rs": {
+    "crates/agenthub-core/src/services/threads.rs": {
       "ThreadBlocksPage": {
         "fields": [
           {
@@ -9623,7 +9623,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/services/updates.rs": {
+    "crates/agenthub-core/src/services/updates.rs": {
       "LinuxUpdateJobSpec": {
         "fields": [
           {
@@ -9969,7 +9969,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/services/use_cases.rs": {
+    "crates/agenthub-core/src/services/use_cases.rs": {
       "JobDetailPlan": {
         "fields": [
           {
@@ -10037,7 +10037,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/session_storage.rs": {
+    "crates/agenthub-core/src/session_storage.rs": {
       "SessionStorageSize": {
         "fields": [
           {
@@ -10108,7 +10108,7 @@
         ]
       }
     },
-    "crates/nexushub-core/src/system.rs": {
+    "crates/agenthub-core/src/system.rs": {
       "ServiceStatus": {
         "fields": [
           {
@@ -10182,7 +10182,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/update.rs": {
+    "crates/agenthub-core/src/update.rs": {
       "CodexVersionInfo": {
         "fields": [
           {
@@ -10331,7 +10331,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-core/src/user_message.rs": {
+    "crates/agenthub-core/src/user_message.rs": {
       "SessionAttachmentRequest": {
         "fields": [
           {
@@ -10502,7 +10502,7 @@
         ]
       }
     },
-    "crates/nexushub-webd/src/api/claude.rs": {
+    "crates/agenthub-webd/src/api/claude.rs": {
       "ClaudeListQuery": {
         "fields": [
           {
@@ -10538,7 +10538,7 @@
         ]
       }
     },
-    "crates/nexushub-webd/src/api/cleanup.rs": {
+    "crates/agenthub-webd/src/api/cleanup.rs": {
       "ArchiveExecuteRequest": {
         "fields": [
           {
@@ -10558,14 +10558,14 @@
             "serde": [
               "serde (default)"
             ],
-            "type": "Option < Vec < nexushub_core :: archive :: HiddenThreadSelection > >"
+            "type": "Option < Vec < agenthub_core :: archive :: HiddenThreadSelection > >"
           }
         ],
         "kind": "struct",
         "serde": []
       }
     },
-    "crates/nexushub-webd/src/api/grok.rs": {
+    "crates/agenthub-webd/src/api/grok.rs": {
       "GrokDetailQuery": {
         "fields": [
           {
@@ -10615,7 +10615,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-webd/src/api/probe.rs": {
+    "crates/agenthub-webd/src/api/probe.rs": {
       "ProbeEventsQuery": {
         "fields": [
           {
@@ -10639,7 +10639,7 @@
         "serde": []
       }
     },
-    "crates/nexushub-webd/src/api/threads.rs": {
+    "crates/agenthub-webd/src/api/threads.rs": {
       "RenameThreadRequest": {
         "fields": [
           {
@@ -10715,7 +10715,7 @@
       }
     },
     "src-tauri/src/overview.rs": {
-      "NexusPaths": {
+      "AgentHubPaths": {
         "fields": [
           {
             "name": "app_support_dir",
@@ -10912,7 +10912,7 @@
           {
             "name": "events",
             "serde": [],
-            "type": "Vec < nexushub_core :: db :: ProbeEvent >"
+            "type": "Vec < agenthub_core :: db :: ProbeEvent >"
           },
           {
             "name": "limit",
@@ -10935,7 +10935,7 @@
           {
             "name": "probe",
             "serde": [],
-            "type": "nexushub_core :: config :: ProbeConfig"
+            "type": "agenthub_core :: config :: ProbeConfig"
           },
           {
             "name": "notifications",
@@ -11134,7 +11134,7 @@
     }
   },
   "rustAdapters": {
-    "crates/nexushub-core/src/services/app_server_threads.rs": {
+    "crates/agenthub-core/src/services/app_server_threads.rs": {
       "json": [
         "{ \"type\" : \"response_item\" , \"payload\" : payload , }",
         "{ \"type\" : \"item_completed\" , \"item\" : { \"type\" : \"Plan\" } , }",
@@ -11189,7 +11189,7 @@
         "fn timestamp_to_rfc3339 (value : i64) -> Option < String >"
       ]
     },
-    "crates/nexushub-core/src/services/cleanup.rs": {
+    "crates/agenthub-core/src/services/cleanup.rs": {
       "json": [
         "{ \"confirmed\" : request . confirmed , \"expectedCount\" : request . expected_count , \"candidates\" : request . candidates , }"
       ],
@@ -11219,11 +11219,11 @@
         "fn execute_unified_with_capability (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , request : UnifiedCleanupExecuteRequest ,) -> Result < UnifiedCleanupResult >"
       ]
     },
-    "crates/nexushub-core/src/services/codex_desktop.rs": {
+    "crates/agenthub-core/src/services/codex_desktop.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/commands.rs": {
+    "crates/agenthub-core/src/services/commands.rs": {
       "json": [],
       "signatures": [
         "fn is_mutating_rpc_command (command : & str) -> bool",
@@ -11233,11 +11233,11 @@
         "fn is_internal_command (command : & str) -> bool"
       ]
     },
-    "crates/nexushub-core/src/services/contract_dtos.rs": {
+    "crates/agenthub-core/src/services/contract_dtos.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/jobs.rs": {
+    "crates/agenthub-core/src/services/jobs.rs": {
       "json": [
         "{ \"name\" : name }"
       ],
@@ -11256,15 +11256,15 @@
         "fn plan_thread_archive_state_action (platform : & PlatformPaths , thread_id : & str , archived : bool ,) -> Result < ThreadStateActionPlan >"
       ]
     },
-    "crates/nexushub-core/src/services/mod.rs": {
+    "crates/agenthub-core/src/services/mod.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/plans.rs": {
+    "crates/agenthub-core/src/services/plans.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/probe.rs": {
+    "crates/agenthub-core/src/services/probe.rs": {
       "json": [
         "snapshot_age_seconds",
         "is_refreshing",
@@ -11334,22 +11334,22 @@
         "fn job_from_row (row : & rusqlite :: Row < '_ >) -> rusqlite :: Result < JobRecord >"
       ]
     },
-    "crates/nexushub-core/src/services/remote.rs": {
+    "crates/agenthub-core/src/services/remote.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/remote/credentials.rs": {
+    "crates/agenthub-core/src/services/remote/credentials.rs": {
       "json": [],
       "signatures": []
     },
-    "crates/nexushub-core/src/services/retired_commands.rs": {
+    "crates/agenthub-core/src/services/retired_commands.rs": {
       "json": [],
       "signatures": [
         "fn is_retired_command (command : & str) -> bool",
         "fn is_retired_tauri_command (command : & str) -> bool"
       ]
     },
-    "crates/nexushub-core/src/services/search.rs": {
+    "crates/agenthub-core/src/services/search.rs": {
       "json": [],
       "signatures": [
         "fn validate_request (request : & SessionSearchRequest) -> Result < () >",
@@ -11364,13 +11364,13 @@
         "fn push_result (output : & mut Vec < SessionSearchResult > , key : & str , native_id : & str , title : & str , cwd : Option < String > , kind : & str , position : String , snippet : String , timestamp : Option < String > ,)"
       ]
     },
-    "crates/nexushub-core/src/services/sessions.rs": {
+    "crates/agenthub-core/src/services/sessions.rs": {
       "json": [],
       "signatures": [
         "fn validate (provider : SessionProvider , operation : SessionOperation , keys : & [String]) -> Result < () >"
       ]
     },
-    "crates/nexushub-core/src/services/settings.rs": {
+    "crates/agenthub-core/src/services/settings.rs": {
       "json": [
         "config_write . is_some ()",
         "write . audit_value"
@@ -11398,7 +11398,7 @@
         "fn normalize_optional_nullable_string (value : Option < Option < String > >) -> Option < Option < String > >"
       ]
     },
-    "crates/nexushub-core/src/services/system.rs": {
+    "crates/agenthub-core/src/services/system.rs": {
       "json": [],
       "signatures": [
         "fn capability_gate_plan (platform : & PlatformPaths , capability : Capability ,) -> CapabilityGatePlan",
@@ -11410,7 +11410,7 @@
         "fn platform_kind_label (kind : PlatformKind) -> & 'static str"
       ]
     },
-    "crates/nexushub-core/src/services/threads.rs": {
+    "crates/agenthub-core/src/services/threads.rs": {
       "json": [],
       "signatures": [
         "fn build_threads_overview (threads : Vec < ThreadSummary > , running_jobs : Vec < JobRecord > , query : ThreadsQuery , hidden_thread_ids : & HashSet < String > , archived_thread_ids : & HashSet < String > ,) -> ThreadsOverview",
@@ -11442,7 +11442,7 @@
         "fn timestamp_to_rfc3339 (timestamp : i64) -> Option < String >"
       ]
     },
-    "crates/nexushub-core/src/services/updates.rs": {
+    "crates/agenthub-core/src/services/updates.rs": {
       "json": [],
       "signatures": [
         "fn update_status (_config : & Config , platform : & PlatformPaths , latest_version : Option < & str > , last_error : Option < & str > ,) -> UpdateStatus",
@@ -11470,7 +11470,7 @@
         "fn recommended_action (platform : PlatformKind , method : UpdateExecutionMethod , update_available : Option < bool > ,) -> String"
       ]
     },
-    "crates/nexushub-core/src/services/use_cases.rs": {
+    "crates/agenthub-core/src/services/use_cases.rs": {
       "json": [],
       "signatures": [
         "fn normalize_job_list_limit (limit : Option < u32 >) -> u32",
@@ -11478,17 +11478,17 @@
         "fn job_response (job : JobRecord) -> JobResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/claude.rs": {
+    "crates/agenthub-webd/src/api/claude.rs": {
       "json": [],
       "signatures": [
         "async fn claude_list (State (state) : State < AppState > , headers : HeaderMap , Query (query) : Query < ClaudeListQuery > ,) -> ApiResponse",
-        "async fn claude_detail (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: claude :: ClaudeDetailRequest > ,) -> ApiResponse",
+        "async fn claude_detail (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: claude :: ClaudeDetailRequest > ,) -> ApiResponse",
         "async fn claude_rename (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < ClaudeRenameRequest > ,) -> ApiResponse",
         "async fn claude_delete_preview (State (state) : State < AppState > , headers : HeaderMap , Path (session_key) : Path < String > ,) -> ApiResponse",
         "async fn claude_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < ClaudeDeleteRequest > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/cleanup.rs": {
+    "crates/agenthub-webd/src/api/cleanup.rs": {
       "json": [
         "{ \"deleted_threads\" : result . deleted_threads , \"deleted_bytes\" : result . deleted_bytes }",
         "{ \"deleted_count\" : result . deleted_count , \"deleted_bytes\" : result . deleted_bytes , \"failed_count\" : result . failed_count , \"stopped_early\" : result . stopped_early , }"
@@ -11496,15 +11496,15 @@
       "signatures": [
         "async fn archive_delete_dry_run (State (state) : State < AppState > , headers : HeaderMap ,) -> ApiResponse",
         "async fn archive_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (payload) : Json < ArchiveExecuteRequest > ,) -> ApiResponse",
-        "async fn hidden_threads_delete_dry_run (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: archive :: hidden_scan :: HiddenScanRequest > ,) -> ApiResponse",
+        "async fn hidden_threads_delete_dry_run (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: archive :: hidden_scan :: HiddenScanRequest > ,) -> ApiResponse",
         "async fn hidden_threads_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (payload) : Json < ArchiveExecuteRequest > ,) -> ApiResponse",
         "async fn dsh_archive_delete_dry_run (State (state) : State < AppState > , headers : HeaderMap ,) -> ApiResponse",
-        "async fn dsh_archive_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: dsh :: DshArchiveDeleteRequest > ,) -> ApiResponse",
-        "async fn unified_cleanup_dry_run (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: services :: cleanup :: UnifiedCleanupDryRunRequest > ,) -> ApiResponse",
-        "async fn unified_cleanup_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: services :: cleanup :: UnifiedCleanupExecuteRequest > ,) -> ApiResponse"
+        "async fn dsh_archive_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: dsh :: DshArchiveDeleteRequest > ,) -> ApiResponse",
+        "async fn unified_cleanup_dry_run (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: services :: cleanup :: UnifiedCleanupDryRunRequest > ,) -> ApiResponse",
+        "async fn unified_cleanup_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: services :: cleanup :: UnifiedCleanupExecuteRequest > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/grok.rs": {
+    "crates/agenthub-webd/src/api/grok.rs": {
       "json": [],
       "signatures": [
         "async fn grok_list (State (state) : State < AppState > , headers : HeaderMap , Query (query) : Query < GrokListQuery > ,) -> ApiResponse",
@@ -11514,14 +11514,14 @@
         "async fn grok_delete_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < GrokDeleteRequest > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/jobs.rs": {
+    "crates/agenthub-webd/src/api/jobs.rs": {
       "json": [],
       "signatures": [
         "async fn list_jobs (State (state) : State < AppState > , headers : HeaderMap , Query (query) : Query < HashMap < String , String > > ,) -> ApiResponse",
         "async fn job_detail (State (state) : State < AppState > , headers : HeaderMap , Path (id) : Path < String > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/payload.rs": {
+    "crates/agenthub-webd/src/api/payload.rs": {
       "json": [],
       "signatures": [
         "fn rpc_payload < T : DeserializeOwned > (value : & Value) -> Result < T , ApiError >",
@@ -11532,7 +11532,7 @@
         "fn api_rpc_payload < T > (result : Result < T , RpcPayloadError >) -> Result < T , ApiError >"
       ]
     },
-    "crates/nexushub-webd/src/api/probe.rs": {
+    "crates/agenthub-webd/src/api/probe.rs": {
       "json": [
         "{ \"events\" : events , \"limit\" : limit , }",
         "{ \"job_id\" : id }",
@@ -11558,11 +11558,11 @@
         "fn spawn_probe_status_refresh (state : AppState)",
         "fn probe_settings_value (state : & AppState) -> anyhow :: Result < Value >",
         "fn probe_settings_value_for_config (state : & AppState , config : & Config) -> anyhow :: Result < Value >",
-        "async fn load_probe_threads (state : & AppState , status : & 'static str , limit : usize ,) -> anyhow :: Result < Vec < nexushub_core :: codex :: ThreadSummary > >",
-        "fn redact_probe_event (event : nexushub_core :: db :: ProbeEvent) -> nexushub_core :: db :: ProbeEvent"
+        "async fn load_probe_threads (state : & AppState , status : & 'static str , limit : usize ,) -> anyhow :: Result < Vec < agenthub_core :: codex :: ThreadSummary > >",
+        "fn redact_probe_event (event : agenthub_core :: db :: ProbeEvent) -> agenthub_core :: db :: ProbeEvent"
       ]
     },
-    "crates/nexushub-webd/src/api/provider_sessions.rs": {
+    "crates/agenthub-webd/src/api/provider_sessions.rs": {
       "json": [],
       "signatures": [
         "async fn antigravity_list (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < ProviderListRequest > ,) -> ApiResponse",
@@ -11577,7 +11577,7 @@
         "async fn dsh_restore (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < ProviderSessionRequest > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/routes.rs": {
+    "crates/agenthub-webd/src/api/routes.rs": {
       "json": [
         "{ \"ok\" : true }"
       ],
@@ -11587,25 +11587,25 @@
         "async fn api_not_found () -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/rpc_dispatch.rs": {
+    "crates/agenthub-webd/src/api/rpc_dispatch.rs": {
       "json": [],
       "signatures": [
         "async fn rpc_dispatch (State (state) : State < AppState > , Path (command) : Path < String > , connect : Option < ConnectInfo < SocketAddr > > , headers : HeaderMap , Json (args) : Json < Value > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/sessions.rs": {
+    "crates/agenthub-webd/src/api/sessions.rs": {
       "json": [
         "{ \"provider\" : request . provider , \"operation\" : request . operation , \"count\" : request . items . len () }",
         "{ \"succeeded\" : result . items . iter () . filter (| item | item . status == \"succeeded\") . count () , \"blocked\" : result . items . iter () . filter (| item | item . status == \"blocked\") . count () , \"failed\" : result . items . iter () . filter (| item | item . status == \"failed\") . count () }"
       ],
       "signatures": [
         "async fn search (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < SessionSearchRequest > ,) -> ApiResponse",
-        "async fn attachment_read (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: user_message :: SessionAttachmentRequest > ,) -> ApiResponse",
+        "async fn attachment_read (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: user_message :: SessionAttachmentRequest > ,) -> ApiResponse",
         "async fn bulk_preview (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < SessionBatchRequest > ,) -> ApiResponse",
         "async fn bulk_execute (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < SessionBatchExecuteRequest > ,) -> ApiResponse"
       ]
     },
-    "crates/nexushub-webd/src/api/system.rs": {
+    "crates/agenthub-webd/src/api/system.rs": {
       "json": [
         "{ \"job_id\" : id }"
       ],
@@ -11613,17 +11613,17 @@
         "async fn system_capabilities (State (state) : State < AppState > , headers : HeaderMap ,) -> ApiResponse",
         "async fn system_version (State (state) : State < AppState > , headers : HeaderMap ,) -> ApiResponse",
         "async fn system_update_status (State (state) : State < AppState > , headers : HeaderMap ,) -> ApiResponse",
-        "async fn http_version_info () -> AnyhowResult < nexushub_core :: system :: VersionInfo >",
+        "async fn http_version_info () -> AnyhowResult < agenthub_core :: system :: VersionInfo >",
         "async fn github_latest_release (owner : & str , repo : & str) -> AnyhowResult < String >",
         "async fn npm_latest_version (package : & str) -> AnyhowResult < String >",
         "async fn start_update_action (state : AppState , headers : HeaderMap , action : UpdateAction , audit_action : Option < & str > ,) -> ApiResponse",
         "fn http_update_platform () -> PlatformPaths"
       ]
     },
-    "crates/nexushub-webd/src/api/threads.rs": {
+    "crates/agenthub-webd/src/api/threads.rs": {
       "json": [],
       "signatures": [
-        "async fn subagent_detail (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < nexushub_core :: codex :: subagents :: SubagentDetailRequest > ,) -> ApiResponse",
+        "async fn subagent_detail (State (state) : State < AppState > , headers : HeaderMap , Json (request) : Json < agenthub_core :: codex :: subagents :: SubagentDetailRequest > ,) -> ApiResponse",
         "async fn list_threads (State (state) : State < AppState > , headers : HeaderMap , Query (query) : Query < ThreadsQuery > ,) -> ApiResponse",
         "async fn thread_detail (State (state) : State < AppState > , headers : HeaderMap , Path (id) : Path < String > , Query (query) : Query < ThreadDetailQuery > ,) -> ApiResponse",
         "fn api_error_for_thread_detail_load (err : anyhow :: Error) -> ApiError",
@@ -11697,8 +11697,8 @@
         "fn local_file_url (value : & str) -> Option < PathBuf >",
         "fn text_paths (text : & str , home_dir : Option < & Path >) -> Option < Vec < PathBuf > >",
         "fn selected_files (paths : Vec < PathBuf >) -> Result < Vec < NativeReference > , & 'static str >",
-        "fn copy_diagnostics (diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
-        "fn write_diagnostics (pasteboard : & NSPasteboard , diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
+        "fn copy_diagnostics (diagnostics : & agenthub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
+        "fn write_diagnostics (pasteboard : & NSPasteboard , diagnostics : & agenthub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
         "fn read_png (pasteboard : & NSPasteboard) -> Result < Vec < u8 > , & 'static str >",
         "fn read_png_using (pasteboard : & NSPasteboard , convert : impl FnOnce (& [u8] , bool) -> Result < Vec < u8 > , & 'static str > ,) -> Result < Vec < u8 > , & 'static str >",
         "fn normalize (bytes : & [u8] , png : bool) -> Result < Vec < u8 > , & 'static str >",
@@ -11724,10 +11724,10 @@
     "src-tauri/src/commands/claude.rs": {
       "json": [],
       "signatures": [
-        "async fn claudeOwnershipDiagnostics (session_key : String ,) -> Result < nexushub_core :: claude :: ClaudeOwnershipDiagnostics , String >",
-        "async fn listClaudeSessions (q : Option < String > , limit : Option < usize > ,) -> Result < Vec < nexushub_core :: claude :: ClaudeSessionSummary > , String >",
-        "async fn getClaudeSession (session_key : String , limit : Option < usize > , before : Option < String > ,) -> Result < nexushub_core :: claude :: ClaudeSessionDetail , String >",
-        "async fn renameClaudeSession (session_key : String , title : String ,) -> Result < nexushub_core :: claude :: ClaudeSessionSummary , String >",
+        "async fn claudeOwnershipDiagnostics (session_key : String ,) -> Result < agenthub_core :: claude :: ClaudeOwnershipDiagnostics , String >",
+        "async fn listClaudeSessions (q : Option < String > , limit : Option < usize > ,) -> Result < Vec < agenthub_core :: claude :: ClaudeSessionSummary > , String >",
+        "async fn getClaudeSession (session_key : String , limit : Option < usize > , before : Option < String > ,) -> Result < agenthub_core :: claude :: ClaudeSessionDetail , String >",
+        "async fn renameClaudeSession (session_key : String , title : String ,) -> Result < agenthub_core :: claude :: ClaudeSessionSummary , String >",
         "async fn previewClaudeSessionDelete (session_key : String ,) -> Result < ClaudeDeletePreview , String >",
         "async fn deleteClaudeSession (request : ClaudeDeleteRequest ,) -> Result < ClaudeDeleteResult , String >"
       ]
@@ -11735,9 +11735,9 @@
     "src-tauri/src/commands/grok.rs": {
       "json": [],
       "signatures": [
-        "async fn listGrokSessions (q : Option < String > , limit : Option < usize > ,) -> Result < Vec < nexushub_core :: grok :: GrokSessionSummary > , String >",
-        "async fn getGrokSession (id : String , limit : Option < usize > , before : Option < String > ,) -> Result < nexushub_core :: grok :: GrokSessionDetail , String >",
-        "async fn renameGrokSession (id : String , title : String ,) -> Result < nexushub_core :: grok :: GrokSessionSummary , String >",
+        "async fn listGrokSessions (q : Option < String > , limit : Option < usize > ,) -> Result < Vec < agenthub_core :: grok :: GrokSessionSummary > , String >",
+        "async fn getGrokSession (id : String , limit : Option < usize > , before : Option < String > ,) -> Result < agenthub_core :: grok :: GrokSessionDetail , String >",
+        "async fn renameGrokSession (id : String , title : String ,) -> Result < agenthub_core :: grok :: GrokSessionSummary , String >",
         "async fn previewGrokSessionDelete (id : String) -> Result < GrokDeletePreview , String >",
         "async fn deleteGrokSession (request : GrokDeleteRequest) -> Result < GrokDeleteResult , String >"
       ]
@@ -11785,7 +11785,7 @@
       "json": [],
       "signatures": [
         "async fn searchSessions (state : tauri :: State < '_ , DesktopState > , request : SessionSearchRequest ,) -> Result < SessionSearchResponse , String >",
-        "async fn readSessionAttachment (state : tauri :: State < '_ , DesktopState > , request : nexushub_core :: user_message :: SessionAttachmentRequest ,) -> Result < nexushub_core :: user_message :: SessionAttachmentResponse , String >",
+        "async fn readSessionAttachment (state : tauri :: State < '_ , DesktopState > , request : agenthub_core :: user_message :: SessionAttachmentRequest ,) -> Result < agenthub_core :: user_message :: SessionAttachmentResponse , String >",
         "async fn previewSessionBatch (state : tauri :: State < '_ , DesktopState > , request : SessionBatchRequest ,) -> Result < SessionBatchPreview , String >",
         "async fn executeSessionBatch (state : tauri :: State < '_ , DesktopState > , request : SessionBatchExecuteRequest ,) -> Result < SessionBatchResult , String >"
       ]
@@ -11799,33 +11799,33 @@
         "fn probeInstallHooks (state : tauri :: State < '_ , DesktopState > ,) -> Result < DesktopActionResponse , String >",
         "fn probeRemoveHooks (state : tauri :: State < '_ , DesktopState > ,) -> Result < DesktopActionResponse , String >",
         "fn getProbeEvents (state : tauri :: State < '_ , DesktopState > , limit : Option < u32 > ,) -> Result < DesktopProbeEventsResponse , String >",
-        "fn dryRunArchiveDelete (state : tauri :: State < '_ , DesktopState > ,) -> Result < nexushub_core :: archive :: ArchiveDeletePlan , String >",
-        "fn startArchiveDelete (state : tauri :: State < '_ , DesktopState > , request : DesktopCleanupExecuteRequest ,) -> Result < nexushub_core :: archive :: ArchiveDeleteResult , String >",
-        "async fn dryRunHiddenThreadDelete (state : tauri :: State < '_ , DesktopState > , request : Option < nexushub_core :: archive :: hidden_scan :: HiddenScanRequest > ,) -> Result < nexushub_core :: archive :: HiddenThreadDeletePlan , String >",
-        "async fn startHiddenThreadDelete (state : tauri :: State < '_ , DesktopState > , request : DesktopCleanupExecuteRequest ,) -> Result < nexushub_core :: archive :: HiddenThreadDeleteResult , String >",
-        "async fn claudeHooks (state : tauri :: State < '_ , DesktopState > , request : nexushub_core :: claude :: hooks :: ClaudeHooksRequest , provider : Option < nexushub_core :: claude :: hooks :: HookProvider > ,) -> Result < nexushub_core :: claude :: hooks :: ClaudeHooksStatus , String >",
-        "async fn dryRunDshArchiveDelete (state : tauri :: State < '_ , DesktopState > ,) -> Result < nexushub_core :: dsh :: DshArchiveDeletePlan , String >",
-        "async fn startDshArchiveDelete (state : tauri :: State < '_ , DesktopState > , request : nexushub_core :: dsh :: DshArchiveDeleteRequest ,) -> Result < nexushub_core :: dsh :: DshArchiveDeleteResult , String >",
-        "async fn dryRunUnifiedCleanup (state : tauri :: State < '_ , DesktopState > , request : Option < nexushub_core :: services :: cleanup :: UnifiedCleanupDryRunRequest > ,) -> Result < nexushub_core :: services :: cleanup :: UnifiedCleanupPlan , String >",
-        "async fn startUnifiedCleanup (state : tauri :: State < '_ , DesktopState > , request : nexushub_core :: services :: cleanup :: UnifiedCleanupExecuteRequest ,) -> Result < nexushub_core :: services :: cleanup :: UnifiedCleanupResult , String >"
+        "fn dryRunArchiveDelete (state : tauri :: State < '_ , DesktopState > ,) -> Result < agenthub_core :: archive :: ArchiveDeletePlan , String >",
+        "fn startArchiveDelete (state : tauri :: State < '_ , DesktopState > , request : DesktopCleanupExecuteRequest ,) -> Result < agenthub_core :: archive :: ArchiveDeleteResult , String >",
+        "async fn dryRunHiddenThreadDelete (state : tauri :: State < '_ , DesktopState > , request : Option < agenthub_core :: archive :: hidden_scan :: HiddenScanRequest > ,) -> Result < agenthub_core :: archive :: HiddenThreadDeletePlan , String >",
+        "async fn startHiddenThreadDelete (state : tauri :: State < '_ , DesktopState > , request : DesktopCleanupExecuteRequest ,) -> Result < agenthub_core :: archive :: HiddenThreadDeleteResult , String >",
+        "async fn claudeHooks (state : tauri :: State < '_ , DesktopState > , request : agenthub_core :: claude :: hooks :: ClaudeHooksRequest , provider : Option < agenthub_core :: claude :: hooks :: HookProvider > ,) -> Result < agenthub_core :: claude :: hooks :: ClaudeHooksStatus , String >",
+        "async fn dryRunDshArchiveDelete (state : tauri :: State < '_ , DesktopState > ,) -> Result < agenthub_core :: dsh :: DshArchiveDeletePlan , String >",
+        "async fn startDshArchiveDelete (state : tauri :: State < '_ , DesktopState > , request : agenthub_core :: dsh :: DshArchiveDeleteRequest ,) -> Result < agenthub_core :: dsh :: DshArchiveDeleteResult , String >",
+        "async fn dryRunUnifiedCleanup (state : tauri :: State < '_ , DesktopState > , request : Option < agenthub_core :: services :: cleanup :: UnifiedCleanupDryRunRequest > ,) -> Result < agenthub_core :: services :: cleanup :: UnifiedCleanupPlan , String >",
+        "async fn startUnifiedCleanup (state : tauri :: State < '_ , DesktopState > , request : agenthub_core :: services :: cleanup :: UnifiedCleanupExecuteRequest ,) -> Result < agenthub_core :: services :: cleanup :: UnifiedCleanupResult , String >"
       ]
     },
     "src-tauri/src/commands/system.rs": {
       "json": [],
       "signatures": [
-        "async fn getSystemCapabilities (state : tauri :: State < '_ , DesktopState > ,) -> Result < nexushub_core :: services :: system :: SystemCapabilitiesResponse , String >",
+        "async fn getSystemCapabilities (state : tauri :: State < '_ , DesktopState > ,) -> Result < agenthub_core :: services :: system :: SystemCapabilitiesResponse , String >",
         "fn getSystemVersion () -> Result < system_service :: DesktopSystemVersion , String >",
-        "fn listProviders () -> Result < Vec < nexushub_core :: local :: LocalPluginInfo > , String >",
-        "async fn getPlatformOverview (state : tauri :: State < '_ , DesktopState > ,) -> Result < nexushub_core :: platform :: PlatformPaths , String >"
+        "fn listProviders () -> Result < Vec < agenthub_core :: local :: LocalPluginInfo > , String >",
+        "async fn getPlatformOverview (state : tauri :: State < '_ , DesktopState > ,) -> Result < agenthub_core :: platform :: PlatformPaths , String >"
       ]
     },
     "src-tauri/src/commands/threads.rs": {
       "json": [],
       "signatures": [
         "fn thread_id_request (thread_id : String) -> DesktopThreadIdRequest",
-        "async fn getSubagentDetail (state : tauri :: State < '_ , DesktopState > , request : nexushub_core :: codex :: subagents :: SubagentDetailRequest ,) -> Result < nexushub_core :: codex :: subagents :: SubagentDetailResponse , String >",
-        "async fn listThreads (state : tauri :: State < '_ , DesktopState > , archived : Option < bool > , q : Option < String > , limit : Option < usize > ,) -> Result < Vec < nexushub_core :: codex :: ThreadSummary > , String >",
-        "async fn getThread (state : tauri :: State < '_ , DesktopState > , id : String , options : Option < ThreadDetailOptions > ,) -> Result < Option < nexushub_core :: codex :: ThreadDetail > , String >",
+        "async fn getSubagentDetail (state : tauri :: State < '_ , DesktopState > , request : agenthub_core :: codex :: subagents :: SubagentDetailRequest ,) -> Result < agenthub_core :: codex :: subagents :: SubagentDetailResponse , String >",
+        "async fn listThreads (state : tauri :: State < '_ , DesktopState > , archived : Option < bool > , q : Option < String > , limit : Option < usize > ,) -> Result < Vec < agenthub_core :: codex :: ThreadSummary > , String >",
+        "async fn getThread (state : tauri :: State < '_ , DesktopState > , id : String , options : Option < ThreadDetailOptions > ,) -> Result < Option < agenthub_core :: codex :: ThreadDetail > , String >",
         "async fn getThreadBlocks (state : tauri :: State < '_ , DesktopState > , id : String , options : Option < ThreadDetailOptions > ,) -> Result < Option < ThreadBlocksPage > , String >",
         "fn archiveThread (state : tauri :: State < '_ , DesktopState > , threadId : String ,) -> Result < DesktopActionResponse , String >",
         "fn restoreThread (state : tauri :: State < '_ , DesktopState > , threadId : String ,) -> Result < DesktopActionResponse , String >",
@@ -11866,9 +11866,9 @@
       "json": [],
       "signatures": [
         "fn default_local_desktop_workspace () -> Option < PathBuf >",
-        "fn nexus_paths_for_home (home : impl Into < PathBuf >) -> NexusPaths",
-        "fn nexus_paths_for_platform_home (kind : PlatformKind , home : impl Into < PathBuf >) -> NexusPaths",
-        "fn nexus_paths_for_platform (platform : & PlatformPaths) -> NexusPaths",
+        "fn agenthub_paths_for_home (home : impl Into < PathBuf >) -> AgentHubPaths",
+        "fn agenthub_paths_for_platform_home (kind : PlatformKind , home : impl Into < PathBuf >) -> AgentHubPaths",
+        "fn agenthub_paths_for_platform (platform : & PlatformPaths) -> AgentHubPaths",
         "fn load_desktop_config (platform : & PlatformPaths) -> Config",
         "fn open_panel_db (config : & Config) -> Result < PanelDb >"
       ]
@@ -11904,14 +11904,14 @@
     "src-tauri/src/resources.rs": {
       "json": [],
       "signatures": [
-        "fn sync_nexushub_webd_helper_from_resource (resource_dir : & Path) -> Result < () , String >",
-        "fn repair_probe_error_monitor_launch_agent (config : & nexushub_core :: config :: Config , platform : & nexushub_core :: platform :: PlatformPaths ,) -> Result < nexushub_core :: probe_error_monitor :: ProbeErrorMonitorLaunchAgentStatus , String >",
-        "fn is_nexushub_webd_helper_placeholder (path : & Path) -> std :: io :: Result < bool >",
-        "fn sync_nexushub_webd_helper_file (source : & Path , target : & Path) -> std :: io :: Result < () >",
+        "fn sync_agenthub_webd_helper_from_resource (resource_dir : & Path) -> Result < () , String >",
+        "fn repair_probe_error_monitor_launch_agent (config : & agenthub_core :: config :: Config , platform : & agenthub_core :: platform :: PlatformPaths ,) -> Result < agenthub_core :: probe_error_monitor :: ProbeErrorMonitorLaunchAgentStatus , String >",
+        "fn is_agenthub_webd_helper_placeholder (path : & Path) -> std :: io :: Result < bool >",
+        "fn sync_agenthub_webd_helper_file (source : & Path , target : & Path) -> std :: io :: Result < () >",
         "fn ensure_executable (path : & Path) -> std :: io :: Result < () >",
         "fn ensure_executable (_path : & Path) -> std :: io :: Result < () >",
-        "fn retire_legacy_desktop_web_service (platform : & nexushub_core :: platform :: PlatformPaths ,) -> anyhow :: Result < () >",
-        "fn legacy_web_service_matches (arguments : & str , platform : & nexushub_core :: platform :: PlatformPaths ,) -> bool",
+        "fn retire_legacy_desktop_web_service (platform : & agenthub_core :: platform :: PlatformPaths ,) -> anyhow :: Result < () >",
+        "fn legacy_web_service_matches (arguments : & str , platform : & agenthub_core :: platform :: PlatformPaths ,) -> bool",
         "fn audited_static_copy (path : & Path) -> std :: io :: Result < bool >"
       ]
     },
@@ -11944,7 +11944,7 @@
       "signatures": [
         "fn probe_settings_with_state (state : & DesktopState) -> Result < DesktopProbeSettings >",
         "fn probe_save_settings_with_state (state : & DesktopState , request : ProbeSettingsSaveRequest ,) -> Result < DesktopProbeSettings >",
-        "fn probe_save_settings_with_state_and_repair (state : & DesktopState , request : ProbeSettingsSaveRequest , repair_error_monitor : impl FnOnce (& Config , & nexushub_core :: platform :: PlatformPaths) -> Result < () > ,) -> Result < DesktopProbeSettings >",
+        "fn probe_save_settings_with_state_and_repair (state : & DesktopState , request : ProbeSettingsSaveRequest , repair_error_monitor : impl FnOnce (& Config , & agenthub_core :: platform :: PlatformPaths) -> Result < () > ,) -> Result < DesktopProbeSettings >",
         "fn probe_action_with_state (state : & DesktopState , action : probe_service :: ProbeAction ,) -> Result < DesktopActionResponse >",
         "fn probe_fixed_shell_job_with_state (state : & DesktopState , action : probe_service :: ProbeAction , plan : probe_service :: ProbeActionPlan ,) -> Result < DesktopActionResponse >",
         "fn archive_delete_dry_run_with_state (state : & DesktopState) -> Result < ArchiveDeletePlan >",
@@ -12226,7 +12226,7 @@
         "RemoteSelectionRequest": "exporttypeRemoteSelectionRequest=RemoteRevisionRequest&{target:MachineTarget};",
         "RpcArgs": "typeRpcArgs=Record<string,unknown>|undefined;",
         "RuntimeContext": "exporttypeRuntimeContext={kind:\"desktop\"};",
-        "RuntimeGlobal": "typeRuntimeGlobal=typeofglobalThis&{__TAURI_INTERNALS__?:{invoke?:(command:string,args?:RpcArgs)=>Promise<unknown>;transformCallback?:(callback:(frame:{index:number;message?:unknown;end?:boolean})=>void)=>number;unregisterCallback?:(id:number)=>void;};__NEXUSHUB_DESKTOP_RUNTIME__?:boolean;__NEXUSHUB_TEST_INVOKE__?:(command:string,args?:RpcArgs)=>Promise<unknown>|unknown;};"
+        "RuntimeGlobal": "typeRuntimeGlobal=typeofglobalThis&{__TAURI_INTERNALS__?:{invoke?:(command:string,args?:RpcArgs)=>Promise<unknown>;transformCallback?:(callback:(frame:{index:number;message?:unknown;end?:boolean})=>void)=>number;unregisterCallback?:(id:number)=>void;};__AGENTHUB_DESKTOP_RUNTIME__?:boolean;__AGENTHUB_TEST_INVOKE__?:(command:string,args?:RpcArgs)=>Promise<unknown>|unknown;};"
       }
     },
     "webui/src/types.ts": {

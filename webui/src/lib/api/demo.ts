@@ -60,7 +60,7 @@ export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateS
     method: "linux_systemd_job",
     state: "idle",
     failure_category: null,
-    recommended_action: "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest",
+    recommended_action: "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest",
     capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
   };
 }
@@ -163,7 +163,7 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-api"): ProbeS
   const codexHome = fixture === "macos-tauri" ? "~/.codex" : "/root/.codex";
   const runtimeProbeSettings = fixture === "macos-tauri"
     ? {
-      logsPath: "~/Library/Application Support/NexusHub/logs_2.sqlite",
+      logsPath: "~/Library/Application Support/AgentHub/logs_2.sqlite",
       workspace: "~/Documents"
     }
     : {
@@ -239,7 +239,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Raw reply event",
           message: "Probe 事件已记录",
           dedupe_key: "reply-needed:019e95a0-demo:turn-plan-demo",
-          source: "nexushub-webd probe passive-scan",
+          source: "agenthub-webd probe passive-scan",
           payload: {
             event_type: "reply-needed",
             thread_title: "Plan Mode 修复",
@@ -252,7 +252,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 324,
             body_source: "proposed_plan",
             body_truncated: false,
-            source: "nexushub-webd probe passive-scan",
+            source: "agenthub-webd probe passive-scan",
             bark: { title: "等待回复：Plan Mode 修复", sent: false, skipped: true, reason: "dedupe", http_status: 200, dedupe_hit: true, chunk_count: 1, request_count: 0 },
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
@@ -266,7 +266,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Completion",
           message: "Thread completed",
           dedupe_key: "completion:019e5281-demo:turn-done",
-          source: "nexushub-webd probe hook-stop",
+          source: "agenthub-webd probe hook-stop",
           payload: {
             event_type: "completion",
             thread_title: "检查仓库状态",
@@ -278,7 +278,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 128,
             body_source: "task_complete.last_agent_message",
             body_truncated: false,
-            source: "nexushub-webd probe hook-stop",
+            source: "agenthub-webd probe hook-stop",
             bark: { title: "线程正常完成：检查仓库状态", sent: true, skipped: false, http_status: 200, dedupe_hit: false, chunk_count: 1, request_count: 1 },
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
@@ -292,7 +292,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Codex Stop Hook",
           message: "Stop Hook event recorded by AgentHub Probe",
           dedupe_key: "hook-stop:019e95a0-demo:turn-demo",
-          source: "nexushub-webd probe hook-stop",
+          source: "agenthub-webd probe hook-stop",
           payload: {
             event_type: "hook-stop",
             thread_title: "Plan Mode 修复",
@@ -304,7 +304,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 212,
             body_source: "default",
             body_truncated: false,
-            source: "nexushub-webd probe hook-stop",
+            source: "agenthub-webd probe hook-stop",
             bark: { title: "探针事件：Plan Mode 修复", skipped: true, reason: "notifications-disabled", dedupe_hit: false, chunk_count: 0, request_count: 0 },
             dedupe: { claimed: false, duplicate: true, status: "duplicate" }
           },
@@ -587,7 +587,7 @@ export function demoUnifiedCleanupResult(request?: UnifiedCleanupExecuteRequest)
 export function demoJobs(): JobRecord[] {
   return [
     { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "AgentHub 推送测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "AgentHub 推送测试\n来自本机的测试通知。\nBark 已受理" },
-    { id: "job-demo", kind: "nexushub_update_check", status: "succeeded", title: "AgentHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
+    { id: "job-demo", kind: "agenthub_update_check", status: "succeeded", title: "AgentHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
     { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
   ];
 }

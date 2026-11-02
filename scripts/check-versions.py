@@ -32,7 +32,7 @@ def check(root, tag=None):
         raise ValueError("src-tauri/Cargo.toml: version mismatch")
     for name, packages in [
         ("Cargo.lock", members),
-        ("src-tauri/Cargo.lock", [desktop["name"], "nexushub-core"]),
+        ("src-tauri/Cargo.lock", [desktop["name"], "agenthub-core"]),
     ]:
         locked = read_toml(root, name)["package"]
         for package in packages:
@@ -40,8 +40,8 @@ def check(root, tag=None):
             if len(entries) != 1 or entries[0]["version"] != expected or "source" in entries[0]:
                 raise ValueError(f"{name}: local package {package} version mismatch")
     # Registry schema version describes its own format, not the app release.
-    registry = json.loads((root / "contracts/nexushub-contract.json").read_text())
-    schema = json.loads((root / "contracts/nexushub-contract.schema.json").read_text())
+    registry = json.loads((root / "contracts/agenthub-contract.json").read_text())
+    schema = json.loads((root / "contracts/agenthub-contract.schema.json").read_text())
     if registry["schemaVersion"] != schema["properties"]["schemaVersion"]["const"]:
         raise ValueError("contract registry schema version mismatch")
     return expected
@@ -56,7 +56,7 @@ def main():
     except (OSError, ValueError, KeyError, TypeError) as error:
         # Fixed repository paths and identifiers only; never dump manifest contents.
         raise SystemExit(f"version check failed: {type(error).__name__}") from None
-    print(f"NexusHub {version} manifest and lock versions: ok")
+    print(f"AgentHub {version} manifest and lock versions: ok")
 
 
 if __name__ == "__main__":

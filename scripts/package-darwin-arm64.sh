@@ -37,7 +37,7 @@ cleanup() {
 trap cleanup EXIT
 
 cargo_package_version() {
-  cargo pkgid --package nexushub-webd --manifest-path "${ROOT}/Cargo.toml" |
+  cargo pkgid --package agenthub-webd --manifest-path "${ROOT}/Cargo.toml" |
     awk -F# '{print $NF}'
 }
 
@@ -111,10 +111,10 @@ assert_app_only_archive() {
 
 assert_app_bundle_resources() {
   local app_bundle="$1"
-  local helper="${app_bundle}/Contents/Resources/nexushub-webd"
+  local helper="${app_bundle}/Contents/Resources/agenthub-webd"
   local bundled_webui="${app_bundle}/Contents/Resources/webui"
 
-  [[ -x "${helper}" ]] || die "app bundle missing executable nexushub-webd helper"
+  [[ -x "${helper}" ]] || die "app bundle missing executable agenthub-webd helper"
   local helper_kind
   helper_kind="$(file "${helper}")"
   [[ "${helper_kind}" == *"Mach-O 64-bit executable arm64"* ]] ||
@@ -129,7 +129,7 @@ assert_app_bundle_resources() {
 assert_helper_resource_placeholder() {
   [[ -f "${HELPER_RESOURCE}" ]] || die "helper placeholder missing after packaging cleanup"
   [[ ! -x "${HELPER_RESOURCE}" ]] || die "helper placeholder must remain non-executable after packaging cleanup"
-  if ! grep -q '^NEXUSHUB_HELPER_PLACEHOLDER' "${HELPER_RESOURCE}"; then
+  if ! grep -q '^AGENTHUB_HELPER_PLACEHOLDER' "${HELPER_RESOURCE}"; then
     die "helper placeholder was not restored after packaging cleanup"
   fi
 }
@@ -139,7 +139,7 @@ cleanup_stale_launchservices_dmg_registrations() {
   [[ -x "${lsregister}" ]] || return 0
 
   "${lsregister}" -dump 2>/dev/null |
-    awk '/path: *\/Volumes\/dmg\..*\/(AgentHub|NexusHub)\.app/ {print $2}' |
+    awk '/path: *\/Volumes\/dmg\..*\/(AgentHub|AgentHub)\.app/ {print $2}' |
     sort -u |
     while IFS= read -r stale_app; do
       [[ -n "${stale_app}" ]] || continue
@@ -159,8 +159,8 @@ if [[ "${ALLOW_HOST_MISMATCH:-0}" != "1" ]]; then
 fi
 
 VERSION="${VERSION:-$(cargo_package_version)}"
-TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
-SIGNATURE_ASSET="nexushub-darwin-arm64.tar.gz.sig"
+TARBALL_ASSET="agenthub-darwin-arm64.tar.gz"
+SIGNATURE_ASSET="agenthub-darwin-arm64.tar.gz.sig"
 DMG_ASSET="AgentHub-${VERSION}-darwin-arm64.dmg"
 SIGNED_RELEASE_CONTEXT=0
 if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
@@ -175,7 +175,7 @@ fi
 
 mkdir -p "${DIST}"
 mkdir -p "${TAURI_DIR}/resources"
-HELPER_RESOURCE="${TAURI_DIR}/resources/nexushub-webd"
+HELPER_RESOURCE="${TAURI_DIR}/resources/agenthub-webd"
 HELPER_RESOURCE_BACKUP="$(mktemp)"
 if [[ -f "${HELPER_RESOURCE}" ]]; then
   cp -p "${HELPER_RESOURCE}" "${HELPER_RESOURCE_BACKUP}"
@@ -189,10 +189,10 @@ fi
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
 
 if [[ "${SKIP_HELPER_BUILD:-0}" != "1" ]]; then
-  cargo build --release --package nexushub-webd --locked
+  cargo build --release --package agenthub-webd --locked
 fi
 
-HELPER_BINARY="${CARGO_TARGET_DIR:-${ROOT}/target}/release/nexushub-webd"
+HELPER_BINARY="${CARGO_TARGET_DIR:-${ROOT}/target}/release/agenthub-webd"
 [[ -x "${HELPER_BINARY}" ]] || die "missing helper binary: ${HELPER_BINARY}"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"

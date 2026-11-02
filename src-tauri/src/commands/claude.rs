@@ -1,17 +1,17 @@
 #![allow(non_snake_case)]
 
-use nexushub_core::{
+use agenthub_core::{
     claude::{ClaudeDeletePreview, ClaudeDeleteRequest, ClaudeDeleteResult},
     platform::PlatformPaths,
-    services::use_cases::NexusHubUseCases,
+    services::use_cases::AgentHubUseCases,
 };
 
 #[tauri::command(rename = "claude.ownershipDiagnostics")]
 pub async fn claudeOwnershipDiagnostics(
     session_key: String,
-) -> Result<nexushub_core::claude::ClaudeOwnershipDiagnostics, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+) -> Result<agenthub_core::claude::ClaudeOwnershipDiagnostics, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .ownership_diagnostics(&session_key)
             .map_err(|err| err.to_string())
@@ -24,9 +24,9 @@ pub async fn claudeOwnershipDiagnostics(
 pub async fn listClaudeSessions(
     q: Option<String>,
     limit: Option<usize>,
-) -> Result<Vec<nexushub_core::claude::ClaudeSessionSummary>, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+) -> Result<Vec<agenthub_core::claude::ClaudeSessionSummary>, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .list(limit.unwrap_or(100), q.as_deref())
             .map_err(|err| err.to_string())
@@ -40,11 +40,11 @@ pub async fn getClaudeSession(
     session_key: String,
     limit: Option<usize>,
     before: Option<String>,
-) -> Result<nexushub_core::claude::ClaudeSessionDetail, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+) -> Result<agenthub_core::claude::ClaudeSessionDetail, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
-            .detail(nexushub_core::claude::ClaudeDetailRequest {
+            .detail(agenthub_core::claude::ClaudeDetailRequest {
                 session_key,
                 limit,
                 before,
@@ -59,9 +59,9 @@ pub async fn getClaudeSession(
 pub async fn renameClaudeSession(
     session_key: String,
     title: String,
-) -> Result<nexushub_core::claude::ClaudeSessionSummary, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+) -> Result<agenthub_core::claude::ClaudeSessionSummary, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .rename(&session_key, &title)
             .map_err(|err| err.to_string())
@@ -74,8 +74,8 @@ pub async fn renameClaudeSession(
 pub async fn previewClaudeSessionDelete(
     session_key: String,
 ) -> Result<ClaudeDeletePreview, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .delete_preview(&session_key)
             .map_err(|err| err.to_string())
@@ -88,8 +88,8 @@ pub async fn previewClaudeSessionDelete(
 pub async fn deleteClaudeSession(
     request: ClaudeDeleteRequest,
 ) -> Result<ClaudeDeleteResult, String> {
-    nexushub_core::read_tasks::spawn_blocking(move || {
-        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .delete_execute(request)
             .map_err(|err| err.to_string())
