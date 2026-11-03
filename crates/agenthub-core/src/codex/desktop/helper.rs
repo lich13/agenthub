@@ -253,15 +253,16 @@ impl HelperProcess {
     }
 
     fn start(executable: &Path, codex_home: &Path) -> Result<Self> {
-        let mut child = Command::new(executable)
-            .args(["app-server", "--listen", "stdio://"])
-            .env("CODEX_HOME", codex_home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|_| DesktopError::Unavailable)?;
+        let mut child = crate::jobs::spawn_retrying_etxtbsy(
+            Command::new(executable)
+                .args(["app-server", "--listen", "stdio://"])
+                .env("CODEX_HOME", codex_home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true),
+        )
+        .map_err(|_| DesktopError::Unavailable)?;
         let stdin = child.stdin.take().ok_or(DesktopError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(DesktopError::Unavailable)?;
         Ok(Self {

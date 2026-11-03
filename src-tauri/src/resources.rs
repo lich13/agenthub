@@ -41,23 +41,46 @@ fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
 }
 
 fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
-    let should_copy = match (std::fs::metadata(source), std::fs::metadata(target)) {
-        (Ok(source_meta), Ok(target_meta)) => {
-            source_meta.len() != target_meta.len()
-                || source_meta.modified().ok() != target_meta.modified().ok()
-        }
-        (Ok(_), Err(_)) => true,
-        (Err(err), _) => return Err(err),
+    static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let source_bytes = std::fs::read(source)?;
+    let should_copy = match std::fs::read(target) {
+        Ok(target_bytes) => source_bytes != target_bytes,
+        Err(_) => true,
     };
     if !should_copy {
         ensure_executable(target)?;
         return Ok(());
     }
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "helper target has no parent directory",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let seq = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(AGENTHUB_WEBD_RESOURCE_NAME),
+        std::process::id(),
+        seq,
+    ));
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp_path)?;
+        std::io::Write::write_all(&mut file, &source_bytes)?;
+        file.sync_all()?;
+        drop(file);
+        ensure_executable(&temp_path)?;
+        std::fs::rename(&temp_path, target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
     }
-    std::fs::copy(source, target)?;
-    ensure_executable(target)
+    result
 }
 
 #[cfg(unix)]
@@ -93,9 +116,33 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"#!/bin/sh\nexit 0\n");
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
-            assert_ne!(mode & 0o111, 0, "helper must be executable");
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let first_meta = std::fs::metadata(&target).unwrap();
+            assert_ne!(
+                first_meta.permissions().mode() & 0o111,
+                0,
+                "helper must be executable"
+            );
+            let first_ino = first_meta.ino();
+
+            // Repeat sync with identical bytes keeps existing inode untouched.
+            sync_agenthub_webd_helper_file(&source, &target).unwrap();
+            assert_eq!(std::fs::metadata(&target).unwrap().ino(), first_ino);
+
+            // Updating helper bytes replaces via a temporary file + rename (new inode),
+            // avoiding macOS arm64 vnode signature cache invalidation (SIGKILL 137).
+            std::fs::write(&source, b"#!/bin/sh\necho v2\nexit 0\n").unwrap();
+            sync_agenthub_webd_helper_file(&source, &target).unwrap();
+            let second_meta = std::fs::metadata(&target).unwrap();
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                b"#!/bin/sh\necho v2\nexit 0\n"
+            );
+            assert_ne!(
+                second_meta.ino(),
+                first_ino,
+                "updated helper must be replaced with a new inode via atomic rename"
+            );
         }
     }
 

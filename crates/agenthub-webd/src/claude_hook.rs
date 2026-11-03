@@ -29,11 +29,7 @@ pub(super) fn installed() -> bool {
         .is_ok_and(|binary| hooks::configured(&ClaudePaths::default_for_user(), &binary))
 }
 
-fn parse(value: &Value) -> Result<Option<HookEvent>> {
-    parse_with_paths(&ClaudePaths::default_for_user(), value)
-}
-
-pub(super) fn parse_with_paths(paths: &ClaudePaths, value: &Value) -> Result<Option<HookEvent>> {
+pub(super) fn parse(value: &Value) -> Result<Option<HookEvent>> {
     let get = |key| value[key].as_str().unwrap_or("");
     let notification = get("notification_type");
     let (kind, body, idle) = match (get("hook_event_name"), notification) {
@@ -76,7 +72,7 @@ pub(super) fn parse_with_paths(paths: &ClaudePaths, value: &Value) -> Result<Opt
         "invalid hook identity"
     );
     let path = PathBuf::from(get("transcript_path"));
-    let root = &paths.projects;
+    let root = ClaudePaths::default_for_user().projects;
     let canonical_root = root.canonicalize().ok();
     ensure!(
         path.is_absolute()
@@ -105,23 +101,7 @@ pub(super) fn parse_with_paths(paths: &ClaudePaths, value: &Value) -> Result<Opt
 }
 
 pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationContext> {
-    let default_paths = ClaudePaths::default_for_user();
-    let paths = if hook.path.starts_with(&default_paths.projects) {
-        default_paths
-    } else if let Some(projects) = hook
-        .path
-        .parent()
-        .and_then(Path::parent)
-        .filter(|dir| dir.file_name().is_some_and(|n| n == "projects"))
-    {
-        ClaudePaths {
-            config: projects.parent().unwrap_or(projects).to_path_buf(),
-            projects: projects.to_path_buf(),
-        }
-    } else {
-        default_paths
-    };
-    let context = claude::notification_context(&paths, &hook.path)?;
+    let context = claude::notification_context(&ClaudePaths::default_for_user(), &hook.path)?;
     ensure!(
         context.stream.id == hook.session_id
             && hook

@@ -148,6 +148,20 @@ impl JobRunner {
     }
 }
 
+pub(crate) fn spawn_retrying_etxtbsy(
+    command: &mut Command,
+) -> std::io::Result<tokio::process::Child> {
+    for attempt in 0..5 {
+        match command.spawn() {
+            Err(err) if err.raw_os_error() == Some(26) && attempt < 4 => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            other => return other,
+        }
+    }
+    unreachable!()
+}
+
 async fn run_process_command(
     db: &PanelDb,
     tx: &broadcast::Sender<JobEvent>,
@@ -156,12 +170,13 @@ async fn run_process_command(
     command: &ProcessCommand,
     exclusive_group: Option<String>,
 ) -> Result<()> {
-    let mut child = Command::new(&command.program)
-        .args(&command.args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("unable to start managed job")?;
+    let mut child = spawn_retrying_etxtbsy(
+        Command::new(&command.program)
+            .args(&command.args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .context("unable to start managed job")?;
     if let Some(pid) = child.id() {
         running
             .lock()
