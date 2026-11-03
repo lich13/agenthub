@@ -448,8 +448,8 @@ describe("conversation helpers", () => {
 
   test("thread list keeps title and search outside the independent scroll container and retires top status tabs", () => {
     const source = extractThreadListSource();
-    const titleIndex = source.indexOf('className="section-title thread-title-row"');
-    const searchIndex = source.indexOf('className="search-box"');
+    const titleIndex = source.indexOf("<WorkspaceListHeader");
+    const searchIndex = source.indexOf("<WorkspaceSearchInput");
     const scrollIndex = source.indexOf('className="thread-scroll"');
     const scrollEndIndex = source.indexOf("\n      </div>\n      <SessionBatchControls", scrollIndex);
     const scrollBody = source.slice(scrollIndex, scrollEndIndex);
@@ -469,8 +469,8 @@ describe("conversation helpers", () => {
     expect(source).not.toContain('className="segmented"');
     expect(source).not.toContain("statusTabs");
     expect(source).not.toContain("多选线程");
-    expect(scrollBody).not.toContain('className="section-title thread-title-row"');
-    expect(scrollBody).not.toContain('className="search-box"');
+    expect(scrollBody).not.toContain("<WorkspaceListHeader");
+    expect(scrollBody).not.toContain("<WorkspaceSearchInput");
   });
 
   test("visible Codex copy avoids legacy transport labels", async () => {
@@ -799,6 +799,49 @@ describe("conversation helpers", () => {
     expect(app.canStartUpdateInstall?.({ ...baseStatus, update_available: null })).toBe(false);
     expect(app.canStartUpdateInstall?.(baseStatus)).toBe(false);
     expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.118", update_available: true })).toBe(true);
+  });
+
+  test("settings appearance switcher supports system, dark, and light modes with storage persistence", async () => {
+    const app = await loadApp();
+    expect(app.APPEARANCE_OPTIONS).toEqual([
+      { id: "system", label: "跟随系统" },
+      { id: "dark", label: "深色" },
+      { id: "light", label: "浅色" }
+    ]);
+
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      }
+    };
+    const attrs = new Map<string, string>();
+    const root = {
+      setAttribute: (name: string, value: string) => {
+        attrs.set(name, value);
+      },
+      removeAttribute: (name: string) => {
+        attrs.delete(name);
+      }
+    };
+
+    expect(app.readStoredThemeMode(storage)).toBe("system");
+    expect(app.applyThemeMode("dark", root, storage)).toBe("dark");
+    expect(store.get(app.THEME_STORAGE_KEY)).toBe("dark");
+    expect(attrs.get("data-theme")).toBe("dark");
+
+    expect(app.applyThemeMode("light", root, storage)).toBe("light");
+    expect(store.get(app.THEME_STORAGE_KEY)).toBe("light");
+    expect(attrs.get("data-theme")).toBe("light");
+
+    expect(app.applyThemeMode("system", root, storage)).toBe("system");
+    expect(store.get(app.THEME_STORAGE_KEY)).toBe("system");
+    expect(attrs.has("data-theme")).toBe(false);
+
+    const opsSource = extractFunctionSource("OpsWorkspace");
+    expect(opsSource).toContain('aria-label="外观"');
+    expect(opsSource).toContain('role="radiogroup"');
   });
 
 });

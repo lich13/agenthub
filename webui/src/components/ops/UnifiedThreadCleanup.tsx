@@ -206,13 +206,12 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
       title={OPS_PANEL_TITLES.unifiedCleanup}
       icon={<Sparkles size={18} />}
       className="wide-panel unified-cleanup-panel"
-    >
-      <div className="cleanup-panel-head unified-cleanup-head">
+      action={
         <span role="status" className={`status-chip ${stage.tone ? `tone-${stage.tone}` : "tone-muted"}`}>
           {stage.label}
         </span>
-      </div>
-
+      }
+    >
       <div className="archive-plan unified-cleanup-metrics">
         <Metric
           label="可清理会话"

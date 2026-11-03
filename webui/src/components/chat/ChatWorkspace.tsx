@@ -1,14 +1,16 @@
 import { SessionSize } from "../common/SessionSize";
-import { AgentBrandIcon } from "../common/AgentBrandIcon";
-import { WorkspaceEmptyState, WorkspaceSplitShell } from "../common/WorkspaceSplitShell";
+import {
+  WorkspaceEmptyState,
+  WorkspaceListHeader,
+  WorkspaceSearchInput,
+  WorkspaceSplitShell,
+} from "../common/WorkspaceSplitShell";
 import {
   Archive,
   ArchiveRestore,
   ChevronRight,
   Copy,
   FolderOpen,
-  RefreshCw,
-  Search,
   Trash2,
 } from "lucide-react";
 import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
@@ -369,33 +371,14 @@ function ThreadList({
 
   return (
     <div className="thread-list">
-      <div className="section-title thread-title-row">
-        <div className="workspace-title-brand">
-          <span className="agent-brand-badge" data-agent="codex" aria-hidden="true">
-            <AgentBrandIcon agent="codex" size={16} />
-          </span>
-          <strong>Codex</strong>
-          {!loading && (
-            <span className="workspace-count-pill" aria-hidden="true">
-              {threads.length}
-            </span>
-          )}
-        </div>
-        <div className="thread-title-actions">
-          {newThread}
-          <button className="icon-button compact" onClick={onRefresh} title="刷新任务">
-            <RefreshCw size={15} />
-          </button>
-        </div>
-      </div>
-      <label className="search-box">
-        <Search size={15} />
-        <input
-          value={q}
-          onChange={event => setQ(event.target.value)}
-          placeholder="搜索标题或 ID"
-        />
-      </label>
+      <WorkspaceListHeader
+        agent="codex"
+        title="Codex"
+        count={loading ? null : threads.length}
+        onRefresh={onRefresh}
+        actions={newThread}
+      />
+      <WorkspaceSearchInput value={q} onChange={setQ} placeholder="搜索标题或 ID" />
       <div className="thread-scroll" onKeyDown={batch.onListKeyDown}>
         {error && (
           <div className="form-error" role="alert">

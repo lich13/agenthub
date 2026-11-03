@@ -20,6 +20,8 @@ import {
   type RuntimeCapabilityMatrix
 } from "./lib/query/system";
 import {
+  applyThemeMode,
+  readStoredThemeMode,
   type RuntimeCapabilityInput
 } from "./lib/domain/runtimeViewModel";
 import {
@@ -68,6 +70,7 @@ export default function App() {
   const setSettingsSection = (next: "maintenance" | "remote") => { lastSettingsSection = next; setSettingsSectionState(next); };
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(true);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("agenthub.nav-collapsed") === "1");
+  applyThemeMode(readStoredThemeMode(), undefined, null);
 
   const toggleNavCollapsed = () => {
     setNavCollapsed((current) => {
@@ -98,7 +101,7 @@ export default function App() {
             {view === "dsh" && <DshWorkspace capabilities={capabilities} />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}
             {view === "ops" && <div className="settings-workspace">
-              <header className="settings-header"><div className="settings-header-copy"><h1>设置</h1></div><div className="settings-tabs" role="tablist">
+              <header className="settings-header"><h1>设置</h1><div className="settings-tabs" role="tablist">
                 <button role="tab" aria-selected={settingsSection === "maintenance"} onClick={() => setSettingsSection("maintenance")}>更新与维护</button>
                 <button role="tab" aria-selected={settingsSection === "remote"} onClick={() => setSettingsSection("remote")}>远程连接</button>
               </div></header>

@@ -177,9 +177,7 @@ export function RemoteConnectionSettings() {
           <header className="remote-machines-header">
             <div className="remote-machines-heading">
               <Cloud size={18} />
-              <div>
-                <strong>远程机器列表</strong>
-              </div>
+              <strong>远程机器列表</strong>
             </div>
             <button
               type="button"
@@ -290,9 +288,7 @@ export function RemoteConnectionSettings() {
           });
         }}
       >
-        <div className="remote-form-heading">
-          <strong>{isEditingExisting ? "编辑远程机器" : "新增远程机器"}</strong>
-        </div>
+        <strong>{isEditingExisting ? "编辑远程机器" : "新增远程机器"}</strong>
         <label>
           机器名称
           <input

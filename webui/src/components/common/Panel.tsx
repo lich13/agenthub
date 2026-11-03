@@ -3,11 +3,13 @@ import type { ReactNode } from "react";
 export function Panel({
   title,
   icon,
+  action,
   children,
   className = ""
 }: {
   title: string;
   icon: ReactNode;
+  action?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
@@ -16,6 +18,7 @@ export function Panel({
       <header>
         {icon}
         <strong>{title}</strong>
+        {action}
       </header>
       {children}
     </section>

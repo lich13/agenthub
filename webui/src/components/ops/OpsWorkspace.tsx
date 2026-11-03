@@ -1,6 +1,13 @@
-import { RefreshCw, SlidersHorizontal, TerminalSquare } from "lucide-react";
-import { useState } from "react";
-import { OPS_PANEL_TITLES, opsWorkspaceView } from "../../lib/domain/runtimeViewModel";
+import { Monitor, Moon, RefreshCw, SlidersHorizontal, Sun, TerminalSquare } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import {
+  APPEARANCE_OPTIONS,
+  OPS_PANEL_TITLES,
+  applyThemeMode,
+  opsWorkspaceView,
+  readStoredThemeMode,
+  type ThemeMode,
+} from "../../lib/domain/runtimeViewModel";
 import { machineScope } from "../../lib/query/connection";
 import { isTerminalJob, useStartedJob } from "../../lib/query/jobs";
 import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
@@ -12,8 +19,15 @@ import { UpdatePanel } from "./UpdatePanel";
 
 export { CleanupPagination };
 
+const APPEARANCE_ICONS: Record<ThemeMode, ReactNode> = {
+  system: <Monitor size={16} />,
+  dark: <Moon size={16} />,
+  light: <Sun size={16} />,
+};
+
 export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredThemeMode());
   const { update, jobs } = useOpsQueries({ historyOpen });
   const opsActions = useOpsActions({ capabilities });
   const jobMutation = opsActions.updateJob;
@@ -26,14 +40,16 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
     capabilities,
   });
 
+  const handleThemeChange = (next: ThemeMode) => {
+    setThemeMode(applyThemeMode(next));
+  };
+
   return (
     <div className="ops-grid ws-control-stage" data-update-actions={opsView.updateActions.length}>
       <header className="ops-header probe-header">
-        <div className="probe-header-meta">
-          <div className="workspace-title-brand">
-            <SlidersHorizontal size={18} />
-            <h1>设置与维护</h1>
-          </div>
+        <div className="workspace-title-brand">
+          <SlidersHorizontal size={18} />
+          <h1>设置与维护</h1>
         </div>
         <div className="button-row">
           <button
@@ -49,6 +65,24 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           </button>
         </div>
       </header>
+      <section className="appearance-section" aria-label="外观">
+        <strong className="appearance-heading">外观</strong>
+        <div className="appearance-segmented" role="radiogroup" aria-label="外观">
+          {APPEARANCE_OPTIONS.map(option => (
+            <button
+              key={option.id}
+              type="button"
+              role="radio"
+              aria-checked={themeMode === option.id}
+              className={`appearance-option ${themeMode === option.id ? "is-active" : ""}`}
+              onClick={() => handleThemeChange(option.id)}
+            >
+              {APPEARANCE_ICONS[option.id]}
+              <span>{option.label}</span>
+            </button>
+          ))}
+        </div>
+      </section>
       <UpdatePanel
         capabilities={capabilities}
         status={update.data}

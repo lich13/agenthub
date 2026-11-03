@@ -53,7 +53,7 @@ test("Codex context menu preserves selection, supports Shift+F10 and returns foc
 
   await target.click({ button: "right" });
   await expect(menu).toBeVisible();
-  await page.locator(".thread-title-row strong").click();
+  await page.locator(".workspace-heading h1").click();
   await expect(menu).toHaveCount(0);
 
   const shortRow = page.locator(".renameable-session").nth(1);

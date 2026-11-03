@@ -159,9 +159,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
   return (
     <div className="probe-layout" data-host-label={hostLabel ?? undefined}>
       <header className="probe-header">
-        <div className="probe-header-meta">
-          <h1>{PROBE_NAV_LABEL}</h1>
-        </div>
+        <h1>{PROBE_NAV_LABEL}</h1>
         <div className="button-row">
           <button className="icon-button" title="刷新 Probe" onClick={probeActions.refresh}>
             <RefreshCw size={17} />

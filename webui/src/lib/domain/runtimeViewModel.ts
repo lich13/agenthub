@@ -929,3 +929,52 @@ export function jobOutputView(value: string, input?: RuntimeCapabilityInput): st
     ? output
     : sanitizeDesktopFailureCopy(output, "任务输出不可用");
 }
+
+export type ThemeMode = "system" | "dark" | "light";
+
+export const THEME_STORAGE_KEY = "agenthub.theme";
+
+export const APPEARANCE_OPTIONS: ReadonlyArray<{ id: ThemeMode; label: string }> = [
+  { id: "system", label: "跟随系统" },
+  { id: "dark", label: "深色" },
+  { id: "light", label: "浅色" }
+];
+
+export function normalizeThemeMode(value: unknown): ThemeMode {
+  return value === "dark" || value === "light" ? value : "system";
+}
+
+export function readStoredThemeMode(storage?: Pick<Storage, "getItem"> | null): ThemeMode {
+  const target =
+    storage === undefined ? (typeof localStorage !== "undefined" ? localStorage : null) : storage;
+  try {
+    return normalizeThemeMode(target?.getItem(THEME_STORAGE_KEY));
+  } catch {
+    return "system";
+  }
+}
+
+export function applyThemeMode(
+  mode: ThemeMode,
+  root?: { setAttribute: (name: string, value: string) => void; removeAttribute: (name: string) => void } | null,
+  storage?: Pick<Storage, "setItem"> | null
+): ThemeMode {
+  const normalized = normalizeThemeMode(mode);
+  const targetStorage =
+    storage === undefined ? (typeof localStorage !== "undefined" ? localStorage : null) : storage;
+  try {
+    targetStorage?.setItem(THEME_STORAGE_KEY, normalized);
+  } catch {
+    // Ignore storage write errors in restricted environments.
+  }
+  const targetRoot =
+    root === undefined ? (typeof document !== "undefined" ? document.documentElement : null) : root;
+  if (targetRoot) {
+    if (normalized === "system") {
+      targetRoot.removeAttribute("data-theme");
+    } else {
+      targetRoot.setAttribute("data-theme", normalized);
+    }
+  }
+  return normalized;
+}
