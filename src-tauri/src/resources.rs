@@ -48,16 +48,14 @@ fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
 fn files_have_same_len_and_bytes(source: &Path, target: &Path) -> bool {
     use std::io::Read;
 
-    let (Ok(source_meta), Ok(target_meta)) =
-        (std::fs::metadata(source), std::fs::metadata(target))
+    let (Ok(source_meta), Ok(target_meta)) = (std::fs::metadata(source), std::fs::metadata(target))
     else {
         return false;
     };
     if source_meta.len() != target_meta.len() {
         return false;
     }
-    let (Ok(mut src), Ok(mut dst)) =
-        (std::fs::File::open(source), std::fs::File::open(target))
+    let (Ok(mut src), Ok(mut dst)) = (std::fs::File::open(source), std::fs::File::open(target))
     else {
         return false;
     };
