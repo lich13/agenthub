@@ -36,19 +36,45 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
 }
 
 fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
-    let bytes = std::fs::read(path)?;
-    Ok(bytes.starts_with(AGENTHUB_WEBD_HELPER_PLACEHOLDER))
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut prefix = Vec::with_capacity(AGENTHUB_WEBD_HELPER_PLACEHOLDER.len());
+    file.take(AGENTHUB_WEBD_HELPER_PLACEHOLDER.len() as u64)
+        .read_to_end(&mut prefix)?;
+    Ok(prefix == AGENTHUB_WEBD_HELPER_PLACEHOLDER)
+}
+
+fn files_have_same_len_and_bytes(source: &Path, target: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+
+    let source_meta = std::fs::metadata(source)?;
+    let Ok(target_meta) = std::fs::metadata(target) else {
+        return Ok(false);
+    };
+    if source_meta.len() != target_meta.len() {
+        return Ok(false);
+    }
+    let mut src = std::fs::File::open(source)?;
+    let mut dst = std::fs::File::open(target)?;
+    let mut src_buf = [0u8; 64 * 1024];
+    let mut dst_buf = [0u8; 64 * 1024];
+    loop {
+        let n = src.read(&mut src_buf)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        dst.read_exact(&mut dst_buf[..n])?;
+        if src_buf[..n] != dst_buf[..n] {
+            return Ok(false);
+        }
+    }
 }
 
 fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
     static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    let source_bytes = std::fs::read(source)?;
-    let should_copy = match std::fs::read(target) {
-        Ok(target_bytes) => source_bytes != target_bytes,
-        Err(_) => true,
-    };
-    if !should_copy {
+    if files_have_same_len_and_bytes(source, target)? {
         ensure_executable(target)?;
         return Ok(());
     }
@@ -70,10 +96,11 @@ fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Resu
         seq,
     ));
     let result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&temp_path)?;
-        std::io::Write::write_all(&mut file, &source_bytes)?;
-        file.sync_all()?;
-        drop(file);
+        let mut src_file = std::fs::File::open(source)?;
+        let mut dst_file = std::fs::File::create(&temp_path)?;
+        std::io::copy(&mut src_file, &mut dst_file)?;
+        dst_file.sync_all()?;
+        drop(dst_file);
         ensure_executable(&temp_path)?;
         std::fs::rename(&temp_path, target)
     })();
@@ -143,6 +170,17 @@ mod tests {
                 first_ino,
                 "updated helper must be replaced with a new inode via atomic rename"
             );
+
+            // Same-length content update also replaces via atomic rename.
+            let second_ino = second_meta.ino();
+            std::fs::write(&source, b"#!/bin/sh\necho v3\nexit 0\n").unwrap();
+            sync_agenthub_webd_helper_file(&source, &target).unwrap();
+            let third_meta = std::fs::metadata(&target).unwrap();
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                b"#!/bin/sh\necho v3\nexit 0\n"
+            );
+            assert_ne!(third_meta.ino(), second_ino);
         }
     }
 
