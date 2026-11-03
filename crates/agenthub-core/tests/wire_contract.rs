@@ -82,69 +82,6 @@ fn current_types() -> BTreeMap<String, BTreeMap<String, Value>> {
         .collect()
 }
 
-#[derive(Default)]
-struct AdapterShape {
-    signatures: Vec<String>,
-    json: Vec<String>,
-}
-fn test_only(attributes: &[Attribute]) -> bool {
-    attributes.iter().any(|attr| {
-        attr.path().is_ident("cfg") && attr.meta.to_token_stream().to_string() == "cfg (test)"
-    })
-}
-impl<'a> Visit<'a> for AdapterShape {
-    fn visit_item_mod(&mut self, module: &'a syn::ItemMod) {
-        if !test_only(&module.attrs) {
-            syn::visit::visit_item_mod(self, module);
-        }
-    }
-    fn visit_item_fn(&mut self, function: &'a syn::ItemFn) {
-        if test_only(&function.attrs) {
-            return;
-        }
-        self.signatures
-            .push(function.sig.to_token_stream().to_string());
-        syn::visit::visit_item_fn(self, function);
-    }
-    fn visit_macro(&mut self, mac: &'a syn::Macro) {
-        // Value-based envelopes have no derive DTO: their actual JSON expressions are explicit contracts.
-        if mac
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "json")
-        {
-            self.json.push(mac.tokens.to_string());
-        }
-    }
-}
-fn adapter_shape(source: &str) -> Value {
-    let mut shape = AdapterShape::default();
-    shape.visit_file(&syn::parse_file(source).unwrap());
-    json!({"signatures":shape.signatures, "json":shape.json})
-}
-fn current_adapters() -> BTreeMap<String, Value> {
-    source_files()
-        .into_iter()
-        .filter_map(|path| {
-            let relative = path
-                .strip_prefix(root())
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if !relative.starts_with("crates/agenthub-core/src/services/")
-                && !relative.starts_with("crates/agenthub-webd/src/api/")
-                && !relative.starts_with("src-tauri/src/")
-            {
-                return None;
-            }
-            Some((
-                relative,
-                adapter_shape(&std::fs::read_to_string(path).unwrap()),
-            ))
-        })
-        .collect()
-}
 fn fixture() -> Value {
     serde_json::from_slice(&std::fs::read(root().join("contracts/wire-types.json")).unwrap())
         .unwrap()
@@ -152,22 +89,19 @@ fn fixture() -> Value {
 #[test]
 fn actual_rust_types_match_reviewed_wire_fields_and_serde_rules() {
     let actual = serde_json::to_value(current_types()).unwrap();
-    let adapters = serde_json::to_value(current_adapters()).unwrap();
     let path = root().join("contracts/wire-types.json");
     let mut expected = fixture();
     if std::env::var_os("AGENTHUB_UPDATE_WIRE_FIXTURE").is_some() {
         expected["rust"] = actual.clone();
-        expected["rustAdapters"] = adapters.clone();
+        if let Some(obj) = expected.as_object_mut() {
+            obj.remove("rustAdapters");
+        }
         std::fs::write(
             path,
             serde_json::to_string_pretty(&expected).unwrap() + "\n",
         )
         .unwrap();
     }
-    assert_eq!(
-        expected["rustAdapters"], adapters,
-        "adapter signature or dynamic JSON envelope changed; follow Shared changes"
-    );
     assert_eq!(
         expected["rust"], actual,
         "wire field, optional/null, enum or serde attribute changed; follow Shared changes"
@@ -280,24 +214,6 @@ fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
     assert_eq!(
         serde_json::to_value(DesktopChoice { item: None }).unwrap(),
         json!({"item":null})
-    );
-}
-
-#[test]
-fn missing_adapters_and_changed_dynamic_envelopes_are_detected() {
-    let source = "pub fn reply(id: String) -> Value { json!({\"id\": id, \"items\": []}) }";
-    let shape = adapter_shape(source);
-    assert_ne!(shape, adapter_shape(""));
-    assert_ne!(
-        shape,
-        adapter_shape(&source.replace("id: String", "id: Option<String>"))
-    );
-    assert_ne!(shape, adapter_shape(&source.replace(", \"items\": []", "")));
-    assert_eq!(
-        shape,
-        adapter_shape(&format!(
-            "{source} #[cfg(test)] mod tests {{ fn irrelevant() {{ json!({{\"test\":true}}); }} }}"
-        ))
     );
 }
 

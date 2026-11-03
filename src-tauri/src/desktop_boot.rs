@@ -1,36 +1,8 @@
-use std::{
-    io::Write,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use tauri::{PhysicalPosition, PhysicalSize, Runtime, Size, WebviewWindow};
-
-use agenthub_core::platform::PlatformPaths;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
 window.__AGENTHUB_DESKTOP_RUNTIME__ = true;
-"#;
-
-const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
-(function () {
-  var root = document.getElementById("root");
-  var bodyText = (document.body && document.body.innerText ? document.body.innerText : "").replace(/\s+/g, " ").trim();
-  return {
-    readyState: document.readyState,
-    title: document.title,
-    desktopRuntime: window.__AGENTHUB_DESKTOP_RUNTIME__ === true,
-    bootMounted: Boolean(window.__AGENTHUB_BOOT__ && window.__AGENTHUB_BOOT__.mounted),
-    rootChildren: root ? root.children.length : -1,
-    rootClass: root && root.firstElementChild ? root.firstElementChild.className : "",
-    bodyTextLength: bodyText.length,
-    hasMainShell: Boolean(document.querySelector(".app-shell")),
-    hasDesktopNav: ["Codex", "Grok Build", "Probe", "设置"].every(function (label) {
-      return Boolean(document.querySelector('.side-nav button[aria-label="' + label + '"]'));
-    }),
-    hasMachineSelector: Boolean(document.querySelector('[aria-label="当前机器"]'))
-  };
-})()
 "#;
 
 /// Reveal an already initialized window without touching its geometry.
@@ -75,35 +47,4 @@ fn fit_main_window_to_work_area<R: Runtime>(window: &WebviewWindow<R>) {
         work_area.size.width,
         work_area.size.height,
     )));
-}
-
-fn append_desktop_app_log(message: &str) {
-    let paths = PlatformPaths::desktop_current();
-    if std::fs::create_dir_all(&paths.log_dir).is_err() {
-        return;
-    }
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.log_dir.join("agenthub.log"))
-    else {
-        return;
-    };
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let _ = writeln!(file, "{timestamp} {message}");
-}
-
-pub(crate) fn schedule_desktop_boot_probe<R: tauri::Runtime>(window: &WebviewWindow<R>) {
-    let probe_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        if let Err(err) = probe_window.eval_with_callback(DESKTOP_BOOT_PROBE_SCRIPT, |payload| {
-            append_desktop_app_log(&format!("desktop_boot_probe {payload}"));
-        }) {
-            append_desktop_app_log(&format!("desktop_boot_probe_error {err}"));
-        }
-    });
 }

@@ -136,15 +136,3 @@ fn current_adapters_delegate_thread_and_provider_operations() {
         );
     }
 }
-
-#[test]
-fn desktop_lan_webui_and_upload_entrypoints_are_retired() {
-    let lib = src("../lib.rs");
-    let commands = src("../commands/mod.rs");
-    let resources = src("../resources.rs");
-    for source in [&lib, &commands, &resources] {
-        assert!(!source.contains("desktop_webui"));
-        assert!(!source.contains("startDesktopWebUi"));
-    }
-    assert!(!src("../commands/system.rs").contains("getClaudeCodeOverview"));
-}

@@ -84,7 +84,6 @@ mod tests {
             "resources::sync_agenthub_webd_helper_from_resource(&resource_dir)",
             "resources::repair_probe_error_monitor_launch_agent(",
             "desktop_boot::initialize_main_window(&window)",
-            "desktop_boot::schedule_desktop_boot_probe(&window)",
         ] {
             assert!(
                 lib_source.contains(required),
@@ -115,9 +114,8 @@ mod tests {
         assert!(
             boot_source.contains("fn fit_main_window_to_work_area")
                 && boot_source.contains("pub(crate) fn initialize_main_window")
-                && boot_source.contains("pub(crate) fn reveal_main_window")
-                && boot_source.contains("pub(crate) fn schedule_desktop_boot_probe"),
-            "desktop_boot.rs must own one-time window initialization, reveal, and boot probe implementation"
+                && boot_source.contains("pub(crate) fn reveal_main_window"),
+            "desktop_boot.rs must own one-time window initialization and reveal implementation"
         );
     }
 
@@ -1001,9 +999,8 @@ mod tests {
             .map(|(_, source)| source)
             .expect("Tauri setup must build and initialize the main window");
         assert!(
-            setup_source.contains("desktop_boot::initialize_main_window(&window)")
-                && setup_source.contains("desktop_boot::schedule_desktop_boot_probe(&window)"),
-            "setup must initialize the hidden window and start the desktop boot probe"
+            setup_source.contains("desktop_boot::initialize_main_window(&window)"),
+            "setup must initialize the hidden window"
         );
         assert!(
             !setup_source.contains("desktop_boot::reveal_main_window(&window)"),
@@ -1104,18 +1101,6 @@ mod tests {
             !boot_source.contains("schedule_delayed_main_window_reveal")
                 && !lib_source.contains("schedule_delayed_main_window_reveal"),
             "startup must not schedule a delayed second reveal"
-        );
-        assert!(
-            boot_source.contains("desktop_boot_probe"),
-            "Tauri must leave a low-detail boot probe for macOS App acceptance"
-        );
-        assert!(
-            !boot_source.contains("bodyTextSample"),
-            "desktop boot probe must not log visible thread or workspace text"
-        );
-        assert!(
-            !boot_source.contains(r#"bodyText.indexOf("Turnstile")"#),
-            "desktop boot probe must not classify session text as Web login UI"
         );
     }
 

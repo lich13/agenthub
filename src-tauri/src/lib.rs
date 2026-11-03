@@ -93,14 +93,7 @@ pub fn run() {
         .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(move |invoke| {
-            if agenthub_core::services::commands::is_retired_tauri_command(invoke.message.command())
-            {
-                invoke.resolver.reject("unavailable: retired command");
-                return true;
-            }
-            active_handler(invoke)
-        })
+        .invoke_handler(active_handler)
         .on_window_event(|window, event| {
             // Wry's single-webview window routes OS drops as WindowEvent;
             // multi-webview surfaces use WebviewEvent below. Neither uses JS.
@@ -122,11 +115,6 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            if let Err(err) = resources::retire_legacy_desktop_web_service(
-                &agenthub_core::platform::PlatformPaths::desktop_current(),
-            ) {
-                eprintln!("Legacy desktop WebUI retirement incomplete: {err}");
-            }
             if let Ok(resource_dir) = app.path().resource_dir() {
                 resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
             }
@@ -155,7 +143,6 @@ pub fn run() {
                 .build()
                 .map_err(|err| err.to_string())?;
             desktop_boot::initialize_main_window(&window);
-            desktop_boot::schedule_desktop_boot_probe(&window);
             Ok(())
         })
         .build(tauri::generate_context!())

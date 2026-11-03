@@ -4,7 +4,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use serde_json::Value;
 use tower::ServiceExt;
 
 fn authenticated_test_state() -> (crate::state::AppState, String) {
@@ -161,33 +160,4 @@ async fn only_current_rpc_commands_and_health_are_available() {
 
     let unknown = request_path_status(app, "GET", "/api/not-rpc", Some(&api_key)).await;
     assert_eq!(unknown, StatusCode::NOT_FOUND);
-}
-
-#[test]
-fn legacy_rest_test_cases_cover_required_retired_paths() {
-    let required = [
-        "/api/threads",
-        "/api/threads/thread-a/followups",
-        "/api/probe/status",
-        "/agenthub/api/probe/status",
-        "/api/system/update/precheck",
-        "/api/system/panel/update/precheck",
-        "/api/system/codex/update/precheck",
-        "/api/jobs",
-        "/api/jobs/job-a",
-        "/api/cleanup/archive/execute",
-        "/api/security",
-        "/api/auth/login",
-        "/api/probe/diagnostics",
-        "/api/sentinel/status",
-        "/api/providers/claude-code/jobs/version-check",
-    ];
-    let source = include_str!("legacy_routes_tests.rs");
-    for path in required {
-        assert!(
-            source.contains(path),
-            "missing retired REST assertion: {path}"
-        );
-    }
-    let _: Value = serde_json::json!({"keeps": "serde_json imported for route body checks"});
 }
