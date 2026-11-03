@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.5": [
+        "恢复 claude_hook::context 对 ClaudePaths::default_for_user 的目录边界校验，修复 macOS helper 原地覆盖导致的 SIGKILL 137 及 Linux 子进程 ETXTBSY 竞态",
+        "统一五大 Agent 会话列表标题字号，移除 Probe 与设置工作区 5 处副标题说明，并在五平台自检中对环境变量加锁及固定 Phase 4 测试时间戳。",
+    ],
     "2.0.4": [
         "修复 Config::load 因默认通知分组自迁移判定在每次加载时原子重写 config.toml 的回归，并跳过轮询主路径上的 Antigravity 诊断构建与后台任务扫描开销",
         "补齐跨回合挂起任务收敛补发断言、Claude Hook 端到端入队自检与 notification_snapshots 模块可见性收敛，并清理本机遗留旧文件名产物。",
@@ -256,7 +260,7 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version in ("2.0.4", "2.0.3", "2.0.2", "2.0.1", "2.0.0"):
+    if version in ("2.0.5", "2.0.4", "2.0.3", "2.0.2", "2.0.1", "2.0.0"):
         sections = {
             "版本概览": [
                 "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 agenthub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"

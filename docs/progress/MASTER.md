@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 2.0.4，基线为 `9c13093 / v2.0.3`。本版完成以下工作：① 移除 `config.rs` 中将默认通知分组 `"AgentHub"` 误判为待迁移旧值的自迁移分支，根治每次 `Config::load` 触发 `replace_config_atomically` 重写 `config.toml` 及多 Hook 并发冲突问题，并在单元测试中断言二次加载不触发重写（保持 `mtime` 与 Unix `ino` 不变）；② 为 `antigravity::evaluate_trajectory` 增加 `want_diag` 开关，在 `snapshot_with_context` 轮询主路径跳过候选 JSON 构造、`collect_turn_pending_work` 与 `diagnosis` 拼装开销，并将 `main.rs` 分离 Hook 固定等待提取为带注释常量 `ANTIGRAVITY_DETACHED_SETTLE_DELAY_MS`；③ 补齐跨回合未决后台任务在任务收敛后释放并补发上一轮完成通知的断言，将五平台端到端自检中的 Claude 支路接入 `notification_delivery::claude_hook` 真实入队管线，并将 `claude::notification_snapshots` 与 `grok::notification_snapshots` 恢复为 `pub(crate)`；④ 清理本机残留旧名锁文件、日志与附件归属目录。API 协议保持 2；macOS App 仍是唯一界面。
+当前维护源码版本为 2.0.5，基线为 `2995b5f / v2.0.4`。本版完成以下工作：① 恢复 `claude_hook::context` 直接使用 `ClaudePaths::default_for_user()` 校验会话目录边界、删除冗余 `parse_with_paths` 并恢复 `pub(super) fn parse`；将 `src-tauri/src/resources.rs` 中 `sync_agenthub_webd_helper_file` 改为比对字节相同时直接返回、更新时写临时文件并 `rename` 原子替换（新 inode），根治 macOS 升级后 helper 触发 `SIGKILL 137`；为 `agenthub-core` 子进程启动补齐 Linux `ETXTBSY (os error 26)` 短暂退避重试；② 在五平台端到端自检中持有 `CONFIG_ENV_LOCK` 统一设置并恢复 `CLAUDE_CONFIG_DIR`、`GROK_HOME` 与 `DSH_HOME`，将 Antigravity Phase 4 测试改为确定性固定时间戳；③ 恢复 `.workspace-title-brand` 与 `.section-title strong, .workspace-heading h1` 样式规则使五大 Agent 列表标题字号与间距一致，并移除 Probe 与设置工作区 5 处副标题小字说明；④ 记录方案 A 已批准取舍：旧配置中分组仍为 `"NexusHub"` 或小写 `"agenthub"` 的不再自动规范化为 `"AgentHub"`（仅空分组回填默认值）。API 协议保持 2；macOS App 仍是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/agenthub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/agenthub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/agenthub/actions/workflows/release.yml) 为准。
 
@@ -10,6 +10,7 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| Hook 目录边界恢复、helper 原子替换、ETXTBSY 重试与五大 Agent 标题统一 | `claude_hook::context` 恢复按 `ClaudePaths::default_for_user()` 严格校验路径边界并移除 `parse_with_paths`；`sync_agenthub_webd_helper_file` 改用同目录临时文件 `rename` 原子替换避免 macOS `SIGKILL 137`；子进程 `spawn` 针对 `ETXTBSY` 自动重试；五平台自检持有 `CONFIG_ENV_LOCK` 注入 `CLAUDE_CONFIG_DIR`／`GROK_HOME`／`DSH_HOME` 且 Phase 4 使用固定时间戳；统一五大 Agent 列表标题 `15px` 字号并移除 5 处说明小字；旧通知分组名（`"NexusHub"`／`"agenthub"`）按方案 A 不再自动规范化。 | `ee12316`, `60a1178`, `e2dd498` |
 | 配置加载自迁移修复、轮询路径去诊断开销与测试／可见性收口 | 移除 `config.rs` 默认分组 `"AgentHub"` 自迁移重写并断言 `ino` 不变；`evaluate_trajectory(want_diag)` 在轮询路径跳过诊断构造与 `collect_turn_pending_work`；补齐跨回合挂起任务收敛补发断言、Claude Hook 入队自检，恢复 `notification_snapshots` 为 `pub(crate)`。 | `e518e97`, `a2a7582`, `0d77fb5` |
 | Probe 宿主卡片排布修复、Antigravity 判定／Hook 收口与全量底层命名统一 | 修复 `.probe-host-card-head` 换行与 `.probe-host-card-copy` 宽度挤压并收紧 5 卡几何 E2E；`evaluate_trajectory` 合并 `snapshot_with_context` 与 `diagnose_trajectory`、修复跨回合未决后台任务游标越界、`antigravity-hook` 单次 `allow` 原子门控与分离后台扫描；补齐 `unrecorded_at_cursor` 与五平台真实解析器自检及脱敏回归夹具；全仓 crate、二进制、路径、契约与部署脚本统一为 `AgentHub`／`agenthub`。 | `44027ce`, `6da0e4e`, `dcac3b9`, `245a4d7` |
 | Antigravity／Grok Hook 契约修复与后端 `config_path` 下发 | Antigravity 改用顶层 `"agenthub"` 契约（仅 `Stop` 事件）并清理污染顶层 `"hooks"` 键，`antigravity-hook` 恒向 stdout 输出 `{"decision":"allow"}`；Grok 清理遗留 `claude-hook` 条目；后端 Hook 状态接口直接返回真实宿主 `config_path`。 | `b1bd231` |
