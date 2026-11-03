@@ -8,9 +8,13 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.7": [
+        "在界面首次渲染前应用已保存的深色或浅色外观设置，消除启动时的主题闪烁，并支持在设置页用键盘方向键切换外观",
+        "当本机后台服务程序损坏或无法读取时自动重新替换，提升桌面端启动自愈能力，并改进版本发布说明展示。",
+    ],
     "2.0.6": [
-        "在设置工作区新增「外观」三段式切换（跟随系统／深色／浅色）并支持本地持久化，Codex 会话列表头部复用 WorkspaceListHeader 与 WorkspaceSearchInput 并清理残留冗余包装节点与样式",
-        "彻底隔离测试沙箱 AppState 对进程环境变量的读取并改用 api/test_support 异步环境锁，将子进程 ETXTBSY 预热收敛至测试夹具，Tauri helper 同步先按 metadata 长度短路并以分块流比对，修复 release-notes.py 历史版本概览文案复用问题。",
+        "设置页新增「外观」切换（跟随系统／深色／浅色）并记住选择，统一 Codex 会话列表顶部标题栏与搜索框布局",
+        "优化桌面端启动时后台服务程序的比对速度，仅在文件变化时更新，并修正版本发布说明中的版本概览文案。",
     ],
     "2.0.5": [
         "恢复 claude_hook::context 对 ClaudePaths::default_for_user 的目录边界校验，修复 macOS helper 原地覆盖导致的 SIGKILL 137 及 Linux 子进程 ETXTBSY 竞态",
@@ -1432,12 +1436,21 @@ def render(version: str, *, updater: bool = False) -> str:
     version_parts = tuple(int(part) for part in version.split("."))
     if version_parts >= (2, 0, 1):
         notes_items = highlights(version)
+        if len(notes_items) > 1:
+            features = [notes_items[0]]
+            fixes = notes_items[1:]
+        elif notes_items[0].startswith("修复"):
+            features = ["保持现有工作区功能与交互不变。"]
+            fixes = notes_items
+        else:
+            features = notes_items
+            fixes = ["常规稳定性与细节维护。"]
         sections = {
             "版本概览": [
                 f"AgentHub {version}：{'；'.join(notes_items).rstrip('。')}；API 协议保持 2。"
             ],
-            "功能调整": [notes_items[0]],
-            "问题修复": notes_items[1:] if len(notes_items) > 1 else notes_items,
+            "功能调整": features,
+            "问题修复": fixes,
             "兼容性与迁移": [
                 "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
                 "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/AgentHub.app，不保留旧版副本。",
@@ -1447,7 +1460,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
             ],
             "升级提示": [
-                "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验设置页外观切换、五大 Agent 会话列表与全平台线程清理。",
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验各 Agent 会话列表、Probe 状态与全平台线程清理。",
                 "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
                 "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
             ],

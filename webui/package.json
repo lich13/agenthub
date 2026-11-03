@@ -1,7 +1,7 @@
 {
   "name": "agenthub-webui",
   "private": true,
-  "version": "2.0.6",
+  "version": "2.0.7",
   "packageManager": "pnpm@12.11.2",
   "type": "module",
   "scripts": {
