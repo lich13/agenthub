@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "2.0.6": [
+        "在设置工作区新增「外观」三段式切换（跟随系统／深色／浅色）并支持本地持久化，Codex 会话列表头部复用 WorkspaceListHeader 与 WorkspaceSearchInput 并清理残留冗余包装节点与样式",
+        "彻底隔离测试沙箱 AppState 对进程环境变量的读取并改用 api/test_support 异步环境锁，将子进程 ETXTBSY 预热收敛至测试夹具，Tauri helper 同步先按 metadata 长度短路并以分块流比对，修复 release-notes.py 历史版本概览文案复用问题。",
+    ],
     "2.0.5": [
         "恢复 claude_hook::context 对 ClaudePaths::default_for_user 的目录边界校验，修复 macOS helper 原地覆盖导致的 SIGKILL 137 及 Linux 子进程 ETXTBSY 竞态",
         "统一五大 Agent 会话列表标题字号，移除 Probe 与设置工作区 5 处副标题说明，并在五平台自检中对环境变量加锁及固定 Phase 4 测试时间戳。",
@@ -260,7 +264,7 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version in ("2.0.5", "2.0.4", "2.0.3", "2.0.2", "2.0.1", "2.0.0"):
+    if version == "2.0.0":
         sections = {
             "版本概览": [
                 "重新设计无平台数量绑定的「Command Nexus（无界多轨星枢）」应用图标，将 styles.css 彻底重写并精简至 566 行纯净三层表面令牌体系，提取 WorkspaceSplitShell、useCopyFeedback 与五平台统一 AgentHookHostCard 深度重构全部七大工作区；修复 Antigravity 顶层 agenthub Stop Hook 契约（向 stdout 输出 allow 放行决策）与 Grok 遗留重复 Hook 清理，合并 core／webd Antigravity 端点缓存并消除存活进程瞬时失败 5 秒负缓存，移除缓存 #[cfg(not(test))] 门禁、补齐环境隔离键与 Grok 1 秒进程缓存并统一纳入空闲回收，将 Probe 活跃扫描磁盘 I/O 减半并将 DSH 事件解析降至 O(events) 线性复杂度；API 协议保持 2。"
@@ -1426,6 +1430,35 @@ def render(version: str, *, updater: bool = False) -> str:
         return "\n".join(lines)
 
     version_parts = tuple(int(part) for part in version.split("."))
+    if version_parts >= (2, 0, 1):
+        notes_items = highlights(version)
+        sections = {
+            "版本概览": [
+                f"AgentHub {version}：{'；'.join(notes_items).rstrip('。')}；API 协议保持 2。"
+            ],
+            "功能调整": [notes_items[0]],
+            "问题修复": notes_items[1:] if len(notes_items) > 1 else notes_items,
+            "兼容性与迁移": [
+                "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/AgentHub.app，不保留旧版副本。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验设置页外观切换、五大 Agent 会话列表与全平台线程清理。",
+                "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# AgentHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
+
     has_remote_api = version_parts >= (1, 2, 0)
     has_linux_desktop = version_parts < (1, 1, 0)
     assets = [
