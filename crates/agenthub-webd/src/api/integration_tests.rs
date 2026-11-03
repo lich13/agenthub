@@ -38,7 +38,7 @@ use std::{
 use tower::ServiceExt;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+pub(crate) static CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[test]
 fn api_facade_stays_under_line_budget() {

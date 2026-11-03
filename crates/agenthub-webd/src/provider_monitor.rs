@@ -443,6 +443,49 @@ mod tests {
         assert!(codex_outcome.recorded);
 
         // 2-5. Claude Code, Grok, Antigravity, and DSH via their real parsers and hook inputs
+        struct PlatformEnvGuard {
+            _lock: std::sync::MutexGuard<'static, ()>,
+            previous: [(&'static str, Option<std::ffi::OsString>); 3],
+        }
+        impl PlatformEnvGuard {
+            fn set(
+                claude_dir: &std::path::Path,
+                grok_home: &std::path::Path,
+                dsh_home: &std::path::Path,
+            ) -> Self {
+                let lock = crate::api::integration_tests::CONFIG_ENV_LOCK
+                    .get_or_init(|| std::sync::Mutex::new(()))
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let previous = [
+                    ("CLAUDE_CONFIG_DIR", std::env::var_os("CLAUDE_CONFIG_DIR")),
+                    ("GROK_HOME", std::env::var_os("GROK_HOME")),
+                    ("DSH_HOME", std::env::var_os("DSH_HOME")),
+                ];
+                std::env::set_var("CLAUDE_CONFIG_DIR", claude_dir);
+                std::env::set_var("GROK_HOME", grok_home);
+                std::env::set_var("DSH_HOME", dsh_home);
+                Self {
+                    _lock: lock,
+                    previous,
+                }
+            }
+        }
+        impl Drop for PlatformEnvGuard {
+            fn drop(&mut self) {
+                for (key, value) in &self.previous {
+                    match value {
+                        Some(v) => std::env::set_var(key, v),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let claude_config_dir = sandbox_root.join("claude");
+        let grok_home_dir = sandbox_root.join("grok");
+        let dsh_home_dir = sandbox_root.join("dsh");
+        let _env_guard = PlatformEnvGuard::set(&claude_config_dir, &grok_home_dir, &dsh_home_dir);
+
         let start_ms = chrono::Utc::now().timestamp_millis() + 1_000;
         let now_ms = start_ms + 1_000;
         let start_rfc3339 = chrono::DateTime::from_timestamp_millis(start_ms)
@@ -452,11 +495,8 @@ mod tests {
             .unwrap()
             .to_rfc3339();
 
-        // 2. Claude Code: real JSONL transcript + claude_hook::parse_with_paths + notification_delivery::claude_hook
-        let claude_paths = agenthub_core::claude::ClaudePaths {
-            config: sandbox_root.join("claude"),
-            projects: sandbox_root.join("claude/projects"),
-        };
+        // 2. Claude Code: real JSONL transcript + claude_hook::parse + notification_delivery::claude_hook
+        let claude_paths = agenthub_core::claude::ClaudePaths::default_for_user();
         let claude_transcript = claude_paths.projects.join("fixture/session.jsonl");
         std::fs::create_dir_all(claude_transcript.parent().unwrap()).unwrap();
         let claude_user = serde_json::json!({
@@ -487,16 +527,13 @@ mod tests {
             format!("{claude_user}\n{claude_assistant}\n"),
         )
         .unwrap();
-        let claude_hook_event = crate::claude_hook::parse_with_paths(
-            &claude_paths,
-            &serde_json::json!({
-                "session_id": "00000000-0000-4000-8000-000000000002",
-                "prompt_id": "prompt-self-test-1",
-                "transcript_path": claude_transcript,
-                "hook_event_name": "Stop",
-                "last_assistant_message": "Claude self-test completed."
-            }),
-        )
+        let claude_hook_event = crate::claude_hook::parse(&serde_json::json!({
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "prompt_id": "prompt-self-test-1",
+            "transcript_path": claude_transcript,
+            "hook_event_name": "Stop",
+            "last_assistant_message": "Claude self-test completed."
+        }))
         .unwrap()
         .expect("real claude hook parser must accept Stop payload");
         assert_eq!(claude_hook_event.kind, "completion");
@@ -512,9 +549,7 @@ mod tests {
         .unwrap();
 
         // 3. Grok: real summary.json + events.jsonl + updates.jsonl + native_probe::scan(Grok)
-        let grok_paths = agenthub_core::grok::GrokPaths {
-            home: sandbox_root.join("grok"),
-        };
+        let grok_paths = agenthub_core::grok::GrokPaths::default_for_user();
         let grok_id = "00000000-0000-4000-8000-000000000003";
         let grok_session_dir = grok_paths.home.join("sessions/%2Ffixture").join(grok_id);
         std::fs::create_dir_all(&grok_session_dir).unwrap();
@@ -542,20 +577,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let grok_scan = {
-            struct GrokEnvGuard(Option<std::ffi::OsString>);
-            impl Drop for GrokEnvGuard {
-                fn drop(&mut self) {
-                    match &self.0 {
-                        Some(v) => std::env::set_var("GROK_HOME", v),
-                        None => std::env::remove_var("GROK_HOME"),
-                    }
-                }
-            }
-            let _guard = GrokEnvGuard(std::env::var_os("GROK_HOME"));
-            std::env::set_var("GROK_HOME", &grok_paths.home);
-            agenthub_core::native_probe::scan(NativeProvider::Grok).unwrap()
-        };
+        let grok_scan = agenthub_core::native_probe::scan(NativeProvider::Grok).unwrap();
         assert_eq!(grok_scan.errors, 0);
         assert_eq!(grok_scan.streams.len(), 1);
         assert_eq!(grok_scan.streams[0].events.len(), 1);
@@ -610,10 +632,8 @@ mod tests {
             errors: 0,
         };
 
-        // 5. DSH: real v4 session.v4.jsonl + dsh::notifications::scan
-        let dsh_paths = agenthub_core::dsh::DshPaths {
-            home: sandbox_root.join("dsh"),
-        };
+        // 5. DSH: real v4 session.v4.jsonl + native_probe::scan(Dsh)
+        let dsh_paths = agenthub_core::dsh::DshPaths::default_for_user();
         let dsh_id = "00000000-0000-4000-8000-000000000004";
         let dsh_dir = dsh_paths.home.join("sessions/fixture").join(dsh_id);
         std::fs::create_dir_all(&dsh_dir).unwrap();
@@ -631,7 +651,7 @@ mod tests {
                 .collect::<String>(),
         )
         .unwrap();
-        let dsh_scan = agenthub_core::dsh::notifications::scan(&dsh_paths).unwrap();
+        let dsh_scan = agenthub_core::native_probe::scan(NativeProvider::Dsh).unwrap();
         assert_eq!(dsh_scan.errors, 0);
         assert_eq!(dsh_scan.streams.len(), 1);
         assert_eq!(dsh_scan.streams[0].events.len(), 1);

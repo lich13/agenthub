@@ -952,10 +952,9 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         &probe_cfg,
     )
     .unwrap();
-    let post_activation_ms = chrono::Utc::now().timestamp_millis() + 5_000;
-    let post_activation_rfc3339 = chrono::DateTime::from_timestamp_millis(post_activation_ms)
-        .unwrap()
-        .to_rfc3339();
+    // 2026-01-01T00:05:00Z in epoch milliseconds (deterministic fixture timestamp).
+    const FIXED_TASK_DONE_MS: i64 = 1_767_225_900_000;
+    const FIXED_TASK_DONE_RFC3339: &str = "2026-01-01T00:05:00Z";
 
     let mut pending_turn2 = turn2_response.clone();
     let pending_task_id = format!("{cascade_id}/task-134");
@@ -964,7 +963,7 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         "movedToBackgroundAt": "2026-01-01T00:02:15Z"
     });
     pending_turn2["trajectory"]["steps"][6]["metadata"]["completedAt"] =
-        json!(post_activation_rfc3339);
+        json!(FIXED_TASK_DONE_RFC3339);
     let pending_snap = snapshot(cascade_id, &summary, &pending_turn2).unwrap();
     assert!(pending_snap.events.is_empty());
     assert_eq!(
@@ -1010,11 +1009,11 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         pending_task_id,
         TaskLiveness {
             active: false,
-            last_activity_ms: Some(post_activation_ms),
+            last_activity_ms: Some(FIXED_TASK_DONE_MS),
         },
     );
     let released_ctx = TrajectoryLivenessContext {
-        now_ms: Some(post_activation_ms + BACKGROUND_HANDOFF_GRACE_MS + 1_000),
+        now_ms: Some(FIXED_TASK_DONE_MS + BACKGROUND_HANDOFF_GRACE_MS + 1_000),
         tasks: released_tasks,
         ..Default::default()
     };
