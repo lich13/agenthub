@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 2.0.3，基线为 `686ad56 / v2.0.2`。本版完成以下工作：① 修复 Probe 工作区五张宿主卡片在 `.probe-host-card-head` 中因路径徽标挤压 `.probe-host-card-copy` 导致的副标题逐字竖排与卡片高度失衡，并在 E2E 中新增 5 张平台切换卡片单行与 5 张宿主卡片几何尺寸断言；② 统一 `agenthub-core` 与 `agenthub-webd` 中 Antigravity 轨迹判定与 `diagnose-antigravity` 诊断实现（消除约 190 行重复判定与运行态重复采集，统一 `skipReason` 字段并细分跨回合跳过原因），修复上一轮仍有未收敛后台任务时跨回合游标越界导致的完成通知漏发，使用 `AtomicBool` 消除 Stop Hook 5s 看门狗双重 `allow` 输出并在打印 `allow` 后分离后台子进程执行增量扫描（复用单次 RPC 连接重试）；③ 补齐 `unrecorded_at_cursor` 游标边界单元测试、五平台经过真实解析器／Hook 入口的端到端自检，以及完全脱敏的 7 步真实轨迹回归夹具；④ 将全仓历史遗留包名、二进制、服务、路径、契约文件与部署脚本彻底统一为 `AgentHub`／`agenthub`。API 协议保持 2；macOS App 仍是唯一界面。
+当前维护源码版本为 2.0.4，基线为 `9c13093 / v2.0.3`。本版完成以下工作：① 移除 `config.rs` 中将默认通知分组 `"AgentHub"` 误判为待迁移旧值的自迁移分支，根治每次 `Config::load` 触发 `replace_config_atomically` 重写 `config.toml` 及多 Hook 并发冲突问题，并在单元测试中断言二次加载不触发重写（保持 `mtime` 与 Unix `ino` 不变）；② 为 `antigravity::evaluate_trajectory` 增加 `want_diag` 开关，在 `snapshot_with_context` 轮询主路径跳过候选 JSON 构造、`collect_turn_pending_work` 与 `diagnosis` 拼装开销，并将 `main.rs` 分离 Hook 固定等待提取为带注释常量 `ANTIGRAVITY_DETACHED_SETTLE_DELAY_MS`；③ 补齐跨回合未决后台任务在任务收敛后释放并补发上一轮完成通知的断言，将五平台端到端自检中的 Claude 支路接入 `notification_delivery::claude_hook` 真实入队管线，并将 `claude::notification_snapshots` 与 `grok::notification_snapshots` 恢复为 `pub(crate)`；④ 清理本机残留旧名锁文件、日志与附件归属目录。API 协议保持 2；macOS App 仍是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/agenthub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/agenthub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/agenthub/actions/workflows/release.yml) 为准。
 
@@ -10,6 +10,7 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| 配置加载自迁移修复、轮询路径去诊断开销与测试／可见性收口 | 移除 `config.rs` 默认分组 `"AgentHub"` 自迁移重写并断言 `ino` 不变；`evaluate_trajectory(want_diag)` 在轮询路径跳过诊断构造与 `collect_turn_pending_work`；补齐跨回合挂起任务收敛补发断言、Claude Hook 入队自检，恢复 `notification_snapshots` 为 `pub(crate)`。 | `e518e97`, `a2a7582`, `0d77fb5` |
 | Probe 宿主卡片排布修复、Antigravity 判定／Hook 收口与全量底层命名统一 | 修复 `.probe-host-card-head` 换行与 `.probe-host-card-copy` 宽度挤压并收紧 5 卡几何 E2E；`evaluate_trajectory` 合并 `snapshot_with_context` 与 `diagnose_trajectory`、修复跨回合未决后台任务游标越界、`antigravity-hook` 单次 `allow` 原子门控与分离后台扫描；补齐 `unrecorded_at_cursor` 与五平台真实解析器自检及脱敏回归夹具；全仓 crate、二进制、路径、契约与部署脚本统一为 `AgentHub`／`agenthub`。 | `44027ce`, `6da0e4e`, `dcac3b9`, `245a4d7` |
 | Antigravity／Grok Hook 契约修复与后端 `config_path` 下发 | Antigravity 改用顶层 `"agenthub"` 契约（仅 `Stop` 事件）并清理污染顶层 `"hooks"` 键，`antigravity-hook` 恒向 stdout 输出 `{"decision":"allow"}`；Grok 清理遗留 `claude-hook` 条目；后端 Hook 状态接口直接返回真实宿主 `config_path`。 | `b1bd231` |
 | 缓存合并去重、清理／目录枚举收敛与 Probe 扫描减半 | 合并 `core`／`webd` Antigravity 端点缓存并修复存活进程瞬时失败负缓存；移除缓存 `#[cfg(not(test))]` 门禁、补齐环境隔离键与 Grok 1s 进程缓存并全部纳入 `evict_idle_detail_caches`；`cleanup.rs` `run_scope_targets` 与 `tree.rs` `visit_codex_tree_files` 消除重复；DSH `load_all_events` 降至 `O(events)`，`aggregate_active_sessions` 消除双倍扫描。 | `b5ba008`, `8c2b206` |
