@@ -8,12 +8,17 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
-    "2.0.8": {
-        "features": [
-            "精简前端生产包（剔除运行期 45 KB 契约 JSON 与自检循环），将桌面端与服务端 Probe 状态轮询、Codex SQLite 线程扫描及配置加载解析收敛为单次执行，并移除桌面启动遗留巡检与延迟探针注入。",
-        ],
+    "2.0.9": {
+        "features": [],
         "fixes": [
-            "在浏览器与桌面端首帧绘制前同步读取并应用已保存的深色／浅色外观设置，补齐启动主题挂载顺序断言与发布说明分类校验。",
+            "修正 Probe 状态缓存刷新时机，缓存有效期内不再重复触发后台刷新。",
+        ],
+    },
+    "2.0.8": {
+        "features": [],
+        "fixes": [
+            "修复浏览器端与桌面端启动时的主题闪烁，在首帧绘制前应用已保存的深色或浅色外观设置。",
+            "加快 Probe 状态刷新与会话列表加载速度，减少界面轮询与配置读取开销。",
         ],
     },
     "2.0.7": {
@@ -302,23 +307,24 @@ HIGHLIGHTS: dict[str, list[str]] = {
 
 
 def highlights(version: str) -> list[str]:
-    return HIGHLIGHTS.get(version, ["修复问题并改进稳定性。"])
+    items = HIGHLIGHTS.get(version)
+    if not items:
+        raise SystemExit(f"version {version} is not registered in release notes")
+    return items
 
 
 def render(version: str, *, updater: bool = False) -> str:
-    if updater:
-        return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
-
     version_parts = tuple(int(part) for part in version.split("."))
     if version_parts >= (2, 0, 1):
         entry = VERSION_NOTES.get(version)
-        if entry is not None:
-            features = list(entry.get("features", []))
-            fixes = list(entry.get("fixes", []))
-        else:
-            notes_items = highlights(version)
-            features = [notes_items[0]] if len(notes_items) > 1 else []
-            fixes = notes_items[1:] if len(notes_items) > 1 else notes_items
+        if entry is None:
+            raise SystemExit(f"version {version} is not registered in VERSION_NOTES")
+        features = list(entry.get("features", []))
+        fixes = list(entry.get("fixes", []))
+        if not features and not fixes:
+            raise SystemExit(f"version {version} has no features or fixes in VERSION_NOTES")
+        if updater:
+            return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
         summary_items = [item.rstrip("。") for item in [*features, *fixes] if item]
         sections: dict[str, list[str]] = {
             "版本概览": [
@@ -352,6 +358,9 @@ def render(version: str, *, updater: bool = False) -> str:
             lines.extend(f"- {paragraph}" for paragraph in paragraphs)
             lines.append("")
         return "\n".join(lines)
+
+    if updater:
+        return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
 
     has_remote_api = version_parts >= (1, 2, 0)
     has_linux_desktop = version_parts < (1, 1, 0)

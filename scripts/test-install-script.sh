@@ -121,6 +121,9 @@ for title in ["版本概览", "兼容性与迁移", "支持平台与资产", "�
         raise SystemExit("release notes are missing a required Chinese section")
 if "## 功能调整" not in notes and "## 问题修复" not in notes:
     raise SystemExit("release notes must include at least one of 功能调整 or 问题修复")
+unregistered = subprocess.run([sys.executable, str(root / "scripts/release-notes.py"), "9.9.9"], capture_output=True, text=True)
+if unregistered.returncode == 0:
+    raise SystemExit("release-notes.py must reject unregistered >= 2.0.1 versions")
 
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
