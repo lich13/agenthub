@@ -133,41 +133,33 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
     }
 
     if let Some(snapshot) = current_probe_status_snapshot(&state) {
-        spawn_probe_status_refresh(state);
         let now = chrono::Utc::now().timestamp();
         let age = now.saturating_sub(snapshot.refreshed_at_unix).max(0);
+        let refreshing = if age >= 2 {
+            spawn_probe_status_refresh(state);
+            true
+        } else {
+            is_probe_status_refreshing(&state)
+        };
         return probe_service::probe_status_snapshot_view(
             snapshot.value,
             age,
-            true,
+            refreshing,
             probe_service::ProbeSnapshotStatus::Cached,
         );
     }
 
-    let value = probe_status_base_value(state.clone()).await;
-    spawn_probe_status_refresh(state);
+    let value = probe_status_fresh_value(state.clone()).await;
+    store_probe_status_snapshot(&state, value.clone());
     probe_service::probe_status_snapshot_view(
         value,
         0,
-        true,
+        false,
         probe_service::ProbeSnapshotStatus::Initial,
     )
 }
 
 async fn probe_status_fresh_value(state: AppState) -> Value {
-    match probe_runtime(&state).status().await {
-        Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
-        Err(err) => json!({
-            "label": "Probe",
-            "enabled": state.config().probe.enabled,
-            "available": false,
-            "flavor": "builtin",
-            "error": err.to_string(),
-        }),
-    }
-}
-
-async fn probe_status_base_value(state: AppState) -> Value {
     match probe_runtime(&state).status().await {
         Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
         Err(err) => json!({
@@ -224,6 +216,14 @@ fn current_probe_status_snapshot(state: &AppState) -> Option<CachedProbeStatus> 
         .expect("probe status cache")
         .snapshot
         .clone()
+}
+
+fn is_probe_status_refreshing(state: &AppState) -> bool {
+    state
+        .probe_status_cache
+        .lock()
+        .expect("probe status cache")
+        .refreshing
 }
 
 fn store_probe_status_snapshot(state: &AppState, value: Value) {

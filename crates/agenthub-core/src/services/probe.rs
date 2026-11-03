@@ -644,9 +644,12 @@ fn probe_codex_buckets(
     let Ok(raw_threads) = codex::list_threads(&paths, false, None, usize::MAX) else {
         return (Vec::new(), Vec::new(), Vec::new());
     };
-    let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_default();
-    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_default();
     let running_jobs = running_thread_jobs(&config.paths.db_path).unwrap_or_default();
+    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
+        Default::default()
+    } else {
+        codex::hidden_and_archived_thread_ids(&paths).unwrap_or_default()
+    };
     let mut threads = threads::apply_thread_list_runtime_state(
         raw_threads,
         ThreadListRuntimeState {
@@ -716,10 +719,13 @@ pub fn probe_threads_for_status_with_paths(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let hidden_thread_ids = codex::hidden_thread_ids(paths).unwrap_or_default();
-    let archived_thread_ids = codex::archived_thread_ids(paths).unwrap_or_default();
     let threads = codex::list_threads(paths, false, None, usize::MAX)?;
     let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
+    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
+        Default::default()
+    } else {
+        codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
+    };
     let mut threads = threads::apply_thread_list_runtime_state(
         threads,
         ThreadListRuntimeState {
@@ -743,6 +749,47 @@ pub fn probe_threads_for_status_with_paths(
     ThreadSummary::sort_by_message_time(&mut threads);
     threads.truncate(limit);
     Ok(threads)
+}
+
+pub fn probe_passive_scan_threads_with_paths(
+    paths: &CodexPaths,
+    panel_db_path: &Path,
+    limit: usize,
+) -> Result<Vec<(&'static str, Vec<ThreadSummary>)>> {
+    let limit = limit.clamp(1, 200);
+    let threads = codex::list_threads(paths, false, None, usize::MAX)?;
+    let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
+    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
+        Default::default()
+    } else {
+        codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
+    };
+    let mut threads = threads::apply_thread_list_runtime_state(
+        threads,
+        ThreadListRuntimeState {
+            running_jobs: &running_jobs,
+            hidden_thread_ids: &hidden_thread_ids,
+            archived_thread_ids: &archived_thread_ids,
+        },
+    );
+    ThreadSummary::sort_by_message_time(&mut threads);
+    let mut reply_needed = Vec::new();
+    let mut recoverable = Vec::new();
+    for row in threads {
+        match row.status {
+            ThreadStatus::ReplyNeeded
+                if reply_needed.len() < limit && probe_reply_needed_thread_is_fresh(&row) =>
+            {
+                reply_needed.push(row);
+            }
+            ThreadStatus::Recoverable if recoverable.len() < limit => recoverable.push(row),
+            _ => {}
+        }
+    }
+    Ok(vec![
+        ("reply-needed", reply_needed),
+        ("recoverable", recoverable),
+    ])
 }
 
 pub fn probe_passive_thread_notification_plan(

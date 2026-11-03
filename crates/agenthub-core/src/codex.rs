@@ -57,7 +57,9 @@ pub use rollout_events::{
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};
 use session_index::{read_session_index, SessionIndexEntry};
 use thread_rows::read_thread_rows;
-pub use thread_rows::{archived_thread_ids, hidden_thread_ids, thread_source_counts};
+pub use thread_rows::{
+    archived_thread_ids, hidden_and_archived_thread_ids, hidden_thread_ids, thread_source_counts,
+};
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
     ThreadStatus, ThreadSummary, UserInputAnswer, UserInputOption, UserInputQuestion,

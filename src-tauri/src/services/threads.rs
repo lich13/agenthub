@@ -1,7 +1,7 @@
 use agenthub_core::{
     codex::{
-        archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
-        set_thread_title, thread_detail_page, ThreadDetail, ThreadSummary,
+        hidden_and_archived_thread_ids, list_threads, set_thread_archived, set_thread_title,
+        thread_detail_page, ThreadDetail, ThreadSummary,
     },
     db::JobRecord,
     services::{
@@ -28,20 +28,17 @@ pub(crate) fn thread_summaries_with_query(
     let paths = state.codex_paths();
     let use_cases = AgentHubUseCases::new(state.platform()).threads();
     let plan = use_cases.list_read(query)?;
-    let hidden_thread_ids = if plan.include_hidden_thread_ids {
-        hidden_thread_ids(&paths).unwrap_or_default()
-    } else {
-        Default::default()
-    };
-    let archived_thread_ids = if plan.include_archived_thread_ids {
-        archived_thread_ids(&paths).unwrap_or_default()
-    } else {
-        Default::default()
-    };
     let running_jobs = if plan.include_running_jobs {
         state.db.running_thread_jobs()?
     } else {
         Vec::new()
+    };
+    let (hidden_thread_ids, archived_thread_ids) = if !running_jobs.is_empty()
+        && (plan.include_hidden_thread_ids || plan.include_archived_thread_ids)
+    {
+        hidden_and_archived_thread_ids(&paths).unwrap_or_default()
+    } else {
+        Default::default()
     };
     let raw_threads = list_threads(
         &paths,

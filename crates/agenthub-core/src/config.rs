@@ -590,16 +590,7 @@ impl Config {
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let logs_migrated = migrate_retired_logs_db_section(&text)?;
-        let migration_input = logs_migrated.as_deref().unwrap_or(&text);
-        let goal_migrated = migrate_retired_probe_goal_config(migration_input)?;
-        let previous = goal_migrated.or(logs_migrated);
-        let web_migrated = migrate_retired_web_config(previous.as_deref().unwrap_or(&text))?;
-        let previous = web_migrated.or(previous);
-        let pi_migrated = migrate_retired_pi_config(previous.as_deref().unwrap_or(&text))?;
-        let previous = pi_migrated.or(previous);
-        let retired_push = migrate_retired_push_config(previous.as_deref().unwrap_or(&text))?;
-        let migrated = retired_push.or(previous);
+        let migrated = migrate_all_retired_config(&text)?;
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
         config.server.validate_listen()?;
@@ -1015,23 +1006,51 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
     Ok(editor.finish())
 }
 
-/// Remove retired push settings while preserving all other values and comments,
-/// including credentials and inline or quoted table definitions.
-fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
+const RETIRED_CONFIG_KEYS: &[&str] = &[
+    "logs_db",
+    "auto_resume_goals",
+    "cookie_secure",
+    "session_ttl_seconds",
+    "login_rate_limit_per_minute",
+    "turnstile_expected_hostname",
+    "turnstile_expected_action",
+    "public_base_url",
+    "trust_forwarded_headers",
+    "webui_dir",
+    "notify_pi",
+    "gotify",
+];
+
+fn migrate_all_retired_config(text: &str) -> Result<Option<String>> {
+    if !RETIRED_CONFIG_KEYS.iter().any(|key| text.contains(key)) {
+        return Ok(None);
+    }
     let mut doc: toml_edit::DocumentMut = text.parse()?;
     let mut changed = false;
-    if let Some(table) = doc
-        .get_mut("probe")
-        .and_then(|item| item.get_mut("notifications"))
-        .and_then(|item| item.as_table_like_mut())
-    {
-        changed |= table.remove("gotify").is_some();
-    }
+    changed |= migrate_retired_logs_db_doc(&mut doc)?;
+    changed |= migrate_retired_probe_goal_doc(&mut doc);
+    changed |= migrate_retired_web_doc(&mut doc);
+    changed |= migrate_retired_pi_doc(&mut doc);
+    changed |= migrate_retired_push_doc(&mut doc);
     Ok(changed.then(|| doc.to_string()))
 }
 
-fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
+fn migrate_retired_push_doc(doc: &mut toml_edit::DocumentMut) -> bool {
+    doc.get_mut("probe")
+        .and_then(|item| item.get_mut("notifications"))
+        .and_then(|item| item.as_table_like_mut())
+        .is_some_and(|table| table.remove("gotify").is_some())
+}
+
+/// Remove retired push settings while preserving all other values and comments,
+/// including credentials and inline or quoted table definitions.
+#[cfg(test)]
+fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
     let mut doc: toml_edit::DocumentMut = text.parse()?;
+    Ok(migrate_retired_push_doc(&mut doc).then(|| doc.to_string()))
+}
+
+fn migrate_retired_pi_doc(doc: &mut toml_edit::DocumentMut) -> bool {
     let mut changed = false;
     if let Some(notifications) = doc
         .get_mut("probe")
@@ -1042,11 +1061,16 @@ fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
             changed |= notifications.remove(key).is_some();
         }
     }
-    Ok(changed.then(|| doc.to_string()))
+    changed
 }
 
-fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
+#[cfg(test)]
+fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
     let mut doc: toml_edit::DocumentMut = text.parse()?;
+    Ok(migrate_retired_pi_doc(&mut doc).then(|| doc.to_string()))
+}
+
+fn migrate_retired_web_doc(doc: &mut toml_edit::DocumentMut) -> bool {
     let mut changed = false;
     if let Some(security) = doc
         .get_mut("security")
@@ -1076,19 +1100,24 @@ fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
     {
         changed |= paths.remove("webui_dir").is_some();
     }
-    Ok(changed.then(|| doc.to_string()))
+    changed
 }
 
-fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
-    let mut document = text.parse::<toml_edit::DocumentMut>()?;
+#[cfg(test)]
+fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    Ok(migrate_retired_web_doc(&mut doc).then(|| doc.to_string()))
+}
+
+fn migrate_retired_logs_db_doc(document: &mut toml_edit::DocumentMut) -> Result<bool> {
     let Some(probe) = document
         .get_mut("probe")
         .and_then(toml_edit::Item::as_table_like_mut)
     else {
-        return Ok(None);
+        return Ok(false);
     };
     let Some(old) = probe.remove("logs_db") else {
-        return Ok(None);
+        return Ok(false);
     };
     let retention = old
         .get("retention_days")
@@ -1108,20 +1137,23 @@ fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
     if !observability.contains_key("event_retention_days") {
         observability.insert("event_retention_days", toml_edit::value(retention));
     }
-    Ok(Some(document.to_string()))
+    Ok(true)
 }
 
-/// Remove the retired AgentHub Goal recovery switch while preserving the rest
-/// of the user's configuration and comments.
-fn migrate_retired_probe_goal_config(text: &str) -> Result<Option<String>> {
+#[cfg(test)]
+fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
     let mut document = text.parse::<toml_edit::DocumentMut>()?;
-    let removed = document
+    Ok(migrate_retired_logs_db_doc(&mut document)?.then(|| document.to_string()))
+}
+
+fn migrate_retired_probe_goal_doc(document: &mut toml_edit::DocumentMut) -> bool {
+    document
         .get_mut("probe")
         .and_then(toml_edit::Item::as_table_like_mut)
         .and_then(|probe| probe.get_mut("error_monitor"))
         .and_then(toml_edit::Item::as_table_like_mut)
-        .and_then(|error_monitor| error_monitor.remove("auto_resume_goals"));
-    Ok(removed.map(|_| document.to_string()))
+        .and_then(|error_monitor| error_monitor.remove("auto_resume_goals"))
+        .is_some()
 }
 
 fn replace_config_atomically(path: &Path, original: &str, updated: &str) -> Result<()> {

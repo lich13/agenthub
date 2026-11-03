@@ -82,26 +82,20 @@ pub fn list_threads_read_model(
         .threads()
         .list_read(query)?;
     let paths = state.codex_paths();
-    let hidden_thread_ids = if plan.include_hidden_thread_ids {
-        codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
-            tracing::warn!("failed to read hidden thread metadata: {err}");
-            HashSet::new()
-        })
-    } else {
-        HashSet::new()
-    };
-    let archived_thread_ids = if plan.include_archived_thread_ids {
-        codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
-            tracing::warn!("failed to read archived thread metadata: {err}");
-            HashSet::new()
-        })
-    } else {
-        HashSet::new()
-    };
     let running_jobs = if plan.include_running_jobs {
         state.db.running_thread_jobs()?
     } else {
         Vec::new()
+    };
+    let (hidden_thread_ids, archived_thread_ids) = if !running_jobs.is_empty()
+        && (plan.include_hidden_thread_ids || plan.include_archived_thread_ids)
+    {
+        codex::hidden_and_archived_thread_ids(&paths).unwrap_or_else(|err| {
+            tracing::warn!("failed to read thread visibility metadata: {err}");
+            (HashSet::new(), HashSet::new())
+        })
+    } else {
+        (HashSet::new(), HashSet::new())
     };
     let raw_threads = codex::list_threads(
         &paths,

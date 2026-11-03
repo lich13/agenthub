@@ -587,11 +587,9 @@ mod tests {
             .unwrap_or(include_str!("services/probe.rs"));
 
         assert!(
-            probe_source.contains("AgentHubUseCases::with_config")
-                && probe_source.contains(".probe()?")
-                && probe_source.contains(".status()?")
-                && probe_source.contains("probe_service::probe_status_with_runtime_read_model"),
-            "Tauri probe status must derive read-model buckets through the shared core Probe use-case facade"
+            probe_source.contains("require_capability(state.platform(), Capability::Probe)?")
+                && probe_source.contains("ProbeRuntime::new(config, state.platform().clone())"),
+            "Tauri probe status must derive read-model buckets through single-pass ProbeRuntime"
         );
         for forbidden in [
             "status.running_threads =",

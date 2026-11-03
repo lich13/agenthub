@@ -1708,8 +1708,13 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     }
     let mut recorded = 0usize;
     let mut active_markers = Vec::new();
-    for status in ["reply-needed", "recoverable"] {
-        let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
+    let codex_paths = state.codex_paths();
+    let buckets = probe_service::probe_passive_scan_threads_with_paths(
+        &codex_paths,
+        state.db.path(),
+        config.probe.recent_limit,
+    )?;
+    for (status, threads) in buckets {
         for thread in threads {
             if task_notification_suppression_reason(&config, Some(&thread.id)).is_some() {
                 continue;

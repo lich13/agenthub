@@ -15,10 +15,12 @@ use super::{
     CodexPaths, ThreadStatus, ThreadSummary,
 };
 
-pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
+pub fn hidden_and_archived_thread_ids(
+    paths: &CodexPaths,
+) -> Result<(HashSet<String>, HashSet<String>)> {
     let db = paths.state_db();
     if !db.exists() {
-        return Ok(HashSet::new());
+        return Ok((HashSet::new(), HashSet::new()));
     }
     let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
     let has_threads = conn
@@ -30,7 +32,7 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
         .unwrap_or(0)
         > 0;
     if !has_threads {
-        return Ok(HashSet::new());
+        return Ok((HashSet::new(), HashSet::new()));
     }
 
     let columns = table_columns(&conn, "threads")?;
@@ -65,8 +67,14 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
     let preview_expr = first_existing(&columns, &["preview"])
         .unwrap_or("NULL")
         .to_string();
+    let archived_expr = first_existing(&columns, &["archived"])
+        .unwrap_or("0")
+        .to_string();
+    let archived_at_expr = first_existing(&columns, &["archived_at"])
+        .unwrap_or("NULL")
+        .to_string();
     let sql = format!(
-        "SELECT id, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, {first_user_message_expr}, {preview_expr} FROM threads"
+        "SELECT id, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, {first_user_message_expr}, {preview_expr}, {archived_expr}, {archived_at_expr} FROM threads"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
@@ -81,6 +89,8 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
         let title: Option<String> = row.get(8).ok();
         let first_user_message: Option<String> = row.get(9).ok();
         let preview: Option<String> = row.get(10).ok();
+        let archived_flag: i64 = row.get(11).unwrap_or(0);
+        let archived_at: Option<ValueCell> = row.get(12).ok();
         let hidden = is_hidden_thread_metadata(ThreadVisibilityMetadata {
             thread_source: thread_source.as_deref(),
             source: source.as_deref(),
@@ -93,55 +103,30 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
             first_user_message: first_user_message.as_deref(),
             preview: preview.as_deref(),
         });
-        Ok(hidden.then_some(id))
+        let archived =
+            archived_flag != 0 || archived_at.as_ref().and_then(format_cell_time).is_some();
+        Ok((id, hidden, archived))
     })?;
-    Ok(rows
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+    let mut hidden_ids = HashSet::new();
+    let mut archived_ids = HashSet::new();
+    for row in rows {
+        let (id, hidden, archived) = row?;
+        if hidden {
+            hidden_ids.insert(id.clone());
+        }
+        if archived {
+            archived_ids.insert(id);
+        }
+    }
+    Ok((hidden_ids, archived_ids))
+}
+
+pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
+    Ok(hidden_and_archived_thread_ids(paths)?.0)
 }
 
 pub fn archived_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
-    let db = paths.state_db();
-    if !db.exists() {
-        return Ok(HashSet::new());
-    }
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
-    let has_threads = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='threads'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-    if !has_threads {
-        return Ok(HashSet::new());
-    }
-
-    let columns = table_columns(&conn, "threads")?;
-    let archived_expr = first_existing(&columns, &["archived"])
-        .unwrap_or("0")
-        .to_string();
-    let archived_at_expr = first_existing(&columns, &["archived_at"])
-        .unwrap_or("NULL")
-        .to_string();
-    let sql = format!("SELECT id, {archived_expr}, {archived_at_expr} FROM threads");
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
-        let id: String = row.get(0)?;
-        let archived_flag: i64 = row.get(1).unwrap_or(0);
-        let archived_at: Option<ValueCell> = row.get(2).ok();
-        let archived =
-            archived_flag != 0 || archived_at.as_ref().and_then(format_cell_time).is_some();
-        Ok(archived.then_some(id))
-    })?;
-    Ok(rows
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+    Ok(hidden_and_archived_thread_ids(paths)?.1)
 }
 
 pub fn thread_source_counts(paths: &CodexPaths) -> Result<HashMap<String, usize>> {

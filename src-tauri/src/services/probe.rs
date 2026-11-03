@@ -1,17 +1,13 @@
 use crate::overview::DesktopState;
 use agenthub_core::{
     probe::{ProbeRuntime, ProbeStatus},
-    services::{probe as probe_service, use_cases::AgentHubUseCases},
+    services::system::{require_capability, Capability},
 };
 use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
+    require_capability(state.platform(), Capability::Probe)?;
     let config = state.config();
-    let limit = config.probe.recent_limit.clamp(1, 200);
-    let facade_status = AgentHubUseCases::with_config(&config, state.platform())
-        .probe()?
-        .status()?
-        .status;
     let mut status = ProbeRuntime::new(config, state.platform().clone())
         .status()
         .await?;
@@ -27,14 +23,5 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
         }
     }
     status.provider_notifications = state.db.native_notification_status()?;
-    let recent_event_count = state
-        .db
-        .list_probe_events(limit as u32)
-        .ok()
-        .map(|events| events.len());
-    Ok(probe_service::probe_status_with_runtime_read_model(
-        status,
-        facade_status,
-        recent_event_count,
-    ))
+    Ok(status)
 }

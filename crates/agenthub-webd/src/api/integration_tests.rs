@@ -907,7 +907,7 @@ async fn probe_status_route_returns_lightweight_snapshot_immediately_and_refresh
     let first_status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
     assert_eq!(first_status["label"], "Probe");
     assert_eq!(first_status["snapshot_status"], "initial");
-    assert_eq!(first_status["is_refreshing"], true);
+    assert_eq!(first_status["is_refreshing"], false);
     assert_eq!(first_status["snapshot_age_seconds"], 0);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
