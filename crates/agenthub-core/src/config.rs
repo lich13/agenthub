@@ -700,7 +700,7 @@ impl ProbeConfig {
         // Preserve invalid destinations so send-time validation fails closed. Replacing
         // one with the default service could disclose a key belonging to another server.
         let group = self.notifications.group.trim();
-        if group.is_empty() || group.eq_ignore_ascii_case("AgentHub") {
+        if group.is_empty() {
             self.notifications.group = default_probe_notification_group();
         }
         self.observability.event_retention_days =
@@ -1026,17 +1026,6 @@ fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
         .and_then(|item| item.as_table_like_mut())
     {
         changed |= table.remove("gotify").is_some();
-        if table
-            .get("group")
-            .and_then(|item| item.as_str())
-            .is_some_and(|group| group.trim().eq_ignore_ascii_case("AgentHub"))
-        {
-            table.insert(
-                "group",
-                toml_edit::value(default_probe_notification_group()),
-            );
-            changed = true;
-        }
     }
     Ok(changed.then(|| doc.to_string()))
 }
@@ -1566,32 +1555,56 @@ token = "fixture-not-a-real-secret"
         std::fs::create_dir(&directory).unwrap();
         let path = directory.join("config.toml");
         let text = format!(
-            "{}\n[probe.logs_db]\nretention_days = 7\n",
+            "{}\n[probe.logs_db]\nretention_days = 7\n[probe.notifications.gotify]\nenabled = true\n",
             toml::to_string_pretty(&Config::default()).unwrap()
         );
         // An explicit existing observability preference takes precedence.
         std::fs::write(&path, text).unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        let initial_ino = {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
+            std::fs::metadata(&path).unwrap().ino()
+        };
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.probe.observability.event_retention_days, 2);
         assert_eq!(loaded.probe.notifications.group, "AgentHub");
         let migrated = std::fs::read(&path).unwrap();
         let migrated_text = String::from_utf8_lossy(&migrated);
         assert!(!migrated_text.contains("[probe.logs_db]"));
+        assert!(!migrated_text.contains("gotify"));
         assert!(migrated_text.contains("group = \"AgentHub\""));
+        assert!(super::migrate_retired_push_config(&migrated_text)
+            .unwrap()
+            .is_none());
+        let migrated_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        #[cfg(unix)]
+        let migrated_ino = {
+            use std::os::unix::fs::MetadataExt;
+            let ino = std::fs::metadata(&path).unwrap().ino();
+            assert_ne!(
+                ino, initial_ino,
+                "first load must atomically replace legacy config"
+            );
+            ino
+        };
         Config::load(&path).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), migrated);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            migrated_mtime,
+            "second load of migrated config must not rewrite file"
+        );
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let meta = std::fs::metadata(&path).unwrap();
             assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
+                meta.ino(),
+                migrated_ino,
+                "second load must not replace config file inode"
             );
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         }
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
         std::fs::remove_file(path).unwrap();
