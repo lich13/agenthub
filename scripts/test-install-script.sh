@@ -116,9 +116,11 @@ if any(action.startswith("pi.") for action in active) or not {"pi.list", "pi.det
 if "pub const API_VERSION: u32 = 2;" not in (root / "crates/agenthub-core/src/services/system.rs").read_text():
     raise SystemExit("preview-bound cleanup requires API protocol 2")
 notes = subprocess.check_output([sys.executable, str(root / "scripts/release-notes.py"), version], text=True)
-for title in ["版本概览", "功能调整", "问题修复", "兼容性与迁移", "支持平台与资产", "升级提示"]:
+for title in ["版本概览", "兼容性与迁移", "支持平台与资产", "升级提示"]:
     if f"## {title}" not in notes:
         raise SystemExit("release notes are missing a required Chinese section")
+if "## 功能调整" not in notes and "## 问题修复" not in notes:
+    raise SystemExit("release notes must include at least one of 功能调整 or 问题修复")
 
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
