@@ -45,31 +45,41 @@ fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
     Ok(prefix == AGENTHUB_WEBD_HELPER_PLACEHOLDER)
 }
 
-fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
+fn files_have_same_len_and_bytes(source: &Path, target: &Path) -> bool {
     use std::io::Read;
+
+    let (Ok(source_meta), Ok(target_meta)) =
+        (std::fs::metadata(source), std::fs::metadata(target))
+    else {
+        return false;
+    };
+    if source_meta.len() != target_meta.len() {
+        return false;
+    }
+    let (Ok(mut src), Ok(mut dst)) =
+        (std::fs::File::open(source), std::fs::File::open(target))
+    else {
+        return false;
+    };
+    let mut src_buf = [0u8; 64 * 1024];
+    let mut dst_buf = [0u8; 64 * 1024];
+    loop {
+        let Ok(n) = src.read(&mut src_buf) else {
+            return false;
+        };
+        if n == 0 {
+            return true;
+        }
+        if dst.read_exact(&mut dst_buf[..n]).is_err() || src_buf[..n] != dst_buf[..n] {
+            return false;
+        }
+    }
+}
+
+fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
     static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    let source_meta = std::fs::metadata(source)?;
-    let same_content = match std::fs::metadata(target) {
-        Ok(target_meta) if source_meta.len() == target_meta.len() => {
-            let mut src = std::fs::File::open(source)?;
-            let mut dst = std::fs::File::open(target)?;
-            let mut src_buf = [0u8; 64 * 1024];
-            let mut dst_buf = [0u8; 64 * 1024];
-            loop {
-                let n = src.read(&mut src_buf)?;
-                if n == 0 {
-                    break true;
-                }
-                dst.read_exact(&mut dst_buf[..n])?;
-                if src_buf[..n] != dst_buf[..n] {
-                    break false;
-                }
-            }
-        }
-        Ok(_) | Err(_) => false,
-    };
-    if same_content {
+    if files_have_same_len_and_bytes(source, target) {
         ensure_executable(target)?;
         return Ok(());
     }
@@ -176,6 +186,17 @@ mod tests {
                 b"#!/bin/sh\necho v3\nexit 0\n"
             );
             assert_ne!(third_meta.ino(), second_ino);
+
+            // Unreadable same-length target is treated as different and replaced atomically.
+            let third_ino = third_meta.ino();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+            sync_agenthub_webd_helper_file(&source, &target).unwrap();
+            let fourth_meta = std::fs::metadata(&target).unwrap();
+            assert_ne!(fourth_meta.ino(), third_ino);
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                b"#!/bin/sh\necho v3\nexit 0\n"
+            );
         }
     }
 

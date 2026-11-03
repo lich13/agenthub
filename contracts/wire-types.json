@@ -11907,6 +11907,7 @@
         "fn sync_agenthub_webd_helper_from_resource (resource_dir : & Path) -> Result < () , String >",
         "fn repair_probe_error_monitor_launch_agent (config : & agenthub_core :: config :: Config , platform : & agenthub_core :: platform :: PlatformPaths ,) -> Result < agenthub_core :: probe_error_monitor :: ProbeErrorMonitorLaunchAgentStatus , String >",
         "fn is_agenthub_webd_helper_placeholder (path : & Path) -> std :: io :: Result < bool >",
+        "fn files_have_same_len_and_bytes (source : & Path , target : & Path) -> bool",
         "fn sync_agenthub_webd_helper_file (source : & Path , target : & Path) -> std :: io :: Result < () >",
         "fn ensure_executable (path : & Path) -> std :: io :: Result < () >",
         "fn ensure_executable (_path : & Path) -> std :: io :: Result < () >",
