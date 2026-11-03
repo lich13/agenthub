@@ -45,36 +45,31 @@ fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
     Ok(prefix == AGENTHUB_WEBD_HELPER_PLACEHOLDER)
 }
 
-fn files_have_same_len_and_bytes(source: &Path, target: &Path) -> std::io::Result<bool> {
-    use std::io::Read;
-
-    let source_meta = std::fs::metadata(source)?;
-    let Ok(target_meta) = std::fs::metadata(target) else {
-        return Ok(false);
-    };
-    if source_meta.len() != target_meta.len() {
-        return Ok(false);
-    }
-    let mut src = std::fs::File::open(source)?;
-    let mut dst = std::fs::File::open(target)?;
-    let mut src_buf = [0u8; 64 * 1024];
-    let mut dst_buf = [0u8; 64 * 1024];
-    loop {
-        let n = src.read(&mut src_buf)?;
-        if n == 0 {
-            return Ok(true);
-        }
-        dst.read_exact(&mut dst_buf[..n])?;
-        if src_buf[..n] != dst_buf[..n] {
-            return Ok(false);
-        }
-    }
-}
-
 fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::io::Read;
     static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    if files_have_same_len_and_bytes(source, target)? {
+    let source_meta = std::fs::metadata(source)?;
+    let same_content = match std::fs::metadata(target) {
+        Ok(target_meta) if source_meta.len() == target_meta.len() => {
+            let mut src = std::fs::File::open(source)?;
+            let mut dst = std::fs::File::open(target)?;
+            let mut src_buf = [0u8; 64 * 1024];
+            let mut dst_buf = [0u8; 64 * 1024];
+            loop {
+                let n = src.read(&mut src_buf)?;
+                if n == 0 {
+                    break true;
+                }
+                dst.read_exact(&mut dst_buf[..n])?;
+                if src_buf[..n] != dst_buf[..n] {
+                    break false;
+                }
+            }
+        }
+        Ok(_) | Err(_) => false,
+    };
+    if same_content {
         ensure_executable(target)?;
         return Ok(());
     }
