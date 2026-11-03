@@ -276,8 +276,7 @@ pub const DECLARED_COMMANDS: &[&str] = &[
 ];
 
 pub use super::retired_commands::{
-    is_retired_command, is_retired_tauri_command, RetiredSurface, RETIRED_COMMANDS,
-    RETIRED_COMMAND_REGISTRY,
+    is_retired_command, RetiredSurface, RETIRED_COMMANDS, RETIRED_COMMAND_REGISTRY,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

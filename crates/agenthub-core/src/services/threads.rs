@@ -177,6 +177,62 @@ pub fn thread_list_read_model(
     })
 }
 
+fn visibility_ids_for_running_jobs(
+    paths: &crate::codex::CodexPaths,
+    running_jobs: &[JobRecord],
+    include_visibility_ids: bool,
+) -> (HashSet<String>, HashSet<String>) {
+    if running_jobs.is_empty() || !include_visibility_ids {
+        Default::default()
+    } else {
+        crate::codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
+    }
+}
+
+pub fn load_thread_read_model_inputs(
+    paths: &crate::codex::CodexPaths,
+    plan: &ThreadListReadPlan,
+    running_jobs: Vec<JobRecord>,
+) -> anyhow::Result<ThreadReadModelInputs> {
+    let threads = crate::codex::list_threads(
+        paths,
+        plan.list.query.archived.unwrap_or(false),
+        plan.list.query.q.as_deref(),
+        plan.list.fetch_limit,
+    )?;
+    let (hidden_thread_ids, archived_thread_ids) = visibility_ids_for_running_jobs(
+        paths,
+        &running_jobs,
+        plan.include_hidden_thread_ids || plan.include_archived_thread_ids,
+    );
+    Ok(ThreadReadModelInputs {
+        threads,
+        running_jobs,
+        hidden_thread_ids,
+        archived_thread_ids,
+    })
+}
+
+pub fn load_threads_with_runtime_state(
+    paths: &crate::codex::CodexPaths,
+    archived: bool,
+    q: Option<&str>,
+    fetch_limit: usize,
+    running_jobs: &[JobRecord],
+) -> anyhow::Result<Vec<ThreadSummary>> {
+    let raw_threads = crate::codex::list_threads(paths, archived, q, fetch_limit)?;
+    let (hidden_thread_ids, archived_thread_ids) =
+        visibility_ids_for_running_jobs(paths, running_jobs, true);
+    Ok(apply_thread_list_runtime_state(
+        raw_threads,
+        ThreadListRuntimeState {
+            running_jobs,
+            hidden_thread_ids: &hidden_thread_ids,
+            archived_thread_ids: &archived_thread_ids,
+        },
+    ))
+}
+
 pub fn thread_detail_read_model(
     platform: &PlatformPaths,
     detail: ThreadDetail,

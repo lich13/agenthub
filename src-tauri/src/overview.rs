@@ -159,7 +159,9 @@ mod tests {
     #[test]
     fn desktop_thread_service_passes_archive_filter_to_codex_reader() {
         let source = include_str!("services/threads.rs");
-        assert!(source.contains("plan.list.query.archived.unwrap_or(false)"));
+        assert!(source.contains(
+            "thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)"
+        ));
     }
 
     #[test]

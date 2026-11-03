@@ -894,7 +894,7 @@ async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
 }
 
 #[tokio::test]
-async fn probe_status_route_returns_lightweight_snapshot_immediately_and_refreshes_background() {
+async fn probe_status_route_caches_initial_snapshot_and_throttles_background_refresh() {
     let (state, api_key) = authenticated_test_state();
     let dir = temp_test_dir("agenthub-probe-status-snapshot");
     let codex_home = dir.join(".codex");
@@ -911,12 +911,26 @@ async fn probe_status_route_returns_lightweight_snapshot_immediately_and_refresh
     assert_eq!(first_status["snapshot_age_seconds"], 0);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let second_status = request_rpc_json(app, "probe.status", "{}", &api_key).await;
+    let second_status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
     assert_eq!(second_status["snapshot_status"], "cached");
-    assert!(second_status["snapshot_age_seconds"].as_i64().is_some());
+    assert_eq!(second_status["is_refreshing"], false);
+    assert!(second_status["snapshot_age_seconds"].as_i64().unwrap() < 2);
     assert!(second_status["running_threads"].as_array().is_some());
     assert!(second_status["reply_needed_threads"].as_array().is_some());
     assert!(second_status["recoverable_threads"].as_array().is_some());
+
+    state
+        .probe_status_cache
+        .lock()
+        .unwrap()
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .refreshed_at_unix -= 3;
+    let third_status = request_rpc_json(app, "probe.status", "{}", &api_key).await;
+    assert_eq!(third_status["snapshot_status"], "cached");
+    assert_eq!(third_status["is_refreshing"], true);
+    assert!(third_status["snapshot_age_seconds"].as_i64().unwrap() >= 2);
     fs::remove_dir_all(dir).unwrap();
 }
 

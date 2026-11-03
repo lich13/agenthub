@@ -1146,6 +1146,8 @@ fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
     Ok(migrate_retired_logs_db_doc(&mut document)?.then(|| document.to_string()))
 }
 
+/// Remove the retired AgentHub Goal recovery switch while preserving the rest
+/// of the user's configuration and comments.
 fn migrate_retired_probe_goal_doc(document: &mut toml_edit::DocumentMut) -> bool {
     document
         .get_mut("probe")
@@ -1928,5 +1930,68 @@ secret_key = "fixture-only-key"
             Some("fixture-only-key")
         );
         assert!(super::migrate_retired_pi_config(&after).unwrap().is_none());
+    }
+
+    #[test]
+    fn every_migrated_retired_key_matches_fast_path_filter_and_triggers_migration() {
+        for (key, snippet) in [
+            ("logs_db", "[probe.logs_db]\nretention_days = 7\n"),
+            (
+                "auto_resume_goals",
+                "[probe.error_monitor]\nauto_resume_goals = true\n",
+            ),
+            ("cookie_secure", "[security]\ncookie_secure = true\n"),
+            (
+                "session_ttl_seconds",
+                "[security]\nsession_ttl_seconds = 60\n",
+            ),
+            (
+                "login_rate_limit_per_minute",
+                "[security]\nlogin_rate_limit_per_minute = 5\n",
+            ),
+            (
+                "turnstile_expected_hostname",
+                "[security]\nturnstile_expected_hostname = \"example.invalid\"\n",
+            ),
+            (
+                "turnstile_expected_action",
+                "[security]\nturnstile_expected_action = \"login\"\n",
+            ),
+            (
+                "public_base_url",
+                "[server]\npublic_base_url = \"https://example.invalid\"\n",
+            ),
+            (
+                "trust_forwarded_headers",
+                "[server]\ntrust_forwarded_headers = true\n",
+            ),
+            ("webui_dir", "[paths]\nwebui_dir = \"/tmp/webui\"\n"),
+            ("notify_pi", "[probe.notifications]\nnotify_pi = true\n"),
+            (
+                "notify_pi_completion",
+                "[probe.notifications]\nnotify_pi_completion = true\n",
+            ),
+            (
+                "notify_pi_failure",
+                "[probe.notifications]\nnotify_pi_failure = true\n",
+            ),
+            ("gotify", "[probe.notifications.gotify]\nenabled = true\n"),
+        ] {
+            assert!(
+                super::RETIRED_CONFIG_KEYS
+                    .iter()
+                    .any(|pattern| key.contains(pattern)),
+                "retired key {key} is not covered by RETIRED_CONFIG_KEYS"
+            );
+            let migrated = super::migrate_all_retired_config(snippet)
+                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!("retired key {key} was skipped by migrate_all_retired_config")
+                });
+            assert!(
+                !migrated.contains(key),
+                "migrated config still contains {key}: {migrated}"
+            );
+        }
     }
 }

@@ -15,7 +15,7 @@ use agenthub_core::{
 };
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::{collections::HashSet, fs, path::Path};
+use std::{fs, path::Path};
 
 pub fn apply_probe_settings_save_plan(
     state: &AppState,
@@ -87,32 +87,8 @@ pub fn list_threads_read_model(
     } else {
         Vec::new()
     };
-    let (hidden_thread_ids, archived_thread_ids) = if !running_jobs.is_empty()
-        && (plan.include_hidden_thread_ids || plan.include_archived_thread_ids)
-    {
-        codex::hidden_and_archived_thread_ids(&paths).unwrap_or_else(|err| {
-            tracing::warn!("failed to read thread visibility metadata: {err}");
-            (HashSet::new(), HashSet::new())
-        })
-    } else {
-        (HashSet::new(), HashSet::new())
-    };
-    let raw_threads = codex::list_threads(
-        &paths,
-        plan.list.query.archived.unwrap_or(false),
-        plan.list.query.q.as_deref(),
-        plan.list.fetch_limit,
-    )?;
-    let view = thread_service::thread_list_read_model(
-        &platform,
-        thread_service::ThreadReadModelInputs {
-            threads: raw_threads,
-            running_jobs,
-            hidden_thread_ids,
-            archived_thread_ids,
-        },
-        plan.list.query,
-    )?;
+    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
+    let view = thread_service::thread_list_read_model(&platform, inputs, plan.list.query)?;
     Ok(view.threads)
 }
 

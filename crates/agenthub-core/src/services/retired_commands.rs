@@ -143,11 +143,6 @@ retired_commands! {
 pub fn is_retired_command(command: &str) -> bool {
     RETIRED_COMMANDS.contains(&command)
 }
-pub fn is_retired_tauri_command(command: &str) -> bool {
-    RETIRED_COMMAND_REGISTRY
-        .iter()
-        .any(|entry| entry.name == command)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,7 +155,6 @@ mod tests {
                 "duplicate tombstone {}",
                 entry.name
             );
-            assert!(is_retired_tauri_command(entry.name));
             assert_eq!(
                 is_retired_command(entry.name),
                 entry.surface == RetiredSurface::Shared
@@ -170,6 +164,5 @@ mod tests {
                 entry.name
             ));
         }
-        assert!(!is_retired_tauri_command("fixture.unknown"));
     }
 }

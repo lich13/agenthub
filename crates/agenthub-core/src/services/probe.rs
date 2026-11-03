@@ -7,7 +7,7 @@ use crate::{
     probe as probe_core,
     services::commands,
     services::system::{require_capability, Capability},
-    services::threads::{self, ThreadListRuntimeState},
+    services::threads,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -230,23 +230,6 @@ pub fn probe_status_snapshot_view(
         );
     }
     value
-}
-
-pub fn probe_status_with_runtime_read_model(
-    mut status: probe_core::ProbeStatus,
-    read_model: ProbeStatusAggregation,
-    recent_event_count_override: Option<usize>,
-) -> probe_core::ProbeStatus {
-    status.recent_event_count =
-        recent_event_count_override.unwrap_or(read_model.recent_event_count);
-    status.running_count = read_model.running_threads.len();
-    status.reply_needed_count = read_model.reply_needed_threads.len();
-    status.recoverable_count = read_model.recoverable_threads.len();
-    status.running_threads = read_model.running_threads;
-    status.reply_needed_threads = read_model.reply_needed_threads;
-    status.recoverable_threads = read_model.recoverable_threads;
-    status.active_sessions = read_model.active_sessions;
-    status
 }
 
 pub fn plan_probe_action(
@@ -634,30 +617,21 @@ fn aggregate_active_sessions(
     sessions
 }
 
-fn probe_codex_buckets(
-    config: &Config,
+fn load_probe_codex_threads(
+    paths: &CodexPaths,
+    panel_db_path: &Path,
+) -> Result<Vec<ThreadSummary>> {
+    let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
+    threads::load_threads_with_runtime_state(paths, false, None, usize::MAX, &running_jobs)
+}
+
+fn probe_codex_buckets_with_paths(
+    paths: &CodexPaths,
+    panel_db_path: &Path,
     limit: usize,
-) -> (Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>) {
+) -> Result<(Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>)> {
     let limit = limit.clamp(1, 200);
-    let resolved = codex::resolve_codex_paths(&config.codex.home);
-    let paths = resolved.codex_paths();
-    let Ok(raw_threads) = codex::list_threads(&paths, false, None, usize::MAX) else {
-        return (Vec::new(), Vec::new(), Vec::new());
-    };
-    let running_jobs = running_thread_jobs(&config.paths.db_path).unwrap_or_default();
-    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
-        Default::default()
-    } else {
-        codex::hidden_and_archived_thread_ids(&paths).unwrap_or_default()
-    };
-    let mut threads = threads::apply_thread_list_runtime_state(
-        raw_threads,
-        ThreadListRuntimeState {
-            running_jobs: &running_jobs,
-            hidden_thread_ids: &hidden_thread_ids,
-            archived_thread_ids: &archived_thread_ids,
-        },
-    );
+    let mut threads = load_probe_codex_threads(paths, panel_db_path)?;
     ThreadSummary::sort_by_message_time(&mut threads);
     let mut running = Vec::new();
     let mut reply_needed = Vec::new();
@@ -674,7 +648,16 @@ fn probe_codex_buckets(
             _ => {}
         }
     }
-    (running, reply_needed, recoverable)
+    Ok((running, reply_needed, recoverable))
+}
+
+fn probe_codex_buckets(
+    config: &Config,
+    limit: usize,
+) -> (Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>) {
+    let resolved = codex::resolve_codex_paths(&config.codex.home);
+    probe_codex_buckets_with_paths(&resolved.codex_paths(), &config.paths.db_path, limit)
+        .unwrap_or_default()
 }
 
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
@@ -719,21 +702,7 @@ pub fn probe_threads_for_status_with_paths(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let threads = codex::list_threads(paths, false, None, usize::MAX)?;
-    let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
-    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
-        Default::default()
-    } else {
-        codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
-    };
-    let mut threads = threads::apply_thread_list_runtime_state(
-        threads,
-        ThreadListRuntimeState {
-            running_jobs: &running_jobs,
-            hidden_thread_ids: &hidden_thread_ids,
-            archived_thread_ids: &archived_thread_ids,
-        },
-    );
+    let mut threads = load_probe_codex_threads(paths, panel_db_path)?;
     if status == "reply-needed" {
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
@@ -756,36 +725,8 @@ pub fn probe_passive_scan_threads_with_paths(
     panel_db_path: &Path,
     limit: usize,
 ) -> Result<Vec<(&'static str, Vec<ThreadSummary>)>> {
-    let limit = limit.clamp(1, 200);
-    let threads = codex::list_threads(paths, false, None, usize::MAX)?;
-    let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
-    let (hidden_thread_ids, archived_thread_ids) = if running_jobs.is_empty() {
-        Default::default()
-    } else {
-        codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
-    };
-    let mut threads = threads::apply_thread_list_runtime_state(
-        threads,
-        ThreadListRuntimeState {
-            running_jobs: &running_jobs,
-            hidden_thread_ids: &hidden_thread_ids,
-            archived_thread_ids: &archived_thread_ids,
-        },
-    );
-    ThreadSummary::sort_by_message_time(&mut threads);
-    let mut reply_needed = Vec::new();
-    let mut recoverable = Vec::new();
-    for row in threads {
-        match row.status {
-            ThreadStatus::ReplyNeeded
-                if reply_needed.len() < limit && probe_reply_needed_thread_is_fresh(&row) =>
-            {
-                reply_needed.push(row);
-            }
-            ThreadStatus::Recoverable if recoverable.len() < limit => recoverable.push(row),
-            _ => {}
-        }
-    }
+    let (_running, reply_needed, recoverable) =
+        probe_codex_buckets_with_paths(paths, panel_db_path, limit)?;
     Ok(vec![
         ("reply-needed", reply_needed),
         ("recoverable", recoverable),
