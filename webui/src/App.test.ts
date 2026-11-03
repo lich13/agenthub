@@ -13,11 +13,12 @@ import agentHookHostCardSource from "./components/probe/AgentHookHostCard.tsx?ra
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
+import mainSource from "./main.tsx?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
-type AppExports = typeof import("./test/domain") & typeof import("./lib/domain/conversationViewModel") & typeof import("./lib/domain/runtimeViewModel") & typeof import("./lib/domain/codexViewModel");
+type AppExports = typeof import("./test/domain") & typeof import("./lib/domain/conversationViewModel") & typeof import("./lib/domain/runtimeViewModel") & typeof import("./lib/domain/codexViewModel") & typeof import("./lib/theme");
 
 type ThreadQueryExports = typeof import("./lib/query/threads") & {
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
@@ -30,7 +31,7 @@ type ThreadQueryExports = typeof import("./lib/query/threads") & {
 };
 
 async function loadApp(): Promise<AppExports> {
-  return { ...await import("./lib/domain/conversationViewModel"), ...await import("./lib/domain/runtimeViewModel"), ...await import("./lib/domain/codexViewModel"), ...await import("./test/domain") } as AppExports;
+  return { ...await import("./lib/domain/conversationViewModel"), ...await import("./lib/domain/runtimeViewModel"), ...await import("./lib/domain/codexViewModel"), ...await import("./lib/theme"), ...await import("./test/domain") } as AppExports;
 }
 
 async function loadThreadQuery(): Promise<ThreadQueryExports> {
@@ -827,21 +828,32 @@ describe("conversation helpers", () => {
     };
 
     expect(app.readStoredThemeMode(storage)).toBe("system");
-    expect(app.applyThemeMode("dark", root, storage)).toBe("dark");
+    expect(app.writeStoredThemeMode("dark", storage)).toBe("dark");
+    expect(app.applyThemeMode("dark", root)).toBe("dark");
     expect(store.get(app.THEME_STORAGE_KEY)).toBe("dark");
     expect(attrs.get("data-theme")).toBe("dark");
 
-    expect(app.applyThemeMode("light", root, storage)).toBe("light");
+    expect(app.writeStoredThemeMode("light", storage)).toBe("light");
+    expect(app.applyThemeMode("light", root)).toBe("light");
     expect(store.get(app.THEME_STORAGE_KEY)).toBe("light");
     expect(attrs.get("data-theme")).toBe("light");
 
-    expect(app.applyThemeMode("system", root, storage)).toBe("system");
+    expect(app.writeStoredThemeMode("system", storage)).toBe("system");
+    expect(app.applyThemeMode("system", root)).toBe("system");
     expect(store.get(app.THEME_STORAGE_KEY)).toBe("system");
     expect(attrs.has("data-theme")).toBe(false);
 
+    expect(runtimeViewModelSource).not.toContain("THEME_STORAGE_KEY");
+    expect(appSource).not.toContain("applyThemeMode");
+    expect(mainSource.indexOf("applyThemeMode(readStoredThemeMode())")).toBeLessThan(
+      mainSource.indexOf("createRoot(")
+    );
+
     const opsSource = extractFunctionSource("OpsWorkspace");
-    expect(opsSource).toContain('aria-label="外观"');
-    expect(opsSource).toContain('role="radiogroup"');
+    expect(opsSource).not.toContain('<section className="appearance-section" aria-label="外观">');
+    expect(opsSource).toContain('role="radiogroup" aria-label="外观"');
+    expect(opsSource).toContain("ArrowRight");
+    expect(opsSource).toContain("ArrowLeft");
   });
 
 });

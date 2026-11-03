@@ -19,11 +19,7 @@ import {
   useSystemCapabilitiesQuery,
   type RuntimeCapabilityMatrix
 } from "./lib/query/system";
-import {
-  applyThemeMode,
-  readStoredThemeMode,
-  type RuntimeCapabilityInput
-} from "./lib/domain/runtimeViewModel";
+import { type RuntimeCapabilityInput } from "./lib/domain/runtimeViewModel";
 import {
   navigationLabelsForRuntime as navigationLabelsForRuntimeDomain,
   visibleNavigationItems,
@@ -70,7 +66,6 @@ export default function App() {
   const setSettingsSection = (next: "maintenance" | "remote") => { lastSettingsSection = next; setSettingsSectionState(next); };
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(true);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("agenthub.nav-collapsed") === "1");
-  applyThemeMode(readStoredThemeMode(), undefined, null);
 
   const toggleNavCollapsed = () => {
     setNavCollapsed((current) => {

@@ -1,13 +1,16 @@
 import { Monitor, Moon, RefreshCw, SlidersHorizontal, Sun, TerminalSquare } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  OPS_PANEL_TITLES,
+  opsWorkspaceView,
+} from "../../lib/domain/runtimeViewModel";
 import {
   APPEARANCE_OPTIONS,
-  OPS_PANEL_TITLES,
   applyThemeMode,
-  opsWorkspaceView,
   readStoredThemeMode,
+  writeStoredThemeMode,
   type ThemeMode,
-} from "../../lib/domain/runtimeViewModel";
+} from "../../lib/theme";
 import { machineScope } from "../../lib/query/connection";
 import { isTerminalJob, useStartedJob } from "../../lib/query/jobs";
 import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
@@ -41,7 +44,24 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
   });
 
   const handleThemeChange = (next: ThemeMode) => {
-    setThemeMode(applyThemeMode(next));
+    const normalized = writeStoredThemeMode(next);
+    applyThemeMode(normalized);
+    setThemeMode(normalized);
+  };
+
+  const handleAppearanceKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex = -1;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (index + 1) % APPEARANCE_OPTIONS.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (index - 1 + APPEARANCE_OPTIONS.length) % APPEARANCE_OPTIONS.length;
+    }
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    const nextOption = APPEARANCE_OPTIONS[nextIndex];
+    handleThemeChange(nextOption.id);
+    const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    buttons?.[nextIndex]?.focus();
   };
 
   return (
@@ -65,17 +85,19 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           </button>
         </div>
       </header>
-      <section className="appearance-section" aria-label="外观">
+      <section className="appearance-section">
         <strong className="appearance-heading">外观</strong>
         <div className="appearance-segmented" role="radiogroup" aria-label="外观">
-          {APPEARANCE_OPTIONS.map(option => (
+          {APPEARANCE_OPTIONS.map((option, index) => (
             <button
               key={option.id}
               type="button"
               role="radio"
+              tabIndex={themeMode === option.id ? 0 : -1}
               aria-checked={themeMode === option.id}
               className={`appearance-option ${themeMode === option.id ? "is-active" : ""}`}
               onClick={() => handleThemeChange(option.id)}
+              onKeyDown={event => handleAppearanceKeyDown(event, index)}
             >
               {APPEARANCE_ICONS[option.id]}
               <span>{option.label}</span>

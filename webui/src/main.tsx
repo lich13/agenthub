@@ -5,6 +5,7 @@ import App from "./App";
 import "./styles.css";
 import { initializeConnection, useConnection } from "./lib/runtime";
 import { clearAttachmentCache } from "./lib/query/attachments";
+import { applyThemeMode, readStoredThemeMode } from "./lib/theme";
 
 declare global {
   interface Window {
@@ -60,6 +61,7 @@ class RootErrorBoundary extends Component<
   }
 }
 
+applyThemeMode(readStoredThemeMode());
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <RootErrorBoundary><MachineWorkspace /></RootErrorBoundary>
