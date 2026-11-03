@@ -452,7 +452,7 @@ mod tests {
             .unwrap()
             .to_rfc3339();
 
-        // 2. Claude Code: real JSONL transcript + claude::notification_snapshots + claude_hook::parse_with_paths
+        // 2. Claude Code: real JSONL transcript + claude_hook::parse_with_paths + notification_delivery::claude_hook
         let claude_paths = agenthub_core::claude::ClaudePaths {
             config: sandbox_root.join("claude"),
             projects: sandbox_root.join("claude/projects"),
@@ -500,12 +500,18 @@ mod tests {
         .unwrap()
         .expect("real claude hook parser must accept Stop payload");
         assert_eq!(claude_hook_event.kind, "completion");
-        let claude_scan = agenthub_core::claude::notification_snapshots(&claude_paths).unwrap();
-        assert_eq!(claude_scan.errors, 0);
-        assert_eq!(claude_scan.streams.len(), 1);
-        assert_eq!(claude_scan.streams[0].events.len(), 1);
+        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+            .unwrap();
+        crate::notification_delivery::claude_hook(
+            &config,
+            &db,
+            claude_hook_event,
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
 
-        // 3. Grok: real summary.json + events.jsonl + updates.jsonl + grok::notification_snapshots
+        // 3. Grok: real summary.json + events.jsonl + updates.jsonl + native_probe::scan(Grok)
         let grok_paths = agenthub_core::grok::GrokPaths {
             home: sandbox_root.join("grok"),
         };
@@ -536,7 +542,20 @@ mod tests {
             ),
         )
         .unwrap();
-        let grok_scan = agenthub_core::grok::notification_snapshots(&grok_paths).unwrap();
+        let grok_scan = {
+            struct GrokEnvGuard(Option<std::ffi::OsString>);
+            impl Drop for GrokEnvGuard {
+                fn drop(&mut self) {
+                    match &self.0 {
+                        Some(v) => std::env::set_var("GROK_HOME", v),
+                        None => std::env::remove_var("GROK_HOME"),
+                    }
+                }
+            }
+            let _guard = GrokEnvGuard(std::env::var_os("GROK_HOME"));
+            std::env::set_var("GROK_HOME", &grok_paths.home);
+            agenthub_core::native_probe::scan(NativeProvider::Grok).unwrap()
+        };
         assert_eq!(grok_scan.errors, 0);
         assert_eq!(grok_scan.streams.len(), 1);
         assert_eq!(grok_scan.streams[0].events.len(), 1);
@@ -618,7 +637,6 @@ mod tests {
         assert_eq!(dsh_scan.streams[0].events.len(), 1);
 
         let native_scans = vec![
-            (NativeProvider::Claude, claude_scan),
             (NativeProvider::Grok, grok_scan),
             (NativeProvider::Antigravity, ag_scan),
             (NativeProvider::Dsh, dsh_scan),
@@ -644,6 +662,14 @@ mod tests {
                 .iter()
                 .any(|e| e.thread_id.as_deref() == Some("codex-self-test-thread")),
             "missing probe_event for provider codex"
+        );
+        assert!(
+            events.iter().any(|e| {
+                e.source == "claude_hook"
+                    && e.payload["provider"] == "claude_code"
+                    && e.payload["bark_status"] == "sent"
+            }),
+            "Claude hook must enqueue, deliver, and record a sent claude_hook probe_event"
         );
         for expected_provider in ["claude_code", "grok", "antigravity", "dsh"] {
             assert!(

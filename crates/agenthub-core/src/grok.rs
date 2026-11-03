@@ -223,7 +223,7 @@ static GROK_PROBE_CACHE: std::sync::Mutex<std::collections::VecDeque<GrokProbeCa
 #[cfg(test)]
 thread_local! { static PROBE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
-pub fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_probe::NativeScan> {
+pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_probe::NativeScan> {
     use crate::native_probe::{
         grok_events, read_jsonl, NativeProvider, NativeScan, NativeStreamSnapshot,
     };

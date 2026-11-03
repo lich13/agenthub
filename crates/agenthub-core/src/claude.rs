@@ -593,7 +593,9 @@ pub fn read_attachment(
     );
     Ok(result)
 }
-pub fn notification_snapshots(paths: &ClaudePaths) -> Result<crate::native_probe::NativeScan> {
+pub(crate) fn notification_snapshots(
+    paths: &ClaudePaths,
+) -> Result<crate::native_probe::NativeScan> {
     use crate::native_probe::NativeScan;
     let mut scan = NativeScan::default();
     let files = files(paths)?;

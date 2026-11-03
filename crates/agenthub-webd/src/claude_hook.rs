@@ -105,7 +105,23 @@ pub(super) fn parse_with_paths(paths: &ClaudePaths, value: &Value) -> Result<Opt
 }
 
 pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationContext> {
-    let context = claude::notification_context(&ClaudePaths::default_for_user(), &hook.path)?;
+    let default_paths = ClaudePaths::default_for_user();
+    let paths = if hook.path.starts_with(&default_paths.projects) {
+        default_paths
+    } else if let Some(projects) = hook
+        .path
+        .parent()
+        .and_then(Path::parent)
+        .filter(|dir| dir.file_name().is_some_and(|n| n == "projects"))
+    {
+        ClaudePaths {
+            config: projects.parent().unwrap_or(projects).to_path_buf(),
+            projects: projects.to_path_buf(),
+        }
+    } else {
+        default_paths
+    };
+    let context = claude::notification_context(&paths, &hook.path)?;
     ensure!(
         context.stream.id == hook.session_id
             && hook

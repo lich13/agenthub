@@ -938,17 +938,55 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
 
     // Phase 4: If the prior turn still had an unsettled background task when USER_INPUT arrived,
     // settled_count is clamped to 132 (the start of exec_done, below 137) and diagnose reports
-    // skipReason = "prior_turn_has_pending_work".
+    // skipReason = "prior_turn_has_pending_work". Once that task finishes, the held completion
+    // is emitted and staged into the database while the cursor advances to 138.
+    let db = crate::db::PanelDb::open(":memory:").unwrap();
+    let mut probe_cfg = crate::config::Config::default();
+    probe_cfg.probe.enabled = true;
+    probe_cfg.probe.notifications.enabled = true;
+    probe_cfg.probe.notifications.notify_antigravity = true;
+    probe_cfg.probe.notifications.notify_antigravity_completion = true;
+    db.stage_native_notifications(
+        NativeProvider::Antigravity,
+        &crate::native_probe::NativeScan::default(),
+        &probe_cfg,
+    )
+    .unwrap();
+    let post_activation_ms = chrono::Utc::now().timestamp_millis() + 5_000;
+    let post_activation_rfc3339 = chrono::DateTime::from_timestamp_millis(post_activation_ms)
+        .unwrap()
+        .to_rfc3339();
+
     let mut pending_turn2 = turn2_response.clone();
+    let pending_task_id = format!("{cascade_id}/task-134");
     pending_turn2["trajectory"]["steps"][4]["taskDetails"] = json!({
-        "id": format!("{cascade_id}/task-134"),
+        "id": pending_task_id,
         "movedToBackgroundAt": "2026-01-01T00:02:15Z"
     });
+    pending_turn2["trajectory"]["steps"][6]["metadata"]["completedAt"] =
+        json!(post_activation_rfc3339);
     let pending_snap = snapshot(cascade_id, &summary, &pending_turn2).unwrap();
     assert!(pending_snap.events.is_empty());
     assert_eq!(
         pending_snap.settled_count, 132,
         "prior turn with pending background work must clamp settled_count below 137"
+    );
+    assert_eq!(
+        db.stage_native_notifications(
+            NativeProvider::Antigravity,
+            &crate::native_probe::NativeScan {
+                streams: vec![pending_snap],
+                errors: 0,
+            },
+            &probe_cfg,
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.native_probe_stream_cursor(NativeProvider::Antigravity, cascade_id)
+            .unwrap(),
+        Some(132)
     );
     let pending_diag = diagnose_trajectory(
         cascade_id,
@@ -965,5 +1003,44 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
             .last()
             .unwrap()["skipReason"],
         json!("prior_turn_has_pending_work")
+    );
+
+    let mut released_tasks = BTreeMap::new();
+    released_tasks.insert(
+        pending_task_id,
+        TaskLiveness {
+            active: false,
+            last_activity_ms: Some(post_activation_ms),
+        },
+    );
+    let released_ctx = TrajectoryLivenessContext {
+        now_ms: Some(post_activation_ms + BACKGROUND_HANDOFF_GRACE_MS + 1_000),
+        tasks: released_tasks,
+        ..Default::default()
+    };
+    let released_snap =
+        snapshot_with_context(cascade_id, &summary, &pending_turn2, &released_ctx).unwrap();
+    assert_eq!(released_snap.events.len(), 1);
+    assert_eq!(released_snap.events[0].turn_id, exec_done);
+    assert_eq!(released_snap.events[0].kind, "completion");
+    assert_eq!(released_snap.events[0].position, 137);
+    assert_eq!(released_snap.settled_count, 138);
+    assert_eq!(
+        db.stage_native_notifications(
+            NativeProvider::Antigravity,
+            &crate::native_probe::NativeScan {
+                streams: vec![released_snap],
+                errors: 0,
+            },
+            &probe_cfg,
+        )
+        .unwrap(),
+        1,
+        "held prior-turn completion must be staged once its background task finishes"
+    );
+    assert_eq!(
+        db.native_probe_stream_cursor(NativeProvider::Antigravity, cascade_id)
+            .unwrap(),
+        Some(138)
     );
 }
