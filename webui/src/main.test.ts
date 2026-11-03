@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import indexHtml from "../index.html?raw";
 import bootGuardSource from "../public/agenthub-boot.js?raw";
+import { THEME_STORAGE_KEY } from "./lib/theme";
 import mainSource from "./main.tsx?raw";
 
 describe("AgentHub WebUI bootstrap", () => {
@@ -11,7 +12,7 @@ describe("AgentHub WebUI bootstrap", () => {
 
     expect(guardScriptIndex).toBeGreaterThanOrEqual(0);
     expect(moduleIndex).toBeGreaterThan(guardScriptIndex);
-    expect(bootGuardSource).toContain('localStorage.getItem("agenthub.theme")');
+    expect(bootGuardSource).toContain(`localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})`);
     expect(bootGuardSource).toContain('document.documentElement.setAttribute("data-theme", storedTheme)');
     expect(bootGuardSource).toContain('document.documentElement.removeAttribute("data-theme")');
     expect(bootGuardSource).toContain("window.__AGENTHUB_BOOT__");
