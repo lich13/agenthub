@@ -179,7 +179,6 @@ export function RemoteConnectionSettings() {
               <Cloud size={18} />
               <div>
                 <strong>远程机器列表</strong>
-                <span>支持保存多台远程主机并自定义名称，密钥独立存储于系统钥匙串</span>
               </div>
             </div>
             <button
@@ -293,11 +292,6 @@ export function RemoteConnectionSettings() {
       >
         <div className="remote-form-heading">
           <strong>{isEditingExisting ? "编辑远程机器" : "新增远程机器"}</strong>
-          <span>
-            {isEditingExisting
-              ? "可随时修改自定义名称或更新地址；API Key 留空将沿用钥匙串中已保存的凭据"
-              : "连接前将自动校验 HTTPS 证书与 AgentHub API 协议兼容性"}
-          </span>
         </div>
         <label>
           机器名称

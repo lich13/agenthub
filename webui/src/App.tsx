@@ -98,7 +98,7 @@ export default function App() {
             {view === "dsh" && <DshWorkspace capabilities={capabilities} />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}
             {view === "ops" && <div className="settings-workspace">
-              <header className="settings-header"><div className="settings-header-copy"><h1>设置</h1><span className="muted-text">管理工作站版本更新、全平台会话清理与多台远程主机连接</span></div><div className="settings-tabs" role="tablist">
+              <header className="settings-header"><div className="settings-header-copy"><h1>设置</h1></div><div className="settings-tabs" role="tablist">
                 <button role="tab" aria-selected={settingsSection === "maintenance"} onClick={() => setSettingsSection("maintenance")}>更新与维护</button>
                 <button role="tab" aria-selected={settingsSection === "remote"} onClick={() => setSettingsSection("remote")}>远程连接</button>
               </div></header>

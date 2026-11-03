@@ -248,6 +248,11 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
 .ws-sidebar { min-height: 0; height: 100%; overflow: hidden; border-right: var(--b1); }
 .thread-list, .provider-list { height: 100%; gap: 10px; padding: 14px 10px 10px; }
 .section-title, .workspace-heading { justify-content: space-between; padding: 0 4px; }
+.workspace-title-brand { gap: 9px; min-width: 0; }
+.section-title strong, .workspace-heading h1 {
+  font-size: 15px; font-weight: 650; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .workspace-count-pill, .finder-selection-count {
   justify-content: center; min-width: 22px; padding: 1px 7px; background: var(--as); border: 1px solid var(--ab); color: var(--a);
   font-size: 11px; flex: none;

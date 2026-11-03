@@ -161,7 +161,6 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
       <header className="probe-header">
         <div className="probe-header-meta">
           <h1>{PROBE_NAV_LABEL}</h1>
-          <span className="muted-text">全平台会话态势监控、Bark 推送与受管生命周期 Hooks 控制台</span>
         </div>
         <div className="button-row">
           <button className="icon-button" title="刷新 Probe" onClick={probeActions.refresh}>

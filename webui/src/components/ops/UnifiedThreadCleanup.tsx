@@ -208,9 +208,6 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
       className="wide-panel unified-cleanup-panel"
     >
       <div className="cleanup-panel-head unified-cleanup-head">
-        <p className="unified-cleanup-lead">
-          一键扫描并清理五大 Agent 的已归档会话闭包与 0 消息空残余文件，执行端自动复核运行锁与目录边界。
-        </p>
         <span role="status" className={`status-chip ${stage.tone ? `tone-${stage.tone}` : "tone-muted"}`}>
           {stage.label}
         </span>

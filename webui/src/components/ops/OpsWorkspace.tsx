@@ -34,9 +34,6 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
             <SlidersHorizontal size={18} />
             <h1>设置与维护</h1>
           </div>
-          <span className="muted-text">
-            版本更新、跨平台归档与残余会话安全清理、后台作业诊断抽屉
-          </span>
         </div>
         <div className="button-row">
           <button
