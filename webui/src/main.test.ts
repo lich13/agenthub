@@ -11,6 +11,9 @@ describe("AgentHub WebUI bootstrap", () => {
 
     expect(guardScriptIndex).toBeGreaterThanOrEqual(0);
     expect(moduleIndex).toBeGreaterThan(guardScriptIndex);
+    expect(bootGuardSource).toContain('localStorage.getItem("agenthub.theme")');
+    expect(bootGuardSource).toContain('document.documentElement.setAttribute("data-theme", storedTheme)');
+    expect(bootGuardSource).toContain('document.documentElement.removeAttribute("data-theme")');
     expect(bootGuardSource).toContain("window.__AGENTHUB_BOOT__");
     expect(bootGuardSource).toContain("AgentHub 界面载入失败");
     expect(bootGuardSource).toContain("window.addEventListener(\"error\"");

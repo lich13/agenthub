@@ -1,4 +1,15 @@
 (function () {
+  try {
+    const storedTheme = localStorage.getItem("agenthub.theme");
+    if (storedTheme === "dark" || storedTheme === "light") {
+      document.documentElement.setAttribute("data-theme", storedTheme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+  } catch {
+    // Ignore storage access errors before mount.
+  }
+
   function messageFrom(error) {
     if (!error) return "前端入口没有完成挂载";
     if (typeof error === "string") return error;

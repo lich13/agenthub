@@ -207,6 +207,10 @@ describe("contract registry", () => {
     expect(visual.remoteApiOnly).toEqual([...remoteApiOnlyVisualSurfaces]);
     expect(visual.desktopTauriOnly).toEqual([...desktopTauriOnlyVisualSurfaces]);
     expect(visual.forbidden.desktopEmbeddedTauri).toEqual([...macosForbiddenVisualSurfaces]);
+
+    const visualContractSource = repositoryFile("webui/src/lib/domain/visualContract.ts");
+    expect(visualContractSource).not.toContain("./contractRegistry");
+    expect(visualContractSource).not.toContain("agenthub-contract.json");
   });
 
   test("covers WebUI runtime command wrappers without ad hoc command strings", () => {

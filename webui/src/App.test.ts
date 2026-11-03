@@ -845,9 +845,9 @@ describe("conversation helpers", () => {
 
     expect(runtimeViewModelSource).not.toContain("THEME_STORAGE_KEY");
     expect(appSource).not.toContain("applyThemeMode");
-    expect(mainSource.indexOf("applyThemeMode(readStoredThemeMode())")).toBeLessThan(
-      mainSource.indexOf("createRoot(")
-    );
+    const applyThemeIndex = mainSource.indexOf("applyThemeMode(readStoredThemeMode())");
+    expect(applyThemeIndex).toBeGreaterThanOrEqual(0);
+    expect(applyThemeIndex).toBeLessThan(mainSource.indexOf("createRoot("));
 
     const opsSource = extractFunctionSource("OpsWorkspace");
     expect(opsSource).not.toContain('<section className="appearance-section" aria-label="外观">');
