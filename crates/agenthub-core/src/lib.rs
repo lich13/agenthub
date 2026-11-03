@@ -49,11 +49,12 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
 #[cfg(all(test, unix))]
 pub(crate) fn write_executable_fixture(path: &std::path::Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
-    let body = if let Some(rest) = script.strip_prefix("#!/bin/sh\n") {
-        format!("#!/bin/sh\nif [ \"${{AGENTHUB_TEST_EXEC_PROBE:-}}\" = \"1\" ]; then exit 0; fi\n{rest}")
-    } else {
-        script.to_string()
-    };
+    let rest = script
+        .strip_prefix("#!/bin/sh\n")
+        .expect("executable fixture script must start with #!/bin/sh");
+    let body = format!(
+        "#!/bin/sh\nif [ \"${{AGENTHUB_TEST_EXEC_PROBE:-}}\" = \"1\" ]; then exit 0; fi\n{rest}"
+    );
     std::fs::write(path, body).expect("write executable fixture");
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
         .expect("set executable fixture permissions");
@@ -71,5 +72,16 @@ pub(crate) fn write_executable_fixture(path: &std::path::Path, script: &str) {
             Ok(_) => break,
             Err(err) => panic!("probe executable fixture {}: {err}", path.display()),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod fixture_tests {
+    #[test]
+    #[should_panic(expected = "executable fixture script must start with #!/bin/sh")]
+    fn write_executable_fixture_rejects_non_sh_shebang() {
+        let path =
+            std::env::temp_dir().join(format!("agenthub-non-sh-fixture-{}", uuid::Uuid::new_v4()));
+        super::write_executable_fixture(&path, "#!/usr/bin/env node\nprocess.exit(0);\n");
     }
 }

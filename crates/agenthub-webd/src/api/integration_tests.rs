@@ -242,25 +242,30 @@ async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     let executable = home.join("native-codex-fixture");
     write_executable_fixture(
         &executable,
-        r#"#!/usr/bin/env node
-if (process.argv[2] === '--version') { console.log('codex-cli 0.153.4'); process.exit(0); }
-const fs = require('node:fs');
-const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync(path.join(process.env.CODEX_HOME, 'state_5.sqlite'));
-require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
-  fs.appendFileSync(path.join(process.env.CODEX_HOME, 'native-requests.jsonl'), line + '\n');
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "codex-cli 0.153.4"
+  exit 0
+fi
+exec node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(path.join(process.env.CODEX_HOME, "state_5.sqlite"));
+require("node:readline").createInterface({ input: process.stdin }).on("line", line => {
+  fs.appendFileSync(path.join(process.env.CODEX_HOME, "native-requests.jsonl"), line + "\n");
   const request = JSON.parse(line);
   if (request.id == null) return;
   let result = {};
-  if (request.method === 'thread/name/set') {
-    db.prepare('UPDATE threads SET title=? WHERE id=?').run(request.params.name, request.params.threadId);
-    fs.appendFileSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), JSON.stringify({ id:request.params.threadId, thread_name:request.params.name }) + '\n');
-  } else if (request.method === 'thread/read') {
-    result = { thread: db.prepare('SELECT id,title AS name FROM threads WHERE id=?').get(request.params.threadId) };
-  } else if (request.method !== 'initialize') process.exit(2);
+  if (request.method === "thread/name/set") {
+    db.prepare("UPDATE threads SET title=? WHERE id=?").run(request.params.name, request.params.threadId);
+    fs.appendFileSync(path.join(process.env.CODEX_HOME, "session_index.jsonl"), JSON.stringify({ id:request.params.threadId, thread_name:request.params.name }) + "\n");
+  } else if (request.method === "thread/read") {
+    result = { thread: db.prepare("SELECT id,title AS name FROM threads WHERE id=?").get(request.params.threadId) };
+  } else if (request.method !== "initialize") process.exit(2);
   console.log(JSON.stringify({ id: request.id, result }));
 });
+' "$@"
 "#,
     );
     state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(

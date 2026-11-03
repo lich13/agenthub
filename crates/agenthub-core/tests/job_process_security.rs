@@ -48,32 +48,41 @@ async fn wait_for_status(db: &PanelDb, job_id: &str, expected: &str) -> JobRecor
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn process_job_preserves_program_path_and_literal_argument_boundaries() {
+fn write_executable_fixture(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
-
-    let fixture = TempFixture::new();
-    let program = fixture.root.join("argument recorder with spaces");
-    let marker = fixture.root.join("shell-injection-marker");
-    fs::write(&program, "#!/bin/sh\nif [ \"${AGENTHUB_TEST_EXEC_PROBE:-}\" = \"1\" ]; then exit 0; fi\nprintf '<%s>\\n' \"$@\"\n")
-        .expect("write argument recorder fixture");
-    let mut permissions = fs::metadata(&program)
-        .expect("read argument recorder permissions")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&program, permissions).expect("make argument recorder executable");
+    let rest = script
+        .strip_prefix("#!/bin/sh\n")
+        .expect("executable fixture script must start with #!/bin/sh");
+    let body = format!(
+        "#!/bin/sh\nif [ \"${{AGENTHUB_TEST_EXEC_PROBE:-}}\" = \"1\" ]; then exit 0; fi\n{rest}"
+    );
+    fs::write(path, body).expect("write executable fixture");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .expect("set executable fixture permissions");
     for attempt in 0..10 {
-        match std::process::Command::new(&program)
+        match std::process::Command::new(path)
             .env("AGENTHUB_TEST_EXEC_PROBE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
         {
             Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 9 => {
                 std::thread::sleep(Duration::from_millis(5));
             }
             Ok(_) => break,
-            Err(err) => panic!("probe argument recorder fixture: {err}"),
+            Err(err) => panic!("probe executable fixture {}: {err}", path.display()),
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_job_preserves_program_path_and_literal_argument_boundaries() {
+    let fixture = TempFixture::new();
+    let program = fixture.root.join("argument recorder with spaces");
+    let marker = fixture.root.join("shell-injection-marker");
+    write_executable_fixture(&program, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n");
 
     let config_path = Path::new("/synthetic/runtime security/config file.toml");
     let hostile_argument = format!("; touch {}; #", marker.display());

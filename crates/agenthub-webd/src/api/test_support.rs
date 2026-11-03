@@ -51,12 +51,18 @@ impl Drop for AsyncEnvGuard {
 #[cfg(unix)]
 pub(crate) fn write_executable_fixture(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
-    fs::write(path, script).expect("write executable fixture");
+    let rest = script
+        .strip_prefix("#!/bin/sh\n")
+        .expect("executable fixture script must start with #!/bin/sh");
+    let body = format!(
+        "#!/bin/sh\nif [ \"${{AGENTHUB_TEST_EXEC_PROBE:-}}\" = \"1\" ]; then exit 0; fi\n{rest}"
+    );
+    fs::write(path, body).expect("write executable fixture");
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .expect("set executable fixture permissions");
     for attempt in 0..10 {
         match std::process::Command::new(path)
-            .arg("--version")
+            .env("AGENTHUB_TEST_EXEC_PROBE", "1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
