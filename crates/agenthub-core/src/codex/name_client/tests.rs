@@ -1,12 +1,16 @@
 use super::*;
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::fs;
 
 fn fixture(script: &str) -> (std::path::PathBuf, CodexAppServerClient) {
     let root = std::env::temp_dir().join(format!("agenthub-name-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();
     let executable = root.join("codex");
-    fs::write(&executable, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.153.4'; exit 0; fi\n{script}")).unwrap();
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::write_executable_fixture(
+        &executable,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.153.4'; exit 0; fi\n{script}"
+        ),
+    );
     // CLI discovery has separate tests; protocol fixtures start with a resolved executable.
     (
         root,

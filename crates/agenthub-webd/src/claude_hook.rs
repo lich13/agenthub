@@ -149,10 +149,7 @@ mod tests {
     use super::*;
     #[test]
     fn failure_categories_never_include_raw_api_errors() {
-        let _env_guard = crate::api::integration_tests::CONFIG_ENV_LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = crate::api::test_support::CONFIG_ENV_LOCK.blocking_lock();
         let root = ClaudePaths::default_for_user().projects;
         let value = serde_json::json!({"hook_event_name":"StopFailure", "error":"rate_limit", "error_details":"private fixture detail", "last_assistant_message":"private fixture error", "session_id":"fixture", "prompt_id":"prompt-fixture", "transcript_path":root.join("fixture/session.jsonl")});
         let event = parse(&value).unwrap().unwrap();

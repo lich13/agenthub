@@ -2,7 +2,6 @@ use super::{catalog_request, read_bounded_line, CatalogQuery, DesktopHelper};
 use crate::{codex::desktop::DesktopError, resource_limits::CODEX_DESKTOP_FRAME_BYTES};
 use std::{
     fs, io,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     pin::Pin,
     process::Command,
@@ -93,12 +92,7 @@ done
 "#,
             create_case = create_case,
         );
-        fs::write(&executable, script).expect("write fake helper executable");
-        let mut permissions = fs::metadata(&executable)
-            .expect("read fake helper metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&executable, permissions).expect("make fake helper executable");
+        crate::write_executable_fixture(&executable, &script);
         fs::create_dir(directory.join("codex-home")).expect("create fixture Codex home");
         Self {
             directory,

@@ -27,7 +27,7 @@ mod threads;
 #[cfg(test)]
 mod entry_contract_tests;
 #[cfg(test)]
-pub(crate) mod integration_tests;
+mod integration_tests;
 #[cfg(test)]
 mod legacy_routes_tests;
 #[cfg(test)]

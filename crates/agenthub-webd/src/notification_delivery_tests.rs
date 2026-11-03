@@ -498,6 +498,7 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
 
 #[tokio::test]
 async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
+    let _env_guard = crate::api::test_support::AsyncEnvGuard::lock_read_only().await;
     for (provider, kind) in [
         (NativeProvider::Grok, "completion"),
         (NativeProvider::Claude, "reply_needed"),

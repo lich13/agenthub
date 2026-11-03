@@ -45,3 +45,31 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     services::probe::evict_idle_live_provider_sessions_cache(max_idle);
     antigravity::sessions::evict_idle_endpoint_cache(max_idle);
 }
+
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_fixture(path: &std::path::Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let body = if let Some(rest) = script.strip_prefix("#!/bin/sh\n") {
+        format!("#!/bin/sh\nif [ \"${{AGENTHUB_TEST_EXEC_PROBE:-}}\" = \"1\" ]; then exit 0; fi\n{rest}")
+    } else {
+        script.to_string()
+    };
+    std::fs::write(path, body).expect("write executable fixture");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .expect("set executable fixture permissions");
+    for attempt in 0..10 {
+        match std::process::Command::new(path)
+            .env("AGENTHUB_TEST_EXEC_PROBE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 9 => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(_) => break,
+            Err(err) => panic!("probe executable fixture {}: {err}", path.display()),
+        }
+    }
+}

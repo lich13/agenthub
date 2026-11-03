@@ -2,13 +2,11 @@ use super::*;
 
 #[cfg(unix)]
 fn native_fixture(script: &str) -> (GrokPaths, GrokSessionSummary, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
     let (paths, id, _) = fixture();
     let mut session = resolve_session(&paths, &id).unwrap();
     session.cwd = paths.home.to_string_lossy().into_owned();
     let executable = paths.home.join("fake-grok");
-    fs::write(&executable, script).unwrap();
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::write_executable_fixture(&executable, script);
     (paths, session, executable)
 }
 

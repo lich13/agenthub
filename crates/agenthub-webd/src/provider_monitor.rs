@@ -178,6 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn claude_candidate_without_a_readable_source_stays_in_the_bounded_queue() {
+        let _env_guard = crate::api::test_support::AsyncEnvGuard::lock_read_only().await;
         let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
         let db = PanelDb::open(":memory:").unwrap();
@@ -443,48 +444,15 @@ mod tests {
         assert!(codex_outcome.recorded);
 
         // 2-5. Claude Code, Grok, Antigravity, and DSH via their real parsers and hook inputs
-        struct PlatformEnvGuard {
-            _lock: std::sync::MutexGuard<'static, ()>,
-            previous: [(&'static str, Option<std::ffi::OsString>); 3],
-        }
-        impl PlatformEnvGuard {
-            fn set(
-                claude_dir: &std::path::Path,
-                grok_home: &std::path::Path,
-                dsh_home: &std::path::Path,
-            ) -> Self {
-                let lock = crate::api::integration_tests::CONFIG_ENV_LOCK
-                    .get_or_init(|| std::sync::Mutex::new(()))
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let previous = [
-                    ("CLAUDE_CONFIG_DIR", std::env::var_os("CLAUDE_CONFIG_DIR")),
-                    ("GROK_HOME", std::env::var_os("GROK_HOME")),
-                    ("DSH_HOME", std::env::var_os("DSH_HOME")),
-                ];
-                std::env::set_var("CLAUDE_CONFIG_DIR", claude_dir);
-                std::env::set_var("GROK_HOME", grok_home);
-                std::env::set_var("DSH_HOME", dsh_home);
-                Self {
-                    _lock: lock,
-                    previous,
-                }
-            }
-        }
-        impl Drop for PlatformEnvGuard {
-            fn drop(&mut self) {
-                for (key, value) in &self.previous {
-                    match value {
-                        Some(v) => std::env::set_var(key, v),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
         let claude_config_dir = sandbox_root.join("claude");
         let grok_home_dir = sandbox_root.join("grok");
         let dsh_home_dir = sandbox_root.join("dsh");
-        let _env_guard = PlatformEnvGuard::set(&claude_config_dir, &grok_home_dir, &dsh_home_dir);
+        let _env_guard = crate::api::test_support::AsyncEnvGuard::set_many(&[
+            ("CLAUDE_CONFIG_DIR", &claude_config_dir),
+            ("GROK_HOME", &grok_home_dir),
+            ("DSH_HOME", &dsh_home_dir),
+        ])
+        .await;
 
         let start_ms = chrono::Utc::now().timestamp_millis() + 1_000;
         let now_ms = start_ms + 1_000;

@@ -113,14 +113,9 @@ impl AppState {
     pub fn dsh_paths(&self) -> agenthub_core::dsh::DshPaths {
         #[cfg(test)]
         if let Some(sandbox) = &self.test_sandbox {
-            if std::env::var_os("DSH_HOME")
-                .filter(|v| !v.is_empty())
-                .is_none()
-            {
-                return agenthub_core::dsh::DshPaths {
-                    home: sandbox.0.join(".dsh"),
-                };
-            }
+            return agenthub_core::dsh::DshPaths {
+                home: sandbox.0.join(".dsh"),
+            };
         }
         agenthub_core::dsh::DshPaths::default_for_user()
     }
@@ -129,29 +124,20 @@ impl AppState {
         let codex = self.codex_paths();
         #[cfg(test)]
         if let Some(sandbox) = &self.test_sandbox {
-            let claude_cfg = std::env::var_os("CLAUDE_CONFIG_DIR")
-                .filter(|v| !v.is_empty())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| sandbox.0.join(".claude"));
-            let grok_home = std::env::var_os("GROK_HOME")
-                .filter(|v| !v.is_empty())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| sandbox.0.join(".grok"));
-            let ag_home = std::env::var_os("ANTIGRAVITY_HOME")
-                .filter(|v| !v.is_empty())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| sandbox.0.join(".gemini/antigravity"));
+            let claude_cfg = sandbox.0.join(".claude");
             return agenthub_core::services::cleanup::UnifiedCleanupPaths {
                 codex,
                 antigravity: agenthub_core::antigravity::sessions::AntigravityPaths::offline(
-                    ag_home,
+                    sandbox.0.join(".gemini/antigravity"),
                 ),
                 dsh: self.dsh_paths(),
                 claude: agenthub_core::claude::ClaudePaths {
                     projects: claude_cfg.join("projects"),
                     config: claude_cfg,
                 },
-                grok: agenthub_core::grok::GrokPaths { home: grok_home },
+                grok: agenthub_core::grok::GrokPaths {
+                    home: sandbox.0.join(".grok"),
+                },
             };
         }
         agenthub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex)

@@ -1,6 +1,8 @@
 use super::{
     load_probe_threads, probe_config_path, router,
-    test_support::{sandboxed_test_config, source_line_count},
+    test_support::{
+        sandboxed_test_config, source_line_count, write_executable_fixture, AsyncEnvGuard,
+    },
     update_service, UpdateAction,
 };
 use agenthub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
@@ -32,13 +34,12 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, OnceLock,
+        Mutex,
     },
 };
 use tower::ServiceExt;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[test]
 fn api_facade_stays_under_line_budget() {
@@ -46,36 +47,6 @@ fn api_facade_stays_under_line_budget() {
         source_line_count("api.rs") < 260,
         "api.rs should stay a thin facade; move tests and domain logic into api/* modules"
     );
-}
-
-struct ConfigEnvGuard {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl ConfigEnvGuard {
-    fn set(path: &std::path::Path) -> Self {
-        let guard = CONFIG_ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var_os("AGENTHUB_CONFIG");
-        env::set_var("AGENTHUB_CONFIG", path);
-        Self {
-            _guard: guard,
-            previous,
-        }
-    }
-}
-
-impl Drop for ConfigEnvGuard {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.as_ref() {
-            env::set_var("AGENTHUB_CONFIG", previous);
-        } else {
-            env::remove_var("AGENTHUB_CONFIG");
-        }
-    }
 }
 
 fn temp_test_dir(prefix: &str) -> PathBuf {
@@ -268,9 +239,10 @@ async fn request_rpc_status(
 async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     let (mut state, api_key, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
-    use std::os::unix::fs::PermissionsExt;
     let executable = home.join("native-codex-fixture");
-    fs::write(&executable, r#"#!/usr/bin/env node
+    write_executable_fixture(
+        &executable,
+        r#"#!/usr/bin/env node
 if (process.argv[2] === '--version') { console.log('codex-cli 0.153.4'); process.exit(0); }
 const fs = require('node:fs');
 const path = require('node:path');
@@ -289,8 +261,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   } else if (request.method !== 'initialize') process.exit(2);
   console.log(JSON.stringify({ id: request.id, result }));
 });
-"#).unwrap();
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+"#,
+    );
     state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(
         vec![executable],
         std::time::Duration::from_secs(5),
@@ -406,6 +378,7 @@ async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
 
 #[tokio::test]
 async fn rpc_probe_typed_commands_start_matching_jobs() {
+    let _env_guard = AsyncEnvGuard::lock_read_only().await;
     for (command, kind) in [
         ("probe.barkTest", "probe_bark_test"),
         ("probe.installHooks", "probe_hooks_install"),
@@ -1100,7 +1073,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
     config.security.secret_key = state.config().security.secret_key.clone();
     config.paths.db_path = state.config().paths.db_path.clone();
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-    let _config_env = ConfigEnvGuard::set(&config_path);
+    let _config_env = AsyncEnvGuard::set_config(&config_path).await;
     let app = router(state.clone());
 
     let status = request_rpc_status(
@@ -1124,6 +1097,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
 
 #[tokio::test]
 async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
+    let _env_guard = AsyncEnvGuard::lock_read_only().await;
     for (command, kind, title, forbidden_arg) in [
         (
             "probe.installHooks",
@@ -1174,7 +1148,7 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
 #[tokio::test]
 async fn probe_settings_patch_requires_api_key() {
     let (state, _api_key, dir, config_path) = authenticated_test_state_with_config_file();
-    let _config_env = ConfigEnvGuard::set(&config_path);
+    let _config_env = AsyncEnvGuard::set_config(&config_path).await;
     let app = router(state);
 
     let status = request_rpc_status(
@@ -1195,7 +1169,7 @@ async fn probe_settings_patch_rejects_missing_config_file() {
     let dir = temp_test_dir("agenthub-missing-config");
     fs::create_dir_all(&dir).unwrap();
     let missing_path = dir.join("missing-config.toml");
-    let _config_env = ConfigEnvGuard::set(&missing_path);
+    let _config_env = AsyncEnvGuard::set_config(&missing_path).await;
     let app = router(state);
 
     let status = request_rpc_status(
@@ -1212,7 +1186,7 @@ async fn probe_settings_patch_rejects_missing_config_file() {
 #[tokio::test]
 async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
     let (state, api_key, _dir, config_path) = authenticated_test_state_with_config_file();
-    let _config_env = ConfigEnvGuard::set(&config_path);
+    let _config_env = AsyncEnvGuard::set_config(&config_path).await;
     let app = router(state.clone());
 
     let _ = request_rpc_json(
@@ -2945,27 +2919,8 @@ async fn rpc_auth_audit_never_contains_api_key_or_legacy_credentials() {
 
 #[tokio::test]
 async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
-    struct ClaudeEnv {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        previous: Option<std::ffi::OsString>,
-    }
-    impl Drop for ClaudeEnv {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value),
-                None => env::remove_var("CLAUDE_CONFIG_DIR"),
-            }
-        }
-    }
     let root = temp_test_dir("agenthub-claude-rpc");
-    let _env = ClaudeEnv {
-        _lock: CONFIG_ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        previous: env::var_os("CLAUDE_CONFIG_DIR"),
-    };
-    env::set_var("CLAUDE_CONFIG_DIR", &root);
+    let _env = AsyncEnvGuard::set_many(&[("CLAUDE_CONFIG_DIR", &root)]).await;
     let (state, api_key) = authenticated_test_state();
     let app = router(state);
     assert_eq!(

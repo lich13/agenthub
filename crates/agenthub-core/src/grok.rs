@@ -1484,17 +1484,16 @@ async fn rename_native(
     timeout: Duration,
 ) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-    let mut child = crate::jobs::spawn_retrying_etxtbsy(
-        tokio::process::Command::new(executable)
-            .args(["agent", "stdio"])
-            .env("GROK_HOME", &paths.home)
-            .current_dir(&session.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true),
-    )
-    .context("start Grok agent stdio")?;
+    let mut child = tokio::process::Command::new(executable)
+        .args(["agent", "stdio"])
+        .env("GROK_HOME", &paths.home)
+        .current_dir(&session.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("start Grok agent stdio")?;
     let mut input = child.stdin.take().context("Grok stdin unavailable")?;
     let output = child.stdout.take().context("Grok stdout unavailable")?;
     let mut output = tokio::io::BufReader::new(output.take(1024 * 1024));

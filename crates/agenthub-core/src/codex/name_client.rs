@@ -47,16 +47,15 @@ async fn rename_with_client(
         .await
         .context("Codex CLI discovery timed out")?
         .context("Codex CLI is required to rename native tasks")?;
-    let mut child = crate::jobs::spawn_retrying_etxtbsy(
-        Command::new(executable)
-            .args(["app-server", "--stdio"])
-            .env("CODEX_HOME", &paths.home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true),
-    )
-    .context("start Codex app-server for task rename")?;
+    let mut child = Command::new(executable)
+        .args(["app-server", "--stdio"])
+        .env("CODEX_HOME", &paths.home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("start Codex app-server for task rename")?;
     let result = timeout_at(deadline, async {
         let mut stdin = child.stdin.take().context("open Codex app-server stdin")?;
         let stdout = child

@@ -158,27 +158,17 @@ pub(crate) async fn read_response<T: DeserializeOwned>(
 }
 
 async fn probe_codex_version(path: &Path) -> Option<ParsedVersion> {
-    for attempt in 0..5 {
-        let mut command = Command::new(path);
-        command.arg("--version").kill_on_drop(true);
-        match timeout(VERSION_PROBE_TIMEOUT, command.output())
-            .await
-            .ok()?
-        {
-            Err(err) if err.raw_os_error() == Some(26) && attempt < 4 => {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            Err(_) => return None,
-            Ok(output) => {
-                if !output.status.success() {
-                    return None;
-                }
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                return parse_codex_version(&stdout);
-            }
-        }
+    let mut command = Command::new(path);
+    command.arg("--version").kill_on_drop(true);
+    let output = timeout(VERSION_PROBE_TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    None
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_codex_version(&stdout)
 }
 
 fn discover_codex_candidates() -> Vec<PathBuf> {

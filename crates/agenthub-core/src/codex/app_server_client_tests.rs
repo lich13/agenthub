@@ -2,12 +2,7 @@
 
 use super::*;
 use crate::shell::{shell_quote, QuoteStyle};
-use std::{
-    fs,
-    os::unix::fs::{symlink, PermissionsExt},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fs, os::unix::fs::symlink, path::PathBuf, time::Duration};
 
 struct Fixture {
     root: PathBuf,
@@ -60,12 +55,7 @@ impl Fixture {
         let executable = self.root.join(relative);
         fs::create_dir_all(executable.parent().expect("fixture path has a parent"))
             .expect("create fixture executable directory");
-        fs::write(&executable, contents).expect("write fixture executable");
-        let mut permissions = fs::metadata(&executable)
-            .expect("read fixture executable metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&executable, permissions).expect("make fixture executable");
+        crate::write_executable_fixture(&executable, contents);
         executable
     }
 }
