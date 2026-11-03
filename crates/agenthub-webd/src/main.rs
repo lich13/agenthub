@@ -62,6 +62,11 @@ const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
 #[cfg(test)]
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
+/// The foreground Stop hook spawns the detached child right before calling `exit(0)`.
+/// Antigravity's hook runner waits for the foreground process to exit and close stdout
+/// before writing the current turn's `ExecutorMetadata`. Waiting 120ms lets the host
+/// persist `ExecutorMetadata` before the first `GetAllCascadeTrajectories` query.
+const ANTIGRAVITY_DETACHED_SETTLE_DELAY_MS: u64 = 120;
 const PROBE_ERROR_MONITOR_CURSOR_SETTING: &str = "probe_error_monitor_cursor";
 const PROBE_ERROR_MONITOR_STATUS_SETTING: &str = "probe_error_monitor_status";
 const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 100;
@@ -160,7 +165,8 @@ async fn main() -> Result<()> {
                     )
                     .await;
                 } else {
-                    tokio::time::sleep(Duration::from_millis(120)).await;
+                    tokio::time::sleep(Duration::from_millis(ANTIGRAVITY_DETACHED_SETTLE_DELAY_MS))
+                        .await;
                     let _ = tokio::time::timeout(
                         Duration::from_millis(4500),
                         provider_monitor::run_antigravity_hook(&cli.config, cascade_id.as_deref()),

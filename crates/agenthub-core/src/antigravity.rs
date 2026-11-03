@@ -588,7 +588,7 @@ pub fn snapshot_with_context(
     response: &Value,
     ctx: &TrajectoryLivenessContext,
 ) -> Result<NativeStreamSnapshot> {
-    Ok(evaluate_trajectory(id, summary, response, ctx, None)?.0)
+    Ok(evaluate_trajectory(id, summary, response, ctx, None, false)?.0)
 }
 
 pub fn diagnose_trajectory(
@@ -598,7 +598,7 @@ pub fn diagnose_trajectory(
     ctx: &TrajectoryLivenessContext,
     db_cursor: Option<u64>,
 ) -> Result<Value> {
-    Ok(evaluate_trajectory(id, summary, response, ctx, db_cursor)?.1)
+    Ok(evaluate_trajectory(id, summary, response, ctx, db_cursor, true)?.1)
 }
 
 fn evaluate_trajectory(
@@ -607,6 +607,7 @@ fn evaluate_trajectory(
     response: &Value,
     ctx: &TrajectoryLivenessContext,
     db_cursor: Option<u64>,
+    want_diag: bool,
 ) -> Result<(NativeStreamSnapshot, Value)> {
     let identity = identity(id, summary)?;
     let trajectory = &response["trajectory"];
@@ -695,7 +696,11 @@ fn evaluate_trajectory(
             settled_count = settled_count.min(group[0].0 as u64);
         }
     }
-    let mut candidates = Vec::with_capacity(executors.len());
+    let mut candidates = if want_diag {
+        Vec::with_capacity(executors.len())
+    } else {
+        Vec::new()
+    };
     for meta in executors {
         let exec = meta["executionId"]
             .as_str()
@@ -707,6 +712,9 @@ fn evaluate_trajectory(
             .and_then(|group| group.last().map(|(idx, _)| *idx as u64));
         let position = actual_last.map(|idx| idx + 1);
         let record_candidate = |candidates: &mut Vec<Value>, skip_reason: Option<&'static str>| {
+            if !want_diag {
+                return;
+            }
             candidates.push(serde_json::json!({
                     "executionId": exec,
                     "lastStepIdx": end,
@@ -941,6 +949,9 @@ fn evaluate_trajectory(
         settled_count,
         events,
     };
+    if !want_diag {
+        return Ok((snapshot, Value::Null));
+    }
     let pending = collect_turn_pending_work(id, summary_trajectory_id, steps);
     let executor_tail: Vec<Value> = executors
         .iter()
