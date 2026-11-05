@@ -17,7 +17,7 @@ export type ExecutionGroup = {
   mergedIds?: string[];
   commands: ExecutionCommand[];
   kind: "command" | "tool";
-  provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness";
+  provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness" | "Grok Bot";
   running: boolean;
   failedCount: number;
   turnId?: string | null;
@@ -232,9 +232,9 @@ export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRender
 
 export function groupProviderEvents(
   events: ProviderHistoryEvent[],
-  provider: "Antigravity" | "DeepSeek Harness",
+  provider: "Antigravity" | "DeepSeek Harness" | "Grok Bot",
 ): ExecutionRenderItem<ProviderHistoryEvent>[] {
-  const prefix = provider === "Antigravity" ? "antigravity" : "dsh";
+  const prefix = provider === "Antigravity" ? "antigravity" : provider === "Grok Bot" ? "grokbot" : "dsh";
   return groupActivities(events.map(event => ({
     item: event,
     key: `${prefix}:${event.id}`,

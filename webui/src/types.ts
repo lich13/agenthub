@@ -121,8 +121,6 @@ export type ProviderListResponse = ProviderSessionSummary[];
 export type ProviderDetailResponse = ProviderSessionDetail;
 export type ProviderMutationResponse = ProviderSessionSummary;
 
-
-
 export type ThreadSummary = {
   storageSize?: SessionStorageSize | null;
   id: string;
@@ -272,7 +270,7 @@ export type ThreadBlockPage = {
   before_cursor?: string | null;
 };
 
-export type SearchProvider = "codex" | "claude_code" | "grok" | "antigravity" | "dsh";
+export type SearchProvider = "codex" | "claude_code" | "grok" | "grokbot" | "antigravity" | "dsh";
 export type SearchScope = "thread" | "provider";
 export type SessionSearchRequest = {
   provider: SearchProvider;
@@ -303,10 +301,6 @@ export type SessionSearchResponse = {
   warnings?: string[];
 };
 
-
-
-
-
 export type HostSurface = "linux_server_api" | "desktop_embedded_tauri";
 
 export type SystemCapabilities = {
@@ -326,6 +320,8 @@ export type SystemCapabilities = {
   dsh_notifications?: boolean;
   antigravity_sessions?: boolean;
   dsh_sessions?: boolean;
+  grokbot_sessions?: boolean;
+  grokbot_notifications?: boolean;
   codex_delete_tree?: boolean;
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;
@@ -365,7 +361,6 @@ export type UpdateStatus = {
   capabilities: string[];
 };
 
-
 export type DesktopJobDetailRequest = { id: string; includeOutput?: boolean };
 
 export type JobRecord = {
@@ -389,30 +384,9 @@ export type JobRecord = {
   } | null;
 };
 
-export type ArchiveDeletePlan = {
-  total_threads: number;
-  active_threads: number;
-  archived_threads: number;
-  session_index_lines: number;
-  rollout_files: number;
-  archived_ids: string[];
-  integrity: string;
-};
-
-export type ArchiveDeleteResult = {
-  items?: HiddenThreadItemResult[];
-  before: ArchiveDeletePlan;
-  after_total_threads: number;
-  after_active_threads: number;
-  after_archived_threads: number;
-  after_integrity: string;
-  deleted_rollout_files: number;
-};
-
 export type HiddenThreadSelection = { id: string; fingerprint?: string | null };
 export type HiddenThreadCandidate = HiddenThreadSelection & { title: string; allowed: boolean; reason: string | null };
 export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped" | "failed"; reason: string | null; residuals?: string[] };
-export type CleanupExecuteRequest = { confirmed: boolean; expectedCount?: number; candidates?: HiddenThreadSelection[] };
 
 export type HiddenThreadDeletePlan = {
   scan?: HiddenScanProgress | null;
@@ -432,23 +406,6 @@ export type HiddenScanRequest = { mode?: "start" | "poll" | "cancel"; scanId?: s
 export type HiddenScanProgress = {
   id: string; phase: "preparing" | "scanning" | "complete" | "stopping" | "stopped" | "failed";
   processed: number; total: number; cursor: number; nextCursor: number; hasMore: boolean; error: string | null;
-};
-
-export type HiddenThreadDeleteResult = {
-  skipped_threads: number;
-  failed_threads: number;
-  items: HiddenThreadItemResult[];
-  before: HiddenThreadDeletePlan;
-  deleted_threads: number;
-  after_total_threads: number;
-  after_visible_threads: number;
-  after_hidden_threads: number;
-  after_archived_threads: number;
-  after_integrity: string;
-  visible_threads: number;
-  hidden_threads: number;
-  integrity: string;
-  deleted_rollout_files: number;
 };
 
 export type OptionalResult<T> = {
@@ -487,7 +444,7 @@ export type PluginInfo = {
 };
 
 export type ProbeLiveSession = {
-  provider: "codex" | "claude_code" | "grok" | "antigravity" | "dsh" | string;
+  provider: "codex" | "claude_code" | "grok" | "grokbot" | "antigravity" | "dsh" | string;
   id: string;
   session_key: string;
   title: string;
@@ -497,7 +454,7 @@ export type ProbeLiveSession = {
 };
 
 export type ProbeStatus = {
-  provider_notifications?: { provider: "grok" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
+  provider_notifications?: { provider: "grok" | "grokbot" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
   label?: string | null;
   enabled: boolean;
   available?: boolean | null;
@@ -594,6 +551,7 @@ export type ProbeSettings = {
       notify_recoverable?: boolean;
       notify_codex?: boolean;
       notify_grok?: boolean;
+  notify_grokbot?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -611,7 +569,6 @@ export type ProbeSettings = {
     notify_dsh_failure?: boolean;
     notify_dsh_reply_needed?: boolean;
     notify_dsh_authorization?: boolean;
-
 
     };
     observability?: Record<string, unknown> & {
@@ -635,6 +592,7 @@ export type ProbeSettings = {
     notify_recoverable?: boolean;
       notify_codex?: boolean;
       notify_grok?: boolean;
+  notify_grokbot?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -653,12 +611,8 @@ export type ProbeSettings = {
     notify_dsh_reply_needed?: boolean;
     notify_dsh_authorization?: boolean;
 
-
   };
 };
-
-
-
 
 export type CodexConfig = {
   model?: string | null;
@@ -677,12 +631,6 @@ export type { SshDeleteRequest, SshHostList, RemoteMachineSummary, RemoteConnect
 export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
 export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean; configPath?: string };
-
-export type DshArchiveSelection = { id: string; archiveId: string };
-export type DshArchiveCandidate = DshArchiveSelection & { parentId: string | null; reason: string | null };
-export type DshArchiveDeletePlan = { available: boolean; archivedThreads: number; candidates: DshArchiveCandidate[]; issues: string[] };
-export type DshArchiveDeleteRequest = { confirmed: boolean; targets: DshArchiveSelection[] };
-export type DshArchiveDeleteResult = { items: HiddenThreadItemResult[]; deletedThreads: number; deletedBytes: number };
 
 export type UnifiedCleanupDryRunRequest = { scopes?: string[]; includeCodexHidden?: boolean };
 export type UnifiedCleanupCandidate = {

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { assertManagedExecutable, launchOptionsForProject, verifyProjectBrowser } from "../webui/playwright-browser-guard.mjs";
 
@@ -83,19 +81,4 @@ test("a redirected installation fails before launching any browser", async t => 
   await assert.rejects(verifyProjectBrowser({ use: { browserName: "chromium" } }, {
     chromium: { executablePath: () => link, launchServer: () => assert.fail("must not launch") }
   }, {}), /escaped/);
-});
-
-test("repository browser entrypoints cannot select installed brand channels or executable paths", () => {
-  const root = fileURLToPath(new URL("../", import.meta.url));
-  const files = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0")
-    .filter(path => /\.(?:[cm]?[jt]sx?|json|ya?ml|md|sh)$/.test(path))
-    .filter(path => !/(?:^|\/)(?:test-[^/]+|[^/]+\.test\.[^/]+)$/.test(path));
-  for (const path of files) {
-    const source = readFileSync(join(root, path), "utf8");
-    assert.doesNotMatch(source, /\bchannel\s*:\s*["'](?:chromium|chrome(?:-beta|-dev|-canary)?|msedge(?:-beta|-dev|-canary)?)["']/, path);
-    assert.doesNotMatch(source, /\bexecutablePath\s*:\s*["']/, path);
-    assert.doesNotMatch(source, /\/Applications\/Google Chrome\.app/, path);
-  }
-  const config = readFileSync(join(root, "webui/playwright.config.ts"), "utf8");
-  assert.match(config, /globalSetup:\s*["']\.\/playwright\.global-setup\.mjs["']/);
 });

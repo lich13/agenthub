@@ -3,8 +3,6 @@ use agenthub_core::{
     db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
-        commands,
         probe::{ProbeAction, ProbeExecutionKind},
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
@@ -15,7 +13,6 @@ use agenthub_core::{
         use_cases::AgentHubUseCases,
     },
 };
-use serde_json::json;
 
 #[test]
 fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
@@ -135,106 +132,6 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
         .unwrap();
     assert_eq!(detail_response.job.id, "job-c");
     assert!(use_cases.jobs().detail_response(None).is_none());
-}
-
-#[test]
-fn cleanup_use_cases_expose_execute_ready_plans_without_host_types() {
-    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
-    let use_cases = AgentHubUseCases::new(&linux_platform);
-
-    let dry_run = use_cases
-        .cleanup()
-        .operation(CleanupTarget::Archived, CleanupOperationKind::DryRun)
-        .unwrap();
-    assert_eq!(dry_run.required_capability, Capability::ThreadCleanup);
-    assert_eq!(dry_run.target, CleanupTarget::Archived);
-    assert_eq!(dry_run.operation, CleanupOperationKind::DryRun);
-    assert!(!dry_run.execute);
-    assert!(!dry_run.requires_prior_dry_run);
-
-    let unconfirmed_execute = use_cases
-        .cleanup()
-        .execute(CleanupTarget::Hidden)
-        .expect_err("cleanup execute plans must require an explicit confirmation payload");
-    assert!(unconfirmed_execute.to_string().contains("confirmed"));
-
-    let confirmed = use_cases
-        .cleanup()
-        .execute_confirmed(
-            CleanupTarget::Hidden,
-            CleanupExecuteRequest {
-                confirmed: true,
-                expected_count: Some(3),
-                candidates: Some(
-                    (0..3)
-                        .map(|n| agenthub_core::archive::HiddenThreadSelection {
-                            id: format!("fixture-{n}"),
-                            fingerprint: Some(format!("fingerprint-{n}")),
-                        })
-                        .collect(),
-                ),
-            },
-        )
-        .unwrap();
-    assert_eq!(confirmed.target, CleanupTarget::Hidden);
-    assert!(confirmed.confirmation.confirmed);
-    assert_eq!(confirmed.confirmation.expected_count, Some(3));
-    assert_eq!(
-        confirmed.confirmation.payload,
-        json!({"confirmed": true, "expectedCount": 3, "candidates": (0..3).map(|n| json!({"id":format!("fixture-{n}"),"fingerprint":format!("fingerprint-{n}")})).collect::<Vec<_>>()})
-    );
-
-    assert!(use_cases
-        .cleanup()
-        .execute_confirmed(
-            CleanupTarget::Archived,
-            CleanupExecuteRequest {
-                confirmed: false,
-                expected_count: Some(1),
-                candidates: None,
-            },
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("confirmed"));
-}
-
-#[test]
-fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
-    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
-    let linux = AgentHubUseCases::new(&linux_platform);
-    let mac_home = temp_dir("agenthub-cleanup-confirmation-macos");
-    std::fs::create_dir_all(&mac_home).unwrap();
-    let mac_platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
-    let macos = AgentHubUseCases::new(&mac_platform);
-
-    let request = CleanupExecuteRequest {
-        confirmed: true,
-        expected_count: Some(8),
-        candidates: Some(Vec::new()),
-    };
-    let linux_plan = linux
-        .cleanup()
-        .execute_confirmed(CleanupTarget::Archived, request.clone())
-        .unwrap();
-    let mac_plan = macos
-        .cleanup()
-        .execute_confirmed(CleanupTarget::Archived, request)
-        .unwrap();
-
-    assert_eq!(
-        serde_json::to_value(&linux_plan).unwrap(),
-        serde_json::to_value(&mac_plan).unwrap()
-    );
-    assert_eq!(linux_plan.command, commands::CLEANUP_ARCHIVE_EXECUTE);
-    assert!(linux_plan.confirmation.confirmed);
-    assert_eq!(linux_plan.confirmation.expected_count, Some(8));
-    assert_eq!(
-        linux_plan.confirmation.payload,
-        json!({"confirmed": true, "expectedCount": 8, "candidates": []})
-    );
-
-    std::fs::remove_dir_all(mac_home).unwrap();
 }
 
 #[test]
@@ -360,35 +257,6 @@ fn config_backed_use_cases_report_missing_config_in_core() {
             .unwrap_err()
             .to_string()
             .contains("config is required"));
-    }
-}
-
-#[test]
-fn new_core_facade_sources_do_not_import_host_runtime_surfaces() {
-    for (name, source) in [
-        ("use_cases", include_str!("../src/services/use_cases.rs")),
-        ("jobs", include_str!("../src/services/jobs.rs")),
-        ("cleanup", include_str!("../src/services/cleanup.rs")),
-        ("settings", include_str!("../src/services/settings.rs")),
-        ("probe", include_str!("../src/services/probe.rs")),
-        ("updates", include_str!("../src/services/updates.rs")),
-        ("system", include_str!("../src/services/system.rs")),
-    ] {
-        for forbidden in [
-            "axum",
-            "tauri::",
-            "tauri_plugin",
-            "agenthub_webd::",
-            "crate::api",
-            "crate::linux_adapter",
-            "src-tauri",
-            "HeaderMap",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{name} service source must not depend on host runtime surface {forbidden}"
-            );
-        }
     }
 }
 

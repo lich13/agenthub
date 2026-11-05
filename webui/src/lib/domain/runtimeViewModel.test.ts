@@ -1,10 +1,8 @@
 import { describe, expect, test } from "vitest";
 import type {
-  ArchiveDeletePlan,
   GrokSessionSummary,
   HiddenScanProgress,
   HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
   UpdateStatus
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
@@ -14,7 +12,6 @@ import {
   failureCategoryLabel,
   opsUpdateActionView,
   opsWorkspacePanelTitles,
-  opsWorkspaceViewModel,
   probeStateLabel,
   threadMessageControllerView
 } from "./runtimeViewModel";
@@ -170,89 +167,6 @@ describe("runtime view-model helpers", () => {
     expect(canPreviewGrokDelete(grokSession({ status: "recent" }))).toBe(true);
     expect(canPreviewGrokDelete(grokSession({ status: "running" }))).toBe(true);
     expect(canPreviewGrokDelete(grokSession({ status: "recent", deletionEligibility: null }))).toBe(true);
-  });
-
-  test("derives Ops workspace copy and gating from capabilities without leaking Linux labels to macOS", () => {
-    const updateStatus: UpdateStatus = {
-      current_version: "0.1.100",
-      latest_version: "v0.1.103",
-      update_available: true,
-      channel: "stable",
-      method: "macos_tauri_updater",
-      state: "idle",
-      failure_category: null,
-      recommended_action: "Confirm install in the Tauri updater.",
-      capabilities: ["check", "confirm_install"]
-    };
-    const hiddenDeleteResult: HiddenThreadDeleteResult = {
-      skipped_threads: 0,
-      failed_threads: 0,
-      items: [
-        { id: "child-a", status: "deleted", reason: null },
-        { id: "child-b", status: "deleted", reason: null }
-      ],
-      before: hiddenPlan(),
-      deleted_threads: 2,
-      after_total_threads: 7,
-      after_visible_threads: 7,
-      after_hidden_threads: 0,
-      after_archived_threads: 0,
-      after_integrity: "ok",
-      visible_threads: 7,
-      hidden_threads: 0,
-      integrity: "ok",
-      deleted_rollout_files: 2
-    };
-
-    const view = opsWorkspaceViewModel({
-      capabilities: macosTauriCapabilities,
-      updateStatus,
-      archivePlan: archivePlan(),
-      hiddenPlan: hiddenPlan(),
-      hiddenDeleteResult,
-      archiveCleanup: { dryRunPending: false, armed: true, executePending: false },
-      hiddenCleanup: { dryRunPending: false, armed: false, executePending: false }
-    });
-
-    expect(view.panelTitles).toEqual(opsWorkspacePanelTitles(macosTauriCapabilities));
-    expect(view.updateActions).toEqual(opsUpdateActionView(updateStatus, macosTauriCapabilities));
-    expect(view.archiveCleanup.stage).toEqual({ label: "等待确认", tone: "danger" });
-    expect(view.archiveCleanup.canArm).toBe(true);
-    expect(view.hiddenCleanup.stats).toEqual({
-      hidden: 2,
-      visible: 7,
-      sourceCounts: "subagent:2",
-      integrity: "ok"
-    });
-    expect(view.hiddenCleanup.rolloutDeleteResult).toBe("2");
-    expect(view.hiddenCleanup.canArm).toBe(canStartHiddenThreadDelete(hiddenPlan()));
-    expect(JSON.stringify(view)).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Public endpoint|Linux prune|Prune|panel\.example\.com/i);
-  });
-
-  test("keeps Linux service labels when capabilities advertise the Linux WebUI surface", () => {
-    const view = opsWorkspaceViewModel({
-      capabilities: linuxWebCapabilities,
-      updateStatus: {
-        current_version: "0.1.100",
-        latest_version: "v0.1.103",
-        update_available: false,
-        channel: "stable",
-        method: "linux_systemd_job",
-        state: "idle",
-        failure_category: "systemd_failure",
-        recommended_action: "/usr/local/bin/agenthub-webd-update",
-        capabilities: ["prune_backups"]
-      },
-      archivePlan: null,
-      hiddenPlan: null,
-      hiddenDeleteResult: null,
-      archiveCleanup: { dryRunPending: false, armed: false, executePending: false },
-      hiddenCleanup: { dryRunPending: true, armed: false, executePending: false }
-    });
-
-    expect(view.updateActions.map((action) => action.label)).toEqual(["检查更新", "清理更新备份"]);
-    expect(failureCategoryLabel("systemd_failure", linuxWebCapabilities)).toBe("systemd 失败");
-    expect(view.hiddenCleanup.stage).toEqual({ label: "扫描中", tone: "warning" });
   });
 
   test("host policy uses host surface instead of incidental update flags", () => {

@@ -121,40 +121,7 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agenthub_core::crypto::SecretBox;
-    use agenthub_core::services::{jobs as job_service, settings as settings_service};
-
-    fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, temp.path());
-        config.paths.data_dir = temp.path().join("data");
-        config.paths.db_path = temp.path().join("panel.sqlite");
-        config.paths.log_dir = temp.path().join("logs");
-        config.codex.home = temp.path().join("codex-home");
-        config.codex.workspace = temp.path().join("workspace");
-        std::fs::create_dir_all(&config.paths.data_dir).unwrap();
-        std::fs::create_dir_all(&config.paths.log_dir).unwrap();
-        std::fs::create_dir_all(&config.codex.home).unwrap();
-        std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
-        std::fs::create_dir_all(&config.codex.workspace).unwrap();
-        let db =
-            PanelDb::open_with_secret_box(&config.paths.db_path, SecretBox::deterministic_dev())
-                .unwrap();
-        let state = DesktopState::new(
-            config,
-            db,
-            PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path()),
-        );
-        (temp, state)
-    }
-
-    #[test]
-    fn desktop_thread_service_passes_archive_filter_to_codex_reader() {
-        let source = include_str!("services/threads.rs");
-        assert!(source.contains(
-            "thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)"
-        ));
-    }
+    use agenthub_core::services::jobs as job_service;
 
     #[test]
     fn mac_style_paths_use_agenthub_application_support_and_logs() {
@@ -176,41 +143,6 @@ mod tests {
             paths.app_log_file,
             PathBuf::from("/Users/example/Library/Logs/AgentHub/agenthub.log")
         );
-    }
-
-    #[test]
-    fn desktop_probe_save_settings_uses_shared_bark_device_key_constant() {
-        let (_temp, state) = test_desktop_state();
-        std::fs::create_dir_all(state.platform().config_file.parent().unwrap()).unwrap();
-        let config = state.config();
-        std::fs::write(
-            &state.platform().config_file,
-            toml::to_string(&config).unwrap(),
-        )
-        .unwrap();
-
-        crate::services::settings::test_probe_save_settings_with_state(
-            &state,
-            settings_service::ProbeSettingsSaveRequest {
-                notifications: Some(settings_service::ProbeNotificationsSavePatch {
-                    device_key: Some("  shared-device-key  ".to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            state
-                .db
-                .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)
-                .unwrap()
-                .as_deref(),
-            Some(b"shared-device-key".as_slice())
-        );
-        let hardcoded_setter = concat!("set_secret_setting_bytes(\"", "probe_bark_device_key\"");
-        assert!(!include_str!("commands/settings.rs").contains(hardcoded_setter));
     }
 
     #[test]
@@ -245,28 +177,5 @@ mod tests {
             "{command}"
         );
         assert!(!command.contains("/opt/agenthub/bin/agenthub-webd"));
-    }
-
-    #[test]
-    fn macos_default_config_does_not_use_linux_panel_update_precheck() {
-        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
-
-        assert!(config
-            .update
-            .panel_update_command
-            .contains("agenthub-webd-update"));
-        assert!(!config.update.panel_precheck_command.contains("systemctl"));
-        assert!(!config
-            .update
-            .panel_precheck_command
-            .contains("127.0.0.1:15742/healthz"));
-        assert!(!config
-            .update
-            .panel_precheck_command
-            .contains("/opt/agenthub"));
-        assert!(config
-            .update
-            .panel_precheck_command
-            .contains("Library/Application Support/AgentHub"));
     }
 }

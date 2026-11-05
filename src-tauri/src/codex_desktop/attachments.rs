@@ -541,8 +541,5 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "core:event:deny-listen"));
-        let frontend = include_str!("../../../webui/src/lib/api/desktop.ts");
-        assert!(!frontend.contains("tauri://drag"));
-        assert!(!frontend.contains("getPathForFile"));
     }
 }

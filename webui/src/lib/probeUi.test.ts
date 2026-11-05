@@ -398,6 +398,7 @@ describe("Probe UI helpers", () => {
           notify_reply_needed: true,
           notify_codex: true,
           notify_grok: true,
+          notify_grokbot: false,
           notify_grok_completion: true,
           notify_grok_failure: true,
           notify_grok_reply_needed: true,
@@ -663,4 +664,14 @@ test("one-click platform notification switches toggle all sub-events and grok re
   draft = applyPlatformNotificationToggle(draft, "codex", false);
   expect(isPlatformNotificationEnabled(draft, "codex")).toBe(false);
   expect(draft.probe.error_monitor.enabled).toBe(false);
+});
+
+
+test("Grok Bot notifications default off and only use one supported switch", () => {
+  const draft = buildProbeSettingsDraft(settings);
+  expect(isPlatformNotificationEnabled(draft, "grokbot")).toBe(false);
+  const enabled = applyPlatformNotificationToggle(draft, "grokbot", true);
+  expect(isPlatformNotificationEnabled(enabled, "grokbot")).toBe(true);
+  expect(buildProbeSettingsPayload(enabled).probe.notifications?.notify_grokbot).toBe(true);
+  expect(enabled.notifications.notify_grok).toBe(draft.notifications.notify_grok);
 });

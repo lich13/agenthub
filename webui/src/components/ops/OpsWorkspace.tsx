@@ -2,7 +2,7 @@ import { Monitor, Moon, RefreshCw, SlidersHorizontal, Sun, TerminalSquare } from
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   OPS_PANEL_TITLES,
-  opsWorkspaceView,
+  opsUpdateActionView,
 } from "../../lib/domain/runtimeViewModel";
 import {
   APPEARANCE_OPTIONS,
@@ -38,10 +38,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
   const jobBusy =
     jobMutation.isPending ||
     Boolean(jobMutation.data?.job_id && !isTerminalJob(startedJob.data?.status));
-  const opsView = opsWorkspaceView({
-    update: update.data,
-    capabilities,
-  });
+  const updateActions = opsUpdateActionView(update.data, capabilities);
 
   const handleThemeChange = (next: ThemeMode) => {
     const normalized = writeStoredThemeMode(next);
@@ -65,7 +62,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
   };
 
   return (
-    <div className="ops-grid ws-control-stage" data-update-actions={opsView.updateActions.length}>
+    <div className="ops-grid ws-control-stage" data-update-actions={updateActions.length}>
       <header className="ops-header probe-header">
         <div className="workspace-title-brand">
           <SlidersHorizontal size={18} />

@@ -65,16 +65,20 @@ pub struct SearchUseCases {
     claude: claude::ClaudePaths,
     antigravity: crate::antigravity::sessions::AntigravityPaths,
     dsh: crate::dsh::DshPaths,
+    grokbot: crate::grokbot::GrokBotPaths,
+    local_grokbot: bool,
 }
 
 impl SearchUseCases {
-    pub fn new(_platform: &PlatformPaths, codex: codex::CodexPaths) -> Self {
+    pub fn new(platform: &PlatformPaths, codex: codex::CodexPaths) -> Self {
         Self {
             codex,
             grok: grok::GrokPaths::default_for_user(),
             claude: claude::ClaudePaths::default_for_user(),
             antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
             dsh: crate::dsh::DshPaths::default_for_user(),
+            grokbot: crate::grokbot::GrokBotPaths::default_for_user(),
+            local_grokbot: platform.kind == crate::platform::PlatformKind::Macos,
         }
     }
 
@@ -84,6 +88,25 @@ impl SearchUseCases {
         let mut matches = Vec::new();
         let mut warnings = Vec::new();
         match request.provider {
+            SessionProvider::Grokbot => {
+                ensure!(self.local_grokbot, "Grok Bot 仅限本机");
+                let summaries = if request.scope == SearchScope::Thread {
+                    vec![crate::grokbot::session_summary(
+                        &self.grokbot,
+                        request.session_key.as_deref().unwrap(),
+                    )?]
+                } else {
+                    crate::grokbot::list(&self.grokbot, &Default::default())?
+                };
+                self.search_provider_events(
+                    &request,
+                    &needle,
+                    summaries,
+                    |key| crate::grokbot::load_all_events(&self.grokbot, key),
+                    &mut matches,
+                    &mut warnings,
+                )?;
+            }
             SessionProvider::Codex => {
                 self.search_codex(&request, &needle, &mut matches, &mut warnings)?
             }
@@ -128,25 +151,27 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
-        let summaries = codex::list_threads(
-            &self.codex,
-            false,
-            request.session_key.as_deref(),
-            MAX_SESSIONS,
-        )?;
+        let summaries = if request.scope == SearchScope::Thread {
+            codex::local_thread_summary(&self.codex, request.session_key.as_deref().unwrap())?
+                .into_iter()
+                .collect()
+        } else {
+            codex::list_threads(
+                &self.codex,
+                false,
+                request.session_key.as_deref(),
+                MAX_SESSIONS,
+            )?
+        };
         for summary in summaries {
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             if request.scope == SearchScope::Thread
                 && request.session_key.as_deref() != Some(summary.id.as_str())
             {
                 continue;
             }
-            let detail = match codex::thread_detail_from_summary(summary.clone()) {
-                Ok(detail) => detail,
-                Err(_) => {
-                    push_warning(warnings);
-                    continue;
-                }
-            };
             let metadata = strip_memory_metadata(&format!(
                 "{} {} {}",
                 summary.title,
@@ -165,7 +190,20 @@ impl SearchUseCases {
                     summary.updated_at.clone(),
                 );
             }
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
+            let detail = match codex::thread_detail_from_summary(summary.clone()) {
+                Ok(detail) => detail,
+                Err(_) => {
+                    push_warning(warnings);
+                    continue;
+                }
+            };
             for block in detail.blocks {
+                if output.len() >= MAX_RESULTS {
+                    break;
+                }
                 let corpus = json_corpus(&block)?;
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     let position = block.id.clone();
@@ -193,8 +231,18 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
-        let summaries = grok::list_grok_sessions(&self.grok, MAX_SESSIONS, None)?;
+        let summaries = if request.scope == SearchScope::Thread {
+            vec![grok::grok_session_summary(
+                &self.grok,
+                request.session_key.as_deref().unwrap(),
+            )?]
+        } else {
+            grok::list_grok_sessions(&self.grok, MAX_SESSIONS, None)?
+        };
         for summary in summaries {
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             if request.scope == SearchScope::Thread
                 && request.session_key.as_deref() != Some(summary.id.as_str())
             {
@@ -214,6 +262,9 @@ impl SearchUseCases {
                     summary.updated_at.clone(),
                 );
             }
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             let detail = match grok::grok_session_detail(&self.grok, &summary.id, None) {
                 Ok(detail) => detail,
                 Err(_) => {
@@ -222,6 +273,9 @@ impl SearchUseCases {
                 }
             };
             for (index, event) in detail.events.into_iter().enumerate() {
+                if output.len() >= MAX_RESULTS {
+                    break;
+                }
                 let corpus = json_corpus(&event)?;
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     let position = event.call_id.clone().unwrap_or_else(|| {
@@ -255,8 +309,18 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
-        let summaries = claude::list_claude_sessions(&self.claude, MAX_SESSIONS, None)?;
+        let summaries = if request.scope == SearchScope::Thread {
+            vec![claude::claude_session_summary(
+                &self.claude,
+                request.session_key.as_deref().unwrap(),
+            )?]
+        } else {
+            claude::list_claude_sessions(&self.claude, MAX_SESSIONS, None)?
+        };
         for summary in summaries {
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             if request.scope == SearchScope::Thread
                 && request.session_key.as_deref() != Some(summary.session_key.as_str())
             {
@@ -278,6 +342,9 @@ impl SearchUseCases {
             }
             let mut before = None;
             for _ in 0..MAX_CLAUDE_PAGES {
+                if output.len() >= MAX_RESULTS {
+                    break;
+                }
                 let page = match claude::claude_session_detail(
                     &self.claude,
                     &ClaudeDetailRequest {
@@ -293,6 +360,9 @@ impl SearchUseCases {
                     }
                 };
                 for event in &page.events {
+                    if output.len() >= MAX_RESULTS {
+                        break;
+                    }
                     let corpus = json_corpus(event)?;
                     if let Some(snippet) = find_snippet(&corpus, needle) {
                         push_result(
@@ -327,13 +397,20 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
-        let summaries = crate::antigravity::sessions::list_sessions(
-            &self.antigravity,
-            &crate::provider_sessions::ProviderListRequest {
-                limit: Some(MAX_SESSIONS),
-                ..Default::default()
-            },
-        )?;
+        let summaries = if request.scope == SearchScope::Thread {
+            vec![crate::antigravity::sessions::session_summary(
+                &self.antigravity,
+                request.session_key.as_deref().unwrap(),
+            )?]
+        } else {
+            crate::antigravity::sessions::list_sessions(
+                &self.antigravity,
+                &crate::provider_sessions::ProviderListRequest {
+                    limit: Some(MAX_SESSIONS),
+                    ..Default::default()
+                },
+            )?
+        };
         self.search_provider_events(
             request,
             needle,
@@ -351,13 +428,20 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
-        let summaries = crate::dsh::sessions::list_sessions(
-            &self.dsh,
-            &crate::provider_sessions::ProviderListRequest {
-                limit: Some(MAX_SESSIONS),
-                ..Default::default()
-            },
-        )?;
+        let summaries = if request.scope == SearchScope::Thread {
+            vec![crate::dsh::sessions::session_summary(
+                &self.dsh,
+                request.session_key.as_deref().unwrap(),
+            )?]
+        } else {
+            crate::dsh::sessions::list_sessions(
+                &self.dsh,
+                &crate::provider_sessions::ProviderListRequest {
+                    limit: Some(MAX_SESSIONS),
+                    ..Default::default()
+                },
+            )?
+        };
         self.search_provider_events(
             request,
             needle,
@@ -381,6 +465,9 @@ impl SearchUseCases {
         warnings: &mut Vec<String>,
     ) -> Result<()> {
         for summary in summaries {
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             if request.scope == SearchScope::Thread
                 && request.session_key.as_deref() != Some(summary.session_key.as_str())
             {
@@ -400,6 +487,9 @@ impl SearchUseCases {
                     summary.updated_at.clone(),
                 );
             }
+            if output.len() >= MAX_RESULTS {
+                break;
+            }
             let events = match load(&summary.session_key) {
                 Ok(events) => events,
                 Err(_) => {
@@ -408,6 +498,9 @@ impl SearchUseCases {
                 }
             };
             for event in events.iter() {
+                if output.len() >= MAX_RESULTS {
+                    break;
+                }
                 let corpus = json_corpus(event)?;
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     push_result(
@@ -788,6 +881,99 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn isolated_service(root: &std::path::Path) -> SearchUseCases {
+        SearchUseCases {
+            codex: codex::CodexPaths::new(root.join("codex")),
+            grok: grok::GrokPaths {
+                home: root.join("grok"),
+            },
+            claude: claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(root.join("ag")),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
+            },
+            grokbot: crate::grokbot::GrokBotPaths {
+                persistence: root.join("grokbot"),
+            },
+            local_grokbot: true,
+        }
+    }
+
+    #[test]
+    fn current_thread_search_reads_an_older_native_identity_outside_recent_list() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-old-search-{}", uuid::Uuid::new_v4()));
+        let service = isolated_service(&root);
+        let old_id = "00000000-0000-4000-8000-000000000000";
+        for i in 0..201 {
+            let id = format!("00000000-0000-4000-8000-{i:012}");
+            let dir = service.grok.sessions().join("fixture").join(&id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("summary.json"), json!({"info":{"id":id,"cwd":"/workspace"},"generated_title":"Fixture","num_messages":1}).to_string()).unwrap();
+            std::fs::write(dir.join("chat_history.jsonl"),format!("{}\n",json!({"type":"user","content":"needle fixture","timestamp":if i==0 {"2020-01-01T00:00:00Z"} else {"2026-01-01T00:00:00Z"}}))).unwrap();
+        }
+        assert!(!grok::list_grok_sessions(&service.grok, 200, None)
+            .unwrap()
+            .iter()
+            .any(|s| s.id == old_id));
+        let result = service
+            .search(SessionSearchRequest {
+                provider: SessionProvider::Grok,
+                scope: SearchScope::Thread,
+                session_key: Some(old_id.into()),
+                query: "needle".into(),
+                cursor: None,
+                limit: None,
+            })
+            .unwrap();
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].native_id, old_id);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_stops_reading_history_at_result_limit_in_native_order() {
+        let root = std::env::temp_dir().join("agenthub-search-fixture");
+        let service = isolated_service(&root);
+        let summary = |id: &str| {
+            serde_json::from_value(json!({"id":id,"sessionKey":id,"title":"Fixture","cwd":"","path":"","archived":false,"updatedAt":null,"messageCount":220,"lastMessage":null,"status":"unknown","formatVersion":"fixture","canRename":false,"canArchive":false,"canDelete":false})).unwrap()
+        };
+        let events: Vec<crate::provider_sessions::ProviderHistoryEvent> = (0..220).map(|i|serde_json::from_value(json!({"id":format!("event-{i}"),"kind":"assistant_message","text":format!("needle {i}")})).unwrap()).collect();
+        let events = std::sync::Arc::new(events);
+        let reads = std::cell::Cell::new(0);
+        let mut output = vec![];
+        let mut warnings = vec![];
+        service
+            .search_provider_events(
+                &SessionSearchRequest {
+                    provider: SessionProvider::Grokbot,
+                    scope: SearchScope::Provider,
+                    session_key: None,
+                    query: "needle".into(),
+                    cursor: None,
+                    limit: Some(200),
+                },
+                "needle",
+                vec![summary("first"), summary("unread")],
+                |id| {
+                    assert_eq!(id, "first");
+                    reads.set(reads.get() + 1);
+                    Ok(events.clone())
+                },
+                &mut output,
+                &mut warnings,
+            )
+            .unwrap();
+        assert_eq!(reads.get(), 1);
+        assert_eq!(output.len(), 200);
+        assert_eq!(output[0].position_key, "event-0");
+        assert_eq!(output[199].position_key, "event-199");
+        assert!(warnings.is_empty());
+    }
+
     #[test]
     fn grok_native_history_search_uses_visible_messages_and_tool_results() {
         let root =
@@ -812,6 +998,10 @@ mod tests {
         )
         .unwrap();
         let service = SearchUseCases {
+            grokbot: crate::grokbot::GrokBotPaths {
+                persistence: root.join("grokbot"),
+            },
+            local_grokbot: true,
             codex: codex::CodexPaths::new(root.join("codex")),
             claude: claude::ClaudePaths {
                 config: root.join("claude"),

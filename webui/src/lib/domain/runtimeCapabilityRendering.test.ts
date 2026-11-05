@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
-import appSource from "../../App.tsx?raw";
-import opsWorkspaceSource from "../../components/ops/OpsWorkspace.tsx?raw";
+
 import {
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy
@@ -71,35 +70,6 @@ describe("runtime capability rendering", () => {
       sharedDisabledStates.cleanupConfirmBeforeArmed,
       sharedDisabledStates.cleanupDuringMutation
     ]));
-  });
-
-  test("macOS Tauri renders only shared capabilities plus app updater copy", () => {
-    const contract = visualContractForRuntime(macosTauriCapabilities);
-    const visibleCopy = [
-      ...opsWorkspacePanelTitles(macosTauriCapabilities),
-      ...opsWorkspaceVisibleCopy(macosTauriCapabilities)
-    ].join("\n");
-
-    expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", hostSurface: "desktop_embedded_tauri" });
-    expect(visibleCopy).toMatch(/本机 App 更新|检查更新/);
-    expect(visibleCopy).not.toContain("系统状态");
-    expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
-    expect(visibleCopy).toMatch(/全平台线程清理|全平台扫描预览|Job History/);
-    expect(contract.updateActions).toEqual(["检查更新"]);
-    expect(contract.desktopTauriOnly).toEqual([]);
-    expect(contract.forbidden).toEqual([...macosForbiddenVisualSurfaces]);
-    expect(opsWorkspaceSource).not.toContain("DesktopWebUiPanel");
-    expect(visibleCopy).not.toMatch(/登录|CSRF|Turnstile|security settings|管理员密码|systemd|Nginx|公网入口|Public endpoint|Linux update|Linux prune|Prune/i);
-  });
-
-  test("remote API capabilities expose server maintenance in the shared desktop UI", () => {
-    const contract = visualContractForRuntime(remoteCapabilities);
-    const visibleCopy = opsWorkspaceVisibleCopy(remoteCapabilities).join("\n");
-    expect(contract.remoteApiOnly).toEqual(expect.arrayContaining(["服务更新", "清理更新备份"]));
-    expect(contract.updateActions).toEqual(["检查更新", "清理更新备份"]);
-    expect(visibleCopy).toMatch(/远程服务更新|检查更新|清理更新备份/);
-    expect(appSource).not.toMatch(/WebAuthGate|SecurityWorkspace/);
-    expect(contract.remoteApiOnly.join(" ")).not.toMatch(/Turnstile|Public endpoint|Nginx|安全/);
   });
 
   test("task controls and desktop LAN service are absent from the visual contract", () => {

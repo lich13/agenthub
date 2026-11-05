@@ -114,24 +114,16 @@ impl RemoteConnections {
         }
     }
     fn persist(&self, prefs: &Preferences) -> Result<(), String> {
-        let temp = self.path.with_extension("json.pending");
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&temp).map_err(|_| "保存连接配置失败")?;
+        let mut f = tempfile::Builder::new()
+            .prefix("remote-connection.json.")
+            .tempfile_in(self.path.parent().ok_or("保存连接配置失败")?)
+            .map_err(|_| "保存连接配置失败")?;
         let result = (|| -> anyhow::Result<()> {
             f.write_all(&serde_json::to_vec(prefs)?)?;
-            f.sync_all()?;
-            fs::rename(&temp, &self.path)?;
+            f.as_file().sync_all()?;
+            f.persist(&self.path)?;
             Ok(())
         })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
         result.map_err(|_| "保存连接配置失败".into())
     }
     fn machine(request: &RemoteConnectionCredentials) -> Result<RemoteMachineSummary, String> {

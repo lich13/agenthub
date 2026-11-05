@@ -25,7 +25,7 @@ export function RenameableSession({
   multiSelected?: boolean;
   renameBlockReason?: string | null;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
-  onRename: (title: string) => Promise<unknown>;
+  onRename?: (title: string) => Promise<unknown>;
   menuActions?: ThreadMenuAction[];
   batchMenuActions?: ThreadMenuAction[];
   children: ReactNode;
@@ -75,7 +75,7 @@ export function RenameableSession({
   };
 
   const begin = () => {
-    if (disabled || selecting || multiSelected || busy.current) return;
+    if (!onRename || disabled || selecting || multiSelected || busy.current) return;
     if (renameBlockReason) {
       setError(renameBlockReason);
       return;
@@ -87,7 +87,7 @@ export function RenameableSession({
   };
 
   const save = async (restoreFocus: boolean) => {
-    if (cancelled.current || busy.current || selecting || multiSelected || disabled) return;
+    if (!onRename || cancelled.current || busy.current || selecting || multiSelected || disabled) return;
     const next = draft.trim();
     if (!next) {
       setError("名称不能为空");
@@ -140,14 +140,14 @@ export function RenameableSession({
         useBatchMenu
           ? batchMenuActions!
           : [
-              {
+              ...(onRename ? [{
                 id: "rename",
                 label: "改名",
                 icon: <Pencil size={15} />,
                 disabled: Boolean(renameBlockReason) || disabled,
                 reason: renameBlockReason,
                 run: begin,
-              },
+              }] : []),
               ...(menuActions ?? []),
             ]
       ).map(action => ({

@@ -191,42 +191,34 @@ fn without_alias(text: &str, alias: &str) -> String {
                 output.push_str(&header);
             } else {
                 removing = true;
-                if let Some(end) = parts.last().map(|(_, span)| span.end) {
-                    if let Some(comment) = line[end..].find('#') {
-                        output.push_str(&line[end + comment..]);
-                    }
-                }
             }
         } else if !removing || key.is_empty() {
             output.push_str(line);
-        } else if let Some((_, span)) = parts.last() {
-            if let Some(comment) = line[span.end..].find('#') {
-                output.push_str(&line[span.end + comment..]);
-            }
         }
     }
     output
 }
 
 fn replace(edit: &Edit, text: &str) -> Result<(), String> {
-    let temp = edit
-        .path
-        .with_extension(format!("agenthub-{}.pending", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
+    let mut file = tempfile::Builder::new()
+        .prefix(&format!(
+            "{}.",
+            edit.path.file_name().unwrap_or_default().to_string_lossy()
+        ))
+        .tempfile_in(edit.path.parent().ok_or("无法写入 SSH 配置")?)
         .map_err(|_| "无法写入 SSH 配置")?;
-    let result = (|| -> std::io::Result<()> {
-        file.set_permissions(edit.permissions.clone())?;
+    (|| -> anyhow::Result<()> {
+        file.as_file().set_permissions(edit.permissions.clone())?;
         file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temp, &edit.path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map_err(|_| "无法保存 SSH 配置".into())
+        file.as_file().sync_all()?;
+        anyhow::ensure!(
+            std::fs::read_to_string(&edit.path)? == edit.original,
+            "SSH 配置已被修改，请刷新后重试"
+        );
+        file.persist(&edit.path)?;
+        Ok(())
+    })()
+    .map_err(|error| format!("无法保存 SSH 配置：{error}"))
 }
 
 pub fn delete_with<T>(
@@ -300,30 +292,55 @@ fn delete_at<T>(
     let mut applied = 0;
     let result = (|| {
         for edit in &edits {
-            if std::fs::read_to_string(&edit.path).map_err(|_| "无法读取 SSH 配置")?
-                != edit.original
-            {
-                return Err("SSH 配置已被修改，请刷新后重试".into());
-            }
             replace(edit, &edit.updated)?;
             applied += 1;
         }
         commit()
     })();
-    if result.is_err() {
-        for edit in edits[..applied].iter().rev() {
-            if std::fs::read_to_string(&edit.path).ok().as_deref() != Some(edit.updated.as_str())
-                || replace(edit, &edit.original).is_err()
-            {
-                return Err("SSH 配置保存失败且恢复未完成，请检查配置后刷新".into());
-            }
-        }
+    if let Err(error) = &result {
+        return Err(if applied > 0 {
+            format!("已更新 {applied} 个 SSH 配置文件；{error}。请刷新后检查剩余配置")
+        } else {
+            error.clone()
+        });
     }
     result
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deletion_handles_same_stem_and_preserves_concurrent_edits() {
+        let root = tempfile::tempdir().unwrap();
+        let ssh = root.path().join(".ssh");
+        std::fs::create_dir(&ssh).unwrap();
+        std::fs::write(ssh.join("config"), "Include node.conf node.extra\n").unwrap();
+        for name in ["node.conf", "node.extra"] {
+            std::fs::write(ssh.join(name), "Host fixture # removed host\n  HostName example.invalid # removed directive\n# independent\nHost keep\n  Port 22\n").unwrap();
+        }
+        std::fs::write(ssh.join("node.agenthub.pending"), "existing unrelated file").unwrap();
+        delete_at(root.path(), &root.path().join("system"), "fixture", || {
+            Ok(())
+        })
+        .unwrap();
+        for name in ["node.conf", "node.extra"] {
+            assert_eq!(
+                std::fs::read_to_string(ssh.join(name)).unwrap(),
+                "# independent\nHost keep\n  Port 22\n"
+            );
+        }
+        let path = ssh.join("node.conf");
+        let edit = Edit {
+            original: std::fs::read_to_string(&path).unwrap(),
+            updated: String::new(),
+            permissions: std::fs::metadata(&path).unwrap().permissions(),
+            path: path.clone(),
+        };
+        std::fs::write(&path, "Host changed\n").unwrap();
+        assert!(replace(&edit, "").unwrap_err().contains("已被修改"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Host changed\n");
+        assert_eq!(std::fs::read_dir(ssh).unwrap().count(), 4);
+    }
     #[test]
     fn delete_removes_all_explicit_aliases_preserving_other_hosts_and_comments() {
         let root = tempfile::tempdir().unwrap();
@@ -346,7 +363,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             std::fs::read_to_string(&config).unwrap(),
-            "# global\nInclude hosts\n# selected\n# address\n\nHost keep\n  User fixture-user\n"
+            "# global\nInclude hosts\n\nHost keep\n  User fixture-user\n"
         );
         assert_eq!(std::fs::read_to_string(&included).unwrap(), "# shared\nHost other # aliases\n  HostName example.invalid\nMatch all\n  ServerAliveInterval 15\n");
         assert_eq!(std::fs::read_to_string(key).unwrap(), "fixture-key-content");
@@ -369,35 +386,34 @@ mod tests {
     }
 
     #[test]
-    fn failed_file_or_preference_write_restores_configuration() {
+    fn stale_temporary_files_do_not_block_and_partial_failure_is_reported() {
         let root = tempfile::tempdir().unwrap();
         let ssh = root.path().join(".ssh");
         std::fs::create_dir(&ssh).unwrap();
         let config = ssh.join("config");
-        let original = "Include hosts\nHost fixture\n  HostName example.invalid\n";
-        let included = ssh.join("hosts");
-        let other = "Host fixture other\n  User fixture-user\n";
-        std::fs::write(&config, original).unwrap();
-        std::fs::write(&included, other).unwrap();
+        let included = ssh.join("hosts.conf");
+        std::fs::write(
+            &config,
+            "Include hosts.conf\nHost fixture\n  HostName example.invalid\n",
+        )
+        .unwrap();
+        std::fs::write(&included, "Host fixture other\n  User fixture-user\n").unwrap();
         let pending = included.with_extension(format!("agenthub-{}.pending", std::process::id()));
         std::fs::write(&pending, "existing-file").unwrap();
-        assert!(delete_at(
-            root.path(),
-            &root.path().join("system"),
-            "fixture",
-            || -> Result<(), String> { panic!("must not commit after failed file write") }
-        )
-        .is_err());
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        assert_eq!(std::fs::read_to_string(&included).unwrap(), other);
-        assert_eq!(std::fs::read_to_string(&pending).unwrap(), "existing-file");
-        std::fs::remove_file(pending).unwrap();
-        let result = delete_at(root.path(), &root.path().join("system"), "fixture", || {
+        let error = delete_at(root.path(), &root.path().join("system"), "fixture", || {
             Err::<(), _>("preference write failed".into())
-        });
-        assert_eq!(result.unwrap_err(), "preference write failed");
-        assert_eq!(std::fs::read_to_string(config).unwrap(), original);
-        assert_eq!(std::fs::read_to_string(included).unwrap(), other);
+        })
+        .unwrap_err();
+        assert!(error.contains("已更新 2 个"));
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            "Include hosts.conf\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(included).unwrap(),
+            "Host other\n  User fixture-user\n"
+        );
+        assert_eq!(std::fs::read_to_string(pending).unwrap(), "existing-file");
     }
 
     #[test]

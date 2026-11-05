@@ -103,16 +103,6 @@ impl AppState {
         self.resolved_codex_paths().codex_paths()
     }
 
-    pub fn dsh_paths(&self) -> agenthub_core::dsh::DshPaths {
-        #[cfg(test)]
-        if let Some(sandbox) = &self.test_sandbox {
-            return agenthub_core::dsh::DshPaths {
-                home: sandbox.0.join(".dsh"),
-            };
-        }
-        agenthub_core::dsh::DshPaths::default_for_user()
-    }
-
     pub fn unified_cleanup_paths(&self) -> agenthub_core::services::cleanup::UnifiedCleanupPaths {
         let codex = self.codex_paths();
         #[cfg(test)]
@@ -123,7 +113,9 @@ impl AppState {
                 antigravity: agenthub_core::antigravity::sessions::AntigravityPaths::offline(
                     sandbox.0.join(".gemini/antigravity"),
                 ),
-                dsh: self.dsh_paths(),
+                dsh: agenthub_core::dsh::DshPaths {
+                    home: sandbox.0.join(".dsh"),
+                },
                 claude: agenthub_core::claude::ClaudePaths {
                     projects: claude_cfg.join("projects"),
                     config: claude_cfg,

@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod db;
 pub mod dsh;
 pub mod grok;
+pub mod grokbot;
 pub mod history_navigation;
 pub mod jobs;
 pub mod jsonl_cache;
@@ -39,6 +40,7 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     codex::evict_idle_detail_cache(max_idle);
     claude::evict_idle_detail_cache(max_idle);
     grok::evict_idle_detail_cache(max_idle);
+    grokbot::evict_idle(max_idle);
     native_probe::evict_idle_cache(max_idle);
     dsh::notifications::evict_idle_cache(max_idle);
     dsh::sessions::evict_idle_fold_cache(max_idle);

@@ -6,6 +6,7 @@ pub enum AgentProviderId {
     Codex,
     ClaudeCode,
     GrokBuild,
+    GrokBot,
     Antigravity,
     DeepseekHarness,
     Cursor,
@@ -69,6 +70,11 @@ impl Default for ProviderRegistry {
                         "delete_local_session".to_string(),
                     ],
                     safety: "native rename only; deletion is local-session scoped and never touches workspaces or cloud tasks".to_string(),
+                },
+                AgentProviderInfo {
+                    id: AgentProviderId::GrokBot, label: "Grok Bot".into(),
+                    status: if cfg!(target_os="macos") && crate::grokbot::GrokBotPaths::default_for_user().persistence.is_dir() { "ready" } else { "unavailable" }.into(),
+                    description: "Read-only native desktop cache".into(), capabilities: vec!["readonly".into(),"sessions".into()], safety: "local cached history only".into(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::Antigravity,

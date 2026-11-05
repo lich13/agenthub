@@ -58,7 +58,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 线程右键、省略号和键盘菜单共用动作模型；右键目标独立于当前详情。保留焦点返回、边缘避让、双击改名和批量模式。
 - 单条、批量、归档清理和隐藏清理共用直接删除实现。Codex 覆盖普通／归档明文与压缩 rollout、writer 锁、shell snapshots、visualizations、原生状态和分页历史数据库、名称索引。父子关系去重遍历，循环不阻断；不反向扩大到引用方。执行仅处理确认时提交的 ID 集合，不加入后来出现的后代。
 - Claude 定位键取项目相对路径及文件名身份；覆盖主 JSONL、同名目录、file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 按各工作区的 ID 目录定位，摘要缺失或损坏不影响删除。
-- 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围，expectedCount 不再比较。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
+- 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
 - Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理与本机通知。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
 - Pi 活动契约、读取、管理、界面和监测全部退役，未知命令统一拒绝，不维护退役命令墓碑表。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
@@ -67,7 +67,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 阅读与子智能体边界
 
-- 五个 Provider 共用紧凑阅读基线；复制动作不增加正文行高，用户气泡、工具两层折叠、Plan、搜索与用户指令时间线保持原规则。
+- 各 Provider 共用紧凑阅读基线；复制动作不增加正文行高，用户气泡、工具两层折叠、Plan、搜索与用户指令时间线保持原规则。
 - Codex 子智能体只通过原生调用身份、精确任务路径和父子关联读取，不按显示名称猜测。只使用子线程自己的回合证据判断运行状态。
 - `threads.subagentDetail` 和带主线程上下文的子线程附件必须校验可见主线程、唯一父链、深度、循环、文件身份与指纹。无任意路径、执行控制或子线程管理能力。
 - 子智能体能力缺失时按不支持处理，API 协议保持 2；机器切换关闭面板、隔离缓存并丢弃迟到响应。
@@ -76,7 +76,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 ## SSH 恢复与配置管理
 
 - 现有刷新／请求发现断线才恢复连接，同轮共享握手；读取最多自动重试一次，前端查询不叠加远程重试，写操作不重放。传输失败或超时立即关闭通道，业务错误保留通道。恢复不增加连接修订号，不重置页面；切机或退出丢弃旧握手。
-- remote.sshDelete 仅接受 revision 和 alias。删除用户及 Include 中的全部显式定义，多别名仅去掉所选项，系统配置拒绝删除。保留注释、文件权限和其他配置，原子替换并在失败时报告；删除当前目标释放 SSH 并回本机。
+- remote.sshDelete 仅接受 revision 和 alias。删除用户及 Include 中的全部显式定义，多别名仅去掉所选项，系统配置拒绝删除。删除指令时同时移除其行尾注释，保留独立注释、文件权限和其他配置；同目录唯一临时文件原子替换并在保存前核对变化，部分失败报告已完成项，不跨文件反向回滚；删除当前目标释放 SSH 并回本机。
 - 日志按 CR／LF／CRLF 整条解码脱敏后，在原读取任务中累计 16KiB 或 200ms 写库，结束前排空；不增加日志后台任务、状态文件或任意单行硬上限。
 
 ## 凭据边界
@@ -96,7 +96,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 界面说明
 
-Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，保留状态、错误及确认对象；“全平台实时态势”沿用原聚合和数量限制。执行记录列表与运行中后台轮询只返回摘要；jobs.detail 的 includeOutput 默认 true，后台传 false，展开或进入终态读取全文。
+Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，保留状态、错误及确认对象；“全平台实时态势”沿用原聚合和数量限制。执行记录列表与后台轮询（包括终态）只返回摘要；jobs.detail 的 includeOutput 默认 true，后台传 false，仅展开读取全文，终态继续刷新相关状态。
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；保留一次确认及固定目标范围，沿用各平台已有写入校验。
 
@@ -133,3 +133,9 @@ Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，�
 - Playwright 回归及 macOS 有头性能检查默认在现有 GitHub Actions 运行；除非用户另行明确要求，本机不安装或启动验收浏览器。CI 先构建前端、安装 Chromium 与 WebKit，只使用 Playwright 管理的浏览器缓存；禁止渠道、本机可执行路径和外部浏览器连接覆盖。全局启动守卫必须保留，不依赖或启动系统 Google Chrome。内置 Google Chrome for Testing 按真实路径确认来源，不以窗口名称判断。
 
 Claude native command envelopes render as the slash command and exact arguments. Classify isMeta, isCompactSummary and complete automatic envelopes before mutating prompt state; automatic records never start a human turn or clear pending tools. Adjacent metadata stays in place in closed system/context groups, including the preamble. Preserve native anchors, disclosure aliases, literal examples and instruction search; compaction remains searchable and closed by default.
+
+## Grok Bot
+
+- `grokbot.list`／`grokbot.detail` 仅在桌面注册，复用公共历史 DTO、搜索和缓存。只读取当前账户 roster 与近期 transcript 切片，不扫描远程目录、不写原生会话。账户与线程共同确定身份；路径复制只返回实际存在的本线程缓存文件。
+- 通知默认关闭，只认明确待回复／待授权记录。持久化身份绑定账户、线程和原生请求；缓存淘汰或原子替换不能重放提醒，已回答或批准后停止首发和重试。普通卡片、发送失败及工具错误不表示回合终态。
+- 只读入口沿用共享菜单、阅读区、字体与间距；待处理交互使用“需要回复／需要授权”，不显示运行 spinner，不增加管理动作、说明小字或 Hook 占位。

@@ -85,7 +85,8 @@ impl PanelDb {
             let old = tx.query_row("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2", params![provider.as_str(),stream.session_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?))).optional()?;
             let reset = baseline
                 || old.as_ref().is_some_and(|(identity, cursor)| {
-                    identity != &stream.identity || *cursor > stream.record_count
+                    identity != &stream.identity
+                        || (provider != NativeProvider::GrokBot && *cursor > stream.record_count)
                 });
             // Antigravity mutates a waiting step in place. A new request on a
             // previously baselined step keeps that step's original timestamp.
@@ -106,7 +107,9 @@ impl PanelDb {
                         && event.position == cursor
                         && event.timestamp_ms >= activated_ms;
                     if !reset
-                        && ((!unrecorded_at_cursor && event.position <= cursor)
+                        && ((provider != NativeProvider::GrokBot
+                            && !unrecorded_at_cursor
+                            && event.position <= cursor)
                             || (!known_mutable_source && event.timestamp_ms < activated_ms)
                             || (!provider.local_only()
                                 && !provider.event_enabled(config, &event.kind)))

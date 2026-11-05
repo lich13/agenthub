@@ -6,8 +6,7 @@ use agenthub_core::{
     db::JobRecord,
     platform::PlatformPaths,
     services::{
-        cleanup as cleanup_service, jobs as job_service, probe as probe_service,
-        settings as settings_service,
+        jobs as job_service, probe as probe_service, settings as settings_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
         updates::{self as update_service, UpdateAction},
         use_cases::{AgentHubUseCases, JobDetailPlan, JobListPlan},
@@ -175,63 +174,6 @@ pub fn job_detail_plan(
         .job_with_output(&plan.job_id, include_output)?
         .map(job_response_value)
         .transpose()
-}
-
-pub fn execute_cleanup_plan(
-    state: &AppState,
-    auth: &AuditActor,
-    plan: cleanup_service::CleanupOperationPlan,
-) -> Result<Value> {
-    if plan.requires_confirmation && !plan.confirmation.confirmed {
-        anyhow::bail!("cleanup execute must be confirmed");
-    }
-    let paths = state.codex_paths();
-    let platform = PlatformPaths::for_kind(agenthub_core::platform::PlatformKind::Linux);
-    let cleanup = AgentHubUseCases::new(&platform).cleanup();
-    match plan.target {
-        cleanup_service::CleanupTarget::Archived => {
-            let result = if plan.execute {
-                let candidates = cleanup_service::hidden_candidates(&plan)?;
-                let result = cleanup.execute_archived(&paths, &candidates)?;
-                state.db.record_audit(
-                    Some(&auth.admin_id),
-                    "archives.delete.execute",
-                    Some("archives"),
-                    Some("root-codex"),
-                    None,
-                    json!({"before_archived": result.before.archived_threads, "deleted_rollout_files": result.deleted_rollout_files}),
-                )?;
-                serde_json::to_value(result)?
-            } else {
-                serde_json::to_value(cleanup.dry_run_archived(&paths)?)?
-            };
-            Ok(result)
-        }
-        cleanup_service::CleanupTarget::Hidden => {
-            let result = if plan.execute {
-                let candidates = cleanup_service::hidden_candidates(&plan)?;
-                let result = cleanup.execute_hidden(&paths, &candidates)?;
-                state.db.record_audit(
-                    Some(&auth.admin_id),
-                    "hidden_threads.delete.execute",
-                    Some("hidden_threads"),
-                    Some("root-codex"),
-                    None,
-                    json!({
-                        "before_hidden": result.before.hidden_threads,
-                        "deleted_threads": result.deleted_threads,
-                        "skipped_threads": result.skipped_threads,
-                        "failed_threads": result.failed_threads,
-                        "deleted_rollout_files": result.deleted_rollout_files,
-                    }),
-                )?;
-                serde_json::to_value(result)?
-            } else {
-                serde_json::to_value(cleanup.dry_run_hidden(&paths)?)?
-            };
-            Ok(result)
-        }
-    }
 }
 
 fn job_response_value(job: JobRecord) -> Result<Value> {

@@ -7,7 +7,7 @@ AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined read
 ## Layout and interaction
 
 - Navigation contains Codex, Claude Code, Grok Build, Antigravity, DeepSeek Harness, Probe and settings.
-- Desktop uses a compact navigation rail (collapsible to `48px`), a `288px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a 7-column mobile tab bar with ellipsis-safe labels.
+- Desktop uses a compact navigation rail (collapsible to `48px`), a `288px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a single-row mobile tab bar sized to the available providers, with ellipsis-safe labels.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Claude Code and Grok sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
 - Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
@@ -144,3 +144,9 @@ Bark 地址保存和投递共用安全校验；无效配置在既有错误位置
 ## 远程连接
 
 输入框、SSH 下拉框和操作按钮统一 36px 高、13px 系统字体，使用相同圆角与间距。原生下拉框关闭平台外观，箭头垂直居中。名称等于 Host 时只显示一次；没有远程记录时隐藏空卡片。删除 SSH 配置只显示一次明确目标确认，不增加说明小字。窄窗口按钮按自然宽度换行，保留统一高度和对齐。
+
+## Grok Bot 只读工作区
+
+本机导航将 Grok Bot 放在 Grok Build 旁，使用现有列表、阅读区、菜单、搜索、时间线与工具折叠。系统字体、13px 控件、15px 正文及行高间距保持统一，新增导航不缩小字号。远程机器隐藏本机专属入口。
+
+状态仅使用“近期缓存”“未缓存”“需要回复”“需要授权”。交互记录保持原生顺序，待回复和待授权使用状态标签，不伪装运行中的工具或完成回合。未缓存线程仍显示，复制路径和 Finder 动作禁用；其他菜单为复制 ID、复制答复，无管理或发送动作。Probe 仅增加默认关闭的 Grok Bot 平台开关，不增加 Hook 卡片、说明小字或占位开关。

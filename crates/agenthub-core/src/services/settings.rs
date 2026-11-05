@@ -100,6 +100,7 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_recoverable: bool,
     pub notify_codex: bool,
     pub notify_grok: bool,
+    pub notify_grokbot: bool,
     pub notify_grok_completion: bool,
     pub notify_grok_failure: bool,
     pub notify_grok_reply_needed: bool,
@@ -169,6 +170,7 @@ pub fn probe_notifications_settings_view(
         notify_recoverable: notifications.notify_recoverable,
         notify_codex: notifications.notify_codex,
         notify_grok: notifications.notify_grok,
+        notify_grokbot: notifications.notify_grokbot,
         notify_grok_completion: notifications.notify_grok_completion,
         notify_grok_failure: notifications.notify_grok_failure,
         notify_grok_reply_needed: notifications.notify_grok_reply_needed,
@@ -319,6 +321,7 @@ pub struct ProbeNotificationsSavePatch {
     pub notify_recoverable: Option<bool>,
     pub notify_codex: Option<bool>,
     pub notify_grok: Option<bool>,
+    pub notify_grokbot: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -482,6 +485,7 @@ impl ProbeNotificationsSavePatch {
                 notify_recoverable: self.notify_recoverable,
                 notify_codex: self.notify_codex,
                 notify_grok: self.notify_grok,
+                notify_grokbot: self.notify_grokbot,
                 notify_grok_completion: self.notify_grok_completion,
                 notify_grok_failure: self.notify_grok_failure,
                 notify_grok_reply_needed: self.notify_grok_reply_needed,
@@ -607,7 +611,6 @@ fn normalize_codex_patch(mut patch: CodexProbeConfigPatch) -> CodexProbeConfigPa
 fn normalize_probe_hooks_patch(patch: ProbeHooksConfigPatch) -> ProbeHooksConfigPatch {
     ProbeHooksConfigPatch {
         manage_stop_hook: patch.manage_stop_hook,
-        reload_app_server_after_install: patch.reload_app_server_after_install,
     }
 }
 

@@ -1,33 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateVersionInfo {
-    pub panel: PanelVersionInfo,
-    pub codex: CodexVersionInfo,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PanelVersionInfo {
-    pub current: String,
-    pub latest: Option<String>,
-    pub update_available: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexVersionInfo {
-    pub user: Option<String>,
-    pub root: Option<String>,
-    pub raw: Option<String>,
-    pub latest: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobFailureCategory {
     ReleaseMissing,
     DownloadSha256Mismatch,
     SystemdFailure,
-    NginxFailure,
     PermissionDeniedSudo,
     CodexAuthFailure,
     SqliteIntegrityFailure,
@@ -42,14 +20,6 @@ pub struct JobFailureAnalysis {
     pub category: JobFailureCategory,
     pub explanation: String,
     pub suggestions: Vec<String>,
-}
-
-pub fn panel_update_command(configured: &str) -> String {
-    if configured.trim().is_empty() {
-        default_panel_update_command()
-    } else {
-        configured.to_string()
-    }
 }
 
 pub fn default_panel_update_command() -> String {
@@ -81,13 +51,7 @@ pub const PANEL_UPDATE_DEFAULT: &str =
 pub const PANEL_PRECHECK_DEFAULT: &str = "/usr/local/bin/agenthub-webd-update --precheck";
 
 /// Only the managed update command is executable.
-pub fn panel_process(command: &str, precheck: bool) -> anyhow::Result<crate::jobs::ProcessCommand> {
-    let valid = if precheck {
-        command == PANEL_PRECHECK_DEFAULT
-    } else {
-        command.is_empty() || command == PANEL_UPDATE_DEFAULT
-    };
-    anyhow::ensure!(valid, "unsupported managed update command");
+pub fn panel_process(precheck: bool) -> anyhow::Result<crate::jobs::ProcessCommand> {
     Ok(crate::jobs::ProcessCommand::new(
         "/usr/local/bin/agenthub-webd-update",
         if precheck {
@@ -159,17 +123,6 @@ pub fn analyze_job_failure(
         ],
     ) {
         JobFailureCategory::SystemdFailure
-    } else if contains_any(
-        &text,
-        &[
-            "nginx",
-            "nginx -t",
-            "proxy_pass",
-            "emerg",
-            "conflicting server name",
-        ],
-    ) {
-        JobFailureCategory::NginxFailure
     } else if contains_any(
         &text,
         &[
@@ -277,13 +230,6 @@ fn analysis_for(category: JobFailureCategory) -> JobFailureAnalysis {
             vec![
                 "Run systemctl status for the affected service.",
                 "Check journalctl logs before retrying the update.",
-            ],
-        ),
-        JobFailureCategory::NginxFailure => (
-            "Nginx validation or reload failed.",
-            vec![
-                "Run nginx -t to identify the invalid config line.",
-                "Check the panel nginx location and upstream service before reloading.",
             ],
         ),
         JobFailureCategory::PermissionDeniedSudo => (

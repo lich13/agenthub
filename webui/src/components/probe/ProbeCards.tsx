@@ -29,6 +29,7 @@ const PROVIDER_META: Record<string, { brand: AgentBrandId; label: string }> = {
   claude: { brand: "claude", label: "Claude Code" },
   grok: { brand: "grok", label: "Grok Build" },
   antigravity: { brand: "antigravity", label: "Antigravity" },
+  grokbot: { brand: "grokbot", label: "Grok Bot" },
   dsh: { brand: "dsh", label: "DeepSeek Harness" },
 };
 
@@ -201,6 +202,7 @@ export function ProbeRuntimeSettingsCard(props: {
 
   const visiblePlatforms = PROBE_NOTIFICATION_PLATFORMS.filter(platform => {
     if (platform.id === "antigravity") return Boolean(capabilities.antigravityNotifications);
+    if (platform.id === "grokbot") return Boolean(capabilities.grokbotNotifications);
     if (platform.id === "dsh") return Boolean(capabilities.dshNotifications);
     return true;
   });

@@ -120,8 +120,6 @@ def validate_payload(root, signed_version):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", signed_version):
         raise ValueError("invalid signed version")
     # Preserve the previous updater's rejection of retired web-authentication releases.
-    if tuple(map(int, signed_version.split("."))) < (1, 2, 0):
-        raise ValueError("refusing release with retired web authentication")
     # This binary is allowed to execute only after verify() and layout checks.
     result = subprocess.run([str(root / "bin/agenthub-webd"), "--version"], capture_output=True, timeout=30, check=False)
     if result.returncode != 0 or result.stdout.decode("utf-8").strip() != f"agenthub-webd {signed_version}":

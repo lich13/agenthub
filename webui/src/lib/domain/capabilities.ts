@@ -9,6 +9,8 @@ export type RuntimeCapabilityMatrix = {
   dshNotifications?: boolean;
   antigravitySessions?: boolean;
   dshSessions?: boolean;
+  grokbotSessions?: boolean;
+  grokbotNotifications?: boolean;
   codexDesktop?: boolean;
   updatePrune: boolean; threadCleanup: boolean; threadArchiveActions: boolean; updateServiceLabels: boolean;
 };
@@ -32,6 +34,8 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     dshNotifications: !remote && core.dsh_notifications === true,
     antigravitySessions: core.antigravity_sessions === true,
     dshSessions: core.dsh_sessions === true,
+    grokbotSessions: !remote && core.grokbot_sessions === true,
+    grokbotNotifications: !remote && core.grokbot_notifications === true,
     codexDesktop: !remote && core.codex_desktop === true,
     threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: remote && core.linux_update_job };

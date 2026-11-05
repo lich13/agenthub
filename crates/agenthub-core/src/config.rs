@@ -1,4 +1,3 @@
-use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     crypto::SecretBox,
     platform::{PlatformKind, PlatformPaths},
@@ -20,7 +19,6 @@ pub struct Config {
     pub probe: ProbeConfig,
     pub security: SecurityConfig,
     pub paths: PathConfig,
-    pub update: UpdateConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,16 +26,7 @@ pub struct CodexConfig {
     #[serde(default = "default_codex_home")]
     pub home: PathBuf,
     pub workspace: PathBuf,
-    #[serde(default, skip_serializing)]
-    pub app_server_service: String,
-    #[serde(default, skip_serializing)]
-    pub app_server_socket: Option<PathBuf>,
-    #[serde(default, skip_serializing)]
-    pub bridge_enabled: bool,
-    #[serde(default, skip_serializing)]
-    pub bridge_transport: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub bridge_timeout_seconds: Option<u64>,
+
     pub host_label: String,
 }
 
@@ -69,8 +58,6 @@ pub struct ProbeErrorMonitorConfig {
 pub struct ProbeHooksConfig {
     #[serde(default = "default_true")]
     pub manage_stop_hook: bool,
-    #[serde(default = "default_true")]
-    pub reload_app_server_after_install: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,6 +82,8 @@ pub struct ProbeNotificationsConfig {
     pub notify_codex: bool,
     #[serde(default = "default_true")]
     pub notify_grok: bool,
+    #[serde(default)]
+    pub notify_grokbot: bool,
     #[serde(default = "default_true")]
     pub notify_grok_completion: bool,
     #[serde(default = "default_true")]
@@ -176,7 +165,6 @@ pub struct ProbeErrorMonitorConfigPatch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeHooksConfigPatch {
     pub manage_stop_hook: Option<bool>,
-    pub reload_app_server_after_install: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -191,6 +179,7 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_recoverable: Option<bool>,
     pub notify_codex: Option<bool>,
     pub notify_grok: Option<bool>,
+    pub notify_grokbot: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -276,7 +265,6 @@ impl Default for ProbeHooksConfig {
     fn default() -> Self {
         Self {
             manage_stop_hook: true,
-            reload_app_server_after_install: false,
         }
     }
 }
@@ -294,6 +282,7 @@ impl Default for ProbeNotificationsConfig {
             notify_recoverable: true,
             notify_codex: true,
             notify_grok: true,
+            notify_grokbot: false,
             notify_grok_completion: true,
             notify_grok_failure: true,
             notify_grok_reply_needed: true,
@@ -344,87 +333,6 @@ pub struct PathConfig {
     pub db_path: PathBuf,
 
     pub log_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateConfig {
-    pub precheck_command: String,
-    pub update_command: String,
-    pub prune_command: String,
-    pub doctor_command: String,
-    #[serde(default = "default_panel_update_command")]
-    pub panel_update_command: String,
-    #[serde(default = "default_panel_precheck_command")]
-    pub panel_precheck_command: String,
-}
-
-fn default_update_command() -> String {
-    "/usr/local/bin/agenthub-codex-update".to_string()
-}
-
-fn default_precheck_command() -> String {
-    "/usr/local/bin/agenthub-codex-precheck".to_string()
-}
-
-fn default_prune_command() -> String {
-    "/usr/local/bin/agenthub-codex-prune".to_string()
-}
-
-fn default_panel_update_command() -> String {
-    crate::update::default_panel_update_command()
-}
-
-fn default_panel_precheck_command() -> String {
-    default_panel_precheck_command_for_platform(&PlatformPaths::current())
-}
-
-fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
-    match platform.kind {
-        PlatformKind::Linux => crate::update::PANEL_PRECHECK_DEFAULT.to_string(),
-        PlatformKind::Macos => format!(
-            "test -d {}",
-            shell_quote(&platform.data_dir.display().to_string(), QuoteStyle::Always)
-        ),
-        PlatformKind::Windows => "agenthub-update --precheck".to_string(),
-    }
-}
-
-fn default_doctor_command_for_platform(platform: &PlatformPaths) -> String {
-    match platform.kind {
-        PlatformKind::Linux => "/home/ubuntu/codex-admin/bin/codex-cloud-doctor".to_string(),
-        _ => format!(
-            "{} --config {} doctor",
-            shell_quote(
-                &platform.daemon_binary().display().to_string(),
-                QuoteStyle::Always
-            ),
-            shell_quote(
-                &platform.config_file.display().to_string(),
-                QuoteStyle::Always
-            )
-        ),
-    }
-}
-
-fn default_desktop_doctor_command_for_platform(platform: &PlatformPaths) -> String {
-    format!(
-        "{} --config {} doctor",
-        shell_quote(
-            &platform.daemon_binary().display().to_string(),
-            QuoteStyle::Always
-        ),
-        shell_quote(
-            &platform.config_file.display().to_string(),
-            QuoteStyle::Always
-        )
-    )
-}
-
-fn default_desktop_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
-    format!(
-        "test -d {}",
-        shell_quote(&platform.data_dir.display().to_string(), QuoteStyle::Always)
-    )
 }
 
 fn default_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
@@ -494,11 +402,7 @@ impl Config {
                 } else {
                     default_workspace_for_platform(&platform, home)
                 },
-                app_server_service: String::new(),
-                app_server_socket: None,
-                bridge_enabled: false,
-                bridge_transport: None,
-                bridge_timeout_seconds: None,
+
                 host_label: DEFAULT_HOST_LABEL.to_string(),
             },
             probe: ProbeConfig::default(),
@@ -510,22 +414,6 @@ impl Config {
                 db_path: platform.data_dir.join("agenthub.sqlite"),
 
                 log_dir: platform.log_dir.clone(),
-            },
-            update: UpdateConfig {
-                precheck_command: default_precheck_command(),
-                update_command: default_update_command(),
-                prune_command: default_prune_command(),
-                doctor_command: if desktop {
-                    default_desktop_doctor_command_for_platform(&platform)
-                } else {
-                    default_doctor_command_for_platform(&platform)
-                },
-                panel_update_command: default_panel_update_command(),
-                panel_precheck_command: if desktop {
-                    default_desktop_panel_precheck_command_for_platform(&platform)
-                } else {
-                    default_panel_precheck_command_for_platform(&platform)
-                },
             },
         }
     }
@@ -653,12 +541,6 @@ impl Config {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
         self.probe.normalize();
-        if self.update.panel_update_command.trim().is_empty() {
-            self.update.panel_update_command = default_panel_update_command();
-        }
-        if self.update.panel_precheck_command.trim().is_empty() {
-            self.update.panel_precheck_command = default_panel_precheck_command();
-        }
         Ok(())
     }
 
@@ -860,6 +742,11 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 "probe.notifications",
                 "notify_grok",
                 notifications.notify_grok,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_grokbot",
+                notifications.notify_grokbot,
             );
             editor.set_bool(
                 "probe.notifications",
@@ -1262,30 +1149,6 @@ mod tests {
     }
 
     #[test]
-    fn linux_config_uses_loopback_panel_port() {
-        let config = Config::for_platform_kind(PlatformKind::Linux);
-        assert_eq!(
-            config.update.panel_precheck_command,
-            "/usr/local/bin/agenthub-webd-update --precheck"
-        );
-        assert_eq!(config.codex.home.to_string_lossy(), "auto");
-    }
-
-    #[test]
-    fn macos_config_uses_tauri_app_precheck() {
-        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
-
-        assert_eq!(
-            config.update.panel_precheck_command,
-            "test -d '/Users/example/Library/Application Support/AgentHub'"
-        );
-        assert!(!config
-            .update
-            .panel_precheck_command
-            .contains("http://127.0.0.1:15742/healthz"));
-    }
-
-    #[test]
     fn linux_desktop_config_uses_user_scoped_tauri_paths_not_server_paths() {
         let config =
             Config::for_desktop_platform_kind_with_home(PlatformKind::Linux, "/home/alice");
@@ -1302,48 +1165,8 @@ mod tests {
             config.codex.workspace.to_string_lossy(),
             "/home/alice/agenthub-workspace"
         );
-        assert_eq!(
-            config.update.panel_precheck_command,
-            "test -d '/home/alice/.local/share/AgentHub'"
-        );
-        assert!(config
-            .update
-            .doctor_command
-            .contains("/home/alice/.local/share/AgentHub/bin/agenthub-webd"));
         assert!(!config.paths.data_dir.starts_with("/var/lib/agenthub-webd"));
-        assert!(!config
-            .update
-            .panel_precheck_command
-            .contains("/usr/local/bin/agenthub-webd-update"));
         assert!(!config.codex.workspace.starts_with("/home/ubuntu"));
-    }
-
-    #[test]
-    fn default_config_uses_codex_update_transient_wrappers() {
-        let config = Config::default();
-
-        assert_eq!(
-            config.update.precheck_command,
-            "/usr/local/bin/agenthub-codex-precheck"
-        );
-        assert_eq!(
-            config.update.update_command,
-            "/usr/local/bin/agenthub-codex-update"
-        );
-        assert_eq!(
-            config.update.prune_command,
-            "/usr/local/bin/agenthub-codex-prune"
-        );
-    }
-
-    #[test]
-    fn default_config_has_no_app_server_runtime_dependency() {
-        let config = Config::default();
-
-        assert!(!config.codex.bridge_enabled);
-        assert!(config.codex.app_server_service.trim().is_empty());
-        assert!(config.codex.app_server_socket.is_none());
-        assert!(!config.probe.hooks.reload_app_server_after_install);
     }
 
     #[test]
@@ -1354,7 +1177,6 @@ mod tests {
         assert_eq!(config.probe.poll_seconds, 15);
         assert_eq!(config.probe.recent_limit, 50);
         assert!(config.probe.hooks.manage_stop_hook);
-        assert!(!config.probe.hooks.reload_app_server_after_install);
         assert!(!config.probe.notifications.enabled);
         assert_eq!(config.probe.notifications.server_url, "https://api.day.app");
         assert!(config.probe.notifications.notify_reply_needed);
@@ -1473,18 +1295,10 @@ db_path = "/var/lib/agenthub-webd/agenthub.sqlite"
 webui_dir = "/usr/share/agenthub-webd/webui"
 log_dir = "/var/log/agenthub-webd"
 
-[update]
-precheck_command = "/usr/local/bin/agenthub-codex-precheck"
-update_command = "/usr/local/bin/agenthub-codex-update"
-prune_command = "/usr/local/bin/agenthub-codex-prune"
-doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
-panel_update_command = "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"
-panel_precheck_command = "/usr/local/bin/agenthub-webd-update --precheck"
 "#;
         let config: Config = toml::from_str(input).unwrap();
 
         assert_eq!(config.codex.home.to_string_lossy(), "auto");
-        assert!(config.codex.app_server_service.is_empty());
     }
 
     #[test]
@@ -1546,18 +1360,5 @@ workspace = "/home/ubuntu/codex-workspace"
         ] {
             assert!(!serialized.contains(retired), "retired field {retired}");
         }
-    }
-
-    #[test]
-    fn normalize_keeps_custom_codex_precheck_command() {
-        let mut config = Config::default();
-        config.update.precheck_command = "/opt/custom/precheck --strict".to_string();
-
-        config.normalize().unwrap();
-
-        assert_eq!(
-            config.update.precheck_command,
-            "/opt/custom/precheck --strict"
-        );
     }
 }

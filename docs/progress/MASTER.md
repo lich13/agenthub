@@ -2,13 +2,15 @@
 
 ## 当前版本
 
-当前 **2.1.1 已发布并完成部署**，发布提交为 [`5c51fd9`](https://github.com/lich13/agenthub/commit/5c51fd9cd8c29c55073daceca79b8ef790fbb704)，[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/42061502813) 全部通过，[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v2.1.1) 已发布。服务端 `agenthub-webd 2.1.1` 为 `active` 且 health `ok`；Mac App 2.1.1 已原地安装并启动，没有保留旧版副本。完成 SSH 按需恢复与配置删除、远程表单统一，以及批准的 RPC／退役命令／旧迁移／日志／作业摘要／分页／代理运行时／旧 followup 精简；协议 2、schema 3 不变。时间线沿用现有快照缓存和实际容量计重。
+当前源码为 **2.1.2 核心候选**，Grok Bot 只读历史、明确请求通知及已批准的 11 项修复与精简已实现；协议 2、schema 3 保持。发布、部署和安装待标签 CI 完成。上一正式版本为 [v2.1.1](https://github.com/lich13/agenthub/releases/tag/v2.1.1)，不把候选验证视为正式运行验收。
 
-v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
+v2.1.2 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/agenthub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/agenthub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/agenthub/actions/workflows/release.yml) 为准。
 
 ## 已实现范围
+
+2.1.2 新增 Grok Bot 当前账户近期缓存、实际缓存路径复制、默认关闭的明确请求通知；删除旧 App Server 合并、前端文案替换、源码文本门禁、安装配置残留与旧清理入口，修复 SSH 原子保存、Antigravity 离线回退、后台日志、任务释放和搜索读取。
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
@@ -67,21 +69,24 @@ v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 
 ## 本轮合成测量
 
-同一隔离负载：2,048 行、131,072 字节日志及 200 次 jobs.detail 摘要请求，前后各运行一次；固定 SQLite 读事务用于记录累计 WAL 写入量，不代表线上磁盘占用。
+同一隔离负载前后各测一次：200 个 Grok 会话，每个 220 条、约 1KiB 消息，总历史 46,904,000 B；搜索固定返回 200 条。随后同进程运行输出 2,048 行、133,120 B 的日志任务。测量不含夹具生成时间。
 
 | 指标 | 修改前 | 修改后 |
 |---|---:|---:|
-| CPU 时间（user + sys） | 1.39s | 0.04s |
-| 峰值 RSS | 18,513,920 B | 16,678,912 B |
-| SQLite 输出更新次数 | 2,048 | 8 |
-| WAL 字节 | 164,762,952 | 1,042,392 |
-| 200 次 RPC 字节 | 26,686,000 | 62,000 |
-| 日志任务耗时 | 488ms | 28ms |
-| 200 次 RPC 耗时 | 958ms | 6ms |
+| 搜索耗时 | 14,919ms | 455ms |
+| 搜索 CPU（user + sys） | 14,125.224ms | 476.322ms |
+| 搜索阶段进程峰值 RSS | 50,954,240 B | 11,829,248 B |
+| 日志任务耗时 | 16ms | 16ms |
+| 日志任务 CPU | 8.940ms | 9.601ms |
+| 日志阶段进程累计峰值 RSS | 53,608,448 B | 14,532,608 B |
 
-正式资产与 v2.1.0 对比：DMG 18,491,016 → 18,294,699 B（-196,317 B，-1.06%）；macOS updater 归档 17,884,072 → 17,700,880 B（-183,192 B，-1.02%）；Linux webd 服务包 7,955,608 → 7,835,627 B（-119,981 B，-1.51%）。线上 CPU／内存／磁盘未测；WAL 写入量下降不代表磁盘空间回收。
+日志阶段 RSS 包含之前搜索的峰值，不能独立归因于作业实现。相同完成任务的实测 JSON 全文为 135,389 B、摘要为 221 B；后台不再请求终态全文，展开仍读取全文。缓存文件系统下输入／输出块计数均为 0，不能据此量化物理磁盘读写或空间回收。CI 包体积待对应正式产物比较，线上资源未测。
 
 ## 必要验证
+
+2.1.2 核心实现已通过受影响的 core、webd、Tauri 单元／集成测试、WebUI 测试、TypeScript、两端 Clippy、线协议契约及安装脚本测试。合成数据覆盖 Grok Bot 双格式、账户隔离、缓存缺失与替换、分页、未知状态、通知基线／去重／重新启用／重启及回答后停止提醒；回归覆盖 SSH 注释／原子保存／并发编辑／部分失败、Antigravity 离线回退、任务互斥与日志排空、搜索限额与较早线程。只读解析本机 16 个缓存线程、1,115 条可见事件，详情和通知扫描均无解析错误。
+
+已有浏览器完成深浅主题、1440／1280 与窄窗口检查；导航保持单行，Probe 六个平台开关整齐排列，系统字体、13px 桌面控件和 15px 阅读正文一致。键盘菜单、复制动作、未缓存禁用、搜索定位和窄窗口滚动通过；复制路径内容由合成数据测试验证。完整浏览器回归、跨平台构建与正式包体积由标签 CI 验证；真实 Bark 实收、其他 Agent 路径接手和日常业务待用户验收。
 
 2.1.1 核心实现已通过受影响的 core、webd、Tauri 单元／集成测试、WebUI 测试、TypeScript、两端 Clippy、线协议契约及安装脚本测试。覆盖 SSH 并发恢复、认证失败、超时关闭、切机时迟到握手、读取单次重试和写操作不重放；临时配置夹具覆盖 Host／Include／多别名／重复定义、注释与权限保留、系统配置拒绝和写入失败恢复。日志记录分隔、UTF-8／脱敏／尾部排空、作业摘要与默认全文、通知基线与去重、Antigravity 追加与不完整分页检查通过。
 
@@ -170,6 +175,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 1.3.7 核心实现由 [`6ca0716`](https://github.com/lich13/agenthub/commit/6ca0716)、[`e363069`](https://github.com/lich13/agenthub/commit/e363069)、[`d73b2d4`](https://github.com/lich13/agenthub/commit/d73b2d4)、[`0d7afea`](https://github.com/lich13/agenthub/commit/0d7afea) 和 [`70602df`](https://github.com/lich13/agenthub/commit/70602df) 完成；版本、文档和发布说明收尾提交为 [`cffb3e9`](https://github.com/lich13/agenthub/commit/cffb3e9)。该提交对应的[三项主 CI](https://github.com/lich13/agenthub/actions/runs/39727312472) 与 [`v1.3.7` Release CI](https://github.com/lich13/agenthub/actions/runs/39728000909) 全绿，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.3.7)。已使用正式 Linux 服务包升级远端 API，服务版本为 1.3.7、systemd 为 active、回环 healthz 成功；已安装正式 macOS ARM64 App，bundle 版本为 1.3.7 且启动成功，并保留 1.3.6 回退 App。安装和部署临时文件已清理，未自动启用 Claude hooks。
 
 ## 待用户验收
+
+2.1.2：本机 Grok Bot 阅读／搜索／复制路径，开启 Probe 后新待回复或授权的 Bark 实收，回答或批准后停止重试；其他 Agent 使用复制路径接手及日常业务。模拟数据与本机缓存解析不替代这些真实验收。
 
 2.1.1 安装后在远程会话阅读途中断开并恢复网络，再刷新，确认自动恢复且机器、页面和阅读位置保持；在「设置 → 远程连接」用专门测试 Host 检查删除确认及返回本机。继续核验五平台常用操作、作业完整日志和手机通知实收。
 

@@ -43,6 +43,7 @@ const providerLabels: Record<SessionProvider, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
   grok: "Grok Build",
+  grokbot: "Grok Bot",
   antigravity: "Antigravity",
   dsh: "DeepSeek Harness",
 };

@@ -16,6 +16,7 @@ pub enum SessionProvider {
     #[serde(rename = "claude_code")]
     Claude,
     Grok,
+    Grokbot,
     Antigravity,
     Dsh,
 }
@@ -113,6 +114,7 @@ pub struct SessionUseCases {
 }
 
 fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[String]) -> Result<()> {
+    ensure!(provider != SessionProvider::Grokbot, "Grok Bot 仅支持阅读");
     ensure!(
         !keys.is_empty() && (operation == SessionOperation::Delete || keys.len() <= MAX_BATCH_SIZE),
         "每批请选择 1 至 100 个线程"
@@ -157,7 +159,21 @@ impl SessionUseCases {
             );
             return codex::subagents::read_attachment(&self.codex, &request);
         }
-        let message = match request.provider {
+        let mut message = match request.provider {
+            SessionProvider::Grokbot => {
+                ensure!(
+                    self.platform.kind == crate::platform::PlatformKind::Macos,
+                    "Grok Bot 仅限本机"
+                );
+                crate::grokbot::load_all_events(
+                    &crate::grokbot::GrokBotPaths::default_for_user(),
+                    &request.session_key,
+                )?
+                .iter()
+                .filter_map(|e| e.user_message.as_ref())
+                .find(|m| m.id == request.message_id)
+                .cloned()
+            }
             SessionProvider::Claude => {
                 return crate::claude::read_attachment(&self.claude, &request);
             }
@@ -182,6 +198,9 @@ impl SessionUseCases {
             }
         }
         .ok_or_else(|| anyhow::anyhow!("会话消息已变化或不存在，请刷新会话"))?;
+        if request.provider == SessionProvider::Grokbot {
+            message.refresh_files(None);
+        }
         message.read_attachment(&request.attachment_id)
     }
 
@@ -236,6 +255,7 @@ impl SessionUseCases {
             warnings: vec![],
         };
         let summary = match provider {
+            SessionProvider::Grokbot => None,
             SessionProvider::Claude => crate::claude::claude_session_summary(&self.claude, key)
                 .ok()
                 .map(|s| (s.id, s.title, vec![s.path])),
@@ -285,6 +305,7 @@ impl SessionUseCases {
         let mut descendants = Vec::new();
         let mut warnings = Vec::new();
         let (id, title, paths, bytes, fingerprint) = match provider {
+            SessionProvider::Grokbot => anyhow::bail!("Grok Bot 仅支持阅读"),
             SessionProvider::Claude => {
                 let p = crate::claude::preview_claude_delete(&self.claude, key)?;
                 warnings = p.warnings.unwrap_or_default();
@@ -469,7 +490,9 @@ impl SessionUseCases {
                             result.deleted_ids.push(item.session_key.clone());
                         }
                     }
-                    SessionProvider::Antigravity | SessionProvider::Dsh => unreachable!(),
+                    SessionProvider::Antigravity
+                    | SessionProvider::Dsh
+                    | SessionProvider::Grokbot => unreachable!(),
                 }
                 Ok(())
             })();

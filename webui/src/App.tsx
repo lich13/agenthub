@@ -6,7 +6,7 @@ import {
   SlidersHorizontal,
   TriangleAlert
 } from "lucide-react";
-import { Component, ErrorInfo, Fragment, ReactNode, Suspense, lazy, useState } from "react";
+import { Component, ErrorInfo, Fragment, ReactNode, Suspense, lazy, useEffect, useState } from "react";
 import { AgentBrandIcon } from "./components/common/AgentBrandIcon";
 import { MachineButton, RemoteConnectionSettings } from "./components/connection/RemoteConnection";
 import { useConnection } from "./lib/query/connection";
@@ -31,11 +31,13 @@ const ProbeWorkspace = lazy(() => import("./components/probe/ProbeWorkspace").th
 const GrokWorkspace = lazy(() => import("./components/grok/GrokWorkspace").then(module => ({ default: module.GrokWorkspace })));
 const ClaudeWorkspace = lazy(() => import("./components/claude/ClaudeWorkspace").then(module => ({ default: module.ClaudeWorkspace })));
 const AntigravityWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.AntigravityWorkspace })));
+const GrokBotWorkspace = lazy(() => import("./components/providers/GrokBotWorkspace").then(module => ({ default: module.GrokBotWorkspace })));
 const DshWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.DshWorkspace })));
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "codex", label: "Codex", icon: <AgentBrandIcon agent="codex" /> },
   { id: "claude", label: "Claude Code", icon: <AgentBrandIcon agent="claude" /> },
   { id: "grok", label: "Grok Build", icon: <AgentBrandIcon agent="grok" /> },
+  { id: "grokbot", label: "Grok Bot", icon: <AgentBrandIcon agent="grokbot" /> },
   { id: "antigravity", label: "Antigravity", icon: <AgentBrandIcon agent="antigravity" /> },
   { id: "dsh", label: "DeepSeek Harness", icon: <AgentBrandIcon agent="dsh" /> },
   { id: "probe", label: PROBE_NAV_LABEL, icon: <Activity /> },
@@ -62,6 +64,9 @@ export default function App() {
   const capabilities = useRuntimeCapabilities(systemCapabilities.data, bootstrapCapabilities);
   const [view, setViewState] = useState<View>(lastView);
   const setView = (next: View) => { lastView = next; setViewState(next); };
+  useEffect(() => {
+    if (view === "grokbot" && capabilities.grokbotSessions === false) setView("codex");
+  }, [view, capabilities.grokbotSessions]);
   const [settingsSection, setSettingsSectionState] = useState<"maintenance" | "remote">(lastSettingsSection);
   const setSettingsSection = (next: "maintenance" | "remote") => { lastSettingsSection = next; setSettingsSectionState(next); };
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(true);
@@ -91,6 +96,7 @@ export default function App() {
               />
             )}
             {view === "grok" && <GrokWorkspace />}
+            {view === "grokbot" && capabilities.grokbotSessions && <GrokBotWorkspace />}
             {view === "claude" && <ClaudeWorkspace />}
             {view === "antigravity" && <AntigravityWorkspace capabilities={capabilities} />}
             {view === "dsh" && <DshWorkspace capabilities={capabilities} />}

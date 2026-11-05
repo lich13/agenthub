@@ -18,7 +18,7 @@ type TimelineSource = {
 
 /** Anchors remain on every rendered block; the rail represents human input only. */
 export function userTimelineEntries(
-  provider: "codex" | "claude_code" | "grok" | "antigravity" | "dsh",
+  provider: "codex" | "claude_code" | "grok" | "grokbot" | "antigravity" | "dsh",
   sources: readonly TimelineSource[],
 ): TimelineEntry[] {
   const seen = new Set<string>();

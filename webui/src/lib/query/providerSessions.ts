@@ -20,6 +20,7 @@ import {
   renameDshSession,
   restoreDshSession,
 } from "../api/dsh";
+import { getGrokBotSession, listGrokBotSessions } from "../api/grokbot";
 import { compareSessionMessageTime } from "../domain/sessionSelection";
 import { machineScope, useConnection } from "./connection";
 import { providerHistoryAdapter } from "./historyWindows";
@@ -28,26 +29,28 @@ import { usePagedHistory } from "./usePagedHistory";
 
 export type ArchivableProviderId = "antigravity" | "dsh";
 
+export type ReadableProviderId = ArchivableProviderId | "grokbot";
+
 export function readArchivableProviderSession(
-  provider: ArchivableProviderId,
+  provider: ReadableProviderId,
   request: ProviderDetailRequest,
 ): Promise<ProviderSessionDetail> {
   return provider === "antigravity"
     ? getAntigravitySession(request)
-    : getDshSession(request);
+    : provider === "grokbot" ? getGrokBotSession(request) : getDshSession(request);
 }
 
 function listArchivableProviderSessions(
-  provider: ArchivableProviderId,
+  provider: ReadableProviderId,
   request: ProviderListRequest,
 ): Promise<ProviderSessionSummary[]> {
   return provider === "antigravity"
     ? listAntigravitySessions(request)
-    : listDshSessions(request);
+    : provider === "grokbot" ? listGrokBotSessions(request) : listDshSessions(request);
 }
 
 export function useProviderSessions(
-  provider: ArchivableProviderId,
+  provider: ReadableProviderId,
   query: { q?: string; archived?: boolean },
   enabled: boolean,
 ) {
@@ -67,7 +70,7 @@ export function useProviderSessions(
 }
 
 export function useProviderDetail(
-  provider: ArchivableProviderId,
+  provider: ReadableProviderId,
   sessionKey: string | null,
   enabled: boolean,
 ) {

@@ -28,6 +28,8 @@ const capabilityFields = {
   antigravity_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_notifications: { "linux-api": false, "macos-tauri": true },
   antigravity_sessions: { "linux-api": true, "macos-tauri": true },
+  grokbot_sessions: { "linux-api": false, "macos-tauri": true },
+  grokbot_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_sessions: { "linux-api": true, "macos-tauri": true },
   hidden_cleanup_scan: { "linux-api": false, "macos-tauri": false },
   codex_delete_tree: { "linux-api": false, "macos-tauri": false },
@@ -95,7 +97,6 @@ export function buildDemoPlatformOverview(fixture: DemoFixtureKey): PlatformOver
 export function buildDemoSystemCapabilities(fixture: DemoFixtureKey): SystemCapabilitiesResponse {
   return buildDemoFixture(fixture).system;
 }
-
 
 const demoRemoteFixture = buildDemoFixture("linux-api");
 const demoDesktopFixture = buildDemoFixture("macos-tauri");

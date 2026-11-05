@@ -508,6 +508,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
                 }
             }
             record_endpoint_failure(!candidates.is_empty());
+            return Ok(None);
         }
     }
     match response_error {
@@ -2071,7 +2072,14 @@ fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>
             &rpc.token,
             "GetCascadeTrajectorySteps",
             &json!({"cascadeId": id, "stepOffset": steps.len()}),
-        )?;
+        )
+        .map_err(|error| {
+            if service_unreachable(&error) {
+                anyhow::Error::new(LiveHistoryUnavailable)
+            } else {
+                error
+            }
+        })?;
         if let Some(cascade_id) = more.get("cascadeId") {
             ensure!(cascade_id.as_str() == Some(id), "原生历史身份不匹配");
         }
@@ -2082,7 +2090,9 @@ fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>
         steps.append(batch);
     }
     let events = extract_live_step_events(id, &steps);
-    ensure!(!events.is_empty(), "原生历史尚不可读取");
+    if events.is_empty() {
+        return Err(LiveHistoryUnavailable.into());
+    }
     Ok(events)
 }
 
@@ -3817,6 +3827,107 @@ mod tests {
         assert!(root.join("conversations").join(format!("{id}.db")).exists());
         assert!(root.join("brain").join(&id).exists());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_history_uses_offline_only_for_unavailable_or_empty_content() {
+        fn serve(responses: Vec<Value>) -> (u16, std::thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = std::thread::spawn(move || {
+                for body in responses {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let mut len = 0;
+                    loop {
+                        line.clear();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" || line.is_empty() {
+                            break;
+                        }
+                        if let Some((key, value)) = line.split_once(':') {
+                            if key.eq_ignore_ascii_case("content-length") {
+                                len = value.trim().parse().unwrap();
+                            }
+                        }
+                    }
+                    let mut request = vec![0; len];
+                    reader.read_exact(&mut request).unwrap();
+                    let body = body.to_string();
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                }
+            });
+            (port, handle)
+        }
+        let root = env::temp_dir().join(format!(
+            "agenthub-offline-fallback-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let id = uuid::Uuid::new_v4().to_string();
+        let paths = AntigravityPaths::offline(root.clone());
+        let logs = paths.brain_dir().join(&id).join(".system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("transcript_full.jsonl"), r#"{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","content":"offline fixture"}"#).unwrap();
+        let user = json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{"items":[{"text":"live fixture"}]}});
+        let cases = [
+            (
+                vec![json!({"trajectory":{"cascadeId":id,"steps":[]},"numTotalSteps":0})],
+                true,
+            ),
+            (
+                vec![
+                    json!({"trajectory":{"cascadeId":id,"steps":[{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE"}]},"numTotalSteps":1}),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    json!({"trajectory":{"cascadeId":id,"steps":[user.clone()]},"numTotalSteps":2}),
+                ],
+                true,
+            ),
+            (
+                vec![json!({"trajectory":{"cascadeId":"different","steps":[]}})],
+                false,
+            ),
+            (
+                vec![json!({"trajectory":{"cascadeId":id,"steps":"broken"}})],
+                false,
+            ),
+            (
+                vec![
+                    json!({"trajectory":{"cascadeId":id,"steps":[user]},"numTotalSteps":2}),
+                    json!({"cascadeId":id,"steps":[]}),
+                ],
+                false,
+            ),
+        ];
+        for (responses, fallback) in cases {
+            let (port, handle) = serve(responses);
+            let result = load_events_from_source(
+                &paths,
+                &id,
+                Some(&(
+                    LiveRpc {
+                        port,
+                        token: "fixture".into(),
+                    },
+                    json!({}),
+                )),
+            );
+            handle.join().unwrap();
+            if fallback {
+                assert_eq!(
+                    result.unwrap().events[0].text.as_deref(),
+                    Some("offline fixture")
+                );
+            } else {
+                assert!(result.is_err());
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -42,14 +42,9 @@ export {
 } from "./api/threads";
 export type { ThreadDetailOptions } from "./api/threads";
 export {
-  dryRunArchiveDelete,
-  dryRunDshArchiveDelete,
-  startDshArchiveDelete,
   dryRunUnifiedCleanup,
   startUnifiedCleanup,
-  startArchiveDelete,
   dryRunHiddenThreadDelete,
-  startHiddenThreadDelete,
   listJobs,
   getJob
 } from "./api/jobs";

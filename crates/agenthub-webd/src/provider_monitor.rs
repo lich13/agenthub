@@ -18,6 +18,7 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     let mut snapshots = Vec::new();
     for provider in [
         NativeProvider::Grok,
+        NativeProvider::GrokBot,
         NativeProvider::Claude,
         NativeProvider::Antigravity,
         NativeProvider::Dsh,
@@ -160,10 +161,13 @@ pub(super) fn local_event_current(
             && s.session_key == delivery.session_key
     }) {
         return Ok(stream.event_key(&delivery.event) == delivery.event_key
-            && stream
-                .events
-                .iter()
-                .any(|e| native_probe::same_event(e, &delivery.event)));
+            && stream.events.iter().any(|e| {
+                if delivery.provider == NativeProvider::GrokBot {
+                    e.turn_id == delivery.event.turn_id && e.kind == delivery.event.kind
+                } else {
+                    native_probe::same_event(e, &delivery.event)
+                }
+            }));
     }
     anyhow::ensure!(scan.errors == 0, "native notification source pending");
     Ok(false)
@@ -171,6 +175,48 @@ pub(super) fn local_event_current(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grokbot_rechecks_request_identity_and_stops_after_resolution_or_account_switch() {
+        let event = agenthub_core::native_probe::NativeTurnEvent {
+            position: 1000,
+            turn_id: "request".into(),
+            kind: "authorization".into(),
+            body: "fixture".into(),
+            timestamp_ms: 1000,
+            prompt_id: Some("request".into()),
+        };
+        let mut stream = agenthub_core::native_probe::NativeStreamSnapshot {
+            provider: NativeProvider::GrokBot,
+            session_key: "account:thread".into(),
+            id: "thread".into(),
+            title: "Fixture".into(),
+            identity: "account:thread".into(),
+            record_count: 1000,
+            settled_count: 0,
+            events: vec![event.clone()],
+        };
+        let delivery = agenthub_core::db::NativeDelivery {
+            event_key: stream.event_key(&event),
+            provider: NativeProvider::GrokBot,
+            session_key: stream.session_key.clone(),
+            thread_id: stream.id.clone(),
+            title: stream.title.clone(),
+            event,
+        };
+        stream.events[0].timestamp_ms = 2000;
+        stream.events[0].body = "updated native prompt".into();
+        let mut scan = NativeScan {
+            streams: vec![stream],
+            errors: 0,
+        };
+        assert!(local_event_current(&scan, &delivery).unwrap());
+        scan.streams[0].events.clear();
+        assert!(!local_event_current(&scan, &delivery).unwrap());
+        scan.streams[0].events.push(delivery.event.clone());
+        scan.streams[0].session_key = "another:thread".into();
+        assert!(!local_event_current(&scan, &delivery).unwrap());
+    }
+
     use super::*;
     use crate::api::test_support::sandboxed_test_config;
     use native_probe::{NativeStreamSnapshot, NativeTurnEvent};

@@ -20,10 +20,6 @@ fn default_config_uses_agenthub_runtime_names() {
         platform.data_dir.join("agenthub.sqlite")
     );
     assert_eq!(config.paths.log_dir, platform.log_dir);
-    assert_eq!(
-        config.update.panel_update_command,
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"
-    );
 }
 
 #[test]
@@ -45,14 +41,6 @@ fn linux_default_config_values_stay_cloud_compatible() {
     assert_eq!(
         config.codex.workspace,
         PathBuf::from("/home/ubuntu/codex-workspace")
-    );
-    assert_eq!(
-        config.update.doctor_command,
-        "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
-    );
-    assert_eq!(
-        config.update.panel_precheck_command,
-        "/usr/local/bin/agenthub-webd-update --precheck"
     );
 }
 
@@ -78,18 +66,6 @@ fn macos_default_config_uses_application_support_and_tauri_app_paths() {
         .workspace
         .to_string_lossy()
         .contains("/home/ubuntu"));
-    assert!(!config.update.doctor_command.contains("/home/ubuntu"));
-    assert!(config
-        .update
-        .panel_precheck_command
-        .contains("Library/Application Support/AgentHub"));
-    assert!(config.update.panel_precheck_command.contains("test -d"));
-    assert!(!config.update.panel_precheck_command.contains("launchctl"));
-    assert!(!config
-        .update
-        .panel_precheck_command
-        .contains("http://127.0.0.1:15742"));
-    assert!(!config.update.panel_precheck_command.contains("systemctl"));
     assert!(!toml::to_string(&config).unwrap().contains("/opt/agenthub"));
     assert!(!toml::to_string(&config).unwrap().contains("/home/ubuntu"));
 
@@ -501,7 +477,7 @@ fn sandboxed_config(root: &std::path::Path) -> Config {
     config.paths.data_dir = root.join("data");
     config.paths.db_path = root.join("agenthub.sqlite");
     config.paths.log_dir = root.join("logs");
-    config.codex.bridge_enabled = false;
+
     config
 }
 

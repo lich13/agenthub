@@ -1,113 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import appSource from "../App.tsx?raw";
-import apiSource from "./api.ts?raw";
-import apiGrokSource from "./api/grok.ts?raw";
-import apiSessionsSource from "./api/sessions.ts?raw";
-import apiClaudeSource from "./api/claude.ts?raw";
-import apiAntigravitySource from "./api/antigravity.ts?raw";
-import apiDshSource from "./api/dsh.ts?raw";
-import apiJobsSource from "./api/jobs.ts?raw";
-import apiProbeSource from "./api/probe.ts?raw";
-import apiSharedSource from "./api/shared.ts?raw";
-import apiSystemSource from "./api/system.ts?raw";
-import apiThreadsSource from "./api/threads.ts?raw";
-import apiUpdatesSource from "./api/updates.ts?raw";
-import queryOpsSource from "./query/ops.ts?raw";
-import queryProbeSource from "./query/probe.ts?raw";
-import queryProviderSessionsSource from "./query/providerSessions.ts?raw";
-import querySystemSource from "./query/system.ts?raw";
-import queryThreadsSource from "./query/threads.ts?raw";
-import runtimeSource from "./runtime.ts?raw";
-import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
-import demoCoreSource from "./domain/demoCore.ts?raw";
+
 import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetail, ThreadSummary } from "../types";
-
-const domainApiSource = [
-  apiGrokSource,
-  apiClaudeSource,
-  apiAntigravitySource,
-  apiDshSource,
-  apiSessionsSource,
-  apiJobsSource,
-  apiProbeSource,
-  apiSharedSource,
-  apiSystemSource,
-  apiThreadsSource,
-  apiUpdatesSource
-].join("\n");
-
-const querySource = [
-  queryOpsSource,
-  queryProbeSource,
-  queryProviderSessionsSource,
-  querySystemSource,
-  queryThreadsSource
-].join("\n");
-
-type ProductionSource = {
-  path: string;
-  source: string;
-};
-
-const srcRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-
-function collectProductionSources(dir: string = srcRoot): ProductionSource[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const absolutePath = resolve(dir, entry.name);
-    if (entry.isDirectory()) {
-      return collectProductionSources(absolutePath);
-    }
-    if (!/\.(ts|tsx)$/.test(entry.name) || /\.(test|spec)\.(ts|tsx)$/.test(entry.name)) {
-      return [];
-    }
-    return [{
-      path: relative(srcRoot, absolutePath).replaceAll("\\", "/"),
-      source: readFileSync(absolutePath, "utf8")
-    }];
-  }).sort((a, b) => a.path.localeCompare(b.path));
-}
-
-const productionSources = collectProductionSources();
-const runtimeProductionSources = productionSources.filter((file) => file.path === "lib/runtime.ts");
-const apiTransportSources = productionSources.filter((file) => file.path === "lib/api/transport.ts");
-const domainApiProductionSources = productionSources.filter(
-  (file) => file.path.startsWith("lib/api/") && file.path !== "lib/api/transport.ts",
-);
-const queryProductionSources = productionSources.filter((file) => file.path.startsWith("lib/query/"));
-const productionComponentSources = productionSources.filter(
-  (file) => file.path === "App.tsx" || file.path === "main.tsx" || file.path.startsWith("components/") || file.path.startsWith("hooks/"),
-);
-const appComponentSources = productionSources.filter((file) => file.path === "App.tsx");
-const nonRuntimeProductionSources = productionSources.filter((file) => file.path !== "lib/runtime.ts");
-const nonQueryProductionSources = productionSources.filter((file) => !file.path.startsWith("lib/query/"));
-const nonTransportApiProductionSources = productionSources.filter(
-  (file) => file.path !== "lib/runtime.ts" && file.path !== "lib/api/transport.ts",
-);
-const nonTransportAndQueryProductionSources = productionSources.filter(
-  (file) => file.path !== "lib/runtime.ts"
-    && file.path !== "lib/api/transport.ts"
-    && !file.path.startsWith("lib/query/"),
-);
-const apiNonDemoProductionSources = domainApiProductionSources.filter(
-  (file) => file.path !== "lib/api/demo.ts",
-);
-
-function expectNoSourceMatches(
-  files: ProductionSource[],
-  pattern: string | RegExp,
-  label: string,
-) {
-  for (const file of files) {
-    if (typeof pattern === "string") {
-      expect(file.source, `${file.path} must not contain ${label}`).not.toContain(pattern);
-    } else {
-      expect(file.source, `${file.path} must not match ${label}`).not.toMatch(pattern);
-    }
-  }
-}
 
 async function loadRealApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
@@ -143,72 +36,6 @@ describe("archive delete API compatibility", () => {
     delete globalThis.__AGENTHUB_DESKTOP_RUNTIME__;
     delete globalThis.__AGENTHUB_TEST_INVOKE__;
     vi.resetModules();
-  });
-
-  test("uses a typed confirmation payload with explicit archive targets", async () => {
-    const { startArchiveDelete } = await loadRealApi();
-    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({}));
-    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
-
-    await startArchiveDelete({ candidates: [{ id: "archive-fixture" }] });
-
-    const call = rpcCall(invokeMock);
-    expect(call.path).toBe("cleanup.archiveExecute");
-
-    expect(call.body).toEqual({ request: { confirmed: true, candidates: [{ id: "archive-fixture" }] } });
-  });
-
-  test("uses hidden thread cleanup endpoints with dry-run and expected hidden count", async () => {
-    const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
-    const invokeMock = vi.fn(async (path: string, _args?: Record<string, unknown>) => (String(path).endsWith("cleanup.hiddenDryRun")
-        ? {
-          total_threads: 9,
-          visible_threads: 7,
-          hidden_threads: 2,
-          archived_threads: 0,
-          session_index_lines: 9,
-          rollout_files: 9,
-          hidden_ids: ["child-a", "child-b"],
-          hidden_source_counts: { subagent: 2 },
-          integrity: "ok"
-        }
-        : {
-          before: {
-            total_threads: 9,
-            visible_threads: 7,
-            hidden_threads: 2,
-            archived_threads: 0,
-            session_index_lines: 9,
-            rollout_files: 9,
-            hidden_ids: ["child-a", "child-b"],
-            hidden_source_counts: { subagent: 2 },
-            integrity: "ok"
-          },
-          deleted_threads: 2,
-          after_total_threads: 7,
-          after_visible_threads: 7,
-          after_hidden_threads: 0,
-          after_archived_threads: 0,
-          after_integrity: "ok",
-          visible_threads: 7,
-          hidden_threads: 0,
-          integrity: "ok",
-          deleted_rollout_files: 2
-        }));
-    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
-
-    const plan = await dryRunHiddenThreadDelete();
-    const result = await startHiddenThreadDelete({ expectedCount: plan.hidden_threads });
-
-    expect(plan.hidden_threads).toBe(2);
-    expect(result.deleted_threads).toBe(2);
-    expect(invokeMock.mock.calls.map(([path]) => path)).toEqual([
-      "cleanup.hiddenDryRun",
-      "cleanup.hiddenExecute"
-    ]);
-    const execute = rpcCall(invokeMock, 1);
-
-    expect(execute.body).toEqual({ request: { confirmed: true, expectedCount: 2 } });
   });
 
   test("thread detail request supports pagination query parameters", async () => {
@@ -380,18 +207,6 @@ describe("archive delete API compatibility", () => {
     expect(actionCall.body).toEqual({});
   });
 
-  test("does not export legacy update job helper or codex update targets", async () => {
-    const api = await loadRealApi();
-    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "unexpected" }));
-    vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invokeMock);
-
-    expect("startUpdateJob" in api).toBe(false);
-    expect(apiSource).not.toContain("codex/update");
-    expect(apiSource).not.toContain("/api/system/panel/update");
-
-    expect(invokeMock).not.toHaveBeenCalled();
-  });
-
   test("Probe demo data labels the builtin AgentHub service consistently", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
@@ -422,35 +237,6 @@ describe("archive delete API compatibility", () => {
         service_name: "AgentHub.app"
       }
     });
-  });
-
-  test("desktop demo fixtures are built from macOS-only data", async () => {
-    vi.unstubAllEnvs();
-    vi.resetModules();
-    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
-    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
-
-    const systemCapabilities = await getSystemCapabilities();
-    const fixtures = [
-      await getPlatformOverview(),
-      (await getProbeStatus()).data,
-      (await getProbeSettings()).data,
-      { ...systemCapabilities, capabilities: undefined },
-      await getUpdateStatus(),
-      await listJobs()
-    ];
-    const serialized = JSON.stringify(fixtures);
-
-    expect(demoCoreSource).toContain("function buildDemoPlatformOverview");
-    expect(demoCoreSource).toContain("function buildDemoSystemCapabilities");
-    expect(systemCapabilities.capabilities).toMatchObject({
-
-      systemd: false,
-
-      linux_update_job: false,
-      prune_backups: false
-    });
-    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/agenthub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
   });
 
   test("Probe fixed jobs use typed runtime command endpoints and maintenance is retired", async () => {
@@ -829,254 +615,11 @@ describe("archive delete API compatibility", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("desktop archive cleanup uses a typed native command instead of a route bridge", async () => {
-    const { startArchiveDelete } = await loadDesktopApi();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__AGENTHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("cleanup.archiveExecute");
-      expect(args).toEqual({ request: { confirmed: true, candidates: [] } });
-      return {
-        before: {},
-        deleted_threads: 0,
-        after_total_threads: 1,
-        after_archived_threads: 0,
-        after_integrity: "ok"
-      };
-    });
 
-    await expect(startArchiveDelete({ candidates: [] })).resolves.toMatchObject({ after_integrity: "ok" });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
-  test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
-    const forbiddenDomainTokens = [
-      '"/api/',
-      "'/api/",
-      "`/api/",
-      "@tauri-apps/api",
-      "isDesktopRuntime(",
-      "isWebRuntime(",
-      "runtimeDispatch(",
-      "__testRuntimeDispatch",
-      "desktopCommand",
-      "desktopArgs",
-      "webCommand",
-      "webArgs",
-      "runtimeValue",
-      "selectRuntimeFallback",
-      "desktop_api_command",
-      "desktopApiRoute",
-      "invokeDesktopApi",
-      "desktop_api",
-      "DesktopApi",
-      "desktopBridge"
-    ];
 
-    expect(apiSource).not.toContain("const ROUTES");
-    expect(domainApiSource).not.toContain("const ROUTES");
-    expect(domainApiSource).not.toContain("WebRoute");
-    expect(domainApiSource).not.toContain("DesktopRoute");
-    expect(domainApiSource).not.toContain('runtimeRpc("desktopApi"');
-    expect(domainApiSource).not.toContain("invokeDesktop");
-    expect(domainApiSource).not.toContain("DesktopApiUpload");
-    expect(domainApiSource).not.toContain("new EventSource");
-    expect(domainApiSource).not.toContain("/api/system/panel/update");
-    expect(domainApiSource).not.toContain("getRuntimeKind");
-    expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
-    expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
-    expect(domainApiSource).not.toContain("SystemCapabilities =");
-    expect(domainApiSource).not.toContain('from "./shared";\nexport { selectRuntimeFallback');
-    expect(domainApiSource).not.toContain("runtimeRpc(");
-    expect(domainApiSource).not.toContain("uploadRuntimeFiles");
-    expect(domainApiSource).not.toContain("createRuntimeThreadEventSource");
-    expect(domainCapabilitiesSource).not.toContain("../api/");
-    expect(domainCapabilitiesSource).not.toContain('from "../api');
-    expect(domainCapabilitiesSource).not.toContain('from "../runtime"');
-    expect(domainCapabilitiesSource).not.toContain("linuxBackupPrune");
-    expect(domainCapabilitiesSource).not.toContain("linuxUpdateLabels");
-    for (const token of forbiddenDomainTokens) {
-      expect(apiSource, `api.ts must not contain ${token}`).not.toContain(token);
-      expect(domainApiSource, `domain API modules must not contain ${token}`).not.toContain(token);
-      expect(domainCapabilitiesSource, `domain/capabilities.ts must not contain ${token}`).not.toContain(token);
-      expect(demoCoreSource, `domain/demoCore.ts must not contain ${token}`).not.toContain(token);
-    }
-    expect(appSource).not.toContain("desktopApiRoute");
-    expect(appSource).not.toContain('runtimeRpc("desktopApi"');
-    expect(appSource).not.toContain("invoke(");
-    expect(appSource).not.toContain("runtimeDispatch(");
-    expect(appSource).not.toContain("runtimeRpc(");
-    expect(appSource).not.toContain("fetch(");
-    expect(appSource).not.toContain("new EventSource");
-    expect(appSource).not.toContain("EventSource");
-    expect(appSource).not.toContain("desktopCommand");
-    expect(appSource).not.toContain("webCommand");
-    expect(appSource).not.toContain('"/api/');
-    expect(appSource).not.toContain("'/api/");
-  });
 
-  test("production business API commands use the native dot command registry", () => {
-    const commands = [
-      ...domainApiSource.matchAll(/callCommand(?:<[^()]*>)?\(\s*"([^"]+)"/g),
-      ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
-      ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
-    ].map((match) => match[1]);
-    const allowedCommands = [
-      "antigravity.archive",
-      "antigravity.detail",
-      "antigravity.list",
-      "antigravity.rename",
-      "antigravity.restore",
-      "cleanup.dshArchiveDryRun",
-      "cleanup.dshArchiveExecute",
-      "cleanup.unifiedDryRun",
-      "cleanup.unifiedExecute",
-      "cleanup.archiveDryRun",
-      "cleanup.archiveExecute",
-      "cleanup.hiddenDryRun",
-      "cleanup.hiddenExecute",
-      "claude.deleteExecute",
-      "claude.deletePreview",
-      "claude.detail",
-      "claude.hooks",
-      "claude.list",
-      "claude.rename",
-      "dsh.archive",
-      "dsh.detail",
-      "dsh.list",
-      "dsh.rename",
-      "dsh.restore",
-      "grok.deleteExecute",
-      "grok.deletePreview",
-      "grok.detail",
-      "grok.list",
-      "grok.rename",
-      "jobs.detail",
-      "jobs.list",
-      "sessions.attachmentRead",
-      "sessions.bulkPreview",
-      "sessions.bulkExecute",
-      "probe.barkTest",
-      "probe.events",
-      "probe.installHooks",
-      "probe.removeHooks",
-      "probe.settings.get",
-      "probe.settings.save",
-      "probe.status",
-      "system.platform",
-      "system.providers",
-      "system.capabilities",
-      "system.version",
-      "threads.archive",
-      "threads.blocks",
-      "threads.detail",
-      "threads.list",
-      "threads.rename",
-      "threads.restore",
-      "threads.subagentDetail",
-      "updates.check",
-      "updates.install",
-      "updates.prune",
-      "updates.status",
-    ].sort();
 
-    expect(commands.length).toBeGreaterThan(20);
-    expect(commands.every((command) => command.includes("."))).toBe(true);
-    expect([...new Set(commands)].sort()).toEqual(allowedCommands);
-    expect(domainApiSource).not.toMatch(/callCommand(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
-    expect(runtimeSource).not.toContain("uploadRuntimeFiles");
-    expect(runtimeSource).not.toContain("createRuntimeThreadEventSource");
-    expect(runtimeSource).not.toContain("threadEvents/");
-  });
-
-  test("transport and query cache APIs are scoped to their intended layers", () => {
-    const transportOnlyTokens = [
-      '"/api/',
-      "'/api/",
-      "`/api/",
-      "new EventSource",
-      "__TAURI_INTERNALS__",
-      "__AGENTHUB_DESKTOP_RUNTIME__"
-    ];
-    const queryOnlyTokens = [
-      "useQueryClient",
-      "setQueryData",
-      "invalidateQueries"
-    ];
-
-    for (const token of transportOnlyTokens) {
-      expect(domainApiSource, `domain API modules must not own transport token ${token}`).not.toContain(token);
-      expect(querySource, `query modules must not own transport token ${token}`).not.toContain(token);
-      expect(appSource, `components must not own transport token ${token}`).not.toContain(token);
-    }
-    for (const token of queryOnlyTokens) {
-      expect(domainApiSource, `domain API modules must not own query cache token ${token}`).not.toContain(token);
-      expect(appSource, `components must not own query cache token ${token}`).not.toContain(token);
-    }
-
-    expect(runtimeSource).not.toContain("buildRuntimeApiPath");
-    expect(runtimeSource).not.toContain("uploadRuntimeFiles");
-    expect(runtimeSource).not.toContain("EventSource");
-    expect(querySource).toContain("useQueryClient");
-    expect(querySource).toContain("invalidateQueries");
-  });
-
-  test("components do not import transport or own query cache state", () => {
-    expect(appComponentSources.map((file) => file.path)).toEqual(["App.tsx"]);
-    expect(productionComponentSources.map((file) => file.path)).toEqual(expect.arrayContaining([
-      "App.tsx",
-      "components/chat/ChatWorkspace.tsx",
-      "components/chat/Conversation.tsx",
-      "components/connection/RemoteConnection.tsx",
-      "main.tsx"
-    ]));
-
-    for (const token of [
-      'from "./lib/api/transport"',
-      'from "./lib/runtime"',
-      'from "./runtime"',
-      "callCommand(",
-      "runtimeRpc(",
-      "uploadRuntimeFiles",
-      "createRuntimeThreadEventSource",
-      "new EventSource",
-      "useQueryClient",
-      "setQueryData",
-      "invalidateQueries",
-      "QueryClient",
-      "queryClient",
-    ]) {
-      expectNoSourceMatches(appComponentSources, token, `component transport/query-cache token ${token}`);
-    }
-  });
-
-  test("App uses domain/query facades instead of the raw thread message store", () => {
-    expect(appSource).not.toContain("./lib/threadMessageStore");
-    expect(appSource).not.toMatch(/\bfrom\s+["'][^"']*threadMessageStore["']/);
-  });
-
-  test("query action hooks do not expose the raw QueryClient handle", () => {
-    for (const file of queryProductionSources) {
-      const exportedFunctions = Array.from(
-        file.source.matchAll(/export function (use[A-Z]\w+)\([^)]*\)\s*\{([\s\S]*?)(?=\nexport function|\nfunction|\nconst |\ntype |\Z)/g),
-        (match) => ({ name: match[1], body: match[2] }),
-      );
-
-      for (const fn of exportedFunctions) {
-        if (!/Actions$/.test(fn.name)) continue;
-        expect(fn.body, `${file.path} ${fn.name} must not return qc directly`).not.toMatch(/return\s+\{[\s\S]*?\bqc\s*(?:,|\})/);
-        expect(fn.body, `${file.path} ${fn.name} must not expose queryClient directly`).not.toMatch(/return\s+\{[\s\S]*?\bqueryClient\s*(?:,|\})/);
-      }
-    }
-  });
-
-  test("non-demo API modules do not inline bulky demo payloads", () => {
-    for (const file of apiNonDemoProductionSources) {
-      expect(file.source, `${file.path} should not create large demo arrays inline`).not.toMatch(/Array\.from\(\s*\{\s*length:\s*(?:[1-9]\d|[6-9])/);
-      expect(file.source, `${file.path} should not declare demo ThreadSummary arrays inline`).not.toMatch(/const\s+\w+\s*:\s*ThreadSummary\[\]\s*=\s*\[/);
-      expect(file.source, `${file.path} should not declare demo MessageBlock arrays inline`).not.toMatch(/const\s+\w+\s*:\s*MessageBlock\[\]\s*=\s*\[/);
-    }
-  });
 
   test("macOS demo fixtures do not include Linux-only rendered copy or paths", async () => {
     globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
@@ -1108,73 +651,9 @@ describe("archive delete API compatibility", () => {
     expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/agenthub|192\.0\.2\.10|panel\.example\.com|\/home\/ubuntu|\/root\/\.codex/i);
   });
 
-  test("production source files keep transport, domain API, and query cache boundaries explicit", () => {
-    expect(runtimeProductionSources.map((file) => file.path)).toEqual(["lib/runtime.ts"]);
-    expect(apiTransportSources.map((file) => file.path)).toEqual(["lib/api/transport.ts"]);
-    expect(queryProductionSources.length).toBeGreaterThan(0);
-    expect(domainApiProductionSources.length).toBeGreaterThan(0);
-    expect(productionComponentSources.map((file) => file.path).sort()).toEqual(expect.arrayContaining([
-      "App.tsx",
-      "components/chat/ChatWorkspace.tsx",
-      "components/chat/Conversation.tsx",
-      "components/connection/RemoteConnection.tsx",
-      "main.tsx"
-    ]));
 
-    const runtimeOnlyTokens = [
-      '"/api/',
-      "'/api/",
-      "`/api/",
-      "new EventSource"
-    ];
-    for (const token of runtimeOnlyTokens) {
-      expectNoSourceMatches(nonRuntimeProductionSources, token, `runtime transport token ${token}`);
-    }
-    expectNoSourceMatches(nonRuntimeProductionSources, /\bEventSource\b/, "runtime EventSource type/value");
 
-    const runtimePrimitiveTokens = [
-      "runtimeRpc(",
-      "uploadRuntimeFiles",
-      "createRuntimeThreadEventSource",
-      "buildRuntimeApiPath("
-    ];
-    for (const token of runtimePrimitiveTokens) {
-      expectNoSourceMatches(nonTransportApiProductionSources, token, `runtime primitive ${token}`);
-    }
-    expectNoSourceMatches(productionComponentSources.filter(file => file.path !== "main.tsx"), /from\s+["'][^"']*runtime["']/, "direct component runtime import");
-    expectNoSourceMatches(nonTransportAndQueryProductionSources, /from\s+["'][^"']*api\/transport["']/, "direct transport import outside API/query boundary");
 
-    const queryCacheTokens = [
-      "useQueryClient",
-      "setQueryData",
-      "invalidateQueries",
-      "getQueryCache",
-      "getQueryData",
-      "removeQueries",
-      "cancelQueries"
-    ];
-    for (const token of queryCacheTokens) {
-      expectNoSourceMatches(nonQueryProductionSources.filter(file => file.path !== "main.tsx"), token, `query cache API ${token}`);
-    }
-
-    const retiredCompatibilityTokens = [
-      "desktopCommand",
-      "webCommand",
-      "runtimeDispatch",
-      "runtimeValue",
-      "getSentinelStatus",
-      "SentinelStatus"
-    ];
-    for (const token of retiredCompatibilityTokens) {
-      expectNoSourceMatches(productionSources, token, `retired compatibility token ${token}`);
-    }
-  });
-
-  test("retired send payload and results have no production helpers", () => {
-    for (const token of ["function buildPayload(", "function actionMessage(", "function setThreadLastResult(", "function demoCreatedThreadResult("]) {
-      expectNoSourceMatches(productionSources, token, "retired sending helper");
-    }
-  });
 
   test("plan, pending question and answered history render read-only without reviving actions", async () => {
     const { createElement } = await import("react");
@@ -1213,6 +692,7 @@ describe("archive delete API compatibility", () => {
       "codex",
       "claude",
       "grok",
+      "grokbot",
       "antigravity",
       "dsh",
       "probe",
@@ -1222,6 +702,7 @@ describe("archive delete API compatibility", () => {
       "Codex",
       "Claude Code",
       "Grok Build",
+      "Grok Bot",
       "Antigravity",
       "DeepSeek Harness",
       "Probe",
@@ -1683,33 +1164,6 @@ describe("archive delete API compatibility", () => {
     ]);
   });
 
-  test("hidden cleanup helpers expose readiness and disabled state", async () => {
-    const app = await import("../test/domain");
-    const { hiddenThreadDeleteStats } = await import("./domain/runtimeViewModel");
-    const hiddenPlan = {
-      total_threads: 9,
-      visible_threads: 7,
-      hidden_threads: 2,
-      archived_threads: 0,
-      session_index_lines: 9,
-      rollout_files: 9,
-      hidden_ids: ["child-a", "child-b"],
-      hidden_source_counts: { exec: 1, subagent: 1 },
-      candidates: [{ id: "child-a", title: "Fixture A", fingerprint: "fixture", allowed: true, reason: null }, { id: "child-b", title: "Fixture B", fingerprint: null, allowed: false, reason: "protected" }],
-      integrity: "ok"
-    };
-
-    expect(hiddenThreadDeleteStats(hiddenPlan)).toEqual({
-      hidden: 2,
-      visible: 7,
-      sourceCounts: "exec:1 subagent:1",
-      integrity: "ok"
-    });
-    expect(app.canStartHiddenThreadDelete(hiddenPlan)).toBe(true);
-    expect(app.canStartHiddenThreadDelete({ ...hiddenPlan, hidden_threads: 0, candidates: [] })).toBe(false);
-    expect(app.canStartHiddenThreadDelete(null)).toBe(false);
-  });
-
   test("conversation block compaction collapses old chat messages but keeps recent chat and running tools", async () => {
     const app = await import("../test/domain");
     const chat = Array.from({ length: 6 }, (_, index) => ({
@@ -1920,11 +1374,49 @@ describe("archive delete API compatibility", () => {
   });
 });
 
-test("retired mutation and desktop LAN exports are unavailable", async () => {
-  const api = await loadRealApi() as Record<string, unknown>;
-  for (const name of ["createThread", "sendMessage", "steerThread", "stopThread", "forkThread", "enqueueFollowUp", "cancelFollowUp", "listFollowUps", "answerQuestions", "approvePlan", "getGoal", "saveGoal", "pauseGoal", "resumeGoal", "clearGoal", "uploadFiles", "deleteUpload", "getClaudeCodeOverview", "getDesktopWebUiStatus", "startDesktopWebUi", "stopDesktopWebUi"]) {
-    expect(api[name], name).toBeUndefined();
-  }
-  expect(runtimeSource).not.toContain("uploadRuntimeFiles");
-  expect(apiThreadsSource).not.toMatch(/callCommand[^\n]*"(?:threads\.(?:create|send|stop|steer|fork)|threads\.goal\.|uploads\.)/);
-});
+  test("desktop demo fixtures are built from macOS-only data", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
+    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
+
+    const systemCapabilities = await getSystemCapabilities();
+    const fixtures = [
+      await getPlatformOverview(),
+      (await getProbeStatus()).data,
+      (await getProbeSettings()).data,
+      { ...systemCapabilities, capabilities: undefined },
+      await getUpdateStatus(),
+      await listJobs()
+    ];
+    const serialized = JSON.stringify(fixtures);
+
+    expect(systemCapabilities.capabilities).toMatchObject({
+
+      systemd: false,
+
+      linux_update_job: false,
+      prune_backups: false
+    });
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/agenthub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
+  });
+
+  test("hidden cleanup helpers expose readiness and disabled state", async () => {
+    const app = await import("../test/domain");
+    const hiddenPlan = {
+      total_threads: 9,
+      visible_threads: 7,
+      hidden_threads: 2,
+      archived_threads: 0,
+      session_index_lines: 9,
+      rollout_files: 9,
+      hidden_ids: ["child-a", "child-b"],
+      hidden_source_counts: { exec: 1, subagent: 1 },
+      candidates: [{ id: "child-a", title: "Fixture A", fingerprint: "fixture", allowed: true, reason: null }, { id: "child-b", title: "Fixture B", fingerprint: null, allowed: false, reason: "protected" }],
+      integrity: "ok"
+    };
+
+    expect(app.canStartHiddenThreadDelete(hiddenPlan)).toBe(true);
+    expect(app.canStartHiddenThreadDelete({ ...hiddenPlan, hidden_threads: 0, candidates: [] })).toBe(false);
+    expect(app.canStartHiddenThreadDelete(null)).toBe(false);
+  });

@@ -7,10 +7,7 @@ use crate::{
     db::JobRecord,
     platform::PlatformPaths,
     services::{
-        cleanup::{
-            self, CleanupAction, CleanupActionPlan, CleanupExecuteRequest, CleanupOperationKind,
-            CleanupOperationPlan, CleanupTarget,
-        },
+        cleanup,
         jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
         probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
@@ -113,6 +110,12 @@ impl<'a> AgentHubUseCases<'a> {
     pub fn antigravity(self) -> AntigravityUseCases {
         AntigravityUseCases {
             paths: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+        }
+    }
+
+    pub fn grokbot(self) -> GrokBotUseCases {
+        GrokBotUseCases {
+            paths: crate::grokbot::GrokBotPaths::default_for_user(),
         }
     }
 
@@ -335,66 +338,6 @@ pub struct CleanupUseCases<'a> {
 }
 
 impl<'a> CleanupUseCases<'a> {
-    pub fn action(self, action: CleanupAction) -> Result<CleanupActionPlan> {
-        cleanup::plan_cleanup_action(self.platform, action)
-    }
-
-    pub fn operation(
-        self,
-        target: CleanupTarget,
-        operation: CleanupOperationKind,
-    ) -> Result<CleanupOperationPlan> {
-        cleanup::plan_cleanup_operation(self.platform, target, operation)
-    }
-
-    pub fn dry_run(self, target: CleanupTarget) -> Result<CleanupOperationPlan> {
-        self.operation(target, CleanupOperationKind::DryRun)
-    }
-
-    pub fn execute(self, target: CleanupTarget) -> Result<CleanupOperationPlan> {
-        self.operation(target, CleanupOperationKind::Execute)
-    }
-
-    pub fn execute_confirmed(
-        self,
-        target: CleanupTarget,
-        request: CleanupExecuteRequest,
-    ) -> Result<CleanupOperationPlan> {
-        cleanup::plan_cleanup_execute_operation(self.platform, target, request)
-    }
-
-    pub fn dry_run_archived(
-        self,
-        paths: &crate::codex::CodexPaths,
-    ) -> Result<cleanup::ArchiveDeletePlan> {
-        cleanup::dry_run_archived_with_capability(self.platform, paths)
-    }
-
-    pub fn execute_archived(
-        self,
-        paths: &crate::codex::CodexPaths,
-        candidates: &[crate::archive::HiddenThreadSelection],
-    ) -> Result<cleanup::ArchiveDeleteResult> {
-        cleanup::execute_archived_with_capability(self.platform, paths, candidates)
-    }
-
-    pub fn dsh_archive_dry_run(
-        self,
-        paths: &crate::dsh::DshPaths,
-    ) -> Result<crate::dsh::DshArchiveDeletePlan> {
-        system::require_capability(self.platform, Capability::ThreadCleanup)?;
-        crate::dsh::preview(paths)
-    }
-
-    pub fn dsh_archive_execute(
-        self,
-        paths: &crate::dsh::DshPaths,
-        request: crate::dsh::DshArchiveDeleteRequest,
-    ) -> Result<crate::dsh::DshArchiveDeleteResult> {
-        system::require_capability(self.platform, Capability::ThreadCleanup)?;
-        crate::dsh::execute(paths, request)
-    }
-
     pub fn unified_dry_run(
         self,
         paths: &cleanup::UnifiedCleanupPaths,
@@ -411,48 +354,14 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::execute_unified_with_capability(self.platform, paths, request)
     }
 
-    pub fn dry_run_hidden(
-        self,
-        paths: &crate::codex::CodexPaths,
-    ) -> Result<cleanup::HiddenThreadDeletePlan> {
-        cleanup::dry_run_hidden_with_capability(self.platform, paths)
-    }
-
     pub async fn scan_hidden(
         self,
         paths: crate::codex::CodexPaths,
         owner: String,
         request: crate::archive::hidden_scan::HiddenScanRequest,
     ) -> Result<crate::archive::HiddenThreadDeletePlan> {
-        self.operation(
-            cleanup::CleanupTarget::Hidden,
-            cleanup::CleanupOperationKind::DryRun,
-        )?;
+        system::require_capability(self.platform, Capability::ThreadCleanup)?;
         crate::archive::hidden_scan::request(paths, owner, request).await
-    }
-
-    pub fn execute_hidden(
-        self,
-        paths: &crate::codex::CodexPaths,
-        candidates: &[crate::archive::HiddenThreadSelection],
-    ) -> Result<cleanup::HiddenThreadDeleteResult> {
-        cleanup::execute_hidden_with_capability(self.platform, paths, candidates)
-    }
-
-    pub fn archive_delete_dry_run(self) -> Result<CleanupActionPlan> {
-        self.action(CleanupAction::ArchiveDeleteDryRun)
-    }
-
-    pub fn archive_delete_execute(self) -> Result<CleanupActionPlan> {
-        self.action(CleanupAction::ArchiveDeleteExecute)
-    }
-
-    pub fn hidden_delete_dry_run(self) -> Result<CleanupActionPlan> {
-        self.action(CleanupAction::HiddenDeleteDryRun)
-    }
-
-    pub fn hidden_delete_execute(self) -> Result<CleanupActionPlan> {
-        self.action(CleanupAction::HiddenDeleteExecute)
     }
 }
 
@@ -612,5 +521,24 @@ impl DshUseCases {
     }
     pub fn restore(&self, key: &str) -> Result<crate::provider_sessions::ProviderSessionSummary> {
         crate::dsh::sessions::set_archived(&self.paths, key, false)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GrokBotUseCases {
+    paths: crate::grokbot::GrokBotPaths,
+}
+impl GrokBotUseCases {
+    pub fn list(
+        &self,
+        request: crate::provider_sessions::ProviderListRequest,
+    ) -> Result<Vec<crate::provider_sessions::ProviderSessionSummary>> {
+        crate::grokbot::list(&self.paths, &request)
+    }
+    pub fn detail(
+        &self,
+        request: crate::provider_sessions::ProviderDetailRequest,
+    ) -> Result<crate::provider_sessions::ProviderSessionDetail> {
+        crate::grokbot::detail(&self.paths, &request)
     }
 }

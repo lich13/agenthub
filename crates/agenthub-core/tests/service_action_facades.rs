@@ -3,7 +3,6 @@ use agenthub_core::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        cleanup::{plan_cleanup_action, CleanupAction, CleanupTarget},
         commands,
         jobs::{
             archive_thread_response, plan_thread_archive_with_capability,
@@ -21,9 +20,8 @@ use agenthub_core::{
         system::Capability,
         threads::{
             normalize_thread_block_limit, normalize_thread_detail_block_limit,
-            plan_thread_blocks_request, plan_thread_cleanup_action, plan_thread_detail_request,
-            plan_threads_list_request, thread_blocks_page_for_plan, ThreadCleanupAction,
-            ThreadDetailRequest, ThreadsQuery,
+            plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
+            thread_blocks_page_for_plan, ThreadDetailRequest, ThreadsQuery,
         },
         updates::{plan_update_action, UpdateAction, UpdateExecutionMethod, UpdateUseCases},
     },
@@ -315,11 +313,6 @@ fn thread_detail_cleanup_facades_are_capability_gated() {
     assert_eq!(blocks.block_limit, Some(1));
     assert!(!blocks.full);
 
-    let cleanup = plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteDryRun)
-        .expect("Linux can plan cleanup actions");
-    assert_eq!(cleanup.required_capability, Capability::ThreadCleanup);
-    assert!(!cleanup.execute);
-
     assert!(plan_thread_detail_request(
         &windows,
         ThreadDetailRequest {
@@ -328,9 +321,6 @@ fn thread_detail_cleanup_facades_are_capability_gated() {
         }
     )
     .is_err());
-    assert!(
-        plan_thread_cleanup_action(&windows, ThreadCleanupAction::HiddenDeleteExecute).is_err()
-    );
 }
 
 #[test]
@@ -363,75 +353,6 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
 }
 
 #[test]
-fn cleanup_facades_expose_validation_and_execution_boundaries() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-
-    let cleanup = plan_cleanup_action(&linux, CleanupAction::HiddenDeleteExecute).unwrap();
-    assert_eq!(cleanup.required_capability, Capability::ThreadCleanup);
-    assert_eq!(cleanup.command, commands::CLEANUP_HIDDEN_EXECUTE);
-    assert_eq!(cleanup.target, CleanupTarget::Hidden);
-    assert!(cleanup.execute);
-    assert!(cleanup.requires_confirmation);
-
-    for execute in [
-        plan_cleanup_action(&linux, CleanupAction::ArchiveDeleteExecute).unwrap(),
-        plan_cleanup_action(&linux, CleanupAction::HiddenDeleteExecute).unwrap(),
-    ] {
-        assert!(execute.execute);
-        assert!(
-            execute.requires_confirmation,
-            "cleanup execute action must require confirmation: {:?}",
-            execute.action
-        );
-    }
-
-    for dry_run in [
-        plan_cleanup_action(&linux, CleanupAction::ArchiveDeleteDryRun).unwrap(),
-        plan_cleanup_action(&linux, CleanupAction::HiddenDeleteDryRun).unwrap(),
-    ] {
-        assert!(!dry_run.execute);
-        assert!(
-            !dry_run.requires_confirmation,
-            "cleanup dry-run must not require execute confirmation: {:?}",
-            dry_run.action
-        );
-    }
-
-    let thread_reexport =
-        plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteDryRun).unwrap();
-    assert_eq!(thread_reexport.command, commands::CLEANUP_ARCHIVE_DRY_RUN);
-    assert_eq!(thread_reexport.target, CleanupTarget::Archived);
-    assert!(!thread_reexport.execute);
-
-    assert!(plan_cleanup_action(&windows, CleanupAction::ArchiveDeleteDryRun).is_err());
-}
-
-#[test]
-fn core_facade_sources_do_not_import_host_runtime_surfaces() {
-    for (name, source) in [
-        ("threads", include_str!("../src/services/threads.rs")),
-        ("jobs", include_str!("../src/services/jobs.rs")),
-        ("cleanup", include_str!("../src/services/cleanup.rs")),
-    ] {
-        for forbidden in [
-            "axum",
-            "tauri",
-            "HeaderMap",
-            "Tauri",
-            "systemctl",
-            "nginx",
-            "Nginx",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{name} facade source must not import host runtime surface {forbidden}"
-            );
-        }
-    }
-}
-
-#[test]
 fn thread_limit_helpers_are_shared_core_contracts() {
     assert_eq!(normalize_thread_detail_block_limit(None, false), Some(120));
     assert_eq!(
@@ -448,23 +369,6 @@ fn thread_limit_helpers_are_shared_core_contracts() {
 
 #[test]
 fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
-    assert_eq!(
-        ThreadCleanupAction::ArchiveDeleteDryRun.as_rpc_action(),
-        commands::CLEANUP_ARCHIVE_DRY_RUN
-    );
-    assert_eq!(
-        ThreadCleanupAction::ArchiveDeleteExecute.as_rpc_action(),
-        commands::CLEANUP_ARCHIVE_EXECUTE
-    );
-    assert_eq!(
-        ThreadCleanupAction::HiddenDeleteDryRun.as_rpc_action(),
-        commands::CLEANUP_HIDDEN_DRY_RUN
-    );
-    assert_eq!(
-        ThreadCleanupAction::HiddenDeleteExecute.as_rpc_action(),
-        commands::CLEANUP_HIDDEN_EXECUTE
-    );
-
     let archived = archive_thread_response("thread-a".to_string(), true);
     assert_eq!(archived.command, commands::THREADS_ARCHIVE);
     let archive_plan = plan_thread_archive_with_capability(

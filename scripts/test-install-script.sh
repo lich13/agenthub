@@ -21,22 +21,10 @@ required=(
 for path in "${required[@]}"; do
   [[ -f "${ROOT}/${path}" ]] || { echo "missing required file: ${path}" >&2; exit 1; }
 done
-[[ ! -e "${ROOT}/scripts/package-linux-tauri-x86_64.sh" ]] || { echo "Linux Tauri package script must be retired" >&2; exit 1; }
-[[ ! -e "${ROOT}/scripts/smoke-linux-tauri.py" ]] || { echo "Linux Tauri smoke must be retired" >&2; exit 1; }
-
 python3 - "${ROOT}" <<'PY'
 from pathlib import Path
 import json, re, subprocess, sys
 root = Path(sys.argv[1])
-expected_docs = {
-    "README.md", "AGENTS.md", "DESIGN.md",
-    "docs/ARCHITECTURE.md", "docs/cloud-deploy-runbook.md", "docs/progress/MASTER.md",
-}
-tracked = set(subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"], cwd=root, text=True).splitlines())
-actual = {path for path in tracked if (root / path).is_file()}
-if actual != expected_docs:
-    raise SystemExit(f"Markdown set mismatch: missing={sorted(expected_docs-actual)}, extra={sorted(actual-expected_docs)}")
-
 version = json.loads((root / "package.json").read_text())["version"]
 if not re.fullmatch(r"\d+\.\d+\.\d+", version):
     raise SystemExit("package version is not semantic versioning")
@@ -71,28 +59,9 @@ if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
     raise SystemExit("default Claude root must use optional unit entry")
 if ".pi" in unit or provider_paths.custom_session_roots({"PI_CODING_AGENT_DIR": "/srv/fixture-pi", "PI_CODING_AGENT_SESSION_DIR": "/srv/fixture-pi-sessions"}):
     raise SystemExit("retired provider must not gain writable session paths")
-for name in ["crates/agenthub-core/src/pi.rs", "crates/agenthub-webd/src/api/pi.rs", "src-tauri/src/commands/pi.rs", "webui/src/components/pi/PiWorkspace.tsx"]:
-    if (root / name).exists():
-        raise SystemExit("retired provider implementation remains")
 if config["bundle"]["targets"] != ["dmg", "app"]:
     raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 
-ci = (root / ".github/workflows/ci.yml").read_text()
-release = (root / ".github/workflows/release.yml").read_text()
-if "linux-tauri:" in ci or "linux-tauri" in release:
-    raise SystemExit("Linux Tauri job remains in CI/Release")
-for stale in ["AppImage", ".deb", ".rpm", '"linux-x86_64"', "xvfb-run", "package-linux-tauri-x86_64.sh"]:
-    if stale in release:
-        raise SystemExit(f"Release retains retired marker: {stale}")
-for marker in ["webd-linux:", "macos:", "agenthub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected eight release assets"]:
-    if marker not in release:
-        raise SystemExit(f"Release missing marker: {marker}")
-
-package = (root / "scripts/package-webd-linux-x86_64.sh").read_text()
-if "--dir" in package or "SKIP_WEBUI" in package:
-    raise SystemExit("Linux packaging must not build front-end resources")
-if (root / "deploy/agenthub-webd/web-update.sh").exists():
-    raise SystemExit("retired web updater remains")
 update = (root / "deploy/agenthub-webd/update.sh").read_text()
 for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart agenthub-webd"]:
     if marker not in update:

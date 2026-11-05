@@ -5,7 +5,7 @@ import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
-export type View = "codex" | "grok" | "claude" | "antigravity" | "dsh" | "probe" | "ops";
+export type View = "codex" | "grok" | "grokbot" | "claude" | "antigravity" | "dsh" | "probe" | "ops";
 export type SelectedThread = string | null;
 export type ThreadTitleLike = {
   title?: string | null;
@@ -17,7 +17,7 @@ export type ThreadListItemLike = ThreadTitleLike & {
   latest_message?: string | null;
 };
 
-export function visibleNavigationItems<T extends { id: View }>(items: T[], _input?: RuntimeCapabilityInput): T[] { return items; }
+export function visibleNavigationItems<T extends { id: View }>(items: T[], input?: RuntimeCapabilityInput): T[] { return items.filter(item => item.id !== "grokbot" || capabilitiesForInput(input).grokbotSessions === true); }
 export function navigationLabelsForRuntime<T extends { id: View; label: string }>(items: T[], input?: RuntimeCapabilityInput): string[] {
   return visibleNavigationItems(items, input).map(item => item.label);
 }
@@ -259,8 +259,6 @@ export function sourceCountsText(counts?: Record<string, number> | null): string
     .map(([key, value]) => `${key}:${value}`)
     .join(" ");
 }
-
-
 
 export function extractPlanText(value: string): string {
   return value

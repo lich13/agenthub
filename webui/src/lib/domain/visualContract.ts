@@ -63,7 +63,8 @@ export const macosForbiddenVisualSurfaces = [
 export const desktopTauriOnlyVisualSurfaces = [
   "远程连接",
   "本机",
-  "远程机器"
+  "远程机器",
+  "Grok Bot"
 ] as const;
 
 export type VisualContract = {

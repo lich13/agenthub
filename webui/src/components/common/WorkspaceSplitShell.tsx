@@ -97,14 +97,14 @@ export function WorkspaceSearchInput(props: {
   );
 }
 
-export function WorkspaceEmptyState(props: { agent: AgentBrandId; title: string; subtitle: string }) {
+export function WorkspaceEmptyState(props: { agent: AgentBrandId; title: string; subtitle?: string }) {
   return (
     <div className="empty-state">
       <span className="empty-brand-badge" data-agent={props.agent} aria-hidden="true">
         <AgentBrandIcon agent={props.agent} size={26} />
       </span>
       <strong>{props.title}</strong>
-      <small>{props.subtitle}</small>
+      {props.subtitle && <small>{props.subtitle}</small>}
     </div>
   );
 }
@@ -298,6 +298,7 @@ export function StandardProviderEventView({
     role?: string | null;
     text?: string | null;
     detail?: string | null;
+    status?: string | null;
     userMessage?: UserMessageContent | null;
   };
   activityId: string;
@@ -338,10 +339,10 @@ export function StandardProviderEventView({
       <ActivityDetails
         timelineId={activityId}
         timelineAliases={timelineAliases}
-        className="grok-tool"
+        className={event.kind === "interaction" ? "grok-tool provider-interaction" : "grok-tool"}
         stateKey={activityId}
         initiallyOpen={false}
-        summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}
+        summary={<><span className="tool-title">{event.text ?? "活动记录"}</span>{event.kind === "interaction" && (event.status === "reply_needed" || event.status === "authorization") && <span className="status-chip tone-neutral">{event.status === "authorization" ? "需要授权" : "需要回复"}</span>}</>}
       >
         {() => <ToolOutput text={event.detail!} />}
       </ActivityDetails>

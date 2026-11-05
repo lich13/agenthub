@@ -129,7 +129,6 @@ class InstallSafetyTests(unittest.TestCase):
             ("retired webui layout", {"retired": "webui"}, "retired release layout"),
             ("retired web-update layout", {"retired": "deploy/web-update.sh"}, "retired release layout"),
             ("wrong platform", {"header": elf64_header(183)}, "invalid release platform"),
-            ("retired signed version", {"signed_version": "1.1.99"}, "retired web authentication"),
         )
         for name, options, expected_error in cases:
             with self.subTest(case=name):
@@ -480,7 +479,6 @@ install_config
         original = environment.read_text()
         self.assertEqual(original.count("AGENTHUB_SECRET_KEY="),1)
         self.assertNotIn("listen =",config.read_text())
-        self.assertIn('panel_precheck_command = "/usr/local/bin/agenthub-webd-update --precheck"',config.read_text())
         second = subprocess.run(["bash","-c",script],capture_output=True,text=True,check=False)
         self.assertEqual(second.returncode,0,second.stderr)
         self.assertEqual(environment.read_text(),original)

@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { grokbotDetail, grokbotRows } from "./grokbotFixture";
 import * as demo from "../src/lib/api/demo";
 import type { RemoteConnectionView } from "../src/lib/runtime";
 
@@ -202,13 +203,12 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
           return probeSettings;
         },
         "probe.barkTest": () => ({ job_id: "fixture-job" }),
-        "cleanup.archiveDryRun": demo.demoArchiveDeletePlan,
-        "cleanup.archiveExecute": demo.demoArchiveDeleteResult,
         "cleanup.hiddenDryRun": demo.demoHiddenThreadDeletePlan,
-        "cleanup.hiddenExecute": demo.demoHiddenThreadDeleteResult,
         "cleanup.unifiedDryRun": () => demo.demoUnifiedCleanupPlan(fixture(), args.request),
         "cleanup.unifiedExecute": () => demo.demoUnifiedCleanupResult(args.request),
         "probe.events": demo.demoProbeEvents,
+        "grokbot.list": () => grokbotRows.filter(row => row.title.includes(args.request?.q ?? "")),
+        "grokbot.detail": () => grokbotDetail(args.request.sessionKey),
         "grok.list": () => grok.filter((item) => item.title.includes(args.q ?? "")),
         "grok.detail": () => ({ summary: grok[0], events: [{ kind: "user_message_chunk", text: "Check the isolated fixture." }, { kind: "assistant_message_chunk", text: "## Result\n\nReadable response with a [link](https://example.com).\n\n```sh\nprintf test\n```" }] }),
         "grok.rename": () => { grok = grok.map((item) => ({ ...item, title: args.title })); return grok[0]; },

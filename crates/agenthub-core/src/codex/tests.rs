@@ -1,9 +1,8 @@
 use super::{
     archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
     parse_message_event, resolve_codex_paths_with_options, rollout_request_user_input_state,
-    scan_rollout, set_thread_title, test_support::source_line_count, thread_detail,
-    thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
-    RolloutRequestUserInputState, ThreadStatus,
+    scan_rollout, set_thread_title, thread_detail, thread_source_counts, window_thread_detail,
+    CodexPathDiscoveryOptions, CodexPaths, RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -15,14 +14,6 @@ use std::{
 };
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-#[test]
-fn codex_facade_stays_under_line_budget() {
-    assert!(
-        source_line_count("codex.rs") < 320,
-        "codex.rs should stay a thin public facade; move parsing and test details into codex/* modules"
-    );
-}
 
 #[test]
 fn resolved_codex_paths_prefers_valid_configured_home_before_auto_candidates() {
@@ -108,9 +99,6 @@ fn resolved_codex_paths_ignores_app_server_socket_for_home_discovery() {
 
     assert_eq!(resolved.home, current_home.join(".codex"));
     assert_eq!(resolved.codex_home_source, "current_user");
-    assert_eq!(resolved.configured_app_server_socket, None);
-    assert_eq!(resolved.app_server_socket, None);
-    assert_eq!(resolved.app_server_socket_source, None);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -132,8 +120,6 @@ fn resolved_codex_paths_does_not_synthesize_app_server_socket() {
     let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
     assert_eq!(resolved.home, env_home);
-    assert_eq!(resolved.app_server_socket, None);
-    assert_eq!(resolved.app_server_socket_source, None);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -155,8 +141,6 @@ fn resolved_codex_paths_keeps_app_server_socket_empty_without_config() {
     let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
     assert_eq!(resolved.home, env_home);
-    assert_eq!(resolved.app_server_socket, None);
-    assert_eq!(resolved.app_server_socket_source, None);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -288,9 +272,6 @@ fn resolved_codex_paths_ignores_configured_socket_outside_resolved_home() {
     let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
     assert_eq!(resolved.home, env_home);
-    assert_eq!(resolved.app_server_socket, None);
-    assert_eq!(resolved.configured_app_server_socket, None);
-    assert_eq!(resolved.app_server_socket_source, None);
     let _ = fs::remove_dir_all(root);
 }
 

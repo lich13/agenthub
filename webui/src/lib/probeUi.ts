@@ -27,6 +27,7 @@ export type ProbeSettingsDraft = {
     notify_recoverable: boolean;
     notify_codex: boolean;
     notify_grok: boolean;
+    notify_grokbot: boolean;
     notify_grok_completion: boolean;
     notify_grok_failure: boolean;
     notify_grok_reply_needed: boolean;
@@ -94,6 +95,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_recoverable: n.notify_recoverable !== false,
       notify_codex: n.notify_codex !== false,
       notify_grok: n.notify_grok !== false,
+      notify_grokbot: n.notify_grokbot === true,
       notify_grok_completion: n.notify_grok_completion !== false,
       notify_grok_failure: n.notify_grok_failure !== false,
       notify_grok_reply_needed: n.notify_grok_reply_needed !== false,
@@ -151,6 +153,7 @@ export function buildProbeSettingsPayload(
     notify_recoverable: n.notify_recoverable,
     notify_codex: n.notify_codex,
     notify_grok: n.notify_grok,
+    notify_grokbot: n.notify_grokbot,
     notify_grok_completion: n.notify_grok_completion,
     notify_grok_failure: n.notify_grok_failure,
     notify_grok_reply_needed: n.notify_grok_reply_needed,
@@ -195,16 +198,17 @@ export function buildProbeSettingsPayload(
   };
 }
 
-export type ProbeNotificationPlatformId = "codex" | "claude_code" | "grok" | "antigravity" | "dsh";
+export type ProbeNotificationPlatformId = "codex" | "claude_code" | "grok" | "grokbot" | "antigravity" | "dsh";
 
 export const PROBE_NOTIFICATION_PLATFORMS: readonly {
   id: ProbeNotificationPlatformId;
-  brand: "codex" | "claude" | "grok" | "antigravity" | "dsh";
+  brand: "codex" | "claude" | "grok" | "grokbot" | "antigravity" | "dsh";
   label: string;
 }[] = [
   { id: "codex", brand: "codex", label: "Codex" },
   { id: "claude_code", brand: "claude", label: "Claude Code" },
   { id: "grok", brand: "grok", label: "Grok Build" },
+  { id: "grokbot", brand: "grokbot", label: "Grok Bot" },
   { id: "antigravity", brand: "antigravity", label: "Antigravity" },
   { id: "dsh", brand: "dsh", label: "DeepSeek Harness" },
 ];
@@ -221,6 +225,8 @@ export function isPlatformNotificationEnabled(
       return n.notify_claude && (n.notify_claude_completion || n.notify_claude_failure || n.notify_claude_reply_needed);
     case "grok":
       return n.notify_grok && (n.notify_grok_completion || n.notify_grok_failure || n.notify_grok_reply_needed);
+    case "grokbot":
+      return n.notify_grokbot;
     case "antigravity":
       return (
         n.notify_antigravity &&
@@ -261,6 +267,7 @@ export function applyPlatformNotificationToggle(
       notify_grok_failure: enabled,
       notify_grok_reply_needed: enabled,
     },
+    grokbot: { notify_grokbot: enabled },
     antigravity: {
       notify_antigravity: enabled,
       notify_antigravity_completion: enabled,

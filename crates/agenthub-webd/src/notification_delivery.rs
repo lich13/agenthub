@@ -250,6 +250,7 @@ pub async fn native(
             match delivery.provider {
                 native_probe::NativeProvider::Claude => "Claude Code",
                 native_probe::NativeProvider::Grok => "Grok",
+                native_probe::NativeProvider::GrokBot => "Grok Bot",
                 native_probe::NativeProvider::Antigravity => "Antigravity",
                 native_probe::NativeProvider::Dsh => "DSH",
             },

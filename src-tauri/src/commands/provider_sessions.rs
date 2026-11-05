@@ -148,3 +148,31 @@ pub async fn restoreDshSession(
     .await
     .map_err(|err| err.to_string())?
 }
+
+#[tauri::command(rename = "grokbot.list")]
+pub async fn listGrokBotSessions(
+    request: Option<ProviderListRequest>,
+) -> Result<Vec<ProviderSessionSummary>, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
+            .grokbot()
+            .list(request.unwrap_or_default())
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command(rename = "grokbot.detail")]
+pub async fn getGrokBotSession(
+    request: ProviderDetailRequest,
+) -> Result<ProviderSessionDetail, String> {
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(&PlatformPaths::desktop_current())
+            .grokbot()
+            .detail(request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}

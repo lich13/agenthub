@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps, ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
-import workspaceSource from "./ArchivableProviderWorkspace.tsx?raw";
+
 import {
   AntigravityWorkspace,
   DshWorkspace,
@@ -16,6 +16,15 @@ import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDeta
 const observed = vi.hoisted(() => ({
   elements: [] as ReactElement<ComponentProps<"details">>[],
 }));
+
+test("Grok Bot pending interactions keep their reply status without a running tool", () => {
+  const events: ProviderHistoryEvent[] = [{ id: "question", kind: "interaction", status: "reply_needed", text: "Fixture question", detail: "Choose the next step" }];
+  const html = renderToStaticMarkup(<>{renderProviderEvents(groupProviderEvents(events, "Grok Bot"), "Fixture", "Grok Bot")}</>);
+  expect(html).toContain("需要回复");
+  expect(html).toContain("Fixture question");
+  expect(html).not.toContain("运行中");
+  expect(html).not.toContain("已完成");
+});
 
 vi.mock("../common/ActivityDetails", async importOriginal => {
   const actual = await importOriginal<typeof import("../common/ActivityDetails")>();
@@ -125,18 +134,6 @@ describe("ArchivableProviderWorkspace", () => {
   test("providerSessionLabel trims titles and falls back cleanly for untitled threads", () => {
     expect(providerSessionLabel({ id: "ag-1", title: "  Thread Alpha  " })).toBe("Thread Alpha");
     expect(providerSessionLabel({ id: "ag-2", title: "   " })).toBe("ag-2");
-  });
-
-  test("row and header menus implement core actions + Finder reveal and strictly omit 复制恢复命令", () => {
-    expect(workspaceSource).toContain("RenameableSession");
-    expect(workspaceSource).toContain("改名");
-    expect(workspaceSource).toContain('"恢复" : "归档"');
-    expect(workspaceSource).toContain("取消归档");
-    expect(workspaceSource).toContain('label: "复制 ID"');
-    expect(workspaceSource).toContain('label: "复制路径"');
-    expect(workspaceSource).toContain('label: "在 Finder 中显示"');
-    expect(workspaceSource).toContain('label: "永久删除"');
-    expect(workspaceSource).not.toContain("复制恢复命令");
   });
 
   test("older remote servers without antigravity_sessions or dsh_sessions render a graceful upgrade notice", () => {

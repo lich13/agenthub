@@ -2,7 +2,7 @@ use crate::{db::PanelDb, security::redact_output};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     ffi::OsString,
     future::Future,
     path::PathBuf,
@@ -46,7 +46,7 @@ pub struct JobEvent {
 pub struct JobRunner {
     db: PanelDb,
     tx: broadcast::Sender<JobEvent>,
-    running: Arc<Mutex<HashMap<String, u32>>>,
+    running: Arc<Mutex<HashSet<String>>>,
 }
 
 impl JobRunner {
@@ -55,7 +55,7 @@ impl JobRunner {
         Self {
             db,
             tx,
-            running: Arc::new(Mutex::new(HashMap::new())),
+            running: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -95,10 +95,10 @@ impl JobRunner {
                 .as_deref()
                 .expect("exclusive group key");
             let mut running = self.running.lock().expect("running jobs");
-            if running.contains_key(key) {
+            if running.contains(key) {
                 anyhow::bail!("codex update job already running: {group}");
             }
-            running.insert(key.to_string(), 0);
+            running.insert(key.to_string());
         }
         let id = Uuid::new_v4().to_string();
         if let Err(err) = self.db.create_job(&id, kind, title) {
@@ -113,30 +113,27 @@ impl JobRunner {
         let id_for_task = id.clone();
         let exclusive_group = exclusive_group.map(str::to_string);
         spawn_job_task(async move {
-            let result = run_process_command(
-                &db,
-                &tx,
-                &running,
-                &id_for_task,
-                &command,
-                exclusive_group.clone(),
-            )
-            .await;
-            if let Err(err) = result {
-                if let Some(group) = exclusive_group.as_deref() {
-                    running
-                        .lock()
-                        .expect("running jobs")
-                        .remove(&exclusive_group_key(group));
+            let result = run_process_command(&db, &tx, &id_for_task, &command).await;
+            let (status, chunk) = match result {
+                Ok(status) => (status, None),
+                Err(err) => {
+                    let message = redact_output(&err.to_string());
+                    let _ = db.append_job_output(&id_for_task, &format!("\nerror: {message}\n"));
+                    let _ = db.finish_job(&id_for_task, "failed", None, Some(&message));
+                    ("failed", Some(message))
                 }
-                let _ = db.append_job_output(&id_for_task, &format!("\nerror: {err}\n"));
-                let _ = db.finish_job(&id_for_task, "failed", None, Some(&err.to_string()));
-                let _ = tx.send(JobEvent {
-                    job_id: id_for_task,
-                    status: "failed".to_string(),
-                    chunk: Some(err.to_string()),
-                });
+            };
+            if let Some(group) = exclusive_group.as_deref() {
+                running
+                    .lock()
+                    .expect("running jobs")
+                    .remove(&exclusive_group_key(group));
             }
+            let _ = tx.send(JobEvent {
+                job_id: id_for_task,
+                status: status.into(),
+                chunk,
+            });
         });
         Ok(id)
     }
@@ -144,30 +141,22 @@ impl JobRunner {
     pub fn exclusive_group_job(&self, group: &str) -> Option<String> {
         let key = exclusive_group_key(group);
         let running = self.running.lock().expect("running jobs");
-        running.contains_key(&key).then_some(group.to_string())
+        running.contains(&key).then_some(group.to_string())
     }
 }
 
 async fn run_process_command(
     db: &PanelDb,
     tx: &broadcast::Sender<JobEvent>,
-    running: &Arc<Mutex<HashMap<String, u32>>>,
     job_id: &str,
     command: &ProcessCommand,
-    exclusive_group: Option<String>,
-) -> Result<()> {
+) -> Result<&'static str> {
     let mut child = Command::new(&command.program)
         .args(&command.args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("unable to start managed job")?;
-    if let Some(pid) = child.id() {
-        running
-            .lock()
-            .expect("running jobs")
-            .insert(job_id.to_string(), pid);
-    }
 
     let mut handles = Vec::new();
     if let Some(stdout) = child.stdout.take() {
@@ -186,17 +175,15 @@ async fn run_process_command(
             stderr,
         ));
     }
-    let status = child.wait().await?;
-    {
-        let mut running = running.lock().expect("running jobs");
-        running.remove(job_id);
-        if let Some(group) = exclusive_group.as_deref() {
-            running.remove(&exclusive_group_key(group));
+    let status = child.wait().await;
+    let mut drain_result = Ok(());
+    for handle in handles {
+        if let Err(error) = handle.await.map_err(anyhow::Error::from).and_then(|r| r) {
+            drain_result = Err(error);
         }
     }
-    for handle in handles {
-        handle.await??;
-    }
+    let status = status?;
+    drain_result?;
     let code = status.code();
     let status_text = if status.success() {
         "succeeded"
@@ -204,12 +191,7 @@ async fn run_process_command(
         "failed"
     };
     db.finish_job(job_id, status_text, code, None)?;
-    let _ = tx.send(JobEvent {
-        job_id: job_id.to_string(),
-        status: status_text.to_string(),
-        chunk: None,
-    });
-    Ok(())
+    Ok(status_text)
 }
 
 fn exclusive_group_key(group: &str) -> String {
@@ -228,7 +210,7 @@ where
     std::thread::Builder::new()
         .name("agenthub-job-runtime".to_string())
         .spawn(move || {
-            match tokio::runtime::Builder::new_multi_thread()
+            match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
             {
@@ -375,6 +357,28 @@ mod tests {
         drop(writer);
         reader.await.unwrap().unwrap();
         assert!(db.job("fixture").unwrap().unwrap().output.ends_with("完成"));
+    }
+
+    #[tokio::test]
+    async fn terminal_event_releases_group_after_all_output_is_drained() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let runner = JobRunner::new(db.clone());
+        let mut events = runner.subscribe();
+        let id = runner
+            .start_exclusive_process_job(
+                "fixture",
+                "Fixture",
+                super::ProcessCommand::new(
+                    "/bin/sh",
+                    ["-c", "(sleep 0.1; printf tail)& printf start"],
+                ),
+                "drain",
+            )
+            .unwrap();
+        wait_for_job_status(&mut events, &id, "succeeded").await;
+        assert_eq!(db.job(&id).unwrap().unwrap().output, "starttail");
+        assert!(runner.exclusive_group_job("drain").is_none());
+        assert!(runner.running.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

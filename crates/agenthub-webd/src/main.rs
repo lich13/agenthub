@@ -430,7 +430,6 @@ async fn install_probe_hooks(
                     probe: Some(agenthub_core::config::ProbeSettingsPatch {
                         hooks: Some(agenthub_core::config::ProbeHooksConfigPatch {
                             manage_stop_hook: Some(true),
-                            reload_app_server_after_install: None,
                         }),
                         ..Default::default()
                     }),
@@ -501,7 +500,6 @@ async fn remove_probe_hooks(
                     probe: Some(agenthub_core::config::ProbeSettingsPatch {
                         hooks: Some(agenthub_core::config::ProbeHooksConfigPatch {
                             manage_stop_hook: Some(false),
-                            reload_app_server_after_install: None,
                         }),
                         ..Default::default()
                     }),
@@ -1837,8 +1835,7 @@ hooks = false
         fs::create_dir_all(&codex_home).unwrap();
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::write(codex_home.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
-        let mut config = test_config(codex_home.clone());
-        config.probe.hooks.reload_app_server_after_install = false;
+        let config = test_config(codex_home.clone());
 
         let result = install_probe_hooks_for_test(&config, false).await.unwrap();
 
@@ -1977,8 +1974,7 @@ last_error = "old agenthub request hook"
 "#,
         )
         .unwrap();
-        let mut config = test_config(codex_home.clone());
-        config.probe.hooks.reload_app_server_after_install = false;
+        let config = test_config(codex_home.clone());
 
         let result = install_probe_hooks_for_test(&config, false).await.unwrap();
 
@@ -4130,8 +4126,7 @@ last_error = "old agenthub request hook"
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
         let mut config = test_config(codex_home.clone());
-        config.codex.app_server_socket = Some(dir.join("missing.sock"));
-        config.codex.bridge_enabled = true;
+
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4202,8 +4197,7 @@ last_error = "old agenthub request hook"
         .unwrap();
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
         let mut config = test_config(codex_home.clone());
-        config.codex.app_server_socket = Some(dir.join("missing.sock"));
-        config.codex.bridge_enabled = true;
+
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4534,7 +4528,7 @@ last_error = "old agenthub request hook"
         config.paths.data_dir = root.join("data");
         config.paths.db_path = root.join("data/panel.sqlite");
         config.paths.log_dir = root.join("logs");
-        config.codex.bridge_enabled = false;
+
         config
     }
 

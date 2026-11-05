@@ -10,31 +10,6 @@ use agenthub_desktop_lib::{
 use serde_json::json;
 use std::{path::Path, process::Command};
 
-fn registered_invoke_command_paths() -> Vec<String> {
-    let lib_source = include_str!("../src/lib.rs");
-    let production_source = lib_source
-        .split("\n#[cfg(test)]")
-        .next()
-        .expect("lib source must include production section");
-    let marker = "tauri::generate_handler![";
-    let start = production_source
-        .find(marker)
-        .expect("lib source must include tauri generate_handler")
-        + marker.len();
-    let (body, _) = production_source[start..]
-        .split_once(']')
-        .expect("generate_handler block must close");
-    body.lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("commands::"))
-        .map(|line| line.trim_end_matches(',').to_string())
-        .collect()
-}
-
-fn command_path(module: &str, name: &str) -> String {
-    format!("commands::{module}::{name}")
-}
-
 fn desktop_state(temp: &tempfile::TempDir) -> DesktopState {
     let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, temp.path());
     config.paths.data_dir = temp.path().join("data");
@@ -94,104 +69,6 @@ fn write_codex_thread(
         .status()
         .unwrap();
     assert!(status.success());
-}
-
-#[test]
-fn tauri_does_not_register_retired_string_action_or_macos_prune_handlers() {
-    let commands = registered_invoke_command_paths();
-
-    for retired in [
-        command_path("settings", "startProbeJob"),
-        command_path("updates", "runUpdateAction"),
-        command_path("updates", "updatesPrune"),
-        command_path("updates", "backupPrune"),
-    ] {
-        assert!(
-            !commands.contains(&retired),
-            "Tauri must not register retired string action or compat handler: {retired}"
-        );
-    }
-
-    for typed in [
-        command_path("updates", "updatesCheck"),
-        command_path("updates", "updatesInstall"),
-    ] {
-        assert!(
-            commands.contains(&typed),
-            "Tauri must keep typed non-prune update handler: {typed}"
-        );
-    }
-
-    assert!(
-        !commands.iter().any(|command| command.contains("Prune")),
-        "macOS Tauri invoke handler must not register update prune handlers"
-    );
-}
-
-#[test]
-fn tauri_update_sources_never_plan_update_prune() {
-    for (name, source) in [
-        (
-            "commands/updates.rs",
-            include_str!("../src/commands/updates.rs"),
-        ),
-        (
-            "services/updates.rs",
-            include_str!("../src/services/updates.rs"),
-        ),
-    ] {
-        assert!(
-            !source.contains("UpdateAction::Prune"),
-            "{name} must not plan Linux update prune from macOS Tauri"
-        );
-        assert!(
-            !source.contains("updatesPrune") && !source.contains("runUpdateAction"),
-            "{name} must not define retired update action wrappers"
-        );
-    }
-}
-
-#[test]
-fn tauri_cleanup_execute_services_are_native_effect_executors() {
-    let settings_source = include_str!("../src/services/settings.rs")
-        .split("\n#[cfg(test)]\nmod tests")
-        .next()
-        .expect("settings service source must include production section");
-
-    for executor in [
-        "archive_delete_execute_with_state",
-        "hidden_delete_execute_with_state",
-        ".cleanup()",
-        ".execute_confirmed(",
-        ".dry_run_archived(",
-        ".execute_archived(",
-        ".dry_run_hidden(",
-        ".execute_hidden(",
-    ] {
-        assert!(
-            settings_source.contains(executor),
-            "settings service must keep only the cleanup executor landing point: {executor}"
-        );
-    }
-
-    for forbidden in [
-        "cleanup_service::plan_cleanup_execute_operation",
-        "cleanup_service::validate_cleanup_expected_count",
-        "cleanup_service::execute_archived_with_capability",
-        "cleanup_service::execute_hidden_with_capability",
-        "ARCHIVE_DELETE_CONFIRMATION_MESSAGE",
-        "HIDDEN_DELETE_CONFIRMATION_MESSAGE",
-        "CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE",
-        "archive deletion must be confirmed",
-        "hidden thread deletion must be confirmed",
-        "expectedCount mismatch",
-        "fn ensure_cleanup_expected_count",
-    ] {
-        assert!(
-            !settings_source.contains(forbidden),
-            "settings service must not embed cleanup business semantic token: {forbidden}"
-        );
-    }
 }
 
 #[tokio::test]

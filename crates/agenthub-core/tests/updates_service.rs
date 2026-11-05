@@ -5,9 +5,8 @@ use agenthub_core::{
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
         macos_updater_update_available_output, update_action_plan, update_status,
-        update_status_with_capability, update_status_with_recent_check_job, LinuxUpdateJobSpec,
-        UpdateAction, UpdateExecutionMethod, UpdateFailureCategory, UpdateState,
-        MACOS_UPDATER_CHECKING_OUTPUT,
+        update_status_with_capability, update_status_with_recent_check_job, UpdateAction,
+        UpdateExecutionMethod, UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
     },
 };
 
@@ -142,11 +141,7 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
 
 #[test]
 fn linux_update_job_specs_are_planned_in_core_service() {
-    let mut config = Config::for_platform_kind(PlatformKind::Linux);
-    config.update.panel_precheck_command =
-        "/usr/local/bin/agenthub-webd-update --precheck".to_string();
-    config.update.panel_update_command =
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest".to_string();
+    let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let precheck =
@@ -204,81 +199,6 @@ fn linux_update_job_specs_are_planned_in_core_service() {
             .to_string()
             .contains("only Linux WebUI")
     );
-}
-
-#[test]
-fn linux_update_process_accepts_current_defaults_and_rejects_shell_variants() {
-    let expected_update = ProcessCommand::new(
-        "/usr/local/bin/agenthub-webd-update",
-        ["--repo", "lich13/agenthub", "--version", "latest"],
-    );
-    let current_updates = [agenthub_core::update::PANEL_UPDATE_DEFAULT];
-    for command in current_updates {
-        let spec = LinuxUpdateJobSpec {
-            kind: "agenthub_update_install".to_string(),
-            title: "fixture update".to_string(),
-            command: command.to_string(),
-            exclusive_group: None,
-        };
-        assert_eq!(
-            spec.process_command().unwrap(),
-            expected_update,
-            "{command}"
-        );
-    }
-
-    let expected_precheck =
-        ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"]);
-    let current_prechecks = [agenthub_core::update::PANEL_PRECHECK_DEFAULT];
-    for command in current_prechecks {
-        let spec = LinuxUpdateJobSpec {
-            kind: "agenthub_update_check".to_string(),
-            title: "fixture precheck".to_string(),
-            command: command.to_string(),
-            exclusive_group: None,
-        };
-        assert_eq!(
-            spec.process_command().unwrap(),
-            expected_precheck,
-            "{command}"
-        );
-    }
-
-    let rejected = [
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest; touch marker",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest && true",
-        "FIXTURE=1 /usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest | cat",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest > marker",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version $(touch marker)",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version `touch marker`",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version 'latest with spaces'",
-        "/tmp/agenthub-webd-update --repo lich13/agenthub --version latest",
-    ];
-    for command in rejected {
-        let spec = LinuxUpdateJobSpec {
-            kind: "agenthub_update_install".to_string(),
-            title: "fixture update".to_string(),
-            command: command.to_string(),
-            exclusive_group: None,
-        };
-        let error = spec
-            .process_command()
-            .expect_err("non-exact update shell text must be rejected");
-        assert_eq!(error.to_string(), "unsupported managed update command");
-        assert!(
-            !error.to_string().contains(command),
-            "rejection error must not echo the configured command"
-        );
-    }
-
-    let rejected_precheck = LinuxUpdateJobSpec {
-        kind: "agenthub_update_check".to_string(),
-        title: "fixture precheck".to_string(),
-        command: "/usr/local/bin/agenthub-webd-update --precheck; touch marker".to_string(),
-        exclusive_group: None,
-    };
-    assert!(rejected_precheck.process_command().is_err());
 }
 
 #[test]

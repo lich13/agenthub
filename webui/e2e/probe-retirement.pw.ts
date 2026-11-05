@@ -70,12 +70,12 @@ async function assertProbeCardGeometry(page: Page, desktop: boolean) {
       return { top: Math.round(rect.top), height: rect.height };
     }),
   );
-  expect(platformBoxes).toHaveLength(5);
+  expect(platformBoxes).toHaveLength(6);
   for (const box of platformBoxes) {
     expect(box.height).toBeLessThan(80);
   }
   if (desktop) {
-    expect(new Set(platformBoxes.map(box => box.top)).size).toBe(1);
+    expect(new Set(platformBoxes.map(box => box.top)).size).toBe(2);
   }
   const hostBoxes = await page.locator(".probe-host-card").evaluateAll(cards =>
     cards.map(card => {

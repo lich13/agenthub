@@ -19,8 +19,6 @@ pub(crate) mod rollout_file;
 mod session_index;
 pub mod subagents;
 #[cfg(test)]
-mod test_support;
-#[cfg(test)]
 mod tests;
 mod thread_rows;
 mod types;

@@ -1,9 +1,6 @@
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
   HiddenScanProgress,
   HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
   JobRecord,
   ProbeEvent,
   ProbeJobAction,
@@ -18,7 +15,7 @@ import type {
   UpdateStatus
 } from "../../types";
 import { runtimeCapabilitiesForRuntime, type RuntimeCapabilityMatrix } from "./capabilities";
-import { hostCapabilityPolicy, redactHostCopy } from "./hostCapabilityPolicy";
+import { hostCapabilityPolicy } from "./hostCapabilityPolicy";
 
 export type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
 
@@ -122,7 +119,6 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
       "已选平台范围"
     ] : []),
     failureCategoryLabel("systemd_failure", capabilities),
-    failureCategoryLabel("nginx_failure", capabilities),
     failureCategoryLabel("permission_denied_sudo", capabilities)
   ];
 }
@@ -193,149 +189,6 @@ export type CleanupStageView = {
   tone?: Tone;
 };
 
-export type HiddenThreadDeleteStatsView = {
-  hidden: number;
-  visible: number;
-  sourceCounts: string;
-  integrity: string;
-};
-
-export type OpsWorkspaceView = {
-  hiddenStats: HiddenThreadDeleteStatsView;
-  archivedCleanupStage: CleanupStageView;
-  hiddenCleanupStage: CleanupStageView;
-  updateActions: ReturnType<typeof opsUpdateActionView>;
-};
-
-export type RuntimeMetricView = {
-  label: string;
-  value: string;
-  tone?: Tone;
-  wide?: boolean;
-};
-
-export type CleanupMutationState = {
-  dryRunPending: boolean;
-  armed: boolean;
-  executePending: boolean;
-};
-
-export type OpsWorkspaceViewModel = {
-  panelTitles: string[];
-  updateActions: ReturnType<typeof opsUpdateActionView>;
-  archiveCleanup: {
-    stage: CleanupStageView;
-    canArm: boolean;
-    nextPlan: ArchiveDeletePlan | null;
-  };
-  hiddenCleanup: {
-    stage: CleanupStageView;
-    canArm: boolean;
-    stats: HiddenThreadDeleteStatsView;
-    rolloutDeleteResult: string;
-  };
-};
-
-export function opsWorkspaceView(input: {
-  update?: UpdateStatus | null;
-  hiddenPlan?: HiddenThreadDeletePlan | null;
-  archivePlan?: ArchiveDeletePlan | null;
-  archiveDryRunPending?: boolean;
-  archiveDeleteArmed?: boolean;
-  archiveExecutePending?: boolean;
-  hiddenDryRunPending?: boolean;
-  hiddenDeleteArmed?: boolean;
-  hiddenExecutePending?: boolean;
-  capabilities?: RuntimeCapabilityInput;
-}): OpsWorkspaceView {
-  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null);
-  return {
-    hiddenStats,
-    archivedCleanupStage: cleanupStageLabel({
-      hasPlan: Boolean(input.archivePlan),
-      dryRunPending: Boolean(input.archiveDryRunPending),
-      armed: Boolean(input.archiveDeleteArmed),
-      executePending: Boolean(input.archiveExecutePending),
-      executableCount: input.archivePlan?.archived_threads ?? 0
-    }),
-    hiddenCleanupStage: cleanupStageLabel({
-      hasPlan: Boolean(input.hiddenPlan),
-      dryRunPending: Boolean(input.hiddenDryRunPending),
-      armed: Boolean(input.hiddenDeleteArmed),
-      executePending: Boolean(input.hiddenExecutePending),
-      executableCount: hiddenStats.hidden
-    }),
-    updateActions: opsUpdateActionView(input.update, input.capabilities)
-  };
-}
-
-export function opsWorkspaceViewModel(input: {
-  capabilities?: RuntimeCapabilityInput;
-  updateStatus?: UpdateStatus | null;
-  archivePlan?: ArchiveDeletePlan | null;
-  archiveExecuteResult?: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity"> | null;
-  hiddenPlan?: HiddenThreadDeletePlan | null;
-  hiddenDeleteResult?: Pick<HiddenThreadDeleteResult, "deleted_rollout_files"> | null;
-  archiveCleanup: CleanupMutationState;
-  hiddenCleanup: CleanupMutationState;
-}): OpsWorkspaceViewModel {
-  const capabilities = capabilitiesForInput(input.capabilities);
-  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null);
-  const archivePlan = input.archiveExecuteResult
-    ? archivePlanAfterExecute(input.archivePlan ?? null, input.archiveExecuteResult)
-    : input.archivePlan ?? null;
-  return {
-    panelTitles: opsWorkspacePanelTitles(capabilities),
-    updateActions: opsUpdateActionView(input.updateStatus, capabilities),
-    archiveCleanup: {
-      stage: cleanupStageLabel({
-        ...input.archiveCleanup,
-        hasPlan: Boolean(archivePlan),
-        executableCount: archivePlan?.archived_threads ?? 0
-      }),
-      canArm: (archivePlan?.archived_threads ?? 0) > 0 && !input.archiveCleanup.dryRunPending && !input.archiveCleanup.executePending,
-      nextPlan: archivePlan
-    },
-    hiddenCleanup: {
-      stage: cleanupStageLabel({
-        ...input.hiddenCleanup,
-        hasPlan: Boolean(input.hiddenPlan),
-        executableCount: hiddenStats.hidden
-      }),
-      canArm: canStartHiddenThreadDelete(input.hiddenPlan) && !input.hiddenCleanup.dryRunPending && !input.hiddenCleanup.executePending,
-      stats: hiddenStats,
-      rolloutDeleteResult: hiddenRolloutDeleteResultText(input.hiddenDeleteResult)
-    }
-  };
-}
-
-export function hiddenThreadDeleteStats(
-  plan: HiddenThreadDeletePlan | null
-): HiddenThreadDeleteStatsView {
-  const hidden = plan?.hidden_threads ?? 0;
-  return {
-    hidden,
-    visible: plan?.visible_threads ?? 0,
-    sourceCounts: sourceCountsText(plan?.hidden_source_counts),
-    integrity: plan?.integrity ?? "dry-run 未执行"
-  };
-}
-
-export function archivePlanAfterExecute(
-  current: ArchiveDeletePlan | null,
-  result: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
-): ArchiveDeletePlan | null {
-  if (!current) return current;
-  return {
-    ...current,
-    total_threads: result.after_total_threads,
-    active_threads: result.after_active_threads,
-    archived_threads: result.after_archived_threads,
-    archived_ids: [],
-    integrity: result.after_integrity
-  };
-}
-
 function cleanupStageLabel(input: CleanupStageInput): CleanupStageView {
   if (input.executePending) return { label: "执行中", tone: "warning" };
   if (input.armed) return { label: "等待确认", tone: "danger" };
@@ -343,11 +196,6 @@ function cleanupStageLabel(input: CleanupStageInput): CleanupStageView {
   if (!input.hasPlan) return { label: "待 dry-run" };
   if (input.executableCount > 0) return { label: "可清理", tone: "warning" };
   return { label: "无可清理", tone: "success" };
-}
-
-export function hiddenRolloutDeleteResultText(result?: Pick<HiddenThreadDeleteResult, "deleted_rollout_files"> | null): string {
-  if (!result) return "等待执行";
-  return String(result.deleted_rollout_files ?? 0);
 }
 
 export function sourceCountsText(counts?: Record<string, number> | null): string {
@@ -575,7 +423,6 @@ export function codexHomeStatusValue(status?: CodexHomePathFields | null): strin
   );
 }
 
-
 export function probeDiscoveryWarningsText(warnings?: string[] | null): string {
   return warnings?.length ? warnings.join(", ") : "无";
 }
@@ -617,7 +464,6 @@ export function probeStateLabel(value?: string | null): string {
   return labels[value] ?? value;
 }
 
-
 export function isProbeSettings(value: unknown): value is ProbeSettings {
   return Boolean(value && typeof value === "object" && "codex" in value && "probe" in value && "notifications" in value);
 }
@@ -631,10 +477,6 @@ export function mbDraftToLogBytes(value: string): number | "" {
   const parsed = numberInputDraftValue(value);
   return parsed === "" ? "" : parsed * 1024 * 1024;
 }
-
-
-
-
 
 export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age_seconds" | "is_refreshing" | "snapshot_status"> | null, fetching = false): string {
   const age = typeof status?.snapshot_age_seconds === "number" ? Math.max(0, Math.round(status.snapshot_age_seconds)) : null;
@@ -903,29 +745,9 @@ export function jobFailureAnalysisView(
 ): { label: string; explanation: string; suggestions: string[] } {
   const capabilities = capabilitiesForInput(input);
   const label = failureCategoryLabel(analysis.category, capabilities);
-  const policy = hostCapabilityPolicy(capabilities);
-  if (!policy.copyRedactionEnabled) {
-    return {
-      label,
-      explanation: analysis.explanation,
-      suggestions: analysis.suggestions
-    };
-  }
-  const sanitize = (value: string) => sanitizeDesktopFailureCopy(value, label);
-  return {
-    label,
-    explanation: sanitize(analysis.explanation),
-    suggestions: analysis.suggestions.map(sanitize)
-  };
+  return { label, explanation: analysis.explanation, suggestions: analysis.suggestions };
 }
 
-function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
-  return redactHostCopy(value, fallback);
-}
-
-export function jobOutputView(value: string, input?: RuntimeCapabilityInput): string {
-  const output = value.trim() || "no output";
-  return !hostCapabilityPolicy(capabilitiesForInput(input)).copyRedactionEnabled
-    ? output
-    : sanitizeDesktopFailureCopy(output, "任务输出不可用");
+export function jobOutputView(value: string, _input?: RuntimeCapabilityInput): string {
+  return value.trim() || "no output";
 }

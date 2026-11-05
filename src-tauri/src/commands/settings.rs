@@ -5,8 +5,8 @@ use crate::{
     services::{
         actions::DesktopActionResponse,
         settings::{
-            self as settings_service, DesktopCleanupExecuteRequest, DesktopProbeEventsRequest,
-            DesktopProbeEventsResponse, DesktopProbeSettings,
+            self as settings_service, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
+            DesktopProbeSettings,
         },
     },
 };
@@ -62,22 +62,6 @@ pub fn getProbeEvents(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command(rename = "cleanup.archiveDryRun")]
-pub fn dryRunArchiveDelete(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<agenthub_core::archive::ArchiveDeletePlan, String> {
-    settings_service::archive_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "cleanup.archiveExecute")]
-pub fn startArchiveDelete(
-    state: tauri::State<'_, DesktopState>,
-    request: DesktopCleanupExecuteRequest,
-) -> Result<agenthub_core::archive::ArchiveDeleteResult, String> {
-    settings_service::archive_delete_execute_with_state(&state, request)
-        .map_err(|err| err.to_string())
-}
-
 #[tauri::command(rename = "cleanup.hiddenDryRun")]
 pub async fn dryRunHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
@@ -92,20 +76,6 @@ pub async fn dryRunHiddenThreadDelete(
         )
         .await
         .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "cleanup.hiddenExecute")]
-pub async fn startHiddenThreadDelete(
-    state: tauri::State<'_, DesktopState>,
-    request: DesktopCleanupExecuteRequest,
-) -> Result<agenthub_core::archive::HiddenThreadDeleteResult, String> {
-    let state = state.inner().clone();
-    agenthub_core::read_tasks::spawn_blocking(move || {
-        settings_service::hidden_delete_execute_with_state(&state, request)
-            .map_err(|err| err.to_string())
-    })
-    .await
-    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command(rename = "claude.hooks")]
@@ -125,37 +95,6 @@ pub async fn claudeHooks(
     .await
     .map_err(|_| "Hooks 设置任务未完成".to_string())?
     .map_err(|error| error.to_string())
-}
-
-#[tauri::command(rename = "cleanup.dshArchiveDryRun")]
-pub async fn dryRunDshArchiveDelete(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<agenthub_core::dsh::DshArchiveDeletePlan, String> {
-    let state = state.inner().clone();
-    agenthub_core::read_tasks::spawn_blocking(move || {
-        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
-            .cleanup()
-            .dsh_archive_dry_run(&agenthub_core::dsh::DshPaths::default_for_user())
-            .map_err(|err| err.to_string())
-    })
-    .await
-    .map_err(|_| "DSH 归档预览任务未完成".to_string())?
-}
-
-#[tauri::command(rename = "cleanup.dshArchiveExecute")]
-pub async fn startDshArchiveDelete(
-    state: tauri::State<'_, DesktopState>,
-    request: agenthub_core::dsh::DshArchiveDeleteRequest,
-) -> Result<agenthub_core::dsh::DshArchiveDeleteResult, String> {
-    let state = state.inner().clone();
-    agenthub_core::read_tasks::spawn_blocking(move || {
-        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
-            .cleanup()
-            .dsh_archive_execute(&agenthub_core::dsh::DshPaths::default_for_user(), request)
-            .map_err(|err| err.to_string())
-    })
-    .await
-    .map_err(|_| "DSH 归档清理任务未完成".to_string())?
 }
 
 #[tauri::command(rename = "cleanup.unifiedDryRun")]

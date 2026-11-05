@@ -58,7 +58,6 @@ pub enum UpdateFailureCategory {
     ReleaseMissing,
     DownloadSha256Mismatch,
     SystemdFailure,
-    NginxFailure,
     PermissionDeniedSudo,
     CodexAuthFailure,
     SqliteIntegrityFailure,
@@ -106,11 +105,12 @@ pub struct LinuxUpdateJobSpec {
 impl LinuxUpdateJobSpec {
     pub fn process_command(&self) -> Result<crate::jobs::ProcessCommand> {
         match self.kind.as_str() {
-            "agenthub_update_check" => update::panel_process(&self.command, true),
-            "agenthub_update_install" => update::panel_process(&self.command, false),
-            "agenthub_update_prune" if self.command == update::panel_prune_command() => Ok(
-                crate::jobs::ProcessCommand::new("python3", ["-c", update::PANEL_PRUNE_SCRIPT]),
-            ),
+            "agenthub_update_check" => update::panel_process(true),
+            "agenthub_update_install" => update::panel_process(false),
+            "agenthub_update_prune" => Ok(crate::jobs::ProcessCommand::new(
+                "python3",
+                ["-c", update::PANEL_PRUNE_SCRIPT],
+            )),
             _ => anyhow::bail!("unsupported managed update command"),
         }
     }
@@ -437,7 +437,7 @@ pub fn macos_updater_no_update_output() -> &'static str {
     MACOS_UPDATER_NO_UPDATE_OUTPUT
 }
 
-pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
+pub fn linux_update_job_spec(_config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
     if plan.method != UpdateExecutionMethod::LinuxSystemdJob {
         anyhow::bail!("only Linux WebUI can start server update jobs");
     }
@@ -449,13 +449,13 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
         UpdateAction::Check => LinuxUpdateJobSpec {
             kind: "agenthub_update_check".to_string(),
             title: "AgentHub update precheck".to_string(),
-            command: config.update.panel_precheck_command.clone(),
+            command: update::PANEL_PRECHECK_DEFAULT.into(),
             exclusive_group,
         },
         UpdateAction::Install => LinuxUpdateJobSpec {
             kind: "agenthub_update_install".to_string(),
             title: "AgentHub update install".to_string(),
-            command: update::panel_update_command(&config.update.panel_update_command),
+            command: update::PANEL_UPDATE_DEFAULT.into(),
             exclusive_group,
         },
         UpdateAction::Prune => LinuxUpdateJobSpec {
@@ -643,7 +643,6 @@ impl From<JobFailureCategory> for UpdateFailureCategory {
             JobFailureCategory::ReleaseMissing => Self::ReleaseMissing,
             JobFailureCategory::DownloadSha256Mismatch => Self::DownloadSha256Mismatch,
             JobFailureCategory::SystemdFailure => Self::SystemdFailure,
-            JobFailureCategory::NginxFailure => Self::NginxFailure,
             JobFailureCategory::PermissionDeniedSudo => Self::PermissionDeniedSudo,
             JobFailureCategory::CodexAuthFailure => Self::CodexAuthFailure,
             JobFailureCategory::SqliteIntegrityFailure => Self::SqliteIntegrityFailure,

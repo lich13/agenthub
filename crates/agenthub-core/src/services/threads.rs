@@ -10,11 +10,6 @@ use crate::{
     services::system::{require_capability, Capability},
 };
 
-pub use crate::services::cleanup::{
-    plan_cleanup_action as plan_thread_cleanup_action, CleanupAction as ThreadCleanupAction,
-    CleanupActionPlan as ThreadCleanupPlan, CleanupTarget as ThreadCleanupTarget,
-};
-
 pub const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 pub const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 

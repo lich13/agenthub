@@ -1,10 +1,7 @@
 import type {
   AgentProviderInfo,
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
   CodexConfig,
   HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
   JobRecord,
   MessageBlock,
   OptionalResult,
@@ -36,7 +33,6 @@ export function demoPlatformOverview(fixture: DemoFixtureKey = "linux-api"): Pla
 export function demoSystemCapabilities(fixture: DemoFixtureKey = "linux-api"): SystemCapabilitiesResponse {
   return buildDemoSystemCapabilities(fixture);
 }
-
 
 export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateStatus {
   if (fixture === "macos-tauri") {
@@ -115,9 +111,6 @@ export function demoProviders(): AgentProviderInfo[] {
     { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
   ];
 }
-
-
-
 
 export function demoProbeStatus(fixture: DemoFixtureKey = "linux-api"): ProbeStatus {
   const platform = demoPlatformOverview(fixture);
@@ -198,7 +191,6 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-api"): ProbeS
 export function demoSavedProbeSettings(settings: Partial<ProbeSettings>, fixture: DemoFixtureKey = "linux-api"): ProbeSettings {
   return { ...demoProbeSettings(fixture), ...settings } as ProbeSettings;
 }
-
 
 export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse> {
   const retryEvents = [
@@ -393,27 +385,8 @@ export function demoThreadBlockPage(id: string): ThreadBlockPage {
   };
 }
 
-
-
 export function demoOk(): { ok: boolean } {
   return { ok: true };
-}
-
-
-
-export function demoArchiveDeletePlan(): ArchiveDeletePlan {
-  return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };
-}
-
-export function demoArchiveDeleteResult(): ArchiveDeleteResult {
-  return {
-    before: demoArchiveDeletePlan(),
-    after_total_threads: 31,
-    after_active_threads: 31,
-    after_archived_threads: 0,
-    after_integrity: "ok",
-    deleted_rollout_files: 11
-  };
 }
 
 export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
@@ -428,23 +401,6 @@ export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
     candidates: ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"].map(id => ({ id, title: id, fingerprint: "fixture-fingerprint", allowed: true, reason: null })),
     hidden_source_counts: { exec: 1, subagent: 3 },
     integrity: "ok"
-  };
-}
-
-export function demoHiddenThreadDeleteResult(): HiddenThreadDeleteResult {
-  return {
-    before: demoHiddenThreadDeletePlan(),
-    skipped_threads: 0, failed_threads: 0, items: [],
-    deleted_threads: 4,
-    after_total_threads: 38,
-    after_visible_threads: 38,
-    after_hidden_threads: 0,
-    after_archived_threads: 0,
-    after_integrity: "ok",
-    visible_threads: 38,
-    hidden_threads: 0,
-    integrity: "ok",
-    deleted_rollout_files: 4
   };
 }
 

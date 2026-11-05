@@ -1,6 +1,6 @@
 import { useId } from "react";
 
-export type AgentBrandId = "codex" | "claude" | "grok" | "antigravity" | "dsh";
+export type AgentBrandId = "codex" | "claude" | "grok" | "grokbot" | "antigravity" | "dsh";
 
 // Exact official DeepSeek whale path extracted from DeepSeek Harness.app (@deepseek-ai/dsh-web-frontend/dist/favicon.svg, viewBox 0 0 50 50)
 const DEEPSEEK_OFFICIAL_PATH =
@@ -54,7 +54,7 @@ export function AgentBrandIcon({
     );
   }
 
-  if (agent === "grok") {
+  if ((agent === "grok" || agent === "grokbot")) {
     // Official Grok Build macOS app icon (Grok Bot.app): dark squircle + 3D silver spherical bot dome + tilted visor capsule eyes
     const clipId = `grok-clip-${uid}`;
     const domeId = `grok-dome-${uid}`;

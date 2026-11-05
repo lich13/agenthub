@@ -499,7 +499,7 @@ export function renderProviderEvents(
   providerLabel: string,
   sessionRunning = false,
 ): ReactNode {
-  const prefix = providerLabel === "Antigravity" ? "antigravity" : "dsh";
+  const prefix = providerLabel === "Antigravity" ? "antigravity" : providerLabel === "Grok Bot" ? "grokbot" : "dsh";
   const lastIndex = entries.length - 1;
   const folded = foldProcessSequence(prefix, entries, entry => {
     if (entry.kind === "group") {
@@ -518,6 +518,7 @@ export function renderProviderEvents(
     }
     if (
       event.detail &&
+      event.kind !== "interaction" &&
       event.kind !== "user_message" &&
       event.kind !== "plan" &&
       !event.kind.startsWith("assistant_message")

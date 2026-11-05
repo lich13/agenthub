@@ -30,6 +30,7 @@ pub(crate) fn notification_title(title: &str, id: &str, cwd: &str) -> String {
 #[serde(rename_all = "lowercase")]
 pub enum NativeProvider {
     Grok,
+    GrokBot,
     #[serde(rename = "claude_code")]
     Claude,
     Antigravity,
@@ -39,19 +40,21 @@ impl NativeProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Grok => "grok",
+            Self::GrokBot => "grokbot",
             Self::Claude => "claude_code",
             Self::Antigravity => "antigravity",
             Self::Dsh => "dsh",
         }
     }
     pub fn local_only(self) -> bool {
-        matches!(self, Self::Antigravity | Self::Dsh)
+        matches!(self, Self::Antigravity | Self::Dsh | Self::GrokBot)
     }
     pub fn enabled(self, config: &Config) -> bool {
         config.probe.enabled
             && config.probe.notifications.enabled
             && match self {
                 Self::Grok => config.probe.notifications.notify_grok,
+                Self::GrokBot => config.probe.notifications.notify_grokbot,
                 Self::Claude => config.probe.notifications.notify_claude,
                 Self::Antigravity => config.probe.notifications.notify_antigravity,
                 Self::Dsh => config.probe.notifications.notify_dsh,
@@ -59,6 +62,9 @@ impl NativeProvider {
     }
     pub fn event_enabled(self, config: &Config, kind: &str) -> bool {
         match (self, kind) {
+            (Self::GrokBot, "reply_needed" | "authorization") => {
+                config.probe.notifications.notify_grokbot
+            }
             (Self::Claude, "completion") => config.probe.notifications.notify_claude_completion,
             (Self::Claude, "failure") => config.probe.notifications.notify_claude_failure,
             (Self::Claude, "reply_needed" | "authorization") => {
@@ -182,12 +188,15 @@ pub fn retry_event_is_current(provider: NativeProvider, id: &str, event: &Native
     match provider {
         NativeProvider::Grok => crate::grok::notification_event_current(id, event.position),
         NativeProvider::Claude => true, // Claude snapshots retain terminal events on the valid branch.
-        NativeProvider::Antigravity | NativeProvider::Dsh => true, // Re-read by the local source verifier.
+        NativeProvider::Antigravity | NativeProvider::Dsh | NativeProvider::GrokBot => true, // Re-read by the local source verifier.
     }
 }
 
 pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     match provider {
+        NativeProvider::GrokBot => {
+            crate::grokbot::scan(&crate::grokbot::GrokBotPaths::default_for_user())
+        }
         NativeProvider::Claude => {
             crate::claude::notification_snapshots(&crate::claude::ClaudePaths::default_for_user())
         }

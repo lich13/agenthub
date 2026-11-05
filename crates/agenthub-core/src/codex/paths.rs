@@ -50,11 +50,10 @@ pub struct ResolvedCodexPaths {
     pub state_db: PathBuf,
     pub session_index: PathBuf,
     pub sessions_dir: PathBuf,
-    pub configured_app_server_socket: Option<PathBuf>,
-    pub app_server_socket: Option<PathBuf>,
+
     pub codex_home_source: String,
     pub logs_db_source: String,
-    pub app_server_socket_source: Option<String>,
+
     pub discovery_warnings: Vec<String>,
 }
 
@@ -191,11 +190,10 @@ pub fn resolve_codex_paths_with_options(
         state_db: home.join("state_5.sqlite"),
         session_index: home.join("session_index.jsonl"),
         sessions_dir: home.join("sessions"),
-        configured_app_server_socket: None,
-        app_server_socket: None,
+
         codex_home_source: codex_home_source.clone(),
         logs_db_source: codex_home_source,
-        app_server_socket_source: None,
+
         discovery_warnings: warnings,
         home,
     }

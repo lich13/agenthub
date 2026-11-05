@@ -5,14 +5,13 @@ use super::{
     claude_rename, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore, ClaudeListQuery,
 };
 use super::{
-    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread,
-    dsh_archive_delete_dry_run, dsh_archive_delete_execute, get_probe_events, get_probe_settings,
-    get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail, grok_list,
-    grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute, job_detail,
-    list_jobs, list_providers, patch_probe_settings, platform_overview, rename_thread,
-    restore_thread, start_probe_action, start_update_action, system_capabilities,
-    system_update_status, system_version, thread_blocks, thread_detail, unified_cleanup_dry_run,
-    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery, ProbeStatusQuery,
+    api_error, archive_thread, get_probe_events, get_probe_settings, get_probe_status,
+    grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
+    hidden_threads_delete_dry_run, job_detail, list_jobs, list_providers, patch_probe_settings,
+    platform_overview, rename_thread, restore_thread, start_probe_action, start_update_action,
+    system_capabilities, system_update_status, system_version, thread_blocks, thread_detail,
+    unified_cleanup_dry_run, unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery,
+    ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
@@ -194,10 +193,6 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         rpc_commands::PROBE_REMOVE_HOOKS => {
             start_probe_action(state, probe_service::ProbeAction::RemoveHooks).await
         }
-        rpc_commands::CLEANUP_DSH_ARCHIVE_DRY_RUN => dsh_archive_delete_dry_run(state).await,
-        rpc_commands::CLEANUP_DSH_ARCHIVE_EXECUTE => {
-            dsh_archive_delete_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
         rpc_commands::CLEANUP_UNIFIED_DRY_RUN => {
             let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
                 Default::default()
@@ -209,20 +204,8 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         rpc_commands::CLEANUP_UNIFIED_EXECUTE => {
             unified_cleanup_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
         }
-        rpc_commands::CLEANUP_ARCHIVE_DRY_RUN => archive_delete_dry_run(state).await,
-        rpc_commands::CLEANUP_ARCHIVE_EXECUTE => {
-            archive_delete_execute(state, rpc_wrapped_payload(&args, &["payload", "request"])?)
-                .await
-        }
         rpc_commands::CLEANUP_HIDDEN_DRY_RUN => {
             hidden_threads_delete_dry_run(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::CLEANUP_HIDDEN_EXECUTE => {
-            hidden_threads_delete_execute(
-                state,
-                rpc_wrapped_payload(&args, &["payload", "request"])?,
-            )
-            .await
         }
         rpc_commands::UPDATES_STATUS => system_update_status(state).await,
         rpc_commands::UPDATES_CHECK => start_update_action(state, UpdateAction::Check, None).await,

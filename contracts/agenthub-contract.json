@@ -97,7 +97,8 @@
     "desktopTauriOnly": [
       "远程连接",
       "本机",
-      "远程机器"
+      "远程机器",
+      "Grok Bot"
     ],
     "forbidden": {
       "desktopEmbeddedTauri": [
@@ -398,30 +399,6 @@
       "hostOnlyReason": "Linux server release backup prune only; Tauri updater must not expose Linux prune"
     },
     {
-      "id": "cleanup.dshArchiveDryRun",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "cleanup.dshArchiveDryRun",
-      "linuxRpc": "cleanup.dshArchiveDryRun",
-      "tauriCommand": "commands::settings::dryRunDshArchiveDelete",
-      "webuiWrapper": "dryRunDshArchiveDelete",
-      "dtoOwner": "cleanup",
-      "requestDto": "NoRequest",
-      "responseDto": "DshArchiveDeletePlan"
-    },
-    {
-      "id": "cleanup.dshArchiveExecute",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "cleanup.dshArchiveExecute",
-      "linuxRpc": "cleanup.dshArchiveExecute",
-      "tauriCommand": "commands::settings::startDshArchiveDelete",
-      "webuiWrapper": "startDshArchiveDelete",
-      "dtoOwner": "cleanup",
-      "requestDto": "DshArchiveDeleteRequest",
-      "responseDto": "DshArchiveDeleteResult"
-    },
-    {
       "id": "cleanup.unifiedDryRun",
       "kind": "rpc",
       "scope": "shared",
@@ -446,30 +423,6 @@
       "responseDto": "UnifiedCleanupResult"
     },
     {
-      "id": "cleanup.archiveDryRun",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "cleanup.archiveDryRun",
-      "linuxRpc": "cleanup.archiveDryRun",
-      "tauriCommand": "commands::settings::dryRunArchiveDelete",
-      "webuiWrapper": "dryRunArchiveDelete",
-      "dtoOwner": "cleanup",
-      "requestDto": "NoRequest",
-      "responseDto": "CleanupArchiveDryRunResponse"
-    },
-    {
-      "id": "cleanup.archiveExecute",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "cleanup.archiveExecute",
-      "linuxRpc": "cleanup.archiveExecute",
-      "tauriCommand": "commands::settings::startArchiveDelete",
-      "webuiWrapper": "startArchiveDelete",
-      "dtoOwner": "cleanup",
-      "requestDto": "CleanupExecuteRequest",
-      "responseDto": "CleanupArchiveExecuteResponse"
-    },
-    {
       "id": "cleanup.hiddenDryRun",
       "kind": "rpc",
       "scope": "shared",
@@ -480,18 +433,6 @@
       "dtoOwner": "cleanup",
       "requestDto": "HiddenScanRequest",
       "responseDto": "CleanupHiddenDryRunResponse"
-    },
-    {
-      "id": "cleanup.hiddenExecute",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "cleanup.hiddenExecute",
-      "linuxRpc": "cleanup.hiddenExecute",
-      "tauriCommand": "commands::settings::startHiddenThreadDelete",
-      "webuiWrapper": "startHiddenThreadDelete",
-      "dtoOwner": "cleanup",
-      "requestDto": "CleanupExecuteRequest",
-      "responseDto": "CleanupHiddenExecuteResponse"
     },
     {
       "id": "grok.list",
@@ -922,6 +863,30 @@
       "hostOnlyReason": "Explicit local macOS Claude settings status/install/remove; never exposed by the server or remote.invoke"
     },
     {
+      "id": "grokbot.list",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "grokbot.list",
+      "tauriCommand": "commands::provider_sessions::listGrokBotSessions",
+      "webuiWrapper": "listGrokBotSessions",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderListRequest",
+      "responseDto": "ProviderListResponse",
+      "hostOnlyReason": "Reads the local macOS Grok Bot account cache"
+    },
+    {
+      "id": "grokbot.detail",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "grokbot.detail",
+      "tauriCommand": "commands::provider_sessions::getGrokBotSession",
+      "webuiWrapper": "getGrokBotSession",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderDetailRequest",
+      "responseDto": "ProviderDetailResponse",
+      "hostOnlyReason": "Reads the local macOS Grok Bot account cache"
+    },
+    {
       "id": "antigravity.list",
       "kind": "rpc",
       "scope": "shared",
@@ -1063,21 +1028,9 @@
       "core": "SessionBatchResult",
       "webui": "SessionBatchResult"
     },
-    "CleanupArchiveDryRunResponse": {
-      "core": "CleanupArchiveDryRunResponse",
-      "webui": "CleanupArchiveDryRunResponse"
-    },
-    "CleanupArchiveExecuteResponse": {
-      "core": "CleanupArchiveExecuteResponse",
-      "webui": "CleanupArchiveExecuteResponse"
-    },
     "CleanupHiddenDryRunResponse": {
       "core": "CleanupHiddenDryRunResponse",
       "webui": "CleanupHiddenDryRunResponse"
-    },
-    "CleanupHiddenExecuteResponse": {
-      "core": "CleanupHiddenExecuteResponse",
-      "webui": "CleanupHiddenExecuteResponse"
     },
     "GrokDeletePreview": {
       "core": "GrokDeletePreview",
@@ -1295,10 +1248,6 @@
       "core": "SessionSearchResponse",
       "webui": "SessionSearchResponse"
     },
-    "CleanupExecuteRequest": {
-      "core": "CleanupExecuteRequest",
-      "webui": "CleanupExecuteRequest"
-    },
     "HiddenScanRequest": {
       "core": "HiddenScanRequest",
       "webui": "HiddenScanRequest"
@@ -1474,26 +1423,6 @@
     "ClaudeOwnershipProcess": {
       "core": "ClaudeOwnershipProcess",
       "webui": "ClaudeOwnershipProcess"
-    },
-    "DshArchiveSelection": {
-      "core": "DshArchiveSelection",
-      "webui": "DshArchiveSelection"
-    },
-    "DshArchiveCandidate": {
-      "core": "DshArchiveCandidate",
-      "webui": "DshArchiveCandidate"
-    },
-    "DshArchiveDeletePlan": {
-      "core": "DshArchiveDeletePlan",
-      "webui": "DshArchiveDeletePlan"
-    },
-    "DshArchiveDeleteRequest": {
-      "core": "DshArchiveDeleteRequest",
-      "webui": "DshArchiveDeleteRequest"
-    },
-    "DshArchiveDeleteResult": {
-      "core": "DshArchiveDeleteResult",
-      "webui": "DshArchiveDeleteResult"
     },
     "UnifiedCleanupDryRunRequest": {
       "core": "UnifiedCleanupDryRunRequest",

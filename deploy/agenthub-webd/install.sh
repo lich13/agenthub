@@ -16,9 +16,6 @@ SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 SYSTEMD_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 PROVIDER_PATHS_DROPIN="${SYSTEMD_DROPIN_DIR}/20-provider-session-paths.conf"
 UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
-CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/agenthub-codex-precheck"
-CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-update"
-CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-prune"
 
 ARCHIVE_PATH=""
 BINARY_PATH=""
@@ -106,19 +103,10 @@ install_dirs() {
   install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
 }
 
-assert_service_version() {
-  python3 - "$("$1" --version)" <<'PYVERSION'
-import re, sys
-match = re.fullmatch(r"agenthub-webd (\d+)\.(\d+)\.(\d+)", sys.argv[1])
-if not match or tuple(map(int, match.groups())) < (2, 1, 0):
-    raise SystemExit("SSH service requires v2.1.0 or newer")
-PYVERSION
-}
 
 install_payload() {
   if [[ -n "${BINARY_PATH}" ]]; then
     [[ -f "${BINARY_PATH}" ]] || die "binary not found: ${BINARY_PATH}"
-    assert_service_version "${BINARY_PATH}"
     replace_file "${BINARY_PATH}" "${INSTALL_BIN}" 0755
     return
   fi
@@ -128,20 +116,12 @@ install_payload() {
   python3 "${SAFETY}" extract "${ARCHIVE_PATH}" "${PAYLOAD_TMP}"
   root="${PAYLOAD_TMP}/agenthub-webd-linux-x86_64"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing bin/${BIN_NAME}"
-  assert_service_version "${root}/bin/${BIN_NAME}"
   replace_file "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}" 0755
   if [[ -d "${root}/deploy" ]]; then
     [[ ! -f "${root}/deploy/update.sh" ]] || replace_file "${root}/deploy/update.sh" "${UPDATE_BIN}" 0755
   fi
 }
 
-install_codex_wrappers() {
-  local source_dir
-  source_dir="$(script_dir)"
-  replace_file "${source_dir}/agenthub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}" 0755
-  replace_file "${source_dir}/agenthub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}" 0755
-  replace_file "${source_dir}/agenthub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}" 0755
-}
 
 install_codex_home_write_paths() {
   install -d -m 0700 -o root -g root /root/.codex
@@ -172,7 +152,6 @@ install_config() {
   snapshot_file "${ENV_FILE}"
   snapshot_file "${CONFIG_FILE}"
   ensure_secret_key
-  ensure_config_defaults
 }
 
 ensure_secret_key() {
@@ -228,56 +207,6 @@ PYKEY
   chown root:root "${ENV_FILE}"
 }
 
-ensure_config_defaults() {
-  python3 - "${CONFIG_FILE}" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-lines = text.splitlines()
-
-def ensure_section(section, required_values):
-    global lines
-    start = None
-    end = len(lines)
-    for index, line in enumerate(lines):
-        if line.strip() == f'[{section}]':
-            start = index
-            continue
-        if start is not None and index > start and line.strip().startswith('[') and line.strip().endswith(']'):
-            end = index
-            break
-    if start is None:
-        if lines and lines[-1].strip():
-            lines.append('')
-        lines.append(f'[{section}]')
-        start = len(lines) - 1
-        end = len(lines)
-    seen = set()
-    for index in range(start + 1, end):
-        stripped = lines[index].strip()
-        if not stripped or stripped.startswith('#') or '=' not in stripped:
-            continue
-        key, value = [part.strip() for part in stripped.split('=', 1)]
-        if key in required_values:
-            seen.add(key)
-    insert_at = end
-    for key, value in required_values.items():
-        if key not in seen:
-            lines.insert(insert_at, f'{key} = {value}')
-            insert_at += 1
-ensure_section('codex', {'host_label': '"AgentHub"'})
-ensure_section('paths', {'data_dir': '"/var/lib/agenthub-webd"', 'db_path': '"/var/lib/agenthub-webd/agenthub.sqlite"', 'log_dir': '"/var/log/agenthub-webd"'})
-ensure_section('update', {'precheck_command': '"/usr/local/bin/agenthub-codex-precheck"', 'update_command': '"/usr/local/bin/agenthub-codex-update"', 'prune_command': '"/usr/local/bin/agenthub-codex-prune"', 'panel_update_command': '"/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"', 'panel_precheck_command': '"/usr/local/bin/agenthub-webd-update --precheck"'})
-ensure_section('probe', {'enabled': 'true', 'poll_seconds': '15', 'recent_limit': '50'})
-ensure_section('probe.hooks', {'manage_stop_hook': 'true'})
-ensure_section('probe.notifications', {'enabled': 'false', 'server_url': '"https://api.day.app"', 'group': '"AgentHub"', 'notify_completion': 'true', 'notify_reply_needed': 'true', 'notify_recoverable': 'true'})
-ensure_section('probe.observability', {'hook_event_max_lines': '500', 'hook_cooldown_max_lines': '1000', 'log_max_bytes': '5242880'})
-path.write_text('\n'.join(lines) + '\n')
-
-PY
-}
 
 install_provider_session_write_paths() {
   local source_dir rendered
@@ -355,7 +284,6 @@ main() {
   install_dirs
   install_payload
 
-  install_codex_wrappers
   replace_file "${SAFETY}" "${SHARE_DIR}/install-safety.py" 0644
   replace_file "$(script_dir)/updater.pub" "${SHARE_DIR}/updater.pub" 0644
   install_config

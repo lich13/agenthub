@@ -1,20 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
-import appSource from "./App.tsx?raw";
-import chatWorkspaceSource from "./components/chat/ChatWorkspace.tsx?raw";
-import conversationSource from "./components/chat/Conversation.tsx?raw";
-import jobListSource from "./components/jobs/JobList.tsx?raw";
-import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
-import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
-import unifiedThreadCleanupSource from "./components/ops/UnifiedThreadCleanup.tsx?raw";
-import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
-import probeCardsSource from "./components/probe/ProbeCards.tsx?raw";
-import agentHookHostCardSource from "./components/probe/AgentHookHostCard.tsx?raw";
-import conversationControllerSource from "./hooks/useConversationController.ts?raw";
-import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
-import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
-import mainSource from "./main.tsx?raw";
-import threadQuerySource from "./lib/query/threads.ts?raw";
+
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
@@ -36,49 +22,6 @@ async function loadApp(): Promise<AppExports> {
 
 async function loadThreadQuery(): Promise<ThreadQueryExports> {
   return import("./lib/query/threads") as Promise<ThreadQueryExports>;
-}
-
-function extractThreadListSource(): string {
-  const source = chatWorkspaceSource;
-  const start = source.indexOf("function ThreadList(");
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  return source.slice(start);
-}
-
-function extractProbeWorkspaceSource(): string {
-  const source = probeWorkspaceSource;
-  const start = source.indexOf("function ProbeWorkspace(");
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  // Probe cards and AgentHookHostCard now own the markup formerly declared in ProbeWorkspace.
-  return `${source.slice(start)}\n${probeCardsSource}\n${agentHookHostCardSource}`;
-}
-
-function extractFunctionSource(name: string): string {
-  const source = name === "OpsWorkspace"
-      ? opsWorkspaceSource
-      : name === "JobList"
-        ? jobListSource
-        : name === "ProbeWorkspace"
-          ? probeWorkspaceSource
-          : name === "ChatWorkspace" || name === "ThreadList"
-            ? chatWorkspaceSource
-            : name === "MessageBlockView"
-                    ? messageStreamSource
-                    : [
-                        "Conversation",
-                        "EmptyConversation",
-                        "StatusChip"
-                      ].includes(name)
-                        ? conversationSource
-                        : appSource;
-  const start = source.indexOf(`function ${name}`);
-
-  expect(start).toBeGreaterThanOrEqual(0);
-
-  const next = source.indexOf("\nfunction ", start + 1);
-  return source.slice(start, next === -1 ? source.length : next);
 }
 
 const forbiddenComponentTokens = [
@@ -133,82 +76,13 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
 
 describe("conversation helpers", () => {
 
-  test("desktop runtime maps Linux-only job failure categories to generic copy", async () => {
+  test("job errors preserve the backend's file names and addresses", async () => {
     const app = await loadApp();
-
-    const webCapabilities = remoteCapabilities;
-    const desktopCapabilities = macosDesktopCapabilities;
-
-    expect(app.failureCategoryLabel?.("systemd_failure", webCapabilities)).toBe("systemd 失败");
-    expect(app.failureCategoryLabel?.("nginx_failure", webCapabilities)).toBe("Nginx 失败");
-    expect(app.failureCategoryLabel?.("systemd_failure", desktopCapabilities)).toBe("服务失败");
-    expect(app.failureCategoryLabel?.("nginx_failure", desktopCapabilities)).toBe("更新失败");
-    expect(app.failureCategoryLabel?.("permission_denied_sudo", desktopCapabilities)).toBe("权限失败");
-
-    const view = app.jobFailureAnalysisView?.({
-      category: "nginx_failure",
-      explanation: "Nginx reload failed after systemd restart; 执行 Linux prune，公网入口 https://panel.example.com/agenthub/ 192.0.2.10",
-      suggestions: ["检查 Nginx", "systemd restart", "使用 sudo", "Linux prune", "panel.example.com"]
-    }, desktopCapabilities);
-    const rendered = [view?.label, view?.explanation, ...(view?.suggestions ?? [])].join("\n");
-
-    expect(rendered).not.toMatch(/systemd|Nginx|Linux prune|公网入口|panel\.example\.com|192\.0\.2\.10/i);
-    expect(rendered).toContain("更新失败");
-    expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 执行 Linux prune with sudo; 公网入口 https://panel.example.com/agenthub/ 192.0.2.10",
-      desktopCapabilities
-    )).not.toMatch(/systemd|nginx|Linux prune|sudo|公网入口|panel\.example\.com|192\.0\.2\.10/i);
-    expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 执行 Linux prune with sudo",
-      webCapabilities
-    )).toMatch(/systemd|nginx|Linux prune|sudo/i);
-  });
-
-  test("App delegates Codex view-model helpers to domain modules", () => {
-    expect(appSource).not.toMatch(/function (makeRunConfig|permissionPresetFromConfig|threadStatusLabel|sourceCountsText|normalizeServiceTier)\b/);
-    expect(appSource).not.toMatch(/export function (defaultRunConfig|applyPermissionPreset|threadListItemText|filterVisibleThreadSummaries|buildPayload|runConfigWithSupportedServiceTier|conversationTitleText|lastEventKindText)\b/);
-    expect(appSource).not.toMatch(/const (codexLocalCopy|defaultCwd)\b/);
-    expect(appSource).toContain('from "./lib/domain/codexViewModel"');
-    expect(codexViewModelSource).not.toContain("../query/");
-    expect(codexViewModelSource).not.toContain("../session");
-    expect(codexViewModelSource).not.toMatch(/runtimeRpc|invokeNative|remoteInvoke/);
-  });
-
-  test("App delegates Probe and Ops display derivations to domain modules", () => {
-    expect(appSource).not.toMatch(/export function (probeStatusThreads|probeThreadsByStatus|probeRunningCountValue|probeSettingsAfterBarkSave|probeEventSummary|shouldAutoScrollProbeFeed|codexHomeStatusValue|logsDbPathStatusValue|probeDiscoveryWarningsText|probeSnapshotStatusText|probeAvailabilityView|hiddenThreadDeleteStats|archivePlanAfterExecute)\b/);
-    expect(appSource).not.toMatch(/function (isProbeJob|probeJobActionLabel|probeStateLabel|probeLogsDbTone|isProbeSettings|logBytesDraftToMb|mbDraftToLogBytes|probeLogDbNumber|probeLogDbString|probeLogDbSize|probeLogDbValue|cleanHostValue|hostnameFromPublicEndpoint|secondsToDays|normalizeTurnstileAction|cleanupStageLabel|hiddenRolloutDeleteResultText)\b/);
-
-    const probeSource = extractProbeWorkspaceSource();
-    const opsSource = extractFunctionSource("OpsWorkspace");
-    expect(probeSource).toContain("const probeView = probeWorkspaceView(");
-    expect(probeSource).not.toContain("probeAvailabilityView({");
-    expect(probeSource).not.toContain("const probeThreads =");
-    expect(probeSource).not.toContain("const serviceText =");
-    expect(opsSource).toContain("const opsView = opsWorkspaceView(");
-    expect(opsSource).not.toContain("const publicEndpoint =");
-    expect(opsSource).not.toContain("const hiddenStats = hiddenThreadDeleteStats(");
-    expect(opsSource).not.toContain("cleanupStageLabel({");
-  });
-
-  test("OpsWorkspace surfaces cleanup mutation errors instead of leaving confirm buttons silent", () => {
-    const opsSource = `${extractFunctionSource("OpsWorkspace")}\n${unifiedThreadCleanupSource}`;
-    expectSourceToAvoidTokens(unifiedThreadCleanupSource, "UnifiedThreadCleanup", forbiddenComponentTokens);
-
-    expect(opsSource).toContain("unifiedCleanupError");
-    expect(opsSource).toContain("hiddenCleanupError");
-    expect(opsSource).toContain("unifiedExecute.error");
-    expect(opsSource).toContain("unifiedDryRun.error");
-    expect(opsSource).toContain("cleanup-error");
-  });
-
-  test("App.tsx keeps domain-only pure helpers out of the component file", () => {
-    expect(appSource).not.toContain("export function canStartHiddenThreadDelete(");
-    expect(appSource).not.toContain("export function canStartUpdateInstall(");
-    expect(appSource).not.toContain("export function goalStatusLabel(");
-    expect(appSource).not.toContain("export function goalStatusTone(");
-    expect(appSource).not.toContain("export function goalControlState(");
-    expect(appSource).not.toContain("export function formatGoalTimestamp(");
-    expect(appSource).not.toContain("export function resolvedSelectedThreadId(");
+    const explanation = "config.toml: connection refused at https://example.invalid/agenthub/";
+    const view = app.jobFailureAnalysisView?.({ category: "update_failed", explanation, suggestions: ["Inspect config.toml"] }, macosDesktopCapabilities);
+    expect(view?.explanation).toBe(explanation);
+    expect(view?.suggestions).toEqual(["Inspect config.toml"]);
+    expect(app.jobOutputView?.(explanation, macosDesktopCapabilities)).toBe(explanation);
   });
 
   test("segments internal paths and Codex ids as copyable references", async () => {
@@ -438,42 +312,6 @@ describe("conversation helpers", () => {
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: { ...recent, id: "thread-b" } })).toBe(false);
   });
 
-  test("first paint does not auto-select the first thread and trigger detail loading", async () => {
-    const app = await loadApp();
-
-    expect(app.resolvedSelectedThreadId?.(null)).toBeNull();
-    expect(chatWorkspaceSource).not.toContain('"__new"');
-    expect(app.resolvedSelectedThreadId?.("thread-a")).toBe("thread-a");
-    expect(appSource).not.toContain("visibleThreads[0]?.id");
-  });
-
-  test("thread list keeps title and search outside the independent scroll container and retires top status tabs", () => {
-    const source = extractThreadListSource();
-    const titleIndex = source.indexOf("<WorkspaceListHeader");
-    const searchIndex = source.indexOf("<WorkspaceSearchInput");
-    const scrollIndex = source.indexOf('className="thread-scroll"');
-    const scrollEndIndex = source.indexOf("\n      </div>\n      <SessionBatchControls", scrollIndex);
-    const scrollBody = source.slice(scrollIndex, scrollEndIndex);
-
-    expect(source.match(/className="thread-scroll"/g)).toHaveLength(1);
-    expect(titleIndex).toBeGreaterThanOrEqual(0);
-    expect(searchIndex).toBeGreaterThan(titleIndex);
-    expect(scrollIndex).toBeGreaterThan(searchIndex);
-    expect(scrollEndIndex).toBeGreaterThan(scrollIndex);
-
-    expect(source).toContain("className={`thread-item ");
-    expect(scrollBody).toContain("{threads.map((thread) => {");
-    expect(scrollBody).toContain("renderThreadRow");
-    expect(scrollBody).toContain("没有匹配任务");
-    expect(scrollBody).toContain('className="archived-toggle"');
-    expect(scrollBody).toContain("已归档");
-    expect(source).not.toContain('className="segmented"');
-    expect(source).not.toContain("statusTabs");
-    expect(source).not.toContain("多选线程");
-    expect(scrollBody).not.toContain("<WorkspaceListHeader");
-    expect(scrollBody).not.toContain("<WorkspaceSearchInput");
-  });
-
   test("visible Codex copy avoids legacy transport labels", async () => {
     const app = await loadApp();
     const visibleText = [
@@ -521,23 +359,6 @@ describe("conversation helpers", () => {
       metric: "运行中",
       tone: "success"
     });
-  });
-
-  test("bark settings save marks a submitted key configured so test buttons unlock", async () => {
-    const app = await loadApp();
-    const saved = {
-      codex: { host_label: "mac" },
-      probe: { enabled: true },
-      notifications: { enabled: true, device_key_configured: false }
-    };
-
-    expect(app.probeSettingsAfterBarkSave?.(saved, " bark-device-key ")).toMatchObject({
-      notifications: { device_key_configured: true }
-    });
-    expect(app.probeSettingsAfterBarkSave?.(saved, "   ")).toMatchObject({
-      notifications: { device_key_configured: false }
-    });
-    expect(extractProbeWorkspaceSource()).toContain("probeSettingsAfterBarkSave(");
   });
 
   test("probe event summary shows context without leaking payload secrets", async () => {
@@ -693,94 +514,6 @@ describe("conversation helpers", () => {
     expect(visibleCopy).not.toContain(retiredMissingCopy);
   });
 
-  test("desktop read-only task surface retains copy and archive without web authentication controls", async () => {
-    const { runtimeCapabilitiesFromResponse } = await import("./lib/domain/capabilities");
-    const { demoSystemCapabilities } = await import("./lib/api/demo");
-    const capabilities = runtimeCapabilitiesFromResponse(demoSystemCapabilities("macos-tauri"));
-    expect(capabilities).not.toHaveProperty("webAuth");
-    expect(capabilities).not.toHaveProperty("securitySettings");
-    expect(capabilities.threadArchiveActions).toBe(true);
-    expect(conversationSource).toContain("复制 ID");
-    expect(conversationSource).toContain("取消归档");
-    expect(conversationSource).not.toMatch(/管理员|Turnstile|setGoal|sendMessage|approvalAction/);
-  });
-
-  test("probe workspace labels the paired lifecycle hooks as Codex Hook and supports hook removal, platform master toggles, and single retention input", async () => {
-    const probeSource = extractProbeWorkspaceSource();
-    const { grokResumeCommand } = await import("./components/grok/GrokWorkspace");
-
-    expect(probeSource).toContain('<Metric label="Codex Hook"');
-    expect(probeSource).toContain("AgentHookHostCardShell");
-    expect(probeSource).toContain('labelledBy="codex-hooks-confirm"');
-    expect(probeSource).toContain("移除 Hook");
-    expect(probeSource).toContain('"hooks-remove"');
-    expect(probeSource).toContain("平台通知一键开关");
-    expect(probeSource).not.toContain("probe-status-banner");
-    expect(probeSource).not.toContain('<Metric label="Stop Hook"');
-    expect((probeCardsSource.match(/通知事件保留天数/g) ?? []).length).toBe(1);
-    expect(grokResumeCommand("/tmp/my work", "grok-123")).toBe("cd -- '/tmp/my work' && grok --resume 'grok-123'");
-  });
-
-  test("probe workspace exposes terminal error monitor controls and runtime status", () => {
-    const probeSource = extractProbeWorkspaceSource();
-
-    expect(probeSource).toContain('<Metric label="错误监控"');
-    expect(probeSource).toContain('<Metric label="错误事件"');
-    expect(probeSource).toContain("<span>终止错误监控</span>");
-    expect(probeSource).not.toContain("受限 Goal 自动恢复");
-    expect(probeSource).toContain("status?.error_monitor_status");
-    expect(probeSource).toContain("status?.error_monitor_incident_count");
-  });
-
-  test("probe workspace tolerates partial desktop settings DTOs without white-screen assumptions", () => {
-    const probeSource = extractProbeWorkspaceSource();
-
-    expect(probeSource).toContain("probeWorkspaceView(");
-    expect(runtimeViewModelSource).toContain("input.currentSettings?.notifications?.device_key_configured");
-    expect(runtimeViewModelSource).toContain("input.currentSettings?.probe?.enabled");
-    expect(probeSource).toContain("currentSettings?.codex?.host_label");
-    expect(probeSource).toContain("settings?.codex?.discovery_warnings");
-  });
-
-  test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {
-    const app = await loadApp();
-    const current = {
-      total_threads: 12,
-      active_threads: 8,
-      archived_threads: 4,
-      session_index_lines: 15,
-      rollout_files: 6,
-      archived_ids: ["archived-a", "archived-b"],
-      integrity: "ok"
-    };
-
-    expect(app.archivePlanAfterExecute?.(current, {
-      after_total_threads: 8,
-      after_active_threads: 8,
-      after_archived_threads: 0,
-      after_integrity: "ok"
-    })).toEqual({
-      ...current,
-      total_threads: 8,
-      active_threads: 8,
-      archived_threads: 0,
-      archived_ids: [],
-      integrity: "ok"
-    });
-    expect(app.canStartHiddenThreadDelete?.({
-      total_threads: 10,
-      visible_threads: 7,
-      hidden_threads: 3,
-      archived_threads: 0,
-      session_index_lines: 10,
-      rollout_files: 2,
-      hidden_ids: ["hidden-a"],
-      hidden_source_counts: { subagent: 3 },
-      candidates: [{ id: "hidden-a", title: "Fixture", fingerprint: "fixture", allowed: true, reason: null }],
-      integrity: "ok"
-    })).toBe(true);
-  });
-
   test("update install action requires an explicit available update", async () => {
     const app = await loadApp();
     const baseStatus: UpdateStatus = {
@@ -800,6 +533,46 @@ describe("conversation helpers", () => {
     expect(app.canStartUpdateInstall?.({ ...baseStatus, update_available: null })).toBe(false);
     expect(app.canStartUpdateInstall?.(baseStatus)).toBe(false);
     expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.118", update_available: true })).toBe(true);
+  });
+
+});
+
+  test("first paint does not auto-select the first thread and trigger detail loading", async () => {
+    const app = await loadApp();
+
+    expect(app.resolvedSelectedThreadId?.(null)).toBeNull();
+    expect(app.resolvedSelectedThreadId?.("thread-a")).toBe("thread-a");
+  });
+
+  test("bark settings save marks a submitted key configured so test buttons unlock", async () => {
+    const app = await loadApp();
+    const saved = {
+      codex: { host_label: "mac" },
+      probe: { enabled: true },
+      notifications: { enabled: true, device_key_configured: false }
+    };
+
+    expect(app.probeSettingsAfterBarkSave?.(saved, " bark-device-key ")).toMatchObject({
+      notifications: { device_key_configured: true }
+    });
+    expect(app.probeSettingsAfterBarkSave?.(saved, "   ")).toMatchObject({
+      notifications: { device_key_configured: false }
+    });
+  });
+
+  test("desktop read-only task surface retains copy and archive without web authentication controls", async () => {
+    const { runtimeCapabilitiesFromResponse } = await import("./lib/domain/capabilities");
+    const { demoSystemCapabilities } = await import("./lib/api/demo");
+    const capabilities = runtimeCapabilitiesFromResponse(demoSystemCapabilities("macos-tauri"));
+    expect(capabilities).not.toHaveProperty("webAuth");
+    expect(capabilities).not.toHaveProperty("securitySettings");
+    expect(capabilities.threadArchiveActions).toBe(true);
+  });
+
+  test("Grok resume quotes native paths and identities", async () => {
+    const { grokResumeCommand } = await import("./components/grok/GrokWorkspace");
+
+    expect(grokResumeCommand("/tmp/my work", "grok-123")).toBe("cd -- '/tmp/my work' && grok --resume 'grok-123'");
   });
 
   test("settings appearance switcher supports system, dark, and light modes with storage persistence", async () => {
@@ -843,26 +616,4 @@ describe("conversation helpers", () => {
     expect(store.get(app.THEME_STORAGE_KEY)).toBe("system");
     expect(attrs.has("data-theme")).toBe(false);
 
-    expect(runtimeViewModelSource).not.toContain("THEME_STORAGE_KEY");
-    expect(appSource).not.toContain("applyThemeMode");
-    const applyThemeIndex = mainSource.indexOf("applyThemeMode(readStoredThemeMode())");
-    expect(applyThemeIndex).toBeGreaterThanOrEqual(0);
-    expect(applyThemeIndex).toBeLessThan(mainSource.indexOf("createRoot("));
-
-    const opsSource = extractFunctionSource("OpsWorkspace");
-    expect(opsSource).not.toContain('<section className="appearance-section" aria-label="外观">');
-    expect(opsSource).toContain('role="radiogroup" aria-label="外观"');
-    expect(opsSource).toContain("ArrowRight");
-    expect(opsSource).toContain("ArrowLeft");
   });
-
-});
-
-test("retired task controls are absent from the user entrypoints", () => {
-  for (const source of [appSource, chatWorkspaceSource, conversationSource, messageStreamSource]) {
-    expect(source).not.toMatch(/SlashCommandTextarea|useComposerAttachments|ThreadGoalPanel|ThreadInspectorPanels|onDecision|onSubmitQuestion|sendMessage|createThread|enqueueFollowUp|steerThread/);
-  }
-  expect(conversationSource).toContain("useReadOnlyThreadActions");
-  expect(conversationSource).toContain("复制恢复命令");
-  expect(conversationSource).not.toContain("textarea");
-});

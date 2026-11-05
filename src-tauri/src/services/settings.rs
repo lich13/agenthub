@@ -1,15 +1,9 @@
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
-#[cfg(test)]
-use agenthub_core::services::cleanup::HiddenThreadDeletePlan;
 use agenthub_core::services::use_cases::AgentHubUseCases;
 use agenthub_core::{
     config::{patch_probe_config_toml, Config},
     probe::redact_probe_event_for_output,
     services::{
-        cleanup::{
-            self as cleanup_service, ArchiveDeletePlan, ArchiveDeleteResult,
-            HiddenThreadDeleteResult,
-        },
         jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
     },
@@ -17,8 +11,6 @@ use agenthub_core::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-pub(crate) type DesktopCleanupExecuteRequest = cleanup_service::CleanupExecuteRequest;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -174,43 +166,6 @@ pub(crate) fn probe_fixed_shell_job_with_state(
         Some(job_id),
         Some(serde_json::to_value(diagnostic_plan)?),
     ))
-}
-
-pub(crate) fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
-    AgentHubUseCases::new(state.platform())
-        .cleanup()
-        .dry_run_archived(&state.codex_paths())
-}
-
-pub(crate) fn archive_delete_execute_with_state(
-    state: &DesktopState,
-    request: DesktopCleanupExecuteRequest,
-) -> Result<ArchiveDeleteResult> {
-    let paths = state.codex_paths();
-    let cleanup = AgentHubUseCases::new(state.platform()).cleanup();
-    let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Archived, request)?;
-    let candidates = agenthub_core::services::cleanup::hidden_candidates(&plan)?;
-    cleanup.execute_archived(&paths, &candidates)
-}
-
-#[cfg(test)]
-pub(crate) fn hidden_delete_dry_run_with_state(
-    state: &DesktopState,
-) -> Result<HiddenThreadDeletePlan> {
-    AgentHubUseCases::new(state.platform())
-        .cleanup()
-        .dry_run_hidden(&state.codex_paths())
-}
-
-pub(crate) fn hidden_delete_execute_with_state(
-    state: &DesktopState,
-    request: DesktopCleanupExecuteRequest,
-) -> Result<HiddenThreadDeleteResult> {
-    let paths = state.codex_paths();
-    let cleanup = AgentHubUseCases::new(state.platform()).cleanup();
-    let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Hidden, request)?;
-    let candidates = cleanup_service::hidden_candidates(&plan)?;
-    cleanup.execute_hidden(&paths, &candidates)
 }
 
 pub(crate) fn probe_events_with_state(
@@ -419,24 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_source_does_not_duplicate_probe_save_normalization() {
-        let source = settings_source_before_test_module();
-
-        assert!(
-            source.contains(".settings()?") && source.contains(".save_probe_settings("),
-            "probe.settings.save must use the shared core settings use-case facade"
-        );
-        assert!(
-            !source.contains("normalize_probe_config_file_patch"),
-            "Tauri adapter must not duplicate core Probe settings normalization"
-        );
-        assert!(
-            !source.contains("merge_probe_notification_patch"),
-            "Tauri adapter must not merge Probe notification patches itself"
-        );
-    }
-
-    #[test]
     fn probe_process_command_preserves_config_path_as_one_argument() {
         let (_temp, _state, platform) = command_test_state(PlatformKind::Macos);
         let config_path = platform.config_file.clone();
@@ -459,92 +396,5 @@ mod tests {
                 ]
             );
         }
-    }
-
-    #[test]
-    fn cleanup_archive_execute_requires_confirmation_before_deleting() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
-
-        let err =
-            archive_delete_execute_with_state(&state, DesktopCleanupExecuteRequest::default())
-                .expect_err("archive cleanup execute must reject unconfirmed requests")
-                .to_string();
-
-        assert!(!err.is_empty(), "{err}");
-        let plan = archive_delete_dry_run_with_state(&state).unwrap();
-        assert_eq!(plan.total_threads, 0);
-    }
-
-    #[test]
-    fn cleanup_hidden_execute_requires_confirmation_before_deleting() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
-
-        let err = hidden_delete_execute_with_state(&state, DesktopCleanupExecuteRequest::default())
-            .expect_err("hidden cleanup execute must reject unconfirmed requests")
-            .to_string();
-
-        assert!(!err.is_empty(), "{err}");
-        let plan = hidden_delete_dry_run_with_state(&state).unwrap();
-        assert_eq!(plan.total_threads, 0);
-    }
-
-    #[test]
-    fn cleanup_archive_execute_accepts_confirmed_targets_without_matching_count() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
-
-        let result = archive_delete_execute_with_state(
-            &state,
-            DesktopCleanupExecuteRequest {
-                confirmed: true,
-                expected_count: Some(99),
-                candidates: Some(Vec::new()),
-            },
-        )
-        .expect("confirmed archive cleanup with explicit targets should execute");
-
-        assert_eq!(result.before.archived_threads, 0);
-        assert_eq!(result.after_archived_threads, 0);
-    }
-
-    #[test]
-    fn cleanup_hidden_execute_requires_preview_candidates() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
-
-        let err = hidden_delete_execute_with_state(
-            &state,
-            DesktopCleanupExecuteRequest {
-                confirmed: true,
-                expected_count: Some(0),
-                candidates: None,
-            },
-        )
-        .expect_err("hidden cleanup execute must be bound to preview candidates")
-        .to_string();
-
-        assert!(err.contains("线程列表"), "{err}");
-    }
-
-    #[test]
-    fn cleanup_hidden_execute_ignores_legacy_count() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
-
-        let result = hidden_delete_execute_with_state(
-            &state,
-            DesktopCleanupExecuteRequest {
-                confirmed: true,
-                expected_count: Some(1),
-                candidates: Some(Vec::new()),
-            },
-        )
-        .expect("explicit targets determine execution");
-
-        assert_eq!(result.deleted_threads, 0);
-    }
-
-    fn settings_source_before_test_module() -> &'static str {
-        include_str!("settings.rs")
-            .split("\n#[cfg(test)]\nmod tests")
-            .next()
-            .expect("settings source before test module")
     }
 }

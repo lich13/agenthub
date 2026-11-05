@@ -29,7 +29,7 @@ API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力
 3. 同步 WebUI 的类型、query/domain 和对应测试。
 4. 执行契约、Rust、WebUI、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
 
-共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
+共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*`、`grokbot.list/detail` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
 
 `contracts/wire-types.json` 是测试用映射及审阅后的源结构清单：Rust 用已有 syn/quote 开发依赖读取实际类型、serde 属性、枚举、适配签名及动态 JSON 表达式；TypeScript 用锁定编译器 API 读取实际声明及调用包装。自由 JSON 与内联请求必须明确归类；代表性真实序列化测试验证缺省、null 和枚举拼写。仅名称标记不能通过实际类型/注册函数检查，负面 fixture 覆盖缺字段、缺映射和缺适配入口。更新清单必须同时审阅线上 wire shape，不能用重新生成清单代替兼容性判断。
 
@@ -131,11 +131,19 @@ opaque session key 绑定项目相对路径和文件名身份，同名 ID 互不
 
 冷读消费完整历史，不截取尾部；增量缓存保留文件身份、ctime 和前缀锚点。优先读取 updates.jsonl，缺失时使用 chat_history.jsonl。可选 `deletionEligibility` 保留协议兼容并返回可删除；删除按原生目录定位，不采集进程快照或核验指纹。
 
+### Grok Bot
+
+仅 macOS 桌面通过 `GrokBotUseCases` 暴露 `grokbot.list`／`grokbot.detail`；能力字段 `grokbot_sessions`／`grokbot_notifications` 为可选扩展，Linux 不注册读取入口。当前账户槽确定 roster 与 transcript 切片路径，按原生键读取短名 `.blob` 或带键头的 `.kblob`，校验格式及身份。列表只读 roster 与文件元数据，未缓存项仍存在；复制路径重新读取详情，缺失时不替换为共享目录或其他文件。
+
+历史映射用户、助手、工具、附件与交互记录，保留原生 ID 和顺序；详情复用共享历史快照、分页与时间线，搜索和附件复用同一投影。账户与线程共同确定身份，未变化切片复用有界缓存；不导出历史、不增加监听进程或状态库，不提供写操作。
+
+Probe 复用原生轮询、启用基线、加密队列与有限重试。只识别明确待回复／待授权，默认关闭；普通卡片、发送失败及单个工具错误不产生回合终态。请求去重绑定账户、线程与原生请求身份，滚动淘汰或原子替换不重置去重；首发及每次重试复核请求，已答复、已批准或账户切换停止旧提醒。原生缓存仅覆盖近期内容，不代表完整云端历史。
+
 ### Antigravity 与 DeepSeek Harness
 
 `antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、Tauri 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
 
-Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；服务未运行或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
+Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；自动探测未命中、分页网络不可达、没有可见消息或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
 
 DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。 改名追加前校验完整记录与压缩帧：合法末行缺换行时补分隔；半条 JSON 或半帧报错并保持原文件，不自动修复历史。
 
@@ -149,7 +157,7 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 `visibleMarkdown` 在解析前按源范围去除结构化 memory 与完整 `external_codex_apps_open_page`/page_id 元数据，并有渲染保护；CommonMark 代码、引用和普通示例不被误删。显示、复制、预览、Plan 内容和文件名共用清理结果。指令分段及完整 Markdown 转换缓存不保存 React owner、路径解析结果或折叠状态，每次恢复独立语法树后继续执行链接安全处理。
 
-`sessions.search` 是当前机器内的只读动作，输入 Provider、线程/Provider 范围、opaque key、query、cursor 和 limit，不接受文件路径。搜索摘要与有界正文页，返回稳定 block/event position key。用户搜索取实际正文、问题/回答、附件名和指令块，自动字段不重复命中。AGENTS.md 命中仍能展开上下文。Plan、工具、助手回复保留搜索锚点，但不成为用户时间线刻度。
+`sessions.search` 是当前机器内的只读动作，输入 Provider、线程/Provider 范围、opaque key、query、cursor 和 limit，不接受文件路径。搜索摘要与有界正文页，返回稳定 block/event position key；达到现有 200 条上限立即停止后续历史读取，保持原顺序和分页规则。当前线程按选中身份直接读取，不扫描最近 200 条列表。用户搜索取实际正文、问题/回答、附件名和指令块，自动字段不重复命中。AGENTS.md 命中仍能展开上下文。Plan、工具、助手回复保留搜索锚点，但不成为用户时间线刻度。
 
 `usePagedHistory` 分离最新窗口轮询与历史取页；静态页不重复请求，只刷新变化的已加载身份，快速追加时补齐中间窗口。`historyScrollCoordinator` 统一首次底部定位、上滚、搜索分页、请求互斥和可见锚点补偿；失败或游标不前进停止自动重试。`historyWindows` 保留最早游标；`useTimelineWindow` 直接取定位窗口，复用最新变更记录，无需下载中间全部历史。
 
@@ -173,11 +181,11 @@ Codex 依据原生父子关系生成后代集合，循环去重；includeDescend
 
 Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
 
-单条、批量、归档清理和隐藏清理共用删除实现。cleanup.archiveExecute 和 cleanup.hiddenExecute 使用 candidates 固定目标，expectedCount 不参与执行判断。缺失文件视为完成；权限、文件系统和数据库失败返回逐项 failed/residuals，继续处理其他目标，不回滚整批。数据库修改按目标事务执行。原生程序之后新写入的数据在刷新后显示，不启动重复删除任务。
+单条、批量和统一清理共用删除实现。仅保留 cleanup.unifiedDryRun／cleanup.unifiedExecute 与渐进 cleanup.hiddenDryRun，旧独立 archive／hiddenExecute／dshArchive 入口及适配器已删除。缺失文件视为完成；权限、文件系统和数据库失败返回逐项 failed/residuals，继续处理其他目标，不回滚整批。数据库修改按目标事务执行。原生程序之后新写入的数据在刷新后显示，不启动重复删除任务。
 
 cleanup.hiddenDryRun 保留 start/poll/cancel、扫描 ID 与游标和旧完整响应。只扫描元数据及原生父子关系，不核验正文或指纹；每页最多 100 项，候选总数没有业务上限。同源最多一个活动扫描，进程最多两个上下文；五分钟无请求释放。界面加载完整确认范围后允许执行，停止结果不能执行，切换机器隔离迟到响应。
 
-DSH 使用独立 cleanup.dshArchiveDryRun／cleanup.dshArchiveExecute，通过共享 CleanupUseCases、Linux RPC、Tauri 与远端 allowlist 接入，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。独立会话入口另由 dsh_sessions 能力声明。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
+DSH 归档清理纳入统一 CleanupUseCases、Linux RPC 与 Tauri 入口，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。独立会话入口另由 dsh_sessions 能力声明。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
 
 Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；缺少 cwd 或版本不产生读取失败。Grok 优先读取 updates.jsonl，缺失时读取 chat_history.jsonl，映射用户、助手和工具调用／结果，复用分页、增量缓存、搜索和时间线。系统提示、system_reminder 和加密推理不作为普通对话展示。
 
@@ -199,7 +207,7 @@ TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目�
 
 桌面专属 remote.sshDelete 接收 revision 与 alias，返回更新后的 RemoteConnectionView，不接收前端文件路径。用户配置与 Include 按显式别名编辑，保留注释、权限、其他别名与密钥；系统配置不能删除。原子替换失败报告并恢复已替换文件；删除对应 AgentHub 记录，当前连接被删除时回到本机。
 
-Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。rpc-stdio 与 health 使用单线程 Tokio，其余命令保留原运行方式。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，运行中后台轮询传 false，展开和终态读取全文。
+Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。rpc-stdio 与 health 使用单线程 Tokio，其余命令保留原运行方式。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，所有后台轮询（包括终态）传 false，展开时读取全文，终态仍刷新相关状态。作业注册表仅持有互斥组；启动、等待或读取失败统一收尾，日志排空与终态处理后释放，无现成运行时时使用单线程 runtime。前端不改写文件名或地址，后端保留凭据脱敏。
 
 ## 通知与监测
 

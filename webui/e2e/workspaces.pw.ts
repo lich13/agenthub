@@ -19,7 +19,7 @@ const claudeSummary = {
 
 for (const colorScheme of ["light", "dark"] as const) {
   for (const viewport of viewports) {
-    test(`${colorScheme} ${viewport.width}: seven workspaces and list transitions`, async ({ page }, info) => {
+    test(`${colorScheme} ${viewport.width}: eight workspaces and list transitions`, async ({ page }, info) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ colorScheme });
       const errors: string[] = [];
@@ -36,6 +36,10 @@ for (const colorScheme of ["light", "dark"] as const) {
         await page.addStyleTag({ content: "::-webkit-scrollbar { width: 15px; height: 15px; }" });
       }
       const nav = page.locator(viewport.width <= 767 ? ".mobile-tabs" : ".side-nav");
+      if (viewport.width <= 767) {
+        const rows = await nav.locator("button").evaluateAll(buttons => new Set(buttons.map(button => Math.round(button.getBoundingClientRect().top))).size);
+        expect(rows).toBe(1);
+      }
       const first = page.locator(".thread-item").first();
       await first.click();
       await expect(page.locator(".conversation-title")).toBeVisible();
@@ -65,6 +69,15 @@ for (const colorScheme of ["light", "dark"] as const) {
       if (viewport.width <= 767) {
         await page.getByTitle("返回任务列表").click();
         await expect(page.locator(".provider-session")).toBeVisible();
+      }
+      await nav.getByRole("button", { name: "Grok Bot", exact: true }).click();
+      await page.locator(".provider-session").first().click();
+      await expect(page.locator(".provider-events")).toContainText("已整理项目结构");
+      await assertContrast(page, ".provider-detail .conversation-title, .provider-events .markdown-content");
+      await assertNoOverflow(page);
+      if (viewport.width <= 767) {
+        await page.getByTitle("返回任务列表").click();
+        await expect(page.locator(".provider-session").first()).toBeVisible();
       }
       await nav.getByRole("button", { name: "Claude Code", exact: true }).click();
       await page.locator(".provider-session").first().click();

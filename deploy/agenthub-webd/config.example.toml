@@ -41,11 +41,3 @@ log_max_bytes = 5242880
 data_dir = "/var/lib/agenthub-webd"
 db_path = "/var/lib/agenthub-webd/agenthub.sqlite"
 log_dir = "/var/log/agenthub-webd"
-
-[update]
-precheck_command = "/usr/local/bin/agenthub-codex-precheck"
-update_command = "/usr/local/bin/agenthub-codex-update"
-prune_command = "/usr/local/bin/agenthub-codex-prune"
-doctor_command = "/usr/local/bin/agenthub-codex-precheck"
-panel_update_command = "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"
-panel_precheck_command = "/usr/local/bin/agenthub-webd-update --precheck"
