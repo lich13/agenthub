@@ -63,7 +63,7 @@
 
 ## 必要验证
 
-2.1.0 核心阶段已完成受影响的 Rust 单元／集成测试、两端 Clippy、TypeScript 与相关 Vitest、线协议契约及安装脚本测试。覆盖并发 SSH 响应、认证失败、服务断开与通道释放、后台作业断开后完成、旧库拒绝／schema 3 保留、完整日志、基线启停、正文同数量改写、不完整分页及签名／下载／安装失败。浏览器完整回归和跨平台构建由标签 CI 完成，真实 SSH 和手机实收仍待用户验收。
+2.1.0 已通过受影响的 Rust 单元／集成测试、两端 Clippy、TypeScript 与相关 Vitest、线协议契约及安装脚本测试。覆盖并发 SSH 响应、认证失败、服务断开与通道释放、后台作业断开后完成、旧库拒绝／schema 3 保留、完整日志、基线启停、正文同数量改写、不完整分页及签名／下载／安装失败。新库的 WAL 切换纳入现有初始化锁，并发建库连续 40 次回归通过；已有 schema 3 数据库不重复设置 WAL。浏览器完整回归、Linux 后端及 macOS 构建由标签 CI 验证通过；部署后的 SSH 健康检查通过，界面操作和手机实收仍待用户验收。
 
 同一隔离合成样本比较：200 次 DB 打开 CPU 57.781 → 42.637 ms，1,000 次基线读取 CPU 19.034 → 8.733 ms、WAL 86,552 → 8,272 B；30 条任务列表 JSON 725,721 → 5,721 B；3,000 条历史冷读 CPU 232.051 → 216.078 ms，10 次热读 2.404 → 1.923 ms；进程峰值 RSS 19,169,280 → 17,055,744 B。样本不代表线上收益，未测量磁盘空间回收。
 
@@ -113,7 +113,7 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 正式交付
 
-2.1.0 的版本、文档和部署脚本已更新；待标签 CI 完成后发布八项资产，并按服务端、Mac App 的顺序升级。
+2.1.0 发布提交 [`2c72801`](https://github.com/lich13/agenthub/commit/2c72801) 的[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/41996055611) 全部通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v2.1.0)。使用对应 CI 产物先升级服务端，再原地安装 Mac App：服务端为 `agenthub-webd 2.1.0`、service 为 `active`、SSH health 为 `ok`；Mac App 从 2.0.10 升级至 2.1.0 并启动，未保留旧副本。部署暂存清理已修复并实跑通过。SSH 连接选择／切换／重连与安装入口、Probe 文案、五平台常用操作、完整执行日志及手机通知仍待用户验收，线上资源占用未测量。
 
 2.0.10 实现提交 [`4ff11a0`](https://github.com/lich13/agenthub/commit/4ff11a032340) 与启动入口断言修复 [`deb081d`](https://github.com/lich13/agenthub/commit/deb081d5b050) 已推送，`v2.0.10` 指向 `deb081d`。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/41941803886) 全部通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v2.0.10)。按先服务端后 App 的顺序使用对应 CI 产物交付：服务端为 `agenthub-webd 2.0.10`、service 为 `active`、health 为 `{"ok":true}`；Mac App 从 2.0.9 原地升级至 2.0.10 并启动，未保留旧副本。真实功能与手机实收仍待用户验收，线上资源占用未测量。
 

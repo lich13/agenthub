@@ -46,6 +46,6 @@ ssh "${HOST}" "tar -xzf '${REMOTE_STAGE}/deploy.tar.gz' -C '${REMOTE_STAGE}'"
 ssh "${HOST}" "sudo -n bash '${REMOTE_STAGE}/agenthub-webd/install.sh' --archive '${REMOTE_STAGE}/release.tar.gz'"
 ssh "${HOST}" "sudo -n systemctl is-active --quiet agenthub-webd && test \"\$(sudo -n /usr/local/bin/agenthub-webd --version)\" = \"agenthub-webd ${EXPECTED_VERSION}\" && sudo -n /usr/local/bin/agenthub-webd health >/dev/null"
 
-ssh "${HOST}" "rm -r -- '${REMOTE_STAGE}'"
+ssh "${HOST}" "sudo -n rm -r -- '${REMOTE_STAGE}'"
 rm -r -- "${STAGE}"
 trap - ERR
