@@ -9,7 +9,7 @@ use agenthub_core::{
     crypto::SecretBox,
     db::desktop_submissions::{DesktopLedger, DesktopWorkerLease},
     resource_limits::CREDENTIAL_WAIT,
-    services::{codex_desktop::*, remote::credentials::CredentialAccess},
+    services::{codex_desktop::*, credentials::CredentialAccess},
 };
 use std::{
     collections::HashMap,

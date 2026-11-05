@@ -80,27 +80,12 @@ pub const PANEL_UPDATE_DEFAULT: &str =
     "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest";
 pub const PANEL_PRECHECK_DEFAULT: &str = "/usr/local/bin/agenthub-webd-update --precheck";
 
-pub fn is_legacy_panel_update(value: &str) -> bool {
-    matches!(value,
-        "/usr/local/bin/codex-cloud-panel-update --repo lich13/codex-cloud-panel --version latest" |
-        "/usr/local/bin/codex-cloud-panel-update --repo lich13/agenthub --version latest" |
-        "/usr/local/bin/agenthub-webd-update --repo lich13/codex-cloud-panel --version latest")
-}
-
-pub fn is_legacy_panel_precheck(value: &str) -> bool {
-    matches!(value,
-        "test -x /usr/local/bin/agenthub-webd-update && systemctl is-active agenthub-webd && curl -fsS http://127.0.0.1:15742/healthz" |
-        "test -x /usr/local/bin/codex-cloud-panel-update && systemctl is-active codex-cloud-panel && curl -fsS http://127.0.0.1:15732/healthz" |
-        "/usr/local/bin/codex-cloud-panel-update --precheck" |
-        "test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz")
-}
-
-/// Exact compatibility entries only. Never tokenize or execute user-supplied shell text.
+/// Only the managed update command is executable.
 pub fn panel_process(command: &str, precheck: bool) -> anyhow::Result<crate::jobs::ProcessCommand> {
     let valid = if precheck {
-        command == PANEL_PRECHECK_DEFAULT || is_legacy_panel_precheck(command)
+        command == PANEL_PRECHECK_DEFAULT
     } else {
-        command.is_empty() || command == PANEL_UPDATE_DEFAULT || is_legacy_panel_update(command)
+        command.is_empty() || command == PANEL_UPDATE_DEFAULT
     };
     anyhow::ensure!(valid, "unsupported managed update command");
     Ok(crate::jobs::ProcessCommand::new(

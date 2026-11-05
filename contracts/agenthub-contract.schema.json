@@ -11,11 +11,9 @@
     "capabilitiesByHostSurface",
     "visual",
     "actions",
-    "retiredActions",
     "dtoCatalog"
   ],
   "properties": {
-    "retiredActions": { "$ref": "#/$defs/stringList" },
     "schemaVersion": {
       "type": "integer",
       "const": 1

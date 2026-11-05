@@ -18,7 +18,6 @@ mod notification_delivery;
 mod provider_monitor;
 mod question_monitor;
 mod rpc_payload;
-mod rpc_surface;
 mod ssh_server;
 mod state;
 
@@ -72,8 +71,7 @@ const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 100;
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_ERROR_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -83,6 +81,15 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let mut runtime = if matches!(cli.command, Command::RpcStdio | Command::Health) {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    runtime.enable_all().build()?.block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
     if matches!(
         cli.command,
         Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook { .. }

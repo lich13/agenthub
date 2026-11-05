@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::time::Duration;
 
-use agenthub_core::services::remote::credentials::{CredentialAccess, CredentialAccessError};
+use agenthub_core::services::credentials::{CredentialAccess, CredentialAccessError};
 use tokio::sync::{oneshot, Barrier};
 
 const WATCHDOG: Duration = Duration::from_secs(10);

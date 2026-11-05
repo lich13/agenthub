@@ -122,46 +122,6 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
 }
 
 #[test]
-fn retired_string_action_multiplexers_do_not_reenter_core_facades() {
-    let service_sources = [
-        ("cleanup", include_str!("../src/services/cleanup.rs")),
-        ("probe", include_str!("../src/services/probe.rs")),
-        ("updates", include_str!("../src/services/updates.rs")),
-        ("use_cases", include_str!("../src/services/use_cases.rs")),
-    ];
-
-    for (name, source) in service_sources {
-        for forbidden in [
-            "startProbeJob",
-            "runUpdateAction",
-            "updatesPrune",
-            "backupPrune",
-            "dryRunArchiveDelete",
-            "startArchiveDelete",
-            "dryRunHiddenThreadDelete",
-            "startHiddenThreadDelete",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{name} service must not accept retired string action: {forbidden}"
-            );
-        }
-    }
-
-    let cleanup_source = include_str!("../src/services/cleanup.rs");
-    assert!(
-        !cleanup_source.contains("impl FromStr for CleanupAction"),
-        "cleanup execute/dry-run selection must stay typed and must not parse string actions"
-    );
-
-    let update_source = include_str!("../src/services/updates.rs");
-    assert!(
-        !update_source.contains("impl FromStr for UpdateAction"),
-        "update actions must stay typed and must not reintroduce a string action multiplexer"
-    );
-}
-
-#[test]
 fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
@@ -543,83 +503,6 @@ fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
         thread_state_action_response(&rename_plan).unwrap().data,
         Some(serde_json::json!({"name": "new name"}))
     );
-}
-
-#[test]
-fn retired_commands_are_not_emitted_by_core_action_plans() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
-    let mut values = vec![
-        serde_json::to_value(
-            plan_probe_action(&linux_config, &linux, ProbeAction::BarkTest).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_probe_action(&linux_config, &linux, ProbeAction::InstallHooks).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_update_action(&linux_config, &linux, UpdateAction::Check).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_update_action(&linux_config, &linux, UpdateAction::Install).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_update_action(&linux_config, &linux, UpdateAction::Prune).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteDryRun).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteExecute).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_thread_cleanup_action(&linux, ThreadCleanupAction::HiddenDeleteDryRun).unwrap(),
-        )
-        .unwrap(),
-        serde_json::to_value(
-            plan_thread_cleanup_action(&linux, ThreadCleanupAction::HiddenDeleteExecute).unwrap(),
-        )
-        .unwrap(),
-    ];
-
-    values.extend([
-        serde_json::to_value(archive_thread_response("thread-a".to_string(), true)).unwrap(),
-        serde_json::to_value(archive_thread_response("thread-a".to_string(), false)).unwrap(),
-        serde_json::to_value(rename_thread_response("thread-a".to_string(), "new name").unwrap())
-            .unwrap(),
-    ]);
-
-    for value in values {
-        assert_no_retired_command(&value);
-    }
-}
-
-fn assert_no_retired_command(value: &serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => {
-            assert!(
-                !commands::is_retired_command(value),
-                "action plan emitted retired command: {value}"
-            );
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                assert_no_retired_command(item);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for item in map.values() {
-                assert_no_retired_command(item);
-            }
-        }
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
-    }
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

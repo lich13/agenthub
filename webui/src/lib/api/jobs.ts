@@ -71,11 +71,11 @@ export async function listJobs(): Promise<JobRecord[]> {
   return result.available && Array.isArray(result.data) ? result.data : [];
 }
 
-export async function getJob(id: string): Promise<JobRecord> {
+export async function getJob(id: string, includeOutput = true): Promise<JobRecord> {
   if (USE_DEMO) {
     return (await import("./demo")).demoJob(id);
   }
-  return callCommand<JobRecord>("jobs.detail", { id });
+  return callCommand<JobRecord>("jobs.detail", { id, includeOutput });
 }
 
 export async function dryRunDshArchiveDelete(): Promise<DshArchiveDeletePlan> {

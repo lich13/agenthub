@@ -265,7 +265,7 @@
       "tauriCommand": "commands::jobs::getJob",
       "webuiWrapper": "getJob",
       "dtoOwner": "jobs",
-      "requestDto": "NoRequest",
+      "requestDto": "DesktopJobDetailRequest",
       "responseDto": "JobsDetailResponse"
     },
     {
@@ -643,6 +643,18 @@
       "dtoOwner": "remote",
       "requestDto": "NoRequest",
       "responseDto": "SshHostList",
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.sshDelete",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.sshDelete",
+      "tauriCommand": "remote::remoteSshDelete",
+      "webuiWrapper": "remoteSshDelete",
+      "dtoOwner": "remote",
+      "requestDto": "SshDeleteRequest",
+      "responseDto": "RemoteConnectionView",
       "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
@@ -1546,59 +1558,14 @@
     "SshHostList": {
       "core": "SshHostList",
       "webui": "SshHostList"
+    },
+    "SshDeleteRequest": {
+      "core": "SshDeleteRequest",
+      "webui": "SshDeleteRequest"
+    },
+    "DesktopJobDetailRequest": {
+      "core": "DesktopJobDetailRequest",
+      "webui": "DesktopJobDetailRequest"
     }
-  },
-  "retiredActions": [
-    "probe.gotifyTest",
-    "system.plugins",
-    "system.models",
-    "system.permissionProfiles",
-    "system.codexConfig",
-    "system.claudeCodeOverview",
-    "threads.create",
-    "threads.send",
-    "threads.steer",
-    "threads.stop",
-    "threads.fork",
-    "threads.followups.list",
-    "threads.followups.enqueue",
-    "threads.followups.claim",
-    "threads.followups.submit",
-    "threads.followups.error",
-    "threads.followups.cancel",
-    "threads.plan.accept",
-    "threads.plan.revise",
-    "threads.elicitation.answer",
-    "threads.approval.answer",
-    "threads.goal.get",
-    "threads.goal.save",
-    "threads.goal.clear",
-    "threads.goal.pause",
-    "threads.goal.resume",
-    "uploads.delete",
-    "uploadFiles",
-    "desktopWebUi.settings.get",
-    "desktopWebUi.settings.save",
-    "desktopWebUi.status",
-    "desktopWebUi.start",
-    "desktopWebUi.stop",
-    "desktopWebUi.password.reset",
-    "probe.logsDb.status",
-    "probe.logsDbDryRun",
-    "probe.logsDbExecute",
-    "system.status",
-    "auth.login",
-    "auth.logout",
-    "auth.me",
-    "auth.publicSettings",
-    "security.changePassword",
-    "security.get",
-    "security.save",
-    "threadEvents",
-    "pi.list",
-    "pi.detail",
-    "pi.rename",
-    "pi.deletePreview",
-    "pi.deleteExecute"
-  ]
+  }
 }

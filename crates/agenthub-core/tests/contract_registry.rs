@@ -88,7 +88,6 @@ fn contract_schema_locks_registry_top_level_shape() {
         "visual",
         "actions",
         "dtoCatalog",
-        "retiredActions",
     ]
     .into_iter()
     .map(str::to_string)
@@ -185,10 +184,7 @@ fn contract_registry_covers_all_linux_rpc_and_transport_commands() {
         .iter()
         .map(|command| command.to_string())
         .collect::<BTreeSet<_>>();
-    let expected_transport = commands::ALLOWED_TRANSPORT_COMMANDS
-        .iter()
-        .map(|command| command.to_string())
-        .collect::<BTreeSet<_>>();
+    let expected_transport = BTreeSet::new();
 
     assert_eq!(rpc_actions, expected_rpc);
     assert_eq!(transport_actions, expected_transport);

@@ -4,7 +4,7 @@ mod ssh;
 mod ssh_config;
 use agenthub_core::services::{
     commands::{is_allowed_rpc_command, is_mutating_rpc_command},
-    remote::{credentials::CredentialAccess, *},
+    remote::*,
     system::{HostSurface, SystemCapabilitiesResponse, API_VERSION},
 };
 use serde::{Deserialize, Serialize};
@@ -33,46 +33,30 @@ impl Preferences {
             .find(|m| Some(&m.id) == self.active_machine_id.as_ref())
     }
 }
+type ConnectionAttempt = Arc<tokio::sync::OnceCell<Result<Arc<ssh::Client>, String>>>;
+
 #[derive(Default)]
 struct ConnectionState {
     prefs: Preferences,
     writes: usize,
     changing: bool,
     client: Option<Arc<ssh::Client>>,
+    connecting: Option<ConnectionAttempt>,
+    closed: bool,
 }
 #[derive(Clone)]
 pub struct RemoteConnections {
     state: Arc<Mutex<ConnectionState>>,
     path: PathBuf,
-    credentials: CredentialAccess,
-    legacy: Arc<Mutex<Option<Value>>>,
 }
 impl RemoteConnections {
     pub fn load(data_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(data_dir).map_err(|_| "无法创建连接配置目录")?;
         let path = data_dir.join("remote-connection.json");
-        let raw = if path.exists() {
-            Some(
-                serde_json::from_slice::<Value>(&fs::read(&path).map_err(|_| "无法读取连接配置")?)
-                    .map_err(|_| "连接配置损坏")?,
-            )
-        } else {
-            None
-        };
-        let old = raw.as_ref().is_some_and(|v| {
-            v.get("baseUrl").is_some()
-                || v["machines"]
-                    .as_array()
-                    .is_some_and(|ms| ms.iter().any(|m| m.get("baseUrl").is_some()))
-        });
-        let prefs = if old {
-            Preferences::default()
-        } else {
-            raw.as_ref()
-                .map(|v| serde_json::from_value(v.clone()))
-                .transpose()
-                .map_err(|_| "连接配置损坏")?
-                .unwrap_or_default()
+        let prefs = match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "连接配置损坏")?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Preferences::default(),
+            Err(_) => return Err("无法读取连接配置".into()),
         };
         Ok(Self {
             state: Arc::new(Mutex::new(ConnectionState {
@@ -80,17 +64,15 @@ impl RemoteConnections {
                 ..Default::default()
             })),
             path,
-            credentials: CredentialAccess::default(),
-            legacy: Arc::new(Mutex::new(if old { raw } else { None })),
         })
     }
     pub(crate) fn disconnect(&self) {
-        if let Some(client) = self.state.lock().expect("connection").client.take() {
+        let mut state = self.state.lock().expect("connection");
+        state.closed = true;
+        state.connecting = None;
+        if let Some(client) = state.client.take() {
             client.close();
         }
-    }
-    pub(crate) fn credential_access(&self) -> CredentialAccess {
-        self.credentials.clone()
     }
     pub(crate) fn require_local(&self, revision: u64) -> Result<(), String> {
         let s = self.state.lock().expect("connection");
@@ -133,15 +115,15 @@ impl RemoteConnections {
     }
     fn persist(&self, prefs: &Preferences) -> Result<(), String> {
         let temp = self.path.with_extension("json.pending");
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&temp).map_err(|_| "保存连接配置失败")?;
         let result = (|| -> anyhow::Result<()> {
-            let mut opts = fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut f = opts.open(&temp)?;
             f.write_all(&serde_json::to_vec(prefs)?)?;
             f.sync_all()?;
             fs::rename(&temp, &self.path)?;
@@ -151,51 +133,6 @@ impl RemoteConnections {
             let _ = fs::remove_file(&temp);
         }
         result.map_err(|_| "保存连接配置失败".into())
-    }
-    async fn retire_legacy(&self) -> Result<(), String> {
-        let old = self.legacy.lock().expect("legacy").clone();
-        let Some(old) = old else {
-            return Ok(());
-        };
-        self.credentials
-            .transaction(
-                agenthub_core::resource_limits::CREDENTIAL_WAIT,
-                move || -> Result<(), String> {
-                    let mut accounts = Vec::new();
-                    if let Some(base) = old["baseUrl"].as_str() {
-                        accounts.push(base.to_string());
-                        accounts.push("machine:m-legacy".into());
-                    }
-                    if let Some(ms) = old["machines"].as_array() {
-                        for m in ms {
-                            if let Some(id) = m["id"].as_str() {
-                                accounts.push(format!("machine:{id}"));
-                            }
-                            if let Some(base) = m["baseUrl"].as_str() {
-                                accounts.push(base.into());
-                            }
-                        }
-                    }
-                    accounts.sort();
-                    accounts.dedup();
-                    for account in accounts {
-                        let entry = keyring::Entry::new("com.lich13.agenthub.remote", &account)
-                            .map_err(|_| "无法清理旧远程凭据")?;
-                        match entry.delete_credential() {
-                            Ok(()) | Err(keyring::Error::NoEntry) => {}
-                            Err(_) => {
-                                return Err("无法清理旧远程凭据，请检查钥匙串授权后重试".into())
-                            }
-                        }
-                    }
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|_| "旧远程凭据清理失败")??;
-        self.persist(&self.state.lock().expect("connection").prefs)?;
-        *self.legacy.lock().expect("legacy") = None;
-        Ok(())
     }
     fn machine(request: &RemoteConnectionCredentials) -> Result<RemoteMachineSummary, String> {
         let host = request.ssh_host.trim();
@@ -227,9 +164,12 @@ impl RemoteConnections {
         client: Option<Arc<ssh::Client>>,
     ) -> Result<RemoteConnectionView, String> {
         prefs.revision = prefs.revision.wrapping_add(1);
-        self.persist(&prefs)?;
         {
             let mut s = self.state.lock().expect("connection");
+            if s.closed {
+                return Err("连接已关闭，操作已取消".into());
+            }
+            self.persist(&prefs)?;
             if let Some(previous) = s.client.take() {
                 if !client
                     .as_ref()
@@ -238,10 +178,115 @@ impl RemoteConnections {
                     previous.close();
                 }
             }
+            s.connecting = None;
             s.prefs = prefs;
             s.client = client;
         }
         Ok(self.view())
+    }
+    async fn reconnect(machine: RemoteMachineSummary) -> Result<Arc<ssh::Client>, String> {
+        Self::connect(&machine).await.map(|(client, _)| client)
+    }
+    async fn ensure_client(&self, revision: u64) -> Result<Arc<ssh::Client>, String> {
+        self.ensure_client_with(revision, Self::reconnect).await
+    }
+    async fn ensure_client_with<F, Fut>(
+        &self,
+        revision: u64,
+        connect: F,
+    ) -> Result<Arc<ssh::Client>, String>
+    where
+        F: FnOnce(RemoteMachineSummary) -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<ssh::Client>, String>>,
+    {
+        let (attempt, machine) = {
+            let mut s = self.state.lock().expect("connection");
+            if s.closed
+                || s.changing
+                || s.prefs.revision != revision
+                || s.prefs.target != MachineTarget::Remote
+            {
+                return Err("连接已变化，操作已取消".into());
+            }
+            if let Some(client) = s.client.as_ref().filter(|c| c.is_connected()) {
+                return Ok(client.clone());
+            }
+            if let Some(client) = s.client.take() {
+                client.close();
+            }
+            let machine = s.prefs.active().cloned().ok_or("请先选择远程机器")?;
+            let attempt = s
+                .connecting
+                .get_or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+                .clone();
+            (attempt, machine)
+        };
+        let result = attempt.get_or_init(|| connect(machine)).await.clone();
+        let mut s = self.state.lock().expect("connection");
+        if s.connecting
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(pending, &attempt))
+        {
+            s.connecting = None;
+        }
+        if s.closed
+            || s.changing
+            || s.prefs.revision != revision
+            || s.prefs.target != MachineTarget::Remote
+        {
+            if let Ok(client) = result {
+                client.close();
+            }
+            return Err("连接已变化，操作已取消".into());
+        }
+        let client = result?;
+        if !client.is_connected() {
+            return Err("SSH 连接已断开，请稍后重试".into());
+        }
+        s.client = Some(client.clone());
+        Ok(client)
+    }
+    fn forget_client(&self, failed: &Arc<ssh::Client>) {
+        let mut s = self.state.lock().expect("connection");
+        if s.client
+            .as_ref()
+            .is_some_and(|client| Arc::ptr_eq(client, failed))
+        {
+            s.client = None;
+        }
+        failed.close();
+    }
+    async fn invoke(&self, request: &RemoteInvokeRequest) -> Result<Value, String> {
+        self.invoke_with(request, Self::reconnect).await
+    }
+    async fn invoke_with<F, Fut>(
+        &self,
+        request: &RemoteInvokeRequest,
+        connect: F,
+    ) -> Result<Value, String>
+    where
+        F: Fn(RemoteMachineSummary) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<Arc<ssh::Client>, String>>,
+    {
+        let mut client = self
+            .ensure_client_with(request.revision, connect.clone())
+            .await?;
+        let result = client.call(&request.command, request.args.clone()).await;
+        match result {
+            Err(error) if error.is_transport() => {
+                self.forget_client(&client);
+                if is_mutating_rpc_command(&request.command) {
+                    return Err(error.to_string());
+                }
+                client = self.ensure_client_with(request.revision, connect).await?;
+                let result = client.call(&request.command, request.args.clone()).await;
+                if result.as_ref().is_err_and(|error| error.is_transport()) {
+                    self.forget_client(&client);
+                }
+                result.map_err(|error| error.to_string())
+            }
+            result => result.map_err(|error| error.to_string()),
+        }
     }
     async fn connect(
         machine: &RemoteMachineSummary,
@@ -278,17 +323,9 @@ impl Drop for LocalWriteGuard {
 pub async fn remoteGet(
     state: tauri::State<'_, RemoteConnections>,
 ) -> Result<RemoteConnectionView, String> {
-    state.retire_legacy().await?;
-    let selected = {
-        let s = state.state.lock().expect("connection");
-        (s.prefs.target == MachineTarget::Remote && s.client.is_none())
-            .then(|| (s.prefs.revision, s.prefs.active().cloned()))
-    };
-    if let Some((revision, Some(machine))) = selected {
-        let _guard = state.begin_change(revision)?;
-        if let Ok((client, _)) = RemoteConnections::connect(&machine).await {
-            state.state.lock().expect("connection").client = Some(client);
-        }
+    let view = state.view();
+    if view.target == MachineTarget::Remote {
+        let _ = state.ensure_client(view.revision).await;
     }
     Ok(state.view())
 }
@@ -297,6 +334,32 @@ pub async fn remoteSshHosts() -> Result<SshHostList, String> {
     tokio::task::spawn_blocking(ssh_config::list)
         .await
         .map_err(|_| "SSH 配置读取失败")?
+}
+#[tauri::command(rename = "remote.sshDelete")]
+pub async fn remoteSshDelete(
+    state: tauri::State<'_, RemoteConnections>,
+    request: SshDeleteRequest,
+) -> Result<RemoteConnectionView, String> {
+    let _guard = state.begin_change(request.revision)?;
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        ssh_config::delete_with(&request.alias, || {
+            let mut prefs = state.state.lock().expect("connection").prefs.clone();
+            prefs
+                .machines
+                .retain(|machine| machine.ssh_host != request.alias);
+            if prefs.active().is_none() {
+                prefs.active_machine_id = None;
+                prefs.target = MachineTarget::Local;
+            }
+            let client = (prefs.target == MachineTarget::Remote)
+                .then(|| state.state.lock().expect("connection").client.clone())
+                .flatten();
+            state.commit(prefs, client)
+        })
+    })
+    .await
+    .map_err(|_| "SSH 配置删除失败")?
 }
 #[tauri::command(rename = "remote.verify")]
 pub async fn remoteVerify(
@@ -389,7 +452,7 @@ pub async fn remoteInvoke(
     if !is_allowed_rpc_command(&request.command) {
         return Err("不支持的远程操作".into());
     }
-    let (client, guard) = {
+    let guard = {
         let mut s = state.state.lock().expect("connection");
         if s.changing
             || s.prefs.revision != request.revision
@@ -397,16 +460,14 @@ pub async fn remoteInvoke(
         {
             return Err("连接已变化，操作已取消".into());
         }
-        let client = s.client.clone().ok_or("请重新连接远程机器")?;
-        let guard = if is_mutating_rpc_command(&request.command) {
+        if is_mutating_rpc_command(&request.command) {
             s.writes += 1;
             Some(LocalWriteGuard(state.state.clone()))
         } else {
             None
-        };
-        (client, guard)
+        }
     };
-    let value = client.call(&request.command, request.args).await;
+    let value = state.invoke(&request).await;
     drop(guard);
     if state.state.lock().expect("connection").prefs.revision != request.revision {
         return Err("连接已变化，已丢弃旧响应".into());
@@ -416,6 +477,187 @@ pub async fn remoteInvoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn remote_fixture() -> (tempfile::TempDir, RemoteConnections) {
+        let root = tempfile::tempdir().unwrap();
+        let connection = RemoteConnections::load(root.path()).unwrap();
+        let prefs = Preferences {
+            target: MachineTarget::Remote,
+            active_machine_id: Some("fixture".into()),
+            machines: vec![RemoteMachineSummary {
+                id: "fixture".into(),
+                name: "Fixture".into(),
+                ssh_host: "fixture-host".into(),
+                use_sudo: false,
+            }],
+            ..Default::default()
+        };
+        connection.commit(prefs, None).unwrap();
+        (root, connection)
+    }
+    const RESPONDER: &str = r#"
+import sys,struct,json
+while True:
+ h=sys.stdin.buffer.read(4)
+ if not h: break
+ n=struct.unpack('>I',h)[0]
+ r=json.loads(sys.stdin.buffer.read(n))
+ b=json.dumps({'id':r['id'],'result':'fixture','error':None}).encode()
+ sys.stdout.buffer.write(struct.pack('>I',len(b))+b)
+ sys.stdout.buffer.flush()
+"#;
+
+    #[tokio::test]
+    async fn concurrent_recovery_shares_success_and_authentication_failure() {
+        for succeed in [true, false] {
+            let (_root, connection) = remote_fixture();
+            let calls = AtomicUsize::new(0);
+            let connect = |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                if succeed {
+                    Ok(ssh::fixture(RESPONDER))
+                } else {
+                    Err("authentication failed".into())
+                }
+            };
+            let (first, second) = tokio::join!(
+                connection.ensure_client_with(1, connect),
+                connection.ensure_client_with(1, connect)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(connection.view().revision, 1);
+            if succeed {
+                assert!(Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
+            } else {
+                assert_eq!(first.err(), second.err());
+                assert!(connection.state.lock().unwrap().client.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn late_handshake_cannot_restore_a_switched_or_closed_connection() {
+        for close in [false, true] {
+            let (_root, connection) = remote_fixture();
+            let client = ssh::fixture(RESPONDER);
+            let result = connection
+                .ensure_client_with(1, |_| async {
+                    if close {
+                        connection.disconnect();
+                    } else {
+                        let _guard = connection.begin_change(1).unwrap();
+                        connection.commit(Preferences::default(), None).unwrap();
+                    }
+                    Ok(client.clone())
+                })
+                .await;
+            assert!(result.is_err());
+            assert!(!client.is_connected());
+            assert!(connection.state.lock().unwrap().client.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_switch_does_not_leave_a_closed_recovery_attempt() {
+        let (_root, connection) = remote_fixture();
+        let guard = Mutex::new(None);
+        let result = connection
+            .ensure_client_with(1, |_| async {
+                *guard.lock().unwrap() = Some(connection.begin_change(1).unwrap());
+                Ok(ssh::fixture(RESPONDER))
+            })
+            .await;
+        assert!(result.is_err());
+        drop(guard.lock().unwrap().take());
+        assert!(connection
+            .ensure_client_with(1, |_| async { Ok(ssh::fixture(RESPONDER)) })
+            .await
+            .unwrap()
+            .is_connected());
+    }
+
+    #[tokio::test]
+    async fn reads_retry_once_and_writes_are_not_replayed() {
+        for (command, expected_calls) in [("jobs.list", 2), ("threads.rename", 1)] {
+            let (_root, connection) = remote_fixture();
+            let calls = AtomicUsize::new(0);
+            let result = connection
+                .invoke_with(
+                    &RemoteInvokeRequest {
+                        revision: 1,
+                        command: command.into(),
+                        args: json!({}),
+                    },
+                    |_| async {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(ssh::fixture(
+                            "import sys; sys.stdin.buffer.read(1); sys.exit(1)",
+                        ))
+                    },
+                )
+                .await;
+            assert!(result.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+            assert!(connection.state.lock().unwrap().client.is_none());
+        }
+        let (_root, connection) = remote_fixture();
+        let calls = AtomicUsize::new(0);
+        let result = connection
+            .invoke_with(
+                &RemoteInvokeRequest {
+                    revision: 1,
+                    command: "jobs.list".into(),
+                    args: json!({}),
+                },
+                |_| async {
+                    let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+                    Ok(ssh::fixture(if first {
+                        "import sys; sys.stdin.buffer.read(1); sys.exit(1)"
+                    } else {
+                        RESPONDER
+                    }))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, "fixture");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(connection.view().revision, 1);
+    }
+
+    #[tokio::test]
+    async fn business_errors_keep_the_channel_and_do_not_retry() {
+        let (_root, connection) = remote_fixture();
+        let calls = AtomicUsize::new(0);
+        let result = connection
+            .invoke_with(
+                &RemoteInvokeRequest {
+                    revision: 1,
+                    command: "jobs.detail".into(),
+                    args: json!({}),
+                },
+                |_| async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(ssh::fixture(&RESPONDER.replace(
+                        "'result':'fixture','error':None",
+                        "'result':None,'error':'job not found'",
+                    )))
+                },
+            )
+            .await;
+        assert_eq!(result.unwrap_err(), "job not found");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(connection
+            .state
+            .lock()
+            .unwrap()
+            .client
+            .as_ref()
+            .unwrap()
+            .is_connected());
+    }
     #[test]
     fn saved_ssh_preferences_and_local_write_guard() {
         let root = tempfile::tempdir().unwrap();

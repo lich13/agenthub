@@ -10,12 +10,12 @@
 
 - Shared actions flow through `AgentHubUseCases` and the contract registry, then typed WebUI query/domain code and thin Linux/Tauri adapters.
 - Codex, Claude Code, Grok, Antigravity and DSH provide session reading and explicit management actions. Local Codex main threads additionally support collaboration through a verified native desktop owner. Claude rename retains native identity, version, ownership and fingerprint validation. Archive/restore retain their existing rules. Codex, Claude and Grok direct deletion is independent of content reading and activity; Antigravity and DSH retain their native running/lock checks. Unified cleanup retains its preview fingerprint and allowlist checks. Resolve targets from the selected machine, Provider, native ID or project-relative filename key; unlink directory symlinks themselves and only remove matching records from shared files. Never install Claude or infer permission waits from generic pending tools.
-- The AgentHub Goal feature and automatic recovery chain are retired. Goal RPC names remain only as unavailable contract tombstones. Codex native logs are retained as read-only error-monitor input; no Goal scheduler, recovery retry or Goal database table remains. The separate desktop outgoing queue stores only user-submitted messages and never runs models or edits the native queue.
+- The AgentHub Goal feature and automatic recovery chain are retired. Unknown RPC names are rejected by the current positive allowlist; no retired-name table remains. Codex native logs are retained as read-only error-monitor input; no Goal scheduler, recovery retry or Goal database table remains. The separate desktop outgoing queue stores only user-submitted messages and never runs models or edits the native queue.
 - Probe keeps error detection, persistent cursors, dedupe, retention and encrypted Bark delivery. Provider identities and terminal evidence are validated independently. Codex ordinary feedback requests are classified locally only after a verified terminal turn. Native asynchronous questions remain pending across tool acknowledgements and normal completion; all notification entrances use the shared question tracker, identity recheck and persistent per-call delivery claim. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without blocking management; fatal parse, identity, path, permission or uncertain ownership errors still guard rename and collaboration. Only fatal parse or identity errors suppress notification scanning. Claude hooks are explicit local-only settings operations; App installation never enables them. Hooks and local polling share verified native prompt identities and one claim per prompt/category; this rule never changes Codex per-question claims. Retain completed Claude turns on the current branch across later prompts. Check Claude failure freshness before first delivery and every retry; a new prompt, resumed execution, success or cancellation obsoletes the old failure and clears its queued payload. Main-turn completion does not wait for independent background tasks. New Bark events are one plain-text summary (four lines, 300 Unicode characters); preserve encrypted legacy chunks and their acknowledgements. Partial answers never change the original dedupe identity. Never replay questions older than the asynchronous enablement baseline.
 - Settings use one `更新与维护` surface and the retired `system.status` action cannot execute; capability bootstrap uses `system.capabilities`. File-path Markdown actions must preserve the source path and never invent a web origin.
 
 - The macOS App is the sole UI. Remote management uses system SSH with saved OpenSSH Host/Include aliases and a fixed `agenthub-webd rpc-stdio` command forwarding to the service-owned private Unix socket. Reuse native SSH identity, agent and jump settings without copying private keys or storing passwords. Keep protocol 2, command allowlists and connection revisions. Switching machines releases the owned channel, isolates previews, selection and cached responses; mutations are never replayed automatically. Only pending write requests block switching; accepted jobs continue in the service.
-- HTTP management, API Key authentication, static assets and EventSource are retired. Preserve business audit, Bark encryption and notification state. After the SSH service is healthy, remove only the owned API Key setting and AgentHub Nginx entry; shared Nginx/TLS and native provider databases remain intact. Desktop cleanup removes only old remote connection credentials, preserving the independent Codex queue credential store.
+- HTTP management, API Key authentication, static assets and EventSource are retired. Their completed migrations live in v2.1.0; support fresh installs and already migrated configurations. Preserve business audit, Bark encryption, notification state and the independent Codex queue credential store.
 
 Grok activity display uses one native-process snapshot per list and bounded incremental event reads. Deletion locates every matching native ID directory without parsing summaries or checking ownership, and removes corresponding active_sessions registrations. Prefer updates.jsonl for reading; when absent, map native chat_history.jsonl user, assistant and tool records into the existing history, search and timeline. System prompts, system_reminder and encrypted reasoning are not conversation content. Claude empty and metadata-only records remain readable without cwd or version.
 
@@ -61,7 +61,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围，expectedCount 不再比较。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
 - Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理与本机通知。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
-- Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
+- Pi 活动契约、读取、管理、界面和监测全部退役，未知命令统一拒绝，不维护退役命令墓碑表。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
 - 发布前检查当前树、索引、可达历史和资产。仅发现可达历史敏感值时才按授权重写；平台保留的不可达对象另行记录，不声称已完全擦除。
 
@@ -73,10 +73,16 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 子智能体能力缺失时按不支持处理，API 协议保持 2；机器切换关闭面板、隔离缓存并丢弃迟到响应。
 - Hook 集成测试必须启动本次 Cargo 构建的 CLI；不得跳过测试或借用已安装的正式服务。浏览器、Tauri 与真实入口验收分别记录。
 
+## SSH 恢复与配置管理
+
+- 现有刷新／请求发现断线才恢复连接，同轮共享握手；读取最多自动重试一次，前端查询不叠加远程重试，写操作不重放。传输失败或超时立即关闭通道，业务错误保留通道。恢复不增加连接修订号，不重置页面；切机或退出丢弃旧握手。
+- remote.sshDelete 仅接受 revision 和 alias。删除用户及 Include 中的全部显式定义，多别名仅去掉所选项，系统配置拒绝删除。保留注释、文件权限和其他配置，原子替换并在失败时报告；删除当前目标释放 SSH 并回本机。
+- 日志按 CR／LF／CRLF 整条解码脱敏后，在原读取任务中累计 16KiB 或 200ms 写库，结束前排空；不增加日志后台任务、状态文件或任意单行硬上限。
+
 ## 凭据边界
 
 - Keychain 读写统一经过 `CredentialAccess`，不在异步执行线程直接调用阻塞凭据 API。读取超时仍保留在执行工作所持许可，避免并发堆积。
-- 保存与移除连接使用现有变更保护与原子配置写入；切换或退出时释放自有 SSH 进程。旧远程钥匙串条目清理仍通过 CredentialAccess。
+- 保存与移除连接使用现有变更保护与原子配置写入；切换或退出时释放自有 SSH 进程。CredentialAccess 独立于 SSH，只服务现用凭据，旧远程钥匙串迁移由 v2.1.0 完成。
 - SSH 能力验证保持连接变更保护；请求校验修订号及目标，丢弃迟到响应。固定错误消息不含原生异常、Key 或地址。测试不得访问真实钥匙串。
 - 桌面与 monitor 共用运行配置密钥入口；新环境在既有受限 env 文件生成随机密钥，有效密钥保留，配置损坏或密钥异常明确报错。支持空库和 schema 3，旧库须先经过 v2.0.10；不再预开数据库或抽样解密，密文在实际读取时校验，不触碰独立 Keychain 管理的 Codex 发送队列。
 
@@ -90,14 +96,14 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 界面说明
 
-Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，保留状态、错误及确认对象；“全平台实时态势”沿用原聚合和数量限制。执行记录列表只返回摘要，展开用 jobs.detail 读取完整日志。
+Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，保留状态、错误及确认对象；“全平台实时态势”沿用原聚合和数量限制。执行记录列表与运行中后台轮询只返回摘要；jobs.detail 的 includeOutput 默认 true，后台传 false，展开或进入终态读取全文。
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；保留一次确认及固定目标范围，沿用各平台已有写入校验。
 
 ## 指令与通知边界
 
 - 完整原生 INSTRUCTIONS 包装允许结束标签与后续环境标签同行；内部标题不能截断折叠。代码、引用示例与不完整结构保持保守处理，原生会话不写回。
-- Gotify 已退役；只允许迁移代码和不可执行契约 tombstone 引用旧标识。移除其配置、Token、队列、测试任务和投递字段时，必须保留 Bark 凭据、基线、成功/未知记录及待投递状态。
+- Gotify 已退役；配置迁移由 v2.1.0 完成，不维护旧标识扫描门禁或不可执行契约墓碑。移除其配置、Token、队列、测试任务和投递字段时，必须保留 Bark 凭据、基线、成功/未知记录及待投递状态。
 - Bark 使用下述有限重试规则。接口协议保持 2，不改变 Provider 或事件识别规则。
 - 外部通知服务卸载归运维仓库，须明确配置与数据归属；不改共用 Nginx/TLS、其他服务或用户原生会话。
 
@@ -109,7 +115,7 @@ Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，�
 - 网络失败、结果未知和明确临时拒绝可重试；凭据、证书验证、重定向、非法请求及已知永久 APNs 拒绝不能重试。日志仅含安全分类、状态码、耗时、次数和匿名身份，不含原始异常、地址、Key 或正文。
 - 使用加密不可变队列、持久化分段确认与带归属校验的租约。成功分段不重发，Hook 不等待后台重试，monitor 每轮最多处理 10 项。每次重试及来源复核后重新读取配置、核对当前状态和目标；正常追加不等于来源变化。
 - 原生待发正文使用已有加密组件；交接给 Bark 队列及终态后清除原生正文副本，只保留去重身份、结果及界面短摘要。升级保留基线、认领、重试与成功分段；保留期清理包含 unknown 终态，但保留当前游标需要的最小去重身份，游标推进后再清理。空闲轮询不重写未变游标，不执行无变化的全历史同步。稳定 Bark ID 不能被描述为绝对去重保证。
-- 测试通知使用“AgentHub 推送测试”与机器来源正文，作业等待真实终态，HTTP 成功且 Bark code=200 才算受理。旧配置导入仅保留不可执行入口。
+- 测试通知使用“AgentHub 推送测试”与机器来源正文，作业等待真实终态，HTTP 成功且 Bark code=200 才算受理。不提供旧配置导入入口。
 
 ## 历史与大小边界
 

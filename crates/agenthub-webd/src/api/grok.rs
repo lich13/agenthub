@@ -1,11 +1,6 @@
-use super::{http_update_platform, ok, ApiResponse};
+use super::{linux_update_platform, ok, ApiResponse};
 use crate::state::AppState;
 use agenthub_core::{grok::GrokDeleteRequest, services::use_cases::AgentHubUseCases};
-use axum::{
-    extract::{Path, Query, State},
-    http::HeaderMap,
-    Json,
-};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -20,13 +15,9 @@ pub(crate) struct GrokDetailQuery {
     pub before: Option<String>,
 }
 
-pub(crate) async fn grok_list(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Query(query): Query<GrokListQuery>,
-) -> ApiResponse {
+pub(crate) async fn grok_list(_state: AppState, query: GrokListQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .grok()
             .list(query.limit.unwrap_or(50), query.q.as_deref())
     })
@@ -35,13 +26,12 @@ pub(crate) async fn grok_list(
 }
 
 pub(crate) async fn grok_detail(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Path(id): Path<String>,
-    Query(query): Query<GrokDetailQuery>,
+    _state: AppState,
+    id: String,
+    query: GrokDetailQuery,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform()).grok().page(
+        AgentHubUseCases::new(&linux_update_platform()).grok().page(
             &id,
             query.limit,
             query.before.as_deref(),
@@ -57,24 +47,16 @@ pub(crate) struct GrokRenameRequest {
     pub title: String,
 }
 
-pub(crate) async fn grok_rename(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<GrokRenameRequest>,
-) -> ApiResponse {
-    ok(AgentHubUseCases::new(&http_update_platform())
+pub(crate) async fn grok_rename(_state: AppState, request: GrokRenameRequest) -> ApiResponse {
+    ok(AgentHubUseCases::new(&linux_update_platform())
         .grok()
         .rename(&request.id, &request.title)
         .await?)
 }
 
-pub(crate) async fn grok_delete_preview(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResponse {
+pub(crate) async fn grok_delete_preview(_state: AppState, id: String) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .grok()
             .delete_preview(&id)
     })
@@ -83,12 +65,11 @@ pub(crate) async fn grok_delete_preview(
 }
 
 pub(crate) async fn grok_delete_execute(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<GrokDeleteRequest>,
+    _state: AppState,
+    request: GrokDeleteRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .grok()
             .delete_execute(request)
     })

@@ -27,10 +27,6 @@ mod tests {
             .collect()
     }
 
-    fn command_path(module: &str, name: &str) -> String {
-        format!("commands::{module}::{name}")
-    }
-
     fn contract_actions() -> Vec<serde_json::Value> {
         let raw = include_str!("../../contracts/agenthub-contract.json");
         let value: serde_json::Value =
@@ -40,14 +36,6 @@ mod tests {
             .and_then(serde_json::Value::as_array)
             .expect("contract actions must be an array")
             .clone()
-    }
-
-    fn retired_compat_path(module: &str, stem: &str) -> String {
-        command_path(module, &format!("{stem}_{}", "command"))
-    }
-
-    fn concat_token(parts: &[&str]) -> String {
-        parts.concat()
     }
 
     #[test]
@@ -120,54 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn tauri_invoke_handler_excludes_retired_desktop_command_compat_wrappers() {
-        let commands = registered_invoke_command_paths();
-        for command in &commands {
-            let Some(name) = command.rsplit("::").next() else {
-                continue;
-            };
-            assert!(
-                !(name.starts_with("desktop_") && name.ends_with("_command")),
-                "desktop_*_command compatibility command must not be registered: {command}"
-            );
-        }
-        for retired in [
-            command_path("settings", "startProbeJob"),
-            command_path("updates", "runUpdateAction"),
-            command_path("updates", "updatesPrune"),
-            command_path("system", "getDesktopOverview"),
-            command_path("system", "getDesktopHome"),
-            command_path("system", "getDesktopPlatformStatus"),
-            command_path("system", "getDesktopClaudeCodeOverview"),
-        ] {
-            assert!(
-                !commands.contains(&retired),
-                "retired or Linux-only update command must not be registered: {retired}"
-            );
-        }
-        for (module, stem) in [
-            ("threads", "desktop_threads"),
-            ("threads", "desktop_thread_detail"),
-            ("probe", "desktop_probe_status"),
-            ("settings", "desktop_archive_plan"),
-            ("settings", "desktop_hidden_plan"),
-            ("settings", "desktop_open_config_dir"),
-            ("settings", "desktop_open_log_dir"),
-            ("settings", "desktop_save_goal"),
-            ("settings", "desktop_clear_goal"),
-            ("settings", "desktop_pause_goal"),
-            ("settings", "desktop_resume_goal"),
-            ("settings", "desktop_upload_files"),
-        ] {
-            let retired = retired_compat_path(module, stem);
-            assert!(
-                !commands.contains(&retired),
-                "unused desktop compatibility command must not be registered: {retired}"
-            );
-        }
-    }
-
-    #[test]
     fn tauri_invoke_handler_matches_contract_registry() {
         let registered = registered_invoke_command_paths()
             .into_iter()
@@ -187,132 +127,6 @@ mod tests {
             registered, expected,
             "Tauri invoke registration must be declared by contracts/agenthub-contract.json"
         );
-    }
-
-    #[test]
-    fn tauri_invoke_handler_keeps_desktop_compat_out_of_frontend_workflows() {
-        let commands = registered_invoke_command_paths();
-        for typed in [
-            command_path("system", "getSystemCapabilities"),
-            command_path("system", "getSystemVersion"),
-            command_path("system", "listProviders"),
-            command_path("system", "getPlatformOverview"),
-            command_path("threads", "listThreads"),
-            command_path("threads", "getThread"),
-            command_path("threads", "getThreadBlocks"),
-            command_path("threads", "archiveThread"),
-            command_path("threads", "restoreThread"),
-            command_path("threads", "renameThread"),
-            command_path("probe", "getProbeStatus"),
-            command_path("updates", "getUpdateStatus"),
-            command_path("updates", "updatesCheck"),
-            command_path("updates", "updatesInstall"),
-            command_path("settings", "getProbeSettings"),
-            command_path("settings", "saveProbeSettings"),
-            command_path("settings", "getProbeEvents"),
-            command_path("settings", "probeBarkTest"),
-            command_path("settings", "probeInstallHooks"),
-            command_path("settings", "probeRemoveHooks"),
-            command_path("settings", "dryRunArchiveDelete"),
-            command_path("settings", "startArchiveDelete"),
-            command_path("settings", "dryRunHiddenThreadDelete"),
-            command_path("settings", "startHiddenThreadDelete"),
-            command_path("jobs", "listJobs"),
-            command_path("jobs", "getJob"),
-            command_path("grok", "listGrokSessions"),
-            command_path("grok", "getGrokSession"),
-            command_path("grok", "renameGrokSession"),
-            command_path("grok", "previewGrokSessionDelete"),
-            command_path("grok", "deleteGrokSession"),
-        ] {
-            assert!(
-                commands.contains(&typed),
-                "typed desktop command must be registered: {typed}"
-            );
-        }
-
-        for command in &commands {
-            let Some(name) = command.rsplit("::").next() else {
-                continue;
-            };
-            assert!(
-                !name.starts_with("desktop_"),
-                "frontend workflow must use typed command registration instead of desktop_* compat: {command}"
-            );
-        }
-    }
-
-    #[test]
-    fn tauri_invoke_handler_registers_only_typed_probe_and_update_commands() {
-        let commands = registered_invoke_command_paths();
-        for legacy in [
-            command_path("updates", "checkUpdate"),
-            command_path("updates", "installUpdateAndRestart"),
-            command_path("settings", "startProbeBarkTest"),
-            command_path("settings", "startProbeHooksInstall"),
-            command_path("settings", "startProbeLogsDbDryRun"),
-            command_path("settings", "startProbeLogsDbExecute"),
-            command_path("system", "getDesktopOverview"),
-            command_path("system", "getDesktopHome"),
-            command_path("system", "getDesktopPlatformStatus"),
-            command_path("system", "getDesktopClaudeCodeOverview"),
-        ] {
-            assert!(
-                !commands.contains(&legacy),
-                "legacy WebUI compatibility command must not be registered in Tauri: {legacy}"
-            );
-        }
-    }
-
-    #[test]
-    fn tauri_command_modules_do_not_define_legacy_probe_or_update_wrappers() {
-        for (source, legacy) in [
-            (
-                include_str!("commands/updates.rs"),
-                "pub async fn checkUpdate",
-            ),
-            (
-                include_str!("commands/updates.rs"),
-                "pub async fn installUpdateAndRestart",
-            ),
-            (
-                include_str!("commands/settings.rs"),
-                "pub fn startProbeBarkTest",
-            ),
-            (
-                include_str!("commands/settings.rs"),
-                "pub fn startProbeHooksInstall",
-            ),
-            (
-                include_str!("commands/settings.rs"),
-                "pub fn startProbeLogsDbDryRun",
-            ),
-            (
-                include_str!("commands/settings.rs"),
-                "pub fn startProbeLogsDbExecute",
-            ),
-            (
-                include_str!("commands/system.rs"),
-                "pub fn getDesktopOverview",
-            ),
-            (
-                include_str!("commands/system.rs"),
-                "pub async fn getDesktopHome",
-            ),
-            (
-                include_str!("commands/system.rs"),
-                "pub async fn getDesktopPlatformStatus",
-            ),
-            (
-                include_str!("commands/system.rs"),
-                "pub fn getDesktopClaudeCodeOverview",
-            ),
-        ] {
-            assert!(
-                !source.contains(legacy),
-                "legacy Tauri command wrapper must not be defined: {legacy}"
-            );
-        }
     }
 
     #[test]
@@ -501,30 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn tauri_thread_job_submission_is_retired() {
-        let source = [
-            production_lib_source(),
-            include_str!("commands/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in [
-            "commands::threads::createThread",
-            "commands::threads::sendMessage",
-            "commands::threads::stopThread",
-            "commands::threads::forkThread",
-            "commands::settings::saveCodexGoal",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "retired execution must not be reachable: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
     fn tauri_settings_commands_use_core_settings_view_and_secret_write_plans() {
         let settings_commands_source = include_str!("commands/settings.rs")
             .split("\n#[cfg(test)]\nmod tests")
@@ -559,24 +349,6 @@ mod tests {
             !settings_source.contains("if let Some(device_key) = plan.bark_device_key"),
             "Tauri settings adapter must not special-case Probe secret writes outside the core plan"
         );
-    }
-
-    #[test]
-    fn tauri_settings_service_is_retired() {
-        let source = [
-            production_lib_source(),
-            include_str!("commands/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in ["goal_service", "GoalRequest", "execute_goal_command"] {
-            assert!(
-                !source.contains(forbidden),
-                "retired execution must not be reachable: {forbidden}"
-            );
-        }
     }
 
     #[test]
@@ -655,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn tauri_retains_cleanup_and_archive_without_goal_or_followup_execution() {
+    fn tauri_retains_cleanup_and_archive() {
         let settings = include_str!("services/settings.rs");
         let threads = include_str!("services/threads.rs");
         for required in [
@@ -674,45 +446,6 @@ mod tests {
             assert!(
                 threads.contains(required),
                 "native task management must remain: {required}"
-            );
-        }
-        for forbidden in [
-            ".uploads()",
-            ".goals()",
-            ".apply_enqueue_followup(",
-            ".apply_cancel_followup(",
-            ".resolve_stop(",
-            "execute_goal_command",
-        ] {
-            assert!(
-                !settings.contains(forbidden) && !threads.contains(forbidden),
-                "retired task mutation: {forbidden}"
-            );
-        }
-        assert!(!std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/services/goals.rs")
-            .exists());
-    }
-
-    #[test]
-    fn tauri_thread_approval_is_retired() {
-        let source = [
-            production_lib_source(),
-            include_str!("commands/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in [
-            "approve_plan",
-            "answer_questions",
-            "fork_thread",
-            "stop_thread",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "retired execution must not be reachable: {forbidden}"
             );
         }
     }
@@ -820,69 +553,6 @@ mod tests {
     }
 
     #[test]
-    fn tauri_goal_commands_is_retired() {
-        let source = [
-            production_lib_source(),
-            include_str!("commands/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in [
-            "goal_get",
-            "goal_save",
-            "goal_pause",
-            "goal_resume",
-            "goal_clear",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "retired execution must not be reachable: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn tauri_command_guard_does_not_embed_retired_compat_tokens_in_tests() {
-        let test_source = include_str!("lib.rs")
-            .split("\n#[cfg(test)]")
-            .nth(1)
-            .expect("lib source must include test section");
-        for retired in [
-            command_path("settings", "startProbeJob"),
-            command_path("updates", "runUpdateAction"),
-            command_path("updates", "updatesPrune"),
-            command_path("updates", "pruneBackups"),
-        ] {
-            assert!(
-                !test_source.contains(&retired),
-                "tests must not embed retired string action command token: {retired}"
-            );
-        }
-        for (module, stem) in [
-            ("threads", "desktop_threads"),
-            ("threads", "desktop_thread_detail"),
-            ("probe", "desktop_probe_status"),
-            ("settings", "desktop_archive_plan"),
-            ("settings", "desktop_hidden_plan"),
-            ("settings", "desktop_open_config_dir"),
-            ("settings", "desktop_open_log_dir"),
-            ("settings", "desktop_save_goal"),
-            ("settings", "desktop_clear_goal"),
-            ("settings", "desktop_pause_goal"),
-            ("settings", "desktop_resume_goal"),
-            ("settings", "desktop_upload_files"),
-        ] {
-            let retired = retired_compat_path(module, stem);
-            assert!(
-                !test_source.contains(&retired),
-                "tests must not embed retired compatibility command token: {retired}"
-            );
-        }
-    }
-
-    #[test]
     fn macos_tauri_sources_do_not_suggest_linux_host_repair_steps() {
         for (label, source) in [
             ("commands/updates.rs", include_str!("commands/updates.rs")),
@@ -903,41 +573,6 @@ mod tests {
                     "macOS Tauri source must not suggest Linux host repair step {forbidden} in {label}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn tauri_invoke_handler_excludes_linux_web_host_command_surfaces() {
-        let commands = registered_invoke_command_paths();
-        for parts in [
-            &["get", "Security"][..],
-            &["save", "Security"][..],
-            &["security", "Status"][..],
-            &["change", "Password"][..],
-            &["security", "_status"][..],
-            &["auth", "Status"][..],
-            &["log", "in"][..],
-            &["log", "out"][..],
-            &["cs", "rf"][..],
-            &["turn", "stile"][..],
-            &["admin", "_password"][..],
-            &["system", "d"][..],
-            &["System", "d"][..],
-            &["ngi", "nx"][..],
-            &["Nginx"][..],
-            &["web", "Auth"][..],
-            &["web", "auth"][..],
-            &["system_update", "_prune"][..],
-            &["desktop_update", "_prune"][..],
-            &["prune", "_backups"][..],
-            &["Probe", "Job"][..],
-            &["run", "UpdateAction"][..],
-        ] {
-            let forbidden = concat_token(parts);
-            assert!(
-                commands.iter().all(|command| !command.contains(&forbidden)),
-                "macOS desktop invoke handler must not register Linux Web host command surface: {forbidden}"
-            );
         }
     }
 
@@ -1100,29 +735,5 @@ mod tests {
                 && !lib_source.contains("schedule_delayed_main_window_reveal"),
             "startup must not schedule a delayed second reveal"
         );
-    }
-
-    #[test]
-    fn tauri_goal_flat_invoke_abi_is_retired() {
-        let source = [
-            production_lib_source(),
-            include_str!("commands/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in [
-            "threads.goal.get",
-            "threads.goal.save",
-            "threads.goal.pause",
-            "threads.goal.resume",
-            "threads.goal.clear",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "retired execution must not be reachable: {forbidden}"
-            );
-        }
     }
 }

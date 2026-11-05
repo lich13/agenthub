@@ -79,7 +79,7 @@ impl AntigravityPaths {
     }
 
     pub fn available(&self) -> bool {
-        self.home.is_dir() || connect_endpoint(self).is_some()
+        self.home.is_dir() || connect_endpoint(self).is_ok_and(|endpoint| endpoint.is_some())
     }
 
     pub fn summaries_db(&self) -> PathBuf {
@@ -420,75 +420,99 @@ pub fn evict_idle_endpoint_cache(max_idle: Duration) {
     }
 }
 
-fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
+fn service_unreachable(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            ErrorKind::ConnectionRefused
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::TimedOut
+                | ErrorKind::WouldBlock
+                | ErrorKind::NotConnected
+                | ErrorKind::BrokenPipe
+        )
+    })
+}
+fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
+    let mut response_error = None;
+    let mut try_endpoint = |port: u16, token: &str| match connect_rpc_post(
+        port,
+        token,
+        "GetAllCascadeTrajectories",
+        &json!({"excludeSubtrajectories": false}),
+    ) {
+        Ok(mut value) => {
+            if value.is_object() && value.get("trajectorySummaries").is_none() {
+                value["trajectorySummaries"] = json!({});
+            }
+            if value["trajectorySummaries"].is_object() {
+                Some(value)
+            } else {
+                response_error = Some(anyhow::anyhow!("Antigravity 会话列表格式错误"));
+                None
+            }
+        }
+        Err(error) => {
+            if !service_unreachable(&error) {
+                response_error = Some(error);
+            }
+            None
+        }
+    };
     match &paths.rpc_mode {
-        RpcMode::OfflineOnly => None,
+        RpcMode::OfflineOnly => return Ok(None),
         RpcMode::Fixed { port, token } => {
-            let value = connect_rpc_post(
-                *port,
-                token,
-                "GetAllCascadeTrajectories",
-                &json!({"excludeSubtrajectories": false}),
-            )
-            .ok()?;
-            value["trajectorySummaries"].is_object().then_some((
-                LiveRpc {
-                    port: *port,
-                    token: token.clone(),
-                },
-                value,
-            ))
+            if let Some(value) = try_endpoint(*port, token) {
+                return Ok(Some((
+                    LiveRpc {
+                        port: *port,
+                        token: token.clone(),
+                    },
+                    value,
+                )));
+            }
         }
         RpcMode::AutoDiscover => {
             match get_cached_live_endpoint() {
                 Some(Ok(ep)) => {
                     for &port in &ep.ports {
-                        if let Ok(value) = connect_rpc_post(
-                            port,
-                            &ep.token,
-                            "GetAllCascadeTrajectories",
-                            &json!({"excludeSubtrajectories": false}),
-                        ) {
-                            if value["trajectorySummaries"].is_object() {
-                                return Some((
-                                    LiveRpc {
-                                        port,
-                                        token: ep.token,
-                                    },
-                                    value,
-                                ));
-                            }
+                        if let Some(value) = try_endpoint(port, &ep.token) {
+                            return Ok(Some((
+                                LiveRpc {
+                                    port,
+                                    token: ep.token,
+                                },
+                                value,
+                            )));
                         }
                     }
                 }
-                Some(Err(())) => return None,
+                Some(Err(())) => return Ok(None),
                 None => {}
             }
             let candidates = discover_host_endpoints();
             for ep in &candidates {
                 for &port in &ep.ports {
-                    if let Ok(value) = connect_rpc_post(
-                        port,
-                        &ep.token,
-                        "GetAllCascadeTrajectories",
-                        &json!({"excludeSubtrajectories": false}),
-                    ) {
-                        if value["trajectorySummaries"].is_object() {
-                            record_verified_live_endpoint(ep.pid, port, ep.token.clone());
-                            return Some((
-                                LiveRpc {
-                                    port,
-                                    token: ep.token.clone(),
-                                },
-                                value,
-                            ));
-                        }
+                    if let Some(value) = try_endpoint(port, &ep.token) {
+                        record_verified_live_endpoint(ep.pid, port, ep.token.clone());
+                        return Ok(Some((
+                            LiveRpc {
+                                port,
+                                token: ep.token.clone(),
+                            },
+                            value,
+                        )));
                     }
                 }
             }
             record_endpoint_failure(!candidates.is_empty());
-            None
         }
+    }
+    match response_error {
+        Some(error) => Err(error),
+        None => Ok(None),
     }
 }
 
@@ -1103,7 +1127,7 @@ fn list_summaries_filtered(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
 ) -> Result<Vec<ProviderSessionSummary>> {
-    let endpoint = connect_endpoint(paths);
+    let endpoint = connect_endpoint(paths)?;
     list_summaries_from_source(
         paths,
         filter_id,
@@ -1990,11 +2014,20 @@ pub fn load_all_events(
     id: &str,
 ) -> Result<std::sync::Arc<Vec<ProviderHistoryEvent>>> {
     valid_cascade_id(id)?;
-    let endpoint = connect_endpoint(paths);
+    let endpoint = connect_endpoint(paths)?;
     Ok(load_events_from_source(paths, id, endpoint.as_ref())?
         .events
         .clone())
 }
+
+#[derive(Debug)]
+struct LiveHistoryUnavailable;
+impl std::fmt::Display for LiveHistoryUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("原生历史服务不可达或暂无在线内容")
+    }
+}
+impl std::error::Error for LiveHistoryUnavailable {}
 
 fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
     let mut resp = connect_rpc_post(
@@ -2002,37 +2035,54 @@ fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>
         &rpc.token,
         "GetCascadeTrajectory",
         &json!({"cascadeId": id}),
-    )?;
-    let mut steps = resp["trajectory"]["steps"]
-        .as_array_mut()
-        .map(std::mem::take)
-        .unwrap_or_default();
-    let total = resp["numTotalSteps"].as_u64().unwrap_or(steps.len() as u64) as usize;
-    while steps.len() < total && steps.len() < 50_000 {
-        let offset = steps.len();
-        let Ok(mut more) = connect_rpc_post(
-            rpc.port,
-            &rpc.token,
-            "GetCascadeTrajectorySteps",
-            &json!({"cascadeId": id, "stepOffset": offset}),
-        ) else {
-            break;
-        };
-        let Some(batch) = more["steps"]
-            .as_array_mut()
-            .filter(|batch| !batch.is_empty())
-        else {
-            break;
-        };
-        steps.append(batch);
+    )
+    .map_err(|error| {
+        if service_unreachable(&error) {
+            anyhow::Error::new(LiveHistoryUnavailable)
+        } else {
+            error
+        }
+    })?;
+    if resp.is_object() && resp.get("trajectory").is_none() {
+        return Err(LiveHistoryUnavailable.into());
     }
     ensure!(
         resp["trajectory"]["cascadeId"].as_str() == Some(id),
         "原生历史身份不匹配"
     );
-    ensure!(steps.len() == total, "原生历史读取不完整，请重试");
+    let mut steps = match resp["trajectory"].get_mut("steps") {
+        Some(value) => value
+            .as_array_mut()
+            .map(std::mem::take)
+            .context("原生历史步骤格式错误")?,
+        None => Vec::new(),
+    };
+    let total = match resp.get("numTotalSteps") {
+        Some(value) => value.as_u64().context("原生历史总数格式错误")? as usize,
+        None => steps.len(),
+    };
+    if steps.is_empty() && total == 0 {
+        return Err(LiveHistoryUnavailable.into());
+    }
+    ensure!(!steps.is_empty(), "原生历史读取不完整，请重试");
+    while steps.len() < total {
+        let mut more = connect_rpc_post(
+            rpc.port,
+            &rpc.token,
+            "GetCascadeTrajectorySteps",
+            &json!({"cascadeId": id, "stepOffset": steps.len()}),
+        )?;
+        if let Some(cascade_id) = more.get("cascadeId") {
+            ensure!(cascade_id.as_str() == Some(id), "原生历史身份不匹配");
+        }
+        let batch = more["steps"]
+            .as_array_mut()
+            .context("原生历史分页格式错误")?;
+        ensure!(!batch.is_empty(), "原生历史读取不完整，请重试");
+        steps.append(batch);
+    }
     let events = extract_live_step_events(id, &steps);
-    ensure!(!events.is_empty() || steps.is_empty(), "原生历史尚不可读取");
+    ensure!(!events.is_empty(), "原生历史尚不可读取");
     Ok(events)
 }
 
@@ -2058,8 +2108,10 @@ fn load_events_from_source(
             history_weight,
             || read_live_events(rpc, id).map(ProviderHistorySnapshot::new),
         );
-        if events.is_ok() {
-            return events;
+        match events {
+            Ok(events) => return Ok(events),
+            Err(error) if error.is::<LiveHistoryUnavailable>() => {}
+            Err(error) => return Err(error),
         }
     }
     let logs = paths.brain_dir().join(id).join(".system_generated/logs");
@@ -2085,7 +2137,7 @@ fn summary_and_events(
     std::sync::Arc<ProviderHistorySnapshot>,
 )> {
     valid_cascade_id(id)?;
-    let endpoint = connect_endpoint(paths);
+    let endpoint = connect_endpoint(paths)?;
     let summary =
         list_summaries_from_source(paths, Some(id), endpoint.as_ref().map(|(_, value)| value))?
             .into_iter()
@@ -2135,7 +2187,7 @@ pub fn rename_session(
     ensure!(!title.is_empty(), "会话名称不能为空");
     let _existing = session_summary(paths, key)?;
 
-    if let Some((rpc, _)) = connect_endpoint(paths) {
+    if let Some((rpc, _)) = connect_endpoint(paths)? {
         connect_rpc_post(
             rpc.port,
             &rpc.token,
@@ -2174,7 +2226,7 @@ pub fn set_archived(
     valid_cascade_id(key)?;
     let _existing = session_summary(paths, key)?;
 
-    if let Some((rpc, _)) = connect_endpoint(paths) {
+    if let Some((rpc, _)) = connect_endpoint(paths)? {
         connect_rpc_post(
             rpc.port,
             &rpc.token,
@@ -2375,7 +2427,7 @@ pub fn preview_batch_item(
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
     let summary = session_summary(paths, key)?;
-    let (live_rpc, all_live) = match connect_endpoint(paths) {
+    let (live_rpc, all_live) = match connect_endpoint(paths)? {
         Some((rpc, live)) => (
             Some(rpc),
             (operation == SessionOperation::Delete).then_some(live),
@@ -2483,7 +2535,7 @@ pub fn execute_batch_item(
         }
         SessionOperation::Delete => {
             let summary = session_summary(paths, key)?;
-            let (live_rpc, all_live) = match connect_endpoint(paths) {
+            let (live_rpc, all_live) = match connect_endpoint(paths)? {
                 Some((rpc, live)) => (Some(rpc), Some(live)),
                 None => (None, None),
             };
@@ -2878,24 +2930,42 @@ mod tests {
                     }
                 } else if req_line.contains("GetCascadeTrajectory ") {
                     server_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    json!({
-                        "numTotalSteps": if guard.4 == 1 { 3 } else { 2 },
-                        "trajectory": {
-                            "cascadeId": if guard.4 == 2 { "fixture-mismatched" } else { &server_id },
-                            "steps": [
-                                {
-                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
-                                    "status": "CORTEX_STEP_STATUS_DONE",
-                                    "userInput": { "items": [{ "text": "你好 Antigravity" }] }
-                                },
-                                {
-                                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
-                                    "status": "CORTEX_STEP_STATUS_DONE",
-                                    "plannerResponse": { "response": "你好！我是 Antigravity。" }
-                                }
-                            ]
-                        }
-                    })
+                    if guard.4 == 5 {
+                        json!({"trajectory":{"cascadeId":server_id}})
+                    } else if guard.4 == 6 {
+                        json!({})
+                    } else if guard.4 == 7 {
+                        json!({"numTotalSteps":1,"trajectory":{"cascadeId":server_id}})
+                    } else {
+                        json!({
+                            "numTotalSteps": if [1, 3, 4].contains(&guard.4) { 3 } else { 2 },
+                            "trajectory": {
+                                "cascadeId": if guard.4 == 2 { "fixture-mismatched" } else { &server_id },
+                                "steps": [
+                                    {
+                                        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                        "status": "CORTEX_STEP_STATUS_DONE",
+                                        "userInput": { "items": [{ "text": "你好 Antigravity" }] }
+                                    },
+                                    {
+                                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                        "status": "CORTEX_STEP_STATUS_DONE",
+                                        "plannerResponse": { "response": "你好！我是 Antigravity。" }
+                                    }
+                                ]
+                            }
+                        })
+                    }
+                } else if req_line.contains("GetCascadeTrajectorySteps") {
+                    assert_eq!(json_body["stepOffset"], 2);
+                    match guard.4 {
+                        3 => json!({"steps": [
+                            {"type":"CORTEX_STEP_TYPE_USER_INPUT", "userInput":{"items":[{"text":"追加请求"}]}},
+                            {"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE", "plannerResponse":{"response":"追加回复"}}
+                        ]}),
+                        4 => json!({"steps":"invalid"}),
+                        _ => json!({"steps":[]}),
+                    }
                 } else if req_line.contains("UpdateConversationAnnotations") {
                     if let Some(t) = json_body["annotations"]["title"].as_str() {
                         guard.0 = t.to_owned();
@@ -2956,13 +3026,19 @@ mod tests {
         assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 4);
 
         // Incomplete pages and a mismatched identity must never populate the live cache.
-        for invalid in [1, 2] {
+        for invalid in [1, 2, 4, 7] {
             state.lock().unwrap().4 = invalid;
             let before = reads.load(std::sync::atomic::Ordering::Relaxed);
-            assert!(load_all_events(&paths, &id).unwrap().is_empty());
-            assert!(load_all_events(&paths, &id).unwrap().is_empty());
+            assert!(load_all_events(&paths, &id).is_err());
+            assert!(load_all_events(&paths, &id).is_err());
             assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), before + 2);
         }
+        for empty in [5, 6] {
+            state.lock().unwrap().4 = empty;
+            assert!(load_all_events(&paths, &id).unwrap().is_empty());
+        }
+        state.lock().unwrap().4 = 3;
+        assert_eq!(load_all_events(&paths, &id).unwrap().len(), 4);
         state.lock().unwrap().4 = 0;
 
         let renamed = rename_session(&paths, &id, "RPC 改名成功").unwrap();

@@ -12,8 +12,6 @@ use std::{
 };
 
 pub const DEFAULT_HOST_LABEL: &str = "AgentHub";
-const LEGACY_PRECHECK_COMMAND_SIMPLE: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
-const LEGACY_PRECHECK_COMMAND_WITH_AUDIT: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && readlink -f /usr/local/bin/codex && readlink -f /usr/local/bin/codex-raw && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && sqlite3 /root/.codex/state_5.sqlite \"select count(*) total, sum(archived_at is null) active, sum(archived_at is not null) archived from threads;\" && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -558,14 +556,10 @@ impl Config {
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let migrated = migrate_all_retired_config(&text)?;
-        let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
-            .with_context(|| format!("parse config {}", path.display()))?;
+        let mut config: Self =
+            toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
         config.load_sibling_env(path)?;
         config.normalize()?;
-        if let Some(updated) = migrated {
-            replace_config_atomically(path, &text, &updated)?;
-        }
         Ok(config)
     }
 
@@ -659,28 +653,10 @@ impl Config {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
         self.probe.normalize();
-        if is_legacy_precheck_command(&self.update.precheck_command) {
-            self.update.precheck_command = default_precheck_command();
-        }
-        if self.update.precheck_command == "/usr/local/bin/codex-cloud-panel-codex-precheck" {
-            self.update.precheck_command = default_precheck_command();
-        }
-        if self.update.update_command == "/usr/local/bin/codex-cloud-panel-codex-update" {
-            self.update.update_command = default_update_command();
-        }
-        if self.update.prune_command == "/usr/local/bin/codex-cloud-panel-codex-prune" {
-            self.update.prune_command = default_prune_command();
-        }
         if self.update.panel_update_command.trim().is_empty() {
             self.update.panel_update_command = default_panel_update_command();
         }
-        if crate::update::is_legacy_panel_update(&self.update.panel_update_command) {
-            self.update.panel_update_command = default_panel_update_command();
-        }
         if self.update.panel_precheck_command.trim().is_empty() {
-            self.update.panel_precheck_command = default_panel_precheck_command();
-        }
-        if crate::update::is_legacy_panel_precheck(&self.update.panel_precheck_command) {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
         Ok(())
@@ -732,11 +708,6 @@ impl ProbeConfig {
             self.observability.hook_cooldown_max_lines.clamp(10, 10_000);
         self.observability.log_max_bytes = self.observability.log_max_bytes.clamp(4_096, 8_388_608);
     }
-}
-
-fn is_legacy_precheck_command(value: &str) -> bool {
-    let normalized = value.trim();
-    normalized == LEGACY_PRECHECK_COMMAND_SIMPLE || normalized == LEGACY_PRECHECK_COMMAND_WITH_AUDIT
 }
 
 fn env_file_value(text: &str, key: &str) -> Option<String> {
@@ -859,7 +830,6 @@ fn non_auto_string(value: Option<&str>) -> Option<&str> {
 
 pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Result<String> {
     let mut editor = TomlPatchEditor::new(text);
-    remove_legacy_app_server_patch_keys(&mut editor);
     if let Some(codex) = patch.codex.as_ref() {
         if let Some(home) = codex.home.as_ref() {
             match non_auto_string(home.as_deref()) {
@@ -1036,158 +1006,6 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
     Ok(editor.finish())
 }
 
-const RETIRED_CONFIG_KEYS: &[&str] = &[
-    "logs_db",
-    "auto_resume_goals",
-    "cookie_secure",
-    "session_ttl_seconds",
-    "login_rate_limit_per_minute",
-    "turnstile_expected_hostname",
-    "turnstile_expected_action",
-    "public_base_url",
-    "trust_forwarded_headers",
-    "webui_dir",
-    "notify_pi",
-    "gotify",
-];
-
-fn migrate_all_retired_config(text: &str) -> Result<Option<String>> {
-    if !RETIRED_CONFIG_KEYS.iter().any(|key| text.contains(key)) {
-        return Ok(None);
-    }
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let mut changed = false;
-    changed |= migrate_retired_logs_db_doc(&mut doc)?;
-    changed |= migrate_retired_probe_goal_doc(&mut doc);
-    changed |= migrate_retired_web_doc(&mut doc);
-    changed |= migrate_retired_pi_doc(&mut doc);
-    changed |= migrate_retired_push_doc(&mut doc);
-    Ok(changed.then(|| doc.to_string()))
-}
-
-fn migrate_retired_push_doc(doc: &mut toml_edit::DocumentMut) -> bool {
-    doc.get_mut("probe")
-        .and_then(|item| item.get_mut("notifications"))
-        .and_then(|item| item.as_table_like_mut())
-        .is_some_and(|table| table.remove("gotify").is_some())
-}
-
-/// Remove retired push settings while preserving all other values and comments,
-/// including credentials and inline or quoted table definitions.
-#[cfg(test)]
-fn migrate_retired_push_config(text: &str) -> Result<Option<String>> {
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    Ok(migrate_retired_push_doc(&mut doc).then(|| doc.to_string()))
-}
-
-fn migrate_retired_pi_doc(doc: &mut toml_edit::DocumentMut) -> bool {
-    let mut changed = false;
-    if let Some(notifications) = doc
-        .get_mut("probe")
-        .and_then(|item| item.get_mut("notifications"))
-        .and_then(|item| item.as_table_like_mut())
-    {
-        for key in ["notify_pi", "notify_pi_completion", "notify_pi_failure"] {
-            changed |= notifications.remove(key).is_some();
-        }
-    }
-    changed
-}
-
-#[cfg(test)]
-fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    Ok(migrate_retired_pi_doc(&mut doc).then(|| doc.to_string()))
-}
-
-fn migrate_retired_web_doc(doc: &mut toml_edit::DocumentMut) -> bool {
-    let mut changed = false;
-    if let Some(security) = doc
-        .get_mut("security")
-        .and_then(|item| item.as_table_like_mut())
-    {
-        for key in [
-            "cookie_secure",
-            "session_ttl_seconds",
-            "login_rate_limit_per_minute",
-            "turnstile_expected_hostname",
-            "turnstile_expected_action",
-        ] {
-            changed |= security.remove(key).is_some();
-        }
-    }
-    if let Some(server) = doc
-        .get_mut("server")
-        .and_then(|item| item.as_table_like_mut())
-    {
-        for key in ["public_base_url", "trust_forwarded_headers"] {
-            changed |= server.remove(key).is_some();
-        }
-    }
-    if let Some(paths) = doc
-        .get_mut("paths")
-        .and_then(|item| item.as_table_like_mut())
-    {
-        changed |= paths.remove("webui_dir").is_some();
-    }
-    changed
-}
-
-#[cfg(test)]
-fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    Ok(migrate_retired_web_doc(&mut doc).then(|| doc.to_string()))
-}
-
-fn migrate_retired_logs_db_doc(document: &mut toml_edit::DocumentMut) -> Result<bool> {
-    let Some(probe) = document
-        .get_mut("probe")
-        .and_then(toml_edit::Item::as_table_like_mut)
-    else {
-        return Ok(false);
-    };
-    let Some(old) = probe.remove("logs_db") else {
-        return Ok(false);
-    };
-    let retention = old
-        .get("retention_days")
-        .and_then(toml_edit::Item::as_integer)
-        .unwrap_or(2)
-        .clamp(1, 3_650);
-    if !probe.contains_key("observability") {
-        probe.insert(
-            "observability",
-            toml_edit::Item::Table(toml_edit::Table::new()),
-        );
-    }
-    let observability = probe
-        .get_mut("observability")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .context("probe.observability must be a table")?;
-    if !observability.contains_key("event_retention_days") {
-        observability.insert("event_retention_days", toml_edit::value(retention));
-    }
-    Ok(true)
-}
-
-#[cfg(test)]
-fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
-    let mut document = text.parse::<toml_edit::DocumentMut>()?;
-    Ok(migrate_retired_logs_db_doc(&mut document)?.then(|| document.to_string()))
-}
-
-/// Remove the retired AgentHub Goal recovery switch while preserving the rest
-/// of the user's configuration and comments.
-fn migrate_retired_probe_goal_doc(document: &mut toml_edit::DocumentMut) -> bool {
-    document
-        .get_mut("probe")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .and_then(|probe| probe.get_mut("error_monitor"))
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .and_then(|error_monitor| error_monitor.remove("auto_resume_goals"))
-        .is_some()
-}
-
 #[cfg(any(target_os = "macos", test))]
 fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
     use std::io::Write;
@@ -1210,50 +1028,6 @@ fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
         let _ = fs::remove_file(&candidate);
     }
     result
-}
-
-fn replace_config_atomically(path: &Path, original: &str, updated: &str) -> Result<()> {
-    use std::io::Write;
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        anyhow::bail!("configuration migration requires a regular file");
-    }
-    let candidate = path.with_extension(format!("migration-{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&candidate)?;
-    let result = (|| -> Result<()> {
-        file.set_permissions(metadata.permissions())?;
-        file.write_all(updated.as_bytes())?;
-        file.sync_all()?;
-        if fs::read_to_string(path)? != original {
-            anyhow::bail!("configuration changed during migration; retry");
-        }
-        fs::rename(&candidate, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&candidate);
-    }
-    result
-}
-
-fn remove_legacy_app_server_patch_keys(editor: &mut TomlPatchEditor) {
-    for key in [
-        "app_server_service",
-        "app_server_socket",
-        "bridge_enabled",
-        "bridge_transport",
-        "bridge_timeout_seconds",
-    ] {
-        editor.remove_key("codex", key);
-    }
-    editor.remove_key("probe.hooks", "reload_app_server_after_install");
 }
 
 struct TomlPatchEditor {
@@ -1630,11 +1404,6 @@ keep = "yes"
 
 [codex]
 home = "/root/.codex"
-app_server_service = "codex-app-server-root.service"
-app_server_socket = "/root/.codex/app-server.sock"
-bridge_enabled = true
-bridge_transport = "socket"
-bridge_timeout_seconds = 60
 host_label = "old-host"
 
 [probe]
@@ -1643,7 +1412,6 @@ poll_seconds = 15
 
 [probe.hooks]
 manage_stop_hook = true
-reload_app_server_after_install = true
 
 [probe.notifications]
 enabled = false
@@ -1675,128 +1443,11 @@ group = "old"
         assert!(output.contains("[custom]\nkeep = \"yes\""));
         assert!(output.contains("home = \"/srv/codex\""));
         assert!(output.contains("host_label = \"192.0.2.10\""));
-        assert!(!output.contains("app_server_service"));
-        assert!(!output.contains("app_server_socket"));
-        assert!(!output.contains("bridge_enabled"));
-        assert!(!output.contains("bridge_transport"));
-        assert!(!output.contains("bridge_timeout_seconds"));
-        assert!(!output.contains("reload_app_server_after_install"));
         assert!(output.contains("[probe]\nenabled = false\npoll_seconds = 30"));
         assert!(output.contains("recent_limit = 80"));
         assert!(output.contains("[probe.notifications]"));
         assert!(output.contains("enabled = true"));
         assert!(output.contains("group = \"AgentHub\""));
-        assert!(!output.contains("logs_db"));
-    }
-
-    #[test]
-    fn retired_maintenance_migration_preserves_credentials_and_retention() {
-        let input = r#"# retained comment
-[server]
-listen = "127.0.0.1:15742"
-public_base_url = "https://panel.example.com/agenthub/"
-[security]
-turnstile_expected_hostname = "panel.example.com"
-[probe.notifications]
-enabled = true
-group = "saved-group"
-[probe.logs_db]
-retention_days = 7
-compact_enabled = true
-[custom]
-token = "fixture-not-a-real-secret"
-"#;
-        let updated = super::migrate_retired_logs_db_section(input)
-            .unwrap()
-            .unwrap();
-        let old: toml::Value = toml::from_str(input).unwrap();
-        let new: toml::Value = toml::from_str(&updated).unwrap();
-        for key in ["server", "security", "custom"] {
-            assert_eq!(old[key], new[key]);
-        }
-        assert_eq!(old["probe"]["notifications"], new["probe"]["notifications"]);
-        assert_eq!(
-            new["probe"]["observability"]["event_retention_days"].as_integer(),
-            Some(7)
-        );
-        assert!(new["probe"].get("logs_db").is_none());
-        assert!(updated.contains("# retained comment"));
-        assert!(super::migrate_retired_logs_db_section(&updated)
-            .unwrap()
-            .is_none());
-        let inline = r#"probe = { logs_db = { retention_days = 7 }, observability = { event_retention_days = 3 } }"#;
-        let updated = super::migrate_retired_logs_db_section(inline)
-            .unwrap()
-            .unwrap();
-        let parsed: toml::Value = toml::from_str(&updated).unwrap();
-        assert_eq!(
-            parsed["probe"]["observability"]["event_retention_days"].as_integer(),
-            Some(3)
-        );
-        assert!(parsed["probe"].get("logs_db").is_none());
-    }
-
-    #[test]
-    fn loading_old_config_migrates_once_and_preserves_file_mode() {
-        let directory =
-            std::env::temp_dir().join(format!("config-upgrade-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("config.toml");
-        let text = format!(
-            "{}\n[probe.logs_db]\nretention_days = 7\n[probe.notifications.gotify]\nenabled = true\n",
-            toml::to_string_pretty(&Config::default()).unwrap()
-        );
-        // An explicit existing observability preference takes precedence.
-        std::fs::write(&path, text).unwrap();
-        #[cfg(unix)]
-        let initial_ino = {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-            std::fs::metadata(&path).unwrap().ino()
-        };
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.probe.observability.event_retention_days, 2);
-        assert_eq!(loaded.probe.notifications.group, "AgentHub");
-        let migrated = std::fs::read(&path).unwrap();
-        let migrated_text = String::from_utf8_lossy(&migrated);
-        assert!(!migrated_text.contains("[probe.logs_db]"));
-        assert!(!migrated_text.contains("gotify"));
-        assert!(migrated_text.contains("group = \"AgentHub\""));
-        assert!(super::migrate_retired_push_config(&migrated_text)
-            .unwrap()
-            .is_none());
-        let migrated_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-        #[cfg(unix)]
-        let migrated_ino = {
-            use std::os::unix::fs::MetadataExt;
-            let ino = std::fs::metadata(&path).unwrap().ino();
-            assert_ne!(
-                ino, initial_ino,
-                "first load must atomically replace legacy config"
-            );
-            ino
-        };
-        Config::load(&path).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), migrated);
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().modified().unwrap(),
-            migrated_mtime,
-            "second load of migrated config must not rewrite file"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            let meta = std::fs::metadata(&path).unwrap();
-            assert_eq!(
-                meta.ino(),
-                migrated_ino,
-                "second load must not replace config file inode"
-            );
-            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
-        }
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        std::fs::remove_file(path).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
@@ -1852,42 +1503,6 @@ workspace = "/home/ubuntu/codex-workspace"
     }
 
     #[test]
-    fn probe_config_patch_cannot_reintroduce_legacy_app_server_bridge_keys() {
-        let input = r#"
-[codex]
-home = "/root/.codex"
-workspace = "/home/ubuntu/codex-workspace"
-host_label = "old"
-"#;
-        let patch: ProbeConfigFilePatch = serde_json::from_str(
-            r#"{
-                "codex": {
-                    "home": "/srv/codex",
-                    "workspace": "/srv/workspace",
-                    "host_label": "cloud",
-                    "app_server_service": "codex-app-server-root.service",
-                    "app_server_socket": "/root/.codex/app-server.sock",
-                    "bridge_enabled": true,
-                    "bridge_transport": "socket",
-                    "bridge_timeout_seconds": 99
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let output = super::patch_probe_config_toml(input, &patch).unwrap();
-
-        assert!(output.contains("home = \"/srv/codex\""));
-        assert!(output.contains("workspace = \"/srv/workspace\""));
-        assert!(output.contains("host_label = \"cloud\""));
-        assert!(!output.contains("app_server_service"));
-        assert!(!output.contains("app_server_socket"));
-        assert!(!output.contains("bridge_enabled"));
-        assert!(!output.contains("bridge_transport"));
-        assert!(!output.contains("bridge_timeout_seconds"));
-    }
-
-    #[test]
     fn load_reads_secret_key_from_sibling_env_file() {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -1934,112 +1549,6 @@ host_label = "old"
     }
 
     #[test]
-    fn web_config_upgrade_removes_retired_fields_and_preserves_secret_and_business_values() {
-        for input in [
-            r#"# preserved configuration
-[server]
-listen = "127.0.0.1:15742"
-public_base_url = "https://panel.example.com/agenthub/"
-trust_forwarded_headers = true
-[security]
-secret_key = "fixture-secret-key"
-cookie_secure = true
-session_ttl_seconds = 31536000
-login_rate_limit_per_minute = 10
-turnstile_expected_hostname = "panel.example.com"
-turnstile_expected_action = "login"
-[paths]
-data_dir = "/tmp/agenthub-fixture"
-db_path = "/tmp/agenthub-fixture/agenthub.sqlite"
-webui_dir = "/tmp/agenthub-fixture/webui"
-[probe.notifications]
-enabled = true
-group = "fixture-group"
-[custom]
-token = "fixture-custom-value"
-"#,
-            r#"# preserved configuration
-server = { listen = "127.0.0.1:15742", public_base_url = "https://panel.example.com/agenthub/", trust_forwarded_headers = true }
-security = { secret_key = "fixture-secret-key", cookie_secure = true, session_ttl_seconds = 31536000, login_rate_limit_per_minute = 10, turnstile_expected_hostname = "panel.example.com", turnstile_expected_action = "login" }
-paths = { data_dir = "/tmp/agenthub-fixture", db_path = "/tmp/agenthub-fixture/agenthub.sqlite", webui_dir = "/tmp/agenthub-fixture/webui" }
-probe = { notifications = { enabled = true, group = "fixture-group" } }
-custom = { token = "fixture-custom-value" }
-"#,
-        ] {
-            let upgraded = super::migrate_retired_web_config(input).unwrap().unwrap();
-            let previous: toml::Value = toml::from_str(input).unwrap();
-            let current: toml::Value = toml::from_str(&upgraded).unwrap();
-            assert_eq!(current["server"]["listen"], previous["server"]["listen"]);
-            assert_eq!(
-                current["security"]["secret_key"],
-                previous["security"]["secret_key"]
-            );
-            assert_eq!(current["paths"]["db_path"], previous["paths"]["db_path"]);
-            assert_eq!(current["paths"]["data_dir"], previous["paths"]["data_dir"]);
-            assert_eq!(current["probe"], previous["probe"]);
-            assert_eq!(current["custom"], previous["custom"]);
-            for retired in [
-                "public_base_url",
-                "trust_forwarded_headers",
-                "cookie_secure",
-                "session_ttl_seconds",
-                "login_rate_limit_per_minute",
-                "turnstile_expected_hostname",
-                "turnstile_expected_action",
-                "webui_dir",
-            ] {
-                assert!(!upgraded.contains(retired), "retired field {retired}");
-            }
-            assert!(upgraded.contains("# preserved configuration"));
-            assert!(super::migrate_retired_web_config(&upgraded)
-                .unwrap()
-                .is_none());
-        }
-    }
-
-    #[test]
-    fn normalize_migrates_legacy_runtime_values_and_preserves_host_label() {
-        let mut config = Config::default();
-        config.codex.host_label = "configured-host".into();
-        config.update.panel_precheck_command =
-            "test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz".to_string();
-
-        config.normalize().unwrap();
-
-        assert_eq!(config.codex.host_label, "configured-host");
-        match super::current_platform_kind() {
-            PlatformKind::Linux | PlatformKind::Windows => {
-                assert!(config.update.panel_precheck_command.contains("--precheck"))
-            }
-            PlatformKind::Macos => {
-                assert!(config.update.panel_precheck_command.starts_with("test -d "));
-                assert!(!config
-                    .update
-                    .panel_precheck_command
-                    .contains("http://127.0.0.1:15742/healthz"));
-            }
-        }
-    }
-
-    #[test]
-    fn normalize_migrates_legacy_codex_precheck_to_transient_wrapper() {
-        for legacy in [
-            super::LEGACY_PRECHECK_COMMAND_SIMPLE,
-            super::LEGACY_PRECHECK_COMMAND_WITH_AUDIT,
-        ] {
-            let mut config = Config::default();
-            config.update.precheck_command = legacy.to_string();
-
-            config.normalize().unwrap();
-
-            assert_eq!(
-                config.update.precheck_command,
-                "/usr/local/bin/agenthub-codex-precheck"
-            );
-        }
-    }
-
-    #[test]
     fn normalize_keeps_custom_codex_precheck_command() {
         let mut config = Config::default();
         config.update.precheck_command = "/opt/custom/precheck --strict".to_string();
@@ -2050,99 +1559,5 @@ custom = { token = "fixture-custom-value" }
             config.update.precheck_command,
             "/opt/custom/precheck --strict"
         );
-    }
-}
-
-#[cfg(test)]
-mod retired_provider_tests {
-    #[test]
-    fn pi_configuration_upgrade_is_precise_and_idempotent() {
-        let before = r#"[probe.notifications]
-enabled = true
-notify_pi = true
-notify_pi_completion = false
-notify_pi_failure = true
-notify_claude = true
-server_url = "https://example.invalid"
-[security]
-secret_key = "fixture-only-key"
-"#;
-        let after = super::migrate_retired_pi_config(before).unwrap().unwrap();
-        let doc: toml::Value = toml::from_str(&after).unwrap();
-        for key in ["notify_pi", "notify_pi_completion", "notify_pi_failure"] {
-            assert!(doc["probe"]["notifications"].get(key).is_none());
-        }
-        assert_eq!(
-            doc["probe"]["notifications"]["notify_claude"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(
-            doc["security"]["secret_key"].as_str(),
-            Some("fixture-only-key")
-        );
-        assert!(super::migrate_retired_pi_config(&after).unwrap().is_none());
-    }
-
-    #[test]
-    fn every_migrated_retired_key_matches_fast_path_filter_and_triggers_migration() {
-        for (key, snippet) in [
-            ("logs_db", "[probe.logs_db]\nretention_days = 7\n"),
-            (
-                "auto_resume_goals",
-                "[probe.error_monitor]\nauto_resume_goals = true\n",
-            ),
-            ("cookie_secure", "[security]\ncookie_secure = true\n"),
-            (
-                "session_ttl_seconds",
-                "[security]\nsession_ttl_seconds = 60\n",
-            ),
-            (
-                "login_rate_limit_per_minute",
-                "[security]\nlogin_rate_limit_per_minute = 5\n",
-            ),
-            (
-                "turnstile_expected_hostname",
-                "[security]\nturnstile_expected_hostname = \"example.invalid\"\n",
-            ),
-            (
-                "turnstile_expected_action",
-                "[security]\nturnstile_expected_action = \"login\"\n",
-            ),
-            (
-                "public_base_url",
-                "[server]\npublic_base_url = \"https://example.invalid\"\n",
-            ),
-            (
-                "trust_forwarded_headers",
-                "[server]\ntrust_forwarded_headers = true\n",
-            ),
-            ("webui_dir", "[paths]\nwebui_dir = \"/tmp/webui\"\n"),
-            ("notify_pi", "[probe.notifications]\nnotify_pi = true\n"),
-            (
-                "notify_pi_completion",
-                "[probe.notifications]\nnotify_pi_completion = true\n",
-            ),
-            (
-                "notify_pi_failure",
-                "[probe.notifications]\nnotify_pi_failure = true\n",
-            ),
-            ("gotify", "[probe.notifications.gotify]\nenabled = true\n"),
-        ] {
-            assert!(
-                super::RETIRED_CONFIG_KEYS
-                    .iter()
-                    .any(|pattern| key.contains(pattern)),
-                "retired key {key} is not covered by RETIRED_CONFIG_KEYS"
-            );
-            let migrated = super::migrate_all_retired_config(snippet)
-                .unwrap()
-                .unwrap_or_else(|| {
-                    panic!("retired key {key} was skipped by migrate_all_retired_config")
-                });
-            assert!(
-                !migrated.contains(key),
-                "migrated config still contains {key}: {migrated}"
-            );
-        }
     }
 }

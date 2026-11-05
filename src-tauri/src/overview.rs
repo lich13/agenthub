@@ -214,61 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn desktop_typed_uploads_store_under_local_codex_home_retired() {
-        let source = [
-            include_str!("commands/threads.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in ["store_uploads_with_state", "DesktopUploadFile"] {
-            assert!(
-                !source.contains(forbidden),
-                "retired write chain remains: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn desktop_typed_uploads_use_shared_batch_validation_retired() {
-        let source = [
-            include_str!("commands/threads.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in ["store_to_root", "DesktopDeleteUploadRequest"] {
-            assert!(
-                !source.contains(forbidden),
-                "retired write chain remains: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn desktop_send_message_uses_shared_job_service_and_attachment_context_retired() {
-        let source = [
-            include_str!("commands/threads.rs"),
-            include_str!("services/threads.rs"),
-            include_str!("commands/settings.rs"),
-            include_str!("services/settings.rs"),
-        ]
-        .join("\n");
-        for forbidden in [
-            "codex_job_spec_for_request",
-            "start_codex_job",
-            "send_message_with_state",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "retired write chain remains: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
     fn desktop_unsupported_action_is_explicitly_unavailable() {
         let response =
             job_service::action_unavailable("forkThread", "fork uses Codex app-server state");

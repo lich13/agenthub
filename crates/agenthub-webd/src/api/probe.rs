@@ -1,4 +1,5 @@
-use super::{api_error, http_update_platform, ok, ApiResponse};
+use super::ApiErrorKind;
+use super::{api_error, linux_update_platform, ok, ApiResponse};
 use crate::{
     linux_adapter,
     state::{AppState, CachedProbeStatus},
@@ -13,11 +14,6 @@ use agenthub_core::{
         use_cases::AgentHubUseCases,
     },
 };
-use axum::{
-    extract::{Query, State},
-    http::{HeaderMap, StatusCode},
-    Json,
-};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -27,40 +23,32 @@ pub(crate) struct ProbeStatusQuery {
     pub(crate) refresh: Option<bool>,
 }
 
-pub(crate) async fn get_probe_status(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeStatusQuery>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn get_probe_status(state: AppState, query: ProbeStatusQuery) -> ApiResponse {
     ok(probe_status_cached_value(state, query.refresh.unwrap_or(false)).await)
 }
 
-pub(crate) async fn get_probe_settings(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn get_probe_settings(state: AppState) -> ApiResponse {
     ok(probe_settings_value(&state)?)
 }
 
 pub(crate) async fn patch_probe_settings(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<settings_service::ProbeSettingsSaveRequest>,
+    state: AppState,
+    request: settings_service::ProbeSettingsSaveRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let config_path = probe_config_path();
     if !config_path.exists() {
         return Err(api_error(
-            StatusCode::BAD_REQUEST,
+            ApiErrorKind::InvalidRequest,
             &format!("config file not found: {}", config_path.display()),
         ));
     }
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     let config = state.config();
     let plan = AgentHubUseCases::with_config(&config, &platform)
         .settings()
         .and_then(|settings| settings.save_probe_settings(request))
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     let response_config =
         linux_adapter::apply_probe_settings_save_plan(&state, &auth, &config_path, plan)?;
     ok(probe_settings_value_for_config(&state, &response_config)?)
@@ -71,11 +59,7 @@ pub(crate) struct ProbeEventsQuery {
     pub(crate) limit: Option<u32>,
 }
 
-pub(crate) async fn get_probe_events(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeEventsQuery>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn get_probe_events(state: AppState, query: ProbeEventsQuery) -> ApiResponse {
     let limit = query
         .limit
         .unwrap_or(state.config().probe.recent_limit as u32)
@@ -94,15 +78,14 @@ pub(crate) async fn get_probe_events(
 
 pub(crate) async fn start_probe_action(
     state: AppState,
-    _headers: HeaderMap,
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     let config_path = probe_config_path();
     let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;
     let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
+        .map_err(|err| api_error(ApiErrorKind::Conflict, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
 

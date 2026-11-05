@@ -19,8 +19,6 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/agenthub-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-prune"
-LEGACY_DIR="/opt/agenthub"
-LEGACY_SERVICE="agenthub"
 
 ARCHIVE_PATH=""
 BINARY_PATH=""
@@ -108,23 +106,6 @@ install_dirs() {
   install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
 }
 
-copy_legacy_runtime_once() {
-  if [[ -f "${LEGACY_DIR}/config.toml" && ! -f "${CONFIG_FILE}" ]]; then
-    replace_file "${LEGACY_DIR}/config.toml" "${CONFIG_FILE}" 0640
-  fi
-  if [[ -f "${LEGACY_DIR}/env" && ! -f "${ENV_FILE}" ]]; then
-    replace_file "${LEGACY_DIR}/env" "${ENV_FILE}" 0640
-  fi
-  if [[ -f "${LEGACY_DIR}/agenthub.sqlite" && ! -f "${DATA_DIR}/agenthub.sqlite" ]]; then
-    install -m 0640 -o root -g root "${LEGACY_DIR}/agenthub.sqlite" "${DATA_DIR}/agenthub.sqlite"
-  fi
-  for suffix in -wal -shm; do
-    if [[ -f "${LEGACY_DIR}/agenthub.sqlite${suffix}" && ! -f "${DATA_DIR}/agenthub.sqlite${suffix}" ]]; then
-      install -m 0640 -o root -g root "${LEGACY_DIR}/agenthub.sqlite${suffix}" "${DATA_DIR}/agenthub.sqlite${suffix}"
-    fi
-  done
-}
-
 assert_service_version() {
   python3 - "$("$1" --version)" <<'PYVERSION'
 import re, sys
@@ -154,19 +135,6 @@ install_payload() {
   fi
 }
 
-retire_web_payload() {
-  python3 - <<'PYWEB'
-from pathlib import Path
-import shutil
-path = Path("/usr/share/agenthub-webd/webui")
-if path.is_symlink():
-    raise SystemExit("refusing symlink at retired web asset directory")
-if path.is_dir(): shutil.rmtree(path)
-for path in [Path("/usr/local/bin/agenthub-webd-web-update")]:
-    if path.is_file() or path.is_symlink(): path.unlink()
-PYWEB
-}
-
 install_codex_wrappers() {
   local source_dir
   source_dir="$(script_dir)"
@@ -193,7 +161,7 @@ install_codex_home_write_paths() {
 install_config() {
   local source_dir
   source_dir="$(script_dir)"
-  copy_legacy_runtime_once
+
   if [[ ! -f "${CONFIG_FILE}" || "${FORCE_CONFIG}" -eq 1 ]]; then
     replace_file "${source_dir}/config.example.toml" "${CONFIG_FILE}" 0640
 
@@ -204,20 +172,11 @@ install_config() {
   snapshot_file "${ENV_FILE}"
   snapshot_file "${CONFIG_FILE}"
   ensure_secret_key
-  python3 - "${ENV_FILE}" <<'PYENV'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-retired = {"AGENTHUB_ADMIN_PASSWORD", "AGENTHUB_TURNSTILE_SITE_KEY", "AGENTHUB_TURNSTILE_SECRET_KEY", "AGENTHUB_SESSION_TTL_SECONDS", "AGENTHUB_COOKIE_SECURE", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_BIN"}
-text = path.read_text()
-updated = "".join(line for line in text.splitlines(keepends=True) if line.strip().removeprefix("export ").split("=", 1)[0].strip() not in retired)
-if updated != text: path.write_text(updated)
-PYENV
   ensure_config_defaults
 }
 
 ensure_secret_key() {
-  python3 - "${ENV_FILE}" "${LEGACY_DIR}/env" <<'PYKEY'
+  python3 - "${ENV_FILE}" <<'PYKEY'
 from pathlib import Path
 import os
 import secrets
@@ -240,9 +199,7 @@ def read_key(source, name):
 
 secret = read_key(path, key)
 if not secret:
-    secret = (read_key(Path(sys.argv[2]), key)
-              or read_key(Path("/etc/codex-cloud-panel/env"), "CODEX_CLOUD_PANEL_SECRET_KEY")
-              or secrets.token_urlsafe(32))
+    secret = secrets.token_urlsafe(32)
     lines = text.splitlines(keepends=True)
     replaced = False
     updated = []
@@ -280,158 +237,45 @@ path = Path(sys.argv[1])
 text = path.read_text()
 lines = text.splitlines()
 
-def is_legacy_codex_precheck(key, value):
-    return key == "precheck_command" and all(
-        needle in value
-        for needle in (
-            "codex --version",
-            "sudo -n codex --version",
-            "/usr/local/bin/codex-raw --version",
-            "/root/.codex/state_5.sqlite",
-            "/home/ubuntu/codex-admin/bin/codex-cloud-doctor",
-        )
-    )
-
-def ensure_section(section, required_values, replace_values=None):
+def ensure_section(section, required_values):
     global lines
-    replace_values = replace_values or {}
     start = None
     end = len(lines)
     for index, line in enumerate(lines):
-        if line.strip() == f"[{section}]":
+        if line.strip() == f'[{section}]':
             start = index
             continue
-        if start is not None and index > start and line.strip().startswith("[") and line.strip().endswith("]"):
+        if start is not None and index > start and line.strip().startswith('[') and line.strip().endswith(']'):
             end = index
             break
     if start is None:
         if lines and lines[-1].strip():
-            lines.append("")
-        lines.append(f"[{section}]")
+            lines.append('')
+        lines.append(f'[{section}]')
         start = len(lines) - 1
         end = len(lines)
     seen = set()
     for index in range(start + 1, end):
         stripped = lines[index].strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
             continue
-        key, value = [part.strip() for part in stripped.split("=", 1)]
-        if (key in replace_values and value in replace_values[key]) or is_legacy_codex_precheck(key, value):
-            lines[index] = f"{key} = {required_values[key]}"
+        key, value = [part.strip() for part in stripped.split('=', 1)]
         if key in required_values:
             seen.add(key)
     insert_at = end
     for key, value in required_values.items():
         if key not in seen:
-            lines.insert(insert_at, f"{key} = {value}")
+            lines.insert(insert_at, f'{key} = {value}')
             insert_at += 1
+ensure_section('codex', {'host_label': '"AgentHub"'})
+ensure_section('paths', {'data_dir': '"/var/lib/agenthub-webd"', 'db_path': '"/var/lib/agenthub-webd/agenthub.sqlite"', 'log_dir': '"/var/log/agenthub-webd"'})
+ensure_section('update', {'precheck_command': '"/usr/local/bin/agenthub-codex-precheck"', 'update_command': '"/usr/local/bin/agenthub-codex-update"', 'prune_command': '"/usr/local/bin/agenthub-codex-prune"', 'panel_update_command': '"/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"', 'panel_precheck_command': '"/usr/local/bin/agenthub-webd-update --precheck"'})
+ensure_section('probe', {'enabled': 'true', 'poll_seconds': '15', 'recent_limit': '50'})
+ensure_section('probe.hooks', {'manage_stop_hook': 'true'})
+ensure_section('probe.notifications', {'enabled': 'false', 'server_url': '"https://api.day.app"', 'group': '"AgentHub"', 'notify_completion': 'true', 'notify_reply_needed': 'true', 'notify_recoverable': 'true'})
+ensure_section('probe.observability', {'hook_event_max_lines': '500', 'hook_cooldown_max_lines': '1000', 'log_max_bytes': '5242880'})
+path.write_text('\n'.join(lines) + '\n')
 
-def remove_section_keys(section, keys):
-    global lines
-    start = None
-    end = len(lines)
-    for index, line in enumerate(lines):
-        if line.strip() == f"[{section}]":
-            start = index
-            continue
-        if start is not None and index > start and line.strip().startswith("[") and line.strip().endswith("]"):
-            end = index
-            break
-    if start is None:
-        return
-    filtered = []
-    for index, line in enumerate(lines):
-        if start < index < end:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                key = stripped.split("=", 1)[0].strip()
-                if key in keys:
-                    continue
-        filtered.append(line)
-    lines = filtered
-
-ensure_section("codex", {"host_label": '"AgentHub"'})
-remove_section_keys(
-    "codex",
-    {
-        "app_server_service",
-        "app_server_socket",
-        "bridge_enabled",
-        "bridge_transport",
-        "bridge_timeout_seconds",
-    },
-)
-remove_section_keys("server", {"public_base_url", "trust_forwarded_headers", "listen"})
-remove_section_keys("security", {"cookie_secure", "session_ttl_seconds", "login_rate_limit_per_minute", "turnstile_expected_hostname", "turnstile_expected_action", "auth_rate_limit_per_minute"})
-remove_section_keys("paths", {"webui_dir"})
-ensure_section(
-    "paths",
-    {
-        "data_dir": '"/var/lib/agenthub-webd"',
-        "db_path": '"/var/lib/agenthub-webd/agenthub.sqlite"',
-        "log_dir": '"/var/log/agenthub-webd"',
-    },
-    {
-        "data_dir": {'"/var/lib/codex-cloud-panel"', '"/opt/codex-cloud-panel"', '"/opt/agenthub"'},
-        "db_path": {
-            '"/var/lib/codex-cloud-panel/panel.sqlite"',
-            '"/var/lib/codex-cloud-panel/codex-cloud-panel.sqlite"',
-            '"/opt/codex-cloud-panel/codex-cloud-panel.sqlite"',
-            '"/opt/agenthub/agenthub.sqlite"',
-        },
-        "log_dir": {'"/var/log/codex-cloud-panel"', '"/opt/codex-cloud-panel/logs"', '"/opt/agenthub/logs"'},
-    },
-)
-ensure_section(
-    "update",
-    {
-        "precheck_command": '"/usr/local/bin/agenthub-codex-precheck"',
-        "update_command": '"/usr/local/bin/agenthub-codex-update"',
-        "prune_command": '"/usr/local/bin/agenthub-codex-prune"',
-        "panel_update_command": '"/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"',
-        "panel_precheck_command": '"/usr/local/bin/agenthub-webd-update --precheck"',
-    },
-    {
-        "update_command": {
-            '"sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-update --no-prune"',
-            '"/home/ubuntu/codex-admin/bin/codex-cloud-update --no-prune"',
-        },
-        "prune_command": {
-            '"sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-prune"',
-            '"/home/ubuntu/codex-admin/bin/codex-cloud-prune"',
-        },
-        "panel_update_command": {
-            '"/usr/local/bin/agenthub-update --repo lich13/agenthub --version latest"',
-        },
-        "panel_precheck_command": {
-            '"test -x /usr/local/bin/agenthub-webd-update && systemctl is-active agenthub-webd && curl -fsS http://127.0.0.1:15742/healthz"',
-            '"/usr/local/bin/agenthub-update --precheck"',
-            '"test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15742/healthz"',
-            '"test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz"',
-        },
-    },
-)
-ensure_section("probe", {"enabled": "true", "poll_seconds": "15", "recent_limit": "50"})
-ensure_section("probe.hooks", {"manage_stop_hook": "true"})
-remove_section_keys("probe.hooks", {"reload_app_server_after_install"})
-ensure_section(
-    "probe.notifications",
-    {
-        "enabled": "false",
-        "server_url": '"https://api.day.app"',
-        "group": '"AgentHub"',
-        "notify_completion": "true",
-        "notify_reply_needed": "true",
-        "notify_recoverable": "true",
-    },
-)
-ensure_section(
-    "probe.observability",
-    {"hook_event_max_lines": "500", "hook_cooldown_max_lines": "1000", "log_max_bytes": "5242880"},
-    {"hook_event_max_lines": {"120"}, "hook_cooldown_max_lines": {"80"}, "log_max_bytes": {"262144"}},
-)
-
-path.write_text("\n".join(lines) + "\n")
 PY
 }
 
@@ -462,10 +306,6 @@ install_provider_session_write_paths() {
 install_systemd() {
   local source_dir
   source_dir="$(script_dir)"
-  if systemctl list-unit-files "${LEGACY_SERVICE}.service" >/dev/null 2>&1; then
-    systemctl stop "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
-    systemctl disable "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
-  fi
   replace_file "${source_dir}/systemd.service" "${SYSTEMD_UNIT}" 0644
   install_provider_session_write_paths
   systemctl daemon-reload
@@ -473,10 +313,6 @@ install_systemd() {
     systemctl enable "${SERVICE_NAME}.service"
     systemctl restart "${SERVICE_NAME}.service"
   fi
-}
-
-retire_http() {
-  python3 "$(script_dir)/retire-http.py" "${CONFIG_FILE}" "${SAFETY}" "${TRANSACTION}"
 }
 
 SAFETY="$(script_dir)/install-safety.py"
@@ -518,7 +354,7 @@ main() {
   if systemctl is-active --quiet "${SERVICE_NAME}.service"; then WAS_ACTIVE=1; fi
   install_dirs
   install_payload
-  retire_web_payload
+
   install_codex_wrappers
   replace_file "${SAFETY}" "${SHARE_DIR}/install-safety.py" 0644
   replace_file "$(script_dir)/updater.pub" "${SHARE_DIR}/updater.pub" 0644
@@ -533,7 +369,7 @@ main() {
       sleep 0.2
     done
     [[ "${ready}" -eq 1 ]] || die "SSH service health check failed"
-    retire_http
+
   fi
   INSTALL_SUCCEEDED=1
   log "installed ${INSTALL_BIN}"

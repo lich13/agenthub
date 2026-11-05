@@ -120,11 +120,9 @@ describe("contract registry", () => {
       "capabilitiesByHostSurface",
       "visual",
       "actions",
-      "retiredActions",
       "dtoCatalog"
     ]);
     expect(Object.keys(schema.properties ?? {})).toEqual([
-      "retiredActions",
       "schemaVersion",
       "hostSurfaces",
       "capabilities",

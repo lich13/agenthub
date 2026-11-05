@@ -1,3 +1,4 @@
+use super::ApiErrorKind;
 use super::{api_error, ApiError};
 use crate::rpc_payload::{
     rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
@@ -5,7 +6,6 @@ use crate::rpc_payload::{
     rpc_required_string as parse_rpc_required_string,
     rpc_wrapped_payload as parse_rpc_wrapped_payload, RpcPayloadError,
 };
-use axum::http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ pub(super) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String,
 }
 
 fn api_rpc_payload<T>(result: Result<T, RpcPayloadError>) -> Result<T, ApiError> {
-    result.map_err(|err| api_error(StatusCode::BAD_REQUEST, err.message()))
+    result.map_err(|err| api_error(ApiErrorKind::InvalidRequest, err.message()))
 }
 
 #[cfg(test)]

@@ -25,59 +25,11 @@ fn api_entry_exposes_only_current_submodules() {
         "mod jobs;",
         "mod payload;",
         "mod probe;",
-        "mod routes;",
         "mod rpc_dispatch;",
         "mod system;",
         "mod threads;",
     ] {
         assert!(api.contains(module), "missing current API module: {module}");
-    }
-    for retired in [
-        "mod goals;",
-        "mod uploads;",
-        "mod desktop_webui;",
-        "mod security;",
-        "mod web_auth;",
-    ] {
-        assert!(
-            !api.contains(retired),
-            "retired API module remained: {retired}"
-        );
-    }
-    let production = production_section(&api);
-    for handler in [
-        "async fn rpc_dispatch",
-        "async fn create_thread",
-        "async fn send_message",
-    ] {
-        assert!(
-            !production.contains(handler),
-            "API entry owns retired handler: {handler}"
-        );
-    }
-}
-
-#[test]
-fn rpc_surface_separates_retired_commands_from_current_allowlist() {
-    let surface = src("rpc_surface.rs");
-    use agenthub_core::services::commands;
-    assert!(surface.contains("is_transport_rpc_command"));
-    assert!(surface.contains("is_business_rpc_command"));
-    for command in ["grok.list", "grok.deleteExecute"] {
-        assert!(commands::is_allowed_rpc_command(command));
-        assert!(!commands::is_retired_command(command));
-    }
-    assert!(commands::is_retired_command("pi.list"));
-    assert!(!commands::is_allowed_rpc_command(
-        "claude.ownershipDiagnostics"
-    ));
-    assert!(!commands::is_allowed_transport_command(
-        "claude.ownershipDiagnostics"
-    ));
-    assert!(commands::is_retired_command(commands::THREADS_SEND));
-    for command in commands::RETIRED_COMMANDS {
-        assert!(!commands::is_allowed_rpc_command(command));
-        assert!(!commands::is_allowed_transport_command(command));
     }
 }
 
@@ -110,18 +62,6 @@ fn current_adapters_delegate_thread_and_provider_operations() {
         assert!(
             claude.contains(operation),
             "missing Claude adapter operation: {operation}"
-        );
-    }
-    for retired in [
-        "create_thread",
-        "send_message",
-        "enqueue_followup",
-        "stop_thread",
-        "fork_thread",
-    ] {
-        assert!(
-            !threads.contains(retired),
-            "retired thread operation remained: {retired}"
         );
     }
 }

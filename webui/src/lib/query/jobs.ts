@@ -19,8 +19,9 @@ export function useBackgroundJobs(enabled: boolean) {
   const queries = useQueries({ queries: [...new Set(enabled ? ids.filter((id): id is string => Boolean(id)) : [])].map((id) => ({
     queryKey: ["job", id],
     queryFn: async () => {
-      const job = await getJob(id);
+      let job = await getJob(id, false);
       if (isTerminalJob(job.status)) {
+        job = await getJob(id);
         for (const key of ["jobs", "update-status", "probe-status", "probe-events"]) {
           void qc.invalidateQueries({ queryKey: [key] });
         }

@@ -190,3 +190,9 @@ export type SshHost = { alias: string };
 export type SshHostList = SshHost[];
 export function remoteSshHosts() { return invokeNative<SshHostList>("remote.sshHosts"); }
 export function remoteInstall(request: RemoteConnectionCredentials) { return changeConnection<RemoteConnectionView>("remote.install", request); }
+
+export type SshDeleteRequest = { revision: number; alias: string };
+export function remoteSshDelete(alias: string) {
+  const request: SshDeleteRequest = { revision: connection.revision, alias };
+  return changeConnection<RemoteConnectionView>("remote.sshDelete", request);
+}

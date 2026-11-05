@@ -717,6 +717,23 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
   &.is-editing { border-color: var(--ab); box-shadow: 0 0 0 2px var(--as); }
 }
 .remote-machine-card-main { display: grid; gap: 4px; flex: 1 1 240px; }
+.remote-settings-stack {
+  font-size: 13px;
+  .field-label { font-size: 13px; gap: 8px; margin: 0; }
+  .form-grid { gap: 16px; }
+  .field-label :is(input, select), .button-row button {
+    height: 36px; min-height: 36px; font: inherit; line-height: 20px; padding: 7px 12px; border-radius: 8px;
+  }
+  .button-row { gap: 8px; }
+  .remote-machine-card-main > span { color: var(--m); overflow-wrap: anywhere; }
+  .confirm-dialog .button-row { margin-top: 20px; justify-content: flex-end; }
+}
+.remote-settings-stack .remote-host-select select { padding-right: 36px; }
+.remote-host-select {
+  display: block; position: relative;
+  select { appearance: none; -webkit-appearance: none; }
+  > svg { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+}
 .update-panel-row {
   flex-wrap: wrap; gap: 16px 28px;
   .metric { min-width: 120px; gap: 8px; }

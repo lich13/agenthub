@@ -2,14 +2,8 @@ use crate::state::AppState;
 use agenthub_core::providers::ProviderRegistry;
 #[cfg(test)]
 use agenthub_core::services::updates::{self as update_service, UpdateAction};
-use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    Json,
-};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::Value;
 
 mod claude;
 mod cleanup;
@@ -18,8 +12,6 @@ mod jobs;
 mod payload;
 mod probe;
 mod provider_sessions;
-#[cfg(test)]
-mod routes;
 pub(crate) mod rpc_dispatch;
 mod sessions;
 mod system;
@@ -29,8 +21,6 @@ mod threads;
 mod entry_contract_tests;
 #[cfg(test)]
 mod integration_tests;
-#[cfg(test)]
-mod legacy_routes_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -58,45 +48,46 @@ pub(crate) use provider_sessions::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
     antigravity_restore, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
-#[cfg(test)]
-pub(crate) use routes::router;
 pub(crate) use system::{
-    http_update_platform, start_update_action, system_capabilities, system_update_status,
+    linux_update_platform, start_update_action, system_capabilities, system_update_status,
     system_version,
 };
 pub(crate) use threads::{
     archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,
 };
-type ApiResponse = Result<Response, ApiError>;
-
-pub struct ApiError(Box<Response>);
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        *self.0
-    }
+type ApiResponse = Result<Value, ApiError>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApiErrorKind {
+    InvalidRequest,
+    NotFound,
+    Conflict,
+    OperationFailed,
 }
-
+#[derive(Debug)]
+pub(crate) struct ApiError {
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Protocol 2 exposes the message; direct tests also assert the category.
+    pub kind: ApiErrorKind,
+    pub message: String,
+}
 impl From<anyhow::Error> for ApiError {
-    fn from(err: anyhow::Error) -> Self {
-        api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+    fn from(error: anyhow::Error) -> Self {
+        api_error(ApiErrorKind::OperationFailed, &error.to_string())
     }
 }
-
-async fn list_providers(State(_state): State<AppState>, _headers: HeaderMap) -> ApiResponse {
+async fn list_providers(_state: AppState) -> ApiResponse {
     ok(ProviderRegistry::default().list())
 }
-
-async fn platform_overview(State(state): State<AppState>, _headers: HeaderMap) -> ApiResponse {
+async fn platform_overview(state: AppState) -> ApiResponse {
     ok(state.platform().clone())
 }
-
 fn ok<T: Serialize>(value: T) -> ApiResponse {
-    Ok(Json(value).into_response())
+    serde_json::to_value(value)
+        .map_err(|error| api_error(ApiErrorKind::OperationFailed, &error.to_string()))
 }
-
-fn api_error(status: StatusCode, message: &str) -> ApiError {
-    ApiError(Box::new(
-        (status, Json(json!({ "error": message }))).into_response(),
-    ))
+fn api_error(kind: ApiErrorKind, message: &str) -> ApiError {
+    ApiError {
+        kind,
+        message: message.into(),
+    }
 }

@@ -67,16 +67,7 @@ impl PanelDb {
                 |r| Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?)),
             )
             .optional()?;
-        // The compatible Claude reader can now see streams previously rejected
-        // as unknown format. Baseline them once instead of replaying old replies.
-        let reader_upgrade = provider == NativeProvider::Claude
-            && tx.query_row("SELECT count(*) FROM settings WHERE key='native_claude_reader_revision' AND value='2'", [], |r| r.get::<_, i64>(0))? == 0;
-        let baseline =
-            enabled && (reader_upgrade || prior.is_none_or(|(was_enabled, _)| !was_enabled));
-        if enabled && reader_upgrade {
-            tx.execute("INSERT INTO settings(key,value,updated_at) VALUES('native_claude_reader_revision','2',?1) ON CONFLICT(key) DO UPDATE SET value='2',updated_at=excluded.updated_at", [Self::now()])?;
-            tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?1 WHERE provider=?2 AND status='pending'", params![Self::now(),provider.as_str()])?;
-        }
+        let baseline = enabled && prior.is_none_or(|(was_enabled, _)| !was_enabled);
         let activated_ms = if baseline {
             chrono::Utc::now().timestamp_millis()
         } else {
@@ -467,14 +458,12 @@ mod tests {
         );
     }
     #[test]
-    fn claude_upgrade_baselines_old_streams_and_keeps_channel_delivery_ownership() {
+    fn claude_enable_baselines_old_streams_and_keeps_channel_delivery_ownership() {
         let db = PanelDb::open(":memory:").unwrap();
         let config = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
         let mut old = scan("fixture", 1, now);
         old.streams[0].provider = NativeProvider::Claude;
-        // Simulate an already-enabled pre-upgrade scanner that rejected this file.
-        db.conn.lock().unwrap().execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES('claude_code',1,0,0,0,1)", []).unwrap();
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Claude, &old, &config)
                 .unwrap(),

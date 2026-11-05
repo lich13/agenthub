@@ -147,3 +147,24 @@ test("remote Markdown file paths copy the original path and never offer Finder r
   await expect(page.getByRole("button", { name: /Finder/ })).toHaveCount(0);
   expect(calls).not.toContain("plugin:opener|reveal_item_in_dir");
 });
+
+
+test("SSH configuration deletion confirms once, cancellation preserves it and success refreshes hosts", async ({ page }) => {
+  const calls = await mockApi(page, { connection: { target: "remote", revision: 1, configured: true, sshHost } });
+  const requests: unknown[] = [];
+  observeCommands(page, (command, args) => { if (command === "remote.sshDelete") requests.push(args.request); });
+  await page.goto("/");
+  await settings(page);
+  await page.getByRole("button", {name:"删除 SSH 配置", exact:true}).click();
+  await expect(page.getByRole("dialog")).toContainText(sshHost);
+  await page.getByRole("button", {name:"取消", exact:true}).click();
+  expect(calls).not.toContain("remote.sshDelete");
+  await expect(page.getByRole("combobox", {name:"SSH 连接", exact:true})).toHaveValue(sshHost);
+  await page.getByRole("button", {name:"删除 SSH 配置", exact:true}).click();
+  await page.getByRole("button", {name:"确认删除", exact:true}).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(machinePicker(page)).toHaveValue("local");
+  await expect(page.getByRole("combobox", {name:"SSH 连接", exact:true})).toHaveValue("fixture-second");
+  await expect(page.locator(".remote-machine-card")).toHaveCount(0);
+  expect(requests).toEqual([{revision:1,alias:sshHost}]);
+});

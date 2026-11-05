@@ -195,7 +195,7 @@ async fn run_process_command(
         }
     }
     for handle in handles {
-        let _ = handle.await;
+        handle.await??;
     }
     let code = status.code();
     let status_text = if status.success() {
@@ -239,37 +239,78 @@ where
         .expect("spawn AgentHub job runtime thread");
 }
 
+fn flush_job_output(
+    db: &PanelDb,
+    tx: &broadcast::Sender<JobEvent>,
+    job_id: &str,
+    output: &mut String,
+) -> Result<()> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    db.append_job_output(job_id, output)?;
+    let _ = tx.send(JobEvent {
+        job_id: job_id.into(),
+        status: "running".into(),
+        chunk: Some(std::mem::take(output)),
+    });
+    Ok(())
+}
+
 fn stream_reader<R>(
     db: PanelDb,
     tx: broadcast::Sender<JobEvent>,
     job_id: String,
     reader: R,
-) -> tokio::task::JoinHandle<()>
+) -> tokio::task::JoinHandle<Result<()>>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
+        use tokio::time::{sleep_until, Duration, Instant};
         let mut reader = BufReader::new(reader);
-        let mut buf = Vec::new();
+        let mut record = Vec::new();
+        let mut output = String::new();
+        let mut after_cr = false;
+        let mut deadline = Instant::now() + Duration::from_millis(200);
         loop {
-            match reader.read_until(b'\n', &mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let mut chunk = redact_output(&String::from_utf8_lossy(&buf[..n]));
-                    if buf.ends_with(b"\n") {
-                        chunk.push('\n');
-                    }
-                    buf.clear();
-                    let _ = db.append_job_output(&job_id, &chunk);
-                    let _ = tx.send(JobEvent {
-                        job_id: job_id.clone(),
-                        status: "running".to_string(),
-                        chunk: Some(chunk),
-                    });
+            let bytes = tokio::select! {
+                result = reader.fill_buf() => result?,
+                _ = sleep_until(deadline), if !output.is_empty() => {
+                    flush_job_output(&db, &tx, &job_id, &mut output)?;
+                    continue;
                 }
-                Err(_) => break,
+            };
+            if bytes.is_empty() {
+                break;
             }
+            for &byte in bytes {
+                if byte == b'\n' && after_cr {
+                    after_cr = false;
+                    continue;
+                }
+                after_cr = byte == b'\r';
+                if byte == b'\r' || byte == b'\n' {
+                    if output.is_empty() {
+                        deadline = Instant::now() + Duration::from_millis(200);
+                    }
+                    output.push_str(&redact_output(&String::from_utf8_lossy(&record)));
+                    output.push('\n');
+                    record.clear();
+                    if output.len() >= 16 * 1024 {
+                        flush_job_output(&db, &tx, &job_id, &mut output)?;
+                    }
+                } else {
+                    record.push(byte);
+                }
+            }
+            let consumed = bytes.len();
+            reader.consume(consumed);
         }
+        if !record.is_empty() {
+            output.push_str(&redact_output(&String::from_utf8_lossy(&record)));
+        }
+        flush_job_output(&db, &tx, &job_id, &mut output)
     })
 }
 
@@ -292,10 +333,48 @@ mod tests {
             writer.write_all(&[*byte]).await.unwrap();
         }
         drop(writer);
-        reader.await.unwrap();
+        reader.await.unwrap().unwrap();
         let output = db.job("fixture").unwrap().unwrap().output;
         assert_eq!(output, "中文完成\n\n[redacted sensitive line]\n尾行");
         assert!(db.list_jobs(10).unwrap()[0].output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn progress_records_flush_during_running_jobs_and_redact_before_storage() {
+        use tokio::io::AsyncWriteExt;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.create_job("fixture", "fixture", "fixture").unwrap();
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let reader = super::stream_reader(db.clone(), tx, "fixture".into(), reader);
+        writer
+            .write_all("下载 10%\r下载 20%\r\nOPENAI_API_KEY=fixture-secret\r".as_bytes())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !db.job("fixture").unwrap().unwrap().output.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            db.job("fixture").unwrap().unwrap().output,
+            "下载 10%\n下载 20%\n[redacted sensitive line]\n"
+        );
+        assert!(db
+            .job_with_output("fixture", false)
+            .unwrap()
+            .unwrap()
+            .output
+            .is_empty());
+        writer.write_all("完成".as_bytes()).await.unwrap();
+        drop(writer);
+        reader.await.unwrap().unwrap();
+        assert!(db.job("fixture").unwrap().unwrap().output.ends_with("完成"));
     }
 
     #[tokio::test]

@@ -207,17 +207,13 @@ fn linux_update_job_specs_are_planned_in_core_service() {
 }
 
 #[test]
-fn linux_update_process_accepts_exact_historical_defaults_and_rejects_shell_variants() {
+fn linux_update_process_accepts_current_defaults_and_rejects_shell_variants() {
     let expected_update = ProcessCommand::new(
         "/usr/local/bin/agenthub-webd-update",
         ["--repo", "lich13/agenthub", "--version", "latest"],
     );
-    let historical_updates = [
-        "/usr/local/bin/codex-cloud-panel-update --repo lich13/codex-cloud-panel --version latest",
-        "/usr/local/bin/codex-cloud-panel-update --repo lich13/agenthub --version latest",
-        "/usr/local/bin/agenthub-webd-update --repo lich13/codex-cloud-panel --version latest",
-    ];
-    for command in historical_updates {
+    let current_updates = [agenthub_core::update::PANEL_UPDATE_DEFAULT];
+    for command in current_updates {
         let spec = LinuxUpdateJobSpec {
             kind: "agenthub_update_install".to_string(),
             title: "fixture update".to_string(),
@@ -233,13 +229,8 @@ fn linux_update_process_accepts_exact_historical_defaults_and_rejects_shell_vari
 
     let expected_precheck =
         ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"]);
-    let historical_prechecks = [
-        "test -x /usr/local/bin/agenthub-webd-update && systemctl is-active agenthub-webd && curl -fsS http://127.0.0.1:15742/healthz",
-        "test -x /usr/local/bin/codex-cloud-panel-update && systemctl is-active codex-cloud-panel && curl -fsS http://127.0.0.1:15732/healthz",
-        "/usr/local/bin/codex-cloud-panel-update --precheck",
-        "test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz",
-    ];
-    for command in historical_prechecks {
+    let current_prechecks = [agenthub_core::update::PANEL_PRECHECK_DEFAULT];
+    for command in current_prechecks {
         let spec = LinuxUpdateJobSpec {
             kind: "agenthub_update_check".to_string(),
             title: "fixture precheck".to_string(),

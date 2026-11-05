@@ -109,6 +109,20 @@ describe("native machine connection", () => {
     expect(runtime.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select", "remote.invoke"]);
   });
 
+  test("successful recovery keeps the machine revision and deletion sends only the selected alias", async () => {
+    const runtime = await loadRuntime(command => {
+      if (command === "remote.get") return remote;
+      if (command === "remote.sshDelete") return { ...local, revision: 2 };
+      return [];
+    });
+    await runtime.initializeConnection();
+    await runtime.runtimeRpc("threads.list");
+    expect(runtime.connectionSnapshot()).toMatchObject(remote);
+    await runtime.remoteSshDelete("fixture-api");
+    expect(runtime.invoke).toHaveBeenLastCalledWith("remote.sshDelete", { request: { revision: 1, alias: "fixture-api" } });
+    expect(runtime.connectionSnapshot()).toMatchObject({ ...local, revision: 2 });
+  });
+
   test("credentials are sent only to save and are absent from subsequent views and business calls", async () => {
     const runtime = await loadRuntime(command => command === "remote.save" ? remote : []);
     const credentials = { revision: 0, sshHost: remote.sshHost!, useSudo: true };

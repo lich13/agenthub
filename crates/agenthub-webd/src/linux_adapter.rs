@@ -165,10 +165,14 @@ pub fn list_jobs_plan(state: &AppState, plan: JobListPlan) -> Result<Vec<Value>>
         .collect()
 }
 
-pub fn job_detail_plan(state: &AppState, plan: JobDetailPlan) -> Result<Option<Value>> {
+pub fn job_detail_plan(
+    state: &AppState,
+    plan: JobDetailPlan,
+    include_output: bool,
+) -> Result<Option<Value>> {
     state
         .db
-        .job(&plan.job_id)?
+        .job_with_output(&plan.job_id, include_output)?
         .map(job_response_value)
         .transpose()
 }

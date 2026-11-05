@@ -52,6 +52,8 @@ export const contractDtoNames = [
   "RemoteMachineSummary",
   "RemoteConnectionView",
   "SshHostList",
+  "SshDeleteRequest",
+  "DesktopJobDetailRequest",
   "RemoteConnectionCredentials",
   "RemoteRevisionRequest",
   "RemoteSelectionRequest",

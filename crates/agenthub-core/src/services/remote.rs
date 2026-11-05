@@ -1,5 +1,4 @@
-//! Desktop connection DTOs. Credentials are input-only and deliberately not Debug/Serialize.
-pub mod credentials;
+//! Desktop SSH connection DTOs.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,6 +55,13 @@ pub struct RemoteRevisionRequest {
     pub revision: u64,
     #[serde(default)]
     pub machine_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SshDeleteRequest {
+    pub revision: u64,
+    pub alias: String,
 }
 
 #[derive(Debug, Deserialize)]

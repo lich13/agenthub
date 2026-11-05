@@ -1,4 +1,4 @@
-use super::{http_update_platform, ok, ApiResponse};
+use super::{linux_update_platform, ok, ApiResponse};
 use crate::state::AppState;
 use agenthub_core::{
     provider_sessions::{
@@ -6,15 +6,13 @@ use agenthub_core::{
     },
     services::use_cases::AgentHubUseCases,
 };
-use axum::{extract::State, http::HeaderMap, Json};
 
 pub(crate) async fn antigravity_list(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderListRequest>,
+    _state: AppState,
+    request: ProviderListRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .antigravity()
             .list(request)
     })
@@ -23,12 +21,11 @@ pub(crate) async fn antigravity_list(
 }
 
 pub(crate) async fn antigravity_detail(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderDetailRequest>,
+    _state: AppState,
+    request: ProviderDetailRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .antigravity()
             .detail(request)
     })
@@ -37,12 +34,11 @@ pub(crate) async fn antigravity_detail(
 }
 
 pub(crate) async fn antigravity_rename(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderRenameRequest>,
+    _state: AppState,
+    request: ProviderRenameRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .antigravity()
             .rename(&request.session_key, &request.title)
     })
@@ -51,12 +47,11 @@ pub(crate) async fn antigravity_rename(
 }
 
 pub(crate) async fn antigravity_archive(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderSessionRequest>,
+    _state: AppState,
+    request: ProviderSessionRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .antigravity()
             .archive(&request.session_key)
     })
@@ -65,12 +60,11 @@ pub(crate) async fn antigravity_archive(
 }
 
 pub(crate) async fn antigravity_restore(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderSessionRequest>,
+    _state: AppState,
+    request: ProviderSessionRequest,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .antigravity()
             .restore(&request.session_key)
     })
@@ -78,13 +72,9 @@ pub(crate) async fn antigravity_restore(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_list(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderListRequest>,
-) -> ApiResponse {
+pub(crate) async fn dsh_list(_state: AppState, request: ProviderListRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .dsh()
             .list(request)
     })
@@ -92,13 +82,9 @@ pub(crate) async fn dsh_list(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_detail(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderDetailRequest>,
-) -> ApiResponse {
+pub(crate) async fn dsh_detail(_state: AppState, request: ProviderDetailRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .dsh()
             .detail(request)
     })
@@ -106,13 +92,9 @@ pub(crate) async fn dsh_detail(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_rename(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderRenameRequest>,
-) -> ApiResponse {
+pub(crate) async fn dsh_rename(_state: AppState, request: ProviderRenameRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .dsh()
             .rename(&request.session_key, &request.title)
     })
@@ -120,13 +102,9 @@ pub(crate) async fn dsh_rename(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_archive(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderSessionRequest>,
-) -> ApiResponse {
+pub(crate) async fn dsh_archive(_state: AppState, request: ProviderSessionRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .dsh()
             .archive(&request.session_key)
     })
@@ -134,13 +112,9 @@ pub(crate) async fn dsh_archive(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_restore(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<ProviderSessionRequest>,
-) -> ApiResponse {
+pub(crate) async fn dsh_restore(_state: AppState, request: ProviderSessionRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .dsh()
             .restore(&request.session_key)
     })

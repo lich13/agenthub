@@ -1,7 +1,8 @@
-import { Cloud, Monitor, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronDown, Cloud, Monitor, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import {
-  remoteInstall, remoteRemove, remoteSave, remoteSelect, remoteSshHosts,
+  remoteInstall, remoteRemove, remoteSave, remoteSelect, remoteSshHosts, remoteSshDelete,
   useConnection, type RemoteMachineSummary,
 } from "../../lib/query/connection";
 
@@ -43,10 +44,12 @@ export function RemoteConnectionSettings() {
   const [error, setError] = useState("");
   const [installing, setInstalling] = useState(false);
   const [notice, setNotice] = useState("");
+  const [deleting, setDeleting] = useState<string>();
+  const deleteButton = useRef<HTMLButtonElement>(null);
   const busy = Boolean(connection.writes || connection.changing || installing);
   const reload = () => remoteSshHosts().then(rows => {
     setHosts(rows.map(row => row.alias));
-    setHost(value => value || rows[0]?.alias || "");
+    setHost(value => rows.some(row => row.alias === value) ? value : rows[0]?.alias || "");
     setError("");
   }).catch(error => setError(error.message));
   useEffect(() => { void reload(); }, []);
@@ -68,11 +71,11 @@ export function RemoteConnectionSettings() {
     } finally { setInstalling(false); }
   });
   return <div className="remote-settings-stack">
-    <section className="panel remote-machines-panel">
+    {connection.machines.length > 0 && <section className="panel remote-machines-panel">
       <header><strong>远程机器</strong></header>
       <div className="remote-machine-list">
         {connection.machines.map(machine => <article className="remote-machine-card" key={machine.id}>
-          <div className="remote-machine-card-main"><strong>{machine.name}</strong><code>{machine.sshHost}</code></div>
+          <div className="remote-machine-card-main"><strong>{machine.name}</strong>{machine.name !== machine.sshHost && <span>{machine.sshHost}</span>}</div>
           <div className="button-row">
             <button className="secondary-button" disabled={busy} onClick={() => void act(() => remoteSelect("remote", machine.id))}>
               {connection.target === "remote" && connection.activeMachineId === machine.id ? "重新连接" : "连接"}
@@ -85,16 +88,16 @@ export function RemoteConnectionSettings() {
           </div>
         </article>)}
       </div>
-    </section>
+    </section>}
     <section className="panel">
       <header><strong>{id ? "编辑连接" : "新增 SSH 连接"}</strong></header>
       <fieldset disabled={busy} className="probe-card-stack">
         <div className="form-grid">
           <label className="field-label">SSH 连接
-            <select value={sshHost} onChange={event => setHost(event.target.value)}>
+            <span className="remote-host-select"><select value={sshHost} onChange={event => { setHost(event.target.value); setError(""); setNotice(""); }}>
               <option value="">选择已保存的连接</option>
               {[...new Set([...hosts, ...(sshHost ? [sshHost] : [])])].map(host => <option key={host} value={host}>{host}</option>)}
-            </select>
+            </select><ChevronDown size={15} aria-hidden="true" /></span>
           </label>
           <label className="field-label">名称<input value={name} onChange={event => setName(event.target.value)} placeholder={sshHost} /></label>
         </div>
@@ -103,11 +106,25 @@ export function RemoteConnectionSettings() {
           <button className="primary-button" disabled={!sshHost || busy} onClick={() => void submit(false)}>保存并连接</button>
           <button className="secondary-button" disabled={!sshHost || busy} onClick={() => void submit(true)}>{installing ? "正在安装…" : "安装并连接"}</button>
           <button className="secondary-button" onClick={() => void reload()}><RefreshCw size={15} />刷新 SSH 配置</button>
+          <button ref={deleteButton} className="danger-button soft" disabled={!sshHost || busy} onClick={() => { setError(""); setDeleting(sshHost); }}><Trash2 size={15} />删除 SSH 配置</button>
           {id && <button className="secondary-button" onClick={() => { setId(undefined); setName(""); }}>新增连接</button>}
         </div>
       </fieldset>
       {error && <div role="alert" className="form-error">{error}</div>}
       {notice && <div role="status" className="form-success">{notice}</div>}
     </section>
+    {deleting && <ConfirmDialog labelledBy="delete-ssh-title" busy={busy} onCancel={() => setDeleting(undefined)} returnFocus={deleteButton}>
+      <h2 id="delete-ssh-title">删除 SSH 配置</h2>
+      <p>删除“{deleting}”及其在 AgentHub 中的连接记录？</p>
+      {error && <div role="alert" className="form-error">{error}</div>}
+      <div className="button-row">
+        <button className="secondary-button" disabled={busy} onClick={() => setDeleting(undefined)}>取消</button>
+        <button className="danger-button" disabled={busy} onClick={() => void act(async () => {
+          await remoteSshDelete(deleting);
+          setDeleting(undefined); setId(undefined); setName(""); setHost("");
+          await reload(); setNotice("SSH 配置已删除");
+        })}><Trash2 size={15} />确认删除</button>
+      </div>
+    </ConfirmDialog>}
   </div>;
 }

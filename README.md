@@ -2,6 +2,8 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过系统 SSH 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
+v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
+
 ## 核心能力
 
 - **五平台统一阅读与全局检索**：按工作区切换浏览 Codex、Claude Code、Grok Build、Antigravity 与 DeepSeek Harness 会话；支持 `⌘K` 跨五大 Agent 全局搜索、`⌘F` 当前会话／当前工作区搜索，以及右侧独立 20px 用户指令时间线刻度定位（仅标记真实用户指令，悬停预览、点击跨越未加载分页直达目标）。
@@ -13,6 +15,8 @@ AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenth
 - **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；直接选择本机 OpenSSH 配置及 Include 中保存的 Host，复用密钥、ssh-agent 与跳板配置，并支持「安装并连接」同版本服务。切换机器隔离缓存、分页及迟到响应；已受理后台任务继续执行，不阻止切换。
 
 所有模型推理与工具执行始终由各 Agent 原生程序完成；AgentHub 不捆绑模型运行环境，也不改写未知格式的原生会话文件。
+
+在「设置 → 远程连接」选择 Host，可确认一次后「删除 SSH 配置」：移除该别名在用户配置及 Include 中的显式定义与对应连接记录，其他别名、密钥和服务器数据保留；系统配置不能删除。删除当前连接后返回本机。断线恢复沿用当前机器、页面和阅读位置，读取最多自动重试一次，写操作不重放。
 
 ## 本机 Codex 桌面协作
 
@@ -67,7 +71,7 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 
 在「设置 → 远程连接」选择本机已保存的 SSH Host，按服务器权限选择「使用 sudo」，然后「保存并连接」或「安装并连接」。需要密码、首次主机确认或密钥交互时，先在终端完成认证。App 不复制私钥或保存 SSH 密码，不修改 sudoers。
 
-桌面通过常驻 SSH 通道运行固定的 `agenthub-webd rpc-stdio`，转发至服务端私有 Unix 套接字；通知和后台任务由常驻服务继续执行。断线后使用「重新连接」，写操作不会自动重放。Linux 不再监听管理 HTTP 端口，也不需要管理员 API Key 或反向代理。
+桌面通过常驻 SSH 通道运行固定的 `agenthub-webd rpc-stdio`，转发至服务端私有 Unix 套接字；通知和后台任务由常驻服务继续执行。断线后由下一次刷新或请求自动重连，保持当前机器和阅读位置；读取最多自动重试一次，写操作不会重放。Linux 不再监听管理 HTTP 端口，也不需要管理员 API Key 或反向代理。
 
 安装入口下载与 App 同版本的正式签名服务包。Ubuntu/Debian x86_64 自动补齐必要依赖，其他 Linux x86_64 须已有 systemd 和依赖。命令行部署仍可使用仓库外的连接参数：
 
@@ -75,11 +79,11 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ```
 
-升级须先部署服务，再安装 App。支持空库和 schema 3；更早数据库先经过 v2.0.10。安装器验证新服务后清理旧 API Key 和 AgentHub 专属 Nginx 入口，保留共享 Nginx/TLS；桌面清理旧连接及对应钥匙串条目，独立 Codex 发送队列保留。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
+升级须先部署服务，再安装 App。旧 HTTP/Nginx、目录、配置及桌面钥匙串迁移须先由 v2.1.0 完成；本版保留正常安装回退、健康检查、现用密钥和独立 Codex 发送队列。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
 
 ## 发布资产
 
-当前源码版本为 **2.1.0**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.1**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；

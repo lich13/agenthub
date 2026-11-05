@@ -9,7 +9,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -38,21 +37,6 @@ pub struct NotificationRetentionCounts {
     pub dedupe_count: usize,
     pub pending_event_count: usize,
     pub pending_dedupe_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ThreadFollowUp {
-    pub id: String,
-    pub thread_id: String,
-    pub status: String,
-    pub message: String,
-    pub options_json: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub submitted_at: Option<i64>,
-    pub cancelled_at: Option<i64>,
-    pub result_json: Option<String>,
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -573,168 +557,18 @@ impl PanelDb {
     }
 
     pub fn job(&self, id: &str) -> Result<Option<JobRecord>> {
+        self.job_with_output(id, true)
+    }
+
+    pub fn job_with_output(&self, id: &str, include_output: bool) -> Result<Option<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
         conn.query_row(
-            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, output, error FROM jobs WHERE id=?1",
-            params![id],
+            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, CASE WHEN ?2 THEN output ELSE '' END, error FROM jobs WHERE id=?1",
+            params![id, include_output],
             job_from_row,
         )
         .optional()
         .map_err(Into::into)
-    }
-
-    pub fn enqueue_followup(
-        &self,
-        thread_id: &str,
-        message: &str,
-        options: Value,
-    ) -> Result<ThreadFollowUp> {
-        let id = Uuid::new_v4().to_string();
-        let now = Self::now();
-        let options_json = options.to_string();
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            INSERT INTO thread_followups(id, thread_id, status, message, options_json, created_at, updated_at)
-            VALUES(?1, ?2, 'pending', ?3, ?4, ?5, ?5)
-            "#,
-            params![id, thread_id, message, options_json, now],
-        )?;
-        Ok(ThreadFollowUp {
-            id,
-            thread_id: thread_id.to_string(),
-            status: "pending".to_string(),
-            message: message.to_string(),
-            options_json,
-            created_at: now,
-            updated_at: now,
-            submitted_at: None,
-            cancelled_at: None,
-            result_json: None,
-            error: None,
-        })
-    }
-
-    pub fn list_followups(&self, thread_id: &str, limit: u32) -> Result<Vec<ThreadFollowUp>> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT id, thread_id, status, message, options_json, created_at, updated_at,
-                   submitted_at, cancelled_at, result_json, error
-            FROM thread_followups
-            WHERE thread_id=?1
-            ORDER BY created_at DESC, rowid DESC
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = stmt.query_map(params![thread_id, limit.max(1)], followup_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn claim_next_pending_followup(&self, thread_id: &str) -> Result<Option<ThreadFollowUp>> {
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        let followup = conn
-            .query_row(
-                r#"
-                SELECT id, thread_id, status, message, options_json, created_at, updated_at,
-                       submitted_at, cancelled_at, result_json, error
-                FROM thread_followups
-                WHERE thread_id=?1 AND status='pending'
-                ORDER BY created_at ASC, rowid ASC
-                LIMIT 1
-                "#,
-                params![thread_id],
-                followup_from_row,
-            )
-            .optional()?;
-        let Some(followup) = followup else {
-            return Ok(None);
-        };
-        let changed = conn.execute(
-            "UPDATE thread_followups SET status='submitting', updated_at=?2 WHERE id=?1 AND status='pending'",
-            params![followup.id, now],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        Ok(Some(ThreadFollowUp {
-            status: "submitting".to_string(),
-            updated_at: now,
-            ..followup
-        }))
-    }
-
-    pub fn active_followup_upload_ids(&self) -> Result<HashSet<String>> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT options_json
-            FROM thread_followups
-            WHERE status IN ('pending', 'submitting')
-            "#,
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut ids = HashSet::new();
-        for row in rows {
-            let options_json = row?;
-            let Ok(options) = serde_json::from_str::<Value>(&options_json) else {
-                continue;
-            };
-            if let Some(attachments) = options.get("attachments").and_then(Value::as_array) {
-                ids.extend(
-                    attachments
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .filter(|id| Uuid::parse_str(id).is_ok())
-                        .map(str::to_string),
-                );
-            }
-        }
-        Ok(ids)
-    }
-
-    pub fn cancel_followup(&self, thread_id: &str, id: &str) -> Result<bool> {
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        let changed = conn.execute(
-            r#"
-            UPDATE thread_followups
-            SET status='cancelled', cancelled_at=?3, updated_at=?3
-            WHERE thread_id=?1 AND id=?2 AND status='pending'
-            "#,
-            params![thread_id, id, now],
-        )?;
-        Ok(changed > 0)
-    }
-
-    pub fn mark_followup_submitted(&self, id: &str, result: Value) -> Result<()> {
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            UPDATE thread_followups
-            SET status='submitted', submitted_at=?2, updated_at=?2, result_json=?3, error=NULL
-            WHERE id=?1
-            "#,
-            params![id, now, result.to_string()],
-        )?;
-        Ok(())
-    }
-
-    pub fn mark_followup_error(&self, id: &str, error: &str) -> Result<()> {
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            UPDATE thread_followups
-            SET status='error', updated_at=?2, error=?3
-            WHERE id=?1
-            "#,
-            params![id, now, error],
-        )?;
-        Ok(())
     }
 
     pub fn record_probe_event(&self, event: NewProbeEvent<'_>) -> Result<ProbeEvent> {
@@ -1082,22 +916,6 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
     })
 }
 
-fn followup_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadFollowUp> {
-    Ok(ThreadFollowUp {
-        id: row.get(0)?,
-        thread_id: row.get(1)?,
-        status: row.get(2)?,
-        message: row.get(3)?,
-        options_json: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
-        submitted_at: row.get(7)?,
-        cancelled_at: row.get(8)?,
-        result_json: row.get(9)?,
-        error: row.get(10)?,
-    })
-}
-
 fn probe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeEvent> {
     let payload_json: String = row.get(7)?;
     let payload = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
@@ -1196,103 +1014,6 @@ mod tests {
             Some(restarted)
         );
         assert_eq!(changes(), enabled);
-    }
-
-    #[test]
-    fn followup_queue_persists_claims_cancels_and_marks_results() {
-        let db = PanelDb::open(":memory:").unwrap();
-        let first = db
-            .enqueue_followup("thread-a", "first follow-up", json!({"model":"gpt-5.5"}))
-            .unwrap();
-        let second = db
-            .enqueue_followup(
-                "thread-a",
-                "second follow-up",
-                json!({"reasoning_effort":"xhigh"}),
-            )
-            .unwrap();
-
-        let listed = db.list_followups("thread-a", 10).unwrap();
-        assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].id, second.id);
-        assert_eq!(listed[1].id, first.id);
-
-        let claimed = db.claim_next_pending_followup("thread-a").unwrap().unwrap();
-        assert_eq!(claimed.id, first.id);
-        assert_eq!(claimed.status, "submitting");
-        assert!(!db.cancel_followup("thread-a", &first.id).unwrap());
-        assert!(db.cancel_followup("thread-a", &second.id).unwrap());
-
-        db.mark_followup_submitted(&first.id, json!({"turn_id":"turn-next"}))
-            .unwrap();
-        let listed = db.list_followups("thread-a", 10).unwrap();
-        let submitted = listed.iter().find(|item| item.id == first.id).unwrap();
-        let cancelled = listed.iter().find(|item| item.id == second.id).unwrap();
-        assert_eq!(submitted.status, "submitted");
-        assert_eq!(
-            submitted.result_json.as_deref(),
-            Some("{\"turn_id\":\"turn-next\"}")
-        );
-        assert_eq!(cancelled.status, "cancelled");
-    }
-
-    #[test]
-    fn active_followup_upload_ids_only_include_pending_or_submitting_items() {
-        let db = PanelDb::open(":memory:").unwrap();
-        let pending = db
-            .enqueue_followup(
-                "thread-a",
-                "pending",
-                json!({"attachments":["00000000-0000-0000-0000-000000000001", "not-a-uuid"]}),
-            )
-            .unwrap();
-        let submitting = db
-            .enqueue_followup(
-                "thread-a",
-                "submitting",
-                json!({"attachments":["00000000-0000-0000-0000-000000000002"]}),
-            )
-            .unwrap();
-        let submitted = db
-            .enqueue_followup(
-                "thread-a",
-                "submitted",
-                json!({"attachments":["00000000-0000-0000-0000-000000000003"]}),
-            )
-            .unwrap();
-
-        let claimed = db.claim_next_pending_followup("thread-a").unwrap().unwrap();
-        assert_eq!(claimed.id, pending.id);
-        db.mark_followup_submitted(&submitted.id, json!({"ok":true}))
-            .unwrap();
-
-        let ids = db.active_followup_upload_ids().unwrap();
-
-        assert!(ids.contains("00000000-0000-0000-0000-000000000001"));
-        assert!(ids.contains("00000000-0000-0000-0000-000000000002"));
-        assert!(!ids.contains("00000000-0000-0000-0000-000000000003"));
-        assert!(!ids.contains("not-a-uuid"));
-        assert_eq!(submitting.status, "pending");
-    }
-
-    #[test]
-    fn followup_error_records_message_and_is_not_claimed_again() {
-        let db = PanelDb::open(":memory:").unwrap();
-        let followup = db
-            .enqueue_followup("thread-a", "retry later", json!({}))
-            .unwrap();
-        let claimed = db.claim_next_pending_followup("thread-a").unwrap().unwrap();
-        db.mark_followup_error(&claimed.id, "local state unavailable")
-            .unwrap();
-
-        assert!(db
-            .claim_next_pending_followup("thread-a")
-            .unwrap()
-            .is_none());
-        let listed = db.list_followups("thread-a", 10).unwrap();
-        let errored = listed.iter().find(|item| item.id == followup.id).unwrap();
-        assert_eq!(errored.status, "error");
-        assert_eq!(errored.error.as_deref(), Some("local state unavailable"));
     }
 
     #[test]

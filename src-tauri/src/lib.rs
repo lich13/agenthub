@@ -27,6 +27,7 @@ pub fn run() {
         commands::plans::savePlanMarkdown,
         remote::remoteGet,
         remote::remoteSshHosts,
+        remote::remoteSshDelete,
         remote::remoteInstall,
         remote::remoteVerify,
         remote::remoteSave,
@@ -129,7 +130,7 @@ pub fn run() {
             }
             let remote = remote::RemoteConnections::load(&state.config().paths.data_dir)?;
             app.manage(codex_desktop::CodexDesktopBridge::new(
-                remote.credential_access(),
+                agenthub_core::services::credentials::CredentialAccess::default(),
             ));
             app.manage(remote);
             app.manage(state);

@@ -1,26 +1,19 @@
-use super::{api_error, http_update_platform, ok, ApiResponse};
+use super::ApiErrorKind;
+use super::{api_error, linux_update_platform, ok, ApiResponse};
 use crate::{linux_adapter, state::AppState};
 use agenthub_core::services::{
     cleanup::{CleanupExecuteRequest, CleanupTarget},
     use_cases::AgentHubUseCases,
 };
-use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    Json,
-};
 use serde::Deserialize;
 
-pub(crate) async fn archive_delete_dry_run(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn archive_delete_dry_run(state: AppState) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
         .dry_run(CleanupTarget::Archived)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
 }
 
@@ -34,12 +27,11 @@ pub(crate) struct ArchiveExecuteRequest {
 }
 
 pub(crate) async fn archive_delete_execute(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(payload): Json<ArchiveExecuteRequest>,
+    state: AppState,
+    payload: ArchiveExecuteRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
         .execute_confirmed(
@@ -50,18 +42,17 @@ pub(crate) async fn archive_delete_execute(
                 candidates: payload.candidates,
             },
         )
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
+        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?)
 }
 
 pub(crate) async fn hidden_threads_delete_dry_run(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<agenthub_core::archive::hidden_scan::HiddenScanRequest>,
+    state: AppState,
+    request: agenthub_core::archive::hidden_scan::HiddenScanRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     ok(AgentHubUseCases::new(&platform)
         .cleanup()
         .scan_hidden(state.codex_paths(), auth.admin_id.to_string(), request)
@@ -69,12 +60,11 @@ pub(crate) async fn hidden_threads_delete_dry_run(
 }
 
 pub(crate) async fn hidden_threads_delete_execute(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(payload): Json<ArchiveExecuteRequest>,
+    state: AppState,
+    payload: ArchiveExecuteRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = http_update_platform();
+    let platform = linux_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
         .execute_confirmed(
@@ -85,7 +75,7 @@ pub(crate) async fn hidden_threads_delete_execute(
                 candidates: payload.candidates,
             },
         )
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         linux_adapter::execute_cleanup_plan(&state, &auth, plan)
     })
@@ -93,13 +83,10 @@ pub(crate) async fn hidden_threads_delete_execute(
     .map_err(anyhow::Error::from)??)
 }
 
-pub(crate) async fn dsh_archive_delete_dry_run(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn dsh_archive_delete_dry_run(state: AppState) -> ApiResponse {
     let dsh = state.dsh_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .cleanup()
             .dsh_archive_dry_run(&dsh)
     })
@@ -108,14 +95,13 @@ pub(crate) async fn dsh_archive_delete_dry_run(
 }
 
 pub(crate) async fn dsh_archive_delete_execute(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<agenthub_core::dsh::DshArchiveDeleteRequest>,
+    state: AppState,
+    request: agenthub_core::dsh::DshArchiveDeleteRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let dsh = state.dsh_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-        let result = AgentHubUseCases::new(&http_update_platform())
+        let result = AgentHubUseCases::new(&linux_update_platform())
             .cleanup()
             .dsh_archive_execute(&dsh, request)?;
         state.db.record_audit(Some(&auth.admin_id), "dsh_archives.delete.execute", Some("dsh_archives"), None, None,
@@ -125,13 +111,12 @@ pub(crate) async fn dsh_archive_delete_execute(
 }
 
 pub(crate) async fn unified_cleanup_dry_run(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<agenthub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
+    state: AppState,
+    request: agenthub_core::services::cleanup::UnifiedCleanupDryRunRequest,
 ) -> ApiResponse {
     let paths = state.unified_cleanup_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&http_update_platform())
+        AgentHubUseCases::new(&linux_update_platform())
             .cleanup()
             .unified_dry_run(&paths, request)
     })
@@ -140,15 +125,14 @@ pub(crate) async fn unified_cleanup_dry_run(
 }
 
 pub(crate) async fn unified_cleanup_execute(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<agenthub_core::services::cleanup::UnifiedCleanupExecuteRequest>,
+    state: AppState,
+    request: agenthub_core::services::cleanup::UnifiedCleanupExecuteRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let paths = state.unified_cleanup_paths();
     ok(
         agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-            let result = AgentHubUseCases::new(&http_update_platform())
+            let result = AgentHubUseCases::new(&linux_update_platform())
                 .cleanup()
                 .unified_execute(&paths, request)?;
             state.db.record_audit(

@@ -90,49 +90,17 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
     }
     Ok(())
 }
-async fn dispatch(state: AppState, request: Request) -> Response {
-    use axum::{
-        extract::{Path, State},
-        http::HeaderMap,
-        response::IntoResponse,
-        Json,
-    };
-    let response = crate::api::rpc_dispatch::rpc_dispatch(
-        State(state),
-        Path(request.command),
-        None,
-        HeaderMap::new(),
-        Json(request.args),
-    )
-    .await
-    .into_response();
-    let success = response.status().is_success();
-    let decoded = async {
-        let bytes = axum::body::to_bytes(
-            response.into_body(),
-            agenthub_core::resource_limits::REMOTE_RESPONSE_BYTES,
-        )
-        .await?;
-        Ok::<_, anyhow::Error>(serde_json::from_slice::<serde_json::Value>(&bytes)?)
-    }
-    .await;
-    match decoded {
-        Ok(value) if success => Response {
+pub(crate) async fn dispatch(state: AppState, request: Request) -> Response {
+    match crate::api::rpc_dispatch::rpc_dispatch(state, request.command, request.args).await {
+        Ok(value) => Response {
             id: request.id,
             result: Some(value),
             error: None,
         },
-        Ok(value) => Response {
+        Err(error) => Response {
             id: request.id,
             result: None,
-            error: Some(agenthub_core::security::redact_output(
-                value["error"].as_str().unwrap_or("远程操作失败"),
-            )),
-        },
-        Err(_) => Response {
-            id: request.id,
-            result: None,
-            error: Some("远程响应读取失败或超出限制".into()),
+            error: Some(agenthub_core::security::redact_output(&error.message)),
         },
     }
 }

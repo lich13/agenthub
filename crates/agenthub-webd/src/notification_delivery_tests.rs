@@ -1315,22 +1315,12 @@ async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_data
 
 #[tokio::test]
 async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
-    use tower::ServiceExt;
-
     let fixture = Fixture::new().await;
     let state = crate::state::AppState::new(fixture.config.clone(), fixture.db.clone());
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/rpc/probe.gotifyTest")
-        .header("content-type", "application/json");
-    let response = crate::api::router(state)
-        .oneshot(request.body(Body::from("{}")).unwrap())
+    let error = crate::api::rpc_dispatch::rpc_dispatch(state, "probe.gotifyTest".into(), json!({}))
         .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-    let text = std::str::from_utf8(&body).unwrap();
-    assert!(text.contains("unavailable: retired rpc command"));
+        .unwrap_err();
+    assert_eq!(error.kind, crate::api::ApiErrorKind::NotFound);
     assert_eq!(fixture.bark.count(), 0);
     assert_eq!(
         fixture

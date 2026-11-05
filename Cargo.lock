@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -89,7 +89,6 @@ dependencies = [
  "sha2",
  "tokio",
  "toml",
- "tower",
  "tracing",
  "tracing-subscriber",
  "uuid",

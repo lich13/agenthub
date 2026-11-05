@@ -25,6 +25,7 @@ pub(crate) struct DesktopJobsRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopJobDetailRequest {
     pub id: String,
+    pub include_output: Option<bool>,
 }
 
 pub(crate) fn jobs_with_state(
@@ -49,7 +50,7 @@ pub(crate) fn job_detail_with_state(
     let plan = use_cases.jobs().detail(&request.id)?;
     Ok(state
         .db
-        .job(&plan.job_id)?
+        .job_with_output(&plan.job_id, request.include_output.unwrap_or(true))?
         .map(|job| use_cases.jobs().response(job).into()))
 }
 

@@ -22,7 +22,7 @@ export function UpdatePanel({ capabilities, status, loading, action, busy, finis
   const working = busy || status?.state === "checking" || status?.state === "installing";
   const progress = action === "prune" ? "正在清理更新备份…"
     : action === "install" || status?.state === "installing"
-      ? /installing signed/.test(job?.output ?? "") ? "正在安装…" : "正在下载并安装…"
+      ? "正在下载并安装…"
       : "正在检查更新…";
   const feedback = finished && !failure && !working
     ? action === "prune" ? "更新备份已清理"

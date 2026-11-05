@@ -366,6 +366,8 @@ export type UpdateStatus = {
 };
 
 
+export type DesktopJobDetailRequest = { id: string; includeOutput?: boolean };
+
 export type JobRecord = {
   id: string;
   kind: string;
@@ -670,7 +672,7 @@ export type CodexConfig = {
   collaboration_mode?: string | null;
 };
 
-export type { SshHostList, RemoteMachineSummary, RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
+export type { SshDeleteRequest, SshHostList, RemoteMachineSummary, RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
 
 export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };

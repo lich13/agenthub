@@ -43,7 +43,6 @@ export type AgentHubContractRegistry = {
   visual: ContractVisual;
   actions: ContractAction[];
   dtoCatalog: Record<string, ContractDtoCatalogEntry>;
-  retiredActions: string[];
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -94,7 +93,6 @@ function assertContractRegistry(value: unknown): asserts value is AgentHubContra
   if (!isStringArray(value.visual.forbidden.desktopEmbeddedTauri)) {
     throw new Error("contract registry forbidden visual rules must cover desktop host surfaces");
   }
-  if (!isStringArray(value.retiredActions)) throw new Error("contract registry retiredActions must be a string array");
   if (!Array.isArray(value.actions)) {
     throw new Error("contract registry actions must be an array");
   }

@@ -100,15 +100,6 @@ for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWrite
 
 
 contract = json.loads((root / "contracts/agenthub-contract.json").read_text())
-active = {action.get("id") for action in contract.get("actions", [])}
-if any(action.startswith("threads.goal.") for action in active):
-    raise SystemExit("Goal action is still active in the contract")
-retired = set(contract.get("retiredActions", []))
-if not {"threads.goal.get", "threads.goal.save", "threads.goal.clear", "threads.goal.pause", "threads.goal.resume"} <= retired:
-    raise SystemExit("Goal tombstones are incomplete")
-
-if any(action.startswith("pi.") for action in active) or not {"pi.list", "pi.detail", "pi.rename", "pi.deletePreview", "pi.deleteExecute"} <= retired:
-    raise SystemExit("retired provider contract boundary is incomplete")
 if "pub const API_VERSION: u32 = 2;" not in (root / "crates/agenthub-core/src/services/system.rs").read_text():
     raise SystemExit("preview-bound cleanup requires API protocol 2")
 notes = subprocess.check_output([sys.executable, str(root / "scripts/release-notes.py"), version], text=True)

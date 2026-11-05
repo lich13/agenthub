@@ -22,24 +22,6 @@ fn probe_error_monitor_config_defaults_enabled_and_patches_independent_switches(
     let updated = patch_probe_config_toml("[probe]\nenabled = true\n", &patch).unwrap();
     assert!(updated.contains("[probe.error_monitor]"));
     assert!(updated.contains("enabled = false"));
-    assert!(!updated.contains("auto_resume_goals"));
-}
-
-#[test]
-fn retired_goal_switch_is_removed_during_config_load() {
-    let root = std::env::temp_dir().join(format!("agenthub-goal-config-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&root).unwrap();
-    let path = root.join("config.toml");
-    let text = toml::to_string_pretty(&Config::default()).unwrap().replace(
-        "[probe.error_monitor]\n",
-        "[probe.error_monitor]\nauto_resume_goals = true\n",
-    );
-    std::fs::write(&path, text).unwrap();
-    let config = Config::load(&path).unwrap();
-    assert!(config.probe.error_monitor.enabled);
-    let rewritten = std::fs::read_to_string(&path).unwrap();
-    assert!(!rewritten.contains("auto_resume_goals"));
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

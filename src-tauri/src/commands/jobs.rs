@@ -21,7 +21,8 @@ pub fn listJobs(
 pub fn getJob(
     state: tauri::State<'_, DesktopState>,
     id: String,
+    include_output: Option<bool>,
 ) -> Result<Option<DesktopJobResponse>, String> {
-    job_service::job_detail_with_state(&state, DesktopJobDetailRequest { id })
+    job_service::job_detail_with_state(&state, DesktopJobDetailRequest { id, include_output })
         .map_err(|err| err.to_string())
 }

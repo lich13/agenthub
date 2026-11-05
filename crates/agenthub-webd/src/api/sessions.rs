@@ -5,13 +5,8 @@ use agenthub_core::services::{
     sessions::{SessionBatchExecuteRequest, SessionBatchRequest},
     use_cases::AgentHubUseCases,
 };
-use axum::{extract::State, http::HeaderMap, Json};
 
-pub(crate) async fn search(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<SessionSearchRequest>,
-) -> ApiResponse {
+pub(crate) async fn search(state: AppState, request: SessionSearchRequest) -> ApiResponse {
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .search(state.codex_paths())
@@ -23,9 +18,8 @@ pub(crate) async fn search(
 }
 
 pub(crate) async fn attachment_read(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<agenthub_core::user_message::SessionAttachmentRequest>,
+    state: AppState,
+    request: agenthub_core::user_message::SessionAttachmentRequest,
 ) -> ApiResponse {
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
@@ -37,11 +31,7 @@ pub(crate) async fn attachment_read(
     ok(result)
 }
 
-pub(crate) async fn bulk_preview(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<SessionBatchRequest>,
-) -> ApiResponse {
+pub(crate) async fn bulk_preview(state: AppState, request: SessionBatchRequest) -> ApiResponse {
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
@@ -53,9 +43,8 @@ pub(crate) async fn bulk_preview(
 }
 
 pub(crate) async fn bulk_execute(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-    Json(request): Json<SessionBatchExecuteRequest>,
+    state: AppState,
+    request: SessionBatchExecuteRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let detail = serde_json::json!({"provider": request.provider, "operation": request.operation, "count": request.items.len()});

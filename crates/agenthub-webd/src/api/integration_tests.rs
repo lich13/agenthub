@@ -1,10 +1,11 @@
 use super::{
-    load_probe_threads, probe_config_path, router,
+    load_probe_threads, probe_config_path,
     test_support::{
         sandboxed_test_config, source_line_count, write_executable_fixture, AsyncEnvGuard,
     },
     update_service, UpdateAction,
 };
+use super::{rpc_dispatch::rpc_dispatch, ApiErrorKind};
 use agenthub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
 use agenthub_core::{
     config::Config,
@@ -20,10 +21,7 @@ use agenthub_core::{
         threads as thread_service,
     },
 };
-use axum::{
-    body::{to_bytes, Body},
-    http::{Request, StatusCode},
-};
+use axum::http::StatusCode;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashSet;
@@ -37,7 +35,6 @@ use std::{
         Mutex,
     },
 };
-use tower::ServiceExt;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -193,29 +190,25 @@ fn app_server_missing_socket_state() -> (crate::state::AppState, PathBuf) {
     (state, home)
 }
 
-async fn request_rpc_json(app: axum::Router, command: &str, body: &str) -> serde_json::Value {
-    let builder = Request::builder()
-        .method("POST")
-        .uri(format!("/api/rpc/{command}"))
-        .header("content-type", "application/json");
-    let response = app
-        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "RPC {command}");
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-async fn request_rpc_status(app: axum::Router, command: &str, body: &str) -> StatusCode {
-    let builder = Request::builder()
-        .method("POST")
-        .uri(format!("/api/rpc/{command}"))
-        .header("content-type", "application/json");
-    app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+async fn request_rpc_json(
+    state: crate::state::AppState,
+    command: &str,
+    body: &str,
+) -> serde_json::Value {
+    rpc_dispatch(state, command.into(), serde_json::from_str(body).unwrap())
         .await
         .unwrap()
-        .status()
+}
+async fn request_rpc_status(
+    state: crate::state::AppState,
+    command: &str,
+    body: &str,
+) -> Result<(), ApiErrorKind> {
+    let args = serde_json::from_str(body).map_err(|_| ApiErrorKind::InvalidRequest)?;
+    rpc_dispatch(state, command.into(), args)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.kind)
 }
 
 #[tokio::test]
@@ -255,7 +248,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         vec![executable],
         std::time::Duration::from_secs(5),
     );
-    let app = router(state.clone());
+    let app = state.clone();
 
     let list = request_rpc_json(app.clone(), "threads.list", r#"{"limit":10}"#).await;
     assert_eq!(list[0]["id"], "thread-a");
@@ -304,12 +297,12 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     );
     assert_eq!(
         request_rpc_status(
-            router(state),
+            state,
             "threads.rename",
             r#"{"threadId":"thread-a","name":"must not use SQL"}"#
         )
         .await,
-        StatusCode::INTERNAL_SERVER_ERROR
+        Err(ApiErrorKind::OperationFailed)
     );
     let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
     assert_eq!(
@@ -345,22 +338,8 @@ async fn rpc_probe_typed_commands_start_matching_jobs() {
         ("probe.removeHooks", "probe_hooks_remove"),
     ] {
         let state = rpc_test_state();
-        let app = router(state.clone());
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/rpc/{command}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK, "{command}");
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let app = state.clone();
+        let payload = request_rpc_json(app, command, "{}").await;
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind, "{command}");
@@ -375,7 +354,7 @@ async fn rpc_update_typed_commands_start_update_jobs() {
         ("updates.prune", "agenthub_update_prune"),
     ] {
         let rpc_state = rpc_test_state();
-        let rpc = request_rpc_json(router(rpc_state.clone()), command, "{}").await;
+        let rpc = request_rpc_json(rpc_state.clone(), command, "{}").await;
         let job_id = rpc["job_id"].as_str().unwrap();
         let job = rpc_state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind, "{command}");
@@ -385,18 +364,18 @@ async fn rpc_update_typed_commands_start_update_jobs() {
 #[tokio::test]
 async fn rpc_cleanup_execute_requires_confirmed_targets() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     for command in ["cleanup.archiveExecute", "cleanup.hiddenExecute"] {
         let status = request_rpc_status(app.clone(), command, r#"{"confirmed":true}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{command}");
+        assert_eq!(status, Err(ApiErrorKind::InvalidRequest), "{command}");
     }
 }
 
 #[tokio::test]
 async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     let missing_candidates = request_rpc_status(
         app.clone(),
@@ -404,7 +383,7 @@ async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
         r#"{"confirmed":true,"expectedCount":0}"#,
     )
     .await;
-    assert_eq!(missing_candidates, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_candidates, Err(ApiErrorKind::InvalidRequest));
 
     let mismatched_count = request_rpc_status(
         app,
@@ -412,25 +391,7 @@ async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
         r#"{"confirmed":true,"expectedCount":1,"candidates":[]}"#,
     )
     .await;
-    assert_eq!(mismatched_count, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn retired_pi_commands_are_unavailable() {
-    let state = rpc_test_state();
-    let app = router(state);
-    for command in [
-        "pi.list",
-        "pi.detail",
-        "pi.rename",
-        "pi.deletePreview",
-        "pi.deleteExecute",
-    ] {
-        assert_eq!(
-            request_rpc_status(app.clone(), command, "{}").await,
-            StatusCode::NOT_FOUND
-        );
-    }
+    assert_eq!(mismatched_count, Ok(()));
 }
 
 #[test]
@@ -516,7 +477,7 @@ fn linux_probe_process_command_preserves_paths_as_literal_arguments() {
 }
 
 #[test]
-fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
+fn linux_entry_delegates_to_current_core_plans() {
     let source = include_str!("../api.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -539,23 +500,6 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
             "Linux RPC handlers must call the shared core facade/plan: {required}"
         );
     }
-    for retired in [
-        "start_thread_command_execution_plan",
-        "start_codex_resume_action",
-        "execute_autosubmit_effects",
-        "enqueue_followup_plan",
-        "goal_get_plan",
-        "apply_goal_command_plan",
-    ] {
-        assert!(
-            !handler_source.contains(retired),
-            "retired handler remains: {retired}"
-        );
-        assert!(
-            !adapter_source.contains(retired),
-            "retired executor remains: {retired}"
-        );
-    }
     for required_adapter_landing in [
         "AgentHubUseCases::new(&platform).cleanup()",
         ".dry_run_archived(",
@@ -569,61 +513,17 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
         );
     }
 
-    for forbidden in [
-        "state.db.get_thread_goal(",
-        "state.db.upsert_thread_goal(",
-        "state.db.delete_thread_goal(",
-        "state.db.update_thread_goal_status(",
-        "state.db.list_followups(",
-        "state.db.enqueue_followup(",
-        "state.db.cancel_followup(",
-        "payload.name.trim()",
-        "job_service::archive_thread_response(",
-        "job_service::rename_thread_response(",
-        "upload_service::plan_store_uploads(items)",
-        "uploads::delete_upload(&root, &id)",
-        "archive::plan_delete_archived(",
-        "archive::execute_delete_archived(",
-        "archive::plan_delete_hidden(",
-        "archive::execute_delete_hidden(",
-        "cleanup_service::dry_run_archived_with_capability",
-        "cleanup_service::execute_archived_with_capability",
-        "cleanup_service::dry_run_hidden_with_capability",
-        "cleanup_service::execute_hidden_with_capability",
-        "cleanup_service::validate_cleanup_expected_count",
-        "\"stopThread\"",
-        "\"bridge\": false",
-        "\"cancelFollowUp\"",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "Linux RPC handlers must not reimplement migrated goal/follow-up transactions: {forbidden}"
-        );
-    }
-
     let rpc_dispatch_source = include_str!("rpc_dispatch.rs");
     assert!(
         !rpc_dispatch_source.contains("ArchiveExecuteRequest { confirmed: true }"),
         "Linux RPC cleanup execute must preserve confirmed/expectedCount from the request payload"
     );
-
-    for forbidden_keyword in [
-        &format!("{}_", "desktop"),
-        &format!("get{}", "Desktop"),
-        &format!("start{}Job", "Probe"),
-        &format!("run{}Action", "Update"),
-    ] {
-        assert!(
-            !source.contains(forbidden_keyword),
-            "api.rs must not reintroduce retired desktop/probe/update command surface: {forbidden_keyword}"
-        );
-    }
 }
 
 #[tokio::test]
 async fn rpc_runtime_capabilities_has_minimal_dto_shape() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     let rpc = request_rpc_json(app, "system.capabilities", "{}").await;
 
@@ -645,7 +545,7 @@ async fn rpc_update_typed_actions_start_jobs() {
         ("updates.prune", "agenthub_update_prune"),
     ] {
         let state = rpc_test_state();
-        let rpc = request_rpc_json(router(state.clone()), command, "{}").await;
+        let rpc = request_rpc_json(state.clone(), command, "{}").await;
         let job_id = rpc["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind, "{command}");
@@ -655,7 +555,7 @@ async fn rpc_update_typed_actions_start_jobs() {
 #[tokio::test]
 async fn rpc_update_status_uses_shared_update_status_shape() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     let rpc = request_rpc_json(app, "updates.status", "{}").await;
 
@@ -683,7 +583,7 @@ async fn panel_update_starts_fixed_panel_jobs() {
         ),
     ] {
         let state = rpc_test_state();
-        let app = router(state.clone());
+        let app = state.clone();
 
         let payload = request_rpc_json(app.clone(), command, "{}").await;
         let job_id = payload["job_id"].as_str().unwrap();
@@ -748,7 +648,7 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
 #[tokio::test]
 async fn unified_update_status_uses_shared_shape() {
     let state = rpc_test_state();
-    let app = router(state.clone());
+    let app = state.clone();
 
     let payload = request_rpc_json(app, "updates.status", "{}").await;
     assert_eq!(payload["method"], "linux_systemd_job");
@@ -764,7 +664,7 @@ async fn unified_update_status_uses_shared_shape() {
 #[tokio::test]
 async fn runtime_capabilities_preserve_linux_features() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     let payload = request_rpc_json(app, "system.capabilities", "{}").await;
     assert_eq!(payload["host_surface"], "linux_server_api");
@@ -806,7 +706,7 @@ async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
     let mut config = state.config();
     config.codex.home = codex_home.clone();
     state.replace_config(config);
-    let app = router(state.clone());
+    let app = state.clone();
 
     let status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(status["label"], "Probe");
@@ -838,7 +738,7 @@ async fn probe_status_route_caches_initial_snapshot_and_throttles_background_ref
     let mut config = state.config();
     config.codex.home = codex_home.clone();
     state.replace_config(config);
-    let app = router(state.clone());
+    let app = state.clone();
 
     let first_status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(first_status["label"], "Probe");
@@ -975,7 +875,7 @@ async fn probe_events_route_lists_recent_events_with_auth_and_redacts_sensitive_
             }),
         })
         .unwrap();
-    let app = router(state);
+    let app = state;
 
     let payload = request_rpc_json(app, "probe.events", r#"{"limit":1}"#).await;
     assert_eq!(payload["limit"], 1);
@@ -1025,7 +925,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
     config.paths.db_path = state.config().paths.db_path.clone();
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
-    let app = router(state.clone());
+    let app = state.clone();
 
     let status = request_rpc_status(
         app,
@@ -1033,7 +933,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
         r#"{"settings":{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}}"#)
     .await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, Err(ApiErrorKind::InvalidRequest));
     assert!(state
         .db
         .get_secret_setting_bytes("probe_bark_device_key")
@@ -1070,7 +970,7 @@ async fn probe_actions_expose_safe_probe_surfaces() {
     ] as [(&str, &str, &str, &str); 3]
     {
         let state = rpc_test_state();
-        let app = router(state.clone());
+        let app = state.clone();
 
         let payload = request_rpc_json(app.clone(), command, "{}").await;
         let job_id = payload["job_id"].as_str().unwrap();
@@ -1081,14 +981,14 @@ async fn probe_actions_expose_safe_probe_surfaces() {
     }
 
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
     for command in [
         "probe.logsDb.status",
         "probe.logsDbDryRun",
         "probe.logsDbExecute",
     ] {
         let status = request_rpc_status(app.clone(), command, "{}").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(status, Err(ApiErrorKind::NotFound));
     }
 }
 
@@ -1099,7 +999,7 @@ async fn probe_settings_patch_rejects_missing_config_file() {
     fs::create_dir_all(&dir).unwrap();
     let missing_path = dir.join("missing-config.toml");
     let _config_env = AsyncEnvGuard::set_config(&missing_path).await;
-    let app = router(state);
+    let app = state;
 
     let status = request_rpc_status(
         app,
@@ -1108,14 +1008,14 @@ async fn probe_settings_patch_rejects_missing_config_file() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, Err(ApiErrorKind::InvalidRequest));
 }
 
 #[tokio::test]
 async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
     let (state, _dir, config_path) = rpc_test_state_with_config_file();
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
-    let app = router(state.clone());
+    let app = state.clone();
 
     let _ = request_rpc_json(
         app.clone(),
@@ -2538,41 +2438,9 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn retired_task_mutation_routes_return_not_found_even_with_valid_auth() {
-    let state = rpc_test_state();
-    let app = router(state);
-    for command in [
-        "threads.create",
-        "threads.send",
-        "threads.steer",
-        "threads.stop",
-        "threads.fork",
-        "threads.followups.list",
-        "threads.followups.enqueue",
-        "threads.followups.cancel",
-        "threads.goal.get",
-        "threads.goal.save",
-        "threads.goal.clear",
-        "threads.goal.pause",
-        "threads.goal.resume",
-        "uploads.store",
-        "uploads.delete",
-        "claude.overview",
-        "desktopWebui.start",
-        "desktopWebui.stop",
-    ] {
-        assert_eq!(
-            request_rpc_status(app.clone(), command, "{}").await,
-            StatusCode::NOT_FOUND,
-            "{command} must stay retired"
-        );
-    }
-}
-
-#[tokio::test]
 async fn batch_rpc_rejects_paths_or_wildcards() {
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
 
     for payload in [
         r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":[],"path":"/tmp"}}"#,
@@ -2580,7 +2448,7 @@ async fn batch_rpc_rejects_paths_or_wildcards() {
     ] {
         assert_eq!(
             request_rpc_status(app.clone(), "sessions.bulkPreview", payload).await,
-            StatusCode::BAD_REQUEST
+            Err(ApiErrorKind::InvalidRequest)
         );
     }
 }
@@ -2590,7 +2458,7 @@ async fn claude_rpc_identity_paging_rename_and_delete_are_scoped() {
     let root = temp_test_dir("agenthub-claude-rpc");
     let _env = AsyncEnvGuard::set_many(&[("CLAUDE_CONFIG_DIR", &root)]).await;
     let state = rpc_test_state();
-    let app = router(state);
+    let app = state;
     assert_eq!(
         request_rpc_json(app.clone(), "claude.list", "{}").await,
         json!([])
@@ -2624,9 +2492,9 @@ async fn claude_rpc_identity_paging_rename_and_delete_are_scoped() {
             r#"{"sessionKey":"/etc/passwd"}"#
         )
         .await,
-        StatusCode::INTERNAL_SERVER_ERROR
+        Err(ApiErrorKind::OperationFailed)
     );
-    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string()).await,StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string()).await,Err(ApiErrorKind::OperationFailed));
     let preview = request_rpc_json(
         app.clone(),
         "claude.deletePreview",
@@ -2722,7 +2590,7 @@ impl SubagentRpcFixture {
         Self { home, state }
     }
 
-    async fn attachment_request(&self, app: axum::Router) -> serde_json::Value {
+    async fn attachment_request(&self, app: crate::state::AppState) -> serde_json::Value {
         let detail = request_rpc_json(
             app,
             "threads.subagentDetail",
@@ -2764,7 +2632,7 @@ impl Drop for SubagentRpcFixture {
 #[tokio::test]
 async fn subagent_detail_and_attachment_rpc_validate_native_reads() {
     let fixture = SubagentRpcFixture::new();
-    let app = router(fixture.state.clone());
+    let app = fixture.state.clone();
     let attachment = fixture.attachment_request(app.clone()).await;
     let detail = json!({"rootThreadId":"rpc-root","agentId":"rpc-child"});
 
@@ -2788,7 +2656,7 @@ async fn subagent_detail_and_attachment_rpc_validate_native_reads() {
 #[tokio::test]
 async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
     let fixture = SubagentRpcFixture::new();
-    let app = router(fixture.state.clone());
+    let app = fixture.state.clone();
     let attachment = fixture.attachment_request(app.clone()).await;
     let response = request_rpc_json(
         app.clone(),
@@ -2817,7 +2685,7 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
                 };
                 assert_eq!(
                     request_rpc_status(app.clone(), command, &body.to_string(),).await,
-                    StatusCode::BAD_REQUEST,
+                    Err(ApiErrorKind::InvalidRequest),
                     "{command} must reject caller field {field}"
                 );
             }
@@ -2829,7 +2697,7 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         invalid[field] = json!(native_path);
         assert_eq!(
             request_rpc_status(app.clone(), "threads.subagentDetail", &invalid.to_string(),).await,
-            StatusCode::INTERNAL_SERVER_ERROR
+            Err(ApiErrorKind::OperationFailed)
         );
     }
     for field in ["rootThreadId", "sessionKey", "messageId", "attachmentId"] {
@@ -2837,14 +2705,14 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         invalid[field] = json!(native_path);
         assert_eq!(
             request_rpc_status(app.clone(), "sessions.attachmentRead", &invalid.to_string(),).await,
-            StatusCode::INTERNAL_SERVER_ERROR
+            Err(ApiErrorKind::OperationFailed)
         );
     }
     let mut wrong_root = attachment;
     wrong_root["rootThreadId"] = json!("rpc-other-root");
     assert_eq!(
         request_rpc_status(app, "sessions.attachmentRead", &wrong_root.to_string(),).await,
-        StatusCode::INTERNAL_SERVER_ERROR
+        Err(ApiErrorKind::OperationFailed)
     );
 }
 

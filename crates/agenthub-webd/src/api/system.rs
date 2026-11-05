@@ -8,15 +8,11 @@ use agenthub_core::{
     },
 };
 use anyhow::Result as AnyhowResult;
-use axum::{extract::State, http::HeaderMap};
 use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
 
-pub(crate) async fn system_capabilities(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
+pub(crate) async fn system_capabilities(state: AppState) -> ApiResponse {
     let platform = state.platform().clone();
     ok(
         agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
@@ -29,18 +25,12 @@ pub(crate) async fn system_capabilities(
     )
 }
 
-pub(crate) async fn system_version(
-    State(_state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
-    ok(http_version_info().await?)
+pub(crate) async fn system_version(_state: AppState) -> ApiResponse {
+    ok(linux_version_info().await?)
 }
 
-pub(crate) async fn system_update_status(
-    State(state): State<AppState>,
-    _headers: HeaderMap,
-) -> ApiResponse {
-    let version = http_version_info().await?;
+pub(crate) async fn system_update_status(state: AppState) -> ApiResponse {
+    let version = linux_version_info().await?;
     let platform = state.platform().clone();
     ok(update_service::update_status_for_surface(
         &state.config(),
@@ -51,7 +41,7 @@ pub(crate) async fn system_update_status(
     ))
 }
 
-async fn http_version_info() -> AnyhowResult<agenthub_core::system::VersionInfo> {
+async fn linux_version_info() -> AnyhowResult<agenthub_core::system::VersionInfo> {
     let inputs = agenthub_core::system::VersionInfoInputs {
         panel_latest: github_latest_release("lich13", "agenthub").await.ok(),
         codex_latest: npm_latest_version("@openai/codex").await.ok(),
@@ -103,7 +93,6 @@ async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
 
 pub(crate) async fn start_update_action(
     state: AppState,
-    _headers: HeaderMap,
     action: UpdateAction,
     audit_action: Option<&str>,
 ) -> ApiResponse {
@@ -122,6 +111,6 @@ pub(crate) async fn start_update_action(
     ok(json!({"job_id": id}))
 }
 
-pub(crate) fn http_update_platform() -> PlatformPaths {
+pub(crate) fn linux_update_platform() -> PlatformPaths {
     PlatformPaths::for_kind(PlatformKind::Linux)
 }

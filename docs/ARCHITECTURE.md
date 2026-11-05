@@ -4,7 +4,7 @@
 
 ## 运行架构与模块
 
-`desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，HTTP/Tauri 只做薄适配。
+`desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，SSH RPC/Tauri 只做薄适配。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -29,7 +29,7 @@ API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力
 3. 同步 WebUI 的类型、query/domain 和对应测试。
 4. 执行契约、Rust、WebUI、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
 
-共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*` 不进入 Linux dispatcher。旧命令及别名集中为 tombstone，保留原适配层的不可用结果，不重新启用执行入口。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
+共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
 
 `contracts/wire-types.json` 是测试用映射及审阅后的源结构清单：Rust 用已有 syn/quote 开发依赖读取实际类型、serde 属性、枚举、适配签名及动态 JSON 表达式；TypeScript 用锁定编译器 API 读取实际声明及调用包装。自由 JSON 与内联请求必须明确归类；代表性真实序列化测试验证缺省、null 和枚举拼写。仅名称标记不能通过实际类型/注册函数检查，负面 fixture 覆盖缺字段、缺映射和缺适配入口。更新清单必须同时审阅线上 wire shape，不能用重新生成清单代替兼容性判断。
 
@@ -191,9 +191,15 @@ React 只向原生 IPC 传命令、参数及连接 revision。桌面读取用户
 
 「安装并连接」经 SSH 发送 App 内置固定引导脚本，下载同版本正式服务包，复用可信公钥、签名验证及现有安装器。Ubuntu/Debian x86_64 自动补齐必要依赖；其他 Linux x86_64 需要已有 systemd 和依赖。失败按认证、依赖、下载、签名、安装或健康检查阶段报错，可明确重试；不修改 sudoers。
 
-TCP/HTTP 管理监听、API Key 鉴权和限流已删除。安装器验证新服务后清除自有旧 API Key 设置和 AgentHub 专属 Nginx include／snippet，保留共享 Nginx/TLS。桌面通过 CredentialAccess 删除自有旧连接对应的钥匙串条目；Codex 发送队列使用的独立凭据设施保留。业务审计继续记录 SSH 管理操作。systemd 保留隔离与 Provider 数据根的精确 ReadWritePaths，Grok／Claude 的配置和凭据使用可选 ReadOnlyPaths。
+TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目录、配置和桌面钥匙串迁移由 v2.1.0 完成，本版不再执行。CredentialAccess 独立于 SSH，保留 Codex 发送队列密钥与业务审计。systemd 继续保留隔离及 Provider 数据根的精确 ReadWritePaths，Grok／Claude 配置与凭据使用可选 ReadOnlyPaths。
 
-更新任务与 Probe helper 使用内部 `ProcessCommand` 的 program/args 直接启动，不执行配置 shell 字符串。现行和完整匹配的历史默认更新命令映射到固定包装器及参数；自定义 shell、环境赋值、管道、重定向和命令替换返回固定错误。任务名称、状态、输出处理、互斥与审计字段保留；备份清理直接运行固定 Python 参数，保留最近三份。序列化 command 字段仅保留兼容展示，不改变 wire shape；Hook/配置文本的 shell_quote 统一实现并保留既有引用策略。
+更新任务与 Probe helper 使用内部 `ProcessCommand` 的 program/args 直接启动，不执行配置 shell 字符串。现行默认更新命令映射到固定包装器及参数；自定义 shell、环境赋值、管道、重定向和命令替换返回固定错误。任务名称、状态、输出处理、互斥与审计字段保留；备份清理直接运行固定 Python 参数，保留最近三份。序列化 command 字段仅保留兼容展示，不改变 wire shape；Hook/配置文本的 shell_quote 统一实现并保留既有引用策略。
+
+按需恢复复用原刷新或请求，不增加轮询任务或连接修订号。同轮请求共享一个握手结果；读取最多重试一次，业务错误不触发恢复，写操作不重放，传输写失败与超时关闭旧通道。切换或退出后迟到握手不能恢复旧目标。
+
+桌面专属 remote.sshDelete 接收 revision 与 alias，返回更新后的 RemoteConnectionView，不接收前端文件路径。用户配置与 Include 按显式别名编辑，保留注释、权限、其他别名与密钥；系统配置不能删除。原子替换失败报告并恢复已替换文件；删除对应 AgentHub 记录，当前连接被删除时回到本机。
+
+Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。rpc-stdio 与 health 使用单线程 Tokio，其余命令保留原运行方式。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，运行中后台轮询传 false，展开和终态读取全文。
 
 ## 通知与监测
 
@@ -207,7 +213,7 @@ DSH 复用标准存储边界，读取 v4 JSONL 或逐帧解压追加的 Zstandar
 
 原生通知待发正文用既有 SecretBox 加密；交接到 Bark 重试队列后清除原生正文副本，终态只留身份、结果和界面短摘要。保留期清理包括 unknown，保护待发、重试和当前游标仍需要的去重身份，Antigravity 游标推进后再淘汰旧身份。会话身份或游标未变时不更新该行；通知状态更新数为零时跳过三组历史同步 SQL，必要扫描状态照常持久化。
 
-桌面 App 与 monitor 共用 `Config::load_runtime`。新环境在既有受限 env 文件中生成独立随机密钥；有效密钥继续使用，缺失私有密钥、损坏配置及解密异常明确报错并保留数据。旧开发密钥仅用于可确认的通知迁移，不再作为桌面加载失败时的回退。
+桌面 App 与 monitor 共用 `Config::load_runtime`。新环境在既有受限 env 文件中生成独立随机密钥；有效密钥继续使用，缺失私有密钥、损坏配置及解密异常明确报错并保留数据。旧开发密钥迁移已移除；不提供桌面加载失败的密钥回退。
 
 事件识别与 Bark HTTP 投递分离。Codex 错误绑定规范主任务身份；普通自然语言反馈仅在确认终态后本地识别，monitor、Stop Hook 和完成入口共享 `assistant_question` 与持久化认领。Grok 使用主回合结束证据；Claude 轮询要求明确终态且无 pending tools，空完成内容回退到本回合最后一段助手回复。兼容警告继续可读，仅致命解析/身份错误禁止扫描。
 
@@ -255,7 +261,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 | 阻塞读取 / 凭据工作 | 按可用并行度限制为 2–4 个 / 1 个 |
 | WebView 指令切片 / 上下文投影 / Markdown 树 | 各 512 项、各 8MiB，分别计重 |
 
-Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入现有缓存预算；revision 在快照生成时按实际内容计算，不新增增量变更日志，保留保守旧页重读。Antigravity 在线缓存修订只依据会话 ID 与摘要，终态判断复用来源层结果，身份或分页不完整的历史不进入缓存。
+Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入现有缓存预算；revision 在快照生成时按实际内容计算，不新增增量变更日志，保留保守旧页重读。Antigravity 在线缓存修订只依据会话 ID 与摘要，终态判断复用来源层结果，身份、解析或提前空页错误明确返回且不进入缓存。分页以首批总数为目标，末页允许因原生追加超出目标，不设 50,000 步硬上限；仅服务不可达或无在线内容时回退离线。
 
 上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、恢复的语法树、DOM 与并发请求有额外内存；App、helper、远程服务和 WebView 又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
 
@@ -273,11 +279,11 @@ Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入�
 | 1.3.5 codex_delete_tree／includeDescendants | 保留旧能力字段兼容；删除以确认时提交的目标和后代集合为边界 | 最低服务保证整树预览、执行和复检 |
 | 1.3.6 压缩 rollout／Claude 过程显示 | 旧客户端忽略可选阶段字段；压缩目标继续按旧能力边界拒绝离线回退 | 最低服务保证压缩只读核验、引用复检和可选 Claude 阶段字段 |
 
-协议 2 的不可执行 tombstone 与可选能力边界保留。v2.1.0 支持新库和 schema 3；更早数据库必须先通过 v2.0.10 完成旧 web、Goal、Pi、Gotify 和通知加密迁移，直接打开时报错并保留原数据。
+v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。旧 thread_followups 表和历史数据保留，仅删除无生产调用的旧操作方法；当前加密发送队列保持原行为。
 
 新库在现有迁移锁和事务内建立最新结构，schema 3 打开时不再运行旧开发密钥重加密、明文正文迁移或抽样解密预检。实际读取密文时仍验证 GCM tag。配置加载保留真实解析错误，缺失或空运行密钥在现有 env 文件中以 0600 原子写入，替换空条目；有效 Base64、Base64URL 与 hex 密钥保留。独立 Keychain 加密的 Codex 发送队列不参与通知密钥处理。
 
-通知基线仅首次建立或启停变化时写入，重新启用建立新基线。保留当前通知队列、去重、认领、重试次数、成功分段、任务、审计及其他业务数据；不打开或迁移原生会话数据库，也不执行额外空间回收。
+Claude reader 一次性升级查询已删除，通知基线仅首次建立或启停变化时写入，重新启用建立新基线。保留当前通知队列、去重、认领、重试次数、成功分段、任务、审计及其他业务数据；不打开或迁移原生会话数据库，也不执行额外空间回收。
 
 ## 构建、CI 与发布
 

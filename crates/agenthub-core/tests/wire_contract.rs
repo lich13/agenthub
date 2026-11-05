@@ -303,12 +303,4 @@ fn registry_maps_to_real_types_and_registered_adapter_functions() {
             );
         }
     }
-    use agenthub_core::services::commands::{RetiredSurface, RETIRED_COMMAND_REGISTRY};
-    let listed = registry["retiredActions"].as_array().unwrap();
-    let shared: std::collections::BTreeSet<_> = RETIRED_COMMAND_REGISTRY
-        .iter()
-        .filter(|r| r.surface == RetiredSurface::Shared)
-        .map(|r| r.name)
-        .collect();
-    assert!(listed.iter().all(|v| shared.contains(v.as_str().unwrap())));
 }

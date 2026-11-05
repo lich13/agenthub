@@ -24,6 +24,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
     connection.machines=[{id:"remote",name:"Fixture remote",sshHost:connection.sshHost??"fixture-host",useSudo:true}];
     connection.activeMachineId="remote";connection.activeMachineName="Fixture remote";
   }
+  let sshHosts = ["fixture-host", "fixture-second"];
   const calls: string[] = [];
   const titles = new Map<string, string>();
   const archived = new Set<string>(demo.demoThreads(true, "").map((thread) => thread.id));
@@ -71,7 +72,16 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
     state.observers.forEach(observer => observer(name, args));
     const respond = async (): Promise<unknown> => {
       if (name === "remote.get") return { ...connection };
-      if (name === "remote.sshHosts") return [{alias:"fixture-host"}, {alias:"fixture-second"}];
+      if (name === "remote.sshHosts") return sshHosts.map(alias => ({alias}));
+      if (name === "remote.sshDelete") {
+        const alias = args.request.alias;
+        sshHosts = sshHosts.filter(host => host !== alias);
+        const machines = (connection.machines ?? []).filter(machine => machine.sshHost !== alias);
+        const active = machines.find(machine => machine.id === connection.activeMachineId);
+        connection = { ...connection, revision: connection.revision + 1, machines, configured: machines.length > 0,
+          ...(active ? {} : {target:"local", sshHost:null, activeMachineId:null, activeMachineName:null}) };
+        return {...connection};
+      }
       if (name === "remote.verify") return demo.demoSystemCapabilities("linux-api");
       if (name === "remote.save" || name === "remote.install") {
         const existing = [...(connection.machines ?? [])];
@@ -177,7 +187,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "threads.blocks": () => demo.demoThreadBlockPage(args.id),
         "updates.status": () => demo.demoUpdateStatus(fixture()),
         "jobs.list": () => demo.demoJobs().map(job => ({...job, output:""})),
-        "jobs.detail": () => ({ ...demo.demoJob(args.id), status: ++jobReads < 3 ? "running" : "succeeded" }),
+        "jobs.detail": () => ({ ...demo.demoJob(args.id), ...(args.includeOutput === false ? {output:""} : {}), status: ++jobReads < 3 ? "running" : "succeeded" }),
         "updates.check": () => ({ job_id: "fixture-job" }),
         "probe.status": () => ({ available: true, data: demo.demoProbeStatus(fixture()) }),
         "probe.settings.get": () => ({ available: true, data: probeSettings }),

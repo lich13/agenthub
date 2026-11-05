@@ -305,8 +305,7 @@ class InstallSafetyTests(unittest.TestCase):
         log_dir = managed / "log"
         systemd_dir = managed / "systemd"
         dropin_dir = systemd_dir / "agenthub-webd.service.d"
-        legacy_dir = managed / "legacy"
-        for directory in (bin_dir, share_dir, config_dir, data_dir, log_dir, dropin_dir, legacy_dir):
+        for directory in (bin_dir, share_dir, config_dir, data_dir, log_dir, dropin_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
         install_bin = bin_dir / "agenthub-webd"
@@ -369,7 +368,6 @@ class InstallSafetyTests(unittest.TestCase):
             "CODEX_PRECHECK_WRAPPER_BIN": wrappers[0],
             "CODEX_UPDATE_WRAPPER_BIN": wrappers[1],
             "CODEX_PRUNE_WRAPPER_BIN": wrappers[2],
-            "LEGACY_DIR": legacy_dir,
             "NGINX_SNIPPET": managed / "nginx/snippets/agenthub.conf",
             "INSTALL_CONFIG_SOURCE": next_config,
             "INSTALL_ENV_SOURCE": next_env,
@@ -389,7 +387,6 @@ replace_file() {{
 retire_web_payload() {{ :; }}
 install_codex_home_write_paths() {{ :; }}
 install_config() {{
-  copy_legacy_runtime_once
   replace_file "${{INSTALL_CONFIG_SOURCE}}" "${{CONFIG_FILE}}" 0640
   replace_file "${{INSTALL_ENV_SOURCE}}" "${{ENV_FILE}}" 0640
 }}
@@ -463,43 +460,6 @@ main --binary {shlex.quote(str(self.root / 'unused-binary'))}
         self.assertIn("required command not found: minisign", result.stderr)
         self.assertFalse(install_marker.exists(), "installer advanced without minisign")
 
-    def test_ssh_retirement_preserves_shared_nginx_tls_and_pending_queue(self) -> None:
-        import sqlite3
-        module_spec = importlib.util.spec_from_file_location("retire_http", ROOT / "deploy/agenthub-webd/retire-http.py")
-        retire = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(retire)
-        nginx = self.root / "nginx"
-        (nginx / "sites-available").mkdir(parents=True)
-        (nginx / "snippets").mkdir()
-        snippet = nginx / "snippets/agenthub.conf"
-        snippet.write_text("location /agenthub/ { proxy_pass http://127.0.0.1:15742; }\n")
-        site = nginx / "sites-available/shared"
-        retained = 'server {\n ssl_certificate /fixture/tls.pem;\n location /other/ { return 200; }\n'
-        site.write_text(retained + f' include {snippet};\n}}\n')
-        unrelated = nginx / "snippets/shared.conf"
-        unrelated.write_text("# shared TLS configuration\n")
-        database = self.root / "panel.sqlite"
-        with sqlite3.connect(database) as db:
-            db.executescript("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT); INSERT INTO settings VALUES('admin_api_key_sha256','fixture-digest'),('probe_bark_device_key','encrypted-fixture'); CREATE TABLE pending(payload TEXT); INSERT INTO pending VALUES('encrypted-fixture');")
-        config = self.root / "config.toml"
-        config.write_text(f'[paths]\ndb_path = {json.dumps(str(database))}\n')
-        transaction = self.root / "transaction"
-        transaction.mkdir()
-        with mock.patch.object(retire.subprocess, "run") as run:
-            retire.retire(config, SAFETY_PATH, transaction, nginx)
-            self.assertEqual(run.call_count, 2)
-        self.assertFalse(snippet.exists())
-        self.assertIn(retained, site.read_text())
-        self.assertEqual(unrelated.read_text(), "# shared TLS configuration\n")
-        with sqlite3.connect(database) as db:
-            self.assertEqual(db.execute("SELECT key FROM settings").fetchall(), [("probe_bark_device_key",)])
-            self.assertEqual(db.execute("SELECT payload FROM pending").fetchall(), [("encrypted-fixture",)])
-        with mock.patch.object(retire.subprocess, "run") as run:
-            retire.retire(config, SAFETY_PATH, transaction, nginx)
-            run.assert_not_called()
-        safety.rollback(transaction)
-        self.assertTrue(snippet.exists())
-        self.assertIn(f"include {snippet};",site.read_text())
 
     def test_first_install_config_needs_no_http_domain_and_preserves_existing_secret(self) -> None:
         config = self.root / "config.toml"
@@ -511,7 +471,6 @@ source {shlex.quote(str(INSTALL_PATH))}
 CONFIG_FILE={shlex.quote(str(config))}
 ENV_FILE={shlex.quote(str(environment))}
 TRANSACTION={shlex.quote(str(transaction))}
-LEGACY_DIR={shlex.quote(str(self.root / 'absent'))}
 chown() {{ :; }}
 parse_args --binary fixture
 install_config
