@@ -143,6 +143,8 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
               ...view.capabilities,
               antigravity_notifications: view.capabilities.antigravity_notifications,
               dsh_notifications: view.capabilities.dsh_notifications,
+              grokbot_sessions: view.capabilities.grokbot_sessions,
+              grokbot_notifications: view.capabilities.grokbot_notifications,
             },
           };
         },

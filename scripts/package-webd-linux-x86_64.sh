@@ -36,7 +36,6 @@ cp -a "${ROOT}/deploy/agenthub-webd/." "${TMP}/${ARCHIVE_ROOT}/deploy/"
 cp "${ROOT}/README.md" "${ROOT}/DESIGN.md" "${TMP}/${ARCHIVE_ROOT}/"
 chmod 0755 "${TMP}/${ARCHIVE_ROOT}/bin/agenthub-webd"
 chmod 0755 "${TMP}/${ARCHIVE_ROOT}/deploy/"*.sh
-chmod 0755 "${TMP}/${ARCHIVE_ROOT}/deploy/agenthub-codex-"*
 
 "${TMP}/${ARCHIVE_ROOT}/deploy/install.sh" --check
 "${TMP}/${ARCHIVE_ROOT}/bin/agenthub-webd" --version | grep -Eq '^agenthub-webd [0-9]+\.[0-9]+\.[0-9]+'

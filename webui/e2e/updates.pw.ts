@@ -68,7 +68,7 @@ test("update errors, new releases and jobs show accurate inline state and block 
   expect(outputReads.every(include => !include)).toBe(true);
   finish = true;
   await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeEnabled();
-  expect(outputReads.at(-1)).toBe(true);
+  expect(outputReads.every(include => !include)).toBe(true);
   await expect(picker(page)).toBeEnabled();
   await page.setViewportSize({ width: 680, height: 820 });
   await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeVisible();

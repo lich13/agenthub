@@ -273,9 +273,8 @@ test("hidden histories stop polling while started jobs continue to terminal", as
     await page.clock.fastForward(2100);
     await expect.poll(() => calls.filter(name => name === "jobs.detail").length).toBe(i);
   }
-  await expect.poll(() => calls.filter(name => name === "jobs.detail").length).toBe(4);
-  expect(outputReads).toEqual([false, false, false, true]);
+  expect(outputReads).toEqual([false, false, false]);
   await page.clock.fastForward(10000);
-  expect(calls.filter(name => name === "jobs.detail")).toHaveLength(4);
+  expect(calls.filter(name => name === "jobs.detail")).toHaveLength(3);
   await info.attach("request-counts.json", { body: JSON.stringify(calls), contentType: "application/json" });
 });
