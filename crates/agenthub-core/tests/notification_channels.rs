@@ -1200,8 +1200,8 @@ fn migration_preserves_legacy_bark_claims_without_replaying_deliveries() {
         .unwrap();
     for status in ["sent", "skipped", "delivering", "failed", "pending"] {
         connection.execute(
-            "INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,'claude_code','{}',?2,1,2)",
-            params![format!("legacy-{status}"), status],
+            "INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,'claude_code',?3,?2,1,2)",
+            params![format!("legacy-{status}"), status, json!({"event_key":format!("legacy-{status}"),"provider":"claude_code","session_key":"fixture","thread_id":"fixture","title":"fixture","event":{"position":1,"turn_id":"turn","kind":"completion","body":"fixture","timestamp_ms":1}}).to_string()],
         ).unwrap();
     }
     for key in [

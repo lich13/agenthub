@@ -4,7 +4,7 @@ use crate::{
     native_probe::{NativeProvider, NativeScan, NativeTurnEvent},
     security::redact_output,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,7 +19,78 @@ pub struct NativeDelivery {
     pub event: NativeTurnEvent,
 }
 
+fn identity_record(delivery: &NativeDelivery, identity: &str) -> Result<String> {
+    let mut record = serde_json::to_value(delivery)?;
+    record["title"] = json!("");
+    record["event"]["body"] = json!("");
+    record["stream_identity"] = json!(identity);
+    Ok(record.to_string())
+}
+
 impl PanelDb {
+    pub(super) fn migrate_native_payloads(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        super::add_column_if_missing(tx, "native_probe_deliveries", "ciphertext", "BLOB")?;
+        super::add_column_if_missing(tx, "native_probe_deliveries", "nonce", "BLOB")?;
+        let mut stmt = tx.prepare(
+            "SELECT event_key,event_json,status,ciphertext,nonce FROM native_probe_deliveries",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            let status: String = row.get(2)?;
+            let ciphertext: Option<Vec<u8>> = row.get(3)?;
+            let nonce: Option<Vec<u8>> = row.get(4)?;
+            let record: Value =
+                serde_json::from_str(&raw).context("原生通知迁移失败，原队列已保留")?;
+            let delivery: NativeDelivery = match (&ciphertext, &nonce) {
+                (Some(ciphertext), Some(nonce)) => {
+                    self.decode_native_payload(ciphertext.clone(), nonce.clone())?
+                }
+                _ => serde_json::from_value(record.clone())
+                    .context("原生通知迁移失败，原队列已保留")?,
+            };
+            let identity = if let Some(identity) = record["stream_identity"].as_str() {
+                identity.to_owned()
+            } else {
+                let identity: String = tx.query_row("SELECT identity FROM native_probe_streams WHERE provider=?1 AND session_key=?2",
+                    params![delivery.provider.as_str(), delivery.session_key], |row| row.get(0)).optional()?.unwrap_or_default();
+                let stream = crate::native_probe::NativeStreamSnapshot {
+                    provider: delivery.provider,
+                    session_key: delivery.session_key.clone(),
+                    identity: identity.clone(),
+                    id: delivery.thread_id.clone(),
+                    title: String::new(),
+                    record_count: 0,
+                    settled_count: 0,
+                    events: Vec::new(),
+                };
+                if stream.event_key(&delivery.event) == key {
+                    identity
+                } else {
+                    String::new()
+                }
+            };
+            let payload = if matches!(status.as_str(), "pending" | "delivering") {
+                Some(match (ciphertext, nonce) {
+                    (Some(ciphertext), Some(nonce)) => (ciphertext, nonce),
+                    _ => self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?,
+                })
+            } else {
+                None
+            };
+            tx.execute("UPDATE native_probe_deliveries SET event_json=?2,ciphertext=?3,nonce=?4 WHERE event_key=?1",
+                params![key, identity_record(&delivery, &identity)?, payload.as_ref().map(|p| &p.0), payload.as_ref().map(|p| &p.1)])?;
+        }
+        Ok(())
+    }
+
+    fn decode_native_payload(&self, ciphertext: Vec<u8>, nonce: Vec<u8>) -> Result<NativeDelivery> {
+        Ok(serde_json::from_slice(
+            &self.crypto.decrypt(&ciphertext, &nonce)?,
+        )?)
+    }
+
     /// Queue events and advance cursors together. First enable baselines every
     /// existing stream; new streams also ignore records older than activation.
     pub fn stage_native_notifications(
@@ -61,7 +132,7 @@ impl PanelDb {
             enabled && (reader_upgrade || prior.is_none_or(|(was_enabled, _)| !was_enabled));
         if enabled && reader_upgrade {
             tx.execute("INSERT INTO settings(key,value,updated_at) VALUES('native_claude_reader_revision','2',?1) ON CONFLICT(key) DO UPDATE SET value='2',updated_at=excluded.updated_at", [Self::now()])?;
-            tx.execute("UPDATE native_probe_deliveries SET status='skipped',updated_at=?1 WHERE provider=?2 AND status='pending'", params![Self::now(),provider.as_str()])?;
+            tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?1 WHERE provider=?2 AND status='pending'", params![Self::now(),provider.as_str()])?;
         }
         let activated_ms = if baseline {
             chrono::Utc::now().timestamp_millis()
@@ -71,7 +142,7 @@ impl PanelDb {
         tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count",
             params![provider.as_str(), enabled, activated_ms, Self::now(), scan.streams.len(), scan.errors])?;
         if !enabled {
-            tx.execute("UPDATE native_probe_deliveries SET status='skipped',updated_at=?2 WHERE provider=?1 AND status='pending'", params![provider.as_str(),Self::now()])?;
+            tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'", params![provider.as_str(),Self::now()])?;
             tx.commit()?;
             return Ok(0);
         }
@@ -127,7 +198,12 @@ impl PanelDb {
                     } else {
                         "pending"
                     };
-                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),serde_json::to_string(&delivery)?,status,now])?;
+                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),identity_record(&delivery, &stream.identity)?,status,now])?;
+                    if inserted > 0 && status == "pending" {
+                        let (ciphertext, nonce) =
+                            self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?;
+                        tx.execute("UPDATE native_probe_deliveries SET ciphertext=?2,nonce=?3 WHERE event_key=?1", params![delivery.event_key,ciphertext,nonce])?;
+                    }
                     if inserted == 0 && event.position > stream.settled_count {
                         tx.execute(
                             "UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped') AND updated_at<?3",
@@ -140,7 +216,7 @@ impl PanelDb {
                 }
             }
             let cursor = cursor.max(stream.settled_count.min(stream.record_count));
-            tx.execute("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at",
+            tx.execute("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at WHERE identity!=excluded.identity OR cursor!=excluded.cursor",
                 params![provider.as_str(),stream.session_key,stream.identity,cursor,Self::now()])?;
         }
         tx.commit()?;
@@ -203,12 +279,12 @@ impl PanelDb {
 
     pub fn pending_native_deliveries(&self, limit: usize) -> Result<Vec<NativeDelivery>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare("SELECT event_json FROM native_probe_deliveries WHERE status='pending' ORDER BY created_at,event_key LIMIT ?1")?;
+        let mut stmt = conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' ORDER BY created_at,event_key LIMIT ?1")?;
         let rows = stmt
-            .query_map([limit.min(100)], |r| r.get::<_, String>(0))?
+            .query_map([limit.min(100)], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|s| serde_json::from_str(&s).map_err(Into::into))
+            .map(|(ciphertext, nonce)| self.decode_native_payload(ciphertext, nonce))
             .collect()
     }
     pub fn claim_native_delivery(&self, key: &str) -> Result<bool> {
@@ -238,7 +314,7 @@ impl PanelDb {
         } else {
             "failed"
         };
-        let changed=tx.execute("UPDATE native_probe_deliveries SET status=?2,updated_at=?3 WHERE event_key=?1 AND status='delivering'",params![delivery.event_key,status,Self::now()])?;
+        let changed=tx.execute("UPDATE native_probe_deliveries SET status=?2,ciphertext=NULL,nonce=NULL,updated_at=?3 WHERE event_key=?1 AND status='delivering'",params![delivery.event_key,status,Self::now()])?;
         if changed > 0 {
             let summary = delivery.event.body.chars().take(240).collect::<String>();
             let payload = json!({"provider":delivery.provider,"session_key":delivery.session_key,"thread_id":delivery.thread_id,"turn_id":delivery.event.turn_id,"thread_title":delivery.title,"event_type":delivery.event.kind,"body_summary":summary,"body_source":"native_terminal_turn","bark":bark,"bark_status":status,"notification_event_key":format!("native:{}",delivery.event_key)});
@@ -250,12 +326,12 @@ impl PanelDb {
     pub fn recover_interrupted_native_deliveries(&self) -> Result<()> {
         let deliveries = {
             let conn = self.conn.lock().expect("db mutex");
-            let mut stmt=conn.prepare("SELECT event_json FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
+            let mut stmt=conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
             let rows = stmt
-                .query_map([Self::now() - 120], |r| r.get::<_, String>(0))?
+                .query_map([Self::now() - 120], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter()
-                .map(|s| serde_json::from_str::<NativeDelivery>(&s).map_err(anyhow::Error::from))
+                .map(|(ciphertext, nonce)| self.decode_native_payload(ciphertext, nonce))
                 .collect::<Result<Vec<_>>>()?
         };
         for delivery in deliveries {
@@ -300,7 +376,13 @@ impl PanelDb {
         {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute(
-                "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped') AND updated_at < ?1",
+                "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped','unknown') AND updated_at < ?1
+                 AND NOT EXISTS (SELECT 1 FROM native_probe_streams s
+                    WHERE s.provider=native_probe_deliveries.provider
+                    AND s.session_key=json_extract(event_json,'$.session_key')
+                    AND s.identity=json_extract(event_json,'$.stream_identity')
+                    AND (s.cursor<json_extract(event_json,'$.event.position')
+                        OR (s.provider='antigravity' AND s.cursor=json_extract(event_json,'$.event.position'))))",
                 [marker_cutoff],
             )?;
         }
@@ -316,6 +398,131 @@ impl PanelDb {
 mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+
+    #[test]
+    fn idle_scan_does_not_rewrite_streams_or_publish_history() {
+        use rusqlite::hooks::{AuthAction, Authorization};
+        let db = PanelDb::open(":memory:").unwrap();
+        let config = config();
+        let scan = scan("fixture-idle", 1, chrono::Utc::now().timestamp_millis());
+        db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+            .unwrap();
+        db.sync_notification_channels(&config).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_idle_stream_update BEFORE UPDATE ON native_probe_streams
+            WHEN OLD.identity=NEW.identity AND OLD.cursor=NEW.cursor
+            BEGIN SELECT RAISE(ABORT,'idle stream update'); END;",
+            )
+            .unwrap();
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+                .unwrap(),
+            0
+        );
+        db.conn
+            .lock()
+            .unwrap()
+            .authorizer(Some(
+                |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                    AuthAction::Read {
+                        table_name: "probe_events" | "probe_error_incidents",
+                        ..
+                    } => Authorization::Deny,
+                    _ => Authorization::Allow,
+                },
+            ));
+        db.sync_notification_channels(&config).unwrap();
+        assert!(db.due_notification_deliveries(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn retention_keeps_mutable_cursor_identity_without_body_then_prunes_unknown_after_progress() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let mut config = config();
+        config.probe.notifications.notify_antigravity = true;
+        config.probe.notifications.notify_antigravity_completion = true;
+        let old_ms = (PanelDb::now() - 8 * 86_400) * 1000;
+        let mut scan = scan("fixture-ag", 5, old_ms);
+        scan.streams[0].provider = NativeProvider::Antigravity;
+        scan.streams[0].events.clear();
+        db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE native_probe_providers SET activated_ms=1", [])
+            .unwrap();
+        scan.streams[0].events.push(NativeTurnEvent {
+            prompt_id: None,
+            position: 5,
+            turn_id: "finished".into(),
+            kind: "completion".into(),
+            body: "private fixture".repeat(80),
+            timestamp_ms: old_ms,
+        });
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
+                .unwrap(),
+            1
+        );
+        let delivery = db.pending_native_deliveries(1).unwrap().remove(0);
+        let raw: String = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT event_json FROM native_probe_deliveries",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("private fixture"));
+        db.claim_native_delivery(&delivery.event_key).unwrap();
+        db.finish_native_delivery(&delivery, json!({"status":"unknown","sent":false}))
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE native_probe_deliveries SET updated_at=?1",
+                [old_ms / 1000],
+            )
+            .unwrap();
+        db.maintain_notification_history_if_due(7).unwrap();
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
+                .unwrap(),
+            0
+        );
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM native_probe_deliveries WHERE status='unknown' AND ciphertext IS NULL AND nonce IS NULL", [], |row| row.get::<_,usize>(0)).unwrap(), 1);
+        scan.streams[0].record_count = 6;
+        scan.streams[0].settled_count = 6;
+        scan.streams[0].events.clear();
+        db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM settings WHERE key='probe_event_retention_last_run'",
+                [],
+            )
+            .unwrap();
+        db.maintain_notification_history_if_due(7).unwrap();
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM native_probe_deliveries", [], |row| {
+                    row.get::<_, usize>(0)
+                })
+                .unwrap(),
+            0
+        );
+    }
     #[test]
     fn claude_upgrade_baselines_old_streams_and_keeps_channel_delivery_ownership() {
         let db = PanelDb::open(":memory:").unwrap();

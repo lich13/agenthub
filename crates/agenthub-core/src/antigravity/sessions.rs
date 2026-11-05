@@ -18,7 +18,8 @@ use std::{
 use crate::{
     provider_sessions::{
         matches_query, paginate_provider_detail, ProviderDetailRequest, ProviderHistoryEvent,
-        ProviderListRequest, ProviderSessionDetail, ProviderSessionSummary,
+        ProviderHistorySnapshot, ProviderListRequest, ProviderSessionDetail,
+        ProviderSessionSummary,
     },
     services::sessions::{SessionBatchItem, SessionBatchItemResult, SessionOperation},
     session_delete::{self, Outcome},
@@ -148,6 +149,7 @@ pub struct DiscoveredAntigravityEndpoint {
 
 #[derive(Clone)]
 struct LiveRpc {
+    pid: u32,
     port: u16,
     token: String,
 }
@@ -432,6 +434,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
             .ok()?;
             value["trajectorySummaries"].is_object().then_some((
                 LiveRpc {
+                    pid: 0,
                     port: *port,
                     token: token.clone(),
                 },
@@ -451,6 +454,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                             if value["trajectorySummaries"].is_object() {
                                 return Some((
                                     LiveRpc {
+                                        pid: ep.pid,
                                         port,
                                         token: ep.token,
                                     },
@@ -476,6 +480,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                             record_verified_live_endpoint(ep.pid, port, ep.token.clone());
                             return Some((
                                 LiveRpc {
+                                    pid: ep.pid,
                                     port,
                                     token: ep.token.clone(),
                                 },
@@ -1102,7 +1107,20 @@ fn list_summaries_filtered(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
 ) -> Result<Vec<ProviderSessionSummary>> {
-    let mut items = if let Some((_, payload)) = connect_endpoint(paths) {
+    let endpoint = connect_endpoint(paths);
+    list_summaries_from_source(
+        paths,
+        filter_id,
+        endpoint.as_ref().map(|(_, payload)| payload),
+    )
+}
+
+fn list_summaries_from_source(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+    payload: Option<&Value>,
+) -> Result<Vec<ProviderSessionSummary>> {
+    let mut items = if let Some(payload) = payload {
         let map = payload["trajectorySummaries"].as_object();
         let active_roots = map
             .map(active_subagent_roots_from_summaries)
@@ -1971,50 +1989,145 @@ fn collect_proto_strings(bytes: &[u8], depth: usize, out: &mut Vec<String>) {
     }
 }
 
-pub fn load_all_events(paths: &AntigravityPaths, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
+pub fn load_all_events(
+    paths: &AntigravityPaths,
+    id: &str,
+) -> Result<std::sync::Arc<Vec<ProviderHistoryEvent>>> {
     valid_cascade_id(id)?;
-    if let Some((rpc, _)) = connect_endpoint(paths) {
-        if let Ok(resp) = connect_rpc_post(
+    let endpoint = connect_endpoint(paths);
+    Ok(load_events_from_source(paths, id, endpoint.as_ref())?
+        .events
+        .clone())
+}
+
+fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<(Vec<ProviderHistoryEvent>, bool)> {
+    let mut resp = connect_rpc_post(
+        rpc.port,
+        &rpc.token,
+        "GetCascadeTrajectory",
+        &json!({"cascadeId": id}),
+    )?;
+    let mut steps = resp["trajectory"]["steps"]
+        .as_array_mut()
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let total = resp["numTotalSteps"].as_u64().unwrap_or(steps.len() as u64) as usize;
+    while steps.len() < total && steps.len() < 50_000 {
+        let offset = steps.len();
+        let Ok(mut more) = connect_rpc_post(
             rpc.port,
             &rpc.token,
-            "GetCascadeTrajectory",
-            &json!({"cascadeId": id}),
-        ) {
-            let mut steps = resp["trajectory"]["steps"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            let total = resp["numTotalSteps"].as_u64().unwrap_or(steps.len() as u64) as usize;
-            while steps.len() < total && steps.len() < 50_000 {
-                let offset = steps.len();
-                let Ok(more) = connect_rpc_post(
-                    rpc.port,
-                    &rpc.token,
-                    "GetCascadeTrajectorySteps",
-                    &json!({"cascadeId": id, "stepOffset": offset}),
-                ) else {
-                    break;
-                };
-                let Some(batch) = more["steps"].as_array().filter(|b| !b.is_empty()) else {
-                    break;
-                };
-                steps.extend(batch.iter().cloned());
-            }
-            let events = extract_live_step_events(id, &steps);
-            if !events.is_empty() || steps.is_empty() {
-                return Ok(events);
-            }
+            "GetCascadeTrajectorySteps",
+            &json!({"cascadeId": id, "stepOffset": offset}),
+        ) else {
+            break;
+        };
+        let Some(batch) = more["steps"]
+            .as_array_mut()
+            .filter(|batch| !batch.is_empty())
+        else {
+            break;
+        };
+        steps.append(batch);
+    }
+    let settled = resp["trajectory"]["cascadeId"].as_str() == Some(id)
+        && steps.len() == total
+        && steps.iter().all(|step| {
+            matches!(
+                step["status"].as_str(),
+                Some(
+                    "CORTEX_STEP_STATUS_DONE"
+                        | "CORTEX_STEP_STATUS_ERROR"
+                        | "CORTEX_STEP_STATUS_CANCELED"
+                        | "CORTEX_STEP_STATUS_INTERRUPTED"
+                        | "CORTEX_STEP_STATUS_HALTED"
+                )
+            )
+        });
+    let events = extract_live_step_events(id, &steps);
+    ensure!(!events.is_empty() || steps.is_empty(), "原生历史尚不可读取");
+    Ok((events, settled))
+}
+
+fn load_events_from_source(
+    paths: &AntigravityPaths,
+    id: &str,
+    endpoint: Option<&(LiveRpc, Value)>,
+) -> Result<std::sync::Arc<ProviderHistorySnapshot>> {
+    use crate::provider_sessions::{history_weight, HISTORY_CACHE};
+    if let Some((rpc, payload)) = endpoint {
+        let summaries = payload["trajectorySummaries"].as_object();
+        let item = &payload["trajectorySummaries"][id];
+        let active =
+            summaries.is_some_and(|map| active_subagent_roots_from_summaries(map).contains(id));
+        let reusable =
+            item["status"] == "CASCADE_RUN_STATUS_IDLE" && !active && !live_item_is_running(item);
+        let revision = reusable.then(|| {
+            Sha256::digest(
+                serde_json::to_vec(&json!([rpc.pid, rpc.port, rpc.token, id, item]))
+                    .expect("JSON value"),
+            )
+            .to_vec()
+        });
+        let settled = std::cell::Cell::new(false);
+        let events = HISTORY_CACHE.read_revision(
+            &paths.brain_dir().join(id).join("live-history"),
+            revision,
+            |events, size| {
+                if settled.get() {
+                    history_weight(events, size)
+                } else {
+                    u64::MAX
+                }
+            },
+            || {
+                let (events, complete) = read_live_events(rpc, id)?;
+                settled.set(complete);
+                Ok(ProviderHistorySnapshot::new(events))
+            },
+        );
+        if events.is_ok() {
+            return events;
         }
     }
-    read_offline_transcript_events(paths, id)
+    let logs = paths.brain_dir().join(id).join(".system_generated/logs");
+    let db = paths.conversations_dir().join(format!("{id}.db"));
+    HISTORY_CACHE.read_sources(
+        &paths.brain_dir().join(id).join("offline-history"),
+        &[
+            logs.join("transcript_full.jsonl"),
+            logs.join("transcript.jsonl"),
+            db.clone(),
+            db.with_extension("db-wal"),
+        ],
+        history_weight,
+        || read_offline_transcript_events(paths, id).map(ProviderHistorySnapshot::new),
+    )
+}
+
+fn summary_and_events(
+    paths: &AntigravityPaths,
+    id: &str,
+) -> Result<(
+    ProviderSessionSummary,
+    std::sync::Arc<ProviderHistorySnapshot>,
+)> {
+    valid_cascade_id(id)?;
+    let endpoint = connect_endpoint(paths);
+    let summary =
+        list_summaries_from_source(paths, Some(id), endpoint.as_ref().map(|(_, value)| value))?
+            .into_iter()
+            .next()
+            .context("未找到 Antigravity 会话")?;
+    let events = load_events_from_source(paths, id, endpoint.as_ref())?;
+    Ok((summary, events))
 }
 
 pub fn session_detail(
     paths: &AntigravityPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
-    let summary = session_summary(paths, &request.session_key)?;
-    let events = load_all_events(paths, &summary.id)?;
+    let (summary, events) = summary_and_events(paths, &request.session_key)?;
     paginate_provider_detail(summary, &events, request)
 }
 
@@ -2022,12 +2135,13 @@ pub fn read_attachment(
     paths: &AntigravityPaths,
     request: &crate::user_message::SessionAttachmentRequest,
 ) -> Result<crate::user_message::SessionAttachmentResponse> {
-    let summary = session_summary(paths, &request.session_key)?;
-    let events = load_all_events(paths, &summary.id)?;
+    let (summary, events) = summary_and_events(paths, &request.session_key)?;
     let mut message = events
-        .into_iter()
-        .filter_map(|event| event.user_message)
+        .events
+        .iter()
+        .filter_map(|event| event.user_message.as_ref())
         .find(|msg| msg.id == request.message_id)
+        .cloned()
         .context("会话消息已变化或不存在，请刷新会话")?;
     message.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
     message.read_attachment(&request.attachment_id)
@@ -2422,7 +2536,7 @@ pub fn execute_batch_item(
                     "会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                 );
             }
-            for child in &verified_descendants {
+            for child in descendants {
                 ensure!(
                     !is_cascade_running(all_live.as_ref(), child),
                     "子会话正在运行，请先在 Antigravity 中停止后再删除"
@@ -2435,11 +2549,12 @@ pub fn execute_batch_item(
                 }
             }
 
-            let mut ordered_ids: Vec<String> = if include_descendants {
-                verified_descendants.into_iter().rev().collect()
-            } else {
-                Vec::new()
-            };
+            let selected: BTreeSet<&str> = descendants.iter().map(String::as_str).collect();
+            let mut ordered_ids: Vec<String> = verified_descendants
+                .into_iter()
+                .rev()
+                .filter(|id| selected.contains(id.as_str()))
+                .collect();
             ordered_ids.push(key.to_owned());
 
             let db_path = paths.summaries_db();
@@ -2637,6 +2752,18 @@ mod tests {
         assert_eq!(detail.events[2].kind, "tool_call");
         assert_eq!(detail.events[3].kind, "assistant_message");
         assert_eq!(detail.timeline.as_ref().unwrap().len(), 1);
+        let cached = load_all_events(&paths, &id).unwrap();
+        assert!(Arc::ptr_eq(&cached, &load_all_events(&paths, &id).unwrap()));
+        let transcript = logs_dir.join("transcript_full.jsonl");
+        let original = fs::read_to_string(&transcript).unwrap();
+        fs::write(
+            &transcript,
+            original.replace("重构前端界面", "更新前端界面"),
+        )
+        .unwrap();
+        let refreshed = load_all_events(&paths, &id).unwrap();
+        assert!(!Arc::ptr_eq(&cached, &refreshed));
+        assert_eq!(refreshed[0].text.as_deref(), Some("更新前端界面"));
 
         // Rename (with non-ASCII UTF-8 octal prototext round-trip)
         let renamed = rename_session(&paths, &id, "ChatGPT 风格新标题").unwrap();
@@ -2713,11 +2840,13 @@ mod tests {
         )
         .unwrap();
 
-        let state = Arc::new(Mutex::new(("初始会话".to_string(), false, false)));
+        let state = Arc::new(Mutex::new(("初始会话".to_string(), false, false, false)));
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_shutdown = shutdown.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_reads = reads.clone();
         let server_state = state.clone();
         let server_id = id.clone();
         let handle = std::thread::spawn(move || {
@@ -2759,7 +2888,7 @@ mod tests {
                                     "summary": "默认摘要",
                                     "stepCount": 2,
                                     "lastModifiedTime": "2026-10-28T02:00:00Z",
-                                    "status": "CASCADE_RUN_STATUS_IDLE",
+                                    "status": if guard.3 { "CASCADE_RUN_STATUS_BUSY" } else { "CASCADE_RUN_STATUS_IDLE" },
                                     "annotations": {
                                         "title": guard.0,
                                         "archived": guard.1
@@ -2770,6 +2899,7 @@ mod tests {
                         })
                     }
                 } else if req_line.contains("GetCascadeTrajectory ") {
+                    server_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     json!({
                         "numTotalSteps": 2,
                         "trajectory": {
@@ -2831,6 +2961,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detail.events.len(), 2);
+        let cached = load_all_events(&paths, &id).unwrap();
+        assert!(Arc::ptr_eq(&cached, &load_all_events(&paths, &id).unwrap()));
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1);
+        state.lock().unwrap().3 = true;
+        load_all_events(&paths, &id).unwrap();
+        load_all_events(&paths, &id).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 3);
+        state.lock().unwrap().3 = false;
+        load_all_events(&paths, &id).unwrap();
+        load_all_events(&paths, &id).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 4);
+        let other_owner =
+            AntigravityPaths::with_fixed_rpc(root.clone(), port, "fixture-other-owner");
+        load_all_events(&other_owner, &id).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 5);
 
         let renamed = rename_session(&paths, &id, "RPC 改名成功").unwrap();
         assert_eq!(renamed.title, "RPC 改名成功");
@@ -2916,6 +3061,14 @@ mod tests {
         drop(conn);
 
         let paths = AntigravityPaths::offline(root.clone());
+        let confirmed =
+            preview_batch_item(&paths, &root_a, SessionOperation::Delete, true).unwrap();
+        assert_eq!(confirmed.descendants, vec![sub_a.clone()]);
+        let late = uuid::Uuid::new_v4().to_string();
+        fs::create_dir_all(root.join("brain").join(&late)).unwrap();
+        Connection::open(paths.summaries_db()).unwrap().execute(
+            "INSERT INTO conversation_summaries VALUES (?1,'late','p',1,'2026-10-28T01:00:00Z','',?2,1)",
+            params![late,root_a]).unwrap();
 
         // 1. Forged other-root UUID in descendants is rejected
         assert!(execute_batch_item(
@@ -2972,9 +3125,14 @@ mod tests {
                 0
             );
             assert!(preview_batch_item(&paths, &root_a, SessionOperation::Delete, true).is_err());
-            assert!(
-                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).is_err()
-            );
+            assert!(execute_batch_item(
+                &paths,
+                &root_a,
+                SessionOperation::Delete,
+                std::slice::from_ref(&sub_a),
+                true
+            )
+            .is_err());
             assert!(root
                 .join("conversations")
                 .join(format!("{root_a}.db"))
@@ -2994,8 +3152,14 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let sub_brain = root.join("brain").join(&sub_a);
             fs::set_permissions(&sub_brain, fs::Permissions::from_mode(0o500)).unwrap();
-            let partial =
-                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).unwrap();
+            let partial = execute_batch_item(
+                &paths,
+                &root_a,
+                SessionOperation::Delete,
+                std::slice::from_ref(&sub_a),
+                true,
+            )
+            .unwrap();
             assert_eq!(partial.status, "failed");
             assert!(partial.deleted_ids.is_empty());
             assert!(!partial.residuals.is_empty());
@@ -3011,15 +3175,50 @@ mod tests {
                 .any(|s| s.id == root_a));
 
             fs::set_permissions(&sub_brain, fs::Permissions::from_mode(0o700)).unwrap();
-            let retried =
-                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).unwrap();
+            let retried = execute_batch_item(
+                &paths,
+                &root_a,
+                SessionOperation::Delete,
+                std::slice::from_ref(&sub_a),
+                true,
+            )
+            .unwrap();
             assert_eq!(retried.status, "succeeded");
             assert!(!root.join("brain").join(&root_a).exists());
             assert!(!root.join("brain").join(&sub_a).exists());
+            assert!(root.join("brain").join(&late).exists());
             assert!(root.join("brain").join(&root_b).exists());
             assert!(root.join("brain").join(&sub_b).exists());
         }
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_with_no_confirmed_descendants_keeps_new_children() {
+        let root = env::temp_dir().join(format!("agenthub-ag-fixed-{}", uuid::Uuid::new_v4()));
+        let id = uuid::Uuid::new_v4().to_string();
+        let child = uuid::Uuid::new_v4().to_string();
+        fs::create_dir_all(root.join("brain").join(&id)).unwrap();
+        let paths = AntigravityPaths::offline(root.clone());
+        let preview = preview_batch_item(&paths, &id, SessionOperation::Delete, true).unwrap();
+        assert!(preview.descendants.is_empty());
+        let conn = Connection::open(paths.summaries_db()).unwrap();
+        conn.execute_batch("CREATE TABLE conversation_summaries(conversation_id TEXT PRIMARY KEY,title TEXT,preview TEXT,step_count INTEGER,last_modified_time TEXT,workspace_uris TEXT,parent_conversation_id TEXT,nesting_depth INTEGER);
+            CREATE TABLE conversations_fts(conversation_id TEXT,chunk_index INTEGER,archived TEXT,title TEXT);").unwrap();
+        conn.execute("INSERT INTO conversation_summaries VALUES (?1,'root','',0,'','',NULL,0),(?2,'child','',0,'','',?1,1)", params![id,child]).unwrap();
+        fs::create_dir_all(root.join("brain").join(&child)).unwrap();
+        let result = execute_batch_item(
+            &paths,
+            &id,
+            SessionOperation::Delete,
+            &preview.descendants,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.deleted_ids, vec![id]);
+        assert!(root.join("brain").join(child).exists());
+        drop(conn);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3130,7 +3329,14 @@ mod tests {
 
         // 1. Subagent BUSY blocks both preview and execute even though root summary is IDLE
         assert!(preview_batch_item(&paths, &root_id, SessionOperation::Delete, true).is_err());
-        assert!(execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).is_err());
+        assert!(execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true
+        )
+        .is_err());
         assert!(root
             .join("conversations")
             .join(format!("{sub_id}.db"))
@@ -3138,8 +3344,14 @@ mod tests {
 
         // 2. Subagent IDLE, but DeleteCascadeTrajectory on sub_id returns HTTP 500 -> must NOT delete disk files!
         *mode.lock().unwrap() = (false, true);
-        let failed =
-            execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).unwrap();
+        let failed = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
         assert_eq!(failed.status, "failed");
         assert!(failed.deleted_ids.is_empty());
         assert!(!failed.residuals.is_empty());
@@ -3156,7 +3368,14 @@ mod tests {
 
         // 3. Once RPC succeeds, both sub_id and root_id are cleanly deleted
         *mode.lock().unwrap() = (false, false);
-        let ok = execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).unwrap();
+        let ok = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
         assert_eq!(ok.status, "succeeded");
         assert!(ok.residuals.is_empty());
         assert!(!root

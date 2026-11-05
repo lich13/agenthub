@@ -373,7 +373,10 @@ impl SearchUseCases {
         request: &SessionSearchRequest,
         needle: &str,
         summaries: Vec<crate::provider_sessions::ProviderSessionSummary>,
-        load: impl Fn(&str) -> Result<Vec<crate::provider_sessions::ProviderHistoryEvent>>,
+        load: impl Fn(
+            &str,
+        )
+            -> Result<std::sync::Arc<Vec<crate::provider_sessions::ProviderHistoryEvent>>>,
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
@@ -404,7 +407,7 @@ impl SearchUseCases {
                     continue;
                 }
             };
-            for event in &events {
+            for event in events.iter() {
                 let corpus = json_corpus(event)?;
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     push_result(

@@ -7,9 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct MigrationLock(Option<File>);
+pub(crate) struct MigrationLock(Option<File>);
 impl MigrationLock {
-    pub(super) fn acquire(path: &Path) -> Result<Self> {
+    pub(crate) fn acquire(path: &Path) -> Result<Self> {
         // Independent in-memory databases never share a migration target.
         if path == Path::new(":memory:") {
             return Ok(Self(None));

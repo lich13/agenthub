@@ -51,7 +51,7 @@ pub async fn run_provider_hook(
     config_path: &std::path::Path,
     provider: NativeProvider,
 ) -> Result<()> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     if !provider.enabled(&config) {
         return Ok(());
     }
@@ -70,7 +70,7 @@ pub async fn run_antigravity_hook(
     conversation_id: Option<&str>,
 ) -> Result<()> {
     let provider = NativeProvider::Antigravity;
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     if !provider.enabled(&config) {
         return Ok(());
     }

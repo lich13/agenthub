@@ -122,7 +122,7 @@ pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationCont
 }
 
 pub(super) async fn run(config_path: &Path) -> Result<()> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     let paths = ClaudePaths::default_for_user();
     ensure!(
         hooks::installed(&paths, &std::env::current_exe()?, config_path),

@@ -1,6 +1,7 @@
-mod migration_lock;
+pub(crate) mod migration_lock;
 #[cfg(test)]
 mod migration_tests;
+mod notification_crypto;
 use crate::{crypto::SecretBox, security::hash_token};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
@@ -129,6 +130,7 @@ impl PanelDb {
             crypto,
         };
         db.migrate()?;
+        notification_crypto::validate_key(&db.conn.lock().expect("db mutex"), &db.crypto)?;
         Ok(db)
     }
 
@@ -141,7 +143,7 @@ impl PanelDb {
     }
 
     fn migrate(&self) -> Result<()> {
-        const SCHEMA_VERSION: i64 = 2;
+        const SCHEMA_VERSION: i64 = 3;
         {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -155,10 +157,14 @@ impl PanelDb {
         let mut conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version < SCHEMA_VERSION {
+            conn.execute_batch("PRAGMA secure_delete=ON;")?;
             let tx = conn.transaction()?;
             tx.execute_batch(desktop_submissions::SCHEMA)?;
+            self.migrate_notification_key(&tx)?;
+            self.migrate_native_payloads(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
+            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         }
         Ok(())
     }
@@ -1946,7 +1952,7 @@ mod retired_provider_tests {
                 PRAGMA user_version=0;
                 INSERT INTO native_probe_providers VALUES('pi',1,1,1,1,0),('grok',1,1,1,1,0);
                 INSERT INTO native_probe_streams VALUES('pi','old','identity',7,1),('grok','kept','identity',7,1);
-                INSERT INTO native_probe_deliveries VALUES('retired','pi','not valid JSON','pending',1,1),
+                INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES('retired','pi','not valid JSON','pending',1,1),
                     ('retired-json','legacy','{"provider":"pi"}','delivering',1,1);
                 INSERT INTO probe_events(id,kind,dedupe_key,source,payload_json,created_at)
                     VALUES('retired-event','completion','retired','native_provider_monitor','{}',1),

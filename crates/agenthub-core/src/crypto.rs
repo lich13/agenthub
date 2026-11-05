@@ -38,6 +38,15 @@ impl SecretBox {
         Self { key }
     }
 
+    pub(crate) fn legacy_development_keys() -> [Self; 2] {
+        [
+            Self::deterministic_dev(),
+            Self {
+                key: Sha256::digest(b"nexushub-development-key").into(),
+            },
+        ]
+    }
+
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         let cipher = Aes256Gcm::new((&self.key).into());
         let mut nonce_bytes = [0_u8; 12];

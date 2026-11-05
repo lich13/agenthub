@@ -137,7 +137,9 @@ opaque session key 绑定项目相对路径和文件名身份，同名 ID 互不
 
 Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；服务未运行或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
 
-DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。
+DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。 改名追加前校验完整记录与压缩帧：合法末行缺换行时补分隔；半条 JSON 或半帧报错并保持原文件，不自动修复历史。
+
+Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按需建立的时间线，分页只复制请求页，附件单独刷新。DSH 以原生日志身份、大小及 mtime/ctime 失效；Antigravity 离线同时检查完整／简要转录及 SQLite／WAL，在线仅复用原生 owner、摘要和完整终态未变化的结果，运行中不缓存。详情与附件复用同次请求的摘要扫描；本路径未实现追加增量解析，超预算快照仍可读取但不保留。
 
 ## 消息、搜索与界面状态
 
@@ -163,9 +165,9 @@ DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json
 
 ## 管理与隐藏扫描
 
-三种 Provider 共用 useSessionSelection。⌘ 切换单项、Shift 按可见顺序追加区间，切换机器／Provider／筛选或退出多选清空选择。轮询不选择新行。删除没有批量数量上限；归档、恢复保留原有规则，客户端按 100 项分批提交。
+五种 Provider 共用 useSessionSelection。⌘ 切换单项、Shift 按可见顺序追加区间，切换机器／Provider／筛选或退出多选清空选择。轮询不选择新行。删除没有批量数量上限；归档、恢复保留原有规则，客户端按 100 项分批提交。
 
-删除预览仅定位和展示目标，一次确认后以提交的 ID 集合执行。删除不读取正文核验资格，也不依据活动进程、writer 锁、终态、版本、身份字段冲突、指纹、外部引用或官方接口可用性阻止执行。旧 fingerprint 字段仍可接收但可省略，API 协议保持 2。目录流式遍历，没有文件大小、深度或文件数量业务上限；符号链接只删除链接本身，共享文件只移除目标记录。
+直接删除预览展示目标，一次确认后仅执行提交的根 ID 和 descendants，重新计算的父子关系只用于归属校验，不扩大集合。Codex、Claude 与 Grok 的直接删除不依据正文、活动进程、writer 锁、终态或旧 fingerprint 阻止执行；Antigravity 与 DSH 保留所选目标的运行、占用和原生写入校验。统一清理另复核预览指纹及最新允许集，API 协议保持 2。目录流式遍历，没有文件大小、深度或文件数量业务上限；符号链接只删除链接本身，共享文件只移除目标记录。
 
 Codex 依据原生父子关系生成后代集合，循环去重；includeDescendants 和 SessionBatchSelection.descendants 明确传递确认范围。执行不再发现新后代，也不扩大到引用目标历史的其他线程。直接清理普通／归档 rollout、压缩副本、writer 锁、shell snapshots、visualizations、原生数据库、分页历史和名称索引，不调用 helper。归档、恢复仍使用原有指纹和状态规则。
 
@@ -175,7 +177,7 @@ Claude 的稳定定位键由项目相对路径和文件名身份生成，与正�
 
 cleanup.hiddenDryRun 保留 start/poll/cancel、扫描 ID 与游标和旧完整响应。只扫描元数据及原生父子关系，不核验正文或指纹；每页最多 100 项，候选总数没有业务上限。同源最多一个活动扫描，进程最多两个上下文；五分钟无请求释放。界面加载完整确认范围后允许执行，停止结果不能执行，切换机器隔离迟到响应。
 
-DSH 使用独立 cleanup.dshArchiveDryRun／cleanup.dshArchiveExecute，通过共享 CleanupUseCases、Linux RPC、Tauri 与远端 allowlist 接入，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。不增加完整会话 Provider。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
+DSH 使用独立 cleanup.dshArchiveDryRun／cleanup.dshArchiveExecute，通过共享 CleanupUseCases、Linux RPC、Tauri 与远端 allowlist 接入，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。独立会话入口另由 dsh_sessions 能力声明。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
 
 Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；缺少 cwd 或版本不产生读取失败。Grok 优先读取 updates.jsonl，缺失时读取 chat_history.jsonl，映射用户、助手和工具调用／结果，复用分页、增量缓存、搜索和时间线。系统提示、system_reminder 和加密推理不作为普通对话展示。
 
@@ -195,13 +197,17 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 
 ## 通知与监测
 
-Antigravity 与 DSH 是仅本机的通知来源，不提供完整会话阅读入口。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS Tauri 声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
+Antigravity 与 DSH 的通知仅在本机运行，会话阅读及管理是独立能力。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS Tauri 声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
 
-Antigravity 从已运行且同用户的原生 language server 获取摘要和轨迹，仅允许两个固定只读方法；凭据留在本机内存，请求限回环并禁止代理和重定向。完成取主执行的明确终态，不等待独立后台任务；失败必须是当前执行的明确错误终态。只有 WAITING 与可识别 requestedInteraction 同时存在才发问题或授权提醒，按执行、步骤、请求内容及已处理请求数去重；普通工具、中间错误、取消和自动继续不推断失败。服务未运行、身份不明或读取失败在 Probe 来源状态显示异常。
+Antigravity 通知扫描从已运行且同用户的原生 language server 读取摘要、轨迹及执行段元数据，使用固定方法，请求限回环并禁止代理和重定向；凭据只保留在本机内存。完成须核验主执行终态及已关联子代理、后台任务收敛；失败须是当前执行的明确错误终态。原生等待、requestedInteraction、提问及审批记录按既有解析器配对并去重；普通工具、中间错误、取消和自动继续不推断失败。服务未运行、身份不明或读取失败在 Probe 来源状态显示异常。
 
 DSH 复用标准存储边界，读取 v4 JSONL 或逐帧解压追加的 Zstandard，未写完整的尾部等待下次扫描，完整记录按序列核验。turn/start 与 turn/end 决定主回合终态；approval/asked 与 approval/decided 配对授权；ask_user_question 调用、结果及 user-question-reply 身份配对问题。超时返回 pending 的异步问题跨正常回合结束仍保持待回复，实际回答、取消或明确失效解除。子代理、归档和 fork 继承范围不产生主线程通知；不支持的版本、持久化格式及未知必要记录显示读取异常。
 
 两者首次启用及重新启用建立基线，不补发历史；按来源、会话和回合／请求身份认领，同一请求不因摘要变化重复发送。首次发送及每次重试前读取原生状态，恢复执行淘汰旧失败，已处理问题／审批清除重试正文；正常完成沿用既有有效期补发。无法复核时只使用既有有限重试，不猜测终态。
+
+原生通知待发正文用既有 SecretBox 加密；交接到 Bark 重试队列后清除原生正文副本，终态只留身份、结果和界面短摘要。保留期清理包括 unknown，保护待发、重试和当前游标仍需要的去重身份，Antigravity 游标推进后再淘汰旧身份。会话身份或游标未变时不更新该行；通知状态更新数为零时跳过三组历史同步 SQL，必要扫描状态照常持久化。
+
+桌面 App 与 monitor 共用 `Config::load_runtime`。新环境在既有受限 env 文件中生成独立随机密钥；有效密钥继续使用，缺失私有密钥、损坏配置及解密异常明确报错并保留数据。旧开发密钥仅用于可确认的通知迁移，不再作为桌面加载失败时的回退。
 
 事件识别与 Bark HTTP 投递分离。Codex 错误绑定规范主任务身份；普通自然语言反馈仅在确认终态后本地识别，monitor、Stop Hook 和完成入口共享 `assistant_question` 与持久化认领。Grok 使用主回合结束证据；Claude 轮询要求明确终态且无 pending tools，空完成内容回退到本回合最后一段助手回复。兼容警告继续可读，仅致命解析/身份错误禁止扫描。
 
@@ -229,25 +235,27 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 `session_storage` 只统计已验证归属的逻辑字节，不读正文或计算完整内容哈希。Codex 统计 rollout，Claude 统计主 JSONL 及同项目内确认身份的同名会话目录，Grok 统计专属目录；独立线程、共享数据、工作目录和外部附件不计入，不跟随符号链接。
 
-三个摘要的可选 `storageSize` 使用 bytes/scope/status，未知不等于零。普通追加可复用身份缓存；截断、替换和归属改变立即失效。K/M/G 按 1024 换算，颜色按准确字节：小于 100MiB 绿色，100MiB 至不足 300MiB 琥珀色，至少 300MiB 红色。未知灰色，部分结果按确认下限分色并保留 ≥，提示准确字节和不完整状态。
+五个平台摘要的可选 `storageSize` 使用 bytes/scope/status，未知不等于零。普通追加可复用身份缓存；截断、替换和归属改变立即失效。K/M/G 按 1024 换算，颜色按准确字节：小于 100MiB 绿色，100MiB 至不足 300MiB 琥珀色，至少 300MiB 红色。未知灰色，部分结果按确认下限分色并保留 ≥，提示准确字节和不完整状态。
 
 固定预算由 Rust `resource_limits` 和 WebUI `resourceBudgets` 命名管理，不是设置项。每个 JSONL/普通读取缓存默认最多 64 个来源，以下字节数独立计重：
 
 | 缓存或工作 | 当前预算 |
 | --- | --- |
-| Codex 正文 / 活动扫描 / session index | 384 / 8 / 16MiB |
+| Codex 正文 / 活动扫描 / session index | 128 / 8 / 16MiB |
 | Codex 问题 / 子线程生命周期 / 关联 | 4 / 4 / 1MiB |
-| Claude 正文 / 摘要 | 512MiB；摘要 2,000 条、8MiB |
+| Claude 正文 / 摘要 | 160MiB；摘要 2,000 条、8MiB |
 | Claude 输入文件 / 单条记录 | 512 / 32MiB |
-| Grok 正文 / 活动 | 192 / 2MiB |
+| Grok 正文 / 活动 | 64 / 2MiB |
 | 原生通知派生读取 | 32MiB |
+| Antigravity／DSH 历史与时间线 | 合计 32MiB、64 项 |
+| DSH 折叠摘要 | 8MiB、2,000 项，按旧项淘汰 |
 | 历史变更记录 | 64 个 revision，合计 4,096 个变化身份；超限要求安全刷新 |
 | 大小缓存 / 队列 / worker | 512 项 / 128 项 / 2 个；TTL 30 秒 |
 | 单次目录统计 | 10,000 项、16 层、250ms |
 | 阻塞读取 / 凭据工作 | 按可用并行度限制为 2–4 个 / 1 个 |
 | WebView 指令切片 / 上下文投影 / Markdown 树 | 各 512 项、各 8MiB，分别计重 |
 
-上述读取模型的配置预算合计 1,163MiB，但**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、恢复的语法树、DOM 与并发请求有额外内存；App、helper、远程服务和 WebView 又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
+上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、恢复的语法树、DOM 与并发请求有额外内存；App、helper、远程服务和 WebView 又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
 
 ## 兼容与自有数据迁移
 
@@ -265,7 +273,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 不删除 tombstone、回退或有效迁移。tombstone 至少保留整个协议 2 生命周期；移除回退需明确提高最低服务版本；数据库迁移按历史数据库升级支持范围保留，不能仅因服务版本提高而移除。
 
-迁移只打开 AgentHub 自有数据库。schema 版本标记成功完成的升级，重复打开跳过退役 JSON 扫描；跨进程迁移锁覆盖含 VACUUM 的全过程。完成所有迁移后才推进版本，失败保留原有 pending 标记，下次可重入；退役阶段不新增业务表或用户设置。桌面发送记录通过后续 schema 2 独立建立，不重复退役扫描。
+迁移只打开 AgentHub 自有数据库。schema 版本标记成功完成的升级，重复打开跳过退役 JSON 扫描；跨进程迁移锁覆盖含 VACUUM 的全过程。完成所有迁移后才推进版本，失败保留原有 pending 标记，下次可重入；退役阶段不新增业务表或用户设置。桌面发送记录通过 schema 2 独立建立，不重复退役扫描。schema 3 继续使用同一迁移锁，在事务内加密旧原生通知待发正文、清除终态正文副本并迁移可确认的旧开发密钥通知数据；保留去重、基线、认领、重试次数与成功分段。失败回滚，不清空队列或重发旧事件；迁移后清理旧正文所在 SQLite 页和 WAL。独立 Keychain 加密的 Codex 发送队列不参与通知密钥迁移。
 
 退役范围限于 Goal 表/恢复列、旧网页 admins/sessions/Turnstile、Pi 自有提供方/流/投递/事件/设置，以及 Gotify 配置、密钥、通道、队列、Probe 字段和专属任务。Pi 队列先于 JSON 解码清理；涉及退役秘密时使用 secure_delete、VACUUM 和 WAL 截断，保留 Bark 密钥、成功/未知记录、基线、任务、业务审计及其他设置。配置迁移只删明确退役键，不卸载外部服务，不打开或迁移原生会话数据库。
 

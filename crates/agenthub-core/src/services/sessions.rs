@@ -435,9 +435,7 @@ impl SessionUseCases {
                             );
                         }
                         let mut ids = vec![item.session_key.clone()];
-                        if request.include_descendants {
-                            ids.extend(verified);
-                        }
+                        ids.extend(item.descendants.iter().cloned());
                         let outcome = selected_codex::tree::execute_ids(&self.codex, &ids)?;
                         result.deleted_ids = outcome.deleted_ids;
                         result.residuals = outcome.residuals;
@@ -586,6 +584,35 @@ mod tests {
         let codex_res = service.bulk_execute(forged_codex).unwrap();
         assert_eq!(codex_res.items[0].status, "failed");
         assert!(file_a.exists());
+        assert!(file_b.exists());
+
+        let preview = service
+            .bulk_preview(SessionBatchRequest {
+                provider: SessionProvider::Codex,
+                operation: SessionOperation::Delete,
+                session_keys: vec![codex_a.clone()],
+                include_descendants: true,
+            })
+            .unwrap();
+        assert!(preview.items[0].descendants.is_empty());
+        let conn = rusqlite::Connection::open(service.codex.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,parent_thread_id TEXT);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO threads VALUES(?1,NULL),(?2,?1)",
+            rusqlite::params![codex_a, codex_b],
+        )
+        .unwrap();
+        drop(conn);
+        let fixed: SessionBatchExecuteRequest = serde_json::from_value(serde_json::json!({
+            "provider":"codex","operation":"delete","confirmed":true,"includeDescendants":true,
+            "items":[{"sessionKey":codex_a,"descendants":preview.items[0].descendants}]
+        }))
+        .unwrap();
+        let result = service.bulk_execute(fixed).unwrap();
+        assert_eq!(result.items[0].status, "succeeded");
+        assert_eq!(result.items[0].deleted_ids, vec![codex_a]);
+        assert!(!file_a.exists());
         assert!(file_b.exists());
 
         let ag_a = uuid::Uuid::new_v4().to_string();

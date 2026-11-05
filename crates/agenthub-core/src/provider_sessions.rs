@@ -3,7 +3,83 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
+
+pub(crate) static HISTORY_CACHE: crate::read_cache::ReadCache<Arc<ProviderHistorySnapshot>> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::PROVIDER_HISTORY_CACHE_BYTES)
+        .with_native_metadata();
+
+pub(crate) struct ProviderHistorySnapshot {
+    pub events: Arc<Vec<ProviderHistoryEvent>>,
+    timeline: OnceLock<crate::history_navigation::Timeline>,
+}
+
+impl ProviderHistorySnapshot {
+    pub fn new(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
+        Arc::new(Self {
+            events: Arc::new(events),
+            timeline: OnceLock::new(),
+        })
+    }
+
+    fn timeline(&self) -> crate::history_navigation::Timeline {
+        self.timeline
+            .get_or_init(|| {
+                crate::history_navigation::timeline(
+                    self.events
+                        .iter()
+                        .filter(|event| event.kind == "user_message")
+                        .map(|event| {
+                            (
+                                event.id.as_str(),
+                                event.user_message.as_ref(),
+                                event.text.as_deref(),
+                            )
+                        }),
+                )
+            })
+            .clone()
+    }
+}
+
+pub(crate) fn history_weight(snapshot: &Arc<ProviderHistorySnapshot>, _: u64) -> u64 {
+    let events = &snapshot.events;
+    std::mem::size_of::<ProviderHistorySnapshot>() as u64
+        + (events.capacity() * std::mem::size_of::<ProviderHistoryEvent>()) as u64
+        + events
+            .iter()
+            .map(|event| {
+                (event.id.capacity()
+                    + event.kind.capacity()
+                    + [
+                        &event.timestamp,
+                        &event.role,
+                        &event.text,
+                        &event.call_id,
+                        &event.turn_id,
+                        &event.status,
+                        &event.detail,
+                        &event.result,
+                    ]
+                    .iter()
+                    .map(|value| value.as_ref().map_or(0, String::capacity))
+                    .sum::<usize>()) as u64
+                    + event
+                        .user_message
+                        .as_ref()
+                        .map_or(0, crate::user_message::UserMessage::weight)
+                // Reserve the maximum retained timeline allocation before its
+                // first use; laziness must not bypass the shared byte budget.
+                + if event.kind == "user_message" {
+                    (2 * std::mem::size_of::<crate::history_navigation::TimelineEntry>()
+                        + event.id.len() + 2 * 4 * crate::history_navigation::TIMELINE_TEXT_CHARS) as u64
+                } else { 0 }
+            })
+            .sum::<u64>()
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -114,11 +190,12 @@ pub fn matches_query(summary: &ProviderSessionSummary, needle: Option<&str>) -> 
             .is_some_and(|msg| msg.to_lowercase().contains(&lower))
 }
 
-pub fn paginate_provider_detail(
+pub(crate) fn paginate_provider_detail(
     summary: ProviderSessionSummary,
-    all_events: &[ProviderHistoryEvent],
+    snapshot: &ProviderHistorySnapshot,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
+    let all_events = &snapshot.events;
     let limit = request.limit.unwrap_or(160).clamp(1, 500);
     let (start, end) = match crate::history_navigation::seek_window(
         all_events.iter().map(|event| event.id.as_str()),
@@ -143,20 +220,7 @@ pub fn paginate_provider_detail(
             user.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
         }
     }
-    let timeline = request.before.is_none().then(|| {
-        crate::history_navigation::timeline(
-            all_events
-                .iter()
-                .filter(|event| event.kind == "user_message")
-                .map(|event| {
-                    (
-                        event.id.as_str(),
-                        event.user_message.as_ref(),
-                        event.text.as_deref(),
-                    )
-                }),
-        )
-    });
+    let timeline = request.before.is_none().then(|| snapshot.timeline());
     let revision = hex::encode(Sha256::digest(format!(
         "{}:{}:{}",
         summary.session_key,

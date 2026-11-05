@@ -1,7 +1,7 @@
 {
   "name": "agenthub",
   "private": true,
-  "version": "2.0.9",
+  "version": "2.0.10",
   "scripts": {
     "build:ui": "corepack pnpm@12.11.2 --dir webui build:tauri",
     "desktop:dev": "corepack pnpm@12.11.2 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",

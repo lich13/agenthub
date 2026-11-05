@@ -9,7 +9,7 @@
 ## Architecture
 
 - Shared actions flow through `AgentHubUseCases` and the contract registry, then typed WebUI query/domain code and thin Linux/Tauri adapters.
-- Codex, Claude Code and Grok are read-first providers with explicit rename and direct deletion. Local Codex main threads additionally support collaboration through a verified native desktop owner; remote threads, subagents, Claude and Grok remain read-first. Claude rename retains native identity, version, ownership and fingerprint validation. Archive/restore retain their existing rules. Deletion is independent of content reading, process activity, writer locks, terminal state, versions, fingerprints and external references. Resolve targets from the selected machine, Provider, native ID or project-relative filename key; unlink directory symlinks themselves and only remove matching records from shared files. Never install Claude or infer permission waits from generic pending tools.
+- Codex, Claude Code, Grok, Antigravity and DSH provide session reading and explicit management actions. Local Codex main threads additionally support collaboration through a verified native desktop owner. Claude rename retains native identity, version, ownership and fingerprint validation. Archive/restore retain their existing rules. Codex, Claude and Grok direct deletion is independent of content reading and activity; Antigravity and DSH retain their native running/lock checks. Unified cleanup retains its preview fingerprint and allowlist checks. Resolve targets from the selected machine, Provider, native ID or project-relative filename key; unlink directory symlinks themselves and only remove matching records from shared files. Never install Claude or infer permission waits from generic pending tools.
 - The AgentHub Goal feature and automatic recovery chain are retired. Goal RPC names remain only as unavailable contract tombstones. Codex native logs are retained as read-only error-monitor input; no Goal scheduler, recovery retry or Goal database table remains. The separate desktop outgoing queue stores only user-submitted messages and never runs models or edits the native queue.
 - Probe keeps error detection, persistent cursors, dedupe, retention and encrypted Bark delivery. Provider identities and terminal evidence are validated independently. Codex ordinary feedback requests are classified locally only after a verified terminal turn. Native asynchronous questions remain pending across tool acknowledgements and normal completion; all notification entrances use the shared question tracker, identity recheck and persistent per-call delivery claim. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without blocking management; fatal parse, identity, path, permission or uncertain ownership errors still guard rename and collaboration. Only fatal parse or identity errors suppress notification scanning. Claude hooks are explicit local-only settings operations; App installation never enables them. Hooks and local polling share verified native prompt identities and one claim per prompt/category; this rule never changes Codex per-question claims. Retain completed Claude turns on the current branch across later prompts. Check Claude failure freshness before first delivery and every retry; a new prompt, resumed execution, success or cancellation obsoletes the old failure and clears its queued payload. Main-turn completion does not wait for independent background tasks. New Bark events are one plain-text summary (four lines, 300 Unicode characters); preserve encrypted legacy chunks and their acknowledgements. Partial answers never change the original dedupe identity. Never replay questions older than the asynchronous enablement baseline.
 - Settings use one `更新与维护` surface and the retired `system.status` action cannot execute; capability bootstrap uses `system.capabilities`. File-path Markdown actions must preserve the source path and never invent a web origin.
@@ -59,7 +59,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 单条、批量、归档清理和隐藏清理共用直接删除实现。Codex 覆盖普通／归档明文与压缩 rollout、writer 锁、shell snapshots、visualizations、原生状态和分页历史数据库、名称索引。父子关系去重遍历，循环不阻断；不反向扩大到引用方。执行仅处理确认时提交的 ID 集合，不加入后来出现的后代。
 - Claude 定位键取项目相对路径及文件名身份；覆盖主 JSONL、同名目录、file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 按各工作区的 ID 目录定位，摘要缺失或损坏不影响删除。
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围，expectedCount 不再比较。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
-- DSH 提供独立归档清理及本机通知，不新增 Provider 阅读入口。以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 定位归档根及后代；独立 fork 不扩入。预览可运行中读取，执行前要求对应机器的 DSH 退出。请求固定 id/archiveId，不接受路径；恢复、归属变化或并发修改停止对应清理，共享索引只原子移除成功目标。systemd 仅开放 DSH sessions/storages 子目录，旧服务缺少 dsh_archive_cleanup 能力时禁用入口。
+- Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理与本机通知。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
 - Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。先删除自有队列中的 Pi JSON，再移除 Pi 提供方/流/投递/事件及专属设置；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
@@ -67,7 +67,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 阅读与子智能体边界
 
-- 三个 Provider 共用紧凑阅读基线；复制动作不增加正文行高，用户气泡、工具两层折叠、Plan、搜索与用户指令时间线保持原规则。
+- 五个 Provider 共用紧凑阅读基线；复制动作不增加正文行高，用户气泡、工具两层折叠、Plan、搜索与用户指令时间线保持原规则。
 - Codex 子智能体只通过原生调用身份、精确任务路径和父子关联读取，不按显示名称猜测。只使用子线程自己的回合证据判断运行状态。
 - `threads.subagentDetail` 和带主线程上下文的子线程附件必须校验可见主线程、唯一父链、深度、循环、文件身份与指纹。无任意路径、执行控制或子线程管理能力。
 - 子智能体能力缺失时按不支持处理，API 协议保持 2；机器切换关闭面板、隔离缓存并丢弃迟到响应。
@@ -78,6 +78,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - Keychain 读写统一经过 `CredentialAccess`，不在异步执行线程直接调用阻塞凭据 API。读取超时仍保留在执行工作所持许可，避免并发堆积。
 - 保存与移除连接按完整后台事务执行，调用方取消不提前释放连接变更保护；提交或回滚后才允许切换。
 - 凭据读取与能力验证后重新验证连接修订号及目标；固定错误消息不含原生异常、Key 或地址。测试不得访问真实钥匙串。
+- 桌面与 monitor 共用运行配置密钥入口；新环境在既有受限 env 文件生成随机密钥，有效密钥保留，配置损坏或密钥异常明确报错。只迁移可确认由旧开发密钥加密的 AgentHub 通知数据，不触碰独立 Keychain 管理的 Codex 发送队列。
 
 ## 子智能体活动与汇总
 
@@ -89,7 +90,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 界面说明
 
-子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；保留一次确认及固定目标范围，不按读取或活动状态禁用删除。
+子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；保留一次确认及固定目标范围，沿用各平台已有写入校验。
 
 ## 指令与通知边界
 
@@ -105,7 +106,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 每分段最多 3 次，重试等待 15/60 秒并加入 ±20% 抖动；首次投递起 10 分钟内有效。尊重 Retry-After，不提前发送或无限保留。
 - 网络失败、结果未知和明确临时拒绝可重试；凭据、证书验证、重定向、非法请求及已知永久 APNs 拒绝不能重试。日志仅含安全分类、状态码、耗时、次数和匿名身份，不含原始异常、地址、Key 或正文。
 - 使用加密不可变队列、持久化分段确认与带归属校验的租约。成功分段不重发，Hook 不等待后台重试，monitor 每轮最多处理 10 项。每次重试及来源复核后重新读取配置、核对当前状态和目标；正常追加不等于来源变化。
-- 保留旧成功、去重与基线，旧终态未知或失败不重新入队；结束后清除待投递正文。稳定 Bark ID 不能被描述为绝对去重保证。
+- 原生待发正文使用已有加密组件；交接给 Bark 队列及终态后清除原生正文副本，只保留去重身份、结果及界面短摘要。升级保留基线、认领、重试与成功分段；保留期清理包含 unknown 终态，但保留当前游标需要的最小去重身份，游标推进后再清理。空闲轮询不重写未变游标，不执行无变化的全历史同步。稳定 Bark ID 不能被描述为绝对去重保证。
 - 测试通知使用“AgentHub 推送测试”与机器来源正文，作业等待真实终态，HTTP 成功且 Bark code=200 才算受理。旧配置导入仅保留不可执行入口。
 
 ## 历史与大小边界
@@ -117,7 +118,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 ## 读取性能
 
-- 读取使用有界后台执行和按来源串行的增量缓存；热读不重新解析正文，普通追加只消费新记录。缓存受条目数和内存限制，替换、截断、原地修改和原生身份变化必须失效；半行不能成为已发布记录。
+- 读取使用有界后台执行与不可变快照；Codex／Claude／Grok 沿用增量缓存。Antigravity／DSH 复用未变化历史及时间线，正文缓存合计最多 32MiB／64 项，DSH 摘要最多 8MiB／2000 项，超预算正常读取但不缓存。Antigravity 在线复用仅限原生身份、摘要与终态未变化且完整的会话，运行中继续读取；文件替换、截断或修改立即失效，附件按请求刷新。不得把历史快照复用写成完整增量解析。
 - 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。静态旧页不能随轮询重复请求，历史工具、问题与子智能体状态仍需更新。
 - K／M／G 只表示单位，颜色按实际字节在 100MiB、300MiB 分界；未知或待统计为灰色，部分结果按已确认下限分色并保留 ≥ 与不完整提示。
 - 常规受影响检查在本机运行，完整回归和跨平台构建交由现有三项 CI。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。

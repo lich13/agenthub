@@ -8,6 +8,20 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.0.10": {
+        "features": [],
+        "fixes": [
+            "修复 Codex、Antigravity 与 DSH 删除时扩大确认范围的问题，预览后新增的子会话保留。",
+            "加快 Antigravity 与 DSH 未变化历史的阅读和翻页，避免 DSH 摘要缓存整批清空，减少空闲通知轮询的数据库写入与重复扫描。",
+            "修复 DSH 缺少末尾换行时改名损坏日志的问题；遇到不完整记录或压缩帧时明确报错并保留原文件。",
+            "加密原生通知待发正文，终态清除正文副本，修复未知结果清理遗漏与保留期过后重复通知。",
+            "桌面端新环境使用独立随机密钥，配置或密钥异常时明确报错并保留数据；定向更新 anyhow 与 Tokio 安全修复版本。",
+        ],
+        "migration": [
+            "通知数据自动升级至 schema 3，保留启用基线、投递认领、重试次数与已成功分段；已知旧开发密钥只迁移 AgentHub 自有通知数据，独立 Keychain 管理的 Codex 发送队列不变。",
+            "已有配置或密钥异常会停止加载；请修复配置或恢复原密钥后重试，不要删除数据库或待发队列。",
+        ],
+    },
     "2.0.9": {
         "features": [],
         "fixes": [
@@ -340,6 +354,7 @@ def render(version: str, *, updater: bool = False) -> str:
                 "兼容性与迁移": [
                     "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
                     "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/AgentHub.app，不保留旧版副本。",
+                    *entry.get("migration", []),
                 ],
                 "支持平台与资产": [
                     "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",

@@ -119,12 +119,6 @@ pub fn run() {
                 resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
-            if let Err(err) = resources::repair_probe_error_monitor_launch_agent(
-                &state.config(),
-                state.platform(),
-            ) {
-                eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
-            }
             let remote = remote::RemoteConnections::load(&state.config().paths.data_dir)?;
             app.manage(codex_desktop::CodexDesktopBridge::new(
                 remote.credential_access(),

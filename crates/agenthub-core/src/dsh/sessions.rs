@@ -20,7 +20,8 @@ use super::{
 use crate::{
     provider_sessions::{
         matches_query, paginate_provider_detail, ProviderDetailRequest, ProviderHistoryEvent,
-        ProviderListRequest, ProviderSessionDetail, ProviderSessionSummary,
+        ProviderHistorySnapshot, ProviderListRequest, ProviderSessionDetail,
+        ProviderSessionSummary,
     },
     services::sessions::{SessionBatchItem, SessionBatchItemResult, SessionOperation},
     session_delete::{self, Outcome},
@@ -277,8 +278,19 @@ fn discover_all_sessions(paths: &DshPaths) -> Result<Vec<DiscoveredSession>> {
 fn decode_log_lines(
     path: &Path,
     compressed: bool,
-    mut on_line: impl FnMut(&[u8]) -> Result<()>,
+    on_line: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
+    decode_log_lines_checked(path, compressed, false, on_line).map(|_| ())
+}
+
+// Append requires a complete source. Readers may still show already completed
+// frames while DSH is writing its next frame.
+fn decode_log_lines_checked(
+    path: &Path,
+    compressed: bool,
+    for_append: bool,
+    mut on_line: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
     let file = regular_file(path)?;
     let mut bytes = Vec::new();
     file.take(LOG_FILE_LIMIT + 1).read_to_end(&mut bytes)?;
@@ -287,6 +299,7 @@ fn decode_log_lines(
         "DSH 会话日志超出读取上限"
     );
 
+    let mut needs_newline = false;
     if compressed {
         let mut consumed = 0usize;
         let mut decoded_total = 0usize;
@@ -294,12 +307,14 @@ fn decode_log_lines(
             let tail = &bytes[consumed..];
             let magic = [0x28, 0xb5, 0x2f, 0xfd];
             if tail.len() < 4 || tail[..4] != magic {
+                ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
                 break;
             }
             let size = match zstd::zstd_safe::find_frame_compressed_size(tail) {
                 Ok(size) => size,
                 Err(error) if zstd::zstd_safe::get_error_name(error) == "Src size is incorrect" => {
-                    break
+                    ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
+                    break;
                 }
                 Err(_) => bail!("DSH Zstandard 帧损坏"),
             };
@@ -318,16 +333,20 @@ fn decode_log_lines(
                     on_line(raw)?;
                 }
             }
+            if let Some(last) = decoded.last() {
+                needs_newline = *last != b'\n';
+            }
             consumed += size;
         }
     } else {
+        needs_newline = bytes.last().is_some_and(|last| *last != b'\n');
         for raw in bytes.split(|&b| b == b'\n') {
             if !raw.iter().all(u8::is_ascii_whitespace) {
                 on_line(raw)?;
             }
         }
     }
-    Ok(())
+    Ok(needs_newline)
 }
 
 fn epoch_ms_to_rfc3339(ms: i64) -> Option<String> {
@@ -356,18 +375,13 @@ struct FoldedMetadata {
     last_seq: Option<u64>,
 }
 
-const DSH_FOLD_CACHE_MAX_ENTRIES: usize = 256;
-type DshFoldCacheMap =
-    std::collections::HashMap<PathBuf, (super::FileStamp, FoldedMetadata, std::time::Instant)>;
-static DSH_FOLD_CACHE: std::sync::Mutex<Option<DshFoldCacheMap>> = std::sync::Mutex::new(None);
+static DSH_FOLD_CACHE: crate::read_cache::ReadCache<FoldedMetadata> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::DSH_SUMMARY_CACHE_BYTES)
+        .with_entry_limit(crate::resource_limits::DSH_SUMMARY_ENTRIES)
+        .with_native_metadata();
 
 pub(crate) fn evict_idle_fold_cache(max_idle: std::time::Duration) {
-    if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
-        if let Some(map) = guard.as_mut() {
-            let now = std::time::Instant::now();
-            map.retain(|_, (_, _, touched)| now.saturating_duration_since(*touched) < max_idle);
-        }
-    }
+    DSH_FOLD_CACHE.evict_idle(max_idle);
 }
 
 fn extract_content_plain_text(content: &Value) -> String {
@@ -449,17 +463,25 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
 }
 
 fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
-    let stamp = file_stamp(&session.log_path).ok();
-    if let Some(ref s) = stamp {
-        if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
-            if let Some(cached) = guard.as_mut().and_then(|m| m.get_mut(&session.log_path)) {
-                if cached.0 == *s {
-                    cached.2 = std::time::Instant::now();
-                    return Ok(cached.1.clone());
-                }
-            }
-        }
-    }
+    DSH_FOLD_CACHE.read(
+        &session.log_path,
+        |meta, _| {
+            (std::mem::size_of::<FoldedMetadata>()
+                + [
+                    &meta.title,
+                    &meta.first_prompt,
+                    &meta.last_message,
+                    &meta.cwd,
+                ]
+                .iter()
+                .map(|value| value.as_ref().map_or(0, String::capacity))
+                .sum::<usize>()) as u64
+        },
+        || fold_log_metadata_uncached(session),
+    )
+}
+
+fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetadata> {
     let inherited_count = if session.header["isSeeded"] == true {
         session.header["inheritedEventCount"].as_u64().unwrap_or(0)
     } else {
@@ -540,18 +562,6 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
         }
         Ok(())
     })?;
-    if let Some(s) = stamp {
-        if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= DSH_FOLD_CACHE_MAX_ENTRIES && !map.contains_key(&session.log_path) {
-                map.clear();
-            }
-            map.insert(
-                session.log_path.clone(),
-                (s, meta.clone(), std::time::Instant::now()),
-            );
-        }
-    }
     Ok(meta)
 }
 
@@ -734,8 +744,29 @@ fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
     Value::Array(out)
 }
 
-pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
+pub fn load_all_events(
+    paths: &DshPaths,
+    id: &str,
+) -> Result<std::sync::Arc<Vec<ProviderHistoryEvent>>> {
     let session = find_root_session(paths, id)?;
+    Ok(cached_events(paths, &session)?.events.clone())
+}
+
+fn cached_events(
+    paths: &DshPaths,
+    session: &DiscoveredSession,
+) -> Result<std::sync::Arc<ProviderHistorySnapshot>> {
+    crate::provider_sessions::HISTORY_CACHE.read(
+        &session.log_path,
+        crate::provider_sessions::history_weight,
+        || parse_events(paths, session).map(ProviderHistorySnapshot::new),
+    )
+}
+
+fn parse_events(
+    paths: &DshPaths,
+    session: &DiscoveredSession,
+) -> Result<Vec<ProviderHistoryEvent>> {
     let mut events: Vec<ProviderHistoryEvent> = Vec::new();
     let mut open_tool_indices: Vec<usize> = Vec::new();
     let mut open_tool_by_id: std::collections::HashMap<String, usize> =
@@ -1001,8 +1032,10 @@ pub fn session_detail(
     paths: &DshPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
-    let summary = session_summary(paths, &request.session_key)?;
-    let events = load_all_events(paths, &summary.id)?;
+    let session = find_root_session(paths, &request.session_key)?;
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
+    let summary = build_summary(paths, &session, &archived);
+    let events = cached_events(paths, &session)?;
     paginate_provider_detail(summary, &events, request)
 }
 
@@ -1010,12 +1043,16 @@ pub fn read_attachment(
     paths: &DshPaths,
     request: &crate::user_message::SessionAttachmentRequest,
 ) -> Result<crate::user_message::SessionAttachmentResponse> {
-    let summary = session_summary(paths, &request.session_key)?;
-    let events = load_all_events(paths, &summary.id)?;
+    let session = find_root_session(paths, &request.session_key)?;
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
+    let summary = build_summary(paths, &session, &archived);
+    let events = cached_events(paths, &session)?;
     let mut message = events
-        .into_iter()
-        .filter_map(|event| event.user_message)
+        .events
+        .iter()
+        .filter_map(|event| event.user_message.as_ref())
         .find(|msg| msg.id == request.message_id)
+        .cloned()
         .context("会话消息已变化或不存在，请刷新会话")?;
     message.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
     message.read_attachment(&request.attachment_id)
@@ -1113,22 +1150,25 @@ pub fn rename_session(
     // Re-read log under exclusive lease to obtain exact next monotonic seq
     let mut expected_next_seq = 0u64;
     let mut saw_header = false;
-    decode_log_lines(&session.log_path, session.compressed, |line| {
-        let row: Value =
-            serde_json::from_slice(line).context("DSH 会话日志记录损坏，已拒绝改名")?;
-        if !saw_header {
-            ensure!(
-                row["type"] == "session" && row["version"] == 4 && row["id"].as_str() == Some(id),
-                "DSH 会话头校验失败"
-            );
-            saw_header = true;
-            return Ok(());
-        }
-        let seq = row["seq"].as_u64().context("DSH 事件缺少序号")?;
-        ensure!(seq == expected_next_seq, "DSH 事件序号不连续，已拒绝改名");
-        expected_next_seq = seq.checked_add(1).context("DSH 事件序号溢出")?;
-        Ok(())
-    })?;
+    let needs_newline =
+        decode_log_lines_checked(&session.log_path, session.compressed, true, |line| {
+            let row: Value =
+                serde_json::from_slice(line).context("DSH 会话日志记录损坏，已拒绝改名")?;
+            if !saw_header {
+                ensure!(
+                    row["type"] == "session"
+                        && row["version"] == 4
+                        && row["id"].as_str() == Some(id),
+                    "DSH 会话头校验失败"
+                );
+                saw_header = true;
+                return Ok(());
+            }
+            let seq = row["seq"].as_u64().context("DSH 事件缺少序号")?;
+            ensure!(seq == expected_next_seq, "DSH 事件序号不连续，已拒绝改名");
+            expected_next_seq = seq.checked_add(1).context("DSH 事件序号溢出")?;
+            Ok(())
+        })?;
     ensure!(saw_header, "DSH 会话日志缺少头部记录");
 
     let now_ms = SystemTime::now()
@@ -1147,7 +1187,11 @@ pub fn rename_session(
             "source": { "kind": "user" }
         }
     });
-    let mut event_line = serde_json::to_vec(&event)?;
+    let mut event_line = Vec::new();
+    if needs_newline {
+        event_line.push(b'\n');
+    }
+    serde_json::to_writer(&mut event_line, &event)?;
     event_line.push(b'\n');
 
     let payload_to_append = if session.compressed {
@@ -1523,7 +1567,7 @@ pub fn execute_batch_item_checked(
                 !is_session_locked_readonly(&root.dir),
                 "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
             );
-            for child_id in &verified_descendants {
+            for child_id in descendants {
                 for child in all.iter().filter(|s| &s.id == child_id) {
                     ensure!(
                         !is_session_locked_readonly(&child.dir),
@@ -1532,11 +1576,12 @@ pub fn execute_batch_item_checked(
                 }
             }
 
-            let mut ordered_ids: Vec<String> = if include_descendants {
-                verified_descendants.into_iter().rev().collect()
-            } else {
-                Vec::new()
-            };
+            let selected: BTreeSet<&str> = descendants.iter().map(String::as_str).collect();
+            let mut ordered_ids: Vec<String> = verified_descendants
+                .into_iter()
+                .rev()
+                .filter(|id| selected.contains(id.as_str()))
+                .collect();
             ordered_ids.push(key.to_owned());
 
             let mut leases = Vec::new();
@@ -1639,6 +1684,184 @@ pub fn execute_batch_item_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_keeps_children_created_after_confirmation() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-fixed-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        for selected_child in [false, true] {
+            let root = if selected_child {
+                "root-with-child"
+            } else {
+                "root-only"
+            };
+            let child = format!("{root}-selected");
+            let late = format!("{root}-late");
+            let write = |id: &str, parent: Option<&str>| {
+                let dir = home.join("sessions/fixture").join(id);
+                fs::create_dir_all(&dir).unwrap();
+                let mut header = json!({"type":"session","version":4,"id":id,"createdAt":1,"cwd":"/workspace/fixture"});
+                if let Some(parent) = parent {
+                    header["origin"] = json!("subagent");
+                    header["parentSession"] = json!(parent);
+                }
+                fs::write(dir.join("session.v4.jsonl"), format!("{header}\n")).unwrap();
+            };
+            write(root, None);
+            if selected_child {
+                write(&child, Some(root));
+            }
+            let preview =
+                preview_batch_item_checked(&paths, root, SessionOperation::Delete, true, || Ok(()))
+                    .unwrap();
+            assert_eq!(preview.descendants.len(), usize::from(selected_child));
+            write(&late, Some(root));
+            let result = execute_batch_item_checked(
+                &paths,
+                root,
+                SessionOperation::Delete,
+                &preview.descendants,
+                true,
+                || Ok(()),
+            )
+            .unwrap();
+            assert_eq!(result.status, "succeeded");
+            assert_eq!(result.deleted_ids.len(), 1 + usize::from(selected_child));
+            assert!(home.join("sessions/fixture").join(late).exists());
+        }
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn rename_delimits_complete_tails_and_leaves_incomplete_sources_unchanged() {
+        let home = std::env::temp_dir().join(format!("agenthub-dsh-tail-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        for compressed in [false, true] {
+            for tail in ["complete", "partial-json", "partial-frame"] {
+                if tail == "partial-frame" && !compressed {
+                    continue;
+                }
+                let id = format!("session-{compressed}-{tail}");
+                let dir = home.join("sessions/fixture").join(&id);
+                fs::create_dir_all(&dir).unwrap();
+                let path = dir.join(if compressed {
+                    "session.v4.jsonl.zstd"
+                } else {
+                    "session.v4.jsonl"
+                });
+                let header = json!({"type":"session","version":4,"id":id,"createdAt":1,"cwd":"/workspace/fixture"});
+                let event =
+                    json!({"type":"session/title","seq":0,"time":2,"data":{"title":"original"}});
+                let raw = format!(
+                    "{header}\n{event}{}",
+                    if tail == "partial-json" {
+                        "\n{\"seq\":"
+                    } else {
+                        ""
+                    }
+                );
+                let mut bytes = if compressed {
+                    zstd::stream::encode_all(raw.as_bytes(), 3).unwrap()
+                } else {
+                    raw.into_bytes()
+                };
+                if tail == "partial-frame" {
+                    let frame = zstd::stream::encode_all(b"\n{\"seq\":1}".as_slice(), 3).unwrap();
+                    bytes.extend_from_slice(&frame[..frame.len() - 1]);
+                }
+                fs::write(&path, &bytes).unwrap();
+                let result = rename_session(&paths, &id, "renamed");
+                if tail == "complete" {
+                    assert_eq!(result.unwrap().title, "renamed");
+                    let bytes = fs::read(&path).unwrap();
+                    let decoded = if compressed {
+                        zstd::stream::decode_all(bytes.as_slice()).unwrap()
+                    } else {
+                        bytes
+                    };
+                    let rows: Vec<Value> = decoded
+                        .split(|b| *b == b'\n')
+                        .filter(|line| !line.is_empty())
+                        .map(|line| serde_json::from_slice(line).unwrap())
+                        .collect();
+                    assert_eq!(rows.len(), 3);
+                    assert_eq!(rows[2]["seq"], 1);
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(fs::read(&path).unwrap(), bytes);
+                }
+            }
+        }
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn cached_history_reuses_snapshots_and_refreshes_changed_files_and_attachments() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-cache-{}", uuid::Uuid::new_v4()));
+        let dir = home.join("sessions/fixture/session-cache");
+        fs::create_dir_all(&dir).unwrap();
+        let paths = DshPaths { home: home.clone() };
+        let path = dir.join("session.v4.jsonl");
+        let attachment = home.join("fixture.png");
+        let mut image = vec![0u8; 33];
+        image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        image[12..16].copy_from_slice(b"IHDR");
+        fs::write(&attachment, &image).unwrap();
+        let header = json!({"type":"session","version":4,"id":"session-cache","createdAt":1,"cwd":"/workspace/fixture"});
+        let event = json!({"type":"user/message","seq":0,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"fixture"},{"type":"image","path":attachment}]}});
+        let raw = format!("{header}\n{event}\n");
+        fs::write(&path, &raw).unwrap();
+        let first = load_all_events(&paths, "session-cache").unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &first,
+            &load_all_events(&paths, "session-cache").unwrap()
+        ));
+        let request = ProviderDetailRequest {
+            session_key: "session-cache".into(),
+            limit: Some(1),
+            before: None,
+        };
+        let detail = session_detail(&paths, &request).unwrap();
+        let warm = session_detail(&paths, &request).unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            detail.timeline.as_ref().unwrap(),
+            warm.timeline.as_ref().unwrap()
+        ));
+        let before = detail.events[0].user_message.clone().unwrap();
+        image.push(1);
+        fs::write(&attachment, &image).unwrap();
+        let after = session_detail(&paths, &request).unwrap().events[0]
+            .user_message
+            .clone()
+            .unwrap();
+        assert_ne!(before.attachments[0].id, after.attachments[0].id);
+        assert!(read_attachment(
+            &paths,
+            &crate::user_message::SessionAttachmentRequest {
+                root_thread_id: None,
+                provider: crate::services::sessions::SessionProvider::Dsh,
+                session_key: "session-cache".into(),
+                message_id: after.id,
+                attachment_id: after.attachments[0].id.clone()
+            }
+        )
+        .is_ok());
+        let replacement = dir.join("replacement");
+        fs::write(&replacement, raw.replace("\"fixture\"", "\"updated\"")).unwrap();
+        fs::rename(replacement, &path).unwrap();
+        let changed = load_all_events(&paths, "session-cache").unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, &changed));
+        assert!(changed[0].text.as_deref().unwrap().contains("updated"));
+        assert_eq!(
+            session_detail(&paths, &request).unwrap().timeline.unwrap()[0].title,
+            "updated"
+        );
+        fs::write(&path, format!("{header}\n")).unwrap();
+        assert!(load_all_events(&paths, "session-cache").unwrap().is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
 
     fn write_zstd_frames(path: &Path, lines: &[Value]) {
         let mut all_frames = Vec::new();
@@ -1954,7 +2177,7 @@ mod tests {
                 &paths,
                 root_a,
                 SessionOperation::Delete,
-                &[],
+                &[sub_a.to_string()],
                 true,
                 || Ok(()),
             )
@@ -1977,7 +2200,7 @@ mod tests {
                 &paths,
                 root_a,
                 SessionOperation::Delete,
-                &[],
+                &[sub_a.to_string()],
                 true,
                 || Ok(()),
             )
@@ -1999,7 +2222,7 @@ mod tests {
                 &paths,
                 root_a,
                 SessionOperation::Delete,
-                &[],
+                &[sub_a.to_string()],
                 true,
                 || Ok(()),
             )
@@ -2180,11 +2403,6 @@ mod tests {
         let first = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].last_message.as_deref(), Some("第一次回复"));
-        assert!(DSH_FOLD_CACHE
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|m| m.contains_key(&log_path)));
 
         // Second call hits cache and returns identical summary
         let second = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
@@ -2205,11 +2423,8 @@ mod tests {
         assert_eq!(third[0].last_message.as_deref(), Some("更新后的长回复内容"));
 
         evict_idle_fold_cache(std::time::Duration::ZERO);
-        assert!(DSH_FOLD_CACHE
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_none_or(|m| m.is_empty()));
+        let reloaded = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(reloaded[0].last_message, third[0].last_message);
 
         fs::remove_dir_all(home).unwrap();
     }

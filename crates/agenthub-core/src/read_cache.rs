@@ -62,10 +62,25 @@ impl Stamp {
 
 struct Entry<T> {
     path: PathBuf,
-    stamp: Stamp,
+    stamp: SourceStamp,
     value: Arc<T>,
     bytes: u64,
     last_accessed: std::time::Instant,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum SourceStamp {
+    Files(Vec<Option<Stamp>>),
+    Revision(Vec<u8>),
+}
+
+impl SourceStamp {
+    fn size(&self) -> u64 {
+        match self {
+            Self::Files(files) => files.iter().flatten().map(|stamp| stamp.size).sum(),
+            Self::Revision(_) => 0,
+        }
+    }
 }
 
 pub(crate) struct ReadCache<T> {
@@ -105,7 +120,66 @@ impl<T: Clone> ReadCache<T> {
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        let before = Stamp::read(path, self.hash_edges);
+        self.read_stamped(
+            path,
+            || {
+                Stamp::read(path, self.hash_edges)
+                    .map(|stamp| SourceStamp::Files(vec![Some(stamp)]))
+            },
+            weight,
+            load,
+        )
+    }
+
+    pub(crate) fn read_sources(
+        &self,
+        key: &Path,
+        sources: &[PathBuf],
+        weight: impl Fn(&T, u64) -> u64,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.read_stamped(
+            key,
+            || {
+                let stamps: Vec<_> = sources
+                    .iter()
+                    .map(|path| Stamp::read(path, self.hash_edges))
+                    .collect();
+                stamps
+                    .iter()
+                    .any(Option::is_some)
+                    .then_some(SourceStamp::Files(stamps))
+            },
+            weight,
+            load,
+        )
+    }
+
+    /// The caller verifies the native identity and revision on each request.
+    /// None invalidates a previous snapshot and reads without retaining it.
+    pub(crate) fn read_revision(
+        &self,
+        key: &Path,
+        revision: Option<Vec<u8>>,
+        weight: impl Fn(&T, u64) -> u64,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.read_stamped(
+            key,
+            || revision.clone().map(SourceStamp::Revision),
+            weight,
+            load,
+        )
+    }
+
+    fn read_stamped(
+        &self,
+        path: &Path,
+        stamp: impl Fn() -> Option<SourceStamp>,
+        weight: impl Fn(&T, u64) -> u64,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let before = stamp();
         if let Ok(mut entries) = self.entries.lock() {
             if let Some(index) = entries.iter().position(|entry| entry.path == path) {
                 let mut entry = entries.remove(index).expect("known cache entry");
@@ -120,10 +194,8 @@ impl<T: Clone> ReadCache<T> {
         }
         let value = Arc::new(load()?);
         // Never publish a snapshot while its source is being appended or replaced.
-        if let Some(stamp) =
-            before.filter(|stamp| Some(stamp) == Stamp::read(path, self.hash_edges).as_ref())
-        {
-            let bytes = weight(&value, stamp.size);
+        if let Some(stamp) = before.filter(|before| Some(before) == stamp().as_ref()) {
+            let bytes = weight(&value, stamp.size());
             if bytes <= self.max_bytes {
                 if let Ok(mut entries) = self.entries.lock() {
                     entries.retain(|entry| entry.path != path);

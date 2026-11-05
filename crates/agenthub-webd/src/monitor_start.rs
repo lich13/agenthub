@@ -37,7 +37,7 @@ impl DaemonMonitorCache {
                 return Ok(cached_cfg.clone());
             }
         }
-        let loaded = Config::load(config_path)?;
+        let loaded = Config::load_runtime(config_path)?;
         if let Some(current_stamp) = stamp {
             self.config = Some((current_stamp, loaded.clone()));
         } else {

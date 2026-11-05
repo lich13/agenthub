@@ -1,7 +1,6 @@
 use agenthub_core::{
     codex::{resolve_codex_paths, CodexPaths},
     config::Config,
-    crypto::SecretBox,
     db::PanelDb,
     jobs::JobRunner,
     platform::{PlatformKind, PlatformPaths},
@@ -36,7 +35,7 @@ pub struct DesktopState {
 impl DesktopState {
     pub fn current() -> Result<Self> {
         let platform = PlatformPaths::desktop_current();
-        let mut config = load_desktop_config(&platform);
+        let mut config = load_desktop_config(&platform)?;
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
         if agenthub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
@@ -44,6 +43,13 @@ impl DesktopState {
                 .ok_or_else(|| anyhow!("cannot resolve local desktop workspace"))?;
         }
         std::fs::create_dir_all(&config.codex.workspace)?;
+        // Replace/restart the existing monitor before upgrading its shared
+        // queue, so the previous helper cannot append the old plaintext format.
+        if let Err(err) =
+            crate::resources::repair_probe_error_monitor_launch_agent(&config, &platform)
+        {
+            eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
+        }
         let db = open_panel_db(&config)?;
         Ok(Self::new(config, db, platform))
     }
@@ -111,25 +117,18 @@ fn agenthub_paths_for_platform(platform: &PlatformPaths) -> AgentHubPaths {
     }
 }
 
-fn load_desktop_config(platform: &PlatformPaths) -> Config {
-    if platform.config_file.is_file() {
-        Config::load(&platform.config_file)
-            .unwrap_or_else(|_| Config::for_desktop_platform_kind(platform.kind))
-    } else {
-        Config::for_desktop_platform_kind(platform.kind)
-    }
+fn load_desktop_config(platform: &PlatformPaths) -> Result<Config> {
+    Config::load_runtime(&platform.config_file)
 }
 
 pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
-    let secret_box = config
-        .secret_box()
-        .unwrap_or_else(|_| SecretBox::deterministic_dev());
-    PanelDb::open_with_secret_box(&config.paths.db_path, secret_box)
+    PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box()?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agenthub_core::crypto::SecretBox;
     use agenthub_core::services::{jobs as job_service, settings as settings_service};
 
     fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {

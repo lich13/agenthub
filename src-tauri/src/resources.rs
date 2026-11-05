@@ -20,13 +20,9 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
     config: &agenthub_core::config::Config,
     platform: &agenthub_core::platform::PlatformPaths,
 ) -> Result<agenthub_core::probe_error_monitor::ProbeErrorMonitorLaunchAgentStatus, String> {
-    if !platform.config_file.is_file() {
-        if let Some(parent) = platform.config_file.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-        let text = toml::to_string_pretty(config).map_err(|err| err.to_string())?;
-        std::fs::write(&platform.config_file, text).map_err(|err| err.to_string())?;
-    }
+    config
+        .write_runtime_if_missing(&platform.config_file)
+        .map_err(|err| err.to_string())?;
     agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
         platform,
         config.probe.enabled

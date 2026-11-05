@@ -14,6 +14,7 @@ pub struct TimelineEntry {
 }
 
 pub type Timeline = Arc<Vec<TimelineEntry>>;
+pub(crate) const TIMELINE_TEXT_CHARS: usize = 260;
 
 /// A small index independent of the rendered body window and history folding.
 /// Repeated prompts are distinct; only duplicate native message identities merge.
@@ -65,7 +66,7 @@ pub fn update_timeline<'a>(
                 let text: String = text
                     .split_whitespace()
                     .flat_map(|word| word.chars().chain(std::iter::once(' ')))
-                    .take(260)
+                    .take(TIMELINE_TEXT_CHARS)
                     .collect();
                 let text = text.trim_end();
                 let attachments = message.is_some_and(|message| !message.attachments.is_empty());

@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 2.0.5，基线为 `2995b5f / v2.0.4`。本版完成以下工作：① 恢复 `claude_hook::context` 直接使用 `ClaudePaths::default_for_user()` 校验会话目录边界、删除冗余 `parse_with_paths` 并恢复 `pub(super) fn parse`；将 `src-tauri/src/resources.rs` 中 `sync_agenthub_webd_helper_file` 改为比对字节相同时直接返回、更新时写临时文件并 `rename` 原子替换（新 inode），根治 macOS 升级后 helper 触发 `SIGKILL 137`；为 `agenthub-core` 子进程启动补齐 Linux `ETXTBSY (os error 26)` 短暂退避重试；② 在五平台端到端自检中持有 `CONFIG_ENV_LOCK` 统一设置并恢复 `CLAUDE_CONFIG_DIR`、`GROK_HOME` 与 `DSH_HOME`，将 Antigravity Phase 4 测试改为确定性固定时间戳；③ 恢复 `.workspace-title-brand` 与 `.section-title strong, .workspace-heading h1` 样式规则使五大 Agent 列表标题字号与间距一致，并移除 Probe 与设置工作区 5 处副标题小字说明；④ 记录方案 A 已批准取舍：旧配置中分组仍为 `"NexusHub"` 或小写 `"agenthub"` 的不再自动规范化为 `"AgentHub"`（仅空分组回填默认值）。API 协议保持 2；macOS App 仍是唯一界面。
+当前维护源码版本为 **2.0.10**，实现基线为 `ce5d956 / v2.0.9`。本版修复已确认的删除范围、DSH 改名日志完整性、通知正文与密钥迁移、保留期去重问题；复用 Antigravity／DSH 未变化历史，淘汰旧摘要缓存，减少空闲游标写入与无变化通知同步。两份锁文件定向更新至 `anyhow 1.0.103`、`tokio 1.53.3`，同步过时维护规则。API 协议保持 2，现有 RPC、用户操作流程和视觉设计保持不变。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/agenthub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/agenthub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/agenthub/actions/workflows/release.yml) 为准。
 
@@ -10,6 +10,9 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| 固定删除范围与 DSH 日志完整性 | Codex／Antigravity／DSH 只执行确认的根与后代 ID，保留归属校验；DSH 改名补齐合法末行分隔，不完整 JSON／Zstandard 帧报错且保持原文件。 | `v2.0.10` |
+| 通知加密、密钥与保留期迁移 | schema 3 加密原生待发正文并清除终态副本，保留认领／重试／成功分段；独立随机运行密钥与已知旧开发密钥迁移只涉及通知数据；unknown 按保留期清理，当前游标需要的去重身份保留到推进。 | `v2.0.10` |
+| 读取与空闲轮询资源优化 | Antigravity／DSH 共享 32MiB／64 项不可变历史及时间线缓存；DSH 摘要使用 8MiB／2000 项有界淘汰；来源变化失效、运行中读取、附件刷新；未变游标及无变化历史同步不重复写入／扫描。 | `v2.0.10` |
 | Hook 目录边界恢复、helper 原子替换、ETXTBSY 重试与五大 Agent 标题统一 | `claude_hook::context` 恢复按 `ClaudePaths::default_for_user()` 严格校验路径边界并移除 `parse_with_paths`；`sync_agenthub_webd_helper_file` 改用同目录临时文件 `rename` 原子替换避免 macOS `SIGKILL 137`；子进程 `spawn` 针对 `ETXTBSY` 自动重试；五平台自检持有 `CONFIG_ENV_LOCK` 注入 `CLAUDE_CONFIG_DIR`／`GROK_HOME`／`DSH_HOME` 且 Phase 4 使用固定时间戳；统一五大 Agent 列表标题 `15px` 字号并移除 5 处说明小字；旧通知分组名（`"NexusHub"`／`"agenthub"`）按方案 A 不再自动规范化。 | `ee12316`, `60a1178`, `e2dd498` |
 | 配置加载自迁移修复、轮询路径去诊断开销与测试／可见性收口 | 移除 `config.rs` 默认分组 `"AgentHub"` 自迁移重写并断言 `ino` 不变；`evaluate_trajectory(want_diag)` 在轮询路径跳过诊断构造与 `collect_turn_pending_work`；补齐跨回合挂起任务收敛补发断言、Claude Hook 入队自检，恢复 `notification_snapshots` 为 `pub(crate)`。 | `e518e97`, `a2a7582`, `0d77fb5` |
 | Probe 宿主卡片排布修复、Antigravity 判定／Hook 收口与全量底层命名统一 | 修复 `.probe-host-card-head` 换行与 `.probe-host-card-copy` 宽度挤压并收紧 5 卡几何 E2E；`evaluate_trajectory` 合并 `snapshot_with_context` 与 `diagnose_trajectory`、修复跨回合未决后台任务游标越界、`antigravity-hook` 单次 `allow` 原子门控与分离后台扫描；补齐 `unrecorded_at_cursor` 与五平台真实解析器自检及脱敏回归夹具；全仓 crate、二进制、路径、契约与部署脚本统一为 `AgentHub`／`agenthub`。 | `44027ce`, `6da0e4e`, `dcac3b9`, `245a4d7` |
@@ -55,6 +58,20 @@
 
 ## 必要验证
 
+2.0.10 本机针对性回归覆盖固定删除集合与跨根拒绝、DSH 缺换行／半记录／半帧、通知旧数据迁移与重启、终态正文清除、unknown 清理和当前游标去重、密钥异常与有效密钥保留、历史缓存失效和附件刷新，以及空闲轮询不重写游标／不扫描历史。受影响 core、webd、Tauri 测试、两端 Clippy、类型／契约、版本／工作区、隐私及安装脚本检查通过；两份锁文件已确认不再命中本轮 anyhow／Tokio 通告。完整回归和跨平台构建由标签 CI 承担，未访问真实钥匙串或用真实用户会话执行删除测试。
+
+相同合成样本的开发构建比较：
+
+| 样本与指标 | 修复前 | 修复后 |
+|---|---:|---:|
+| 约 12.5MB DSH 历史热读耗时／CPU 时间 | 1652.108／1651.332ms | 0.528／0.518ms |
+| 大历史峰值 RSS | 73.9MiB | 60.1MiB |
+| 257 个摘要热读耗时 | 63.857ms | 19.658ms |
+| 1000 个未变会话一轮 WAL 新增写入 | 32,960 字节 | 4,120 字节 |
+| 2 万条无变化通知处理 CPU 时间 | 32.688ms | 0.181ms |
+
+大历史冷读基本持平，部分小样本峰值 RSS 增加约 0.03–0.36MiB；空闲游标 CPU 时间基本持平。WAL 写入下降不代表磁盘空间已回收，以上不是线上 CPU、内存或硬盘占用收益。本轮未新增性能阈值断言或 CI 门禁。
+
 2.0.0 本机与主／标签 CI 覆盖 `agenthub-core`／`agenthub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（含 Antigravity 顶层 `"agenthub"` 契约安装／修复／移除与遗留 `"hooks"` 清理、`antigravity-hook` `{"decision":"allow"}` stdout 输出、Grok 跨 handler 重复条目清理、Antigravity 端点缓存合并与存活进程瞬时错误不写负缓存、`READONLY_SNAPSHOT_CACHE`／`LIVE_PROVIDER_SESSIONS_CACHE`／`GROK_SNAPSHOT_CACHE` 环境键隔离与 `evict_idle_detail_caches` 统一回收、`estimate_bytes_batch` 与 `inventory` 共享路径扫描、`execute_delete_hidden` `O(K)` 路径、DSH `O(events)` 工具状态结算、Probe 单次扫描复用）、Rust／TypeScript 线协议契约锁、WebUI 65 文件 839 项 Vitest 与类型检查、安装脚本及发布载荷隐私扫描。未使用真实用户会话执行写操作或删除测试。
 
 1.9.0 本机与主／标签 CI 覆盖 `agenthub-core`／`agenthub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（含 DSH 已打开完成线程不误报 `running`、Seeded 会话事件边界与 `turn/end` 工具状态收口、`.zstd` 折叠缓存、Antigravity 端点缓存、Claude 活动快照缓存、`probe.status` 3s 缓存、统一清理管线重算校验与 `O(K)` 隐藏校验及 `O(N)` 单次体积估算、全量测试沙箱隔离、Grok 与 Antigravity 受管 Hooks 安装／修复／移除与 CLI 实时投递、`AgentHub.app` 平台路径断言）、Rust／TypeScript 线协议契约锁、WebUI 64 文件 836 项 Vitest 与类型检查、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 覆盖 280 项 Chromium／WebKit 端到端测试（含浅／深色 `--bg-rail`／`--bg-list`／`--bg-stage` 三层中性表面对比度与零溢出检查）及 macOS 有头双引擎交互帧预算检查。未使用真实用户会话执行写操作或删除测试。
@@ -87,6 +104,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 正式交付
 
+2.0.10 已完成本机实现与必要验证，待标签 CI、正式发布、服务端部署及 Mac 原地安装。
+
 1.9.0 按主题拆分的提交 [`62ade32`](https://github.com/lich13/agenthub/commit/62ade32)、[`1ef92f3`](https://github.com/lich13/agenthub/commit/1ef92f3)、[`b8f2211`](https://github.com/lich13/agenthub/commit/b8f2211)、[`39a4007`](https://github.com/lich13/agenthub/commit/39a4007)、[`221b809`](https://github.com/lich13/agenthub/commit/221b809) 与 [`7395f48`](https://github.com/lich13/agenthub/commit/7395f48fd9bb2f19b4ed6e4a02c2a4a53efb0584) 已与 `v1.9.0` 标签同推，[三项主 CI](https://github.com/lich13/agenthub/actions/runs/41179300628) 与自包含并行 [`v1.9.0` Release CI](https://github.com/lich13/agenthub/actions/runs/41179300785) 均全绿通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.9.0)。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `agenthub-webd 1.9.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `AgentHub-1.9.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地替换安装本机 macOS App（`AgentHub.app 1.8.0 -> AgentHub.app 1.9.0`，Bundle ID `com.lich13.agenthub`），bundle 版本及内置 `agenthub-webd` 均为 1.9.0 且启动运行，没有保留旧副本。计划中建议不做的 1 项（`A6` `projcache` 额外后台任务／状态表）按确认结论未并入实现。真实用户会话未执行删除，待用户验收。
 
 1.8.0 按单一独立主题拆分的六个提交 [`1545b61`](https://github.com/lich13/agenthub/commit/1545b61bd416f85c4f976614fb5b52110aa2f868)、[`3dc983a`](https://github.com/lich13/agenthub/commit/3dc983a736e22cb91ef0fa40e705c2ef6288a7f5)、[`436ee88`](https://github.com/lich13/agenthub/commit/436ee88fbff0d74a15bc5ba07213305fc35334d3)、[`b9a0812`](https://github.com/lich13/agenthub/commit/b9a0812e9a455ca52711fc54e023b959a74be735)、[`a3f412c`](https://github.com/lich13/agenthub/commit/a3f412cebf72620fd1609614fc821ae5774dc661) 与 [`58ddf92`](https://github.com/lich13/agenthub/commit/58ddf92a741de654f9df0037551c0c5607909250) 已与 `v1.8.0` 标签同推，[三项主 CI](https://github.com/lich13/agenthub/actions/runs/41114213895) 与自包含并行 [`v1.8.0` Release CI](https://github.com/lich13/agenthub/actions/runs/41114214135) 均全绿通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.8.0)。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `agenthub-webd 1.8.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `AgentHub-1.8.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地覆盖安装本机 macOS App，bundle 版本及内置 `agenthub-webd` 均为 1.8.0 且启动运行，没有保留旧副本。未确认的 4 项（`M5`、`L7`、`L8`、`A7`）按已批准计划未并入实现。真实用户会话未执行删除，待用户验收。
@@ -114,6 +133,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 1.3.7 核心实现由 [`6ca0716`](https://github.com/lich13/agenthub/commit/6ca0716)、[`e363069`](https://github.com/lich13/agenthub/commit/e363069)、[`d73b2d4`](https://github.com/lich13/agenthub/commit/d73b2d4)、[`0d7afea`](https://github.com/lich13/agenthub/commit/0d7afea) 和 [`70602df`](https://github.com/lich13/agenthub/commit/70602df) 完成；版本、文档和发布说明收尾提交为 [`cffb3e9`](https://github.com/lich13/agenthub/commit/cffb3e9)。该提交对应的[三项主 CI](https://github.com/lich13/agenthub/actions/runs/39727312472) 与 [`v1.3.7` Release CI](https://github.com/lich13/agenthub/actions/runs/39728000909) 全绿，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.3.7)。已使用正式 Linux 服务包升级远端 API，服务版本为 1.3.7、systemd 为 active、回环 healthz 成功；已安装正式 macOS ARM64 App，bundle 版本为 1.3.7 且启动成功，并保留 1.3.6 回退 App。安装和部署临时文件已清理，未自动启用 Claude hooks。
 
 ## 待用户验收
+
+打开 `AgentHub.app 2.0.10`，检查五个平台的阅读、翻页、附件及删除确认范围；使用专门测试线程核验预览后新增子会话被保留。分别触发通知并确认手机实收，回答问题／处理审批／恢复执行后旧提醒不再重试。真实功能、视觉与手机实收待用户验收，线上资源占用未测量。
 
 打开新版 `AgentHub.app`（`2.0.0`），在本机与远端切换下依次核验：① 全新「Command Nexus（多轨星枢）」应用图标与侧栏品牌徽标、566 行纯净三层表面体系（`--bg-rail`、`--bg-surface`、`--bg-stage`）下七大工作区的统一视觉与交互；② 打开「Probe」工作区，确认标题下已移除无用运行态胶囊行与冗余子分栏，五张宿主卡片（Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness）统一展示后端真实配置路径、4 格紧凑指标与弹窗确认开关（DSH 显示只读原生直连状态条，无禁用死按钮）；③ 在 Antigravity 与 Grok 宿主中完成一轮对话，确认 Stop Hook 正常放行且 Bark 收到单条通知、无重复触发；④「设置与维护」工作区的版本检查、全平台线程清理预览与诊断抽屉。
 

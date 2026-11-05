@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
             println!("wrote {}", cli.config.display());
         }
         Command::Doctor => {
-            let config = Config::load(&cli.config)?;
+            let config = Config::load_runtime(&cli.config)?;
             let db = open_panel_db(&config)?;
             let resolved = resolve_codex_paths(&config.codex.home);
             println!("config={}", cli.config.display());
@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
             println!("codex_read_model=local_state_rollout_logs");
         }
         Command::Admin { command } => {
-            let config = Config::load(&cli.config)?;
+            let config = Config::load_runtime(&cli.config)?;
             let db = open_panel_db(&config)?;
             match command {
                 AdminCommand::Generate { output } => {
@@ -247,7 +247,7 @@ async fn main() -> Result<()> {
             command: ProbeCommand::MonitorErrors,
         } => run_probe_error_monitor_daemon(cli.config).await?,
         Command::Probe { command } => {
-            let config = Config::load(&cli.config)?;
+            let config = Config::load_runtime(&cli.config)?;
             let db = open_panel_db(&config)?;
             run_probe_command(command, &config, db, &cli.config).await?;
         }
@@ -1415,7 +1415,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
         host_surface == HostSurface::LinuxServerApi && cfg!(target_os = "linux"),
         "Management API is available only on Linux"
     );
-    let config = Config::load(&config_path)?;
+    let config = Config::load_runtime(&config_path)?;
     upgrade_managed_question_hooks_on_start(&config);
     let db = open_panel_db(&config)?;
     let state = AppState::new_for_surface(config.clone(), db, host_surface);
@@ -1944,7 +1944,7 @@ hooks = false
             .to_string()
             .contains("probe hook-request-user-input"));
         assert!(after_remove.to_string().contains(third_party));
-        let reloaded = Config::load(&probe_cfg_path).unwrap();
+        let reloaded = Config::load_runtime(&probe_cfg_path).unwrap();
         assert!(!reloaded.probe.hooks.manage_stop_hook);
 
         fs::remove_dir_all(&dir).unwrap();

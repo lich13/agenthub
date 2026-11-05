@@ -112,9 +112,10 @@ fn retirement_removes_only_gotify_and_preserves_bark_delivery_and_private_state(
          INSERT INTO probe_notification_channels VALUES('gotify',1,234567);
          INSERT INTO native_probe_providers VALUES('claude_code',1,123456,234567,1,0);
          INSERT INTO native_probe_streams VALUES('claude_code','fixture-stream','fixture-identity',37,234567);
-         INSERT INTO native_probe_deliveries VALUES('fixture-native-event','claude_code','{}','sent',123,234);
          INSERT INTO probe_dedupe VALUES('fixture-completion','fixture-event',9999999999,123);",
     ).unwrap();
+    connection.execute("INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES('fixture-native-event','claude_code',?1,'sent',123,234)",
+        [json!({"event_key":"fixture-native-event","provider":"claude_code","session_key":"fixture-stream","thread_id":"fixture-thread","title":"","stream_identity":"fixture-identity","event":{"position":37,"turn_id":"fixture-turn","kind":"completion","body":"","timestamp_ms":1}}).to_string()]).unwrap();
     for status in ["pending", "delivering", "sent", "failed", "unknown"] {
         connection.execute(
             "INSERT INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,outcome_json,attempts,created_ms,updated_ms,next_ms) VALUES(?1,'gotify',?2,?3,?4,?5,2,123,234,0)",

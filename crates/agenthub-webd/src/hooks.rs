@@ -22,7 +22,7 @@ pub(super) async fn handle_hook_stop_command(
 
 pub(super) async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
     let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     validate_hook_request_user_input_envelope(&stdin_payload)?;
     if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
         return Ok(());
@@ -36,7 +36,7 @@ pub(super) async fn handle_hook_request_user_input_confirm_command(
     config_path: &Path,
 ) -> Result<()> {
     let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     validate_hook_request_user_input_envelope(&stdin_payload)?;
     if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
         return Ok(());

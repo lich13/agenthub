@@ -776,7 +776,7 @@ async fn process(
 
 /// Explicit user tests get a fresh identity and use the same durable queue.
 pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> {
-    let config = Config::load(config_path)?;
+    let config = Config::load_runtime(config_path)?;
     db.sync_notification_channels(&config)?;
     let key = format!("test:{}", uuid::Uuid::new_v4());
     let candidate = queued_candidate(
@@ -811,7 +811,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
             println!("等待重试，已尝试 {} 次。", shown_attempt);
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        retry_pending_with_config(db, &|| Config::load(config_path)).await?;
+        retry_pending_with_config(db, &|| Config::load_runtime(config_path)).await?;
         if let Some(value) = db.notification_delivery_outcome(NotificationChannel::Bark, &key)? {
             outcome = serde_json::from_value(value)?;
         }

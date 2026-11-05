@@ -72,7 +72,7 @@ fn publish_outcomes(tx: &rusqlite::Transaction<'_>, now: i64) -> Result<()> {
     tx.execute(
         "UPDATE native_probe_deliveries SET status=(SELECT CASE WHEN d.status IN ('pending','delivering')
             THEN 'queued' ELSE d.status END FROM probe_notification_deliveries d
-            WHERE d.event_key='native:' || native_probe_deliveries.event_key AND d.channel='bark'),updated_at=?2
+            WHERE d.event_key='native:' || native_probe_deliveries.event_key AND d.channel='bark'),updated_at=?2,ciphertext=NULL,nonce=NULL
          WHERE status!='delivering' AND EXISTS(SELECT 1 FROM probe_notification_deliveries d
             WHERE d.event_key='native:' || native_probe_deliveries.event_key AND d.channel='bark'
             AND d.outcome_json IS NOT NULL AND d.updated_ms=?1)",
@@ -188,6 +188,7 @@ impl PanelDb {
         let now = Utc::now().timestamp_millis();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut changed = 0;
         for channel in NotificationChannel::ALL {
             let enabled = channel.enabled(config);
             let prior = tx
@@ -202,14 +203,16 @@ impl PanelDb {
                 Some((_, activated)) => activated,
                 None => 0, // Preserve the existing Bark baseline.
             };
-            tx.execute("INSERT INTO probe_notification_channels(channel,enabled,activated_ms) VALUES(?1,?2,?3) ON CONFLICT(channel) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms", params![channel.as_str(),enabled,activated])?;
+            tx.execute("INSERT INTO probe_notification_channels(channel,enabled,activated_ms) VALUES(?1,?2,?3) ON CONFLICT(channel) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms", params![channel.as_str(),enabled,activated])?;
             if !enabled {
-                tx.execute("UPDATE probe_notification_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?2,
+                changed += tx.execute("UPDATE probe_notification_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?2,
                     outcome_json=json_set(coalesce(outcome_json,'{}'),'$.sent',json('false'),'$.skipped',json('true'),'$.status','skipped','$.reason','notifications_disabled','$.next_retry_ms',NULL)
                     WHERE channel=?1 AND status IN ('pending','delivering')",params![channel.as_str(),now])?;
             }
         }
-        publish_outcomes(&tx, now)?;
+        if changed > 0 {
+            publish_outcomes(&tx, now)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -411,6 +414,7 @@ impl PanelDb {
         let now = Utc::now().timestamp_millis();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut changed = 0;
         // An expired attempt may already have reached Bark. Recover only its unconfirmed chunk.
         let interrupted: Vec<(String, String, usize, i64)> = {
             let mut stmt=tx.prepare("SELECT event_key,channel,chunk_attempts,first_attempt_ms FROM probe_notification_deliveries
@@ -423,16 +427,18 @@ impl PanelDb {
         for (key, channel, attempt, first) in interrupted {
             let next = now + notification_retry_delay_ms(attempt);
             let retry = attempt < 3 && next < first + NOTIFICATION_LIFETIME_MS;
-            tx.execute("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
+            changed += tx.execute("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
                 outcome_json=json_set(?5,'$.request_count',attempts,'$.chunk_count',chunk_count,'$.confirmed_chunks',chunk_index),
                 updated_ms=?7,ciphertext=CASE WHEN ?6 THEN ciphertext ELSE NULL END,nonce=CASE WHEN ?6 THEN nonce ELSE NULL END
                 WHERE event_key=?1 AND channel=?2",params![key,channel,if retry {"pending"} else {"unknown"},next,
                 json!({"sent":false,"skipped":false,"status":if retry {"waiting_retry"}else{"unknown"},"reason":"delivery_interrupted_outcome_unknown","error_category":"network","attempts":attempt,"next_retry_ms":if retry {Some(next)}else{None}}).to_string(),retry,now])?;
         }
-        tx.execute("UPDATE probe_notification_deliveries SET status=CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?1,
+        changed += tx.execute("UPDATE probe_notification_deliveries SET status=CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?1,
             outcome_json=json_set(coalesce(outcome_json,'{}'),'$.sent',json('false'),'$.status',CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,'$.reason','retry_deadline_exceeded','$.next_retry_ms',NULL)
             WHERE queue_version=1 AND status='pending' AND first_attempt_ms+?2<=?1",params![now,NOTIFICATION_LIFETIME_MS])?;
-        publish_outcomes(&tx, now)?;
+        if changed > 0 {
+            publish_outcomes(&tx, now)?;
+        }
         let rows = {
             let mut stmt=tx.prepare("SELECT event_key,ciphertext,nonce FROM probe_notification_deliveries WHERE channel='bark' AND queue_version=1 AND status='pending'
                 AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL ORDER BY created_ms,event_key LIMIT ?2")?;

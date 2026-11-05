@@ -586,7 +586,10 @@ impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if !path.exists() {
-            return Ok(Self::default());
+            let mut config = Self::default();
+            config.load_sibling_env(path)?;
+            config.normalize()?;
+            return Ok(config);
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
@@ -602,6 +605,67 @@ impl Config {
         Ok(config)
     }
 
+    /// The App and its monitor share the existing sibling env file. Server
+    /// deployments continue to require their explicitly provisioned key.
+    pub fn load_runtime(path: impl AsRef<Path>) -> Result<Self> {
+        let config = Self::load(path.as_ref()).map_err(|_| {
+            anyhow::anyhow!("AgentHub 配置读取或解析失败，请修复配置后重试；原数据已保留")
+        })?;
+        #[cfg(target_os = "macos")]
+        {
+            let mut config = config;
+            config.ensure_runtime_key(path.as_ref())?;
+            Ok(config)
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(config)
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn ensure_runtime_key(&mut self, path: &Path) -> Result<()> {
+        if !self.security.secret_key.trim().is_empty() {
+            self.secret_box()?;
+            return Ok(());
+        }
+        anyhow::ensure!(
+            env::var_os("AGENTHUB_SECRET_KEY").is_none(),
+            "AGENTHUB_SECRET_KEY 为空，请修复运行配置"
+        );
+        if let Some(parent) = self.paths.db_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let _migration = crate::db::migration_lock::MigrationLock::acquire(&self.paths.db_path)?;
+        self.load_sibling_env(path)?;
+        if !self.security.secret_key.trim().is_empty() {
+            self.secret_box()?;
+            return Ok(());
+        }
+        crate::db::PanelDb::validate_legacy_notification_key(&self.paths.db_path)?;
+        let parent = path.parent().context("运行配置缺少目录")?;
+        fs::create_dir_all(parent)?;
+        let env_path = parent.join("env");
+        let original = match fs::read_to_string(&env_path) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(
+            original
+                .as_deref()
+                .and_then(|text| env_file_value(text, "AGENTHUB_SECRET_KEY"))
+                .is_none(),
+            "AGENTHUB_SECRET_KEY 为空，请修复运行配置"
+        );
+        let key = SecretBox::random_key_material();
+        let updated = format!(
+            "{}\nAGENTHUB_SECRET_KEY={key}\n",
+            original.as_deref().unwrap_or("")
+        );
+        write_runtime_env(&env_path, original.as_deref(), &updated)?;
+        self.security.secret_key = key;
+        Ok(())
+    }
+
     pub fn write_default(path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -610,6 +674,27 @@ impl Config {
         }
         let text = toml::to_string_pretty(&Self::default()).context("serialize default config")?;
         fs::write(path, text).with_context(|| format!("write config {}", path.display()))
+    }
+
+    pub fn write_runtime_if_missing(&self, path: &Path) -> Result<()> {
+        use std::io::Write;
+        if path.is_file() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
+        file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
     }
 
     pub fn normalize(&mut self) -> Result<()> {
@@ -1158,6 +1243,36 @@ fn migrate_retired_probe_goal_doc(document: &mut toml_edit::DocumentMut) -> bool
         .is_some()
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn write_runtime_env(path: &Path, original: Option<&str>, updated: &str) -> Result<()> {
+    use std::io::Write;
+    let candidate = path.with_extension(format!("key-{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&candidate)?;
+    let result = (|| -> Result<()> {
+        file.write_all(updated.as_bytes())?;
+        file.sync_all()?;
+        let current = match fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(current.as_deref() == original, "运行配置已变化，请重试");
+        fs::rename(&candidate, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&candidate);
+    }
+    result
+}
+
 fn replace_config_atomically(path: &Path, original: &str, updated: &str) -> Result<()> {
     use std::io::Write;
     let metadata = fs::symlink_metadata(path)?;
@@ -1330,6 +1445,85 @@ mod tests {
     use super::{Config, ProbeConfigFilePatch, ProbeSettingsPatch};
     use crate::platform::{PlatformKind, PlatformPaths};
     use std::{fs, time::SystemTime};
+
+    #[test]
+    fn runtime_key_initialization_preserves_valid_keys_and_rejects_missing_private_keys() {
+        use crate::{crypto::SecretBox, db::PanelDb};
+        let root =
+            std::env::temp_dir().join(format!("agenthub-runtime-key-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let mut keys = Vec::new();
+        for index in 0..2 {
+            let home = root.join(index.to_string());
+            let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+            let path = home.join("config.toml");
+            config.ensure_runtime_key(&path).unwrap();
+            config.secret_box().unwrap();
+            keys.push(config.security.secret_key.clone());
+            config.write_runtime_if_missing(&path).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            let env = home.join("env");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(&env).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            fs::write(
+                &path,
+                toml::to_string(&Config::for_platform_kind_with_home(
+                    PlatformKind::Macos,
+                    &home,
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            let loaded = Config::load(&path).unwrap();
+            assert_eq!(loaded.security.secret_key, config.security.secret_key);
+            let env_bytes = fs::read(&env).unwrap();
+            config.ensure_runtime_key(&path).unwrap();
+            assert_eq!(fs::read(&env).unwrap(), env_bytes);
+            let db =
+                PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap())
+                    .unwrap();
+            db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+                .unwrap();
+            drop(db);
+            let wrong = SecretBox::from_key_material(&SecretBox::random_key_material()).unwrap();
+            assert!(PanelDb::open_with_secret_box(&config.paths.db_path, wrong).is_err());
+            fs::remove_file(&env).unwrap();
+            config.security.secret_key.clear();
+            assert!(config.ensure_runtime_key(&path).is_err());
+            assert!(!env.exists());
+            config.security.secret_key = keys[index].clone();
+            let db =
+                PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap())
+                    .unwrap();
+            assert_eq!(
+                db.get_secret_setting_bytes("probe_bark_device_key")
+                    .unwrap()
+                    .unwrap(),
+                b"fixture-device"
+            );
+            config.security.secret_key = "invalid-fixture".into();
+            assert!(config.ensure_runtime_key(&path).is_err());
+            fs::write(&path, "invalid = [").unwrap();
+            assert!(Config::load_runtime(&path).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), "invalid = [");
+        }
+        assert_ne!(keys[0], keys[1]);
+        assert!(SecretBox::from_key_material(&keys[0]).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn linux_config_uses_loopback_panel_port() {
