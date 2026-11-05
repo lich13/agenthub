@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { assertContrast, assertNoOverflow, mockApi, mockCommand } from "./fixtures";
+import { assertContrast, assertNoOverflow, mockApi, mockCommand, observeCommands } from "./fixtures";
 
 const viewports = [{ width: 1440, height: 900 }, { width: 1280, height: 820 }, { width: 390, height: 844 }, { width: 320, height: 844 }, ...[700, 701, 767, 768].map(width => ({ width, height: 844 }))];
 
@@ -226,6 +226,10 @@ test("Codex and Grok list rows rename on double-click without changing provider 
 
 test("hidden histories stop polling while started jobs continue to terminal", async ({ page }, info) => {
   const calls = await mockApi(page);
+  const outputReads: boolean[] = [];
+  observeCommands(page, (command, args) => {
+    if (command === "jobs.detail") outputReads.push(args.includeOutput !== false);
+  });
   await page.clock.install();
   await page.goto("/");
   const nav = page.locator(".side-nav");
@@ -256,7 +260,9 @@ test("hidden histories stop polling while started jobs continue to terminal", as
     await page.clock.fastForward(2100);
     await expect.poll(() => calls.filter(name => name === "jobs.detail").length).toBe(i);
   }
+  await expect.poll(() => calls.filter(name => name === "jobs.detail").length).toBe(4);
+  expect(outputReads).toEqual([true, false, false, true]);
   await page.clock.fastForward(10000);
-  expect(calls.filter(name => name === "jobs.detail")).toHaveLength(3);
+  expect(calls.filter(name => name === "jobs.detail")).toHaveLength(4);
   await info.attach("request-counts.json", { body: JSON.stringify(calls), contentType: "application/json" });
 });
