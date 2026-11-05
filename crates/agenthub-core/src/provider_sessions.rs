@@ -2,11 +2,8 @@
 //! (Antigravity App and DeepSeek Harness).
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::{
-    path::PathBuf,
-    sync::{Arc, OnceLock},
-};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{path::PathBuf, sync::Arc};
 
 pub(crate) static HISTORY_CACHE: crate::read_cache::ReadCache<Arc<ProviderHistorySnapshot>> =
     crate::read_cache::ReadCache::new(crate::resource_limits::PROVIDER_HISTORY_CACHE_BYTES)
@@ -14,34 +11,36 @@ pub(crate) static HISTORY_CACHE: crate::read_cache::ReadCache<Arc<ProviderHistor
 
 pub(crate) struct ProviderHistorySnapshot {
     pub events: Arc<Vec<ProviderHistoryEvent>>,
-    timeline: OnceLock<crate::history_navigation::Timeline>,
+    timeline: crate::history_navigation::Timeline,
+    revision: String,
 }
 
 impl ProviderHistorySnapshot {
     pub fn new(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
+        let timeline = crate::history_navigation::timeline(
+            events
+                .iter()
+                .filter(|event| event.kind == "user_message")
+                .map(|event| {
+                    (
+                        event.id.as_str(),
+                        event.user_message.as_ref(),
+                        event.text.as_deref(),
+                    )
+                }),
+        );
+        // Calculate once per parsed snapshot, never on a cache hit or page read.
+        let mut digest = DefaultHasher::new();
+        events.hash(&mut digest);
         Arc::new(Self {
             events: Arc::new(events),
-            timeline: OnceLock::new(),
+            timeline,
+            revision: format!("{:016x}", digest.finish()),
         })
     }
 
     fn timeline(&self) -> crate::history_navigation::Timeline {
-        self.timeline
-            .get_or_init(|| {
-                crate::history_navigation::timeline(
-                    self.events
-                        .iter()
-                        .filter(|event| event.kind == "user_message")
-                        .map(|event| {
-                            (
-                                event.id.as_str(),
-                                event.user_message.as_ref(),
-                                event.text.as_deref(),
-                            )
-                        }),
-                )
-            })
-            .clone()
+        self.timeline.clone()
     }
 }
 
@@ -49,6 +48,18 @@ pub(crate) fn history_weight(snapshot: &Arc<ProviderHistorySnapshot>, _: u64) ->
     let events = &snapshot.events;
     std::mem::size_of::<ProviderHistorySnapshot>() as u64
         + (events.capacity() * std::mem::size_of::<ProviderHistoryEvent>()) as u64
+        + snapshot.revision.capacity() as u64
+        + (snapshot.timeline.capacity()
+            * std::mem::size_of::<crate::history_navigation::TimelineEntry>()) as u64
+        + snapshot
+            .timeline
+            .iter()
+            .map(|entry| {
+                (entry.id.capacity()
+                    + entry.title.capacity()
+                    + entry.preview.as_ref().map_or(0, String::capacity)) as u64
+            })
+            .sum::<u64>()
         + events
             .iter()
             .map(|event| {
@@ -71,12 +82,6 @@ pub(crate) fn history_weight(snapshot: &Arc<ProviderHistorySnapshot>, _: u64) ->
                         .user_message
                         .as_ref()
                         .map_or(0, crate::user_message::UserMessage::weight)
-                // Reserve the maximum retained timeline allocation before its
-                // first use; laziness must not bypass the shared byte budget.
-                + if event.kind == "user_message" {
-                    (2 * std::mem::size_of::<crate::history_navigation::TimelineEntry>()
-                        + event.id.len() + 2 * 4 * crate::history_navigation::TIMELINE_TEXT_CHARS) as u64
-                } else { 0 }
             })
             .sum::<u64>()
 }
@@ -143,7 +148,7 @@ pub struct ProviderSessionSummary {
     pub read_warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderHistoryEvent {
     pub id: String,
@@ -221,12 +226,6 @@ pub(crate) fn paginate_provider_detail(
         }
     }
     let timeline = request.before.is_none().then(|| snapshot.timeline());
-    let revision = hex::encode(Sha256::digest(format!(
-        "{}:{}:{}",
-        summary.session_key,
-        all_events.len(),
-        summary.updated_at.as_deref().unwrap_or("")
-    )));
     Ok(ProviderSessionDetail {
         timeline,
         after_cursor: crate::history_navigation::after_cursor(
@@ -238,7 +237,7 @@ pub(crate) fn paginate_provider_detail(
         ),
         history: Some(crate::jsonl_cache::HistoryMetadata {
             epoch: summary.session_key.clone(),
-            revision,
+            revision: snapshot.revision.clone(),
             changed_ids: Vec::new(),
             reset: false,
             changes: Vec::new(),
@@ -249,4 +248,34 @@ pub(crate) fn paginate_provider_detail(
         has_more: start > 0,
         before_cursor: (start > 0).then(|| all_events[start].id.clone()),
     })
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn content_edits_change_revision_without_count_or_timestamp_changes() {
+        let event = ProviderHistoryEvent {
+            id: "fixture".into(),
+            timestamp: Some("2026-01-01T00:00:00Z".into()),
+            kind: "user_message".into(),
+            role: Some("user".into()),
+            text: Some("原文".into()),
+            call_id: None,
+            turn_id: None,
+            status: None,
+            detail: None,
+            result: None,
+            user_message: None,
+        };
+        let first = ProviderHistorySnapshot::new(vec![event.clone()]);
+        let again = ProviderHistorySnapshot::new(vec![event.clone()]);
+        let mut edited = event;
+        edited.text = Some("新文".into());
+        let second = ProviderHistorySnapshot::new(vec![edited]);
+        assert_eq!(first.revision, again.revision);
+        assert_ne!(first.revision, second.revision);
+        assert_eq!(first.timeline.len(), 1);
+        assert_ne!(first.timeline, second.timeline);
+    }
 }

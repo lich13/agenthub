@@ -1,1 +1,1 @@
-export { beforeMachineChange, connectionSnapshot, remoteGet, remoteVerify, remoteSave, remoteRemove, remoteSelect, useConnection, machineScope, type MachineTarget, type RemoteMachineSummary, type RemoteConnectionCredentials } from "../runtime";
+export { beforeMachineChange, connectionSnapshot, remoteGet, remoteSshHosts, remoteInstall, remoteVerify, remoteSave, remoteRemove, remoteSelect, useConnection, machineScope, type MachineTarget, type RemoteMachineSummary, type RemoteConnectionCredentials } from "../runtime";

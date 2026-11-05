@@ -8,6 +8,24 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.0": {
+        "features": [
+            "远程管理改用系统 SSH，可直接选择本机 OpenSSH Host 与 Include 中的连接，复用密钥、ssh-agent 和跳板配置；支持安装并连接同版本服务。",
+            "Probe 移除说明小字和重复引导，实时态势标题改为“全平台实时态势”，现有聚合范围及数量限制保持不变。",
+            "执行记录列表只读取摘要，展开后读取完整日志；后台任务受理后可切换机器，任务继续在远端执行。",
+        ],
+        "fixes": [
+            "减少数据库打开和配置加载的重复检查、通知基线未变化时的写入，删除旧开发密钥与明文通知的一次性兼容迁移。",
+            "历史快照按实际正文生成修订值并按实际时间线容量计重，修复同数量正文改写后不刷新；Antigravity 保留身份与完整分页校验。",
+            "修复跨块日志的中文解码和脱敏、末尾换行保留，以及 Base64、Base64URL、hex 密钥识别；有效现有密钥继续使用。",
+        ],
+        "migration": [
+            "先升级服务至 2.1.0，再安装 App 并选择已有 SSH 连接。旧 HTTPS/API Key 连接和对应钥匙串条目会清理，独立 Codex 发送队列凭据保留。",
+            "服务仅通过 SSH 与私有 Unix 套接字管理。安装器验证新服务后删除旧 API Key 设置和 AgentHub 专属 Nginx 入口，保留共享 Nginx/TLS。",
+            "支持空数据库和 schema 3；更早数据库须先经过 v2.0.10，保留通知队列、业务数据及原生会话。",
+            "安装入口使用与 App 同版本的签名服务包。Ubuntu/Debian x86_64 自动补齐必要依赖；其他 Linux x86_64 须预装 systemd 和依赖。交互认证须先在终端完成；sudo 使用免交互模式，不修改 sudoers。",
+        ],
+    },
     "2.0.10": {
         "features": [],
         "fixes": [
@@ -352,16 +370,16 @@ def render(version: str, *, updater: bool = False) -> str:
         sections.update(
             {
                 "兼容性与迁移": [
-                    "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 agenthub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                    "API 协议保持 2；底层 Bundle ID（com.lich13.agenthub）和远端 agenthub-webd 服务名称保持不变，保留原生会话与业务数据，具体升级要求见下文。",
                     "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/AgentHub.app，不保留旧版副本。",
                     *entry.get("migration", []),
                 ],
                 "支持平台与资产": [
                     "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
-                    "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+                    "Linux x86_64：服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
                 ],
                 "升级提示": [
-                    "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验各 Agent 会话列表、Probe 状态与全平台线程清理。",
+                    "先升级远端服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验各 Agent 会话列表、Probe 状态与全平台线程清理。",
                     "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
                     "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
                 ],

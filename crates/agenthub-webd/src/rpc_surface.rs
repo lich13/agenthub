@@ -1,7 +1,7 @@
 use agenthub_core::services::commands as rpc_commands;
 
+#[cfg(test)]
 pub(crate) const RPC_COMMAND_ROUTE: &str = "/api/rpc/:command";
-pub(crate) const LEGACY_API_FALLBACK_ROUTE: &str = "/api/*path";
 
 pub(crate) fn is_business_rpc_command(command: &str) -> bool {
     rpc_commands::is_allowed_rpc_command(command)
@@ -19,7 +19,7 @@ pub(crate) fn is_retired_rpc_command(command: &str) -> bool {
 mod tests {
     use super::{
         is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
-        LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE,
+        RPC_COMMAND_ROUTE,
     };
     use agenthub_core::services::commands as rpc_commands;
 
@@ -30,7 +30,6 @@ mod tests {
         assert!(!is_transport_rpc_command("uploadFiles"));
         assert!(is_retired_rpc_command("uploadFiles"));
         assert_eq!(RPC_COMMAND_ROUTE, "/api/rpc/:command");
-        assert_eq!(LEGACY_API_FALLBACK_ROUTE, "/api/*path");
     }
 
     #[test]

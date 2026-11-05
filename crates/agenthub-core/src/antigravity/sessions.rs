@@ -149,7 +149,6 @@ pub struct DiscoveredAntigravityEndpoint {
 
 #[derive(Clone)]
 struct LiveRpc {
-    pid: u32,
     port: u16,
     token: String,
 }
@@ -434,7 +433,6 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
             .ok()?;
             value["trajectorySummaries"].is_object().then_some((
                 LiveRpc {
-                    pid: 0,
                     port: *port,
                     token: token.clone(),
                 },
@@ -454,7 +452,6 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                             if value["trajectorySummaries"].is_object() {
                                 return Some((
                                     LiveRpc {
-                                        pid: ep.pid,
                                         port,
                                         token: ep.token,
                                     },
@@ -480,7 +477,6 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                             record_verified_live_endpoint(ep.pid, port, ep.token.clone());
                             return Some((
                                 LiveRpc {
-                                    pid: ep.pid,
                                     port,
                                     token: ep.token.clone(),
                                 },
@@ -2000,7 +1996,7 @@ pub fn load_all_events(
         .clone())
 }
 
-fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<(Vec<ProviderHistoryEvent>, bool)> {
+fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
     let mut resp = connect_rpc_post(
         rpc.port,
         &rpc.token,
@@ -2030,23 +2026,14 @@ fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<(Vec<ProviderHistoryEvent
         };
         steps.append(batch);
     }
-    let settled = resp["trajectory"]["cascadeId"].as_str() == Some(id)
-        && steps.len() == total
-        && steps.iter().all(|step| {
-            matches!(
-                step["status"].as_str(),
-                Some(
-                    "CORTEX_STEP_STATUS_DONE"
-                        | "CORTEX_STEP_STATUS_ERROR"
-                        | "CORTEX_STEP_STATUS_CANCELED"
-                        | "CORTEX_STEP_STATUS_INTERRUPTED"
-                        | "CORTEX_STEP_STATUS_HALTED"
-                )
-            )
-        });
+    ensure!(
+        resp["trajectory"]["cascadeId"].as_str() == Some(id),
+        "原生历史身份不匹配"
+    );
+    ensure!(steps.len() == total, "原生历史读取不完整，请重试");
     let events = extract_live_step_events(id, &steps);
     ensure!(!events.is_empty() || steps.is_empty(), "原生历史尚不可读取");
-    Ok((events, settled))
+    Ok(events)
 }
 
 fn load_events_from_source(
@@ -2063,28 +2050,13 @@ fn load_events_from_source(
         let reusable =
             item["status"] == "CASCADE_RUN_STATUS_IDLE" && !active && !live_item_is_running(item);
         let revision = reusable.then(|| {
-            Sha256::digest(
-                serde_json::to_vec(&json!([rpc.pid, rpc.port, rpc.token, id, item]))
-                    .expect("JSON value"),
-            )
-            .to_vec()
+            Sha256::digest(serde_json::to_vec(&json!([id, item])).expect("JSON value")).to_vec()
         });
-        let settled = std::cell::Cell::new(false);
         let events = HISTORY_CACHE.read_revision(
             &paths.brain_dir().join(id).join("live-history"),
             revision,
-            |events, size| {
-                if settled.get() {
-                    history_weight(events, size)
-                } else {
-                    u64::MAX
-                }
-            },
-            || {
-                let (events, complete) = read_live_events(rpc, id)?;
-                settled.set(complete);
-                Ok(ProviderHistorySnapshot::new(events))
-            },
+            history_weight,
+            || read_live_events(rpc, id).map(ProviderHistorySnapshot::new),
         );
         if events.is_ok() {
             return events;
@@ -2840,7 +2812,13 @@ mod tests {
         )
         .unwrap();
 
-        let state = Arc::new(Mutex::new(("初始会话".to_string(), false, false, false)));
+        let state = Arc::new(Mutex::new((
+            "初始会话".to_string(),
+            false,
+            false,
+            false,
+            0_u8,
+        )));
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_shutdown = shutdown.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2885,7 +2863,7 @@ mod tests {
                         json!({
                             "trajectorySummaries": {
                                 (&server_id): {
-                                    "summary": "默认摘要",
+                                    "summary": format!("默认摘要 {}", guard.4),
                                     "stepCount": 2,
                                     "lastModifiedTime": "2026-10-28T02:00:00Z",
                                     "status": if guard.3 { "CASCADE_RUN_STATUS_BUSY" } else { "CASCADE_RUN_STATUS_IDLE" },
@@ -2901,9 +2879,9 @@ mod tests {
                 } else if req_line.contains("GetCascadeTrajectory ") {
                     server_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     json!({
-                        "numTotalSteps": 2,
+                        "numTotalSteps": if guard.4 == 1 { 3 } else { 2 },
                         "trajectory": {
-                            "cascadeId": server_id,
+                            "cascadeId": if guard.4 == 2 { "fixture-mismatched" } else { &server_id },
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -2975,7 +2953,17 @@ mod tests {
         let other_owner =
             AntigravityPaths::with_fixed_rpc(root.clone(), port, "fixture-other-owner");
         load_all_events(&other_owner, &id).unwrap();
-        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 5);
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 4);
+
+        // Incomplete pages and a mismatched identity must never populate the live cache.
+        for invalid in [1, 2] {
+            state.lock().unwrap().4 = invalid;
+            let before = reads.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(load_all_events(&paths, &id).unwrap().is_empty());
+            assert!(load_all_events(&paths, &id).unwrap().is_empty());
+            assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), before + 2);
+        }
+        state.lock().unwrap().4 = 0;
 
         let renamed = rename_session(&paths, &id, "RPC 改名成功").unwrap();
         assert_eq!(renamed.title, "RPC 改名成功");

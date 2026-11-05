@@ -7,7 +7,7 @@ const settings = (page: Page) => page.locator(".side-nav, .mobile-tabs").getByRo
 const status = { ...demoUpdateStatus("macos-tauri"), current_version: "1.2.2", latest_version: "v1.2.2", update_available: false };
 
 test("one update panel follows the current machine and only checks its selected endpoint", async ({ page }) => {
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
+  await mockApi(page, { connection: { configured: true, sshHost: "fixture-host" } });
   const remoteCalls: string[] = [];
   observeCommands(page, (name, args) => { if (name === "remote.invoke") remoteCalls.push(args.request.command); });
   await mockCommand(page, "updates.status", () => status);
@@ -38,7 +38,7 @@ test("one update panel follows the current machine and only checks its selected 
 test("update errors, new releases and jobs show accurate inline state and block switching", async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 820 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
+  await mockApi(page, { connection: { configured: true, sshHost: "fixture-host" } });
   let current = { ...status, latest_version: null as string | null, update_available: null as boolean | null };
   let fail = true;
   let finish = false;
@@ -58,7 +58,7 @@ test("update errors, new releases and jobs show accurate inline state and block 
   fail = false;
   await panel.getByRole("button", { name: "检查更新" }).click();
   await expect(panel.getByRole("status")).toContainText("正在检查更新");
-  await expect(picker(page)).toBeDisabled();
+  await expect(picker(page)).toBeEnabled();
   await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeDisabled();
   finish = true;
   await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeEnabled();
@@ -69,7 +69,7 @@ test("update errors, new releases and jobs show accurate inline state and block 
 });
 
 test("a late local update read cannot leak a local version into the remote panel", async ({ page }) => {
-  await mockApi(page, { connection: { configured: true, baseUrl: "https://api.example.com/agenthub/" } });
+  await mockApi(page, { connection: { configured: true, sshHost: "fixture-host" } });
   let remote = false;
   let started = false;
   let release!: () => void;

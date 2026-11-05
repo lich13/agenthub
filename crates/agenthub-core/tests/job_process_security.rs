@@ -110,7 +110,7 @@ async fn process_job_preserves_program_path_and_literal_argument_boundaries() {
         config_path.display(),
         hostile_argument
     );
-    assert_eq!(job.output, expected_output.trim_end_matches('\n'));
+    assert_eq!(job.output, expected_output);
     assert!(
         !marker.exists(),
         "shell syntax in an argument must not execute"

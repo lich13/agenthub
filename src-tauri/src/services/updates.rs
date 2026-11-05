@@ -31,6 +31,9 @@ pub fn desktop_update_status_with_state(
             .list_jobs(25)?
             .into_iter()
             .find(|job| job.kind == "agenthub_update_check")
+            .map(|job| state.db.job(&job.id))
+            .transpose()?
+            .flatten()
     } else {
         None
     };

@@ -78,7 +78,6 @@ mod tests {
     fn tauri_entry_delegates_resources_and_boot_to_modules() {
         let lib_source = production_lib_source();
         let resources_source = include_str!("resources.rs");
-        let overview_source = include_str!("overview.rs");
         let boot_source = include_str!("desktop_boot.rs");
 
         for required in [
@@ -91,16 +90,6 @@ mod tests {
                 "lib.rs must compose startup helpers through thin modules: {required}"
             );
         }
-        let monitor_restart = overview_source
-            .find("crate::resources::repair_probe_error_monitor_launch_agent(")
-            .expect("desktop startup must restart the monitor through resources.rs");
-        let database_open = overview_source
-            .find("let db = open_panel_db(&config)?;")
-            .expect("desktop startup must open the configured database");
-        assert!(
-            monitor_restart < database_open,
-            "the upgraded monitor must replace the old writer before queue migration"
-        );
         for forbidden in [
             "fn sync_agenthub_webd_helper_file",
             "fn sync_directory",

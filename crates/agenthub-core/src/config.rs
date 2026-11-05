@@ -7,48 +7,22 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::IpAddr,
     path::{Path, PathBuf},
 };
 
 pub const DEFAULT_HOST_LABEL: &str = "AgentHub";
-const DEFAULT_LOOPBACK_PORT: u16 = 15742;
-const LEGACY_LOOPBACK_PORT: u16 = 15732;
 const LEGACY_PRECHECK_COMMAND_SIMPLE: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
 const LEGACY_PRECHECK_COMMAND_WITH_AUDIT: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && readlink -f /usr/local/bin/codex && readlink -f /usr/local/bin/codex-raw && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && sqlite3 /root/.codex/state_5.sqlite \"select count(*) total, sum(archived_at is null) active, sum(archived_at is not null) archived from threads;\" && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub server: ServerConfig,
     pub codex: CodexConfig,
     #[serde(default)]
     pub probe: ProbeConfig,
     pub security: SecurityConfig,
     pub paths: PathConfig,
     pub update: UpdateConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub listen: SocketAddr,
-}
-
-impl ServerConfig {
-    /// The API is reached through the authenticated reverse proxy, never a LAN socket.
-    pub fn validate_listen(&self) -> Result<()> {
-        let address = match self.listen.ip() {
-            IpAddr::V6(ip) => ip
-                .to_ipv4_mapped()
-                .map(IpAddr::V4)
-                .unwrap_or(IpAddr::V6(ip)),
-            address => address,
-        };
-        anyhow::ensure!(
-            address.is_loopback(),
-            "server.listen must be a loopback address"
-        );
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,8 +338,6 @@ impl Default for ProbeErrorMonitorConfig {
 pub struct SecurityConfig {
     #[serde(default)]
     pub secret_key: String,
-    #[serde(default = "default_auth_rate_limit")]
-    pub auth_rate_limit_per_minute: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,10 +358,6 @@ pub struct UpdateConfig {
     pub panel_update_command: String,
     #[serde(default = "default_panel_precheck_command")]
     pub panel_precheck_command: String,
-}
-
-fn default_auth_rate_limit() -> u32 {
-    8
 }
 
 fn default_update_command() -> String {
@@ -520,9 +488,7 @@ impl Config {
     }
 
     fn for_platform_paths_with_home(platform: PlatformPaths, home: &Path, desktop: bool) -> Self {
-        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
         Self {
-            server: ServerConfig { listen },
             codex: CodexConfig {
                 home: default_codex_home(),
                 workspace: if desktop {
@@ -540,7 +506,6 @@ impl Config {
             probe: ProbeConfig::default(),
             security: SecurityConfig {
                 secret_key: String::new(),
-                auth_rate_limit_per_minute: default_auth_rate_limit(),
             },
             paths: PathConfig {
                 data_dir: platform.data_dir.clone(),
@@ -596,7 +561,6 @@ impl Config {
         let migrated = migrate_all_retired_config(&text)?;
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
-        config.server.validate_listen()?;
         config.load_sibling_env(path)?;
         config.normalize()?;
         if let Some(updated) = migrated {
@@ -608,9 +572,7 @@ impl Config {
     /// The App and its monitor share the existing sibling env file. Server
     /// deployments continue to require their explicitly provisioned key.
     pub fn load_runtime(path: impl AsRef<Path>) -> Result<Self> {
-        let config = Self::load(path.as_ref()).map_err(|_| {
-            anyhow::anyhow!("AgentHub 配置读取或解析失败，请修复配置后重试；原数据已保留")
-        })?;
+        let config = Self::load(path.as_ref())?;
         #[cfg(target_os = "macos")]
         {
             let mut config = config;
@@ -627,20 +589,6 @@ impl Config {
             self.secret_box()?;
             return Ok(());
         }
-        anyhow::ensure!(
-            env::var_os("AGENTHUB_SECRET_KEY").is_none(),
-            "AGENTHUB_SECRET_KEY 为空，请修复运行配置"
-        );
-        if let Some(parent) = self.paths.db_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let _migration = crate::db::migration_lock::MigrationLock::acquire(&self.paths.db_path)?;
-        self.load_sibling_env(path)?;
-        if !self.security.secret_key.trim().is_empty() {
-            self.secret_box()?;
-            return Ok(());
-        }
-        crate::db::PanelDb::validate_legacy_notification_key(&self.paths.db_path)?;
         let parent = path.parent().context("运行配置缺少目录")?;
         fs::create_dir_all(parent)?;
         let env_path = parent.join("env");
@@ -649,19 +597,22 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        anyhow::ensure!(
-            original
-                .as_deref()
-                .and_then(|text| env_file_value(text, "AGENTHUB_SECRET_KEY"))
-                .is_none(),
-            "AGENTHUB_SECRET_KEY 为空，请修复运行配置"
-        );
         let key = SecretBox::random_key_material();
-        let updated = format!(
-            "{}\nAGENTHUB_SECRET_KEY={key}\n",
-            original.as_deref().unwrap_or("")
-        );
-        write_runtime_env(&env_path, original.as_deref(), &updated)?;
+        let mut updated = original
+            .as_deref()
+            .unwrap_or("")
+            .lines()
+            .filter(|line| {
+                line.split_once('=')
+                    .is_none_or(|(name, _)| name.trim() != "AGENTHUB_SECRET_KEY")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        updated.push_str(&format!("AGENTHUB_SECRET_KEY={key}\n"));
+        write_runtime_env(&env_path, &updated)?;
         self.security.secret_key = key;
         Ok(())
     }
@@ -698,18 +649,12 @@ impl Config {
     }
 
     pub fn normalize(&mut self) -> Result<()> {
-        self.server.validate_listen()?;
-        if self.server.listen
-            == SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), LEGACY_LOOPBACK_PORT)
+        if let Some(value) = env::var("AGENTHUB_SECRET_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
         {
-            self.server.listen =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
-        }
-        if let Ok(value) = env::var("AGENTHUB_SECRET_KEY") {
             self.security.secret_key = value;
         }
-        self.security.auth_rate_limit_per_minute =
-            self.security.auth_rate_limit_per_minute.clamp(1, 120);
         if self.codex.host_label.trim().is_empty() {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
@@ -1244,7 +1189,7 @@ fn migrate_retired_probe_goal_doc(document: &mut toml_edit::DocumentMut) -> bool
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn write_runtime_env(path: &Path, original: Option<&str>, updated: &str) -> Result<()> {
+fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
     use std::io::Write;
     let candidate = path.with_extension(format!("key-{}.tmp", uuid::Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
@@ -1258,12 +1203,6 @@ fn write_runtime_env(path: &Path, original: Option<&str>, updated: &str) -> Resu
     let result = (|| -> Result<()> {
         file.write_all(updated.as_bytes())?;
         file.sync_all()?;
-        let current = match fs::read_to_string(path) {
-            Ok(text) => Some(text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-        anyhow::ensure!(current.as_deref() == original, "运行配置已变化，请重试");
         fs::rename(&candidate, path)?;
         Ok(())
     })();
@@ -1447,7 +1386,27 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     #[test]
-    fn runtime_key_initialization_preserves_valid_keys_and_rejects_missing_private_keys() {
+    fn empty_runtime_key_is_replaced_without_duplicate_env_entries() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-empty-key-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("config.toml");
+        fs::write(
+            root.join("env"),
+            "# fixture\nAGENTHUB_SECRET_KEY=\nUNCHANGED=fixture\n",
+        )
+        .unwrap();
+        let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &root);
+        config.ensure_runtime_key(&path).unwrap();
+        let text = fs::read_to_string(root.join("env")).unwrap();
+        assert_eq!(text.matches("AGENTHUB_SECRET_KEY=").count(), 1);
+        assert!(text.contains("UNCHANGED=fixture"));
+        assert!(config.secret_box().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_key_initialization_preserves_valid_keys_and_reports_read_errors() {
         use crate::{crypto::SecretBox, db::PanelDb};
         let root =
             std::env::temp_dir().join(format!("agenthub-runtime-key-{}", uuid::Uuid::new_v4()));
@@ -1499,11 +1458,14 @@ mod tests {
                 .unwrap();
             drop(db);
             let wrong = SecretBox::from_key_material(&SecretBox::random_key_material()).unwrap();
-            assert!(PanelDb::open_with_secret_box(&config.paths.db_path, wrong).is_err());
+            assert!(PanelDb::open_with_secret_box(&config.paths.db_path, wrong)
+                .unwrap()
+                .get_secret_setting_bytes("probe_bark_device_key")
+                .is_err());
             fs::remove_file(&env).unwrap();
             config.security.secret_key.clear();
-            assert!(config.ensure_runtime_key(&path).is_err());
-            assert!(!env.exists());
+            config.ensure_runtime_key(&path).unwrap();
+            assert!(env.exists());
             config.security.secret_key = keys[index].clone();
             let db =
                 PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap())
@@ -1528,7 +1490,6 @@ mod tests {
     #[test]
     fn linux_config_uses_loopback_panel_port() {
         let config = Config::for_platform_kind(PlatformKind::Linux);
-        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         assert_eq!(
             config.update.panel_precheck_command,
             "/usr/local/bin/agenthub-webd-update --precheck"
@@ -1540,7 +1501,6 @@ mod tests {
     fn macos_config_uses_tauri_app_precheck() {
         let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
 
-        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         assert_eq!(
             config.update.panel_precheck_command,
             "test -d '/Users/example/Library/Application Support/AgentHub'"
@@ -1960,7 +1920,6 @@ host_label = "old"
         let config = Config::default();
 
         assert_eq!(config.codex.host_label, "AgentHub");
-        assert!(config.security.auth_rate_limit_per_minute > 0);
         let serialized = toml::to_string(&config).unwrap();
         for retired in [
             "cookie_secure",
@@ -2042,14 +2001,12 @@ custom = { token = "fixture-custom-value" }
     fn normalize_migrates_legacy_runtime_values_and_preserves_host_label() {
         let mut config = Config::default();
         config.codex.host_label = "configured-host".into();
-        config.server.listen = "127.0.0.1:15732".parse().unwrap();
         config.update.panel_precheck_command =
             "test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz".to_string();
 
         config.normalize().unwrap();
 
         assert_eq!(config.codex.host_label, "configured-host");
-        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         match super::current_platform_kind() {
             PlatformKind::Linux | PlatformKind::Windows => {
                 assert!(config.update.panel_precheck_command.contains("--precheck"))

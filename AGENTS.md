@@ -14,8 +14,8 @@
 - Probe keeps error detection, persistent cursors, dedupe, retention and encrypted Bark delivery. Provider identities and terminal evidence are validated independently. Codex ordinary feedback requests are classified locally only after a verified terminal turn. Native asynchronous questions remain pending across tool acknowledgements and normal completion; all notification entrances use the shared question tracker, identity recheck and persistent per-call delivery claim. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without blocking management; fatal parse, identity, path, permission or uncertain ownership errors still guard rename and collaboration. Only fatal parse or identity errors suppress notification scanning. Claude hooks are explicit local-only settings operations; App installation never enables them. Hooks and local polling share verified native prompt identities and one claim per prompt/category; this rule never changes Codex per-question claims. Retain completed Claude turns on the current branch across later prompts. Check Claude failure freshness before first delivery and every retry; a new prompt, resumed execution, success or cancellation obsoletes the old failure and clears its queued payload. Main-turn completion does not wait for independent background tasks. New Bark events are one plain-text summary (four lines, 300 Unicode characters); preserve encrypted legacy chunks and their acknowledgements. Partial answers never change the original dedupe identity. Never replay questions older than the asynchronous enablement baseline.
 - Settings use one `更新与维护` surface and the retired `system.status` action cannot execute; capability bootstrap uses `system.capabilities`. File-path Markdown actions must preserve the source path and never invent a web origin.
 
-- The macOS App is the sole UI. Remote management uses an independent `x-api-key` stored in Keychain and a fixed allowlisted Rust HTTP bridge; never send keys from browser fetch, log them or permit redirects. API protocol and connection revisions gate requests. Switching machines cannot reuse previews, selection or cached responses; mutations are never replayed automatically.
-- Old web authentication, static assets and EventSource are retired. Preserve API authentication throttling, business audit, Bark encryption and notification state. Database erasure is limited to AgentHub's own retired web credentials, Pi integration and Gotify records; never migrate native provider databases.
+- The macOS App is the sole UI. Remote management uses system SSH with saved OpenSSH Host/Include aliases and a fixed `agenthub-webd rpc-stdio` command forwarding to the service-owned private Unix socket. Reuse native SSH identity, agent and jump settings without copying private keys or storing passwords. Keep protocol 2, command allowlists and connection revisions. Switching machines releases the owned channel, isolates previews, selection and cached responses; mutations are never replayed automatically. Only pending write requests block switching; accepted jobs continue in the service.
+- HTTP management, API Key authentication, static assets and EventSource are retired. Preserve business audit, Bark encryption and notification state. After the SSH service is healthy, remove only the owned API Key setting and AgentHub Nginx entry; shared Nginx/TLS and native provider databases remain intact. Desktop cleanup removes only old remote connection credentials, preserving the independent Codex queue credential store.
 
 Grok activity display uses one native-process snapshot per list and bounded incremental event reads. Deletion locates every matching native ID directory without parsing summaries or checking ownership, and removes corresponding active_sessions registrations. Prefer updates.jsonl for reading; when absent, map native chat_history.jsonl user, assistant and tool records into the existing history, search and timeline. System prompts, system_reminder and encrypted reasoning are not conversation content. Claude empty and metadata-only records remain readable without cwd or version.
 
@@ -36,7 +36,7 @@ Grok activity display uses one native-process snapshot per list and bounded incr
 - Use the shared `RunningIndicator` for running Codex, Claude Code and Grok sessions. Codex, Claude Code and Grok group adjacent native tool activity at its original position between messages. Never discard historical tool rows; keep chronological call/result pairing and bounded pagination. Both levels use native `<details>` controls. Completed groups are closed by default; active and failed groups remain open. AGENTS.md rows and instruction-only groups always start closed; retain explicit user choices by session/activity identity. Plan copy and Markdown download use the same cleaned source as rendering, with safe title-derived filenames. Hide structured memory metadata before parsing, preserve code examples and ordinary prose, and never rewrite native files.
 - Timeline rail markers represent only recognized user messages for each Provider. Build the full index independently of loaded pages and folded history; use stable native identities and bounded jump windows, preserving both pagination directions. Tools, plans, assistant replies and activity groups keep their original anchors for search and focus without becoming rail markers. Keep the rail and single hover preview narrow, with bounded mounted markers and keyboard access to every entry.
 - Deletion accepts any number of explicit keys; archive/restore requests are split into batches of 100. A changed filter clears selection; polling never selects new rows. One confirmation lists targets and native descendants; execution uses that fixed set. Per-item failures and residuals remain visible, missing files complete successfully, and a failed item never rolls back other targets.
-- Never expose arbitrary shell, public Codex sockets, private deployment values or real session content in tests and packages. Validate loopback API listeners before startup; managed update and Probe jobs execute fixed programs with literal argument arrays. Reject unsafe Bark destinations before sending without substituting a default destination. Use reserved example values and a GitHub noreply commit identity.
+- Never expose arbitrary shell, public Codex sockets, private deployment values or real session content in tests and packages. The management socket is private to the systemd service user; managed update and Probe jobs execute fixed programs with literal argument arrays. Reject unsafe Bark destinations before sending without substituting a default destination. Use reserved example values and a GitHub noreply commit identity.
 - Keep systemd hardening (`ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true`, `PrivateTmp=true`). Allow exact provider data roots in `ReadWritePaths` so shared indexes can be atomically replaced; protect Grok and Claude settings and credentials with optional `ReadOnlyPaths`. Resolve custom roots from the provider environment and Codex configuration. Missing provider storage must not block service startup.
 
 - User-message presentation is separate from assistant Markdown. Preserve user whitespace and literal Markdown. Read native attachment bytes only through `sessions.attachmentRead`, using provider/session/message/attachment identity; never accept client paths or include image bytes in polling responses.
@@ -61,7 +61,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围，expectedCount 不再比较。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
 - Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理与本机通知。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
-- Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。先删除自有队列中的 Pi JSON，再移除 Pi 提供方/流/投递/事件及专属设置；保留其原生程序与用户数据。
+- Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
 - 发布前检查当前树、索引、可达历史和资产。仅发现可达历史敏感值时才按授权重写；平台保留的不可达对象另行记录，不声称已完全擦除。
 
@@ -76,9 +76,9 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 ## 凭据边界
 
 - Keychain 读写统一经过 `CredentialAccess`，不在异步执行线程直接调用阻塞凭据 API。读取超时仍保留在执行工作所持许可，避免并发堆积。
-- 保存与移除连接按完整后台事务执行，调用方取消不提前释放连接变更保护；提交或回滚后才允许切换。
-- 凭据读取与能力验证后重新验证连接修订号及目标；固定错误消息不含原生异常、Key 或地址。测试不得访问真实钥匙串。
-- 桌面与 monitor 共用运行配置密钥入口；新环境在既有受限 env 文件生成随机密钥，有效密钥保留，配置损坏或密钥异常明确报错。只迁移可确认由旧开发密钥加密的 AgentHub 通知数据，不触碰独立 Keychain 管理的 Codex 发送队列。
+- 保存与移除连接使用现有变更保护与原子配置写入；切换或退出时释放自有 SSH 进程。旧远程钥匙串条目清理仍通过 CredentialAccess。
+- SSH 能力验证保持连接变更保护；请求校验修订号及目标，丢弃迟到响应。固定错误消息不含原生异常、Key 或地址。测试不得访问真实钥匙串。
+- 桌面与 monitor 共用运行配置密钥入口；新环境在既有受限 env 文件生成随机密钥，有效密钥保留，配置损坏或密钥异常明确报错。支持空库和 schema 3，旧库须先经过 v2.0.10；不再预开数据库或抽样解密，密文在实际读取时校验，不触碰独立 Keychain 管理的 Codex 发送队列。
 
 ## 子智能体活动与汇总
 
@@ -89,6 +89,8 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 完整内部 `external_codex_apps_open_page` JSON 包装从显示、复制、导出和搜索排除；代码与引用示例保留，不产生空用户气泡或时间线标记。
 
 ## 界面说明
+
+Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，保留状态、错误及确认对象；“全平台实时态势”沿用原聚合和数量限制。执行记录列表只返回摘要，展开用 jobs.detail 读取完整日志。
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；保留一次确认及固定目标范围，沿用各平台已有写入校验。
 
@@ -119,7 +121,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 ## 读取性能
 
 - 读取使用有界后台执行与不可变快照；Codex／Claude／Grok 沿用增量缓存。Antigravity／DSH 复用未变化历史及时间线，正文缓存合计最多 32MiB／64 项，DSH 摘要最多 8MiB／2000 项，超预算正常读取但不缓存。Antigravity 在线复用仅限原生身份、摘要与终态未变化且完整的会话，运行中继续读取；文件替换、截断或修改立即失效，附件按请求刷新。不得把历史快照复用写成完整增量解析。
-- 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。静态旧页不能随轮询重复请求，历史工具、问题与子智能体状态仍需更新。
+- 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。Antigravity／DSH 快照依据实际内容计算 revision，时间线随快照生成并按实际容量计重；继续保守重读旧页，历史工具、问题与子智能体状态仍需更新。
 - K／M／G 只表示单位，颜色按实际字节在 100MiB、300MiB 分界；未知或待统计为灰色，部分结果按已确认下限分色并保留 ≥ 与不完整提示。
 - 常规受影响检查在本机运行，完整回归和跨平台构建交由现有三项 CI。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。
 - Playwright 回归及 macOS 有头性能检查默认在现有 GitHub Actions 运行；除非用户另行明确要求，本机不安装或启动验收浏览器。CI 先构建前端、安装 Chromium 与 WebKit，只使用 Playwright 管理的浏览器缓存；禁止渠道、本机可执行路径和外部浏览器连接覆盖。全局启动守卫必须保留，不依赖或启动系统 Google Chrome。内置 Google Chrome for Testing 按真实路径确认来源，不以窗口名称判断。

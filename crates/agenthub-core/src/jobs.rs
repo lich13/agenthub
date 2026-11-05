@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::{
-    io::{AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::broadcast,
 };
@@ -250,12 +250,16 @@ where
 {
     tokio::spawn(async move {
         let mut reader = BufReader::new(reader);
-        let mut buf = [0_u8; 2048];
+        let mut buf = Vec::new();
         loop {
-            match reader.read(&mut buf).await {
+            match reader.read_until(b'\n', &mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    let chunk = redact_output(&String::from_utf8_lossy(&buf[..n]));
+                    let mut chunk = redact_output(&String::from_utf8_lossy(&buf[..n]));
+                    if buf.ends_with(b"\n") {
+                        chunk.push('\n');
+                    }
+                    buf.clear();
                     let _ = db.append_job_output(&job_id, &chunk);
                     let _ = tx.send(JobEvent {
                         job_id: job_id.clone(),
@@ -275,6 +279,24 @@ mod tests {
     use crate::db::PanelDb;
     use std::{fs, thread, time::Duration};
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn split_utf8_sensitive_lines_and_unterminated_tail_are_preserved() {
+        use tokio::io::AsyncWriteExt;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.create_job("fixture", "fixture", "fixture").unwrap();
+        let (mut writer, reader) = tokio::io::duplex(3);
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let reader = super::stream_reader(db.clone(), tx, "fixture".into(), reader);
+        for byte in "中文完成\n\nOPENAI_API_KEY=fixture-secret\n尾行".as_bytes() {
+            writer.write_all(&[*byte]).await.unwrap();
+        }
+        drop(writer);
+        reader.await.unwrap();
+        let output = db.job("fixture").unwrap().unwrap().output;
+        assert_eq!(output, "中文完成\n\n[redacted sensitive line]\n尾行");
+        assert!(db.list_jobs(10).unwrap()[0].output.is_empty());
+    }
 
     #[tokio::test]
     async fn exclusive_shell_jobs_reject_same_group_until_finished() {

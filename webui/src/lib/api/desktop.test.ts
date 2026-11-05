@@ -26,7 +26,7 @@ function installBridge(handler?: InvokeHandler) {
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     if (handler) return await handler(command, args);
     if (command === "remote.select") {
-      return { target: "remote", revision: 1, baseUrl: "https://api.example.invalid/", configured: true };
+      return { target: "remote", revision: 1, sshHost: "fixture-host", configured: true };
     }
     if (command === "codex.desktop.attach" || command === "codex.desktop.action") return view("thread-fixture");
     if (command === "codex.desktop.attachments") return { bindingId: "binding-fixture" };

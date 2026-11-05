@@ -1,8 +1,7 @@
 pub(crate) mod migration_lock;
 #[cfg(test)]
 mod migration_tests;
-mod notification_crypto;
-use crate::{crypto::SecretBox, security::hash_token};
+use crate::crypto::SecretBox;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
@@ -130,7 +129,6 @@ impl PanelDb {
             crypto,
         };
         db.migrate()?;
-        notification_crypto::validate_key(&db.conn.lock().expect("db mutex"), &db.crypto)?;
         Ok(db)
     }
 
@@ -153,44 +151,18 @@ impl PanelDb {
             }
         }
         let _migration = migration_lock::MigrationLock::acquire(&self.path)?;
-        self.migrate_retirements()?;
         let mut conn = self.conn.lock().expect("db mutex");
-        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version < SCHEMA_VERSION {
-            conn.execute_batch("PRAGMA secure_delete=ON;")?;
-            let tx = conn.transaction()?;
-            tx.execute_batch(desktop_submissions::SCHEMA)?;
-            self.migrate_notification_key(&tx)?;
-            self.migrate_native_payloads(&tx)?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            tx.commit()?;
-            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
-        }
-        Ok(())
-    }
-
-    // Called with the cross-process migration lock. Schema 1 remains a separate
-    // checkpoint, so adding the encrypted desktop ledger never repeats erasure.
-    fn migrate_retirements(&self) -> Result<()> {
-        // Schema 1 records completion of the protocol-2 retirements. Successful
-        // reopens do not traverse event JSON or repeat schema/data migrations.
-        const SCHEMA_VERSION: i64 = 1;
-        {
-            let conn = self.conn.lock().expect("db mutex");
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-            let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version >= SCHEMA_VERSION {
-                return Ok(());
-            }
-        }
-        // VACUUM must run outside a SQL transaction. Hold an OS advisory lock
-        // across all retirement transactions and recheck after waiting.
-        let conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version >= SCHEMA_VERSION {
             return Ok(());
         }
-        conn.execute_batch(
+        let populated: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')", [], |row| row.get(0))?;
+        anyhow::ensure!(
+            !populated,
+            "旧数据库请先使用 v2.0.10 完成升级；原数据已保留"
+        );
+        let tx = conn.transaction()?;
+        tx.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
@@ -201,9 +173,6 @@ impl PanelDb {
               updated_at INTEGER NOT NULL
             );
 
-            DELETE FROM settings WHERE key IN (
-              'probe_logs_db_last_maintain', 'probe_logs_db_last_compact'
-            );
 
             CREATE TABLE IF NOT EXISTS audit_log (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,9 +199,6 @@ impl PanelDb {
               error TEXT
             );
 
-            DELETE FROM jobs WHERE kind IN (
-              'probe_logs_db_maintain', 'probe_logs_db_maintain_dry_run'
-            );
 
             CREATE TABLE IF NOT EXISTS thread_followups (
               id TEXT PRIMARY KEY,
@@ -315,6 +281,8 @@ impl PanelDb {
               event_key TEXT PRIMARY KEY,
               provider TEXT NOT NULL,
               event_json TEXT NOT NULL,
+              ciphertext BLOB,
+              nonce BLOB,
               status TEXT NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
@@ -322,119 +290,11 @@ impl PanelDb {
 
             "#,
         )?;
-        // Retire only AgentHub-owned Pi records before any queued event JSON is decoded.
-        // Native provider files, configurations and credentials are never opened here.
-        let retire_pi: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM native_probe_providers WHERE provider='pi')
-             OR EXISTS(SELECT 1 FROM native_probe_streams WHERE provider='pi')
-             OR EXISTS(SELECT 1 FROM native_probe_deliveries WHERE provider='pi'
-                 OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END)
-             OR EXISTS(SELECT 1 FROM probe_events WHERE CASE WHEN json_valid(payload_json)
-                 THEN json_extract(payload_json,'$.provider')='pi' ELSE 0 END)
-             OR EXISTS(SELECT 1 FROM settings WHERE key IN ('notify_pi','notify_pi_completion','notify_pi_failure','pi_retirement_pending'))",
-            [], |row| row.get(0))?;
-        if retire_pi {
-            conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
-                INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('pi_retirement_pending','true',unixepoch());
-                DELETE FROM probe_events WHERE dedupe_key IN (
-                    SELECT event_key FROM native_probe_deliveries WHERE provider='pi'
-                    OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END)
-                    OR CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.provider')='pi' ELSE 0 END;
-                DELETE FROM native_probe_deliveries WHERE provider='pi'
-                    OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END;
-                DELETE FROM native_probe_streams WHERE provider='pi';
-                DELETE FROM native_probe_providers WHERE provider='pi';
-                DELETE FROM settings WHERE key IN ('notify_pi','notify_pi_completion','notify_pi_failure');
-                COMMIT; VACUUM;")?;
-            let busy: i64 =
-                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
-            if busy != 0 {
-                return Err(anyhow!(
-                    "retired provider cleanup is waiting for AgentHub database readers"
-                ));
-            }
-            conn.execute("DELETE FROM settings WHERE key='pi_retirement_pending'", [])?;
-        }
-        migrate_probe_error_incidents_schema(&conn)?;
-        conn.execute_batch("DROP TABLE IF EXISTS codex_thread_goals;")?;
-        add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
-        add_column_if_missing(&conn, "jobs", "turn_id", "TEXT")?;
-        add_column_if_missing(&conn, "probe_events", "handled_at", "INTEGER")?;
-        let retired: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('admins','sessions','turnstile_attempts')) OR EXISTS(SELECT 1 FROM settings WHERE key GLOB 'turnstile_*' OR key IN ('session_ttl_seconds','cookie_secure','login_rate_limit_per_minute','web_retirement_pending'))",
-            [], |row| row.get(0))?;
-        if retired {
-            // Only AgentHub's own database is opened here. Erase retired credentials,
-            // including freed pages and WAL, without exporting them to a backup.
-            conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
-                INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('web_retirement_pending','true',unixepoch());
-                DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS admins;
-                DROP TABLE IF EXISTS turnstile_attempts;
-                DELETE FROM settings WHERE key GLOB 'turnstile_*' OR key IN ('session_ttl_seconds','cookie_secure','login_rate_limit_per_minute');
-                COMMIT; VACUUM;")?;
-            let busy: i64 =
-                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
-            if busy != 0 {
-                return Err(anyhow!("retired web credential cleanup is waiting for database readers; retry after closing other AgentHub processes"));
-            }
-            conn.execute(
-                "DELETE FROM settings WHERE key='web_retirement_pending'",
-                [],
-            )?;
-        }
-        drop(conn);
-        self.migrate_notification_channels()?;
-        // Mark complete only after secure erasure, WAL truncation and all
-        // channel migrations succeed. An interrupted attempt remains resumable.
-        self.conn
-            .lock()
-            .expect("db mutex")
-            .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.execute_batch(desktop_submissions::SCHEMA)?;
+        tx.execute_batch(notification_channels::SCHEMA)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.commit()?;
         Ok(())
-    }
-
-    /// Generate once, store only its digest, and immediately replace any previous key.
-    pub fn rotate_admin_api_key(&self) -> Result<String> {
-        use rand::RngCore;
-        let mut bytes = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut bytes);
-        let key = format!("nhk_{}", hex::encode(bytes));
-        self.set_setting("admin_api_key_sha256", &hash_token(&key))?;
-        self.record_audit(
-            None,
-            "api_key.rotate",
-            None,
-            None,
-            None,
-            serde_json::json!({}),
-        )?;
-        Ok(key)
-    }
-
-    pub fn revoke_admin_api_key(&self) -> Result<()> {
-        self.set_setting("admin_api_key_sha256", "")?;
-        self.record_audit(
-            None,
-            "api_key.revoke",
-            None,
-            None,
-            None,
-            serde_json::json!({}),
-        )
-    }
-
-    pub fn verify_admin_api_key(&self, key: &str) -> Result<bool> {
-        use subtle::ConstantTimeEq;
-        let digest = hash_token(key);
-        let stored = self
-            .get_setting("admin_api_key_sha256")?
-            .unwrap_or_default();
-        let mut expected = [0u8; 64];
-        if stored.len() == expected.len() {
-            expected.copy_from_slice(stored.as_bytes());
-        }
-        let matches = digest.as_bytes().ct_eq(&expected);
-        Ok(bool::from(matches) && !key.is_empty() && stored.len() == expected.len())
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -486,6 +346,11 @@ impl PanelDb {
             .optional()?;
         let previous =
             previous.and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
+        if previous.as_ref().and_then(|v| v["enabled"].as_bool()) == Some(enabled) {
+            if let Some(since) = previous.as_ref().and_then(|v| v["since_ms"].as_i64()) {
+                return Ok(enabled.then_some(since));
+            }
+        }
         let since = if previous.as_ref().and_then(|v| v["enabled"].as_bool()) == Some(true) {
             previous
                 .as_ref()
@@ -667,7 +532,7 @@ impl PanelDb {
     pub fn list_jobs(&self, limit: u32) -> Result<Vec<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
         let mut stmt = conn.prepare(
-            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, substr(output, 1, 24000), error FROM jobs ORDER BY started_at DESC LIMIT ?1",
+            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, '' AS output, error FROM jobs ORDER BY started_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], job_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1269,87 +1134,6 @@ fn probe_error_incident_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pr
     })
 }
 
-fn migrate_probe_error_incidents_schema(conn: &Connection) -> Result<()> {
-    let columns = conn
-        .prepare("PRAGMA table_info(probe_error_incidents)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    if columns.is_empty()
-        || ![
-            "recovery_status",
-            "recovery_attempts",
-            "next_retry_at",
-            "last_error",
-        ]
-        .iter()
-        .any(|column| columns.contains(*column))
-    {
-        return Ok(());
-    }
-
-    conn.execute_batch("BEGIN IMMEDIATE")?;
-    let result = (|| -> Result<()> {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE probe_error_incidents_next (
-              incident_key TEXT PRIMARY KEY,
-              source_ts INTEGER NOT NULL,
-              source_ts_nanos INTEGER NOT NULL,
-              source_row_id INTEGER NOT NULL,
-              thread_id TEXT NOT NULL,
-              turn_id TEXT NOT NULL,
-              classification TEXT NOT NULL,
-              error_sha256 TEXT NOT NULL,
-              error_summary TEXT NOT NULL,
-              event_id TEXT,
-              bark_status TEXT NOT NULL DEFAULT 'pending',
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
-            );
-            INSERT INTO probe_error_incidents_next(
-              incident_key, source_ts, source_ts_nanos, source_row_id,
-              thread_id, turn_id, classification, error_sha256, error_summary,
-              event_id, bark_status, created_at, updated_at
-            )
-            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
-              thread_id, turn_id, classification, error_sha256, error_summary,
-              event_id, bark_status, created_at, updated_at
-            FROM probe_error_incidents;
-            DROP INDEX IF EXISTS idx_probe_error_incidents_source;
-            DROP INDEX IF EXISTS idx_probe_error_incidents_retry;
-            DROP TABLE probe_error_incidents;
-            ALTER TABLE probe_error_incidents_next RENAME TO probe_error_incidents;
-            CREATE UNIQUE INDEX idx_probe_error_incidents_source
-              ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
-            "#,
-        )?;
-        conn.execute_batch("COMMIT")?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = conn.execute_batch("ROLLBACK");
-    }
-    result
-}
-
-fn add_column_if_missing(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    sql_type: &str,
-) -> Result<()> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    let columns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    if !columns.iter().any(|name| name == column) {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"),
-            [],
-        )?;
-    }
-    Ok(())
-}
-
 fn encrypted_setting_parts(value: &str) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
     let Ok(json) = serde_json::from_str::<Value>(value) else {
         return None;
@@ -1383,157 +1167,36 @@ fn encrypted_setting_parts(value: &str) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::{NewProbeEvent, PanelDb};
-    use rusqlite::{Connection, OptionalExtension};
     use serde_json::json;
     use std::fs;
 
     #[test]
-    fn upgrade_removes_only_retired_maintenance_state() {
+    fn notification_baseline_only_writes_on_activation_changes() {
         let db = PanelDb::open(":memory:").unwrap();
-        for key in [
-            "probe_logs_db_last_maintain",
-            "probe_logs_db_last_compact",
-            "turnstile_site_key",
-            "probe_bark_device_key",
-            "probe_error_monitor_cursor",
-        ] {
-            db.set_setting(key, "preserve-fixture").unwrap();
-        }
-        db.conn
-            .lock()
-            .unwrap()
-            .pragma_update(None, "user_version", 0)
+        db.set_setting("fixture", r#"{"enabled":true,"since_ms":1}"#)
             .unwrap();
-        db.migrate().unwrap();
-        for key in [
-            "probe_logs_db_last_maintain",
-            "probe_logs_db_last_compact",
-            "turnstile_site_key",
-        ] {
-            assert!(db.get_setting(key).unwrap().is_none());
-        }
-        for key in ["probe_bark_device_key", "probe_error_monitor_cursor"] {
-            assert_eq!(
-                db.get_setting(key).unwrap().as_deref(),
-                Some("preserve-fixture")
-            );
-        }
-    }
-
-    #[test]
-    fn upgrade_removes_retired_log_maintenance_jobs_only() {
-        let db = PanelDb::open(":memory:").unwrap();
-        db.create_job("retired-maintain", "probe_logs_db_maintain", "retired")
-            .unwrap();
-        db.create_job(
-            "retired-dry-run",
-            "probe_logs_db_maintain_dry_run",
-            "retired dry-run",
-        )
-        .unwrap();
-        db.create_job("keep", "probe_bark_test", "keep").unwrap();
-
-        db.conn
-            .lock()
-            .unwrap()
-            .pragma_update(None, "user_version", 0)
-            .unwrap();
-        db.migrate().unwrap();
-
-        let jobs = db.list_jobs(20).unwrap();
-        assert!(jobs
-            .iter()
-            .all(|job| !job.kind.starts_with("probe_logs_db_maintain")));
-        assert!(jobs.iter().any(|job| job.id == "keep"));
-    }
-
-    #[test]
-    fn upgrade_drops_goal_table_and_preserves_probe_incidents() {
-        let path = std::env::temp_dir().join(format!(
-            "agenthub-db-migration-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
-        {
-            let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(
-                r#"
-                CREATE TABLE probe_error_incidents (
-                  incident_key TEXT PRIMARY KEY,
-                  source_ts INTEGER NOT NULL,
-                  source_ts_nanos INTEGER NOT NULL,
-                  source_row_id INTEGER NOT NULL,
-                  thread_id TEXT NOT NULL,
-                  turn_id TEXT NOT NULL,
-                  classification TEXT NOT NULL,
-                  error_sha256 TEXT NOT NULL,
-                  error_summary TEXT NOT NULL,
-                  event_id TEXT,
-                  bark_status TEXT NOT NULL DEFAULT 'pending',
-                  recovery_status TEXT NOT NULL DEFAULT 'pending',
-                  recovery_attempts INTEGER NOT NULL DEFAULT 0,
-                  next_retry_at INTEGER,
-                  last_error TEXT,
-                  created_at INTEGER NOT NULL,
-                  updated_at INTEGER NOT NULL
-                );
-                CREATE UNIQUE INDEX idx_probe_error_incidents_source
-                  ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
-                CREATE INDEX idx_probe_error_incidents_retry
-                  ON probe_error_incidents(recovery_status, next_retry_at);
-                INSERT INTO probe_error_incidents(
-                  incident_key, source_ts, source_ts_nanos, source_row_id,
-                  thread_id, turn_id, classification, error_sha256, error_summary,
-                  bark_status, created_at, updated_at
-                ) VALUES('legacy', 1, 2, 3, 'thread', 'turn', 'capacity', 'hash', 'summary', 'pending', 4, 5);
-                CREATE TABLE codex_thread_goals (thread_id TEXT PRIMARY KEY, goal_json TEXT NOT NULL);
-                INSERT INTO codex_thread_goals(thread_id, goal_json) VALUES('thread', '{}');
-                "#,
-            )
-            .unwrap();
-        }
-
-        let db = PanelDb::open(&path).unwrap();
-        assert_eq!(db.probe_error_incident_count().unwrap(), 1);
-        drop(db);
-        let conn = Connection::open(&path).unwrap();
-        let goal_table: Option<String> = conn
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='codex_thread_goals'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap();
-        assert!(goal_table.is_none());
-        let columns = conn
-            .prepare("PRAGMA table_info(probe_error_incidents)")
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(1))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        assert!(!columns.iter().any(|column| column == "recovery_status"));
-        std::fs::remove_file(&path).unwrap();
-        let mut migration_lock = path.as_os_str().to_owned();
-        migration_lock.push(".migration.lock");
-        std::fs::remove_file(migration_lock).unwrap();
-    }
-
-    #[test]
-    fn administrator_keys_rotate_revoke_and_never_store_plaintext() {
-        let db = PanelDb::open(":memory:").unwrap();
-        assert!(!db.verify_admin_api_key("").unwrap());
-        let first = db.rotate_admin_api_key().unwrap();
-        assert!(db.verify_admin_api_key(&first).unwrap());
-        assert_ne!(
-            db.get_setting("admin_api_key_sha256").unwrap().unwrap(),
-            first
+        let changes = || {
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        let before = changes();
+        assert_eq!(db.notification_baseline("fixture", true).unwrap(), Some(1));
+        assert_eq!(changes(), before);
+        assert_eq!(db.notification_baseline("fixture", false).unwrap(), None);
+        let disabled = changes();
+        assert_eq!(db.notification_baseline("fixture", false).unwrap(), None);
+        assert_eq!(changes(), disabled);
+        let restarted = db.notification_baseline("fixture", true).unwrap().unwrap();
+        assert!(restarted > 1);
+        let enabled = changes();
+        assert_eq!(
+            db.notification_baseline("fixture", true).unwrap(),
+            Some(restarted)
         );
-        let second = db.rotate_admin_api_key().unwrap();
-        assert!(!db.verify_admin_api_key(&first).unwrap());
-        assert!(db.verify_admin_api_key(&second).unwrap());
-        db.revoke_admin_api_key().unwrap();
-        assert!(!db.verify_admin_api_key(&second).unwrap());
+        assert_eq!(changes(), enabled);
     }
 
     #[test]
@@ -1925,85 +1588,5 @@ mod tests {
         );
         drop(db);
         let _ = fs::remove_dir_all(&root);
-    }
-}
-
-#[cfg(test)]
-mod retired_provider_tests {
-    use super::*;
-
-    #[test]
-    fn pi_upgrade_erases_only_owned_records_before_queue_decoding() {
-        let root = std::env::temp_dir().join(format!(
-            "agenthub-retired-provider-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let path = root.join("agenthub.sqlite");
-        let native = root.join("native-session.jsonl");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(&native, "native fixture remains unchanged").unwrap();
-        let db = PanelDb::open(&path).unwrap();
-        let api_key = db.rotate_admin_api_key().unwrap();
-        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
-            .unwrap();
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute_batch(r#"
-                PRAGMA user_version=0;
-                INSERT INTO native_probe_providers VALUES('pi',1,1,1,1,0),('grok',1,1,1,1,0);
-                INSERT INTO native_probe_streams VALUES('pi','old','identity',7,1),('grok','kept','identity',7,1);
-                INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES('retired','pi','not valid JSON','pending',1,1),
-                    ('retired-json','legacy','{"provider":"pi"}','delivering',1,1);
-                INSERT INTO probe_events(id,kind,dedupe_key,source,payload_json,created_at)
-                    VALUES('retired-event','completion','retired','native_provider_monitor','{}',1),
-                    ('retired-payload','failure',NULL,'native_provider_monitor','{"provider":"pi"}',1),
-                    ('kept-event','completion',NULL,'native_provider_monitor','{"provider":"grok"}',1);
-                INSERT INTO settings VALUES('notify_pi','true',1),('notify_pi_completion','true',1),
-                    ('notify_pi_failure','false',1),('fixture-preserved','yes',1);
-            "#).unwrap();
-        }
-        drop(db);
-        for _ in 0..2 {
-            let db = PanelDb::open(&path).unwrap();
-            assert!(db.pending_native_deliveries(100).unwrap().is_empty());
-            db.recover_interrupted_native_deliveries().unwrap();
-            assert!(db.verify_admin_api_key(&api_key).unwrap());
-            assert_eq!(
-                db.get_secret_setting_bytes("probe_bark_device_key")
-                    .unwrap()
-                    .as_deref(),
-                Some(b"fixture-device".as_slice())
-            );
-            assert_eq!(
-                db.get_setting("fixture-preserved").unwrap().as_deref(),
-                Some("yes")
-            );
-            assert!(db.get_setting("notify_pi").unwrap().is_none());
-            let conn = db.conn.lock().unwrap();
-            for table in ["native_probe_providers", "native_probe_streams"] {
-                assert_eq!(
-                    conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                        .get::<_, i64>(0))
-                        .unwrap(),
-                    1
-                );
-                assert_eq!(
-                    conn.query_row(&format!("SELECT provider FROM {table}"), [], |r| r
-                        .get::<_, String>(0))
-                        .unwrap(),
-                    "grok"
-                );
-            }
-            assert_eq!(
-                conn.query_row("SELECT id FROM probe_events", [], |r| r.get::<_, String>(0))
-                    .unwrap(),
-                "kept-event"
-            );
-            assert_eq!(
-                fs::read_to_string(&native).unwrap(),
-                "native fixture remains unchanged"
-            );
-        }
-        fs::remove_dir_all(root).unwrap();
     }
 }

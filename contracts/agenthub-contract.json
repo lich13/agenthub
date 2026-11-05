@@ -619,7 +619,31 @@
       "dtoOwner": "remote",
       "requestDto": "NoRequest",
       "responseDto": "RemoteConnectionView",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.install",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.install",
+      "tauriCommand": "remote::remoteInstall",
+      "webuiWrapper": "remoteInstall",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteConnectionCredentials",
+      "responseDto": "RemoteConnectionView",
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.sshHosts",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.sshHosts",
+      "tauriCommand": "remote::remoteSshHosts",
+      "webuiWrapper": "remoteSshHosts",
+      "dtoOwner": "remote",
+      "requestDto": "NoRequest",
+      "responseDto": "SshHostList",
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "remote.verify",
@@ -631,7 +655,7 @@
       "dtoOwner": "remote",
       "requestDto": "RemoteConnectionCredentials",
       "responseDto": "SystemCapabilitiesResponse",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "remote.save",
@@ -643,7 +667,7 @@
       "dtoOwner": "remote",
       "requestDto": "RemoteConnectionCredentials",
       "responseDto": "RemoteConnectionView",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "remote.remove",
@@ -655,7 +679,7 @@
       "dtoOwner": "remote",
       "requestDto": "RemoteRevisionRequest",
       "responseDto": "RemoteConnectionView",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "remote.select",
@@ -667,7 +691,7 @@
       "dtoOwner": "remote",
       "requestDto": "RemoteSelectionRequest",
       "responseDto": "RemoteConnectionView",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "remote.invoke",
@@ -679,7 +703,7 @@
       "dtoOwner": "remote",
       "requestDto": "RemoteInvokeRequest",
       "responseDto": "RemoteInvokeResponse",
-      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+      "hostOnlyReason": "Native desktop SSH connection; never exposed by the server RPC dispatcher"
     },
     {
       "id": "plans.save",
@@ -1518,6 +1542,10 @@
     "ProviderMutationResponse": {
       "core": "ProviderMutationResponse",
       "webui": "ProviderMutationResponse"
+    },
+    "SshHostList": {
+      "core": "SshHostList",
+      "webui": "SshHostList"
     }
   },
   "retiredActions": [

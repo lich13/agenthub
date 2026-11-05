@@ -51,6 +51,7 @@ export const contractDtoNames = [
   "PlanSaveResult",
   "RemoteMachineSummary",
   "RemoteConnectionView",
+  "SshHostList",
   "RemoteConnectionCredentials",
   "RemoteRevisionRequest",
   "RemoteSelectionRequest",

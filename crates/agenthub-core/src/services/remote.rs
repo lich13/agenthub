@@ -17,7 +17,9 @@ pub enum MachineTarget {
 pub struct RemoteMachineSummary {
     pub id: String,
     pub name: String,
-    pub base_url: String,
+    pub ssh_host: String,
+    #[serde(default)]
+    pub use_sudo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +27,7 @@ pub struct RemoteMachineSummary {
 pub struct RemoteConnectionView {
     pub target: MachineTarget,
     pub revision: u64,
-    pub base_url: Option<String>,
+    pub ssh_host: Option<String>,
     pub configured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_machine_id: Option<String>,
@@ -39,9 +41,9 @@ pub struct RemoteConnectionView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteConnectionCredentials {
     pub revision: u64,
-    pub base_url: String,
+    pub ssh_host: String,
     #[serde(default)]
-    pub api_key: String,
+    pub use_sudo: bool,
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -74,3 +76,11 @@ pub struct RemoteInvokeRequest {
 }
 
 pub type RemoteInvokeResponse = Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHost {
+    pub alias: String,
+}
+
+pub type SshHostList = Vec<SshHost>;

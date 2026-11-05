@@ -201,14 +201,12 @@ export const PROBE_NOTIFICATION_PLATFORMS: readonly {
   id: ProbeNotificationPlatformId;
   brand: "codex" | "claude" | "grok" | "antigravity" | "dsh";
   label: string;
-  subtitle: string;
-  localOnly?: boolean;
 }[] = [
-  { id: "codex", brand: "codex", label: "Codex", subtitle: "完成 · 待回复 · 异常" },
-  { id: "claude_code", brand: "claude", label: "Claude Code", subtitle: "完成 · 待回复 · 失败" },
-  { id: "grok", brand: "grok", label: "Grok Build", subtitle: "完成 · 待回复 · 失败" },
-  { id: "antigravity", brand: "antigravity", label: "Antigravity", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true },
-  { id: "dsh", brand: "dsh", label: "DeepSeek Harness", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true },
+  { id: "codex", brand: "codex", label: "Codex" },
+  { id: "claude_code", brand: "claude", label: "Claude Code" },
+  { id: "grok", brand: "grok", label: "Grok Build" },
+  { id: "antigravity", brand: "antigravity", label: "Antigravity" },
+  { id: "dsh", brand: "dsh", label: "DeepSeek Harness" },
 ];
 
 export function isPlatformNotificationEnabled(

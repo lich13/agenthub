@@ -7,11 +7,7 @@ use agenthub_core::{
     services::system::HostSurface,
 };
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[cfg(test)]
 pub(crate) struct TestSandboxDir(pub(crate) std::path::PathBuf);
@@ -31,7 +27,6 @@ pub struct AppState {
     pub db: PanelDb,
     pub jobs: JobRunner,
     pub app_server_client: CodexAppServerClient,
-    pub auth_limiter: Arc<Mutex<AuthLimiter>>,
     pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
     #[cfg(test)]
     test_sandbox: Option<Arc<TestSandboxDir>>,
@@ -58,7 +53,6 @@ impl AppState {
         app_server_client: CodexAppServerClient,
     ) -> Self {
         let jobs = JobRunner::new(db.clone());
-        let auth_rate_limit = config.security.auth_rate_limit_per_minute;
         let platform = match host_surface {
             HostSurface::LinuxServerApi => {
                 PlatformPaths::for_kind(agenthub_core::platform::PlatformKind::Linux)
@@ -72,7 +66,6 @@ impl AppState {
             db,
             jobs,
             app_server_client,
-            auth_limiter: Arc::new(Mutex::new(AuthLimiter::new(auth_rate_limit))),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
             #[cfg(test)]
             test_sandbox: None,
@@ -154,37 +147,4 @@ pub struct ProbeStatusCache {
 pub struct CachedProbeStatus {
     pub value: Value,
     pub refreshed_at_unix: i64,
-}
-
-pub struct AuthLimiter {
-    max_per_minute: u32,
-    attempts: HashMap<String, Vec<Instant>>,
-}
-
-impl AuthLimiter {
-    pub fn new(max_per_minute: u32) -> Self {
-        Self {
-            max_per_minute,
-            attempts: HashMap::new(),
-        }
-    }
-
-    pub fn check(&mut self, key: &str) -> bool {
-        let now = Instant::now();
-        let window = Duration::from_secs(60);
-        self.attempts.retain(|_, times| {
-            times.retain(|instant| now.duration_since(*instant) < window);
-            !times.is_empty()
-        });
-        if self.attempts.len() >= 4096 && !self.attempts.contains_key(key) {
-            return false;
-        }
-        let attempts = self.attempts.entry(key.to_string()).or_default();
-        attempts.retain(|instant| now.duration_since(*instant) < window);
-        if attempts.len() >= self.max_per_minute as usize {
-            return false;
-        }
-        attempts.push(now);
-        true
-    }
 }

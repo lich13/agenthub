@@ -1,6 +1,5 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
 use crate::{
-    auth::require_auth,
     linux_adapter,
     state::{AppState, CachedProbeStatus},
 };
@@ -31,26 +30,24 @@ pub(crate) struct ProbeStatusQuery {
 pub(crate) async fn get_probe_status(
     State(state): State<AppState>,
     Query(query): Query<ProbeStatusQuery>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(probe_status_cached_value(state, query.refresh.unwrap_or(false)).await)
 }
 
 pub(crate) async fn get_probe_settings(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(probe_settings_value(&state)?)
 }
 
 pub(crate) async fn patch_probe_settings(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<settings_service::ProbeSettingsSaveRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let config_path = probe_config_path();
     if !config_path.exists() {
         return Err(api_error(
@@ -77,9 +74,8 @@ pub(crate) struct ProbeEventsQuery {
 pub(crate) async fn get_probe_events(
     State(state): State<AppState>,
     Query(query): Query<ProbeEventsQuery>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let limit = query
         .limit
         .unwrap_or(state.config().probe.recent_limit as u32)
@@ -98,10 +94,10 @@ pub(crate) async fn get_probe_events(
 
 pub(crate) async fn start_probe_action(
     state: AppState,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let config_path = probe_config_path();
     let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;

@@ -31,7 +31,7 @@ test("Codex Plan copies and saves cleaned Markdown with its title through the na
 });
 
 test("a remote Grok Plan saves on the local machine and reports clipboard failure nearby", async ({ page }) => {
-  await mockApi(page, { connection: { target: "remote", revision: 3, configured: true, baseUrl: "https://api.example.com/agenthub/" } });
+  await mockApi(page, { connection: { target: "remote", revision: 3, configured: true, sshHost: "fixture-host" } });
   const saves: unknown[] = [];
   const remoteCommands: string[] = [];
   observeCommands(page, (command, args) => { if (command === "remote.invoke") remoteCommands.push(args.request.command); });

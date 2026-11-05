@@ -1,5 +1,5 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{auth::require_auth, linux_adapter, state::AppState};
+use crate::{linux_adapter, state::AppState};
 use agenthub_core::services::{
     cleanup::{CleanupExecuteRequest, CleanupTarget},
     use_cases::AgentHubUseCases,
@@ -13,9 +13,9 @@ use serde::Deserialize;
 
 pub(crate) async fn archive_delete_dry_run(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
@@ -35,10 +35,10 @@ pub(crate) struct ArchiveExecuteRequest {
 
 pub(crate) async fn archive_delete_execute(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(payload): Json<ArchiveExecuteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
@@ -57,10 +57,10 @@ pub(crate) async fn archive_delete_execute(
 
 pub(crate) async fn hidden_threads_delete_dry_run(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::archive::hidden_scan::HiddenScanRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     ok(AgentHubUseCases::new(&platform)
         .cleanup()
@@ -70,10 +70,10 @@ pub(crate) async fn hidden_threads_delete_dry_run(
 
 pub(crate) async fn hidden_threads_delete_execute(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(payload): Json<ArchiveExecuteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .cleanup()
@@ -95,9 +95,8 @@ pub(crate) async fn hidden_threads_delete_execute(
 
 pub(crate) async fn dsh_archive_delete_dry_run(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let dsh = state.dsh_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
@@ -110,10 +109,10 @@ pub(crate) async fn dsh_archive_delete_dry_run(
 
 pub(crate) async fn dsh_archive_delete_execute(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::dsh::DshArchiveDeleteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let dsh = state.dsh_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
         let result = AgentHubUseCases::new(&http_update_platform())
@@ -127,10 +126,9 @@ pub(crate) async fn dsh_archive_delete_execute(
 
 pub(crate) async fn unified_cleanup_dry_run(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let paths = state.unified_cleanup_paths();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
@@ -143,10 +141,10 @@ pub(crate) async fn unified_cleanup_dry_run(
 
 pub(crate) async fn unified_cleanup_execute(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::services::cleanup::UnifiedCleanupExecuteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let paths = state.unified_cleanup_paths();
     ok(
         agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {

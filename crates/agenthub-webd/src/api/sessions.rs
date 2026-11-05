@@ -1,5 +1,5 @@
-use super::{api_error, ok, ApiResponse};
-use crate::{auth::require_auth, state::AppState};
+use super::{ok, ApiResponse};
+use crate::state::AppState;
 use agenthub_core::services::{
     search::SessionSearchRequest,
     sessions::{SessionBatchExecuteRequest, SessionBatchRequest},
@@ -9,10 +9,9 @@ use axum::{extract::State, http::HeaderMap, Json};
 
 pub(crate) async fn search(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<SessionSearchRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .search(state.codex_paths())
@@ -25,10 +24,9 @@ pub(crate) async fn search(
 
 pub(crate) async fn attachment_read(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::user_message::SessionAttachmentRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
@@ -41,10 +39,9 @@ pub(crate) async fn attachment_read(
 
 pub(crate) async fn bulk_preview(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<SessionBatchRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
@@ -57,10 +54,10 @@ pub(crate) async fn bulk_preview(
 
 pub(crate) async fn bulk_execute(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<SessionBatchExecuteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let detail = serde_json::json!({"provider": request.provider, "operation": request.operation, "count": request.items.len()});
     state.db.record_audit(
         Some(&auth.admin_id),

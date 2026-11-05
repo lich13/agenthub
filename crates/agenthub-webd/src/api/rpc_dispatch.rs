@@ -35,10 +35,10 @@ use axum::{
 use serde_json::Value;
 use std::net::SocketAddr;
 
-pub(super) async fn rpc_dispatch(
+pub(crate) async fn rpc_dispatch(
     State(state): State<AppState>,
     Path(command): Path<String>,
-    connect: Option<ConnectInfo<SocketAddr>>,
+    _connect: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(args): Json<Value>,
 ) -> ApiResponse {
@@ -60,9 +60,6 @@ pub(super) async fn rpc_dispatch(
             &format!("unknown rpc command: {command}"),
         ));
     }
-
-    crate::auth::authorize_rpc(&headers, &state, connect.map(|c| c.0))
-        .map_err(|status| api_error(status, "API key authorization failed"))?;
 
     match command.as_str() {
         rpc_commands::THREADS_SUBAGENT_DETAIL => {
@@ -482,7 +479,7 @@ mod tests {
     fn authenticated_test_state() -> (AppState, String) {
         let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         let db = PanelDb::open(":memory:").unwrap();
-        let api_key = db.rotate_admin_api_key().unwrap();
+        let api_key = String::new();
         (
             AppState::new(config, db).with_test_sandbox(sandbox_root),
             api_key,
@@ -509,14 +506,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attachments_require_auth_and_reject_client_paths() {
+    async fn attachments_reject_client_paths() {
         let (state, token) = authenticated_test_state();
-        let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a"}}"#;
-        let app = super::super::router(state.clone());
-        assert_eq!(
-            request_rpc_status(app, "sessions.attachmentRead", body, None).await,
-            StatusCode::UNAUTHORIZED
-        );
         let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a","path":"/etc/passwd"}}"#;
         let app = super::super::router(state);
         assert_eq!(

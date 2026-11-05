@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import * as demo from "../src/lib/api/demo";
 import { mockApi, mockCommand, observeCommands } from "./fixtures";
 
-const baseUrl = "https://api.example.com/agenthub/";
+const sshHost = "fixture-host";
 const sharedId = "same-machine-thread";
 const machinePicker = (page: Page) => page.getByRole("combobox", { name: "当前机器" });
 const settings = async (page: Page) => {
@@ -11,7 +11,7 @@ const settings = async (page: Page) => {
 };
 
 async function installMachines(page: Page) {
-  const calls = await mockApi(page, { connection: { configured: true, baseUrl } });
+  const calls = await mockApi(page, { connection: { configured: true, sshHost } });
   let machine: "local" | "remote" = "local";
   const titles = { local: "Local thread", remote: "Remote thread" };
   const summary = () => ({ ...demo.demoThreads(false, "")[0], id: sharedId, title: titles[machine], status: "Recent" as const });
@@ -113,31 +113,27 @@ test("a failed remote connection stays selected and never displays local rows", 
   expect(calls.filter(command => command === "threads.list")).toHaveLength(before);
 });
 
-test("saving the API Key clears its field and never stores it in browser state", async ({ page }) => {
+test("saved SSH aliases can be selected, installed and reconnected", async ({ page }) => {
   const calls = await mockApi(page);
-  const credentials: Record<string, unknown>[] = [];
-  observeCommands(page, (command, args) => { if (command === "remote.save") credentials.push(args.request); });
+  const requests: Record<string, unknown>[] = [];
+  observeCommands(page, (command, args) => { if (command === "remote.install") requests.push(args.request); });
   await page.goto("/");
-  await machinePicker(page).selectOption("remote");
+  await machinePicker(page).selectOption("configure");
   await expect(page.getByRole("tab", { name: "远程连接" })).toHaveAttribute("aria-selected", "true");
-  const key = "fixture-private-api-key";
-  await page.getByLabel("HTTPS 地址", { exact: true }).fill(baseUrl);
-  await page.getByLabel("管理员 API Key", { exact: true }).fill(key);
-  await page.getByRole("button", { name: "验证并保存", exact: true }).click();
-  await expect(machinePicker(page)).toHaveValue("remote");
+  await page.getByLabel("SSH 连接", { exact: true }).selectOption(sshHost);
+  await page.getByLabel("名称", { exact: true }).fill("Fixture server");
+  await page.getByRole("button", { name: "安装并连接", exact: true }).click();
+  await expect(machinePicker(page)).toHaveValue("m-1");
+  expect(requests).toEqual([{revision:0,sshHost,name:"Fixture server",useSudo:true}]);
   await settings(page);
-  await expect(page.getByLabel("管理员 API Key", { exact: true })).toHaveValue("");
-  await expect(page.getByLabel("HTTPS 地址", { exact: true })).toHaveValue(baseUrl);
-  expect(credentials).toEqual([{ revision: 0, baseUrl, apiKey: key }]);
-  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(key);
-  await page.reload();
-  await settings(page);
-  await expect(page.getByLabel("管理员 API Key", { exact: true })).toHaveValue("");
-  expect(calls.filter(command => command === "remote.get")).toHaveLength(2);
+  await expect(page.getByLabel("管理员 API Key", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("HTTPS 地址", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "重新连接", exact: true }).click();
+  await expect.poll(() => calls.filter(command => command === "remote.select").length).toBe(1);
 });
 
 test("remote Markdown file paths copy the original path and never offer Finder reveal", async ({ page }) => {
-  const calls = await mockApi(page, { connection: { target: "remote", revision: 1, configured: true, baseUrl } });
+  const calls = await mockApi(page, { connection: { target: "remote", revision: 1, configured: true, sshHost } });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { document.documentElement.dataset.copied = text; } } });
   });

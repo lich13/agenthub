@@ -54,13 +54,13 @@ Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus i
 
 ## Verification
 
-Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, Plan export and provider empty states. The installed Tauri App is the reference desktop surface; remote checks use the same App through the API and explicit deployment inputs.
+Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, Plan export and provider empty states. The installed Tauri App is the reference desktop surface; remote checks use the same App through SSH and explicit deployment inputs.
 
 ## Machine scope
 
-Place a compact 本机/远程机器 selector below the navigation brand, with an icon in the collapsed rail and an accessible native selector. Keep the current target visible; errors never trigger a silent fallback. Disable switching during writes. Settings use 更新与维护 and 远程连接; no login, system-status or security panel remains. Show only the selected machine’s update panel: 本机 App 更新 or 远程服务更新. Use one compact row with 当前版本, 检查更新 and, only for a confirmed new version, 更新至 followed by its version. Normalize the version prefix; the server also offers 清理更新备份. Show 已是最新版本 only as feedback from a successful check, and keep progress/errors beside the controls.
+Place a compact 本机/远程机器 selector below the navigation brand, with an icon in the collapsed rail and an accessible native selector. Keep the current target visible; errors never trigger a silent fallback. Disable switching only while a write request is awaiting its response; accepted background jobs continue on their original machine. Settings use 更新与维护 and 远程连接; no login, system-status or security panel remains. Show only the selected machine’s update panel: 本机 App 更新 or 远程服务更新. Use one compact row with 当前版本, 检查更新 and, only for a confirmed new version, 更新至 followed by its version. Normalize the version prefix; the server also offers 清理更新备份. Show 已是最新版本 only as feedback from a successful check, and keep progress/errors beside the controls.
 
-Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验证并保存 and 移除连接. Do not display a saved key. Connection errors and save results stay near the controls. Machine changes clear unexecuted confirmations and selection; stable disclosure identities include the machine. All previous conversation layout, themes, keyboard and reduced-motion rules remain.
+Remote connection inputs are the saved SSH Host selector, 名称 and 使用 sudo, followed by 保存并连接 and 安装并连接. Saved connections offer 连接／重新连接, 编辑 and 移除; the current remote machine also has a reconnect action. Connection errors and save results stay near the controls. Machine changes clear unexecuted confirmations and selection; stable disclosure identities include the machine. All previous conversation layout, themes, keyboard and reduced-motion rules remain.
 
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
 
@@ -96,7 +96,7 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 ## 远程连接反馈
 
-钥匙串读取在后台串行进行，不阻塞界面。超过 15 秒时在当前操作附近显示错误，不能把超时当作成功或自动切换到本机。保存与移除连接等待已开始的事务完成；操作期间保持切换保护。连接身份变化后，旧读取不得发起业务操作或覆盖新机器结果。
+SSH 连接、认证和安装错误就地显示，不自动切回本机。需要交互认证时提示先在终端完成；断线提供重新连接。保存、安装与移除期间保留变更保护，已受理后台作业不持续锁住机器选择。连接变化后丢弃旧响应。
 
 ## 原生活动与直属汇总
 
@@ -114,7 +114,7 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
-Probe 默认以「通知配置」控制台作为首屏，直接呈现探针与错误监控开关、五大 Agent 平台级通知一键开关、Bark 通道配置与测试推送、五平台统一 Hooks／Host 管理矩阵（Codex、Claude Code、Grok Build、Antigravity 受管 Hooks 安装／修复／移除与 DeepSeek Harness 原生 `.lock` + `.zstd` 流直连状态）、五平台实时态势与最近事件流。远端以“仅限本机”或对应远端能力显示。安装、修复和移除均需明确确认并保留用户其他 hooks；App 安装不自动启用 hooks。退休通道不保留卡片或占位。
+Probe 默认以「通知配置」控制台作为首屏，直接呈现探针与错误监控开关、五大 Agent 平台级通知一键开关、Bark 通道配置与测试推送、五平台统一 Hooks／Host 管理矩阵（Codex、Claude Code、Grok Build、Antigravity 受管 Hooks 安装／修复／移除与 DeepSeek Harness 原生 `.lock` + `.zstd` 流直连状态）、全平台实时态势与最近事件流。远端以“仅限本机”或对应远端能力显示。安装、修复和移除均需明确确认并保留用户其他 hooks；App 安装不自动启用 hooks。退休通道不保留卡片或占位。移除说明小字、卡片副标题、平台事件解释和 Hook 机制说明；保留控件、实际状态、错误、事件数据及操作确认对象。实时态势标题变更不改变聚合范围、前端 12 条限制或后端截断。
 
 ## Bark 状态与测试反馈
 

@@ -1,5 +1,5 @@
 use super::{api_error, ok, system::http_update_platform, ApiError, ApiResponse};
-use crate::{auth::require_auth, linux_adapter, state::AppState};
+use crate::{linux_adapter, state::AppState};
 use agenthub_core::services::{
     jobs as job_service,
     threads::{self as thread_service, ThreadsQuery},
@@ -27,10 +27,9 @@ pub(crate) struct ThreadBlocksQuery {
 
 pub(crate) async fn subagent_detail(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(request): Json<agenthub_core::codex::subagents::SubagentDetailRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(state.platform())
             .threads()
@@ -43,10 +42,9 @@ pub(crate) async fn subagent_detail(
 
 pub(crate) async fn list_threads(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         linux_adapter::list_threads_read_model(&state, query)
     })
@@ -56,11 +54,10 @@ pub(crate) async fn list_threads(
 
 pub(crate) async fn thread_detail(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<ThreadDetailQuery>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .threads()
@@ -90,11 +87,10 @@ fn api_error_for_thread_detail_load(err: anyhow::Error) -> ApiError {
 
 pub(crate) async fn thread_blocks(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<ThreadBlocksQuery>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .threads()
@@ -114,10 +110,10 @@ pub(crate) async fn thread_blocks(
 
 pub(crate) async fn archive_thread(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .threads()
@@ -128,10 +124,10 @@ pub(crate) async fn archive_thread(
 
 pub(crate) async fn restore_thread(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .threads()
@@ -147,11 +143,11 @@ pub(crate) struct RenameThreadRequest {
 
 pub(crate) async fn rename_thread(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(id): Path<String>,
     Json(payload): Json<RenameThreadRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = http_update_platform();
     let plan = AgentHubUseCases::new(&platform)
         .threads()

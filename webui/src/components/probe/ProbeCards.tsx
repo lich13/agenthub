@@ -53,7 +53,7 @@ export function ProbeLiveOverviewCard({
     <div className="probe-card-stack probe-live-overview">
       <div className="probe-live-summary-head">
         <div>
-          <strong>五平台实时态势</strong>
+          <strong>全平台实时态势</strong>
           <span>
             {serviceText} · {hostLabel}
           </span>
@@ -310,7 +310,6 @@ export function ProbeRuntimeSettingsCard(props: {
       <div className="probe-platform-switch-section">
         <div className="probe-platform-switch-header">
           <strong>平台通知一键开关</strong>
-          <span>按平台一键接管完成、待回复、授权与失败推送，无需逐项勾选细粒度事件</span>
         </div>
         <div className="probe-platform-switch-grid">
           {visiblePlatforms.map(platform => {
@@ -330,10 +329,7 @@ export function ProbeRuntimeSettingsCard(props: {
                   </span>
                   <span className="probe-platform-switch-copy">
                     <strong>{platform.label}</strong>
-                    <small>
-                      {platform.subtitle}
-                      {runtimeStats ? ` · ${runtimeStats.streams} 个会话` : ""}
-                    </small>
+                    {runtimeStats && <small>{runtimeStats.streams} 个会话</small>}
                   </span>
                 </span>
                 <input

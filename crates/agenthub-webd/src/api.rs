@@ -1,4 +1,4 @@
-use crate::{auth::require_auth, state::AppState};
+use crate::state::AppState;
 use agenthub_core::providers::ProviderRegistry;
 #[cfg(test)]
 use agenthub_core::services::updates::{self as update_service, UpdateAction};
@@ -18,8 +18,9 @@ mod jobs;
 mod payload;
 mod probe;
 mod provider_sessions;
+#[cfg(test)]
 mod routes;
-mod rpc_dispatch;
+pub(crate) mod rpc_dispatch;
 mod sessions;
 mod system;
 mod threads;
@@ -57,6 +58,7 @@ pub(crate) use provider_sessions::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
     antigravity_restore, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
+#[cfg(test)]
 pub(crate) use routes::router;
 pub(crate) use system::{
     http_update_platform, start_update_action, system_capabilities, system_update_status,
@@ -81,13 +83,11 @@ impl From<anyhow::Error> for ApiError {
     }
 }
 
-async fn list_providers(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+async fn list_providers(State(_state): State<AppState>, _headers: HeaderMap) -> ApiResponse {
     ok(ProviderRegistry::default().list())
 }
 
-async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+async fn platform_overview(State(state): State<AppState>, _headers: HeaderMap) -> ApiResponse {
     ok(state.platform().clone())
 }
 

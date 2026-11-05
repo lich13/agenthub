@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { RemoteConnectionView } from "./runtime";
 
-const local: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false };
-const remote: RemoteConnectionView = { target: "remote", revision: 1, baseUrl: "https://api.example.com/agenthub/", configured: true };
+const local: RemoteConnectionView = { target: "local", revision: 0, sshHost: null, configured: false };
+const remote: RemoteConnectionView = { target: "remote", revision: 1, sshHost: "fixture-api", configured: true };
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -26,7 +26,7 @@ describe("native machine connection", () => {
     expect(runtime.invoke).toHaveBeenCalledExactlyOnceWith("remote.get", undefined);
     expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, ready: true, writes: 0 });
     expect(runtime.connectionSnapshot()).not.toHaveProperty("apiKey");
-    expect(runtime.machineScope()).toBe("remote:https://api.example.com/agenthub/");
+    expect(runtime.machineScope()).toBe("remote:fixture-api");
   });
 
   test("local business calls retain the typed native command and never use browser fetch", async () => {
@@ -65,8 +65,8 @@ describe("native machine connection", () => {
     expect(runtime.connectionSnapshot().writes).toBe(1);
     for (const operation of [
       () => runtime.remoteSelect("remote"),
-      () => runtime.remoteSave({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-key" }),
-      () => runtime.remoteVerify({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-key" }),
+      () => runtime.remoteSave({ revision: 0, sshHost: remote.sshHost!, useSudo: true }),
+      () => runtime.remoteVerify({ revision: 0, sshHost: remote.sshHost!, useSudo: true }),
       () => runtime.remoteRemove()
     ]) await expect(operation()).rejects.toThrow("操作进行中，请稍后切换");
     expect(runtime.invoke).toHaveBeenCalledTimes(1);
@@ -85,21 +85,14 @@ describe("native machine connection", () => {
     await runtime.remoteSelect("remote");
   });
 
-  test.each(["succeeded", "failed", "cancelled"])("background writes block switching until the job is %s", async status => {
-    let phase = "running";
+  test("accepted background jobs allow switching even when status is unavailable", async () => {
     const runtime = await loadRuntime(command => {
       if (command === "updates.check") return { job_id: "update-1" };
-      if (command === "jobs.detail") return { id: "update-1", status: phase };
+      if (command === "jobs.detail") throw new Error("disconnected");
       return remote;
     });
     await runtime.runtimeRpc("updates.check");
-    expect(runtime.connectionSnapshot().writes).toBe(1);
-    await expect(runtime.remoteSelect("remote")).rejects.toThrow("操作进行中");
-    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
-    expect(runtime.connectionSnapshot().writes).toBe(1);
-    phase = status;
-    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
-    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
+    await expect(runtime.runtimeRpc("jobs.detail", { id: "update-1" })).rejects.toThrow("disconnected");
     expect(runtime.connectionSnapshot().writes).toBe(0);
     await runtime.remoteSelect("remote");
     expect(runtime.connectionSnapshot().target).toBe("remote");
@@ -118,10 +111,10 @@ describe("native machine connection", () => {
 
   test("credentials are sent only to save and are absent from subsequent views and business calls", async () => {
     const runtime = await loadRuntime(command => command === "remote.save" ? remote : []);
-    const credentials = { revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-secret-key" };
+    const credentials = { revision: 0, sshHost: remote.sshHost!, useSudo: true };
     await runtime.remoteSave(credentials);
     expect(runtime.invoke).toHaveBeenCalledWith("remote.save", { request: credentials });
-    expect(JSON.stringify(runtime.connectionSnapshot())).not.toContain(credentials.apiKey);
+    expect(runtime.connectionSnapshot()).not.toHaveProperty("apiKey");
     await runtime.runtimeRpc("threads.list");
     expect(runtime.invoke.mock.calls[1]).toEqual(["remote.invoke", { request: { revision: 1, command: "threads.list", args: {} } }]);
   });
@@ -141,7 +134,7 @@ describe("native machine connection", () => {
     const beforeChange = vi.fn(() => cleanup.promise);
     const unsubscribe = runtime.beforeMachineChange(beforeChange);
 
-    await runtime.remoteVerify({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "" });
+    await runtime.remoteVerify({ revision: 0, sshHost: remote.sshHost!, useSudo: true });
     expect(beforeChange).not.toHaveBeenCalled();
 
     const switching = runtime.remoteSelect("remote");
@@ -176,13 +169,13 @@ describe("native machine connection", () => {
 
   test("switches across multiple named remote machines and isolates machineScope per machineId", async () => {
     const machines = [
-      { id: "m-alpha", name: "主力节点", baseUrl: "https://alpha.example.com/agenthub/" },
-      { id: "m-beta", name: "构建节点", baseUrl: "https://beta.example.com/agenthub/" },
+      { id: "m-alpha", name: "主力节点", sshHost: "fixture-alpha" },
+      { id: "m-beta", name: "构建节点", sshHost: "fixture-beta" },
     ];
     let currentView: RemoteConnectionView = {
       target: "remote",
       revision: 1,
-      baseUrl: machines[0].baseUrl,
+      sshHost: machines[0].sshHost,
       configured: true,
       activeMachineId: "m-alpha",
       activeMachineName: "主力节点",
@@ -197,7 +190,7 @@ describe("native machine connection", () => {
           ...currentView,
           target: req.target,
           revision: req.revision + 1,
-          baseUrl: picked.baseUrl,
+          sshHost: picked.sshHost,
           activeMachineId: picked.id,
           activeMachineName: picked.name,
         };
@@ -209,7 +202,7 @@ describe("native machine connection", () => {
         currentView = {
           target: "local",
           revision: req.revision + 1,
-          baseUrl: remaining[0]?.baseUrl ?? null,
+          sshHost: remaining[0]?.sshHost ?? null,
           configured: remaining.length > 0,
           activeMachineId: remaining[0]?.id ?? null,
           activeMachineName: remaining[0]?.name ?? null,
@@ -221,23 +214,23 @@ describe("native machine connection", () => {
     });
 
     await runtime.initializeConnection();
-    expect(runtime.machineScope()).toBe("remote:m-alpha:https://alpha.example.com/agenthub/");
+    expect(runtime.machineScope()).toBe("remote:m-alpha:fixture-alpha");
 
-    // Selecting the already-active machineId is a no-op.
+    // Selecting the active machine establishes a fresh SSH channel.
     await runtime.remoteSelect("remote", "m-alpha");
-    expect(runtime.invoke).toHaveBeenCalledTimes(1);
+    expect(runtime.invoke).toHaveBeenCalledTimes(2);
 
     // Switching to another named remote machine updates activeMachineId and machineScope.
     await runtime.remoteSelect("remote", "m-beta");
     expect(runtime.invoke).toHaveBeenLastCalledWith("remote.select", {
-      request: { revision: 1, target: "remote", machineId: "m-beta" },
+      request: { revision: 2, target: "remote", machineId: "m-beta" },
     });
-    expect(runtime.machineScope()).toBe("remote:m-beta:https://beta.example.com/agenthub/");
+    expect(runtime.machineScope()).toBe("remote:m-beta:fixture-beta");
 
     // Removing a specific machine passes machineId and resets to local when active was removed.
     await runtime.remoteRemove("m-beta");
     expect(runtime.invoke).toHaveBeenLastCalledWith("remote.remove", {
-      request: { revision: 2, machineId: "m-beta" },
+      request: { revision: 3, machineId: "m-beta" },
     });
     expect(runtime.machineScope()).toBe("local:");
     expect(runtime.connectionSnapshot().machines).toHaveLength(1);

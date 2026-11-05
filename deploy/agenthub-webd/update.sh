@@ -10,7 +10,7 @@ trap '[[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -r -- "${TMP_DIR}"' EXIT
 
 usage() {
   cat <<'USAGE'
-Update AgentHub management API.
+Update AgentHub SSH service.
 
 Usage:
   agenthub-webd-update --repo lich13/agenthub --version latest
@@ -21,7 +21,7 @@ Options:
   --repo REPO       GitHub repo. Default: lich13/agenthub
   --version TAG     Release tag or latest. Default: latest
   --arch ARCH       Release architecture suffix. Default: x86_64
-  --precheck        Verify installed service and loopback health only.
+  --precheck        Verify installed service and SSH service health only.
   -h, --help        Show help.
 USAGE
 }
@@ -77,7 +77,7 @@ fi
 if [[ "${PRECHECK}" -eq 1 ]]; then
   test -x /usr/local/bin/agenthub-webd
   systemctl is-active --quiet agenthub-webd
-  curl -fsS http://127.0.0.1:15742/healthz >/dev/null
+  /usr/local/bin/agenthub-webd health >/dev/null
   exit 0
 fi
 

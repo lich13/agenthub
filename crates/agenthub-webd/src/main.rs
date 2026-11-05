@@ -11,7 +11,7 @@ use monitor_start::*;
 
 mod api;
 mod async_question_monitor;
-mod auth;
+mod audit;
 mod bark;
 mod linux_adapter;
 mod notification_delivery;
@@ -19,6 +19,7 @@ mod provider_monitor;
 mod question_monitor;
 mod rpc_payload;
 mod rpc_surface;
+mod ssh_server;
 mod state;
 
 #[cfg(test)]
@@ -49,13 +50,11 @@ use std::{
     collections::BTreeMap,
     env, fs,
     io::{self, IsTerminal, Read, Write},
-    net::SocketAddr,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     time::Duration,
 };
-use tokio::{net::TcpListener, time};
-use tower_http::trace::TraceLayer;
+use tokio::time;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
@@ -78,7 +77,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "agenthub_webd=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "agenthub_webd=info".into()),
         )
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
@@ -196,29 +195,7 @@ async fn main() -> Result<()> {
                 resolved.configured_codex_home.as_deref().unwrap_or("auto")
             );
             println!("codex_home_source={}", resolved.codex_home_source);
-            println!("listen={}", config.server.listen);
-            println!(
-                "api_key_configured={}",
-                db.get_setting("admin_api_key_sha256")?
-                    .is_some_and(|v| !v.is_empty())
-            );
             println!("codex_read_model=local_state_rollout_logs");
-        }
-        Command::Admin { command } => {
-            let config = Config::load_runtime(&cli.config)?;
-            let db = open_panel_db(&config)?;
-            match command {
-                AdminCommand::Generate { output } => {
-                    anyhow::ensure!(
-                        db.get_setting("admin_api_key_sha256")?
-                            .is_none_or(|v| v.is_empty()),
-                        "API key already configured; use admin key-rotate"
-                    );
-                    write_admin_key(&db, &output)?;
-                }
-                AdminCommand::Rotate { output } => write_admin_key(&db, &output)?,
-                AdminCommand::Revoke => db.revoke_admin_api_key()?,
-            }
         }
         Command::Probe {
             command: ProbeCommand::HookRequestUserInput,
@@ -252,6 +229,8 @@ async fn main() -> Result<()> {
             run_probe_command(command, &config, db, &cli.config).await?;
         }
         Command::Serve { surface } => serve(cli.config, surface).await?,
+        Command::RpcStdio => ssh_server::proxy().await?,
+        Command::Health => ssh_server::health().await?,
     }
     Ok(())
 }
@@ -1394,22 +1373,6 @@ fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
 }
 
-fn write_admin_key(db: &PanelDb, output: &Path) -> Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(output).context("create API key output file")?;
-    let key = db.rotate_admin_api_key()?;
-    file.write_all(key.as_bytes())?;
-    file.sync_all()?;
-    println!("API key saved");
-    Ok(())
-}
-
 async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     anyhow::ensure!(
         host_surface == HostSurface::LinuxServerApi && cfg!(target_os = "linux"),
@@ -1422,18 +1385,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
     api::spawn_probe_status_refresh(state.clone());
-    let app = api::router(state).layer(TraceLayer::new_for_http());
-    let addr: SocketAddr = config.server.listen;
-    config.server.validate_listen()?;
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind {addr}"))?;
-    tracing::info!("agenthub listening on {addr} surface={host_surface}");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
+    ssh_server::serve(state).await?;
     Ok(())
 }
 

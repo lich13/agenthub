@@ -1,4 +1,4 @@
-import { CheckCircle2, TerminalSquare, Trash2 } from "lucide-react";
+import { CheckCircle2, Trash2 } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { probeStateLabel } from "../../lib/domain/runtimeViewModel";
 import type { ProbeSettingsDraft } from "../../lib/probeUi";
@@ -10,35 +10,28 @@ import { Metric } from "../common/Panel";
 
 const HOOK_PROVIDER_META: Record<
   HookProviderId,
-  { agent: AgentBrandId; name: string; label: string; subtitle: string; events: string }
+  { agent: AgentBrandId; name: string; label: string }
 > = {
   claude: {
     agent: "claude",
     name: "Claude Code",
     label: "Claude Code",
-    subtitle: "Stop · Notification · StopFailure 通知 Hook 托管",
-    events: "Stop · Notification · StopFailure",
   },
   grok: {
     agent: "grok",
     name: "Grok Build",
     label: "Grok",
-    subtitle: "Stop · Notification · StopFailure 通知 Hook 托管",
-    events: "Stop · Notification · StopFailure",
   },
   antigravity: {
     agent: "antigravity",
     name: "Antigravity",
     label: "Antigravity",
-    subtitle: "Stop 生命周期通知 Hook 托管（自动返回 allow 放行决策）",
-    events: "Stop (decision: allow)",
   },
 };
 
 export function AgentHookHostCardShell(props: {
   agent: AgentBrandId;
   name: string;
-  subtitle: string;
   configPath?: string | null;
   children: ReactNode;
 }) {
@@ -51,7 +44,6 @@ export function AgentHookHostCardShell(props: {
         </span>
         <div className="probe-host-card-copy">
           <strong>{props.name}</strong>
-          <span>{props.subtitle}</span>
         </div>
         <code className="probe-host-path" title={displayPath}>
           {displayPath}
@@ -150,14 +142,12 @@ export function ProbeHookCard(props: {
       <AgentHookHostCardShell
         agent="codex"
         name="Codex"
-        subtitle="Stop · request_user_input 双通道通知 Hook 托管"
         configPath={configPath}
       >
         <div className="settings-meta-grid">
           <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
           <Metric label="自动维护" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
           <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} />
-          <Metric label="监听事件" value="Stop · request_user_input" />
         </div>
         <HookActionButtons
           installRef={installRef}
@@ -179,11 +169,6 @@ export function ProbeHookCard(props: {
           <h3 id="codex-hooks-confirm">
             {confirmAction === "install" ? "写入 Codex 通知 Hook" : "移除 Codex 通知 Hook"}
           </h3>
-          <p>
-            {confirmAction === "install"
-              ? "写入或更新 AgentHub 托管的 Codex 通知 Hook 并启用自动维护，保留其他第三方 Hook 配置。"
-              : "移除 AgentHub 托管的 Codex 通知 Hook 并关闭自动修复，保留其他第三方 Hook 配置。"}
-          </p>
           <HookConfirmFooter
             action={confirmAction}
             busy={Boolean(props.busy)}
@@ -218,7 +203,6 @@ export function AgentHookHostCard({ provider = "claude" }: { provider?: HookProv
       <AgentHookHostCardShell
         agent={meta.agent}
         name={meta.name}
-        subtitle={meta.subtitle}
         configPath="远端只读"
       >
         <div className="settings-meta-grid">
@@ -248,7 +232,6 @@ export function AgentHookHostCard({ provider = "claude" }: { provider?: HookProv
       <AgentHookHostCardShell
         agent={meta.agent}
         name={meta.name}
-        subtitle={meta.subtitle}
         configPath={configPath}
       >
         {statusQuery.error && <div role="alert" className="form-error">{statusQuery.error.message}</div>}
@@ -256,7 +239,6 @@ export function AgentHookHostCard({ provider = "claude" }: { provider?: HookProv
         <div className="settings-meta-grid">
           <Metric label="Hook 状态" value={statusText} tone={statusTone} />
           <Metric label="托管条目" value={`${managedCount} 条`} />
-          <Metric label="监听事件" value={meta.events} wide />
         </div>
         <HookActionButtons
           installRef={installRef}
@@ -279,11 +261,6 @@ export function AgentHookHostCard({ provider = "claude" }: { provider?: HookProv
               ? `写入 ${meta.label} 通知 Hook`
               : `移除 ${meta.label} 通知 Hook`}
           </h3>
-          <p>
-            {confirmAction === "install"
-              ? `更新 ${meta.label} 配置文件中的 AgentHub 通知 Hook（${meta.events}），并保留已有其他配置与第三方 hooks。`
-              : `从 ${meta.label} 配置文件中移除 AgentHub 托管的通知 Hook，并保留其他第三方配置。`}
-          </p>
           <HookConfirmFooter
             action={confirmAction}
             busy={busy}
@@ -302,18 +279,11 @@ export function DshHostCard({ sessionsPath }: { sessionsPath?: string | null }) 
     <AgentHookHostCardShell
       agent="dsh"
       name="DeepSeek Harness"
-      subtitle="原生会话状态流直连监控（无需写入外部 Hook 配置）"
       configPath={sessionsPath}
     >
       <div className="settings-meta-grid">
         <Metric label="接入模式" value="原生直连" tone="success" />
         <Metric label="Hook 依赖" value="免安装" tone="success" />
-        <Metric label="监听事件" value="完成 · 失败 · 待回复 · 授权确认" wide />
-      </div>
-      <div className="button-row">
-        <span className="status-chip tone-success">
-          <TerminalSquare size={15} /> 原生事件流直连 · 免安装 Hook
-        </span>
       </div>
     </AgentHookHostCardShell>
   );

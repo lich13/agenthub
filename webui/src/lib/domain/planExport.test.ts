@@ -17,7 +17,7 @@ test.each(["local", "remote"] as const)("saving a %s Plan sends cleaned Markdown
   vi.resetModules();
   const saved = { filename: "Visible Plan (2).md" };
   const invoke = vi.fn((command: string) => command === "remote.get"
-    ? { target, revision: 7, baseUrl: "https://api.example.com/agenthub/", configured: true }
+    ? { target, revision: 7, sshHost: "fixture-host", configured: true }
     : saved);
   vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
   const runtime = await import("../runtime");

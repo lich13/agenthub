@@ -38,15 +38,6 @@ impl SecretBox {
         Self { key }
     }
 
-    pub(crate) fn legacy_development_keys() -> [Self; 2] {
-        [
-            Self::deterministic_dev(),
-            Self {
-                key: Sha256::digest(b"nexushub-development-key").into(),
-            },
-        ]
-    }
-
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         let cipher = Aes256Gcm::new((&self.key).into());
         let mut nonce_bytes = [0_u8; 12];
@@ -73,14 +64,48 @@ fn parse_key_material(value: &str) -> Result<Vec<u8>> {
     if trimmed.is_empty() {
         return Err(anyhow!("empty secret key"));
     }
-    if let Ok(decoded) = general_purpose::STANDARD.decode(trimmed) {
-        return Ok(decoded);
+    if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(hex::decode(trimmed)?);
     }
-    if let Ok(decoded) = general_purpose::URL_SAFE_NO_PAD.decode(trimmed) {
-        return Ok(decoded);
+    for encoding in [
+        general_purpose::STANDARD,
+        general_purpose::STANDARD_NO_PAD,
+        general_purpose::URL_SAFE,
+        general_purpose::URL_SAFE_NO_PAD,
+    ] {
+        if let Ok(decoded) = encoding.decode(trimmed) {
+            return Ok(decoded);
+        }
     }
     if let Ok(decoded) = hex::decode(trimmed) {
         return Ok(decoded);
     }
     Err(anyhow!("secret key must be base64, base64url, or hex"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn all_supported_encodings_preserve_the_same_key() {
+        let bytes = [0xfb; 32];
+        let expected = SecretBox::from_key_material(&hex::encode(bytes)).unwrap();
+        let (ciphertext, nonce) = expected.encrypt(b"fixture-notification").unwrap();
+        for encoded in [
+            hex::encode_upper(bytes),
+            general_purpose::STANDARD.encode(bytes),
+            general_purpose::STANDARD_NO_PAD.encode(bytes),
+            general_purpose::URL_SAFE.encode(bytes),
+            general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        ] {
+            assert_eq!(
+                SecretBox::from_key_material(&encoded)
+                    .unwrap()
+                    .decrypt(&ciphertext, &nonce)
+                    .unwrap(),
+                b"fixture-notification"
+            );
+        }
+        assert!(SecretBox::from_key_material("fixture-invalid-key").is_err());
+    }
 }

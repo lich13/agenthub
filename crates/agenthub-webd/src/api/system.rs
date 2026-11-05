@@ -1,5 +1,5 @@
-use super::{api_error, ok, ApiResponse};
-use crate::{auth::require_auth, linux_adapter, state::AppState};
+use super::{ok, ApiResponse};
+use crate::{linux_adapter, state::AppState};
 use agenthub_core::{
     platform::{PlatformKind, PlatformPaths},
     services::{
@@ -15,9 +15,8 @@ use std::time::Duration;
 
 pub(crate) async fn system_capabilities(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let platform = state.platform().clone();
     ok(
         agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
@@ -31,18 +30,16 @@ pub(crate) async fn system_capabilities(
 }
 
 pub(crate) async fn system_version(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(http_version_info().await?)
 }
 
 pub(crate) async fn system_update_status(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let version = http_version_info().await?;
     let platform = state.platform().clone();
     ok(update_service::update_status_for_surface(
@@ -106,11 +103,11 @@ async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
 
 pub(crate) async fn start_update_action(
     state: AppState,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     action: UpdateAction,
     audit_action: Option<&str>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let auth = crate::audit::actor();
     let platform = state.platform().clone();
     require_capability_for_surface(
         &platform,

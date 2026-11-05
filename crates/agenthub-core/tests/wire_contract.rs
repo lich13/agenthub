@@ -135,7 +135,7 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
     let connection = RemoteConnectionView {
         target: MachineTarget::Local,
         revision: 7,
-        base_url: None,
+        ssh_host: None,
         configured: false,
         active_machine_id: None,
         active_machine_name: None,
@@ -143,7 +143,7 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
     };
     assert_eq!(
         serde_json::to_value(connection).unwrap(),
-        json!({"target":"local","revision":7,"baseUrl":null,"configured":false})
+        json!({"target":"local","revision":7,"sshHost":null,"configured":false})
     );
     let mut message = UserMessage::default();
     message.id = "fixture".into();

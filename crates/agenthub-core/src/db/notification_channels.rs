@@ -1,5 +1,5 @@
 //! Durable channel claims. Payloads needed for bounded retry are encrypted at rest.
-use super::{add_column_if_missing, PanelDb};
+use super::PanelDb;
 use crate::config::Config;
 use anyhow::Result;
 use chrono::Utc;
@@ -89,101 +89,24 @@ fn publish_outcomes(tx: &rusqlite::Transaction<'_>, now: i64) -> Result<()> {
     Ok(())
 }
 
+pub(super) const SCHEMA: &str = "
+CREATE TABLE probe_notification_channels (
+ channel TEXT PRIMARY KEY, enabled INTEGER NOT NULL, activated_ms INTEGER NOT NULL
+);
+CREATE TABLE probe_notification_deliveries (
+ event_key TEXT NOT NULL, channel TEXT NOT NULL,
+ ciphertext BLOB, nonce BLOB, status TEXT NOT NULL, outcome_json TEXT,
+ attempts INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+ next_ms INTEGER NOT NULL DEFAULT 0, queue_version INTEGER NOT NULL DEFAULT 0,
+ chunk_index INTEGER NOT NULL DEFAULT 0, chunk_count INTEGER NOT NULL DEFAULT 1,
+ chunk_attempts INTEGER NOT NULL DEFAULT 0, chunk_uncertain INTEGER NOT NULL DEFAULT 0,
+ first_attempt_ms INTEGER, lease_owner TEXT, lease_until_ms INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(event_key, channel)
+);
+CREATE INDEX idx_probe_notification_pending ON probe_notification_deliveries(status,next_ms);
+";
+
 impl PanelDb {
-    pub(super) fn migrate_notification_channels(&self) -> Result<()> {
-        let mut conn = self.conn.lock().expect("db mutex");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS probe_notification_channels (
-                channel TEXT PRIMARY KEY, enabled INTEGER NOT NULL, activated_ms INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS probe_notification_deliveries (
-                event_key TEXT NOT NULL, channel TEXT NOT NULL,
-                ciphertext BLOB, nonce BLOB, status TEXT NOT NULL,
-                outcome_json TEXT, attempts INTEGER NOT NULL DEFAULT 0,
-                created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, next_ms INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(event_key, channel)
-             );
-             CREATE INDEX IF NOT EXISTS idx_probe_notification_pending
-                ON probe_notification_deliveries(status,next_ms);
-             INSERT OR IGNORE INTO probe_notification_deliveries
-                (event_key,channel,status,outcome_json,created_ms,updated_ms)
-             SELECT 'native:' || event_key,'bark',CASE WHEN status='delivering' THEN 'unknown' ELSE status END,
-                NULL,created_at*1000,updated_at*1000 FROM native_probe_deliveries
-                WHERE status IN ('sent','skipped','delivering') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='probe_channel_migration_v1');
-             INSERT OR IGNORE INTO probe_notification_deliveries
-                (event_key,channel,status,outcome_json,created_ms,updated_ms)
-             SELECT key,'bark','legacy',NULL,updated_at*1000,updated_at*1000 FROM settings
-                WHERE (key LIKE 'probe_async_question_delivery:%' OR key LIKE 'probe_feedback_delivery:%') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='probe_channel_migration_v1');
-             INSERT OR IGNORE INTO probe_notification_deliveries
-                (event_key,channel,status,outcome_json,created_ms,updated_ms)
-             SELECT 'codex:' || json_extract(payload_json,'$.dedupe.namespace') || ':' || dedupe_key,
-                'bark','sent',NULL,created_at*1000,created_at*1000 FROM probe_events
-                WHERE json_valid(payload_json) AND json_extract(payload_json,'$.bark.sent')=1
-                AND json_extract(payload_json,'$.dedupe.namespace') IS NOT NULL AND dedupe_key IS NOT NULL
-                AND NOT EXISTS(SELECT 1 FROM settings WHERE key='probe_channel_migration_v1');
-             INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES('probe_channel_migration_v1','1',unixepoch());"
-        )?;
-        for (name, definition) in [
-            ("queue_version", "INTEGER NOT NULL DEFAULT 0"),
-            ("chunk_index", "INTEGER NOT NULL DEFAULT 0"),
-            ("chunk_count", "INTEGER NOT NULL DEFAULT 1"),
-            ("chunk_attempts", "INTEGER NOT NULL DEFAULT 0"),
-            ("chunk_uncertain", "INTEGER NOT NULL DEFAULT 0"),
-            ("first_attempt_ms", "INTEGER"),
-            ("lease_owner", "TEXT"),
-            ("lease_until_ms", "INTEGER NOT NULL DEFAULT 0"),
-        ] {
-            add_column_if_missing(&tx, "probe_notification_deliveries", name, definition)?;
-        }
-        // Old rows have no immutable chunks/target or per-part acknowledgements. Do not replay them.
-        tx.execute("UPDATE probe_notification_deliveries SET status='unknown',ciphertext=NULL,nonce=NULL,
-            outcome_json=?1 WHERE queue_version=0 AND status IN ('pending','delivering')",
-            [json!({"sent":false,"skipped":false,"status":"unknown","reason":"legacy_retry_context_missing"}).to_string()])?;
-        tx.execute("DELETE FROM settings WHERE key='probe_legacy_import'", [])?;
-        tx.commit()?;
-        drop(conn);
-        self.retire_removed_push_channel()?;
-        Ok(())
-    }
-
-    /// Only the retired channel is erased. Bark claims, baselines and retry state remain intact.
-    fn retire_removed_push_channel(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        let retired: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM settings WHERE key IN ('probe_gotify_token','gotify_retirement_pending'))
-             OR EXISTS(SELECT 1 FROM probe_notification_channels WHERE channel='gotify')
-             OR EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel='gotify')
-             OR EXISTS(SELECT 1 FROM probe_events WHERE json_valid(payload_json) AND json_type(payload_json,'$.gotify') IS NOT NULL)
-             OR EXISTS(SELECT 1 FROM jobs WHERE kind='probe_gotify_test')
-             OR EXISTS(SELECT 1 FROM audit_log WHERE action GLOB 'probe_gotify_*' OR action='probe.gotifyTest')",
-            [], |row| row.get(0),
-        )?;
-        if !retired {
-            return Ok(());
-        }
-        // The marker survives interruption until freelist pages and WAL have also been cleaned.
-        conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
-            INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('gotify_retirement_pending','true',unixepoch());
-            DELETE FROM settings WHERE key='probe_gotify_token';
-            DELETE FROM probe_notification_deliveries WHERE channel='gotify';
-            DELETE FROM probe_notification_channels WHERE channel='gotify';
-            UPDATE probe_events SET payload_json=json_remove(payload_json,'$.gotify')
-                WHERE json_valid(payload_json) AND json_type(payload_json,'$.gotify') IS NOT NULL;
-            DELETE FROM jobs WHERE kind='probe_gotify_test';
-            DELETE FROM audit_log WHERE action GLOB 'probe_gotify_*' OR action='probe.gotifyTest';
-            COMMIT; VACUUM;")?;
-        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
-        if busy != 0 {
-            anyhow::bail!("retired notification cleanup is waiting for AgentHub database readers");
-        }
-        conn.execute(
-            "DELETE FROM settings WHERE key='gotify_retirement_pending'",
-            [],
-        )?;
-        Ok(())
-    }
-
     pub fn sync_notification_channels(&self, config: &Config) -> Result<()> {
         let now = Utc::now().timestamp_millis();
         let mut conn = self.conn.lock().expect("db mutex");

@@ -16,3 +16,5 @@ pub mod updates;
 pub mod use_cases;
 
 mod retired_commands;
+
+pub mod ssh_rpc;

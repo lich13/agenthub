@@ -1,6 +1,6 @@
 # AgentHub
 
-AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过加密 API Key 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
+AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过系统 SSH 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
 ## 核心能力
 
@@ -10,7 +10,7 @@ AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenth
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
 - **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、五大 Agent 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
-- **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；每台机器的管理员 API Key 按 `machine_id` 独立保存在 macOS Keychain 中，旧版单远程配置首次启动时自动无损迁移，切换机器时自动隔离查询缓存、分页与写操作状态。
+- **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；直接选择本机 OpenSSH 配置及 Include 中保存的 Host，复用密钥、ssh-agent 与跳板配置，并支持「安装并连接」同版本服务。切换机器隔离缓存、分页及迟到响应；已受理后台任务继续执行，不阻止切换。
 
 所有模型推理与工具执行始终由各 Agent 原生程序完成；AgentHub 不捆绑模型运行环境，也不改写未知格式的原生会话文件。
 
@@ -43,6 +43,8 @@ AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenth
 
 ## Probe 通知探针与五平台 Hooks
 
+Probe 仅保留控件、状态、错误、事件数据和确认对象；「全平台实时态势」继续显示现有聚合结果，前端最多显示 12 条。
+
 Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖：`完成`、`需要回复`、`需要授权`、`失败`），正文提炼最多 4 个非空行、300 个 Unicode 字符的纯净摘要，剥离 Markdown、代码块、工具输出与内部元数据。
 
 - **五平台通知一键开关**：在 Probe 首屏即可独立启停 Codex、Claude Code、Grok Build、Antigravity 与 DeepSeek Harness 通知（Antigravity 与 DSH 仅在本机运行时生效）。
@@ -61,26 +63,23 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 
 下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.agenthub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app`（若存在旧版 `/Applications/AgentHub.app` 会一并无损迁移清理）并校验签名与版本号。
 
-### 远程 Linux API 服务
+### 远程 Linux SSH 服务
 
-Linux `agenthub-webd` 仅提供受管理员 API Key（`x-api-key`）保护的 `/api/rpc/*` 管理接口与 `/healthz` 健康检查，仅绑定回环地址，由前置 HTTPS 反向代理对外提供服务。部署参数须从仓库外提供：
+在「设置 → 远程连接」选择本机已保存的 SSH Host，按服务器权限选择「使用 sudo」，然后「保存并连接」或「安装并连接」。需要密码、首次主机确认或密钥交互时，先在终端完成认证。App 不复制私钥或保存 SSH 密码，不修改 sudoers。
 
-```bash
-AGENTHUB_DOMAIN=panel.example.invalid \
-  bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
-```
+桌面通过常驻 SSH 通道运行固定的 `agenthub-webd rpc-stdio`，转发至服务端私有 Unix 套接字；通知和后台任务由常驻服务继续执行。断线后使用「重新连接」，写操作不会自动重放。Linux 不再监听管理 HTTP 端口，也不需要管理员 API Key 或反向代理。
 
-在远端服务器生成独立管理员 API Key 并填入桌面端「设置 → 远程连接」：
+安装入口下载与 App 同版本的正式签名服务包。Ubuntu/Debian x86_64 自动补齐必要依赖，其他 Linux x86_64 须已有 systemd 和依赖。命令行部署仍可使用仓库外的连接参数：
 
 ```bash
-sudo /usr/local/bin/agenthub-webd admin key-generate --output /absolute/private/api-key
+bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ```
 
-保存成功后立即删除临时 Key 文件。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
+升级须先部署服务，再安装 App。支持空库和 schema 3；更早数据库先经过 v2.0.10。安装器验证新服务后清理旧 API Key 和 AgentHub 专属 Nginx 入口，保留共享 Nginx/TLS；桌面清理旧连接及对应钥匙串条目，独立 Codex 发送队列保留。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
 
 ## 发布资产
 
-当前源码版本为 **2.0.10**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.0**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
@@ -124,5 +123,5 @@ git diff --check
 - [AGENTS.md](AGENTS.md)：协作、安全与交付规范。
 - [DESIGN.md](DESIGN.md)：三层表面、组件与交互设计规范。
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、缓存预算与线协议契约。
-- [docs/cloud-deploy-runbook.md](docs/cloud-deploy-runbook.md)：Linux API 服务部署、升级与回滚手册。
+- [docs/cloud-deploy-runbook.md](docs/cloud-deploy-runbook.md)：Linux SSH 服务部署、升级与回滚手册。
 - [docs/progress/MASTER.md](docs/progress/MASTER.md)：维护者版本演进与已验证证据。

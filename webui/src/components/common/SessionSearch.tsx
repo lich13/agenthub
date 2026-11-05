@@ -106,7 +106,7 @@ export function SearchPanel() {
     setNextCursor(null);
     setActiveIndex(0);
     setFeedback("");
-  }, [connection.revision, connection.target, connection.baseUrl, workspace?.provider, workspace?.sessionKey, scope, query]);
+  }, [connection.revision, connection.target, connection.sshHost, workspace?.provider, workspace?.sessionKey, scope, query]);
 
   useEffect(() => {
     if (!search.data) return;

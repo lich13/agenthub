@@ -23,7 +23,7 @@ describe("file path runtime adapter", () => {
   });
 
   test("remote paths never invoke the local opener even when a native bridge exists", async () => {
-    const invoke = vi.fn(async () => ({ target: "remote", revision: 1, baseUrl: "https://api.example.com/", configured: true }));
+    const invoke = vi.fn(async () => ({ target: "remote", revision: 1, sshHost: "fixture-host", configured: true }));
     globalThis.__AGENTHUB_TEST_INVOKE__ = invoke;
     const { remoteSelect } = await import("../runtime");
     await remoteSelect("remote");

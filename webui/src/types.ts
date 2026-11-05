@@ -670,7 +670,7 @@ export type CodexConfig = {
   collaboration_mode?: string | null;
 };
 
-export type { RemoteMachineSummary, RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
+export type { SshHostList, RemoteMachineSummary, RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
 
 export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };

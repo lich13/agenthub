@@ -1,5 +1,5 @@
-use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{auth::require_auth, state::AppState};
+use super::{http_update_platform, ok, ApiResponse};
+use crate::state::AppState;
 use agenthub_core::{grok::GrokDeleteRequest, services::use_cases::AgentHubUseCases};
 use axum::{
     extract::{Path, Query, State},
@@ -21,11 +21,10 @@ pub(crate) struct GrokDetailQuery {
 }
 
 pub(crate) async fn grok_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Query(query): Query<GrokListQuery>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .grok()
@@ -36,12 +35,11 @@ pub(crate) async fn grok_list(
 }
 
 pub(crate) async fn grok_detail(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<GrokDetailQuery>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform()).grok().page(
             &id,
@@ -60,11 +58,10 @@ pub(crate) struct GrokRenameRequest {
 }
 
 pub(crate) async fn grok_rename(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<GrokRenameRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(AgentHubUseCases::new(&http_update_platform())
         .grok()
         .rename(&request.id, &request.title)
@@ -72,11 +69,10 @@ pub(crate) async fn grok_rename(
 }
 
 pub(crate) async fn grok_delete_preview(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .grok()
@@ -87,11 +83,10 @@ pub(crate) async fn grok_delete_preview(
 }
 
 pub(crate) async fn grok_delete_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<GrokDeleteRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .grok()

@@ -4,7 +4,7 @@ use crate::{
     native_probe::{NativeProvider, NativeScan, NativeTurnEvent},
     security::redact_output,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,63 +28,6 @@ fn identity_record(delivery: &NativeDelivery, identity: &str) -> Result<String> 
 }
 
 impl PanelDb {
-    pub(super) fn migrate_native_payloads(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        super::add_column_if_missing(tx, "native_probe_deliveries", "ciphertext", "BLOB")?;
-        super::add_column_if_missing(tx, "native_probe_deliveries", "nonce", "BLOB")?;
-        let mut stmt = tx.prepare(
-            "SELECT event_key,event_json,status,ciphertext,nonce FROM native_probe_deliveries",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let key: String = row.get(0)?;
-            let raw: String = row.get(1)?;
-            let status: String = row.get(2)?;
-            let ciphertext: Option<Vec<u8>> = row.get(3)?;
-            let nonce: Option<Vec<u8>> = row.get(4)?;
-            let record: Value =
-                serde_json::from_str(&raw).context("原生通知迁移失败，原队列已保留")?;
-            let delivery: NativeDelivery = match (&ciphertext, &nonce) {
-                (Some(ciphertext), Some(nonce)) => {
-                    self.decode_native_payload(ciphertext.clone(), nonce.clone())?
-                }
-                _ => serde_json::from_value(record.clone())
-                    .context("原生通知迁移失败，原队列已保留")?,
-            };
-            let identity = if let Some(identity) = record["stream_identity"].as_str() {
-                identity.to_owned()
-            } else {
-                let identity: String = tx.query_row("SELECT identity FROM native_probe_streams WHERE provider=?1 AND session_key=?2",
-                    params![delivery.provider.as_str(), delivery.session_key], |row| row.get(0)).optional()?.unwrap_or_default();
-                let stream = crate::native_probe::NativeStreamSnapshot {
-                    provider: delivery.provider,
-                    session_key: delivery.session_key.clone(),
-                    identity: identity.clone(),
-                    id: delivery.thread_id.clone(),
-                    title: String::new(),
-                    record_count: 0,
-                    settled_count: 0,
-                    events: Vec::new(),
-                };
-                if stream.event_key(&delivery.event) == key {
-                    identity
-                } else {
-                    String::new()
-                }
-            };
-            let payload = if matches!(status.as_str(), "pending" | "delivering") {
-                Some(match (ciphertext, nonce) {
-                    (Some(ciphertext), Some(nonce)) => (ciphertext, nonce),
-                    _ => self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?,
-                })
-            } else {
-                None
-            };
-            tx.execute("UPDATE native_probe_deliveries SET event_json=?2,ciphertext=?3,nonce=?4 WHERE event_key=?1",
-                params![key, identity_record(&delivery, &identity)?, payload.as_ref().map(|p| &p.0), payload.as_ref().map(|p| &p.1)])?;
-        }
-        Ok(())
-    }
-
     fn decode_native_payload(&self, ciphertext: Vec<u8>, nonce: Vec<u8>) -> Result<NativeDelivery> {
         Ok(serde_json::from_slice(
             &self.crypto.decrypt(&ciphertext, &nonce)?,

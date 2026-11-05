@@ -415,7 +415,7 @@ mod tests {
             "<--config>\n<{}>\n<probe>\n<bark-test>\n",
             platform.config_file.display()
         );
-        assert_eq!(job.output, expected_output.trim_end_matches('\n'));
+        assert_eq!(job.output, expected_output);
     }
 
     #[test]

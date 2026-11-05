@@ -37,7 +37,7 @@ test("large previews evict older entries and failed reads remain retryable", asy
 test("identical attachment identities on local and remote machines never share cached bytes", async () => {
   vi.mocked(readSessionAttachment).mockResolvedValueOnce({ mimeType: "image/png", base64: "bG9jYWw=" }).mockResolvedValueOnce({ mimeType: "image/png", base64: "cmVtb3Rl" });
   expect(await readAttachment(request)).toContain("bG9jYWw=");
-  vi.mocked(machineScope).mockReturnValue("remote:https://api.example.com/");
+  vi.mocked(machineScope).mockReturnValue("remote:fixture-host");
   expect(await readAttachment(request)).toContain("cmVtb3Rl");
   expect(readSessionAttachment).toHaveBeenCalledTimes(2);
 });

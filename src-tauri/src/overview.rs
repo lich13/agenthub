@@ -43,13 +43,6 @@ impl DesktopState {
                 .ok_or_else(|| anyhow!("cannot resolve local desktop workspace"))?;
         }
         std::fs::create_dir_all(&config.codex.workspace)?;
-        // Replace/restart the existing monitor before upgrading its shared
-        // queue, so the previous helper cannot append the old plaintext format.
-        if let Err(err) =
-            crate::resources::repair_probe_error_monitor_launch_agent(&config, &platform)
-        {
-            eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
-        }
         let db = open_panel_db(&config)?;
         Ok(Self::new(config, db, platform))
     }

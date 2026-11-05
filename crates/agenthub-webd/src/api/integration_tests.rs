@@ -86,7 +86,7 @@ fn init_isolated_codex_home(codex_home: &std::path::Path) {
     .unwrap();
 }
 
-fn authenticated_test_state() -> (crate::state::AppState, String) {
+fn rpc_test_state() -> crate::state::AppState {
     let mut config = Config::default();
     let sandbox_root = temp_test_dir("agenthub-test-sandbox");
     let codex_home = sandbox_root.join(".codex");
@@ -103,14 +103,11 @@ fn authenticated_test_state() -> (crate::state::AppState, String) {
         "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest".to_string();
 
     let db = PanelDb::open(":memory:").unwrap();
-    let api_key = db.rotate_admin_api_key().unwrap();
-    let state = crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root);
-    (state, api_key)
+    crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root)
 }
 
-fn authenticated_test_state_with_config_file() -> (crate::state::AppState, String, PathBuf, PathBuf)
-{
-    let (state, api_key) = authenticated_test_state();
+fn rpc_test_state_with_config_file() -> (crate::state::AppState, PathBuf, PathBuf) {
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-config");
     fs::create_dir_all(&dir).unwrap();
     let config_path = dir.join("config.toml");
@@ -119,7 +116,7 @@ fn authenticated_test_state_with_config_file() -> (crate::state::AppState, Strin
         toml::to_string_pretty(&state.config()).unwrap(),
     )
     .unwrap();
-    (state, api_key, dir, config_path)
+    (state, dir, config_path)
 }
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
@@ -184,8 +181,8 @@ fn seed_local_codex_thread(home: &std::path::Path, thread_id: &str, title: &str)
     rollout
 }
 
-fn app_server_missing_socket_state() -> (crate::state::AppState, String, PathBuf) {
-    let (state, api_key) = authenticated_test_state();
+fn app_server_missing_socket_state() -> (crate::state::AppState, PathBuf) {
+    let state = rpc_test_state();
     let home = temp_test_dir("agenthub-local-codex");
     let mut config = state.config();
     config.codex.home = home.clone();
@@ -193,19 +190,13 @@ fn app_server_missing_socket_state() -> (crate::state::AppState, String, PathBuf
     config.codex.bridge_enabled = true;
     config.codex.app_server_socket = Some(home.join("missing-app-server.sock"));
     state.replace_config(config);
-    (state, api_key, home)
+    (state, home)
 }
 
-async fn request_rpc_json(
-    app: axum::Router,
-    command: &str,
-    body: &str,
-    api_key: &str,
-) -> serde_json::Value {
+async fn request_rpc_json(app: axum::Router, command: &str, body: &str) -> serde_json::Value {
     let builder = Request::builder()
         .method("POST")
         .uri(format!("/api/rpc/{command}"))
-        .header("x-api-key", api_key)
         .header("content-type", "application/json");
     let response = app
         .oneshot(builder.body(Body::from(body.to_string())).unwrap())
@@ -216,19 +207,11 @@ async fn request_rpc_json(
     serde_json::from_slice(&body).unwrap()
 }
 
-async fn request_rpc_status(
-    app: axum::Router,
-    command: &str,
-    body: &str,
-    api_key: Option<&str>,
-) -> StatusCode {
-    let mut builder = Request::builder()
+async fn request_rpc_status(app: axum::Router, command: &str, body: &str) -> StatusCode {
+    let builder = Request::builder()
         .method("POST")
         .uri(format!("/api/rpc/{command}"))
         .header("content-type", "application/json");
-    if let Some(api_key) = api_key {
-        builder = builder.header("x-api-key", api_key);
-    }
     app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap()
@@ -237,7 +220,7 @@ async fn request_rpc_status(
 
 #[tokio::test]
 async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
-    let (mut state, api_key, home) = app_server_missing_socket_state();
+    let (mut state, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
     let executable = home.join("native-codex-fixture");
     write_executable_fixture(
@@ -274,46 +257,19 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     );
     let app = router(state.clone());
 
-    let list = request_rpc_json(app.clone(), "threads.list", r#"{"limit":10}"#, &api_key).await;
+    let list = request_rpc_json(app.clone(), "threads.list", r#"{"limit":10}"#).await;
     assert_eq!(list[0]["id"], "thread-a");
     assert_eq!(list[0]["title"], "local title");
 
-    let detail = request_rpc_json(
-        app.clone(),
-        "threads.detail",
-        r#"{"id":"thread-a"}"#,
-        &api_key,
-    )
-    .await;
+    let detail = request_rpc_json(app.clone(), "threads.detail", r#"{"id":"thread-a"}"#).await;
     assert_eq!(detail["summary"]["title"], "local title");
 
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "threads.rename",
-            r#"{"threadId":"thread-a","name":"unauthorized"}"#,
-            None
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "threads.rename",
-            r#"{"threadId":"thread-a","name":"invalid key"}"#,
-            Some("nhk_invalid_fixture")
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
     assert!(!home.join("native-requests.jsonl").exists());
 
     let _ = request_rpc_json(
         app,
         "threads.rename",
         r#"{"threadId":"thread-a","name":"local renamed"}"#,
-        &api_key,
     )
     .await;
 
@@ -350,8 +306,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         request_rpc_status(
             router(state),
             "threads.rename",
-            r#"{"threadId":"thread-a","name":"must not use SQL"}"#,
-            Some(&api_key)
+            r#"{"threadId":"thread-a","name":"must not use SQL"}"#
         )
         .await,
         StatusCode::INTERNAL_SERVER_ERROR
@@ -370,7 +325,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
 
 #[tokio::test]
 async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
-    let (state, _api_key, home) = app_server_missing_socket_state();
+    let (state, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
 
     let rows = load_probe_threads(&state, "recent", 10).await.unwrap();
@@ -389,14 +344,13 @@ async fn rpc_probe_typed_commands_start_matching_jobs() {
         ("probe.installHooks", "probe_hooks_install"),
         ("probe.removeHooks", "probe_hooks_remove"),
     ] {
-        let (state, api_key) = authenticated_test_state();
+        let state = rpc_test_state();
         let app = router(state.clone());
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri(format!("/api/rpc/{command}"))
-                    .header("x-api-key", api_key)
                     .header("content-type", "application/json")
                     .body(Body::from("{}"))
                     .unwrap(),
@@ -420,8 +374,8 @@ async fn rpc_update_typed_commands_start_update_jobs() {
         ("updates.install", "agenthub_update_install"),
         ("updates.prune", "agenthub_update_prune"),
     ] {
-        let (rpc_state, rpc_api_key) = authenticated_test_state();
-        let rpc = request_rpc_json(router(rpc_state.clone()), command, "{}", &rpc_api_key).await;
+        let rpc_state = rpc_test_state();
+        let rpc = request_rpc_json(router(rpc_state.clone()), command, "{}").await;
         let job_id = rpc["job_id"].as_str().unwrap();
         let job = rpc_state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind, "{command}");
@@ -430,31 +384,24 @@ async fn rpc_update_typed_commands_start_update_jobs() {
 
 #[tokio::test]
 async fn rpc_cleanup_execute_requires_confirmed_targets() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
 
     for command in ["cleanup.archiveExecute", "cleanup.hiddenExecute"] {
-        let status = request_rpc_status(
-            app.clone(),
-            command,
-            r#"{"confirmed":true}"#,
-            Some(&api_key),
-        )
-        .await;
+        let status = request_rpc_status(app.clone(), command, r#"{"confirmed":true}"#).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{command}");
     }
 }
 
 #[tokio::test]
 async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
 
     let missing_candidates = request_rpc_status(
         app.clone(),
         "cleanup.hiddenExecute",
         r#"{"confirmed":true,"expectedCount":0}"#,
-        Some(&api_key),
     )
     .await;
     assert_eq!(missing_candidates, StatusCode::BAD_REQUEST);
@@ -463,7 +410,6 @@ async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
         app,
         "cleanup.hiddenExecute",
         r#"{"confirmed":true,"expectedCount":1,"candidates":[]}"#,
-        Some(&api_key),
     )
     .await;
     assert_eq!(mismatched_count, StatusCode::OK);
@@ -471,7 +417,7 @@ async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
 
 #[tokio::test]
 async fn retired_pi_commands_are_unavailable() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
     for command in [
         "pi.list",
@@ -481,7 +427,7 @@ async fn retired_pi_commands_are_unavailable() {
         "pi.deleteExecute",
     ] {
         assert_eq!(
-            request_rpc_status(app.clone(), command, "{}", Some(&api_key)).await,
+            request_rpc_status(app.clone(), command, "{}").await,
             StatusCode::NOT_FOUND
         );
     }
@@ -676,10 +622,10 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
 
 #[tokio::test]
 async fn rpc_runtime_capabilities_has_minimal_dto_shape() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
 
-    let rpc = request_rpc_json(app, "system.capabilities", "{}", &api_key).await;
+    let rpc = request_rpc_json(app, "system.capabilities", "{}").await;
 
     assert_eq!(rpc["api_version"], 2);
     assert_eq!(rpc["host_surface"], "linux_server_api");
@@ -698,8 +644,8 @@ async fn rpc_update_typed_actions_start_jobs() {
         ("updates.install", "agenthub_update_install"),
         ("updates.prune", "agenthub_update_prune"),
     ] {
-        let (state, api_key) = authenticated_test_state();
-        let rpc = request_rpc_json(router(state.clone()), command, "{}", &api_key).await;
+        let state = rpc_test_state();
+        let rpc = request_rpc_json(router(state.clone()), command, "{}").await;
         let job_id = rpc["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind, "{command}");
@@ -708,17 +654,17 @@ async fn rpc_update_typed_actions_start_jobs() {
 
 #[tokio::test]
 async fn rpc_update_status_uses_shared_update_status_shape() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
 
-    let rpc = request_rpc_json(app, "updates.status", "{}", &api_key).await;
+    let rpc = request_rpc_json(app, "updates.status", "{}").await;
 
     assert_eq!(rpc["method"], "linux_systemd_job");
     assert_eq!(rpc["state"], "idle");
 }
 
 #[tokio::test]
-async fn panel_update_routes_require_api_key_and_start_fixed_panel_jobs() {
+async fn panel_update_starts_fixed_panel_jobs() {
     for (command, kind, title) in [
         (
             "updates.check",
@@ -736,17 +682,10 @@ async fn panel_update_routes_require_api_key_and_start_fixed_panel_jobs() {
             "AgentHub update backup prune",
         ),
     ] {
-        let (state, api_key) = authenticated_test_state();
+        let state = rpc_test_state();
         let app = router(state.clone());
 
-        let unauthorized = request_rpc_status(app.clone(), command, "{}", None).await;
-        assert_eq!(unauthorized, StatusCode::UNAUTHORIZED, "{command}");
-
-        let invalid_key =
-            request_rpc_status(app.clone(), command, "{}", Some("nhk_invalid_fixture")).await;
-        assert_eq!(invalid_key, StatusCode::UNAUTHORIZED, "{command}");
-
-        let payload = request_rpc_json(app.clone(), command, "{}", &api_key).await;
+        let payload = request_rpc_json(app.clone(), command, "{}").await;
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
 
@@ -807,14 +746,11 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
 }
 
 #[tokio::test]
-async fn unified_update_status_requires_auth_and_uses_shared_shape() {
-    let (state, api_key) = authenticated_test_state();
+async fn unified_update_status_uses_shared_shape() {
+    let state = rpc_test_state();
     let app = router(state.clone());
 
-    let unauthorized = request_rpc_status(app.clone(), "updates.status", "{}", None).await;
-    assert_eq!(unauthorized, StatusCode::UNAUTHORIZED);
-
-    let payload = request_rpc_json(app, "updates.status", "{}", &api_key).await;
+    let payload = request_rpc_json(app, "updates.status", "{}").await;
     assert_eq!(payload["method"], "linux_systemd_job");
     assert_eq!(payload["state"], "idle");
     assert_eq!(payload["channel"], "stable");
@@ -827,10 +763,10 @@ async fn unified_update_status_requires_auth_and_uses_shared_shape() {
 
 #[tokio::test]
 async fn runtime_capabilities_preserve_linux_features() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
 
-    let payload = request_rpc_json(app, "system.capabilities", "{}", &api_key).await;
+    let payload = request_rpc_json(app, "system.capabilities", "{}").await;
     assert_eq!(payload["host_surface"], "linux_server_api");
     assert_eq!(payload["api_version"], 2);
     assert_eq!(payload.as_object().unwrap().len(), 3);
@@ -863,7 +799,7 @@ async fn runtime_capabilities_preserve_linux_features() {
 
 #[tokio::test]
 async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-probe-status-resolved");
     let codex_home = dir.join(".codex");
     mark_codex_home(&codex_home);
@@ -872,7 +808,7 @@ async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
     state.replace_config(config);
     let app = router(state.clone());
 
-    let status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
+    let status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(status["label"], "Probe");
     assert_ne!(status["label"], "Sentinel");
     assert!(status["flavor"].as_str().is_some());
@@ -895,7 +831,7 @@ async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
 
 #[tokio::test]
 async fn probe_status_route_caches_initial_snapshot_and_throttles_background_refresh() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-probe-status-snapshot");
     let codex_home = dir.join(".codex");
     mark_codex_home(&codex_home);
@@ -904,14 +840,14 @@ async fn probe_status_route_caches_initial_snapshot_and_throttles_background_ref
     state.replace_config(config);
     let app = router(state.clone());
 
-    let first_status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
+    let first_status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(first_status["label"], "Probe");
     assert_eq!(first_status["snapshot_status"], "initial");
     assert_eq!(first_status["is_refreshing"], false);
     assert_eq!(first_status["snapshot_age_seconds"], 0);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let second_status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
+    let second_status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(second_status["snapshot_status"], "cached");
     assert_eq!(second_status["is_refreshing"], false);
     assert!(second_status["snapshot_age_seconds"].as_i64().unwrap() < 2);
@@ -927,7 +863,7 @@ async fn probe_status_route_caches_initial_snapshot_and_throttles_background_ref
         .as_mut()
         .unwrap()
         .refreshed_at_unix -= 3;
-    let third_status = request_rpc_json(app, "probe.status", "{}", &api_key).await;
+    let third_status = request_rpc_json(app, "probe.status", "{}").await;
     assert_eq!(third_status["snapshot_status"], "cached");
     assert_eq!(third_status["is_refreshing"], true);
     assert!(third_status["snapshot_age_seconds"].as_i64().unwrap() >= 2);
@@ -936,7 +872,7 @@ async fn probe_status_route_caches_initial_snapshot_and_throttles_background_ref
 
 #[tokio::test]
 async fn probe_reply_needed_bucket_only_includes_fresh_pending_actions() {
-    let (state, _) = authenticated_test_state();
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-probe-reply-needed-fresh");
     let codex_home = dir.join(".codex");
     mark_codex_home(&codex_home);
@@ -997,7 +933,7 @@ async fn probe_reply_needed_bucket_only_includes_fresh_pending_actions() {
 
 #[tokio::test]
 async fn probe_events_route_lists_recent_events_with_auth_and_redacts_sensitive_payloads() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     state
         .db
         .record_probe_event(agenthub_core::db::NewProbeEvent {
@@ -1041,11 +977,7 @@ async fn probe_events_route_lists_recent_events_with_auth_and_redacts_sensitive_
         .unwrap();
     let app = router(state);
 
-    let unauthorized =
-        request_rpc_status(app.clone(), "probe.events", r#"{"limit":1}"#, None).await;
-    assert_eq!(unauthorized, StatusCode::UNAUTHORIZED);
-
-    let payload = request_rpc_json(app, "probe.events", r#"{"limit":1}"#, &api_key).await;
+    let payload = request_rpc_json(app, "probe.events", r#"{"limit":1}"#).await;
     assert_eq!(payload["limit"], 1);
     assert_eq!(payload["events"].as_array().unwrap().len(), 1);
     let event = &payload["events"][0];
@@ -1084,7 +1016,7 @@ async fn probe_events_route_lists_recent_events_with_auth_and_redacts_sensitive_
 
 #[tokio::test]
 async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-probe-settings-invalid-url");
     fs::create_dir_all(&dir).unwrap();
     let config_path = dir.join("config.toml");
@@ -1098,8 +1030,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
     let status = request_rpc_status(
         app,
         "probe.settings.save",
-        r#"{"settings":{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}}"#,
-        Some(&api_key))
+        r#"{"settings":{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}}"#)
     .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1115,7 +1046,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
 }
 
 #[tokio::test]
-async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
+async fn probe_actions_expose_safe_probe_surfaces() {
     let _env_guard = AsyncEnvGuard::lock_read_only().await;
     for (command, kind, title, forbidden_arg) in [
         (
@@ -1138,13 +1069,10 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         ),
     ] as [(&str, &str, &str, &str); 3]
     {
-        let (state, api_key) = authenticated_test_state();
+        let state = rpc_test_state();
         let app = router(state.clone());
-        let invalid_key =
-            request_rpc_status(app.clone(), command, "{}", Some("nhk_invalid_fixture")).await;
-        assert_eq!(invalid_key, StatusCode::UNAUTHORIZED, "{command}");
 
-        let payload = request_rpc_json(app.clone(), command, "{}", &api_key).await;
+        let payload = request_rpc_json(app.clone(), command, "{}").await;
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, kind);
@@ -1152,39 +1080,21 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         assert!(!job.output.contains(forbidden_arg));
     }
 
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
     for command in [
         "probe.logsDb.status",
         "probe.logsDbDryRun",
         "probe.logsDbExecute",
     ] {
-        let status = request_rpc_status(app.clone(), command, "{}", Some(&api_key)).await;
+        let status = request_rpc_status(app.clone(), command, "{}").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }
 
 #[tokio::test]
-async fn probe_settings_patch_requires_api_key() {
-    let (state, _api_key, dir, config_path) = authenticated_test_state_with_config_file();
-    let _config_env = AsyncEnvGuard::set_config(&config_path).await;
-    let app = router(state);
-
-    let status = request_rpc_status(
-        app,
-        "probe.settings.save",
-        r#"{"probe":{"poll_seconds":25}}"#,
-        None,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[tokio::test]
 async fn probe_settings_patch_rejects_missing_config_file() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let dir = temp_test_dir("agenthub-missing-config");
     fs::create_dir_all(&dir).unwrap();
     let missing_path = dir.join("missing-config.toml");
@@ -1195,7 +1105,6 @@ async fn probe_settings_patch_rejects_missing_config_file() {
         app,
         "probe.settings.save",
         r#"{"probe":{"poll_seconds":25}}"#,
-        Some(&api_key),
     )
     .await;
 
@@ -1204,22 +1113,21 @@ async fn probe_settings_patch_rejects_missing_config_file() {
 
 #[tokio::test]
 async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
-    let (state, api_key, _dir, config_path) = authenticated_test_state_with_config_file();
+    let (state, _dir, config_path) = rpc_test_state_with_config_file();
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
     let app = router(state.clone());
 
     let _ = request_rpc_json(
         app.clone(),
         "probe.settings.save",
-        r#"{"codex":{"host_label":"fresh-host"},"probe":{"poll_seconds":33,"observability":{"event_retention_days":2}}}"#,
-        &api_key)
+        r#"{"codex":{"host_label":"fresh-host"},"probe":{"poll_seconds":33,"observability":{"event_retention_days":2}}}"#)
     .await;
 
-    let settings = request_rpc_json(app.clone(), "probe.settings.get", "{}", &api_key).await;
+    let settings = request_rpc_json(app.clone(), "probe.settings.get", "{}").await;
     assert_eq!(settings["probe"]["poll_seconds"], 33);
     assert_eq!(settings["codex"]["host_label"], "fresh-host");
 
-    let status = request_rpc_json(app.clone(), "probe.status", "{}", &api_key).await;
+    let status = request_rpc_json(app.clone(), "probe.status", "{}").await;
     assert_eq!(status["poll_seconds"], 33);
     assert_eq!(status["host_label"], "fresh-host");
 
@@ -1228,7 +1136,7 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
         2
     );
 
-    let payload = request_rpc_json(app, "probe.barkTest", "{}", &api_key).await;
+    let payload = request_rpc_json(app, "probe.barkTest", "{}").await;
     let job_id = payload["job_id"].as_str().unwrap();
     let job = state.db.job(job_id).unwrap().unwrap();
     assert_eq!(job.kind, "probe_bark_test");
@@ -2631,7 +2539,7 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 
 #[tokio::test]
 async fn retired_task_mutation_routes_return_not_found_even_with_valid_auth() {
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
     for command in [
         "threads.create",
@@ -2654,7 +2562,7 @@ async fn retired_task_mutation_routes_return_not_found_even_with_valid_auth() {
         "desktopWebui.stop",
     ] {
         assert_eq!(
-            request_rpc_status(app.clone(), command, "{}", Some(&api_key)).await,
+            request_rpc_status(app.clone(), command, "{}").await,
             StatusCode::NOT_FOUND,
             "{command} must stay retired"
         );
@@ -2662,317 +2570,42 @@ async fn retired_task_mutation_routes_return_not_found_even_with_valid_auth() {
 }
 
 #[tokio::test]
-async fn batch_rpc_requires_api_key_and_rejects_paths_or_wildcards() {
-    let (state, api_key) = authenticated_test_state();
+async fn batch_rpc_rejects_paths_or_wildcards() {
+    let state = rpc_test_state();
     let app = router(state);
-    let preview =
-        r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":["fixture"]}}"#;
-    assert_eq!(
-        request_rpc_status(app.clone(), "sessions.bulkPreview", preview, None).await,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "sessions.bulkPreview",
-            preview,
-            Some("nhk_invalid_fixture")
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
+
     for payload in [
         r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":[],"path":"/tmp"}}"#,
         r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":["fixture"],"all":true}}"#,
     ] {
         assert_eq!(
-            request_rpc_status(app.clone(), "sessions.bulkPreview", payload, Some(&api_key)).await,
+            request_rpc_status(app.clone(), "sessions.bulkPreview", payload).await,
             StatusCode::BAD_REQUEST
         );
     }
-    let execute = r#"{"request":{"provider":"codex","operation":"delete","items":[{"sessionKey":"fixture","fingerprint":"test"}],"confirmed":true}}"#;
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "sessions.bulkExecute",
-            execute,
-            Some("nhk_invalid_fixture")
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
-}
-
-async fn api_key_request(
-    app: axum::Router,
-    headers: &[(&str, &str)],
-    peer: Option<std::net::SocketAddr>,
-) -> axum::response::Response {
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/api/rpc/system.capabilities")
-        .header("content-type", "application/json");
-    for (name, value) in headers {
-        request = request.header(*name, *value);
-    }
-    if let Some(peer) = peer {
-        request = request.extension(axum::extract::ConnectInfo(peer));
-    }
-    app.oneshot(request.body(Body::from("{}")).unwrap())
-        .await
-        .unwrap()
 }
 
 #[tokio::test]
-async fn rpc_api_key_rejects_unconfigured_missing_wrong_and_legacy_credentials() {
-    let (unconfigured_cfg, sandbox_root) = sandboxed_test_config();
-    let unconfigured = router(
-        crate::state::AppState::new(unconfigured_cfg, PanelDb::open(":memory:").unwrap())
-            .with_test_sandbox(sandbox_root),
-    );
-    for headers in [vec![], vec![("x-api-key", "nhk_unconfigured_fixture")]] {
-        assert_eq!(
-            api_key_request(unconfigured.clone(), &headers, None)
-                .await
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-    }
-
-    let (state, key) = authenticated_test_state();
-    let app = router(state);
-    let legacy_cookie = format!("agenthub_session={key}");
-    let bearer = format!("Bearer {key}");
-    for headers in [
-        vec![],
-        vec![("x-api-key", "nhk_wrong_fixture")],
-        vec![
-            ("cookie", "agenthub_session=old-session-fixture"),
-            ("x-csrf-token", "old-csrf-fixture"),
-        ],
-        vec![("cookie", legacy_cookie.as_str())],
-        vec![("authorization", bearer.as_str())],
-    ] {
-        assert_eq!(
-            api_key_request(app.clone(), &headers, None).await.status(),
-            StatusCode::UNAUTHORIZED
-        );
-    }
-    let response = api_key_request(app, &[("x-api-key", &key)], None).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().get("set-cookie").is_none());
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["api_version"], 2);
-    assert_eq!(payload["host_surface"], "linux_server_api");
-    assert!(!String::from_utf8(body.to_vec()).unwrap().contains(&key));
-}
-
-#[tokio::test]
-async fn rpc_api_key_rotation_and_revocation_take_effect_on_existing_router() {
-    let (state, first) = authenticated_test_state();
-    let app = router(state.clone());
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &first)], None)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    let second = state.db.rotate_admin_api_key().unwrap();
-    assert_ne!(first, second);
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &first)], None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &second)], None)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    state.db.revoke_admin_api_key().unwrap();
-    assert_eq!(
-        api_key_request(app, &[("x-api-key", &second)], None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-}
-
-#[tokio::test]
-async fn rpc_auth_failure_limit_uses_peer_and_keeps_correct_key_available() {
-    let (mut config, sandbox_root) = sandboxed_test_config();
-    config.security.auth_rate_limit_per_minute = 2;
-    let db = PanelDb::open(":memory:").unwrap();
-    let key = db.rotate_admin_api_key().unwrap();
-    let app = router(crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root));
-    let peer = Some("192.0.2.10:43210".parse().unwrap());
-    for (forwarded, expected) in [
-        ("198.51.100.1", StatusCode::UNAUTHORIZED),
-        ("198.51.100.2", StatusCode::UNAUTHORIZED),
-        ("198.51.100.3", StatusCode::TOO_MANY_REQUESTS),
-    ] {
-        let response = api_key_request(
-            app.clone(),
-            &[
-                ("x-api-key", "nhk_invalid_fixture"),
-                ("x-forwarded-for", forwarded),
-            ],
-            peer,
-        )
-        .await;
-        assert_eq!(response.status(), expected);
-    }
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &key)], peer)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        api_key_request(app.clone(), &[], peer).await.status(),
-        StatusCode::TOO_MANY_REQUESTS
-    );
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &key)], peer)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    let other_peer = Some("192.0.2.11:43210".parse().unwrap());
-    assert_eq!(
-        api_key_request(app, &[("x-api-key", "nhk_invalid_fixture")], other_peer)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-}
-
-#[tokio::test]
-async fn rpc_api_key_rejects_duplicate_and_oversized_headers() {
-    let (state, key) = authenticated_test_state();
-    let app = router(state);
-    for headers in [
-        vec![("x-api-key", key.as_str()), ("x-api-key", key.as_str())],
-        vec![
-            ("x-api-key", "nhk_wrong_fixture"),
-            ("x-api-key", key.as_str()),
-        ],
-    ] {
-        assert_eq!(
-            api_key_request(app.clone(), &headers, None).await.status(),
-            StatusCode::UNAUTHORIZED
-        );
-    }
-    let oversized = format!("{key}{}", "0".repeat(256));
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &oversized)], None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        api_key_request(app, &[("x-api-key", &key)], None)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
-async fn rpc_auth_audit_never_contains_api_key_or_legacy_credentials() {
-    let directory = unique_temp_dir("api-key-audit");
-    fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("agenthub.sqlite");
-    let db = PanelDb::open(&path).unwrap();
-    let first = db.rotate_admin_api_key().unwrap();
-    let (audit_cfg, sandbox_root) = sandboxed_test_config();
-    let app =
-        router(crate::state::AppState::new(audit_cfg, db.clone()).with_test_sandbox(sandbox_root));
-    let invalid = "nhk_rejected_audit_fixture";
-    let legacy = "legacy-cookie-audit-fixture";
-    let peer = Some("192.0.2.12:43210".parse().unwrap());
-    assert_eq!(
-        api_key_request(
-            app.clone(),
-            &[("x-api-key", invalid), ("cookie", legacy)],
-            peer
-        )
-        .await
-        .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &first)], peer)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    let second = db.rotate_admin_api_key().unwrap();
-    assert_eq!(
-        api_key_request(app.clone(), &[("x-api-key", &first)], peer)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    db.revoke_admin_api_key().unwrap();
-    drop(app);
-    drop(db);
-    let connection = Connection::open(&path).unwrap();
-    let audit: String = connection.query_row(
-        "SELECT group_concat(COALESCE(admin_id,'') || action || COALESCE(target_type,'') || COALESCE(target_id,'') || COALESCE(ip,'') || detail_json, '|') FROM audit_log",
-        [], |row| row.get(0),
-    ).unwrap();
-    assert_eq!(audit.matches("api.auth_denied").count(), 2);
-    assert_eq!(audit.matches("api_key.rotate").count(), 2);
-    assert_eq!(audit.matches("api_key.revoke").count(), 1);
-    assert!(audit.contains("192.0.2.12"));
-    for secret in [&first, &second, invalid, legacy] {
-        assert!(!audit.contains(secret));
-    }
-    drop(connection);
-    fs::remove_dir_all(directory).unwrap();
-}
-
-#[tokio::test]
-async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
+async fn claude_rpc_identity_paging_rename_and_delete_are_scoped() {
     let root = temp_test_dir("agenthub-claude-rpc");
     let _env = AsyncEnvGuard::set_many(&[("CLAUDE_CONFIG_DIR", &root)]).await;
-    let (state, api_key) = authenticated_test_state();
+    let state = rpc_test_state();
     let app = router(state);
     assert_eq!(
-        request_rpc_json(app.clone(), "claude.list", "{}", &api_key).await,
+        request_rpc_json(app.clone(), "claude.list", "{}").await,
         json!([])
     );
-    for command in [
-        "claude.list",
-        "claude.detail",
-        "claude.rename",
-        "claude.deletePreview",
-        "claude.deleteExecute",
-    ] {
-        for key in [None, Some("nhk_invalid_fixture")] {
-            let status = request_rpc_status(app.clone(), command, "{}", key).await;
-            assert!(matches!(
-                status,
-                StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS
-            ));
-        }
-    }
     let file = root.join("projects/example/native.jsonl");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     let user = json!({"type":"user","uuid":"u1","sessionId":"claude-rpc-id","cwd":root.join("workspace"),"version":"2.1.284","timestamp":"2026-09-29T00:00:00Z","message":{"content":"Claude RPC fixture"}});
     let assistant = json!({"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"claude-rpc-id","timestamp":"2026-09-29T00:00:01Z","message":{"content":[{"type":"text","text":"Done"}],"stop_reason":"end_turn"}});
     fs::write(&file, format!("{user}\n{assistant}\n")).unwrap();
-    let rows = request_rpc_json(app.clone(), "claude.list", "{}", &api_key).await;
+    let rows = request_rpc_json(app.clone(), "claude.list", "{}").await;
     let key = rows[0]["sessionKey"].as_str().unwrap();
     let detail = request_rpc_json(
         app.clone(),
         "claude.detail",
         &json!({"sessionKey":key,"limit":1}).to_string(),
-        &api_key,
     )
     .await;
     assert_eq!(detail["events"].as_array().unwrap().len(), 1);
@@ -2981,7 +2614,6 @@ async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
         app.clone(),
         "claude.rename",
         &json!({"sessionKey":key,"title":"Renamed RPC fixture"}).to_string(),
-        &api_key,
     )
     .await;
     assert_eq!(renamed["title"], "Renamed RPC fixture");
@@ -2989,21 +2621,19 @@ async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
         request_rpc_status(
             app.clone(),
             "claude.detail",
-            r#"{"sessionKey":"/etc/passwd"}"#,
-            Some(&api_key)
+            r#"{"sessionKey":"/etc/passwd"}"#
         )
         .await,
         StatusCode::INTERNAL_SERVER_ERROR
     );
-    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string(),Some(&api_key)).await,StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string()).await,StatusCode::INTERNAL_SERVER_ERROR);
     let preview = request_rpc_json(
         app.clone(),
         "claude.deletePreview",
         &json!({"sessionKey":key}).to_string(),
-        &api_key,
     )
     .await;
-    let deleted = request_rpc_json(app,"claude.deleteExecute",&json!({"request":{"sessionKey":key,"confirmed":true,"fingerprint":preview["fingerprint"]}}).to_string(),&api_key).await;
+    let deleted = request_rpc_json(app,"claude.deleteExecute",&json!({"request":{"sessionKey":key,"confirmed":true,"fingerprint":preview["fingerprint"]}}).to_string()).await;
     assert_eq!(deleted["deleted"], true);
     assert!(!file.exists());
     fs::remove_dir_all(root).unwrap();
@@ -3015,7 +2645,6 @@ const SUBAGENT_RPC_PNG: &str =
 struct SubagentRpcFixture {
     home: PathBuf,
     state: crate::state::AppState,
-    api_key: String,
 }
 
 impl SubagentRpcFixture {
@@ -3085,16 +2714,12 @@ impl SubagentRpcFixture {
             )
             .unwrap();
         }
-        let (state, api_key) = authenticated_test_state();
+        let state = rpc_test_state();
         let mut config = state.config();
         config.codex.home = home.clone();
         config.codex.workspace = home.clone();
         state.replace_config(config);
-        Self {
-            home,
-            state,
-            api_key,
-        }
+        Self { home, state }
     }
 
     async fn attachment_request(&self, app: axum::Router) -> serde_json::Value {
@@ -3102,7 +2727,6 @@ impl SubagentRpcFixture {
             app,
             "threads.subagentDetail",
             r#"{"rootThreadId":"rpc-root","agentId":"rpc-child"}"#,
-            &self.api_key,
         )
         .await;
         assert_eq!(detail["rootThreadId"], "rpc-root");
@@ -3138,7 +2762,7 @@ impl Drop for SubagentRpcFixture {
 }
 
 #[tokio::test]
-async fn subagent_detail_and_attachment_rpc_require_api_key_for_valid_native_reads() {
+async fn subagent_detail_and_attachment_rpc_validate_native_reads() {
     let fixture = SubagentRpcFixture::new();
     let app = router(fixture.state.clone());
     let attachment = fixture.attachment_request(app.clone()).await;
@@ -3149,14 +2773,7 @@ async fn subagent_detail_and_attachment_rpc_require_api_key_for_valid_native_rea
         ("sessions.attachmentRead", attachment.clone()),
     ] {
         let payload = json!({"request":payload}).to_string();
-        for key in [None, Some("nhk_invalid_fixture")] {
-            assert_eq!(
-                request_rpc_status(app.clone(), command, &payload, key).await,
-                StatusCode::UNAUTHORIZED,
-                "{command} must authenticate a valid request"
-            );
-        }
-        let response = request_rpc_json(app.clone(), command, &payload, &fixture.api_key).await;
+        let response = request_rpc_json(app.clone(), command, &payload).await;
         if command == "sessions.attachmentRead" {
             assert_eq!(response["mimeType"], "image/png");
             assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
@@ -3164,13 +2781,7 @@ async fn subagent_detail_and_attachment_rpc_require_api_key_for_valid_native_rea
             assert_eq!(response["detail"]["summary"]["id"], "rpc-child");
         }
     }
-    let response = request_rpc_json(
-        app,
-        "sessions.attachmentRead",
-        &attachment.to_string(),
-        &fixture.api_key,
-    )
-    .await;
+    let response = request_rpc_json(app, "sessions.attachmentRead", &attachment.to_string()).await;
     assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
 }
 
@@ -3183,7 +2794,6 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         app.clone(),
         "sessions.attachmentRead",
         &attachment.to_string(),
-        &fixture.api_key,
     )
     .await;
     assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
@@ -3206,13 +2816,7 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
                     invalid.clone()
                 };
                 assert_eq!(
-                    request_rpc_status(
-                        app.clone(),
-                        command,
-                        &body.to_string(),
-                        Some(&fixture.api_key),
-                    )
-                    .await,
+                    request_rpc_status(app.clone(), command, &body.to_string(),).await,
                     StatusCode::BAD_REQUEST,
                     "{command} must reject caller field {field}"
                 );
@@ -3224,13 +2828,7 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         let mut invalid = json!({"rootThreadId":"rpc-root","agentId":"rpc-child"});
         invalid[field] = json!(native_path);
         assert_eq!(
-            request_rpc_status(
-                app.clone(),
-                "threads.subagentDetail",
-                &invalid.to_string(),
-                Some(&fixture.api_key),
-            )
-            .await,
+            request_rpc_status(app.clone(), "threads.subagentDetail", &invalid.to_string(),).await,
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -3238,26 +2836,14 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         let mut invalid = attachment.clone();
         invalid[field] = json!(native_path);
         assert_eq!(
-            request_rpc_status(
-                app.clone(),
-                "sessions.attachmentRead",
-                &invalid.to_string(),
-                Some(&fixture.api_key),
-            )
-            .await,
+            request_rpc_status(app.clone(), "sessions.attachmentRead", &invalid.to_string(),).await,
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
     let mut wrong_root = attachment;
     wrong_root["rootThreadId"] = json!("rpc-other-root");
     assert_eq!(
-        request_rpc_status(
-            app,
-            "sessions.attachmentRead",
-            &wrong_root.to_string(),
-            Some(&fixture.api_key),
-        )
-        .await,
+        request_rpc_status(app, "sessions.attachmentRead", &wrong_root.to_string(),).await,
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }
@@ -3294,96 +2880,6 @@ mod maintenance_security {
 
         fn text(&self) -> String {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-        }
-    }
-
-    struct FixtureDirectory(PathBuf);
-
-    impl FixtureDirectory {
-        fn new() -> Self {
-            let directory = unique_temp_dir("maintenance-security");
-            fs::create_dir_all(&directory).unwrap();
-            Self(directory)
-        }
-    }
-
-    impl Drop for FixtureDirectory {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).expect("fixture directory cleanup failed");
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn auth_failures_keep_credentials_out_of_responses_logs_and_audit() {
-        let directory = FixtureDirectory::new();
-        let path = directory.0.join("agenthub.sqlite");
-        let db = PanelDb::open(&path).unwrap();
-        let key = db.rotate_admin_api_key().unwrap();
-        let rejected = format!("nhk_{}", "bc".repeat(32));
-        let legacy = "fixture-legacy-session-value";
-        let bearer = "Bearer fixture-bearer-value";
-        let (mut config, sandbox_root) = super::sandboxed_test_config();
-        config.security.auth_rate_limit_per_minute = 1;
-        let app =
-            router(crate::state::AppState::new(config, db.clone()).with_test_sandbox(sandbox_root))
-                .layer(tower_http::trace::TraceLayer::new_for_http());
-        let peer = Some("127.0.0.1:43210".parse().unwrap());
-        let logs = CapturedLogs::default();
-        async {
-            for expected in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
-                let response = api_key_request(
-                    app.clone(),
-                    &[
-                        ("x-api-key", &rejected),
-                        ("cookie", legacy),
-                        ("authorization", bearer),
-                        ("x-forwarded-for", &rejected),
-                    ],
-                    peer,
-                )
-                .await;
-                assert_eq!(response.status(), expected);
-                let headers = format!("{:?}", response.headers());
-                let body = to_bytes(response.into_body(), 4096).await.unwrap();
-                let body = String::from_utf8(body.to_vec()).unwrap();
-                for secret in [key.as_str(), rejected.as_str(), legacy, bearer] {
-                    assert!(
-                        !headers.contains(secret),
-                        "response headers exposed credentials"
-                    );
-                    assert!(!body.contains(secret), "response body exposed credentials");
-                }
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"],
-                    "API key authorization failed"
-                );
-            }
-            let response = api_key_request(app.clone(), &[("x-api-key", &key)], peer).await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-            assert!(!String::from_utf8(body.to_vec()).unwrap().contains(&key));
-        }
-        .with_subscriber(logs.subscriber())
-        .await;
-
-        let log_text = logs.text();
-        assert!(log_text.contains("finished processing request"));
-        let connection = Connection::open(&path).unwrap();
-        let audit: String = connection.query_row(
-            "SELECT group_concat(COALESCE(admin_id,'') || action || COALESCE(target_type,'') || COALESCE(target_id,'') || COALESCE(ip,'') || detail_json, '|') FROM audit_log",
-            [], |row| row.get(0),
-        ).unwrap();
-        assert_eq!(audit.matches("api.auth_denied").count(), 1);
-        assert!(audit.contains("127.0.0.1"), "source IP audit was lost");
-        for secret in [key.as_str(), rejected.as_str(), legacy, bearer] {
-            assert!(
-                !log_text.contains(secret),
-                "request logs exposed credentials"
-            );
-            assert!(
-                !audit.contains(secret),
-                "authentication audit exposed credentials"
-            );
         }
     }
 

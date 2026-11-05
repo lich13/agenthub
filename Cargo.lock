@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.0.10"
+version = "2.1.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.0.10"
+version = "2.1.0"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -90,7 +90,6 @@ dependencies = [
  "tokio",
  "toml",
  "tower",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1916,7 +1915,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

@@ -12,7 +12,6 @@ ENV_FILE="${CONFIG_DIR}/env"
 DATA_DIR="/var/lib/${APP_NAME}"
 LOG_DIR="/var/log/${APP_NAME}"
 BACKUP_DIR="${DATA_DIR}/backups"
-NGINX_BACKUP_DIR="${BACKUP_DIR}/nginx"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 SYSTEMD_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 PROVIDER_PATHS_DROPIN="${SYSTEMD_DROPIN_DIR}/20-provider-session-paths.conf"
@@ -20,33 +19,27 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/agenthub-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/agenthub-codex-prune"
-NGINX_SNIPPET="/etc/nginx/snippets/agenthub.conf"
 LEGACY_DIR="/opt/agenthub"
 LEGACY_SERVICE="agenthub"
 
 ARCHIVE_PATH=""
 BINARY_PATH=""
-DOMAIN=""
-PATH_PREFIX="/agenthub/"
-INSTALL_NGINX=0
 FORCE_CONFIG=0
 ENABLE_SERVICE=1
 CHECK_ONLY=0
 
 usage() {
   cat <<'USAGE'
-Install AgentHub management API.
+Install AgentHub SSH service.
 
 Usage:
-  sudo install.sh --archive ./agenthub-webd-linux-x86_64.tar.gz --domain panel.example.com --path-prefix /agenthub/
+  sudo install.sh --archive ./agenthub-webd-linux-x86_64.tar.gz
   sudo install.sh --binary ./target/release/agenthub-webd
   install.sh --check
 
 Options:
   --archive PATH       Install release tarball.
   --binary PATH        Install local binary without packaged deployment tools.
-  --domain DOMAIN      Add nginx snippet include to the matching vhost when possible.
-  --path-prefix PATH   Public path prefix. Default: /agenthub/
   --force-config       Replace existing config.toml.
   --no-enable          Do not enable/start service.
   --check              Validate archive layout when run from extracted deploy/.
@@ -82,13 +75,11 @@ check_layout() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --archive|--binary|--domain|--path-prefix)
+      --archive|--binary)
         [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "option requires a value"
         case "$1" in
       --archive) ARCHIVE_PATH="${2:-}"; shift 2 ;;
       --binary) BINARY_PATH="${2:-}"; shift 2 ;;
-      --domain) DOMAIN="${2:-}"; INSTALL_NGINX=1; shift 2 ;;
-      --path-prefix) PATH_PREFIX="${2:-}"; shift 2 ;;
         esac ;;
       --force-config) FORCE_CONFIG=1; shift ;;
       --no-enable) ENABLE_SERVICE=0; shift ;;
@@ -101,12 +92,7 @@ parse_args() {
     return
   fi
   [[ -n "${ARCHIVE_PATH}" || -n "${BINARY_PATH}" ]] || die "pass --archive or --binary"
-  [[ "${PATH_PREFIX}" =~ ^/[a-zA-Z0-9_/-]+/$ ]] || die "--path-prefix must look like /name/"
-  if [[ -n "${DOMAIN}" ]]; then
-    [[ "${DOMAIN}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]] || die "invalid --domain"
-  elif [[ ! -f "${CONFIG_FILE}" || "${FORCE_CONFIG}" -eq 1 ]]; then
-    die "new installation requires explicit --domain"
-  fi
+
 }
 
 require_root() {
@@ -119,7 +105,7 @@ require_command() {
 
 install_dirs() {
   install -d -m 0755 -o root -g root /usr/local/bin "${SHARE_DIR}" "${CONFIG_DIR}"
-  install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}" "${NGINX_BACKUP_DIR}"
+  install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
 }
 
 copy_legacy_runtime_once() {
@@ -139,19 +125,19 @@ copy_legacy_runtime_once() {
   done
 }
 
-assert_api_version() {
+assert_service_version() {
   python3 - "$("$1" --version)" <<'PYVERSION'
 import re, sys
 match = re.fullmatch(r"agenthub-webd (\d+)\.(\d+)\.(\d+)", sys.argv[1])
-if not match or tuple(map(int, match.groups())) < (1, 2, 0):
-    raise SystemExit("refusing release with retired web authentication")
+if not match or tuple(map(int, match.groups())) < (2, 1, 0):
+    raise SystemExit("SSH service requires v2.1.0 or newer")
 PYVERSION
 }
 
 install_payload() {
   if [[ -n "${BINARY_PATH}" ]]; then
     [[ -f "${BINARY_PATH}" ]] || die "binary not found: ${BINARY_PATH}"
-    assert_api_version "${BINARY_PATH}"
+    assert_service_version "${BINARY_PATH}"
     replace_file "${BINARY_PATH}" "${INSTALL_BIN}" 0755
     return
   fi
@@ -161,7 +147,7 @@ install_payload() {
   python3 "${SAFETY}" extract "${ARCHIVE_PATH}" "${PAYLOAD_TMP}"
   root="${PAYLOAD_TMP}/agenthub-webd-linux-x86_64"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing bin/${BIN_NAME}"
-  assert_api_version "${root}/bin/${BIN_NAME}"
+  assert_service_version "${root}/bin/${BIN_NAME}"
   replace_file "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}" 0755
   if [[ -d "${root}/deploy" ]]; then
     [[ ! -f "${root}/deploy/update.sh" ]] || replace_file "${root}/deploy/update.sh" "${UPDATE_BIN}" 0755
@@ -213,7 +199,7 @@ install_config() {
 
   fi
   if [[ ! -f "${ENV_FILE}" ]]; then
-    replace_file "${source_dir}/env.example" "${ENV_FILE}" 0640
+    replace_file "${source_dir}/env.example" "${ENV_FILE}" 0600
   fi
   snapshot_file "${ENV_FILE}"
   snapshot_file "${CONFIG_FILE}"
@@ -231,48 +217,57 @@ PYENV
 }
 
 ensure_secret_key() {
-  if grep -q '^AGENTHUB_SECRET_KEY=' "${ENV_FILE}" 2>/dev/null; then
-    return
-  fi
-
-  read_legacy_secret() {
-    local key="$1"
-    local path="$2"
-    [[ -f "${path}" ]] || return 0
-    awk -v want="${key}" '
-      BEGIN { FS="=" }
-      $1 == want {
-        value=$0
-        sub(/^[^=]*=/, "", value)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-        if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
-          value=substr(value, 2, length(value)-2)
-        }
-        print value
-        exit
-      }
-    ' "${path}"
-  }
-
-  local secret=""
-  if [[ -f "${LEGACY_DIR}/env" ]]; then
-    secret="$(read_legacy_secret AGENTHUB_SECRET_KEY "${LEGACY_DIR}/env")"
-  fi
-  if [[ -z "${secret}" && -f /etc/codex-cloud-panel/env ]]; then
-    secret="$(read_legacy_secret CODEX_CLOUD_PANEL_SECRET_KEY /etc/codex-cloud-panel/env)"
-  fi
-  if [[ -z "${secret}" ]]; then
-    secret="$(python3 - <<'PY'
+  python3 - "${ENV_FILE}" "${LEGACY_DIR}/env" <<'PYKEY'
+from pathlib import Path
+import os
 import secrets
-print(secrets.token_urlsafe(32))
-PY
-)"
-  fi
-  {
-    printf '\n'
-    printf 'AGENTHUB_SECRET_KEY=%s\n' "${secret}"
-  } >> "${ENV_FILE}"
-  chmod 0640 "${ENV_FILE}"
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+text = path.read_text()
+key = "AGENTHUB_SECRET_KEY"
+
+def entry(line):
+    name, _, value = line.strip().removeprefix("export ").partition("=")
+    return name.strip(), value.strip().strip('"').strip("'")
+
+def read_key(source, name):
+    if source.is_file():
+        return next((value for line in source.read_text().splitlines()
+                     for field, value in [entry(line)] if field == name and value), "")
+    return ""
+
+secret = read_key(path, key)
+if not secret:
+    secret = (read_key(Path(sys.argv[2]), key)
+              or read_key(Path("/etc/codex-cloud-panel/env"), "CODEX_CLOUD_PANEL_SECRET_KEY")
+              or secrets.token_urlsafe(32))
+    lines = text.splitlines(keepends=True)
+    replaced = False
+    updated = []
+    for line in lines:
+        if entry(line)[0] == key:
+            if not replaced:
+                updated.append(f"{key}={secret}\n")
+                replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        if updated and not updated[-1].endswith("\n"):
+            updated.append("\n")
+        updated.append(f"{key}={secret}\n")
+    fd, pending = tempfile.mkstemp(dir=path.parent, prefix=".env-")
+    try:
+        with os.fdopen(fd, "w") as output:
+            output.write("".join(updated))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(pending, path)
+    finally:
+        Path(pending).unlink(missing_ok=True)
+path.chmod(0o600)
+PYKEY
   chown root:root "${ENV_FILE}"
 }
 
@@ -366,10 +361,8 @@ remove_section_keys(
         "bridge_timeout_seconds",
     },
 )
-remove_section_keys("server", {"public_base_url", "trust_forwarded_headers"})
-ensure_section("server", {"listen": '"127.0.0.1:15742"'}, {"listen": {'"127.0.0.1:15732"'}})
-remove_section_keys("security", {"cookie_secure", "session_ttl_seconds", "login_rate_limit_per_minute", "turnstile_expected_hostname", "turnstile_expected_action"})
-ensure_section("security", {"auth_rate_limit_per_minute": "8"})
+remove_section_keys("server", {"public_base_url", "trust_forwarded_headers", "listen"})
+remove_section_keys("security", {"cookie_secure", "session_ttl_seconds", "login_rate_limit_per_minute", "turnstile_expected_hostname", "turnstile_expected_action", "auth_rate_limit_per_minute"})
 remove_section_keys("paths", {"webui_dir"})
 ensure_section(
     "paths",
@@ -396,7 +389,7 @@ ensure_section(
         "update_command": '"/usr/local/bin/agenthub-codex-update"',
         "prune_command": '"/usr/local/bin/agenthub-codex-prune"',
         "panel_update_command": '"/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest"',
-        "panel_precheck_command": '"test -x /usr/local/bin/agenthub-webd-update && systemctl is-active agenthub-webd && curl -fsS http://127.0.0.1:15742/healthz"',
+        "panel_precheck_command": '"/usr/local/bin/agenthub-webd-update --precheck"',
     },
     {
         "update_command": {
@@ -411,6 +404,7 @@ ensure_section(
             '"/usr/local/bin/agenthub-update --repo lich13/agenthub --version latest"',
         },
         "panel_precheck_command": {
+            '"test -x /usr/local/bin/agenthub-webd-update && systemctl is-active agenthub-webd && curl -fsS http://127.0.0.1:15742/healthz"',
             '"/usr/local/bin/agenthub-update --precheck"',
             '"test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15742/healthz"',
             '"test -x /usr/local/bin/agenthub-update && systemctl is-active agenthub && curl -fsS http://127.0.0.1:15732/healthz"',
@@ -481,36 +475,8 @@ install_systemd() {
   fi
 }
 
-install_nginx() {
-  [[ "${INSTALL_NGINX}" -eq 1 ]] || return 0
-  require_command nginx
-  local source_dir snippet target
-  source_dir="$(script_dir)"
-  snippet="$(mktemp)"
-  sed -e "s#/agenthub/#${PATH_PREFIX}#g" -e "s#= /agenthub #= ${PATH_PREFIX%/} #g" "${source_dir}/nginx.conf" > "${snippet}"
-  replace_file "${snippet}" "${NGINX_SNIPPET}" 0644
-  rm -- "${snippet}"
-  target="$(grep -Rsl "server_name .*${DOMAIN}" /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | head -n 1 || true)"
-  if [[ -n "${target}" ]] && ! grep -Fq "${NGINX_SNIPPET}" "${target}"; then
-    target="$(readlink -f "${target}")"
-    snapshot_file "${target}"
-    cp "${target}" "${NGINX_BACKUP_DIR}/$(basename "${target}").bak-$(date +%Y%m%d%H%M%S)"
-    python3 - "$target" "$NGINX_SNIPPET" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-snippet = sys.argv[2]
-text = path.read_text()
-marker = f"    include {snippet};\n"
-idx = text.rfind("\n}")
-if idx == -1:
-    raise SystemExit("could not find server block close")
-path.write_text(text[:idx] + "\n" + marker + text[idx:])
-PY
-  fi
-  nginx -t
-  systemctl reload nginx
+retire_http() {
+  python3 "$(script_dir)/retire-http.py" "${CONFIG_FILE}" "${SAFETY}" "${TRANSACTION}"
 }
 
 SAFETY="$(script_dir)/install-safety.py"
@@ -559,9 +525,15 @@ main() {
   install_config
   install_codex_home_write_paths
   install_systemd
-  install_nginx
   if [[ "${ENABLE_SERVICE}" -eq 1 ]]; then
     systemctl is-active --quiet "${SERVICE_NAME}.service"
+    local ready=0
+    for _ in {1..30}; do
+      if "${INSTALL_BIN}" health >/dev/null 2>&1; then ready=1; break; fi
+      sleep 0.2
+    done
+    [[ "${ready}" -eq 1 ]] || die "SSH service health check failed"
+    retire_http
   fi
   INSTALL_SUCCEEDED=1
   log "installed ${INSTALL_BIN}"

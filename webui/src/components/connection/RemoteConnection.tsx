@@ -1,356 +1,113 @@
-import { Check, ChevronDown, Cloud, Monitor, Pencil, Plus, Power, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Cloud, Monitor, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
-  remoteRemove,
-  remoteSave,
-  remoteSelect,
-  useConnection,
-  type RemoteConnectionCredentials,
-  type RemoteMachineSummary,
+  remoteInstall, remoteRemove, remoteSave, remoteSelect, remoteSshHosts,
+  useConnection, type RemoteMachineSummary,
 } from "../../lib/query/connection";
 
-function resolvedMachines(connection: ReturnType<typeof useConnection>): RemoteMachineSummary[] {
-  if (connection.machines && connection.machines.length > 0) return connection.machines;
-  if (connection.configured && connection.baseUrl) {
-    return [
-      {
-        id: connection.activeMachineId ?? "m-legacy",
-        name: connection.activeMachineName ?? "远程机器",
-        baseUrl: connection.baseUrl,
-      },
-    ];
-  }
-  return [];
-}
-
-function resolveActiveMachine(
-  connection: ReturnType<typeof useConnection>,
-  machines: RemoteMachineSummary[],
-): RemoteMachineSummary | null {
-  return (
-    machines.find(m => m.id === connection.activeMachineId) ??
-    machines.find(m => m.baseUrl === connection.baseUrl) ??
-    machines[0] ??
-    null
-  );
-}
-
-export function MachineButton({
-  collapsed = false,
-  onConfigure,
-}: {
-  collapsed?: boolean;
-  onConfigure: () => void;
-}) {
+export function MachineButton({ collapsed = false, onConfigure }: { collapsed?: boolean; onConfigure: () => void }) {
   const connection = useConnection();
   const [error, setError] = useState("");
-  const machines = useMemo(() => resolvedMachines(connection), [connection]);
-  const activeMachine = useMemo(() => resolveActiveMachine(connection, machines), [connection, machines]);
-  const multiMode = machines.length >= 2;
-  const currentLabel =
-    connection.target === "local"
-      ? "本机"
-      : activeMachine?.name || connection.activeMachineName || "远程机器";
-  const selectValue =
-    connection.target === "local"
-      ? "local"
-      : multiMode && activeMachine
-        ? `machine:${activeMachine.id}`
-        : "remote";
-
-  const runSelect = async (target: "local" | "remote", machineId?: string) => {
+  const busy = Boolean(connection.writes || connection.changing);
+  const label = connection.target === "local" ? "本机" : connection.activeMachineName || "远程机器";
+  const select = (id: string) => {
+    if (id === "configure") { onConfigure(); return; }
     setError("");
-    try {
-      await remoteSelect(target, machineId);
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    void remoteSelect(id === "local" ? "local" : "remote", id === "local" ? undefined : id)
+      .catch(error => setError(error.message));
   };
-
-  return (
-    <div className="machine-control">
-      <label className={`machine-button ${collapsed ? "compact" : ""}`} title={currentLabel}>
-        {connection.target === "local" ? <Monitor size={16} /> : <Cloud size={16} />}
-        {!collapsed && <span>{currentLabel}</span>}
-        {!collapsed && (
-          <i
-            className={`machine-status-dot${connection.target === "remote" ? " is-remote" : ""}`}
-            aria-hidden="true"
-          />
-        )}
-        {!collapsed && <ChevronDown size={13} className="machine-chevron" aria-hidden="true" />}
-        <select
-          aria-label="当前机器"
-          value={selectValue}
-          disabled={Boolean(connection.writes || connection.changing)}
-          onChange={event => {
-            const value = event.target.value;
-            if (value === "__configure__" || (value === "remote" && !connection.configured)) {
-              onConfigure();
-            } else if (value === "local" || value === "remote") {
-              void runSelect(value);
-            } else if (value.startsWith("machine:")) {
-              void runSelect("remote", value.slice("machine:".length));
-            }
-          }}
-        >
-          <option value="local">本机</option>
-          {!multiMode && (
-            <option value="remote">
-              {machines[0]?.name || connection.activeMachineName || "远程机器"}
-            </option>
-          )}
-          {multiMode &&
-            machines.map(machine => (
-              <option key={machine.id} value={`machine:${machine.id}`}>
-                {machine.name}
-              </option>
-            ))}
-          {connection.configured && <option value="__configure__">管理远程机器…</option>}
-        </select>
-      </label>
-      {error && (
-        <span role="alert" className="form-error">
-          {error}
-        </span>
-      )}
-    </div>
-  );
+  return <div className="machine-control">
+    <label className={`machine-button ${collapsed ? "compact" : ""}`} title={label}>
+      {connection.target === "local" ? <Monitor size={16} /> : <Cloud size={16} />}
+      {!collapsed && <span>{label}</span>}
+      <select aria-label="当前机器" value={connection.target === "local" ? "local" : connection.activeMachineId ?? "local"}
+        disabled={busy} onChange={event => select(event.target.value)}>
+        <option value="local">本机</option>
+        {connection.machines.map(machine => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+        <option value="configure">管理远程机器…</option>
+      </select>
+    </label>
+    {connection.target === "remote" && <button className="icon-button" aria-label="重新连接当前机器" title="重新连接"
+      disabled={busy} onClick={() => select(connection.activeMachineId ?? "")}><RefreshCw size={15} /></button>}
+    {error && <span role="alert" className="form-error">{error}</span>}
+  </div>;
 }
 
 export function RemoteConnectionSettings() {
   const connection = useConnection();
-  const machines = useMemo(() => resolvedMachines(connection), [connection]);
-  const activeMachine = useMemo(() => resolveActiveMachine(connection, machines), [connection, machines]);
-
-  const [mode, setMode] = useState<"edit" | "create">(() => (machines.length > 0 ? "edit" : "create"));
-  const [editingId, setEditingId] = useState<string | null>(() => activeMachine?.id ?? null);
-  const [name, setName] = useState(() => activeMachine?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(() => activeMachine?.baseUrl ?? connection.baseUrl ?? "");
-  const [apiKey, setApiKey] = useState("");
+  const [hosts, setHosts] = useState<string[]>([]);
+  const [sshHost, setHost] = useState("");
+  const [name, setName] = useState("");
+  const [useSudo, setSudo] = useState(true);
+  const [id, setId] = useState<string>();
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const busy = Boolean(connection.writes || connection.changing);
-
-  useEffect(() => {
-    if (machines.length === 0) {
-      setMode("create");
-      setEditingId(null);
-      return;
-    }
-    if (mode === "edit") {
-      const target = machines.find(m => m.id === editingId) ?? activeMachine ?? machines[0];
-      if (target && target.id !== editingId) {
-        setEditingId(target.id);
-        setName(target.name === "远程机器" ? "" : target.name);
-        setBaseUrl(target.baseUrl);
-      }
-    }
-  }, [activeMachine, editingId, machines, mode]);
-
-  const applyDraft = (nextMode: "create" | "edit", machine?: RemoteMachineSummary | null) => {
-    setMode(nextMode);
-    setEditingId(machine?.id ?? null);
-    setName(machine?.name ?? "");
-    setBaseUrl(machine?.baseUrl ?? "");
-    setApiKey("");
+  const [installing, setInstalling] = useState(false);
+  const [notice, setNotice] = useState("");
+  const busy = Boolean(connection.writes || connection.changing || installing);
+  const reload = () => remoteSshHosts().then(rows => {
+    setHosts(rows.map(row => row.alias));
+    setHost(value => value || rows[0]?.alias || "");
     setError("");
-    setSaved(false);
+  }).catch(error => setError(error.message));
+  useEffect(() => { void reload(); }, []);
+  const edit = (machine: RemoteMachineSummary) => {
+    setId(machine.id); setHost(machine.sshHost); setName(machine.name); setSudo(machine.useSudo);
+    setError(""); setNotice("");
   };
-
-  const runAction = async (work: () => Promise<void>) => {
-    setError("");
+  const act = async (work: () => Promise<unknown>) => {
+    setError(""); setNotice("");
+    try { await work(); } catch (error) { setError((error as Error).message); }
+  };
+  const submit = (install: boolean) => act(async () => {
+    const request = { revision: connection.revision, sshHost, name: name || sshHost, useSudo, id };
+    setInstalling(install);
     try {
-      await work();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const isEditingExisting = mode === "edit" && Boolean(editingId) && machines.some(m => m.id === editingId);
-  const canSubmit = !busy && Boolean(baseUrl.trim()) && (Boolean(apiKey.trim()) || isEditingExisting);
-
-  return (
-    <div className="remote-settings-stack">
-      {machines.length > 0 && (
-        <section className="panel remote-machines-panel">
-          <header className="remote-machines-header">
-            <div className="remote-machines-heading">
-              <Cloud size={18} />
-              <strong>远程机器列表</strong>
-            </div>
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => applyDraft("create", null)}
-            >
-              <Plus size={16} />新增远程机器
+      const view = install ? await remoteInstall(request) : await remoteSave(request);
+      setId(view.activeMachineId ?? undefined);
+      setNotice("已连接");
+    } finally { setInstalling(false); }
+  });
+  return <div className="remote-settings-stack">
+    <section className="panel remote-machines-panel">
+      <header><strong>远程机器</strong></header>
+      <div className="remote-machine-list">
+        {connection.machines.map(machine => <article className="remote-machine-card" key={machine.id}>
+          <div className="remote-machine-card-main"><strong>{machine.name}</strong><code>{machine.sshHost}</code></div>
+          <div className="button-row">
+            <button className="secondary-button" disabled={busy} onClick={() => void act(() => remoteSelect("remote", machine.id))}>
+              {connection.target === "remote" && connection.activeMachineId === machine.id ? "重新连接" : "连接"}
             </button>
-          </header>
-          <div className="remote-machine-list">
-            {machines.map(machine => {
-              const isConnected =
-                connection.target === "remote" &&
-                (connection.activeMachineId
-                  ? connection.activeMachineId === machine.id
-                  : connection.baseUrl === machine.baseUrl);
-              const isSelectedForEdit = mode === "edit" && editingId === machine.id;
-              return (
-                <article
-                  key={machine.id}
-                  className={`remote-machine-card ${isConnected ? "is-connected" : ""} ${isSelectedForEdit ? "is-editing" : ""}`}
-                >
-                  <div className="remote-machine-card-main">
-                    <div className="remote-machine-title-row">
-                      <strong>{machine.name}</strong>
-                      <span className={`status-chip ${isConnected ? "tone-success" : "tone-neutral"}`}>
-                        {isConnected ? "当前连接" : "已保存"}
-                      </span>
-                    </div>
-                    <code>{machine.baseUrl}</code>
-                  </div>
-                  <div className="button-row remote-machine-actions">
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={busy}
-                      onClick={() =>
-                        void runAction(() =>
-                          isConnected
-                            ? remoteSelect("local").then(() => undefined)
-                            : remoteSelect("remote", machines.length >= 2 ? machine.id : undefined).then(
-                                () => undefined,
-                              ),
-                        )
-                      }
-                    >
-                      {isConnected ? (
-                        <>
-                          <Power size={15} />切回本机
-                        </>
-                      ) : (
-                        <>
-                          <Check size={15} />连接此机器
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={busy}
-                      onClick={() => applyDraft("edit", machine)}
-                    >
-                      <Pencil size={15} />编辑
-                    </button>
-                    <button
-                      type="button"
-                      className="danger-button soft"
-                      disabled={busy}
-                      onClick={() =>
-                        void runAction(async () => {
-                          setSaved(false);
-                          const view = await remoteRemove(machines.length >= 2 ? machine.id : undefined);
-                          setApiKey("");
-                          if (!view.configured) applyDraft("create", null);
-                        })
-                      }
-                    >
-                      <Trash2 size={15} />移除连接
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
+            <button className="secondary-button" disabled={busy} onClick={() => edit(machine)}>编辑</button>
+            <button className="danger-button soft" disabled={busy} onClick={() => void act(async () => {
+              await remoteRemove(machine.id);
+              if (id === machine.id) { setId(undefined); setName(""); }
+            })}><Trash2 size={15} />移除</button>
           </div>
-        </section>
-      )}
-
-      <form
-        className="panel remote-connection-form"
-        onSubmit={event => {
-          event.preventDefault();
-          setSaved(false);
-          void runAction(async () => {
-            const payload: RemoteConnectionCredentials = {
-              revision: connection.revision,
-              baseUrl,
-              ...(apiKey ? { apiKey } : {}),
-              ...(isEditingExisting && editingId ? { id: editingId } : {}),
-              ...(name.trim() ? { name: name.trim() } : {}),
-            };
-            const view = await remoteSave(payload);
-            setApiKey("");
-            setSaved(true);
-            setMode("edit");
-            if (view.activeMachineId) setEditingId(view.activeMachineId);
-            if (view.activeMachineName && !name.trim()) setName(view.activeMachineName);
-          });
-        }}
-      >
-        <strong>{isEditingExisting ? "编辑远程机器" : "新增远程机器"}</strong>
-        <label>
-          机器名称
-          <input
-            type="text"
-            maxLength={64}
-            value={name}
-            onChange={event => setName(event.target.value)}
-            autoComplete="off"
-            disabled={busy}
-            placeholder="例如：主力云端工作站（留空默认取域名）"
-          />
-        </label>
-        <label>
-          HTTPS 地址
-          <input
-            type="url"
-            required
-            value={baseUrl}
-            onChange={event => setBaseUrl(event.target.value)}
-            autoComplete="off"
-            disabled={busy}
-            placeholder="https://api.example.com/agenthub/"
-          />
-        </label>
-        <label>
-          管理员 API Key
-          <input
-            type="password"
-            required={!isEditingExisting}
-            value={apiKey}
-            onChange={event => setApiKey(event.target.value)}
-            autoComplete="off"
-            disabled={busy}
-            placeholder={isEditingExisting ? "留空保持当前 API Key 不变" : "nhk_..."}
-          />
-        </label>
-        <div className="button-row">
-          <button className="primary-button" disabled={!canSubmit}>
-            {connection.changing ? "连接中…" : "验证并保存"}
-          </button>
-          {mode === "create" && machines.length > 0 && (
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => activeMachine && applyDraft("edit", activeMachine)}
-            >
-              取消新增
-            </button>
-          )}
+        </article>)}
+      </div>
+    </section>
+    <section className="panel">
+      <header><strong>{id ? "编辑连接" : "新增 SSH 连接"}</strong></header>
+      <fieldset disabled={busy} className="probe-card-stack">
+        <div className="form-grid">
+          <label className="field-label">SSH 连接
+            <select value={sshHost} onChange={event => setHost(event.target.value)}>
+              <option value="">选择已保存的连接</option>
+              {[...new Set([...hosts, ...(sshHost ? [sshHost] : [])])].map(host => <option key={host} value={host}>{host}</option>)}
+            </select>
+          </label>
+          <label className="field-label">名称<input value={name} onChange={event => setName(event.target.value)} placeholder={sshHost} /></label>
         </div>
-        {(saved || connection.notice) && (
-          <span role="status" className="form-success">
-            已保存
-          </span>
-        )}
-        {error && (
-          <div className="form-error" role="alert">
-            {error}
-          </div>
-        )}
-      </form>
-    </div>
-  );
+        <label className="toggle-row"><span>使用 sudo</span><input type="checkbox" checked={useSudo} onChange={event => setSudo(event.target.checked)} /></label>
+        <div className="button-row">
+          <button className="primary-button" disabled={!sshHost || busy} onClick={() => void submit(false)}>保存并连接</button>
+          <button className="secondary-button" disabled={!sshHost || busy} onClick={() => void submit(true)}>{installing ? "正在安装…" : "安装并连接"}</button>
+          <button className="secondary-button" onClick={() => void reload()}><RefreshCw size={15} />刷新 SSH 配置</button>
+          {id && <button className="secondary-button" onClick={() => { setId(undefined); setName(""); }}>新增连接</button>}
+        </div>
+      </fieldset>
+      {error && <div role="alert" className="form-error">{error}</div>}
+      {notice && <div role="status" className="form-success">{notice}</div>}
+    </section>
+  </div>;
 }

@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from "react";
 
 export type MachineTarget = "local" | "remote";
-export type RemoteMachineSummary = { id: string; name: string; baseUrl: string };
+export type RemoteMachineSummary = { id: string; name: string; sshHost: string; useSudo: boolean };
 export type RemoteConnectionView = {
   target: MachineTarget;
   revision: number;
-  baseUrl: string | null;
+  sshHost: string | null;
   configured: boolean;
   activeMachineId?: string | null;
   activeMachineName?: string | null;
@@ -13,8 +13,8 @@ export type RemoteConnectionView = {
 };
 export type RemoteConnectionCredentials = {
   revision: number;
-  baseUrl: string;
-  apiKey?: string;
+  sshHost: string;
+  useSudo: boolean;
   id?: string;
   name?: string;
 };
@@ -79,7 +79,7 @@ export function beforeMachineChange(cleanup: () => Promise<void>): () => void {
 let connection = {
   target: "local" as MachineTarget,
   revision: 0,
-  baseUrl: null as string | null,
+  sshHost: null as string | null,
   configured: false,
   activeMachineId: null as string | null,
   activeMachineName: null as string | null,
@@ -94,7 +94,7 @@ function normalizeIncomingView(view: RemoteConnectionView) {
   return {
     target: view.target,
     revision: view.revision,
-    baseUrl: view.baseUrl ?? null,
+    sshHost: view.sshHost ?? null,
     configured: view.configured,
     activeMachineId: view.activeMachineId ?? null,
     activeMachineName: view.activeMachineName ?? null,
@@ -106,8 +106,8 @@ export function connectionSnapshot() { return connection; }
 export function machineScope() {
   if (connection.target !== "remote") return "local:";
   return connection.activeMachineId
-    ? `remote:${connection.activeMachineId}:${connection.baseUrl ?? ""}`
-    : `remote:${connection.baseUrl ?? ""}`;
+    ? `remote:${connection.activeMachineId}:${connection.sshHost ?? ""}`
+    : `remote:${connection.sshHost ?? ""}`;
 }
 export function useConnection() { return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, connectionSnapshot, connectionSnapshot); }
 let initialization: Promise<void> | undefined;
@@ -159,13 +159,6 @@ export async function remoteRemove(machineId?: string) {
 }
 export async function remoteSelect(target: MachineTarget, machineId?: string) {
   if (target === "local" && connection.target === "local") return connection;
-  if (
-    target === "remote" &&
-    connection.target === "remote" &&
-    (!machineId || connection.activeMachineId === machineId)
-  ) {
-    return connection;
-  }
   const payload: RemoteSelectionRequest = machineId
     ? { revision: connection.revision, target, machineId }
     : { revision: connection.revision, target };
@@ -179,7 +172,6 @@ const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.ve
 reads.add("codex.desktop.attach");
 reads.add("codex.desktop.catalog");
 reads.add("codex.desktop.diagnostics");
-const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");
   const captured = connection;
@@ -190,21 +182,11 @@ export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, l
       ? await remoteInvoke<T>({ revision: captured.revision, command, args: args ?? {} })
       : await invokeNative<T>(command, args);
     if (captured.revision !== connection.revision) throw new Error("连接已变化，已丢弃旧响应");
-    if (value && typeof value === "object") {
-      const result = value as Record<string, unknown>;
-      const jobId = result.job_id ?? result.jobId;
-      if (write && typeof jobId === "string" && jobId && !pendingJobs.has(jobId)) {
-        // A server write continues after its RPC returns; the existing job poller
-        // releases this machine lock only after observing a terminal result.
-        pendingJobs.add(jobId);
-        publish({ writes: connection.writes + 1 });
-      }
-      if (command === "jobs.detail" && typeof result.id === "string"
-        && ["succeeded", "failed", "cancelled"].includes(String(result.status))
-        && pendingJobs.delete(result.id)) {
-        publish({ writes: connection.writes - 1 });
-      }
-    }
     return value;
   } finally { if (write) publish({ writes: connection.writes - 1 }); }
 }
+
+export type SshHost = { alias: string };
+export type SshHostList = SshHost[];
+export function remoteSshHosts() { return invokeNative<SshHostList>("remote.sshHosts"); }
+export function remoteInstall(request: RemoteConnectionCredentials) { return changeConnection<RemoteConnectionView>("remote.install", request); }

@@ -97,11 +97,7 @@ update = (root / "deploy/agenthub-webd/update.sh").read_text()
 for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart agenthub-webd"]:
     if marker not in update:
         raise SystemExit(f"server updater missing isolated restart marker: {marker}")
-nginx = (root / "deploy/agenthub-webd/nginx.conf").read_text()
-if "api/rpc/" not in nginx or "healthz" not in nginx or "return 404" not in nginx:
-    raise SystemExit("API-only ingress boundary missing")
-if "proxy_pass http://127.0.0.1:15742/;" in nginx:
-    raise SystemExit("retired root web proxy remains")
+
 
 contract = json.loads((root / "contracts/agenthub-contract.json").read_text())
 active = {action.get("id") for action in contract.get("actions", [])}
@@ -128,7 +124,7 @@ if unregistered.returncode == 0:
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
 
-shellcheck deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh deploy/agenthub-webd/rollback.sh scripts/deploy-cloud.sh
+shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh deploy/agenthub-webd/rollback.sh scripts/deploy-cloud.sh
 python3 scripts/test-install-safety.py
 python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py

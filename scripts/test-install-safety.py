@@ -343,7 +343,7 @@ class InstallSafetyTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
         binary = self.root / "new-binary"
-        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'agenthub-webd 1.2.3'\n", encoding="utf-8")
+        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'agenthub-webd 2.1.0'\n", encoding="utf-8")
         binary.chmod(0o755)
         next_config = self.root / "next-config"
         next_config.write_text('[codex]\nhome = "auto"\n', encoding="utf-8")
@@ -445,7 +445,7 @@ source {shlex.quote(str(INSTALL_PATH))}
 require_root() {{ :; }}
 install_dirs() {{ printf 'called\\n' > {shlex.quote(str(install_marker))}; }}
 PATH={shlex.quote(str(fake_bin))}
-main --binary {shlex.quote(str(self.root / 'unused-binary'))} --domain example.invalid
+main --binary {shlex.quote(str(self.root / 'unused-binary'))}
 """
         harness_path = self.root / "missing-minisign-harness.sh"
         harness_path.write_text(harness, encoding="utf-8")
@@ -462,6 +462,126 @@ main --binary {shlex.quote(str(self.root / 'unused-binary'))} --domain example.i
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("required command not found: minisign", result.stderr)
         self.assertFalse(install_marker.exists(), "installer advanced without minisign")
+
+    def test_ssh_retirement_preserves_shared_nginx_tls_and_pending_queue(self) -> None:
+        import sqlite3
+        module_spec = importlib.util.spec_from_file_location("retire_http", ROOT / "deploy/agenthub-webd/retire-http.py")
+        retire = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(retire)
+        nginx = self.root / "nginx"
+        (nginx / "sites-available").mkdir(parents=True)
+        (nginx / "snippets").mkdir()
+        snippet = nginx / "snippets/agenthub.conf"
+        snippet.write_text("location /agenthub/ { proxy_pass http://127.0.0.1:15742; }\n")
+        site = nginx / "sites-available/shared"
+        retained = 'server {\n ssl_certificate /fixture/tls.pem;\n location /other/ { return 200; }\n'
+        site.write_text(retained + f' include {snippet};\n}}\n')
+        unrelated = nginx / "snippets/shared.conf"
+        unrelated.write_text("# shared TLS configuration\n")
+        database = self.root / "panel.sqlite"
+        with sqlite3.connect(database) as db:
+            db.executescript("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT); INSERT INTO settings VALUES('admin_api_key_sha256','fixture-digest'),('probe_bark_device_key','encrypted-fixture'); CREATE TABLE pending(payload TEXT); INSERT INTO pending VALUES('encrypted-fixture');")
+        config = self.root / "config.toml"
+        config.write_text(f'[paths]\ndb_path = {json.dumps(str(database))}\n')
+        transaction = self.root / "transaction"
+        transaction.mkdir()
+        with mock.patch.object(retire.subprocess, "run") as run:
+            retire.retire(config, SAFETY_PATH, transaction, nginx)
+            self.assertEqual(run.call_count, 2)
+        self.assertFalse(snippet.exists())
+        self.assertIn(retained, site.read_text())
+        self.assertEqual(unrelated.read_text(), "# shared TLS configuration\n")
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("SELECT key FROM settings").fetchall(), [("probe_bark_device_key",)])
+            self.assertEqual(db.execute("SELECT payload FROM pending").fetchall(), [("encrypted-fixture",)])
+        with mock.patch.object(retire.subprocess, "run") as run:
+            retire.retire(config, SAFETY_PATH, transaction, nginx)
+            run.assert_not_called()
+        safety.rollback(transaction)
+        self.assertTrue(snippet.exists())
+        self.assertIn(f"include {snippet};",site.read_text())
+
+    def test_first_install_config_needs_no_http_domain_and_preserves_existing_secret(self) -> None:
+        config = self.root / "config.toml"
+        environment = self.root / "env"
+        transaction = self.root / "transaction"
+        transaction.mkdir()
+        script = f"""set -Eeuo pipefail
+source {shlex.quote(str(INSTALL_PATH))}
+CONFIG_FILE={shlex.quote(str(config))}
+ENV_FILE={shlex.quote(str(environment))}
+TRANSACTION={shlex.quote(str(transaction))}
+LEGACY_DIR={shlex.quote(str(self.root / 'absent'))}
+chown() {{ :; }}
+parse_args --binary fixture
+install_config
+"""
+        first = subprocess.run(["bash","-c",script],capture_output=True,text=True,check=False)
+        self.assertEqual(first.returncode,0,first.stderr)
+        original = environment.read_text()
+        self.assertEqual(original.count("AGENTHUB_SECRET_KEY="),1)
+        self.assertNotIn("listen =",config.read_text())
+        self.assertIn('panel_precheck_command = "/usr/local/bin/agenthub-webd-update --precheck"',config.read_text())
+        second = subprocess.run(["bash","-c",script],capture_output=True,text=True,check=False)
+        self.assertEqual(second.returncode,0,second.stderr)
+        self.assertEqual(environment.read_text(),original)
+        self.assertEqual(environment.stat().st_mode & 0o777,0o600)
+        environment.write_text('AGENTHUB_SECRET_KEY=""\nFIXTURE=preserved\n')
+        empty = subprocess.run(["bash","-c",script],capture_output=True,text=True,check=False)
+        self.assertEqual(empty.returncode,0,empty.stderr)
+        updated = environment.read_text()
+        self.assertEqual(updated.count("AGENTHUB_SECRET_KEY="),1)
+        self.assertIn("FIXTURE=preserved",updated)
+        self.assertGreater(len(updated.splitlines()[0].partition("=")[2]),0)
+        self.assertEqual(environment.stat().st_mode & 0o777,0o600)
+
+    def test_bundled_ssh_bootstrap_reports_stage_and_never_installs_unverified_payload(self) -> None:
+        validator = r"""import os, pathlib, sys
+stage = sys.argv[1]
+if stage == 'verify':
+    if os.environ['FIXTURE_FAIL'] == 'signature': raise SystemExit(1)
+    print('2.1.0')
+if stage == 'extract':
+    root = pathlib.Path(sys.argv[3]) / 'agenthub-webd-linux-x86_64/deploy'
+    root.mkdir(parents=True)
+    (root / 'install.sh').write_text('printf "installed\\n" >> "$FIXTURE_LOG"\n[[ "$FIXTURE_FAIL" != install ]]\n')
+"""
+        health = self.root / 'fixture-health'
+        health.write_text('#!/bin/sh\n[ "$FIXTURE_FAIL" != health ]\n')
+        health.chmod(0o755)
+        source = (ROOT / "deploy/agenthub-webd/bootstrap.sh").read_text()
+        source = source.replace('@VERSION@','2.1.0').replace('@PUBLIC_KEY@','fixture-public-key').replace('@VALIDATOR@',validator)
+        source = source.replace('"${EUID}" -eq 0','0 -eq 0').replace('. /etc/os-release', ': # fixture OS is supplied by environment').replace('/usr/local/bin/agenthub-webd health',shlex.quote(str(health)))
+        shim = r"""
+uname() { if [[ "$1" == -s ]]; then echo Linux; else echo x86_64; fi; }
+systemctl() { :; }
+command() {
+  if [[ "$*" == '-v minisign' ]]; then [[ "$FIXTURE_MISSING" == 0 ]]; else builtin command "$@"; fi
+}
+apt-get() { printf 'dependency\n' >> "$FIXTURE_LOG"; }
+curl() {
+  printf '%s\n' "$2" >> "$FIXTURE_LOG"
+  [[ "$FIXTURE_FAIL" != download ]] || return 22
+  : > "$4"
+}
+"""
+        for failure, missing, distro in [('', '0','ubuntu'),('', '1','debian'),('download','0','ubuntu'),('signature','0','ubuntu'),('install','0','ubuntu'),('health','0','ubuntu'),('dependencies','1','other')]:
+            with self.subTest(failure=failure, missing=missing, distro=distro):
+                log = self.root / 'bootstrap.log'
+                log.unlink(missing_ok=True)
+                env = {**os.environ,'FIXTURE_FAIL':failure,'FIXTURE_MISSING':missing,'FIXTURE_LOG':str(log),'ID':distro}
+                result = subprocess.run(['bash','-c',shim + '\n' + source],env=env,capture_output=True,text=True,check=False,timeout=15)
+                content = log.read_text() if log.exists() else ''
+                if not failure:
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertIn('installed',content)
+                    self.assertIn('/releases/download/v2.1.0/',content)
+                    self.assertEqual('dependency' in content,missing=='1')
+                else:
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertIn(f'AGENTHUB_INSTALL_ERROR:{failure}',result.stdout)
+                    if failure in ('dependencies','download','signature'):
+                        self.assertNotIn('installed',content)
 
     def test_update_download_failures_stop_before_systemd_or_installer(self) -> None:
         real_id = shutil.which("id")

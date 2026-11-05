@@ -23,7 +23,7 @@ describe("ProbeWorkspace & AgentHookHostCard", () => {
       <DshHostCard sessionsPath="/custom/sandbox/.dsh/sessions" />,
     );
     expect(dshMarkup).toContain("/custom/sandbox/.dsh/sessions");
-    expect(dshMarkup).toContain("原生事件流直连");
+    expect(dshMarkup).toContain("原生直连");
     expect(dshMarkup).not.toContain("<button");
     expect(dshMarkup).not.toContain("disabled");
   });

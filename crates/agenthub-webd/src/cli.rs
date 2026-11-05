@@ -34,30 +34,12 @@ pub(super) enum Command {
     },
     Doctor,
     InitConfig,
-    Admin {
-        #[command(subcommand)]
-        command: AdminCommand,
-    },
+    RpcStdio,
+    Health,
     Probe {
         #[command(subcommand)]
         command: ProbeCommand,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub(super) enum AdminCommand {
-    #[command(name = "key-generate")]
-    Generate {
-        #[arg(long)]
-        output: PathBuf,
-    },
-    #[command(name = "key-rotate")]
-    Rotate {
-        #[arg(long)]
-        output: PathBuf,
-    },
-    #[command(name = "key-revoke")]
-    Revoke,
 }
 
 #[derive(Debug, Subcommand)]

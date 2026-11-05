@@ -1,5 +1,5 @@
-use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{auth::require_auth, state::AppState};
+use super::{http_update_platform, ok, ApiResponse};
+use crate::state::AppState;
 use agenthub_core::{
     provider_sessions::{
         ProviderDetailRequest, ProviderListRequest, ProviderRenameRequest, ProviderSessionRequest,
@@ -9,11 +9,10 @@ use agenthub_core::{
 use axum::{extract::State, http::HeaderMap, Json};
 
 pub(crate) async fn antigravity_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderListRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .antigravity()
@@ -24,11 +23,10 @@ pub(crate) async fn antigravity_list(
 }
 
 pub(crate) async fn antigravity_detail(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderDetailRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .antigravity()
@@ -39,11 +37,10 @@ pub(crate) async fn antigravity_detail(
 }
 
 pub(crate) async fn antigravity_rename(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderRenameRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .antigravity()
@@ -54,11 +51,10 @@ pub(crate) async fn antigravity_rename(
 }
 
 pub(crate) async fn antigravity_archive(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderSessionRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .antigravity()
@@ -69,11 +65,10 @@ pub(crate) async fn antigravity_archive(
 }
 
 pub(crate) async fn antigravity_restore(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderSessionRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .antigravity()
@@ -84,11 +79,10 @@ pub(crate) async fn antigravity_restore(
 }
 
 pub(crate) async fn dsh_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderListRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .dsh()
@@ -99,11 +93,10 @@ pub(crate) async fn dsh_list(
 }
 
 pub(crate) async fn dsh_detail(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderDetailRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .dsh()
@@ -114,11 +107,10 @@ pub(crate) async fn dsh_detail(
 }
 
 pub(crate) async fn dsh_rename(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderRenameRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .dsh()
@@ -129,11 +121,10 @@ pub(crate) async fn dsh_rename(
 }
 
 pub(crate) async fn dsh_archive(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderSessionRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .dsh()
@@ -144,11 +135,10 @@ pub(crate) async fn dsh_archive(
 }
 
 pub(crate) async fn dsh_restore(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
     Json(request): Json<ProviderSessionRequest>,
 ) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&http_update_platform())
             .dsh()

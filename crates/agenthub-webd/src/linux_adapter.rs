@@ -1,4 +1,4 @@
-use crate::{auth::AuthContext, state::AppState};
+use crate::{audit::AuditActor, state::AppState};
 use agenthub_core::services::jobs::thread_state_action_response as core_thread_state_action_response;
 use agenthub_core::{
     codex::{self, ThreadDetail, ThreadSummary},
@@ -19,7 +19,7 @@ use std::{fs, path::Path};
 
 pub fn apply_probe_settings_save_plan(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &AuditActor,
     config_path: &Path,
     plan: settings_service::ProbeSettingsSavePlan,
 ) -> Result<Config> {
@@ -49,7 +49,7 @@ pub fn apply_probe_settings_save_plan(
 
 pub fn start_probe_action_plan(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &AuditActor,
     plan: probe_service::ProbeActionPlan,
     config_path: &Path,
 ) -> Result<String> {
@@ -175,7 +175,7 @@ pub fn job_detail_plan(state: &AppState, plan: JobDetailPlan) -> Result<Option<V
 
 pub fn execute_cleanup_plan(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &AuditActor,
     plan: cleanup_service::CleanupOperationPlan,
 ) -> Result<Value> {
     if plan.requires_confirmation && !plan.confirmation.confirmed {
@@ -241,7 +241,7 @@ fn job_response_value(job: JobRecord) -> Result<Value> {
 
 pub async fn apply_thread_state_action_plan(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &AuditActor,
     plan: &job_service::ThreadStateActionPlan,
 ) -> Result<job_service::ActionResponse> {
     let paths = state.codex_paths();
@@ -279,7 +279,7 @@ pub async fn apply_thread_state_action_plan(
 
 pub fn start_update_action_plan(
     state: &AppState,
-    auth: &AuthContext,
+    auth: &AuditActor,
     plan: update_service::UpdateActionPlan,
     audit_action: Option<&str>,
 ) -> Result<String> {

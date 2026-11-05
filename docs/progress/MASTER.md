@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 **2.0.10**，实现基线为 `ce5d956 / v2.0.9`。本版修复已确认的删除范围、DSH 改名日志完整性、通知正文与密钥迁移、保留期去重问题；复用 Antigravity／DSH 未变化历史，淘汰旧摘要缓存，减少空闲游标写入与无变化通知同步。两份锁文件定向更新至 `anyhow 1.0.103`、`tokio 1.53.3`，同步过时维护规则。API 协议保持 2，现有 RPC、用户操作流程和视觉设计保持不变。
+当前维护源码版本为 **2.1.0**，实现基线为 `01f63f1 / v2.0.10`。远程管理改用系统 SSH 与常驻服务私有套接字，支持复用本机已保存 Host 和安装同版本签名服务包；退役旧 HTTP/API Key 管理链路。Probe 删除说明小字，标题改为“全平台实时态势”，保留原聚合和数量限制。已落实全部 13 项审计修复，API 协议和数据库 schema 均保持 2／3。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/agenthub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/agenthub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/agenthub/actions/workflows/release.yml) 为准。
 
@@ -10,6 +10,11 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| SSH 连接、安装与旧链路退役 | OpenSSH Host/Include 选择，系统认证及跳板复用，固定 rpc-stdio 转发私有套接字；仅当前机器维持通道，切换／退出释放；同版本签名安装，清理旧远程连接、API Key 与专属 Nginx 入口。 | `v2.1.0` |
+| Probe 与实时态势 | 删除说明小字、副标题、平台事件解释和重复引导，保留真实状态与确认对象；标题为“全平台实时态势”，前端 12 条及后端限制不变。 | `v2.1.0` |
+| 审计项 1–5、11：配置、加密与迁移 | 删除 DB 打开预检、配置阶段 DB 预开／锁／写后回读及旧开发密钥／明文迁移；空库和 schema 3 可用；有效密钥保留，空条目原子替换；支持 Base64／Base64URL／hex；helper 修复回到启动编排。 | `v2.1.0` |
+| 审计项 6–10：缓存、基线与日志 | Antigravity 复用来源终态，保留身份／分页完整性；时间线随快照生成并实际计重，revision 包含正文；未变通知基线不写库；日志按完整行解码脱敏并保留换行及尾行。 | `v2.1.0` |
+| 审计项 12–13：后台执行记录 | 列表只传摘要，展开读取完整日志；仅未返回写请求阻止切换，已受理作业继续在原机器运行。 | `v2.1.0` |
 | 固定删除范围与 DSH 日志完整性 | Codex／Antigravity／DSH 只执行确认的根与后代 ID，保留归属校验；DSH 改名补齐合法末行分隔，不完整 JSON／Zstandard 帧报错且保持原文件。 | `v2.0.10` |
 | 通知加密、密钥与保留期迁移 | schema 3 加密原生待发正文并清除终态副本，保留认领／重试／成功分段；独立随机运行密钥与已知旧开发密钥迁移只涉及通知数据；unknown 按保留期清理，当前游标需要的去重身份保留到推进。 | `v2.0.10` |
 | 读取与空闲轮询资源优化 | Antigravity／DSH 共享 32MiB／64 项不可变历史及时间线缓存；DSH 摘要使用 8MiB／2000 项有界淘汰；来源变化失效、运行中读取、附件刷新；未变游标及无变化历史同步不重复写入／扫描。 | `v2.0.10` |
@@ -58,6 +63,10 @@
 
 ## 必要验证
 
+2.1.0 核心阶段已完成受影响的 Rust 单元／集成测试、两端 Clippy、TypeScript 与相关 Vitest、线协议契约及安装脚本测试。覆盖并发 SSH 响应、认证失败、服务断开与通道释放、后台作业断开后完成、旧库拒绝／schema 3 保留、完整日志、基线启停、正文同数量改写、不完整分页及签名／下载／安装失败。浏览器完整回归和跨平台构建由标签 CI 完成，真实 SSH 和手机实收仍待用户验收。
+
+同一隔离合成样本比较：200 次 DB 打开 CPU 57.781 → 42.637 ms，1,000 次基线读取 CPU 19.034 → 8.733 ms、WAL 86,552 → 8,272 B；30 条任务列表 JSON 725,721 → 5,721 B；3,000 条历史冷读 CPU 232.051 → 216.078 ms，10 次热读 2.404 → 1.923 ms；进程峰值 RSS 19,169,280 → 17,055,744 B。样本不代表线上收益，未测量磁盘空间回收。
+
 2.0.10 本机针对性回归覆盖固定删除集合与跨根拒绝、DSH 缺换行／半记录／半帧、通知旧数据迁移与重启、终态正文清除、unknown 清理和当前游标去重、密钥异常与有效密钥保留、历史缓存失效和附件刷新，以及空闲轮询不重写游标／不扫描历史。受影响 core、webd、Tauri 测试、两端 Clippy、类型／契约、版本／工作区、隐私及安装脚本检查通过；两份锁文件已确认不再命中本轮 anyhow／Tokio 通告。完整回归和跨平台构建由标签 CI 承担，未访问真实钥匙串或用真实用户会话执行删除测试。
 
 相同合成样本的开发构建比较：
@@ -104,6 +113,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 正式交付
 
+2.1.0 的版本、文档和部署脚本已更新；待标签 CI 完成后发布八项资产，并按服务端、Mac App 的顺序升级。
+
 2.0.10 实现提交 [`4ff11a0`](https://github.com/lich13/agenthub/commit/4ff11a032340) 与启动入口断言修复 [`deb081d`](https://github.com/lich13/agenthub/commit/deb081d5b050) 已推送，`v2.0.10` 指向 `deb081d`。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/41941803886) 全部通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v2.0.10)。按先服务端后 App 的顺序使用对应 CI 产物交付：服务端为 `agenthub-webd 2.0.10`、service 为 `active`、health 为 `{"ok":true}`；Mac App 从 2.0.9 原地升级至 2.0.10 并启动，未保留旧副本。真实功能与手机实收仍待用户验收，线上资源占用未测量。
 
 1.9.0 按主题拆分的提交 [`62ade32`](https://github.com/lich13/agenthub/commit/62ade32)、[`1ef92f3`](https://github.com/lich13/agenthub/commit/1ef92f3)、[`b8f2211`](https://github.com/lich13/agenthub/commit/b8f2211)、[`39a4007`](https://github.com/lich13/agenthub/commit/39a4007)、[`221b809`](https://github.com/lich13/agenthub/commit/221b809) 与 [`7395f48`](https://github.com/lich13/agenthub/commit/7395f48fd9bb2f19b4ed6e4a02c2a4a53efb0584) 已与 `v1.9.0` 标签同推，[三项主 CI](https://github.com/lich13/agenthub/actions/runs/41179300628) 与自包含并行 [`v1.9.0` Release CI](https://github.com/lich13/agenthub/actions/runs/41179300785) 均全绿通过，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.9.0)。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `agenthub-webd 1.9.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `AgentHub-1.9.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地替换安装本机 macOS App（`AgentHub.app 1.8.0 -> AgentHub.app 1.9.0`，Bundle ID `com.lich13.agenthub`），bundle 版本及内置 `agenthub-webd` 均为 1.9.0 且启动运行，没有保留旧副本。计划中建议不做的 1 项（`A6` `projcache` 额外后台任务／状态表）按确认结论未并入实现。真实用户会话未执行删除，待用户验收。
@@ -133,6 +144,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 1.3.7 核心实现由 [`6ca0716`](https://github.com/lich13/agenthub/commit/6ca0716)、[`e363069`](https://github.com/lich13/agenthub/commit/e363069)、[`d73b2d4`](https://github.com/lich13/agenthub/commit/d73b2d4)、[`0d7afea`](https://github.com/lich13/agenthub/commit/0d7afea) 和 [`70602df`](https://github.com/lich13/agenthub/commit/70602df) 完成；版本、文档和发布说明收尾提交为 [`cffb3e9`](https://github.com/lich13/agenthub/commit/cffb3e9)。该提交对应的[三项主 CI](https://github.com/lich13/agenthub/actions/runs/39727312472) 与 [`v1.3.7` Release CI](https://github.com/lich13/agenthub/actions/runs/39728000909) 全绿，已发布[八项正式资产](https://github.com/lich13/agenthub/releases/tag/v1.3.7)。已使用正式 Linux 服务包升级远端 API，服务版本为 1.3.7、systemd 为 active、回环 healthz 成功；已安装正式 macOS ARM64 App，bundle 版本为 1.3.7 且启动成功，并保留 1.3.6 回退 App。安装和部署临时文件已清理，未自动启用 Claude hooks。
 
 ## 待用户验收
+
+2.1.0 安装后在「设置 → 远程连接」选择已有 SSH Host，检查保存连接、切换、重连及安装入口；在 Probe 检查说明清理和“全平台实时态势”标题，验证五平台常用操作、执行记录完整日志和手机通知实收。已受理后台任务应允许切换，返回原机器后能查看执行结果。
 
 打开 `AgentHub.app 2.0.10`，检查五个平台的阅读、翻页、附件及删除确认范围；使用专门测试线程核验预览后新增子会话被保留。分别触发通知并确认手机实收，回答问题／处理审批／恢复执行后旧提醒不再重试。真实功能、视觉与手机实收待用户验收，线上资源占用未测量。
 

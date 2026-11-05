@@ -9,7 +9,7 @@ use tower::ServiceExt;
 fn authenticated_test_state() -> (crate::state::AppState, String) {
     let (config, sandbox_root) = sandboxed_test_config();
     let db = PanelDb::open(":memory:").unwrap();
-    let api_key = db.rotate_admin_api_key().unwrap();
+    let api_key = String::new();
     (
         crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root),
         api_key,
@@ -125,12 +125,12 @@ async fn legacy_rest_routes_all_return_404() {
 }
 
 #[tokio::test]
-async fn only_current_rpc_commands_and_health_are_available() {
+async fn only_current_rpc_commands_are_available() {
     let (state, api_key) = authenticated_test_state();
     let app = router(state);
 
     let health = request_path_status(app.clone(), "GET", "/healthz", None).await;
-    assert_eq!(health, StatusCode::OK);
+    assert_eq!(health, StatusCode::NOT_FOUND);
 
     let upload =
         request_path_status(app.clone(), "POST", "/api/rpc/uploadFiles", Some(&api_key)).await;

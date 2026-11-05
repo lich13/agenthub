@@ -26,6 +26,8 @@ pub fn run() {
         codex_desktop::attachments,
         commands::plans::savePlanMarkdown,
         remote::remoteGet,
+        remote::remoteSshHosts,
+        remote::remoteInstall,
         remote::remoteVerify,
         remote::remoteSave,
         remote::remoteRemove,
@@ -119,6 +121,12 @@ pub fn run() {
                 resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
+            if let Err(error) = resources::repair_probe_error_monitor_launch_agent(
+                &state.config(),
+                state.platform(),
+            ) {
+                eprintln!("Probe monitor repair failed: {error}");
+            }
             let remote = remote::RemoteConnections::load(&state.config().paths.data_dir)?;
             app.manage(codex_desktop::CodexDesktopBridge::new(
                 remote.credential_access(),
@@ -142,6 +150,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build AgentHub desktop app")
         .run(|app, event| match event {
+            tauri::RunEvent::Exit => {
+                app.state::<remote::RemoteConnections>().disconnect();
+            }
             tauri::RunEvent::Ready => {
                 if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {
                     desktop_boot::reveal_main_window(&window);

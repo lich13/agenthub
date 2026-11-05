@@ -58,17 +58,6 @@ fn api_entry_exposes_only_current_submodules() {
 }
 
 #[test]
-fn routes_keep_health_and_single_rpc_transport_surface() {
-    let routes = src("api/routes.rs");
-    assert!(routes.contains(".route(\"/healthz\", get(healthz))"));
-    assert!(!routes.contains("thread_events"));
-    assert!(!routes.contains("RPC_THREAD_EVENTS_ROUTE"));
-    assert!(routes.contains(".route(RPC_COMMAND_ROUTE, post(rpc_dispatch))"));
-    assert!(routes.contains("LEGACY_API_FALLBACK_ROUTE"));
-    assert!(!routes.contains("RPC_UPLOAD_FILES_ROUTE"));
-}
-
-#[test]
 fn rpc_surface_separates_retired_commands_from_current_allowlist() {
     let surface = src("rpc_surface.rs");
     use agenthub_core::services::commands;

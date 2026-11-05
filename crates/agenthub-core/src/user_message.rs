@@ -4,7 +4,12 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::Path};
+use std::{
+    fs,
+    hash::{Hash, Hasher},
+    io::Read,
+    path::Path,
+};
 
 mod context;
 
@@ -22,7 +27,17 @@ pub struct UserMessage {
     sources: Vec<AttachmentSource>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Revision hashes follow the visible projection, excluding private attachment sources.
+impl Hash for UserMessage {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.text.hash(state);
+        self.attachments.hash(state);
+        self.context_blocks.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum UserContextKind {
     Instructions,
@@ -31,7 +46,7 @@ pub enum UserContextKind {
     Files,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct UserContextBlock {
     pub kind: UserContextKind,
@@ -123,7 +138,7 @@ fn question_text(text: &str, include_questions: bool) -> String {
     result
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct UserAttachment {
     pub id: String,

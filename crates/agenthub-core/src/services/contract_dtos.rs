@@ -51,6 +51,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "PlanSaveResult",
     "RemoteMachineSummary",
     "RemoteConnectionView",
+    "SshHostList",
     "RemoteConnectionCredentials",
     "RemoteRevisionRequest",
     "RemoteSelectionRequest",

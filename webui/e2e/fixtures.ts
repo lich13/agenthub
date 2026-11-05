@@ -19,7 +19,11 @@ export function observeCommands(page: Page, observer: (command: string, args: Mo
 export async function mockApi(page: Page, options: { connection?: Partial<RemoteConnectionView> } = {}) {
   const state = { overrides: new Map<string, MockHandler>(), observers: [] as Array<(command: string, args: MockArgs) => void> };
   mockStates.set(page, state);
-  let connection: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false, ...options.connection };
+  let connection: RemoteConnectionView = { target: "local", revision: 0, sshHost: null, configured: false, ...options.connection };
+  if(connection.configured && !connection.machines?.length){
+    connection.machines=[{id:"remote",name:"Fixture remote",sshHost:connection.sshHost??"fixture-host",useSudo:true}];
+    connection.activeMachineId="remote";connection.activeMachineName="Fixture remote";
+  }
   const calls: string[] = [];
   const titles = new Map<string, string>();
   const archived = new Set<string>(demo.demoThreads(true, "").map((thread) => thread.id));
@@ -67,22 +71,22 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
     state.observers.forEach(observer => observer(name, args));
     const respond = async (): Promise<unknown> => {
       if (name === "remote.get") return { ...connection };
+      if (name === "remote.sshHosts") return [{alias:"fixture-host"}, {alias:"fixture-second"}];
       if (name === "remote.verify") return demo.demoSystemCapabilities("linux-api");
-      if (name === "remote.save") {
+      if (name === "remote.save" || name === "remote.install") {
         const existing = [...(connection.machines ?? [])];
         const reqId = typeof args.request.id === "string" && args.request.id ? args.request.id : null;
-        const matched = (reqId ? existing.find(m => m.id === reqId) : existing.find(m => m.baseUrl === args.request.baseUrl)) ?? null;
+        const matched = (reqId ? existing.find(m => m.id === reqId) : existing.find(m => m.sshHost === args.request.sshHost)) ?? null;
         const id = matched?.id ?? `m-${existing.length + 1}`;
-        let defaultHost = "远程机器";
-        try { defaultHost = new URL(args.request.baseUrl).host || defaultHost; } catch { /* ignore */ }
+        const defaultHost = args.request.sshHost;
         const machineName = typeof args.request.name === "string" && args.request.name.trim() ? args.request.name.trim() : (matched?.name ?? defaultHost);
         const nextMachines = matched
-          ? existing.map(m => m.id === id ? { id, name: machineName, baseUrl: args.request.baseUrl } : m)
-          : [...existing, { id, name: machineName, baseUrl: args.request.baseUrl }];
+          ? existing.map(m => m.id === id ? { id, name: machineName, sshHost: args.request.sshHost, useSudo: args.request.useSudo } : m)
+          : [...existing, { id, name: machineName, sshHost: args.request.sshHost, useSudo: args.request.useSudo }];
         connection = {
           target: "remote",
           revision: connection.revision + 1,
-          baseUrl: args.request.baseUrl,
+          sshHost: args.request.sshHost,
           configured: true,
           activeMachineId: id,
           activeMachineName: machineName,
@@ -97,7 +101,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
           ...connection,
           target: args.request.target,
           revision: connection.revision + 1,
-          ...(picked ? { baseUrl: picked.baseUrl, activeMachineId: picked.id, activeMachineName: picked.name } : {}),
+          ...(picked ? { sshHost: picked.sshHost, activeMachineId: picked.id, activeMachineName: picked.name } : {}),
         };
         return { ...connection };
       }
@@ -109,7 +113,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         connection = {
           target: "local",
           revision: connection.revision + 1,
-          baseUrl: nextActive?.baseUrl ?? null,
+          sshHost: nextActive?.sshHost ?? null,
           configured: remaining.length > 0,
           activeMachineId: nextActive?.id ?? null,
           activeMachineName: nextActive?.name ?? null,
@@ -172,7 +176,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "threads.restore": () => { archived.delete(args.threadId); return { ok: true }; },
         "threads.blocks": () => demo.demoThreadBlockPage(args.id),
         "updates.status": () => demo.demoUpdateStatus(fixture()),
-        "jobs.list": demo.demoJobs,
+        "jobs.list": () => demo.demoJobs().map(job => ({...job, output:""})),
         "jobs.detail": () => ({ ...demo.demoJob(args.id), status: ++jobReads < 3 ? "running" : "succeeded" }),
         "updates.check": () => ({ job_id: "fixture-job" }),
         "probe.status": () => ({ available: true, data: demo.demoProbeStatus(fixture()) }),
