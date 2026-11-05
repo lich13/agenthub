@@ -120,7 +120,7 @@ test("saved SSH aliases can be selected, installed and reconnected", async ({ pa
   await page.goto("/");
   await machinePicker(page).selectOption("configure");
   await expect(page.getByRole("tab", { name: "远程连接" })).toHaveAttribute("aria-selected", "true");
-  await page.getByLabel("SSH 连接", { exact: true }).selectOption(sshHost);
+  await page.getByRole("combobox", { name: "SSH 连接", exact: true }).selectOption(sshHost);
   await page.getByLabel("名称", { exact: true }).fill("Fixture server");
   await page.getByRole("button", { name: "安装并连接", exact: true }).click();
   await expect(machinePicker(page)).toHaveValue("m-1");
