@@ -108,15 +108,27 @@ fn simultaneous_new_store_opens_share_current_schema() {
             })
         })
         .collect::<Vec<_>>();
-    for worker in workers {
-        let db = worker.join().unwrap();
+    let results = workers
+        .into_iter()
+        .map(|worker| worker.join())
+        .collect::<Vec<_>>();
+    for result in results {
+        let db = result.unwrap();
+        let conn = db.conn.lock().unwrap();
         assert_eq!(
-            db.conn
-                .lock()
-                .unwrap()
-                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
             3
+        );
+        assert_eq!(
+            conn.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+                .unwrap(),
+            "wal"
+        );
+        assert_eq!(
+            conn.pragma_query_value(None, "foreign_keys", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
 }

@@ -144,7 +144,7 @@ impl PanelDb {
         const SCHEMA_VERSION: i64 = 3;
         {
             let conn = self.conn.lock().expect("db mutex");
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+            conn.execute_batch("PRAGMA foreign_keys=ON;")?;
             let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
             if version >= SCHEMA_VERSION {
                 return Ok(());
@@ -161,12 +161,11 @@ impl PanelDb {
             !populated,
             "旧数据库请先使用 v2.0.10 完成升级；原数据已保留"
         );
+        // WAL mode persists; only a new store needs to change it under the migration lock.
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         let tx = conn.transaction()?;
         tx.execute_batch(
             r#"
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
-
             CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL,

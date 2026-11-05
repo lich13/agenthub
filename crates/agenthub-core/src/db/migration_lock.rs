@@ -1,4 +1,4 @@
-//! Serialize upgrades across App/helper/server processes, including VACUUM.
+//! Serialize database initialization across App/helper/server processes.
 //! A private sidecar avoids conflicting with SQLite byte-range locks on macOS.
 use anyhow::{Context, Result};
 use std::{
