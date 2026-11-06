@@ -861,6 +861,49 @@ async fn probe_settings_patch_rejects_missing_config_file() {
 }
 
 #[tokio::test]
+async fn github_ci_rpc_and_single_notification_switch_patches_work_for_nested_and_top_level_inputs()
+{
+    let (state, _dir, config_path) = rpc_test_state_with_config_file();
+    let _config_env = AsyncEnvGuard::set_config(&config_path).await;
+    let initial = request_rpc_json(state.clone(), "github.ci.status", "{}").await;
+    assert_eq!(initial["enabled"], false);
+    assert_eq!(initial["account"], serde_json::Value::Null);
+    assert_eq!(initial["repositories"], json!([]));
+    assert!(initial.get("token").is_none());
+    for field in ["notify_github_ci", "notify_grokbot"] {
+        for nested in [true, false] {
+            for enabled in [true, false] {
+                let notifications = json!({(field):enabled});
+                let settings = if nested {
+                    json!({"probe":{"enabled":true,"notifications":notifications}})
+                } else {
+                    json!({"probe":{"enabled":true},"notifications":notifications})
+                };
+                let saved = request_rpc_json(
+                    state.clone(),
+                    "probe.settings.save",
+                    &json!({"settings":settings}).to_string(),
+                )
+                .await;
+                assert_eq!(
+                    saved["notifications"][field], enabled,
+                    "{field}, nested={nested}"
+                );
+                if field == "notify_github_ci" {
+                    let status =
+                        request_rpc_json(state.clone(), "github.ci.status", r#"{"refresh":true}"#)
+                            .await;
+                    assert_eq!(status["enabled"], enabled);
+                }
+            }
+        }
+    }
+    assert!(agenthub_core::github_ci::pending(&state.db)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
     let (state, _dir, config_path) = rpc_test_state_with_config_file();
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
@@ -1458,6 +1501,7 @@ mod maintenance_security {
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.base.clone();
             let request = crate::ProbeBarkRequest {
+                url: None,
                 presentation: None,
                 title: TITLE.into(),
                 body: BODY.into(),

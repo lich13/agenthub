@@ -32,6 +32,18 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         return Err(api_error(ApiErrorKind::NotFound, "不支持的远程操作"));
     }
     match command.as_str() {
+        rpc_commands::GITHUB_CI_STATUS => {
+            let config = state.config();
+            super::ok(
+                agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
+                    &config,
+                    state.platform(),
+                    state.host_surface(),
+                )
+                .github_ci(&state.db, rpc_payload(&args)?)?,
+            )
+        }
+
         rpc_commands::THREADS_SUBAGENT_DETAIL => {
             super::threads::subagent_detail(state, rpc_wrapped_payload(&args, &["request"])?).await
         }

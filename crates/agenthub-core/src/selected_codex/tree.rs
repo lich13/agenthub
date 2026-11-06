@@ -18,7 +18,6 @@ pub struct DeleteOutcome {
     pub deleted_ids: Vec<String>,
     pub residuals: Vec<String>,
     pub error: Option<String>,
-    pub deleted_files: u64,
     pub deleted_bytes: u64,
 }
 
@@ -27,12 +26,18 @@ fn quoted(value: &str) -> String {
 }
 
 pub(crate) fn spawn_edges(paths: &CodexPaths) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if !paths.state_db().exists() {
-        return Ok(edges);
+        return Ok(BTreeMap::new());
     }
     let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let available = crate::archive::table_columns(&conn, "threads")?;
+    spawn_edges_with_connection(&conn)
+}
+
+pub(crate) fn spawn_edges_with_connection(
+    conn: &Connection,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let available = crate::archive::table_columns(conn, "threads")?;
     let selected = ["id", "parent_thread_id", "parentThreadId", "source"]
         .into_iter()
         .filter(|column| available.contains(*column))
@@ -67,7 +72,7 @@ pub(crate) fn spawn_edges(paths: &CodexPaths) -> Result<BTreeMap<String, BTreeSe
             edges.entry(parent.into()).or_default().insert(id.into());
         }
     }
-    let columns = crate::archive::table_columns(&conn, "thread_spawn_edges")?;
+    let columns = crate::archive::table_columns(conn, "thread_spawn_edges")?;
     if columns.contains("parent_thread_id") && columns.contains("child_thread_id") {
         let mut stmt =
             conn.prepare("SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")?;
@@ -171,9 +176,6 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
         for line in BufReader::new(file).lines() {
             match line {
                 Ok(line) => {
-                    if !ids.iter().any(|id| line.contains(id.as_str())) {
-                        continue;
-                    }
                     if let Ok(row) = serde_json::from_str::<Value>(&line) {
                         if let Some(id) = row["id"].as_str().filter(|id| ids.contains(*id)) {
                             if let Some(path) = row
@@ -412,16 +414,6 @@ pub(crate) fn is_writer_locked(paths: &CodexPaths, id: &str) -> bool {
     {
         false
     }
-}
-
-pub(crate) fn ensure_tree_not_running(paths: &CodexPaths, root_id: &str) -> Result<()> {
-    let tree_ids = descendants(paths, &[root_id.to_string()])?;
-    let conn = paths
-        .state_db()
-        .exists()
-        .then(|| Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY))
-        .transpose()?;
-    ensure_ids_not_running(paths, &tree_ids, conn.as_ref())
 }
 
 pub(crate) fn ensure_ids_not_running(
@@ -734,7 +726,6 @@ pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutc
         deleted_ids,
         error: (!outcome.residuals.is_empty()).then(|| "部分内容未删除，请查看逐项结果".into()),
         residuals: outcome.residuals,
-        deleted_files: outcome.files,
         deleted_bytes: outcome.bytes,
     })
 }

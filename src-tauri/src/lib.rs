@@ -50,6 +50,7 @@ pub fn run() {
         commands::threads::restoreThread,
         commands::threads::renameThread,
         commands::probe::getProbeStatus,
+        commands::probe::getGithubCiStatus,
         commands::updates::getUpdateStatus,
         commands::updates::updatesCheck,
         commands::updates::updatesInstall,

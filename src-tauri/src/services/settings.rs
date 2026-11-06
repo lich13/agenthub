@@ -91,6 +91,7 @@ fn probe_save_settings_with_state_and_repair(
             secret_write.secret_value.as_bytes(),
         )?;
     }
+    agenthub_core::github_ci::settings_changed(&state.db, &config, &response_config)?;
     state.replace_config(response_config.clone());
     repair_error_monitor(&response_config, state.platform())?;
     probe_settings_with_state(state)

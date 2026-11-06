@@ -2,31 +2,12 @@ import { visibleMarkdown } from "./visibleMarkdown";
 import type {
   MessageBlock,
   PendingElicitation,
-  ThreadDetail,
-  ThreadSummary
 } from "../../types";
-import { mergeIncomingThreadSummary } from "./codexViewModel";
 
 export type MessageScrollSnapshot = {
   scrollTop: number;
   clientHeight: number;
   scrollHeight: number;
-};
-
-export type MessageBlockState = {
-  blocks: MessageBlock[];
-  totalBlocks: number;
-  hasMoreBlocks: boolean;
-  beforeCursor: string | null;
-  visibleUpdateRevision: number;
-  bottomFollowRevision: number;
-};
-
-export type InternalReferenceSegment = {
-  type: "text" | "internal_reference";
-  text: string;
-  copyText?: string;
-  kind?: "path" | "thread" | "turn" | "job";
 };
 
 export type ConversationMessagePresentation = {
@@ -39,55 +20,10 @@ export function shouldAutoFollowMessageStream(snapshot: MessageScrollSnapshot, t
   return snapshot.scrollHeight - snapshot.scrollTop - snapshot.clientHeight <= threshold;
 }
 
-export function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
-  const blocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
-  return {
-    blocks,
-    totalBlocks: detail.total_blocks ?? blocks.length,
-    hasMoreBlocks: Boolean(detail.has_more_blocks),
-    beforeCursor: detail.before_cursor ?? null,
-    visibleUpdateRevision: 0,
-    bottomFollowRevision: 0
-  };
-}
-
 export function isRunningToolBlock(block: MessageBlock): boolean {
   if (!isToolBlock(block)) return false;
   const status = block.status?.trim();
   return Boolean(status && ["pending", "running", "in_progress", "inProgress", "active"].includes(status));
-}
-
-const internalReferencePattern = /((?:\/(?:Users|Volumes|home|root|tmp|var|opt|srv|etc|run|private)\/[^\s,，。；;）)]+)|\b(?:thread|turn|job)[\s:=#-]+[A-Za-z0-9._:-]{3,})/gi;
-
-export function segmentInternalReferences(text: string): InternalReferenceSegment[] {
-  const segments: InternalReferenceSegment[] = [];
-  let lastIndex = 0;
-  for (const match of text.matchAll(internalReferencePattern)) {
-    const value = match[0];
-    const index = match.index ?? 0;
-    if (index > lastIndex) {
-      segments.push({ type: "text", text: text.slice(lastIndex, index) });
-    }
-    segments.push({
-      type: "internal_reference",
-      text: value,
-      copyText: value,
-      kind: internalReferenceKind(value)
-    });
-    lastIndex = index + value.length;
-  }
-  if (lastIndex < text.length) {
-    segments.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return segments.length ? segments : [{ type: "text", text }];
-}
-
-function internalReferenceKind(value: string): InternalReferenceSegment["kind"] {
-  const lower = value.toLowerCase();
-  if (lower.startsWith("/")) return "path";
-  if (lower.startsWith("thread")) return "thread";
-  if (lower.startsWith("turn")) return "turn";
-  return "job";
 }
 
 export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
@@ -96,26 +32,6 @@ export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
   );
   const text = latest ? messageBlockText(latest).trim() : "";
   return text || null;
-}
-
-export function nextRenameDraftValue(input: {
-  previousThreadId: string;
-  threadId: string;
-  currentDraft: string;
-  incomingTitle: string;
-  dirty: boolean;
-}): string {
-  if (input.previousThreadId !== input.threadId) return input.incomingTitle;
-  if (input.dirty) return input.currentDraft;
-  const merged = mergeIncomingThreadSummary(
-    { id: input.threadId, title: input.currentDraft },
-    { id: input.threadId, title: input.incomingTitle }
-  );
-  return merged.title ?? input.currentDraft;
-}
-
-export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string, title: string): ThreadSummary[] {
-  return threads.map((thread) => thread.id === threadId ? { ...thread, title } : thread);
 }
 
 export function threadResumeCommand(threadId?: string | null): string | null {
@@ -213,31 +129,6 @@ export function questionAnswerLabels(block: MessageBlock, questionId: string): s
   return block.answers?.find((answer) => answer.question_id === questionId)?.answers ?? [];
 }
 
-export function blocksWithCurrentPending(blocks: MessageBlock[], pending: PendingElicitation | null): MessageBlock[] {
-  if (!pending || !pending.questions.length) return blocks;
-  const existing = blocks.some((block) => {
-    if (!isQuestionBlock(block)) return false;
-    if (pending.item_id && (block.item_id === pending.item_id || block.call_id === pending.item_id)) return true;
-    if (pending.turn_id && block.turn_id === pending.turn_id) return true;
-    return false;
-  });
-  if (existing) return blocks;
-  return [
-    ...blocks,
-    {
-      id: `pending-question-${pending.turn_id ?? pending.item_id ?? "current"}`,
-      role: "assistant",
-      kind: "request_user_input",
-      display_kind: "question",
-      status: "pending",
-      resolved: false,
-      turn_id: pending.turn_id,
-      item_id: pending.item_id,
-      questions: pending.questions
-    }
-  ];
-}
-
 function sameActionBlock(left: MessageBlock, right: MessageBlock): boolean {
   const leftIds = [left.id, left.item_id, left.call_id].filter(Boolean);
   const rightIds = [right.id, right.item_id, right.call_id].filter(Boolean);
@@ -274,23 +165,6 @@ export function visibleConversationBlocksForHistory(
   const renderable = blocks.filter(shouldRenderConversationBlock);
   if (showAllHistory) return renderable;
   return compactConversationBlocks(renderable, 60, 3, currentPlan, currentQuestion, revealedBlockId);
-}
-
-export function prioritizeCurrentActionBlocks(
-  blocks: MessageBlock[],
-  currentPlan: MessageBlock | null | undefined,
-  currentQuestion: PendingElicitation | MessageBlock | null | undefined
-): MessageBlock[] {
-  const promoted: MessageBlock[] = [];
-  const rest: MessageBlock[] = [];
-  for (const block of blocks) {
-    if (isActionablePlanBlock(block, currentPlan) || isActionableQuestionBlock(block, currentQuestion)) {
-      promoted.push(block);
-    } else {
-      rest.push(block);
-    }
-  }
-  return promoted.length ? [...rest, ...promoted] : blocks;
 }
 
 export function compactConversationBlocks(
@@ -466,17 +340,6 @@ export function toolBlockDetailText(block: MessageBlock): string {
 
 export function messageBlockText(block: MessageBlock): string {
   return visibleMarkdown(block.text?.trim() || formatPayload(block.payload) || "");
-}
-
-function legacyBlocks(detail: ThreadDetail): MessageBlock[] {
-  return detail.messages.map((message, index) => ({
-    id: `legacy-${index}`,
-    role: message.role,
-    kind: message.kind,
-    text: message.text,
-    created_at: message.created_at,
-    questions: []
-  }));
 }
 
 function firstDisplayLine(value?: string | null): string | null {

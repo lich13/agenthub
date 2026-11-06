@@ -36,6 +36,7 @@ pub(super) fn request(
         .collect::<String>();
     let body = summary(body);
     ProbeBarkRequest {
+        url: None,
         title: format!("{provider}｜{status}｜{title}"),
         body: if body.is_empty() {
             format!("{status}，请打开线程查看详情。")

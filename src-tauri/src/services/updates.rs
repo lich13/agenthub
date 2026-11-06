@@ -153,9 +153,6 @@ fn native_update_job_plan_for_action(
         agenthub_core::services::system::HostSurface::DesktopEmbeddedTauri,
         action,
     )?;
-    let _native = plan
-        .native
-        .ok_or_else(|| anyhow::anyhow!("update action did not produce a native updater spec"))?;
     let spec = plan
         .macos_job
         .ok_or_else(|| anyhow::anyhow!("update action did not produce a macOS updater job spec"))?;

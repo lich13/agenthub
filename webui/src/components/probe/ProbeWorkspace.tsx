@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AgentHookHostCard, DshHostCard, ProbeHookCard } from "./AgentHookHostCard";
+import { GithubCiCard } from "./GithubCiCard";
 import { Panel } from "../common/Panel";
 import { JobList } from "../jobs/JobList";
 import {
@@ -41,6 +42,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const submittedDraft = useRef<ProbeSettingsDraft | null>(null);
   const saveInFlight = useRef(false);
+  const [saveTarget, setSaveTarget] = useState<"settings" | "bark" | "ci">("settings");
   const [saveStatus, setSaveStatus] = useState<ProbeSaveStatus>(null);
   const [actionStatus, setActionStatus] = useState<ProbeSaveStatus>(null);
   const data = status.data?.data;
@@ -107,9 +109,10 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
   const jobRunning = Boolean(probeJobMutation.data?.job_id && !isTerminalJob(startedJob.data?.status));
   const jobBusy = probeJobMutation.isPending || jobRunning;
   const saveMutation = probeActions.save;
-  const saveSettings = (deviceKey?: string) => {
+  const saveSettings = (deviceKey?: string, target: "settings" | "bark" | "ci" = "settings") => {
     if (saveInFlight.current) return;
     saveInFlight.current = true;
+    setSaveTarget(target);
     setSaveStatus(null);
     saveMutation.mutate(deviceKey, {
       onSettled: () => {
@@ -181,7 +184,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
             draft={draft}
             setDraft={setDraft}
             errors={settingsErrors}
-            saveStatus={saveStatus}
+            saveStatus={saveTarget === "settings" ? saveStatus : null}
             saving={saveMutation.isPending}
             status={data}
             settings={currentSettings}
@@ -199,7 +202,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
             draft={draft}
             setDraft={setDraft}
             configuredDeviceKey={probeView.barkConfigured}
-            saveStatus={saveStatus}
+            saveStatus={saveTarget === "bark" ? saveStatus : null}
             saving={saveMutation.isPending}
             testing={pendingProbeAction === "bark-test"}
             testStatus={
@@ -213,11 +216,13 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
                       : probeJobMutation.error?.message ?? null
                 : null
             }
-            onSave={saveSettings}
+            onSave={key => saveSettings(key, "bark")}
             onTest={() => probeJobMutation.mutate("bark-test")}
           />
         )}
       </Panel>
+
+      {capabilities.githubCi && <GithubCiCard draft={draft} setDraft={setDraft} saving={saveMutation.isPending} saveStatus={saveTarget === "ci" ? saveStatus : null} onSave={() => saveSettings(undefined, "ci")} />}
 
       {hooksHostMatrix}
 

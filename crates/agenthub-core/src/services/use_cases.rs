@@ -11,12 +11,11 @@ use crate::{
         jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
         probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
-        system::{self, Capability, CapabilityGatePlan, HostSurface, SystemCapabilities},
+        system::{self, Capability, HostSurface, SystemCapabilities},
         threads::{
             self, ThreadBlocksPage, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest,
             ThreadListPlan, ThreadListReadPlan, ThreadsQuery,
         },
-        updates::{UpdateUseCases, UpdateUseCases as CoreUpdateUseCases},
     },
     update::{analyze_job_failure, JobFailureAnalysis},
 };
@@ -87,6 +86,24 @@ impl<'a> AgentHubUseCases<'a> {
             platform,
             host_surface,
         }
+    }
+
+    pub fn github_ci(
+        self,
+        db: &crate::db::PanelDb,
+        request: crate::github_ci::Request,
+    ) -> Result<crate::github_ci::Snapshot> {
+        system::require_capability_for_surface(
+            self.platform,
+            self.host_surface,
+            Capability::Probe,
+        )?;
+        crate::github_ci::status(
+            db,
+            self.config
+                .ok_or_else(|| anyhow::anyhow!("configuration required"))?,
+            request.refresh,
+        )
     }
 
     pub fn threads(self) -> ThreadUseCases<'a> {
@@ -169,14 +186,6 @@ impl<'a> AgentHubUseCases<'a> {
         Ok(CoreProbeUseCases::new(
             self.config_required()?,
             self.platform,
-        ))
-    }
-
-    pub fn updates(self) -> Result<UpdateUseCases<'a>> {
-        Ok(CoreUpdateUseCases::new_for_surface(
-            self.config_required()?,
-            self.platform,
-            self.host_surface,
         ))
     }
 
@@ -416,10 +425,6 @@ impl<'a> SystemUseCases<'a> {
 
     pub fn capabilities(self) -> SystemCapabilities {
         system::system_capabilities_for_surface(self.config, self.platform, self.host_surface)
-    }
-
-    pub fn capability_gate(self, capability: Capability) -> CapabilityGatePlan {
-        system::capability_gate_plan_for_surface(self.platform, self.host_surface, capability)
     }
 }
 

@@ -84,6 +84,8 @@ pub struct ProbeNotificationsConfig {
     pub notify_grok: bool,
     #[serde(default)]
     pub notify_grokbot: bool,
+    #[serde(default)]
+    pub notify_github_ci: bool,
     #[serde(default = "default_true")]
     pub notify_grok_completion: bool,
     #[serde(default = "default_true")]
@@ -180,6 +182,7 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_codex: Option<bool>,
     pub notify_grok: Option<bool>,
     pub notify_grokbot: Option<bool>,
+    pub notify_github_ci: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -283,6 +286,7 @@ impl Default for ProbeNotificationsConfig {
             notify_codex: true,
             notify_grok: true,
             notify_grokbot: false,
+            notify_github_ci: false,
             notify_grok_completion: true,
             notify_grok_failure: true,
             notify_grok_reply_needed: true,
@@ -747,6 +751,11 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 "probe.notifications",
                 "notify_grokbot",
                 notifications.notify_grokbot,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_github_ci",
+                notifications.notify_github_ci,
             );
             editor.set_bool(
                 "probe.notifications",

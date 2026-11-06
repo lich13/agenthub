@@ -33,6 +33,7 @@ pub fn apply_probe_settings_save_plan(
             .set_secret_setting_bytes(&write.setting_key, write.secret_value.as_bytes())?;
     }
 
+    agenthub_core::github_ci::settings_changed(&state.db, &state.config(), &response_config)?;
     state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -285,5 +286,5 @@ pub fn linux_update_action_plan(
     action: UpdateAction,
 ) -> Result<update_service::UpdateActionPlan> {
     let config = state.config();
-    update_service::UpdateUseCases::new(&config, platform).action_plan(action)
+    update_service::plan_update_action(&config, platform, action)
 }

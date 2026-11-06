@@ -29,7 +29,7 @@ describe("machine demo fixtures", () => {
   test("remote API fixture retains Linux service, update and backup capabilities", () => {
     const view = buildDemoSystemCapabilities("linux-api");
     expect(view.host_surface).toBe("linux_server_api");
-    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "antigravity_notifications", "dsh_notifications", "grokbot_sessions", "grokbot_notifications", "hidden_cleanup_scan", "codex_delete_tree"].sort());
+    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "antigravity_notifications", "dsh_notifications", "github_ci", "grokbot_sessions", "grokbot_notifications", "hidden_cleanup_scan", "codex_delete_tree"].sort());
     expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
     expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/agenthub-demo", config_file: "/srv/agenthub-demo/config.toml", log_dir: "/srv/agenthub-demo/logs", service_kind: "systemd", service_name: "agenthub-webd" });
   });

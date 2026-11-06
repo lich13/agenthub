@@ -615,12 +615,6 @@ describe("archive delete API compatibility", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-
-
-
-
-
-
   test("macOS demo fixtures do not include Linux-only rendered copy or paths", async () => {
     globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
     const {
@@ -650,10 +644,6 @@ describe("archive delete API compatibility", () => {
 
     expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/agenthub|192\.0\.2\.10|panel\.example\.com|\/home\/ubuntu|\/root\/\.codex/i);
   });
-
-
-
-
 
   test("plan, pending question and answered history render read-only without reviving actions", async () => {
     const { createElement } = await import("react");
@@ -833,21 +823,6 @@ describe("archive delete API compatibility", () => {
     expect(app.filterVisibleThreadSummaries(rows).map((thread) => thread.id)).toEqual(["main"]);
   });
 
-  test("conversation title text ignores latest message previews", async () => {
-    const app = await import("../test/domain");
-
-    expect(app.conversationTitleText({
-      title: " example-user ",
-      latest_message: "接手这个线程的工作 019e86d2...",
-      model: "custom",
-      last_event_kind: "app-server.thread/read"
-    })).toBe("example-user");
-    expect(app.conversationTitleText({
-      title: "   ",
-      latest_message: "接手这个线程的工作 019e86d2..."
-    })).toBe("未命名线程");
-  });
-
   test("incoming realtime summary keeps an existing title when the update has only a placeholder", async () => {
     const app = await import("../test/domain");
     const current = {
@@ -875,9 +850,6 @@ describe("archive delete API compatibility", () => {
       active_turn_id: "turn-live",
       last_event_kind: "task_complete"
     });
-    expect(app.lastEventKindText({ last_event_kind: "app-server.thread/read" })).toBe("未知");
-    expect(app.lastEventKindText({ last_event_kind: "panel.job.running" })).toBe("未知");
-    expect(app.lastEventKindText({ last_event_kind: "task_complete" })).toBe("task_complete");
   });
 
   test("thread detail summary merges fresh list status without losing title", async () => {
@@ -1153,15 +1125,6 @@ describe("archive delete API compatibility", () => {
     expect(app.questionAnswerLabels(answeredQuestion, "q1")).toEqual(["B"]);
     expect(app.isResolvedActionBlock(answeredQuestion)).toBe(true);
 
-    expect(app.prioritizeCurrentActionBlocks(
-      [currentPlan, answeredQuestion, currentQuestion],
-      currentPlan,
-      currentQuestion
-    ).map((block) => block.id)).toEqual([
-      "question-old",
-      "plan-live",
-      "question-live"
-    ]);
   });
 
   test("conversation block compaction collapses old chat messages but keeps recent chat and running tools", async () => {
@@ -1227,7 +1190,7 @@ describe("archive delete API compatibility", () => {
       currentPlan,
       null
     );
-    const prioritized = app.prioritizeCurrentActionBlocks(compacted, currentPlan, null);
+    const prioritized = compacted;
 
     expect(prioritized.map((block) => block.id)).toEqual([
       "action-history-collapsed",

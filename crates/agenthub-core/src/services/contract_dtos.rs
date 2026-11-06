@@ -1,4 +1,9 @@
 pub const CONTRACT_DTO_NAMES: &[&str] = &[
+    "GithubCiRequest",
+    "GithubCiStatus",
+    "GithubCiAccount",
+    "GithubCiRepository",
+    "GithubCiRun",
     "UnifiedCleanupDryRunRequest",
     "UnifiedCleanupCandidate",
     "UnifiedCleanupTargetSelection",
@@ -124,6 +129,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
 ];
 
 pub const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
+    "github_ci",
     "codex_desktop",
     "remote",
     "cleanup",

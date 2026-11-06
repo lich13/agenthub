@@ -9,7 +9,6 @@ use agenthub_core::{
             ProbeSettingsSaveRequest,
         },
         system::Capability,
-        updates::{UpdateAction, UpdateExecutionMethod},
         use_cases::AgentHubUseCases,
     },
 };
@@ -180,66 +179,9 @@ fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
     assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
     assert_eq!(bark.diagnostic_plan.unwrap().kind, "bark-test".to_string());
 
-    let update_status = linux.updates().unwrap().status(None, None).unwrap();
-    assert_eq!(update_status.required_capability, Capability::AppUpdater);
-    let check = linux.updates().unwrap().check_plan().unwrap();
-    assert_eq!(check.required_capability, Capability::LinuxUpdateJob);
-    assert_eq!(check.action, UpdateAction::Check);
-    assert_eq!(check.method, UpdateExecutionMethod::LinuxSystemdJob);
-    let prune = linux.updates().unwrap().prune_plan().unwrap();
-    assert_eq!(prune.required_capability, Capability::PruneBackups);
-    assert_eq!(prune.action, UpdateAction::Prune);
-
     let capabilities = linux.system().unwrap().capabilities();
     assert!(capabilities.probe);
     assert!(capabilities.prune_backups);
-    let gate = linux
-        .system()
-        .unwrap()
-        .capability_gate(Capability::PruneBackups);
-    assert!(gate.supported);
-    assert_eq!(gate.capability, Capability::PruneBackups);
-}
-
-#[test]
-fn macos_prune_plan_fails_at_capability_gate_without_linux_remediation_advice() {
-    let home = temp_dir("agenthub-top-level-macos");
-    std::fs::create_dir_all(&home).unwrap();
-    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
-    let use_cases = AgentHubUseCases::with_config(&config, &platform);
-
-    let err = use_cases
-        .updates()
-        .unwrap()
-        .prune_plan()
-        .expect_err("macOS must not plan Linux backup pruning");
-    let message = err.to_string();
-    assert!(message.contains("prune_backups is unavailable on macos"));
-    for forbidden in [
-        "Linux",
-        "linux server",
-        "systemd",
-        "Nginx",
-        "nginx",
-        "sudo",
-        "systemctl",
-    ] {
-        assert!(
-            !message.contains(forbidden),
-            "macOS prune error must not include Linux host advice: {message}"
-        );
-    }
-
-    let gate = use_cases
-        .system()
-        .unwrap()
-        .capability_gate(Capability::PruneBackups);
-    assert!(!gate.supported);
-    assert_eq!(gate.error.as_deref(), Some(message.as_str()));
-    assert!(!use_cases.system().unwrap().capabilities().prune_backups);
-
-    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
@@ -250,7 +192,6 @@ fn config_backed_use_cases_report_missing_config_in_core() {
     for result in [
         use_cases.settings().map(|_| ()),
         use_cases.probe().map(|_| ()),
-        use_cases.updates().map(|_| ()),
         use_cases.system().map(|_| ()),
     ] {
         assert!(result
@@ -258,16 +199,4 @@ fn config_backed_use_cases_report_missing_config_in_core() {
             .to_string()
             .contains("config is required"));
     }
-}
-
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let unique = format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    std::env::temp_dir().join(format!("{label}-{unique}"))
 }

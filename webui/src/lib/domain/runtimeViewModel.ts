@@ -2,11 +2,9 @@ import type {
   HiddenScanProgress,
   HiddenThreadDeletePlan,
   JobRecord,
-  ProbeEvent,
   ProbeJobAction,
   ProbeSettings,
   ProbeStatus,
-  ThreadDetail,
   ThreadSummary,
   UnifiedCleanupPlan,
   UnifiedCleanupResult,
@@ -94,39 +92,6 @@ export const UNIFIED_CLEANUP_SCOPES: readonly UnifiedCleanupScopeMeta[] = [
   }
 ];
 
-export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[] {
-  const capabilities = capabilitiesForInput(input);
-  return [
-    updatePanelTitle(capabilities),
-    ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.unifiedCleanup] : []),
-    OPS_PANEL_TITLES.jobs
-  ];
-}
-
-export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[] {
-  const capabilities = capabilitiesForInput(input);
-  return [
-    ...opsWorkspacePanelTitles(input),
-    "当前版本",
-    ...opsUpdateActionView(null, capabilities).map((action) => action.label),
-    ...(capabilities.threadCleanup ? [
-      "全平台扫描预览",
-      "深度扫描隐藏线程",
-      "一键清理所选平台",
-      "确认清理所选",
-      "可清理会话",
-      "预计释放空间",
-      "已选平台范围"
-    ] : []),
-    failureCategoryLabel("systemd_failure", capabilities),
-    failureCategoryLabel("permission_denied_sudo", capabilities)
-  ];
-}
-
-export function resolvedSelectedThreadId(selectedId: string | null): string | null {
-  return selectedId;
-}
-
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
   return Boolean(plan) && (!plan!.scan || (plan!.scan!.phase === "complete" && !plan!.scan!.hasMore
     && plan!.candidates.length === plan!.scan!.total)) && Boolean(plan!.candidates?.length);
@@ -198,45 +163,6 @@ function cleanupStageLabel(input: CleanupStageInput): CleanupStageView {
   return { label: "无可清理", tone: "success" };
 }
 
-export function sourceCountsText(counts?: Record<string, number> | null): string {
-  if (!counts || Object.keys(counts).length === 0) return "暂无";
-  return Object.entries(counts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value}`)
-    .join(" ");
-}
-
-export type ThreadMessageControllerView = {
-  hydration: {
-    threadId: string | null;
-    selectedThreadSummary?: ThreadSummary | null;
-    selectedDetail?: ThreadDetail | null;
-  };
-  realtime: {
-    threadId: string;
-    applyThreadTitleOverride: <T extends Partial<ThreadSummary>>(summary: T) => T;
-  };
-};
-
-export function threadMessageControllerView(input: {
-  threadId: string | null;
-  selectedThreadSummary?: ThreadSummary | null;
-  selectedDetail?: ThreadDetail | null;
-  applyThreadTitleOverride?: <T extends Partial<ThreadSummary>>(summary: T) => T;
-}): ThreadMessageControllerView {
-  return {
-    hydration: {
-      threadId: input.threadId,
-      selectedThreadSummary: input.selectedThreadSummary,
-      selectedDetail: input.selectedDetail
-    },
-    realtime: {
-      threadId: input.threadId ?? "",
-      applyThreadTitleOverride: input.applyThreadTitleOverride ?? ((summary) => summary)
-    }
-  };
-}
-
 export type ProbeAvailabilityView = {
   headline: string;
   metric: string;
@@ -300,14 +226,6 @@ export function probeWorkspaceView(input: {
     snapshotTone: data?.is_refreshing || input.fetching ? "warning" : "success",
     probeJobs: (input.jobs ?? []).filter(isProbeJob).slice(0, 6)
   };
-}
-
-export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ThreadSummary[] {
-  return [
-    ...(status?.running_threads ?? []),
-    ...(status?.reply_needed_threads ?? []),
-    ...(status?.recoverable_threads ?? [])
-  ];
 }
 
 export function probeThreadsByStatus(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ProbeThreadsByStatusView {
@@ -389,23 +307,6 @@ export function probeJobActionLabel(action: ProbeJobAction | undefined): string 
     default:
       return "Probe job";
   }
-}
-
-export function probeEventSummary(event: ProbeEvent): string {
-  const thread = event.thread_id ? `线程 ${event.thread_id}` : "无线程";
-  const fields = [
-    event.payload?.session_id ? "session" : "",
-    event.payload?.transcript_path ? "transcript" : "",
-    event.payload?.last_assistant_message ? "assistant" : ""
-  ].filter(Boolean);
-  return [thread, fields.length ? fields.join(" · ") : "payload 已脱敏"].join(" · ");
-}
-
-export function shouldAutoScrollProbeFeed(
-  current: { scrollTop: number; clientHeight: number; scrollHeight: number },
-  _previous?: { scrollTop: number; clientHeight: number; scrollHeight: number } | null
-): boolean {
-  return current.scrollHeight - current.scrollTop - current.clientHeight <= 32;
 }
 
 type CodexHomePathFields = {

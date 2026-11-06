@@ -144,15 +144,15 @@ fn session_key(scope: &str, id: &str) -> String {
 }
 fn locate(paths: &GrokBotPaths, session: &str) -> Result<(String, Value)> {
     let (scope, roster) = roster(paths)?.context("Grok Bot 当前账户不可用")?;
+    let prefix = format!("{}:", hex::encode(Sha256::digest(&scope)));
+    let id = session
+        .strip_prefix(&prefix)
+        .context("Grok Bot 线程不在当前账户中")?;
     let row = roster["rows"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| {
-            row["id"]
-                .as_str()
-                .is_some_and(|id| session_key(&scope, id) == session)
-        })
+        .find(|row| row["id"].as_str() == Some(id))
         .context("Grok Bot 线程不在当前账户中")?;
     Ok((scope, row.clone()))
 }
@@ -194,6 +194,14 @@ fn text(value: &Value) -> String {
 fn timestamp(ms: i64) -> Option<String> {
     chrono::DateTime::from_timestamp_millis(ms).map(|t| t.to_rfc3339())
 }
+fn row_title(row: &Value) -> String {
+    row["title"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or(row["name"].as_str())
+        .unwrap_or("Grok Bot")
+        .into()
+}
 fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSessionSummary> {
     let id = row["id"]
         .as_str()
@@ -208,12 +216,7 @@ fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSes
             .then(|| crate::session_storage::file_size(&paths.persistence, &path)),
         id: id.into(),
         session_key: session_key(scope, id),
-        title: row["title"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .or(row["name"].as_str())
-            .unwrap_or("Grok Bot")
-            .into(),
+        title: row_title(row),
         cwd: String::new(),
         path: if available { path } else { PathBuf::new() },
         archived: false,
@@ -229,12 +232,7 @@ fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSes
             "unknown"
         }
         .into(),
-        format_version: if available {
-            "近期缓存"
-        } else {
-            "未缓存"
-        }
-        .into(),
+        format_version: String::new(),
         can_rename: false,
         rename_block_reason: None,
         can_archive: false,
@@ -425,8 +423,15 @@ pub fn load_all_events(
 }
 fn snapshot(paths: &GrokBotPaths, session: &str) -> Result<Arc<ProviderHistorySnapshot>> {
     let (scope, row) = locate(paths, session)?;
+    snapshot_for_row(paths, &scope, &row)
+}
+fn snapshot_for_row(
+    paths: &GrokBotPaths,
+    scope: &str,
+    row: &Value,
+) -> Result<Arc<ProviderHistorySnapshot>> {
     let id = row["id"].as_str().context("Grok Bot 线程身份缺失")?;
-    let k = replica_key(&scope, id);
+    let k = replica_key(scope, id);
     let path = slice_path(&paths.persistence, &k);
     provider_sessions::HISTORY_CACHE.read(&path, provider_sessions::history_weight, || {
         let value = read_slice(&paths.persistence, &k, 1)?;
@@ -442,8 +447,8 @@ pub fn detail(
     paths: &GrokBotPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
-    let mut summary = session_summary(paths, &request.session_key)?;
     let (scope, row) = locate(paths, &request.session_key)?;
+    let mut summary = summary(paths, &scope, &row)?;
     let replica = read_slice(&paths.persistence, &replica_key(&scope, &summary.id), 1)?;
     summary.status = pending_events(&row, replica.as_deref())
         .first()
@@ -452,7 +457,7 @@ pub fn detail(
         .into();
     provider_sessions::paginate_provider_detail(
         summary,
-        snapshot(paths, &request.session_key)?.as_ref(),
+        snapshot_for_row(paths, &scope, &row)?.as_ref(),
         request,
     )
 }
@@ -499,31 +504,7 @@ fn pending_events(row: &Value, replica: Option<&Value>) -> Vec<NativeTurnEvent> 
                         || e["message"]["approval"]["requestId"] == request
                 })
             });
-        // A resolved interaction is stronger evidence than a lagging roster.
-        let resolved = matching_entry.is_some_and(|e| {
-            e["kind"] == "send-message"
-                && (e.get("respondedValue").is_some_and(|v| !v.is_null())
-                    || e["widgetDismissed"] == true
-                    || e.get("formResolution").is_some_and(|v| !v.is_null())
-                    || (e["message"]["type"] == "user-form"
-                        && (e["message"]["phoneCallQuestion"].get("closed").is_some()
-                            || e["message"]["phoneCallQuestion"]["deadlineAtMs"]
-                                .as_i64()
-                                .is_some_and(|deadline| {
-                                    deadline <= chrono::Utc::now().timestamp_millis()
-                                })))
-                    || e["message"]["ask"]["status"]
-                        .as_str()
-                        .is_some_and(|s| s != "pending")
-                    || e["message"]["approval"]["status"]
-                        .as_str()
-                        .is_some_and(|s| s != "pending"))
-        });
-        let covered = matching_entry.and_then(interaction).is_some();
-        if !resolved && !covered && !pending.iter().any(|e| e.turn_id == request) {
-            let ts = matching_entry
-                .and_then(|e| e["timestampMs"].as_i64())
-                .unwrap_or(ts);
+        if matching_entry.is_none() && !pending.iter().any(|e| e.turn_id == request) {
             pending.push(NativeTurnEvent {
                 prompt_id: Some(request.into()),
                 position: ts as u64,
@@ -562,12 +543,13 @@ pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
         }
         let pending = pending_events(row, replica.as_deref());
         let count = pending.iter().map(|e| e.position).max().unwrap_or(0);
+        let session_key = session_key(&scope, id);
         scan.streams.push(NativeStreamSnapshot {
             provider: NativeProvider::GrokBot,
-            session_key: session_key(&scope, id),
+            session_key: session_key.clone(),
             id: id.into(),
-            title: summary(paths, &scope, row)?.title,
-            identity: session_key(&scope, id),
+            title: row_title(row),
+            identity: session_key,
             record_count: count,
             settled_count: 0,
             events: pending,

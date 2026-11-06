@@ -3,7 +3,7 @@ import { machineScope } from "../runtime";
 import { visibleMarkdown } from "./visibleMarkdown";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
-import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
+import { capabilitiesForInput, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
 export type View = "codex" | "grok" | "grokbot" | "claude" | "antigravity" | "dsh" | "probe" | "ops";
 export type SelectedThread = string | null;
@@ -18,9 +18,6 @@ export type ThreadListItemLike = ThreadTitleLike & {
 };
 
 export function visibleNavigationItems<T extends { id: View }>(items: T[], input?: RuntimeCapabilityInput): T[] { return items.filter(item => item.id !== "grokbot" || capabilitiesForInput(input).grokbotSessions === true); }
-export function navigationLabelsForRuntime<T extends { id: View; label: string }>(items: T[], input?: RuntimeCapabilityInput): string[] {
-  return visibleNavigationItems(items, input).map(item => item.label);
-}
 
 export function threadListItemText(thread: ThreadTitleLike): string {
   return thread.title?.trim() || "未命名线程";
@@ -58,15 +55,6 @@ export function cleanThreadPreviewText(value?: string | null): string {
   const source = visibleMarkdown(value ?? "").trim();
   if (!source) return "";
   return extractPlanText(source).replace(/\s+/g, " ").trim();
-}
-
-export function conversationTitleText(thread: ThreadTitleLike): string {
-  return thread.title?.trim() || "未命名线程";
-}
-
-export function renderConversationHeaderHtml(summary: ThreadSummary): string {
-  const title = conversationTitleText(summary);
-  return `<div class="conversation-title-copy"><h2 class="conversation-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h2></div>`;
 }
 
 const threadTitleOverrides = new Map<string, { title: string; expiresAt: number }>();
@@ -120,12 +108,6 @@ export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(cur
   return next;
 }
 
-export function lastEventKindText(summary: Pick<ThreadSummary, "last_event_kind">): string {
-  const value = summary.last_event_kind?.trim();
-  if (!isUserVisibleLastEventKind(value)) return "未知";
-  return value || "未知";
-}
-
 export function mergeThreadDetailSummaryFromList(detail: ThreadDetail, incoming: Partial<ThreadSummary>): ThreadDetail {
   return {
     ...detail,
@@ -173,7 +155,7 @@ export function threadSelectionView(input: {
   includeArchived?: boolean;
 }): ThreadSelectionView {
   const visibleThreads = filterVisibleThreadSummaries(input.threads, input.includeArchived);
-  const resolvedSelected = resolvedSelectedThreadId(input.selectedId);
+  const resolvedSelected = input.selectedId;
   const selectedThreadSummary = visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null;
   return {
     visibleThreads,
@@ -240,16 +222,6 @@ export function threadStatusLabel(status?: ThreadStatus | string | null): string
   if (status === "Running") return "运行中";
   if (status === "Archived") return "归档";
   return "最近";
-}
-
-export function optionalUnavailableMessage(
-  feature: string,
-  result?: { available: boolean; reason?: string | null; error?: string | null } | null
-): string {
-  const label = feature.trim() || "功能";
-  if (!result || result.available) return `${label} 已就绪`;
-  const detail = result.reason?.trim() || result.error?.trim();
-  return detail ? `${label} 不可用：${detail}` : `${label} 暂不可用`;
 }
 
 export function sourceCountsText(counts?: Record<string, number> | null): string {
@@ -335,13 +307,3 @@ function isInternalThreadPromptText(value: string): boolean {
     || text.includes("model_reasoning_effort=xhigh");
   return strongSubagentInstruction && fixedAgentConfig;
 }
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-export { resolvedSelectedThreadId };

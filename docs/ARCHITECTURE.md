@@ -2,6 +2,14 @@
 
 本文描述当前实现及维护边界。用户操作与下载见 [README](../README.md)，视觉规则见 [DESIGN](../DESIGN.md)，部署步骤见[部署手册](cloud-deploy-runbook.md)，交付状态见[当前进度](progress/MASTER.md)。
 
+## GitHub CI 通知
+
+`github.ci.status` 通过 AgentHubUseCases 及薄 Tauri／SSH RPC 适配返回账号与运行摘要；`github_ci` 为可选能力，旧服务不显示面板。配置沿用 `probe.settings.get/save` 的 `notifications.notify_github_ci`，默认 false，监控还受 Probe 主开关控制。Bark 的启停独立控制实际投递。
+
+现有 serve／monitor 启动独立扫描循环。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接与 ETag；账号名下仓库含私有仓库和 fork，每 10 分钟刷新，运行每 60 秒查询且支持手动刷新。遍历分页以识别旧 run 的新 attempt，保留最近 1000 个完成摘要及全部在途任务；限流等待同时留存，重启不提前重试。运行日志和产物通过 GitHub 查看。
+
+现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化跳过已有完成记录，在途任务结束仍通知。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 使用对应 workflow run 链接。
+
 ## 运行架构与模块
 
 `desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，SSH RPC/Tauri 只做薄适配。

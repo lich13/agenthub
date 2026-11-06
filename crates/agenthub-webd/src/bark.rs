@@ -194,15 +194,20 @@ async fn send(
         if let Some(sound) = settings.sound.as_deref().filter(|s| !s.is_empty()) {
             payload["sound"] = json!(sound);
         }
-        if let Some(url) = settings.url.as_deref().filter(|s| {
-            reqwest::Url::parse(s).is_ok_and(|u| {
-                !matches!(
-                    u.scheme(),
-                    "javascript" | "data" | "file" | "about" | "blob"
-                ) && u.username().is_empty()
-                    && u.password().is_none()
+        if let Some(url) = request
+            .url
+            .as_deref()
+            .or(settings.url.as_deref())
+            .filter(|s| {
+                reqwest::Url::parse(s).is_ok_and(|u| {
+                    !matches!(
+                        u.scheme(),
+                        "javascript" | "data" | "file" | "about" | "blob"
+                    ) && u.username().is_empty()
+                        && u.password().is_none()
+                })
             })
-        }) {
+        {
             payload["url"] = json!(url);
         }
     }
@@ -298,6 +303,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_server_urls_fail_without_network_delivery_or_retry() {
         let request = ProbeBarkRequest {
+            url: None,
             presentation: None,
             title: "fixture title".into(),
             body: "fixture body".into(),

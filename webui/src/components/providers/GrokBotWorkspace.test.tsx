@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { ProviderSessionDetail, ProviderSessionSummary } from "../../types";
+import type { ProviderSessionSummary } from "../../types";
 import type { ThreadMenuAction } from "../common/TaskMenu";
 import { GrokBotWorkspace } from "./GrokBotWorkspace";
 
@@ -39,12 +39,14 @@ test("uncached threads remain readable list items with no mutation controls", ()
   expect(state.actions.map(action => action.id)).toEqual(["copy-reply", "copy-id", "copy-path", "reveal"]);
   expect(state.actions.find(action => action.id === "copy-path")?.disabled).toBe(true);
 });
-test("copy path rechecks the native cache and never substitutes another path", async () => {
+test("copy path uses the selected native path directly", () => {
   render();
-  const action = state.actions.find(action => action.id === "copy-path")!;
-  state.read.mockResolvedValueOnce({ summary: { ...state.summary, path: "" } } as ProviderSessionDetail);
-  action.run(); await vi.waitFor(() => expect(state.feedback).toHaveBeenCalledWith("未缓存"));
-  expect(state.copy).not.toHaveBeenCalled();
-  state.read.mockResolvedValueOnce({ summary: { ...state.summary, path: "/fixture/thread.kblob" } } as ProviderSessionDetail);
-  action.run(); await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("/fixture/thread.kblob", "已复制路径"));
+  state.actions.find(action => action.id === "copy-path")!.run();
+  expect(state.copy).toHaveBeenCalledWith("/fixture/thread.blob", "已复制路径");
+  expect(state.read).not.toHaveBeenCalled();
+});
+test("an uncached pending request keeps its actionable status", () => {
+  state.summary.path = "";
+  state.summary.status = "reply_needed";
+  expect(render()).toContain("需要回复");
 });

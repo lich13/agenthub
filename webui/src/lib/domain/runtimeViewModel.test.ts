@@ -11,9 +11,7 @@ import {
   canStartHiddenThreadDelete,
   failureCategoryLabel,
   opsUpdateActionView,
-  opsWorkspacePanelTitles,
   probeStateLabel,
-  threadMessageControllerView
 } from "./runtimeViewModel";
 
 const linuxWebCapabilities: RuntimeCapabilityMatrix = {
@@ -180,33 +178,4 @@ describe("runtime view-model helpers", () => {
     })).toBe("服务失败");
   });
 
-  test("derives thread message controller inputs without exposing store/cache internals to components", () => {
-    const selectedThreadSummary = {
-      id: "thread-a",
-      title: "Thread A",
-      status: "Recent",
-      message_count: 1
-    } as const;
-    const selectedDetail = {
-      summary: selectedThreadSummary,
-      messages: [],
-      blocks: [],
-      raw_event_count: 0
-    };
-    const view = threadMessageControllerView({
-      threadId: "thread-a",
-      selectedThreadSummary,
-      selectedDetail
-    });
-
-    expect(view.hydration).toEqual({
-      threadId: "thread-a",
-      selectedThreadSummary,
-      selectedDetail
-    });
-    expect(view.realtime.threadId).toBe("thread-a");
-    expect(view.realtime.applyThreadTitleOverride).toBeTypeOf("function");
-    expect(Object.keys(view).sort()).toEqual(["hydration", "realtime"]);
-    expect(JSON.stringify(view)).not.toMatch(/queryClient|setQueryData|invalidateQueries|useQueryClient/);
-  });
 });

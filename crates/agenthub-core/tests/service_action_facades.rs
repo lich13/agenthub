@@ -23,7 +23,7 @@ use agenthub_core::{
             plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
             thread_blocks_page_for_plan, ThreadDetailRequest, ThreadsQuery,
         },
-        updates::{plan_update_action, UpdateAction, UpdateExecutionMethod, UpdateUseCases},
+        updates::{plan_update_action, UpdateAction, UpdateExecutionMethod},
     },
 };
 
@@ -56,22 +56,10 @@ fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
 
     assert_eq!(UpdateAction::Check.as_rpc_action(), commands::UPDATES_CHECK);
     assert_eq!(
-        UpdateAction::Check.as_desktop_command(),
-        commands::UPDATES_CHECK
-    );
-    assert_eq!(
         UpdateAction::Install.as_rpc_action(),
         commands::UPDATES_INSTALL
     );
-    assert_eq!(
-        UpdateAction::Install.as_desktop_command(),
-        commands::UPDATES_INSTALL
-    );
     assert_eq!(UpdateAction::Prune.as_rpc_action(), commands::UPDATES_PRUNE);
-    assert_eq!(
-        UpdateAction::Prune.as_desktop_command(),
-        commands::UPDATES_PRUNE
-    );
 }
 
 #[test]
@@ -176,7 +164,7 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
         check.linux_job.as_ref().unwrap().kind,
         "agenthub_update_check"
     );
-    assert!(check.native.is_none());
+    assert!(check.macos_job.is_none());
 
     let mac_home = temp_dir("agenthub-update-action-macos");
     std::fs::create_dir_all(&mac_home).unwrap();
@@ -188,14 +176,14 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
     assert_eq!(mac_check.method, UpdateExecutionMethod::MacosTauriUpdater);
     assert!(mac_check.linux_job.is_none());
     assert_eq!(
-        mac_check.native.as_ref().unwrap().command,
-        commands::UPDATES_CHECK
+        mac_check.macos_job.as_ref().unwrap().kind,
+        "agenthub_update_check"
     );
 
     let mac_install = plan_update_action(&mac_config, &mac, UpdateAction::Install).unwrap();
     assert_eq!(
-        mac_install.native.as_ref().unwrap().command,
-        commands::UPDATES_INSTALL
+        mac_install.macos_job.as_ref().unwrap().kind,
+        "agenthub_update_install"
     );
 
     let err = plan_update_action(&mac_config, &mac, UpdateAction::Prune)
@@ -242,40 +230,6 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
     let serialized = serde_json::to_string(&save).unwrap();
     assert!(serialized.contains("[configured]"));
     assert!(!serialized.contains("use-case-bark-key"));
-
-    let updates = UpdateUseCases::new(&linux_config, &linux);
-    let check = updates.check_plan().unwrap();
-    assert_eq!(check.required_capability, Capability::LinuxUpdateJob);
-    assert_eq!(check.action, UpdateAction::Check);
-    assert_eq!(check.method, UpdateExecutionMethod::LinuxSystemdJob);
-    let install = updates.install_plan().unwrap();
-    assert_eq!(install.action, UpdateAction::Install);
-    let prune = updates.prune_plan().unwrap();
-    assert_eq!(prune.required_capability, Capability::PruneBackups);
-    assert_eq!(prune.action, UpdateAction::Prune);
-
-    let mac_home = temp_dir("agenthub-use-cases-macos");
-    std::fs::create_dir_all(&mac_home).unwrap();
-    let mac_config = Config::for_platform_kind_with_home(PlatformKind::Macos, &mac_home);
-    let mac = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
-    let mac_updates = UpdateUseCases::new(&mac_config, &mac);
-
-    assert_eq!(
-        mac_updates.check_plan().unwrap().required_capability,
-        Capability::AppUpdater
-    );
-    assert_eq!(
-        mac_updates.install_plan().unwrap().method,
-        UpdateExecutionMethod::MacosTauriUpdater
-    );
-    let err = mac_updates
-        .prune_plan()
-        .expect_err("macOS must not expose Linux backup pruning");
-    assert!(err
-        .to_string()
-        .contains("prune_backups is unavailable on macos"));
-
-    std::fs::remove_dir_all(mac_home).unwrap();
 }
 
 #[test]

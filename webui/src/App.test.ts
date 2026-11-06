@@ -24,32 +24,6 @@ async function loadThreadQuery(): Promise<ThreadQueryExports> {
   return import("./lib/query/threads") as Promise<ThreadQueryExports>;
 }
 
-const forbiddenComponentTokens = [
-  '"/api/',
-  "'/api/",
-  "`/api/",
-  "@tauri-apps/api",
-  "runtimeRpc(",
-  "fetch(",
-  "EventSource",
-  "useQueryClient",
-  "setQueryData",
-  "invalidateQueries",
-  "isDesktopRuntime(",
-  "desktop_api_command",
-  "desktopApiRoute",
-  "invokeDesktopApi",
-  "runtimeCapabilities(",
-  "runtimeCapabilitiesForRuntime("
-];
-
-function expectSourceToAvoidTokens(source: string, label: string, tokens: string[]) {
-  for (const token of tokens) {
-    expect(source, `${label} must not contain ${token}`).not.toContain(token);
-  }
-  expect(source, `${label} must not call invoke directly`).not.toMatch(/\binvoke\s*\(/);
-}
-
 const remoteCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
   hostSurface: "linux_server_api",
@@ -85,35 +59,6 @@ describe("conversation helpers", () => {
     expect(app.jobOutputView?.(explanation, macosDesktopCapabilities)).toBe(explanation);
   });
 
-  test("segments internal paths and Codex ids as copyable references", async () => {
-    const app = await loadApp();
-    const segments = app.segmentInternalReferences?.(
-      "请看 /Users/example/.codex/sessions/2026/06/15/rollout-00000001.jsonl 和 thread 00000000-0000-4000-8000-000000000001 的 turn turn-live。"
-    );
-
-    expect(segments).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "internal_reference",
-        kind: "path",
-        text: "/Users/example/.codex/sessions/2026/06/15/rollout-00000001.jsonl",
-        copyText: "/Users/example/.codex/sessions/2026/06/15/rollout-00000001.jsonl"
-      }),
-      expect.objectContaining({
-        type: "internal_reference",
-        kind: "thread",
-        text: "thread 00000000-0000-4000-8000-000000000001",
-        copyText: "thread 00000000-0000-4000-8000-000000000001"
-      }),
-      expect.objectContaining({
-        type: "internal_reference",
-        kind: "turn",
-        text: "turn turn-live",
-        copyText: "turn turn-live"
-      })
-    ]));
-    expect(app.segmentInternalReferences?.("goal abc123")).toEqual([{ type: "text", text: "goal abc123" }]);
-  });
-
   test("latest assistant copy text skips tools, plans, and internal context", async () => {
     const app = await loadApp();
     const blocks: MessageBlock[] = [
@@ -129,28 +74,7 @@ describe("conversation helpers", () => {
     expect(app.latestAssistantCopyText?.(blocks.slice(0, -1))).toBe("first reply");
   });
 
-  test("title refresh keeps a dirty local edit for the same thread but syncs on thread switch", async () => {
-    const app = await loadApp();
-
-    expect(app.nextRenameDraftValue?.({
-      previousThreadId: "thread-a",
-      threadId: "thread-a",
-      currentDraft: "我正在输入的新标题",
-      incomingTitle: "服务端旧标题",
-      dirty: true
-    })).toBe("我正在输入的新标题");
-
-    expect(app.nextRenameDraftValue?.({
-      previousThreadId: "thread-a",
-      threadId: "thread-b",
-      currentDraft: "我正在输入的新标题",
-      incomingTitle: "thread-b 标题",
-      dirty: true
-    })).toBe("thread-b 标题");
-  });
-
   test("saved title updates thread list cache values without waiting for a refetch", async () => {
-    const app = await loadApp();
     const threadQuery = await loadThreadQuery();
     const qc = new QueryClient();
     const threads: ThreadSummary[] = [
@@ -163,11 +87,6 @@ describe("conversation helpers", () => {
       blocks: [],
       raw_event_count: 0
     };
-
-    expect(app.mergeSavedThreadTitle?.(threads, "thread-a", "新标题")).toEqual([
-      { id: "thread-a", title: "新标题", status: "Recent", message_count: 1 },
-      { id: "thread-b", title: "其他", status: "Recent", message_count: 1 }
-    ]);
 
     qc.setQueryData(["threads", "all", ""], threads);
     qc.setQueryData(["threads", "running", ""], [threads[1]]);
@@ -324,18 +243,6 @@ describe("conversation helpers", () => {
     expect(visibleText).toBe("Codex 本地状态不可用 Codex 本地状态不可用");
   });
 
-  test("probe thread rows use canonical ThreadSummary status values", async () => {
-    const app = await loadApp();
-    const rows = app.probeStatusThreads?.({
-      running_threads: [{ id: "running", title: "run", status: "Running", message_count: 1 }],
-      reply_needed_threads: [{ id: "reply", title: "reply", status: "ReplyNeeded", message_count: 1 }],
-      recoverable_threads: [{ id: "recoverable", title: "recover", status: "Recoverable", message_count: 1 }]
-    }) ?? [];
-
-    expect(rows.map((thread) => thread.status)).toEqual(["Running", "ReplyNeeded", "Recoverable"]);
-    expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
-  });
-
   test("probe availability copy treats initial snapshot fetch as loading instead of unavailable", async () => {
     const app = await loadApp();
 
@@ -359,31 +266,6 @@ describe("conversation helpers", () => {
       metric: "运行中",
       tone: "success"
     });
-  });
-
-  test("probe event summary shows context without leaking payload secrets", async () => {
-    const app = await loadApp();
-    const summary = app.probeEventSummary?.({
-      id: "event-1",
-      kind: "hook-stop",
-      thread_id: "thread-a",
-      title: "Codex Stop Hook",
-      message: "done",
-      source: "agenthub-webd probe hook-stop",
-      payload: {
-        session_id: "session-a",
-        transcript_path: "/tmp/transcript.jsonl",
-        last_assistant_message: "assistant",
-        device_key: "[redacted]"
-      },
-      created_at: "2026-06-15T00:00:00Z"
-    });
-
-    expect(summary).toContain("线程 thread-a");
-    expect(summary).toContain("session");
-    expect(summary).toContain("transcript");
-    expect(summary).toContain("assistant");
-    expect(summary).not.toContain("device");
   });
 
   test("probe event card renderer prefers structured payload fields and hides secrets", async () => {
@@ -440,29 +322,6 @@ describe("conversation helpers", () => {
     ]));
   });
 
-  test("probe polling helper preserves the current scroll position unless the user is near the bottom", async () => {
-    const app = await loadApp();
-
-    expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 710, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(true);
-    expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 620, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(false);
-  });
-
-  test("conversation header renders title without cwd or runtime paths", async () => {
-    const app = await loadApp();
-    const html = app.renderConversationHeaderHtml?.({
-      id: "thread-a",
-      title: "部署检查",
-      status: "Recent",
-      message_count: 1,
-      cwd: "/root/.codex"
-    });
-
-    expect(html).toContain("部署检查");
-    expect(html).not.toContain("/root/.codex");
-    expect(html).not.toContain("cwd");
-    expect(html).not.toContain("工作目录");
-  });
-
   test("query placeholder helper keeps prior successful data during view switches", async () => {
     const app = await loadApp();
     const previousThreads: ThreadSummary[] = [
@@ -473,45 +332,6 @@ describe("conversation helpers", () => {
     expect(app.preservePreviousQueryData?.(previousThreads)).toBe(previousThreads);
     expect(app.preservePreviousQueryData?.(previousProbe)).toBe(previousProbe);
     expect(app.preservePreviousQueryData?.(undefined)).toBeUndefined();
-  });
-
-  test("ops workspace exposes only the current operations panels", async () => {
-    const app = await loadApp();
-    const retiredCodexPanel = ["Codex", "更新"].join(" ");
-    const retiredClaudePanel = ["Claude Code", "维护"].join(" ");
-    const retiredReadyCopy = ["CSRF", "已就绪"].join(" ");
-    const retiredMissingCopy = ["CSRF", "未恢复"].join(" ");
-
-    expect(app.opsWorkspacePanelTitles?.()).toEqual([
-      "本机 App 更新",
-      "Job History"
-    ]);
-    expect(app.opsWorkspacePanelTitles?.(macosDesktopCapabilities)).toEqual([
-      "本机 App 更新",
-      "全平台线程清理",
-      "Job History"
-    ]);
-    expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
-      "远程服务更新",
-      "全平台线程清理",
-      "Job History"
-    ]);
-    expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual(expect.arrayContaining([
-      "全平台线程清理"
-    ]));
-    expect(app.opsWorkspacePanelTitles?.()).not.toEqual(expect.arrayContaining([
-      retiredCodexPanel,
-      retiredClaudePanel,
-      "归档清理"
-    ]));
-    const visibleCopy = app.opsWorkspaceVisibleCopy?.(remoteCapabilities).join("\n") ?? "";
-    expect(visibleCopy).toContain("全平台线程清理");
-    expect(visibleCopy).toContain("全平台扫描预览");
-    expect(visibleCopy).toContain("一键清理所选平台");
-    expect(visibleCopy).not.toContain(retiredCodexPanel);
-    expect(visibleCopy).not.toContain(retiredClaudePanel);
-    expect(visibleCopy).not.toContain(retiredReadyCopy);
-    expect(visibleCopy).not.toContain(retiredMissingCopy);
   });
 
   test("update install action requires an explicit available update", async () => {
@@ -536,13 +356,6 @@ describe("conversation helpers", () => {
   });
 
 });
-
-  test("first paint does not auto-select the first thread and trigger detail loading", async () => {
-    const app = await loadApp();
-
-    expect(app.resolvedSelectedThreadId?.(null)).toBeNull();
-    expect(app.resolvedSelectedThreadId?.("thread-a")).toBe("thread-a");
-  });
 
   test("bark settings save marks a submitted key configured so test buttons unlock", async () => {
     const app = await loadApp();

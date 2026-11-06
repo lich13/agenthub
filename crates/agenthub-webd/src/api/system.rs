@@ -30,13 +30,13 @@ pub(crate) async fn system_version(_state: AppState) -> ApiResponse {
 }
 
 pub(crate) async fn system_update_status(state: AppState) -> ApiResponse {
-    let version = linux_version_info().await?;
+    let latest = github_latest_release("lich13", "agenthub").await.ok();
     let platform = state.platform().clone();
     ok(update_service::update_status_for_surface(
         &state.config(),
         &platform,
         state.host_surface(),
-        version.panel_latest.as_deref(),
+        latest.as_deref(),
         None,
     ))
 }
@@ -55,7 +55,9 @@ async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> 
         tag_name: String,
     }
     let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let release: Release = reqwest::Client::new()
+    let release: Release = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?
         .get(url)
         .header("user-agent", "agenthub")
         .send()

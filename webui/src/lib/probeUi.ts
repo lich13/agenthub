@@ -28,6 +28,7 @@ export type ProbeSettingsDraft = {
     notify_codex: boolean;
     notify_grok: boolean;
     notify_grokbot: boolean;
+    notify_github_ci: boolean;
     notify_grok_completion: boolean;
     notify_grok_failure: boolean;
     notify_grok_reply_needed: boolean;
@@ -96,6 +97,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_codex: n.notify_codex !== false,
       notify_grok: n.notify_grok !== false,
       notify_grokbot: n.notify_grokbot === true,
+      notify_github_ci: n.notify_github_ci === true,
       notify_grok_completion: n.notify_grok_completion !== false,
       notify_grok_failure: n.notify_grok_failure !== false,
       notify_grok_reply_needed: n.notify_grok_reply_needed !== false,
@@ -154,6 +156,7 @@ export function buildProbeSettingsPayload(
     notify_codex: n.notify_codex,
     notify_grok: n.notify_grok,
     notify_grokbot: n.notify_grokbot,
+    notify_github_ci: n.notify_github_ci,
     notify_grok_completion: n.notify_grok_completion,
     notify_grok_failure: n.notify_grok_failure,
     notify_grok_reply_needed: n.notify_grok_reply_needed,

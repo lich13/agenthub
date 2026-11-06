@@ -99,3 +99,8 @@ export async function manageClaudeHooks(
       : { request: { action, confirmed }, provider }
   );
 }
+
+export async function getGithubCiStatus(refresh = false): Promise<import("../../types").GithubCiStatus> {
+  if (USE_DEMO) return (await import("./demo")).demoGithubCiStatus();
+  return callCommand("github.ci.status", { refresh });
+}

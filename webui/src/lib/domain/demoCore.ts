@@ -16,6 +16,7 @@ const capabilityFields = {
   thread_subagents: { "linux-api": true, "macos-tauri": true },
   codex_desktop: { "linux-api": false, "macos-tauri": true },
   jobs: { "linux-api": true, "macos-tauri": true },
+  github_ci: { "linux-api": true, "macos-tauri": true },
   probe: { "linux-api": true, "macos-tauri": true },
   settings: { "linux-api": true, "macos-tauri": true },
   job_history: { "linux-api": true, "macos-tauri": true },

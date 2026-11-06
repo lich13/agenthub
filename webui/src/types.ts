@@ -321,6 +321,7 @@ export type SystemCapabilities = {
   antigravity_sessions?: boolean;
   dsh_sessions?: boolean;
   grokbot_sessions?: boolean;
+  github_ci?: boolean;
   grokbot_notifications?: boolean;
   codex_delete_tree?: boolean;
   codex_desktop?: boolean;
@@ -551,7 +552,8 @@ export type ProbeSettings = {
       notify_recoverable?: boolean;
       notify_codex?: boolean;
       notify_grok?: boolean;
-  notify_grokbot?: boolean;
+      notify_grokbot?: boolean;
+      notify_github_ci?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -592,7 +594,8 @@ export type ProbeSettings = {
     notify_recoverable?: boolean;
       notify_codex?: boolean;
       notify_grok?: boolean;
-  notify_grokbot?: boolean;
+      notify_grokbot?: boolean;
+      notify_github_ci?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -687,4 +690,17 @@ export type UnifiedCleanupResult = {
   deletedBytes: number;
   stoppedEarly: boolean;
   scopes: UnifiedCleanupScopeResult[];
+};
+
+export type GithubCiAccount = { id: number; login: string };
+export type GithubCiRepository = { id: number; full_name: string; archived: boolean };
+export type GithubCiRun = {
+  id: number; run_attempt: number; name: string | null; head_branch: string | null;
+  head_sha: string; status: string; conclusion: string | null; html_url: string;
+  created_at: string; updated_at: string; repository_id: number; repository_name: string;
+};
+export type GithubCiRequest = { refresh?: boolean };
+export type GithubCiStatus = {
+  account: GithubCiAccount | null; repositories: GithubCiRepository[]; runs: GithubCiRun[];
+  enabled: boolean; last_scan_ms: number; error: string | null; refreshing: boolean; retry_at_ms: number | null;
 };

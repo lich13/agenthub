@@ -1,3 +1,4 @@
+pub const GITHUB_CI_STATUS: &str = "github.ci.status";
 pub const SESSIONS_ATTACHMENT_READ: &str = "sessions.attachmentRead";
 pub const SESSIONS_SEARCH: &str = "sessions.search";
 pub const GROK_LIST: &str = "grok.list";
@@ -51,6 +52,7 @@ pub const CLEANUP_UNIFIED_EXECUTE: &str = "cleanup.unifiedExecute";
 pub const CLEANUP_HIDDEN_DRY_RUN: &str = "cleanup.hiddenDryRun";
 
 pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
+    GITHUB_CI_STATUS,
     SYSTEM_CAPABILITIES,
     SYSTEM_VERSION,
     SYSTEM_PLATFORM,
@@ -108,7 +110,8 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
 pub fn is_mutating_rpc_command(command: &str) -> bool {
     !matches!(
         command,
-        SYSTEM_CAPABILITIES
+        GITHUB_CI_STATUS
+            | SYSTEM_CAPABILITIES
             | SYSTEM_VERSION
             | SYSTEM_PLATFORM
             | SYSTEM_PROVIDERS
@@ -156,5 +159,6 @@ mod tests {
         }
         assert!(!is_allowed_rpc_command("unknown.command"));
         assert!(is_mutating_rpc_command("unknown.command"));
+        assert!(!is_mutating_rpc_command(GITHUB_CI_STATUS));
     }
 }

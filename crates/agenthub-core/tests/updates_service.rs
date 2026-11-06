@@ -5,8 +5,8 @@ use agenthub_core::{
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
         macos_updater_update_available_output, update_action_plan, update_status,
-        update_status_with_capability, update_status_with_recent_check_job, UpdateAction,
-        UpdateExecutionMethod, UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
+        update_status_with_recent_check_job, UpdateAction, UpdateExecutionMethod,
+        UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
     },
 };
 
@@ -80,44 +80,6 @@ fn macos_update_status_uses_tauri_updater_without_linux_leakage() {
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/agenthub"));
     std::fs::remove_dir_all(home).unwrap();
-}
-
-#[test]
-fn update_status_facade_requires_shared_app_updater_capability() {
-    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let linux_status = update_status_with_capability(&linux_config, &linux, Some("v999.0.0"), None)
-        .expect("Linux should expose shared update status");
-
-    assert_eq!(
-        linux_status.required_capability,
-        agenthub_core::services::system::Capability::AppUpdater
-    );
-    assert_eq!(
-        linux_status.status.method,
-        UpdateExecutionMethod::LinuxSystemdJob
-    );
-
-    let mac_config = Config::for_platform_kind(PlatformKind::Macos);
-    let macos = PlatformPaths::for_kind(PlatformKind::Macos);
-    let mac_status = update_status_with_capability(&mac_config, &macos, None, None)
-        .expect("macOS should expose shared update status");
-    assert_eq!(
-        mac_status.required_capability,
-        agenthub_core::services::system::Capability::AppUpdater
-    );
-    assert_eq!(
-        mac_status.status.method,
-        UpdateExecutionMethod::MacosTauriUpdater
-    );
-
-    let windows_config = Config::for_platform_kind(PlatformKind::Windows);
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-    let err = update_status_with_capability(&windows_config, &windows, None, None)
-        .expect_err("Windows should not expose update status");
-    assert!(err
-        .to_string()
-        .contains("app_updater is unavailable on windows"));
 }
 
 #[test]

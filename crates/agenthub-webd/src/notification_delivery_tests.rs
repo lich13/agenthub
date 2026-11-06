@@ -249,6 +249,7 @@ impl Fixture {
 
     fn request(&self) -> ProbeBarkRequest {
         ProbeBarkRequest {
+            url: None,
             presentation: None,
             title: "完成 · 中文 fixture".into(),
             body: BODY.into(),
@@ -1340,4 +1341,73 @@ async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
             .unwrap(),
         0
     );
+}
+
+fn ci_event(fixture: &Fixture) -> agenthub_core::github_ci::Event {
+    serde_json::from_value(json!({"observed_ms":Utc::now().timestamp_millis(),"account":{"id":1,"login":"fixture"},"run":{
+        "id":42,"run_attempt":1,"name":"CI","head_branch":"main","head_sha":"0123456789","status":"completed","conclusion":"success",
+        "html_url":"https://github.com/fixture/repo/actions/runs/42","repository_id":10,"repository_name":"fixture/repo",
+        "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:01:00Z"
+    },"fixture_ms":fixture.event_ms()})).unwrap()
+}
+fn store_ci(fixture: &Fixture, event: &agenthub_core::github_ci::Event) {
+    fixture.db.set_setting("github_ci_state", &json!({"snapshot":{"enabled":true,"account":event.account,"runs":[event.run]},"baseline_ms":event.observed_ms-1000}).to_string()).unwrap();
+}
+#[tokio::test]
+async fn github_ci_delivery_uses_run_link_and_deduplicates_after_restart() {
+    let mut fixture = Fixture::new().await;
+    fixture.config.probe.notifications.notify_github_ci = true;
+    let event = ci_event(&fixture);
+    store_ci(&fixture, &event);
+    github_ci(&fixture.config, &fixture.db, event.clone())
+        .await
+        .unwrap();
+    assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(fixture.bark.requests()[0].body["url"], event.run.url());
+    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    github_ci(&fixture.config, &reopened, event.clone())
+        .await
+        .unwrap();
+    assert_eq!(fixture.bark.count(), 1);
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &event.key());
+}
+#[tokio::test]
+async fn github_ci_retry_stops_after_disable_account_switch_or_new_attempt() {
+    for change in ["disable", "account", "attempt", "reenable"] {
+        let mut fixture = Fixture::new().await;
+        fixture.config.probe.notifications.notify_github_ci = true;
+        fixture.bark.reply(Reply::json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"code":503}),
+        ));
+        let event = ci_event(&fixture);
+        store_ci(&fixture, &event);
+        let key = event.key();
+        github_ci(&fixture.config, &fixture.db, event.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.bark.count(), 1);
+        fixture.due_now(&key);
+        let mut next = event.clone();
+        match change {
+            "disable" => fixture.config.probe.notifications.notify_github_ci = false,
+            "account" => next.account.id = 2,
+            "attempt" => next.run.run_attempt = 2,
+            "reenable" => next.observed_ms += 5000,
+            _ => unreachable!(),
+        }
+        store_ci(&fixture, &next);
+        retry_pending_with_config(&fixture.db, &|| Ok(fixture.config.clone()))
+            .await
+            .unwrap();
+        assert_eq!(fixture.bark.count(), 1, "{change}");
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    }
+}
+#[test]
+fn older_bark_payload_without_run_url_still_deserializes() {
+    let request: ProbeBarkRequest =
+        serde_json::from_value(json!({"title":"fixture","body":"fixture","dedupe_key":"fixture"}))
+            .unwrap();
+    assert!(request.url.is_none());
 }

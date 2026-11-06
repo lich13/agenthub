@@ -1005,6 +1005,18 @@
       "dtoOwner": "dsh",
       "requestDto": "ProviderSessionRequest",
       "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "github.ci.status",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "github_ci",
+      "linuxRpc": "github.ci.status",
+      "tauriCommand": "commands::probe::getGithubCiStatus",
+      "webuiWrapper": "getGithubCiStatus",
+      "dtoOwner": "github_ci",
+      "requestDto": "GithubCiRequest",
+      "responseDto": "GithubCiStatus"
     }
   ],
   "dtoCatalog": {
@@ -1495,6 +1507,26 @@
     "DesktopJobDetailRequest": {
       "core": "DesktopJobDetailRequest",
       "webui": "DesktopJobDetailRequest"
+    },
+    "GithubCiRequest": {
+      "core": "GithubCiRequest",
+      "webui": "GithubCiRequest"
+    },
+    "GithubCiStatus": {
+      "core": "GithubCiStatus",
+      "webui": "GithubCiStatus"
+    },
+    "GithubCiAccount": {
+      "core": "GithubCiAccount",
+      "webui": "GithubCiAccount"
+    },
+    "GithubCiRepository": {
+      "core": "GithubCiRepository",
+      "webui": "GithubCiRepository"
+    },
+    "GithubCiRun": {
+      "core": "GithubCiRun",
+      "webui": "GithubCiRun"
     }
   }
 }

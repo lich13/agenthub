@@ -88,3 +88,5 @@ mod fixture_tests {
         super::write_executable_fixture(&path, "#!/usr/bin/env node\nprocess.exit(0);\n");
     }
 }
+
+pub mod github_ci;

@@ -194,18 +194,21 @@ fn dry_run_single_scope(
         issues: Vec::new(),
     };
     match scope {
-        SCOPE_CODEX_ARCHIVED => match archive::plan_delete_archived(&paths.codex) {
-            Ok(plan) => {
-                let bytes_map = crate::selected_codex::tree::estimate_bytes_batch(
-                    &paths.codex,
-                    &plan.archived_ids,
-                );
-                for id in plan.archived_ids {
-                    let bytes = bytes_map.get(&id).copied().unwrap_or(0);
-                    let fp = archive::codex_thread_fingerprint(&paths.codex, &id)
-                        .ok()
-                        .flatten();
-                    push_candidate(&mut out, id.clone(), id, bytes, fp, None);
+        SCOPE_CODEX_ARCHIVED => match archive::list_archived_threads(&paths.codex) {
+            Ok(candidates) => {
+                let ids = candidates.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+                let bytes_map =
+                    crate::selected_codex::tree::estimate_bytes_batch(&paths.codex, &ids);
+                for candidate in candidates {
+                    let bytes = bytes_map.get(&candidate.id).copied().unwrap_or(0);
+                    push_candidate(
+                        &mut out,
+                        candidate.id,
+                        candidate.title,
+                        bytes,
+                        candidate.fingerprint,
+                        None,
+                    );
                 }
             }
             Err(err) => out.issues.push(err.to_string()),

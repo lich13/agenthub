@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -55,6 +55,7 @@ dependencies = [
  "hex",
  "libc",
  "rand 0.8.6",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -71,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-desktop"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "agenthub-core",
  "anyhow",

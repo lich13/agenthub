@@ -1,4 +1,5 @@
 export const contractDtoNames = [
+  "GithubCiRequest", "GithubCiStatus", "GithubCiAccount", "GithubCiRepository", "GithubCiRun",
     "UnifiedCleanupDryRunRequest",
     "UnifiedCleanupCandidate",
     "UnifiedCleanupTargetSelection",

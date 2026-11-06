@@ -101,6 +101,8 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_codex: bool,
     pub notify_grok: bool,
     pub notify_grokbot: bool,
+    #[serde(default)]
+    pub notify_github_ci: bool,
     pub notify_grok_completion: bool,
     pub notify_grok_failure: bool,
     pub notify_grok_reply_needed: bool,
@@ -171,6 +173,7 @@ pub fn probe_notifications_settings_view(
         notify_codex: notifications.notify_codex,
         notify_grok: notifications.notify_grok,
         notify_grokbot: notifications.notify_grokbot,
+        notify_github_ci: notifications.notify_github_ci,
         notify_grok_completion: notifications.notify_grok_completion,
         notify_grok_failure: notifications.notify_grok_failure,
         notify_grok_reply_needed: notifications.notify_grok_reply_needed,
@@ -225,6 +228,12 @@ pub fn merge_probe_notification_patch(
     }
     if source.notify_codex.is_some() {
         target.notify_codex = source.notify_codex;
+    }
+    if source.notify_github_ci.is_some() {
+        target.notify_github_ci = source.notify_github_ci;
+    }
+    if source.notify_grokbot.is_some() {
+        target.notify_grokbot = source.notify_grokbot;
     }
     if source.notify_grok.is_some() {
         target.notify_grok = source.notify_grok;
@@ -322,6 +331,7 @@ pub struct ProbeNotificationsSavePatch {
     pub notify_codex: Option<bool>,
     pub notify_grok: Option<bool>,
     pub notify_grokbot: Option<bool>,
+    pub notify_github_ci: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -486,6 +496,7 @@ impl ProbeNotificationsSavePatch {
                 notify_codex: self.notify_codex,
                 notify_grok: self.notify_grok,
                 notify_grokbot: self.notify_grokbot,
+                notify_github_ci: self.notify_github_ci,
                 notify_grok_completion: self.notify_grok_completion,
                 notify_grok_failure: self.notify_grok_failure,
                 notify_grok_reply_needed: self.notify_grok_reply_needed,
@@ -553,6 +564,8 @@ fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> 
         && patch.notify_reply_needed.is_none()
         && patch.notify_recoverable.is_none()
         && patch.notify_codex.is_none()
+        && patch.notify_github_ci.is_none()
+        && patch.notify_grokbot.is_none()
         && patch.notify_grok.is_none()
         && patch.notify_grok_completion.is_none()
         && patch.notify_grok_failure.is_none()

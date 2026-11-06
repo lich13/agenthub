@@ -13,6 +13,7 @@ mod api;
 mod async_question_monitor;
 mod audit;
 mod bark;
+mod github_ci_monitor;
 mod linux_adapter;
 mod notification_delivery;
 mod provider_monitor;
@@ -993,6 +994,8 @@ struct HookStopResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProbeBarkRequest {
     #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
     presentation: Option<notification_format::Presentation>,
     title: String,
     body: String,
@@ -1389,6 +1392,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     let state = AppState::new_for_surface(config.clone(), db, host_surface);
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
+    github_ci_monitor::spawn(config_path.clone());
     api::spawn_probe_status_refresh(state.clone());
     ssh_server::serve(state).await?;
     Ok(())
@@ -1516,10 +1520,12 @@ async fn run_probe_error_monitor_once(
     let pending_deliveries = db.list_pending_probe_error_deliveries(100)?;
     let deliveries_completed =
         deliver_probe_error_incidents(config, db, &pending_deliveries).await?;
-    db.set_setting(
-        PROBE_ERROR_MONITOR_CURSOR_SETTING,
-        &serde_json::to_string(&scan.cursor)?,
-    )?;
+    if previous.as_ref() != Some(&scan.cursor) {
+        db.set_setting(
+            PROBE_ERROR_MONITOR_CURSOR_SETTING,
+            &serde_json::to_string(&scan.cursor)?,
+        )?;
+    }
     store_probe_error_monitor_status(
         db,
         ProbeErrorMonitorRuntimeStatus {
@@ -3583,6 +3589,7 @@ last_error = "old agenthub request hook"
         config.probe.notifications.url = Some("https://panel.example.com/agenthub/".to_string());
 
         let request = ProbeBarkRequest {
+            url: None,
             presentation: None,
             title: "AgentHub 推送测试".to_string(),
             body: "来自本机的测试通知。".to_string(),
@@ -3631,6 +3638,7 @@ last_error = "old agenthub request hook"
         config.probe.notifications.group = "Probe Group".to_string();
 
         let request = ProbeBarkRequest {
+            url: None,
             presentation: None,
             title: "AgentHub Probe long body".to_string(),
             body: "完成".repeat(4_000),
@@ -4248,6 +4256,7 @@ last_error = "old agenthub request hook"
             &config,
             b"device-key-secret",
             &ProbeBarkRequest {
+                url: None,
                 presentation: None,
                 title: "AgentHub 推送测试".to_string(),
                 body: "ok".to_string(),

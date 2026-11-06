@@ -436,8 +436,7 @@ fn service_unreachable(error: &anyhow::Error) -> bool {
     })
 }
 fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
-    let mut response_error = None;
-    let mut try_endpoint = |port: u16, token: &str| match connect_rpc_post(
+    let try_endpoint = |port: u16, token: &str| match connect_rpc_post(
         port,
         token,
         "GetAllCascadeTrajectories",
@@ -448,23 +447,23 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
                 value["trajectorySummaries"] = json!({});
             }
             if value["trajectorySummaries"].is_object() {
-                Some(value)
+                Ok(Some(value))
             } else {
-                response_error = Some(anyhow::anyhow!("Antigravity 会话列表格式错误"));
-                None
+                Err(anyhow::anyhow!("Antigravity 会话列表格式错误"))
             }
         }
         Err(error) => {
-            if !service_unreachable(&error) {
-                response_error = Some(error);
+            if service_unreachable(&error) {
+                Ok(None)
+            } else {
+                Err(error)
             }
-            None
         }
     };
     match &paths.rpc_mode {
         RpcMode::OfflineOnly => return Ok(None),
         RpcMode::Fixed { port, token } => {
-            if let Some(value) = try_endpoint(*port, token) {
+            if let Some(value) = try_endpoint(*port, token)? {
                 return Ok(Some((
                     LiveRpc {
                         port: *port,
@@ -478,7 +477,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
             match get_cached_live_endpoint() {
                 Some(Ok(ep)) => {
                     for &port in &ep.ports {
-                        if let Some(value) = try_endpoint(port, &ep.token) {
+                        if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
                             return Ok(Some((
                                 LiveRpc {
                                     port,
@@ -495,7 +494,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
             let candidates = discover_host_endpoints();
             for ep in &candidates {
                 for &port in &ep.ports {
-                    if let Some(value) = try_endpoint(port, &ep.token) {
+                    if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
                         record_verified_live_endpoint(ep.pid, port, ep.token.clone());
                         return Ok(Some((
                             LiveRpc {
@@ -511,10 +510,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
             return Ok(None);
         }
     }
-    match response_error {
-        Some(error) => Err(error),
-        None => Ok(None),
-    }
+    Ok(None)
 }
 
 #[derive(Debug, Default, Clone)]

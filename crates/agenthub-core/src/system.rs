@@ -4,13 +4,6 @@ use std::time::Duration;
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceStatus {
-    pub active: bool,
-    pub active_state: Option<String>,
-    pub sub_state: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
     pub panel_current: String,
     pub panel_latest: Option<String>,

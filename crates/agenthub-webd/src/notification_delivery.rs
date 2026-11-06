@@ -27,6 +27,9 @@ use std::{
 #[serde(tag = "source", rename_all = "snake_case")]
 enum Source {
     Test,
+    GithubCi {
+        event: agenthub_core::github_ci::Event,
+    },
     Codex {
         event: Box<ProbeBuiltEvent>,
         fingerprint: Option<SourceProof>,
@@ -163,6 +166,53 @@ pub fn codex_key(event: &ProbeBuiltEvent) -> String {
         .unwrap_or_else(|| format!("codex:{}:{}", event.dedupe_namespace, event.dedupe_key))
 }
 
+pub async fn github_ci(
+    config: &Config,
+    db: &PanelDb,
+    event: agenthub_core::github_ci::Event,
+) -> Result<()> {
+    db.sync_notification_channels(config)?;
+    let key = event.key();
+    if !agenthub_core::github_ci::event_current(db, config, &event)? {
+        return Ok(());
+    }
+    let run = &event.run;
+    let kind = run.notification_kind().unwrap_or("failure");
+    let mut request = super::notification_format::request(
+        "GitHub CI",
+        kind,
+        &run.repository_name,
+        "",
+        &format!(
+            "{}\n{}\n{} · {}",
+            run.name.as_deref().unwrap_or("CI"),
+            run.head_branch.as_deref().unwrap_or(""),
+            run.head_sha.chars().take(7).collect::<String>(),
+            run.conclusion.as_deref().unwrap_or("")
+        ),
+        &key,
+    );
+    request.url = Some(run.url());
+    let candidate = queued_candidate(
+        config,
+        db,
+        Source::GithubCi { event },
+        request,
+        Utc::now().timestamp_millis(),
+    )?;
+    deliver(
+        config,
+        db,
+        &key,
+        NotificationChannel::Bark,
+        &candidate,
+        true,
+        Duration::from_secs(8),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn codex(
     config: &Config,
     db: &PanelDb,
@@ -279,6 +329,7 @@ pub async fn native(
 fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
     match &candidate.source {
         Source::Test => true,
+        Source::GithubCi { .. } => agenthub_core::github_ci::enabled(config),
         Source::ClaudeHook { hook, .. } => {
             native_probe::NativeProvider::Claude.enabled(config)
                 && native_probe::NativeProvider::Claude.event_enabled(config, &hook.kind)
@@ -785,6 +836,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
         db,
         Source::Test,
         ProbeBarkRequest {
+            url: None,
             presentation: None,
             title: "AgentHub 推送测试".into(),
             body: agenthub_core::probe::bark_test_body().into(),
@@ -953,6 +1005,9 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
     }
     match &candidate.source {
         Source::Test => true,
+        Source::GithubCi { event } => {
+            agenthub_core::github_ci::event_current(db, config, event).unwrap_or(false)
+        }
         Source::Native { delivery } => {
             let provider = delivery.provider;
             let instance = db.notification_instance_id().unwrap_or_default();

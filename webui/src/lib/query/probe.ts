@@ -104,6 +104,7 @@ export function useProbeActions(input: {
       mutationFn: (submittedDeviceKey?: string) => saveProbeSettings(input.savePayload(submittedDeviceKey)),
       onSuccess: (settings, submittedDeviceKey) => {
         input.onSaveSuccess(settings, submittedDeviceKey);
+        qc.invalidateQueries({ queryKey: ["github-ci"] });
         qc.invalidateQueries({ queryKey: probeQueryKeys.settings });
         invalidateProbe();
       },

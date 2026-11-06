@@ -47,10 +47,10 @@ describe("native machine connection", () => {
     expect(runtime.invoke).toHaveBeenCalledWith("remote.select", { request: { target: "remote", revision: 0 } });
   });
 
-  test("a read finishing after a connection switch is discarded", async () => {
+  test.each(["threads.detail", "github.ci.status"])("a %s read finishing after a connection switch is discarded", async (command) => {
     const oldRead = deferred<unknown>();
     const runtime = await loadRuntime(command => command === "remote.select" ? remote : oldRead.promise);
-    const pending = runtime.runtimeRpc("threads.detail", { id: "same-thread" });
+    const pending = runtime.runtimeRpc(command, { id: "same-thread" });
     const rejected = expect(pending).rejects.toThrow("已丢弃旧响应");
     await runtime.remoteSelect("remote");
     oldRead.resolve({ title: "local stale title" });

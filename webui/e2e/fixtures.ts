@@ -193,6 +193,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "jobs.detail": () => ({ ...demo.demoJob(args.id), ...(args.includeOutput === false ? {output:""} : {}), status: ++jobReads < 3 ? "running" : "succeeded" }),
         "updates.check": () => ({ job_id: "fixture-job" }),
         "probe.status": () => ({ available: true, data: demo.demoProbeStatus(fixture()) }),
+        "github.ci.status": demo.demoGithubCiStatus,
         "probe.settings.get": () => ({ available: true, data: probeSettings }),
         "probe.settings.save": () => {
           const input = args.settings;

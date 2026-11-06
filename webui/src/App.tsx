@@ -21,7 +21,6 @@ import {
 } from "./lib/query/system";
 import { type RuntimeCapabilityInput } from "./lib/domain/runtimeViewModel";
 import {
-  navigationLabelsForRuntime as navigationLabelsForRuntimeDomain,
   visibleNavigationItems,
   type View
 } from "./lib/domain/codexViewModel";
@@ -48,9 +47,7 @@ function navigationItemsForCapabilities(capabilities: RuntimeCapabilityMatrix) {
   return visibleNavigationItems(navigationItems, capabilities);
 }
 
-export function navigationLabelsForRuntime(desktop?: RuntimeCapabilityInput): string[] {
-  return navigationLabelsForRuntimeDomain(navigationItems, desktop);
-}
+
 
 // Navigation preferences contain no machine data. Business views remount per revision.
 let lastView: View = "codex";

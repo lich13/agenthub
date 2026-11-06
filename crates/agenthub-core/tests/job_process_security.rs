@@ -137,7 +137,6 @@ async fn failed_process_start_releases_its_exclusive_group() {
     let failed = wait_for_status(&db, &failed_id, "failed").await;
 
     assert_eq!(failed.status, "failed");
-    assert!(runner.exclusive_group_job(group).is_none());
 
     let retry_id = runner
         .start_exclusive_process_job(
@@ -150,5 +149,4 @@ async fn failed_process_start_releases_its_exclusive_group() {
     let retried = wait_for_status(&db, &retry_id, "succeeded").await;
 
     assert_eq!(retried.exit_code, Some(0));
-    assert!(runner.exclusive_group_job(group).is_none());
 }

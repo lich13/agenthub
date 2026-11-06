@@ -399,6 +399,7 @@ describe("Probe UI helpers", () => {
           notify_codex: true,
           notify_grok: true,
           notify_grokbot: false,
+        notify_github_ci: false,
           notify_grok_completion: true,
           notify_grok_failure: true,
           notify_grok_reply_needed: true,

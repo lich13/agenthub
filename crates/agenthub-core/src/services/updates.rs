@@ -46,10 +46,6 @@ impl UpdateAction {
             Self::Prune => commands::UPDATES_PRUNE,
         }
     }
-
-    pub fn as_desktop_command(self) -> &'static str {
-        self.as_rpc_action()
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,12 +74,6 @@ pub struct UpdateStatus {
     pub failure_category: Option<UpdateFailureCategory>,
     pub recommended_action: String,
     pub capabilities: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UpdateStatusFacadePlan {
-    pub required_capability: Capability,
-    pub status: UpdateStatus,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,11 +114,6 @@ pub struct MacosUpdaterJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NativeUpdateSpec {
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateActionPlan {
     pub required_capability: Capability,
     pub action: UpdateAction,
@@ -136,86 +121,6 @@ pub struct UpdateActionPlan {
     pub platform: PlatformKind,
     pub linux_job: Option<LinuxUpdateJobSpec>,
     pub macos_job: Option<MacosUpdaterJobSpec>,
-    pub native: Option<NativeUpdateSpec>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UpdateUseCases<'a> {
-    config: &'a Config,
-    platform: &'a PlatformPaths,
-    host_surface: HostSurface,
-}
-
-impl<'a> UpdateUseCases<'a> {
-    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
-        Self::new_for_surface(
-            config,
-            platform,
-            HostSurface::default_for_platform(platform),
-        )
-    }
-
-    pub fn new_for_surface(
-        config: &'a Config,
-        platform: &'a PlatformPaths,
-        host_surface: HostSurface,
-    ) -> Self {
-        Self {
-            config,
-            platform,
-            host_surface,
-        }
-    }
-
-    pub fn status(
-        self,
-        latest_version: Option<&str>,
-        last_error: Option<&str>,
-    ) -> Result<UpdateStatusFacadePlan> {
-        update_status_with_capability_for_surface(
-            self.config,
-            self.platform,
-            self.host_surface,
-            latest_version,
-            last_error,
-        )
-    }
-
-    pub fn status_with_recent_check_job(
-        self,
-        latest_version: Option<&str>,
-        last_error: Option<&str>,
-        recent_check_job: Option<&JobRecord>,
-    ) -> Result<UpdateStatusFacadePlan> {
-        require_capability_for_surface(self.platform, self.host_surface, Capability::AppUpdater)?;
-        Ok(UpdateStatusFacadePlan {
-            required_capability: Capability::AppUpdater,
-            status: update_status_with_recent_check_job_for_surface(
-                self.config,
-                self.platform,
-                self.host_surface,
-                latest_version,
-                last_error,
-                recent_check_job,
-            ),
-        })
-    }
-
-    pub fn action_plan(self, action: UpdateAction) -> Result<UpdateActionPlan> {
-        plan_update_action_for_surface(self.config, self.platform, self.host_surface, action)
-    }
-
-    pub fn check_plan(self) -> Result<UpdateActionPlan> {
-        self.action_plan(UpdateAction::Check)
-    }
-
-    pub fn install_plan(self) -> Result<UpdateActionPlan> {
-        self.action_plan(UpdateAction::Install)
-    }
-
-    pub fn prune_plan(self) -> Result<UpdateActionPlan> {
-        self.action_plan(UpdateAction::Prune)
-    }
 }
 
 pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed Tauri updater feed\n";
@@ -272,41 +177,6 @@ pub fn update_status_for_surface(
         recommended_action,
         capabilities,
     }
-}
-
-pub fn update_status_with_capability(
-    config: &Config,
-    platform: &PlatformPaths,
-    latest_version: Option<&str>,
-    last_error: Option<&str>,
-) -> Result<UpdateStatusFacadePlan> {
-    update_status_with_capability_for_surface(
-        config,
-        platform,
-        HostSurface::default_for_platform(platform),
-        latest_version,
-        last_error,
-    )
-}
-
-pub fn update_status_with_capability_for_surface(
-    config: &Config,
-    platform: &PlatformPaths,
-    host_surface: HostSurface,
-    latest_version: Option<&str>,
-    last_error: Option<&str>,
-) -> Result<UpdateStatusFacadePlan> {
-    require_capability_for_surface(platform, host_surface, Capability::AppUpdater)?;
-    Ok(UpdateStatusFacadePlan {
-        required_capability: Capability::AppUpdater,
-        status: update_status_for_surface(
-            config,
-            platform,
-            host_surface,
-            latest_version,
-            last_error,
-        ),
-    })
 }
 
 pub fn update_status_with_recent_check_job(
@@ -390,17 +260,11 @@ pub fn plan_update_action_for_surface(
     let required_capability =
         update_action_capability_for_surface(platform.kind, host_surface, action);
     require_capability_for_surface(platform, host_surface, required_capability)?;
-    let (linux_job, macos_job, native) = match job_plan.method {
+    let (linux_job, macos_job) = match job_plan.method {
         UpdateExecutionMethod::LinuxSystemdJob => {
-            (Some(linux_update_job_spec(config, job_plan)?), None, None)
+            (Some(linux_update_job_spec(config, job_plan)?), None)
         }
-        UpdateExecutionMethod::MacosTauriUpdater => (
-            None,
-            Some(macos_updater_job_spec(action)?),
-            Some(NativeUpdateSpec {
-                command: native_update_command(action)?.to_string(),
-            }),
-        ),
+        UpdateExecutionMethod::MacosTauriUpdater => (None, Some(macos_updater_job_spec(action)?)),
         UpdateExecutionMethod::Unsupported => {
             anyhow::bail!("updates are unavailable on this platform")
         }
@@ -412,7 +276,6 @@ pub fn plan_update_action_for_surface(
         platform: job_plan.platform,
         linux_job,
         macos_job,
-        native,
     })
 }
 
@@ -548,14 +411,6 @@ fn update_action_capability_for_surface(
     }
 }
 
-fn native_update_command(action: UpdateAction) -> Result<&'static str> {
-    match action {
-        UpdateAction::Check => Ok(commands::UPDATES_CHECK),
-        UpdateAction::Install => Ok(commands::UPDATES_INSTALL),
-        UpdateAction::Prune => anyhow::bail!("native updater does not support backup prune"),
-    }
-}
-
 pub fn update_available_for_versions(current_version: &str, latest_version: &str) -> Option<bool> {
     Some(
         compare_semver(
@@ -660,7 +515,7 @@ mod tests {
     use crate::{
         config::Config,
         platform::{PlatformKind, PlatformPaths},
-        services::{commands, system::Capability},
+        services::system::Capability,
     };
 
     #[test]
@@ -692,10 +547,6 @@ mod tests {
         assert_eq!(plan.required_capability, Capability::AppUpdater);
         assert_eq!(plan.method, UpdateExecutionMethod::MacosTauriUpdater);
         assert!(plan.linux_job.is_none());
-        assert_eq!(
-            plan.native.as_ref().unwrap().command,
-            commands::UPDATES_INSTALL
-        );
         assert_eq!(
             plan.macos_job.as_ref().unwrap().kind,
             "agenthub_update_install"

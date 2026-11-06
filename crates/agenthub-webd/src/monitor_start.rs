@@ -22,13 +22,13 @@ pub(super) fn spawn_probe_error_monitor(state: AppState) {
 }
 
 #[derive(Default)]
-struct DaemonMonitorCache {
+pub(super) struct DaemonMonitorCache {
     config: Option<((Option<std::time::SystemTime>, u64), Config)>,
     db: Option<(PathBuf, PanelDb)>,
 }
 
 impl DaemonMonitorCache {
-    fn load_config(&mut self, config_path: &Path) -> Result<Config> {
+    pub(super) fn load_config(&mut self, config_path: &Path) -> Result<Config> {
         let stamp = std::fs::metadata(config_path)
             .ok()
             .map(|meta| (meta.modified().ok(), meta.len()));
@@ -46,7 +46,7 @@ impl DaemonMonitorCache {
         Ok(loaded)
     }
 
-    fn panel_db(&mut self, config: &Config) -> Result<PanelDb> {
+    pub(super) fn panel_db(&mut self, config: &Config) -> Result<PanelDb> {
         if let Some((cached_path, cached_db)) = &self.db {
             if cached_path == &config.paths.db_path {
                 return Ok(cached_db.clone());
@@ -59,6 +59,7 @@ impl DaemonMonitorCache {
 }
 
 pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
+    super::github_ci_monitor::spawn(config_path.clone());
     let mut upgraded_hooks = false;
     let mut cache = DaemonMonitorCache::default();
     loop {

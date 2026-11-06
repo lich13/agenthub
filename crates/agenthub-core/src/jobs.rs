@@ -1,6 +1,5 @@
 use crate::{db::PanelDb, security::redact_output};
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     ffi::OsString,
@@ -12,7 +11,6 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
-    sync::broadcast,
 };
 use uuid::Uuid;
 
@@ -35,32 +33,18 @@ impl ProcessCommand {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobEvent {
-    pub job_id: String,
-    pub status: String,
-    pub chunk: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct JobRunner {
     db: PanelDb,
-    tx: broadcast::Sender<JobEvent>,
     running: Arc<Mutex<HashSet<String>>>,
 }
 
 impl JobRunner {
     pub fn new(db: PanelDb) -> Self {
-        let (tx, _) = broadcast::channel(256);
         Self {
             db,
-            tx,
             running: Arc::new(Mutex::new(HashSet::new())),
         }
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
-        self.tx.subscribe()
     }
 
     pub fn start_process_job(
@@ -89,65 +73,41 @@ impl JobRunner {
         command: ProcessCommand,
         exclusive_group: Option<&str>,
     ) -> Result<String> {
-        let exclusive_group_lock_key = exclusive_group.map(exclusive_group_key);
         if let Some(group) = exclusive_group {
-            let key = exclusive_group_lock_key
-                .as_deref()
-                .expect("exclusive group key");
             let mut running = self.running.lock().expect("running jobs");
-            if running.contains(key) {
-                anyhow::bail!("codex update job already running: {group}");
+            if running.contains(group) {
+                anyhow::bail!("exclusive job already running: {group}");
             }
-            running.insert(key.to_string());
+            running.insert(group.to_string());
         }
         let id = Uuid::new_v4().to_string();
         if let Err(err) = self.db.create_job(&id, kind, title) {
-            if let Some(key) = exclusive_group_lock_key.as_deref() {
+            if let Some(key) = exclusive_group {
                 self.running.lock().expect("running jobs").remove(key);
             }
             return Err(err);
         }
         let db = self.db.clone();
-        let tx = self.tx.clone();
         let running = self.running.clone();
         let id_for_task = id.clone();
         let exclusive_group = exclusive_group.map(str::to_string);
         spawn_job_task(async move {
-            let result = run_process_command(&db, &tx, &id_for_task, &command).await;
-            let (status, chunk) = match result {
-                Ok(status) => (status, None),
-                Err(err) => {
-                    let message = redact_output(&err.to_string());
-                    let _ = db.append_job_output(&id_for_task, &format!("\nerror: {message}\n"));
-                    let _ = db.finish_job(&id_for_task, "failed", None, Some(&message));
-                    ("failed", Some(message))
-                }
-            };
-            if let Some(group) = exclusive_group.as_deref() {
-                running
-                    .lock()
-                    .expect("running jobs")
-                    .remove(&exclusive_group_key(group));
+            let result = run_process_command(&db, &id_for_task, &command).await;
+            if let Err(err) = result {
+                let message = redact_output(&err.to_string());
+                let _ = db.append_job_output(&id_for_task, &format!("\nerror: {message}\n"));
+                let _ = db.finish_job(&id_for_task, "failed", None, Some(&message));
             }
-            let _ = tx.send(JobEvent {
-                job_id: id_for_task,
-                status: status.into(),
-                chunk,
-            });
+            if let Some(group) = exclusive_group.as_deref() {
+                running.lock().expect("running jobs").remove(group);
+            }
         });
         Ok(id)
-    }
-
-    pub fn exclusive_group_job(&self, group: &str) -> Option<String> {
-        let key = exclusive_group_key(group);
-        let running = self.running.lock().expect("running jobs");
-        running.contains(&key).then_some(group.to_string())
     }
 }
 
 async fn run_process_command(
     db: &PanelDb,
-    tx: &broadcast::Sender<JobEvent>,
     job_id: &str,
     command: &ProcessCommand,
 ) -> Result<&'static str> {
@@ -160,20 +120,10 @@ async fn run_process_command(
 
     let mut handles = Vec::new();
     if let Some(stdout) = child.stdout.take() {
-        handles.push(stream_reader(
-            db.clone(),
-            tx.clone(),
-            job_id.to_string(),
-            stdout,
-        ));
+        handles.push(stream_reader(db.clone(), job_id.to_string(), stdout));
     }
     if let Some(stderr) = child.stderr.take() {
-        handles.push(stream_reader(
-            db.clone(),
-            tx.clone(),
-            job_id.to_string(),
-            stderr,
-        ));
+        handles.push(stream_reader(db.clone(), job_id.to_string(), stderr));
     }
     let status = child.wait().await;
     let mut drain_result = Ok(());
@@ -192,10 +142,6 @@ async fn run_process_command(
     };
     db.finish_job(job_id, status_text, code, None)?;
     Ok(status_text)
-}
-
-fn exclusive_group_key(group: &str) -> String {
-    format!("exclusive:{group}")
 }
 
 fn spawn_job_task<F>(future: F)
@@ -221,30 +167,16 @@ where
         .expect("spawn AgentHub job runtime thread");
 }
 
-fn flush_job_output(
-    db: &PanelDb,
-    tx: &broadcast::Sender<JobEvent>,
-    job_id: &str,
-    output: &mut String,
-) -> Result<()> {
+fn flush_job_output(db: &PanelDb, job_id: &str, output: &mut String) -> Result<()> {
     if output.is_empty() {
         return Ok(());
     }
     db.append_job_output(job_id, output)?;
-    let _ = tx.send(JobEvent {
-        job_id: job_id.into(),
-        status: "running".into(),
-        chunk: Some(std::mem::take(output)),
-    });
+    output.clear();
     Ok(())
 }
 
-fn stream_reader<R>(
-    db: PanelDb,
-    tx: broadcast::Sender<JobEvent>,
-    job_id: String,
-    reader: R,
-) -> tokio::task::JoinHandle<Result<()>>
+fn stream_reader<R>(db: PanelDb, job_id: String, reader: R) -> tokio::task::JoinHandle<Result<()>>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -259,7 +191,7 @@ where
             let bytes = tokio::select! {
                 result = reader.fill_buf() => result?,
                 _ = sleep_until(deadline), if !output.is_empty() => {
-                    flush_job_output(&db, &tx, &job_id, &mut output)?;
+                    flush_job_output(&db, &job_id, &mut output)?;
                     continue;
                 }
             };
@@ -280,7 +212,7 @@ where
                     output.push('\n');
                     record.clear();
                     if output.len() >= 16 * 1024 {
-                        flush_job_output(&db, &tx, &job_id, &mut output)?;
+                        flush_job_output(&db, &job_id, &mut output)?;
                     }
                 } else {
                     record.push(byte);
@@ -292,7 +224,7 @@ where
         if !record.is_empty() {
             output.push_str(&redact_output(&String::from_utf8_lossy(&record)));
         }
-        flush_job_output(&db, &tx, &job_id, &mut output)
+        flush_job_output(&db, &job_id, &mut output)
     })
 }
 
@@ -309,8 +241,7 @@ mod tests {
         let db = PanelDb::open(":memory:").unwrap();
         db.create_job("fixture", "fixture", "fixture").unwrap();
         let (mut writer, reader) = tokio::io::duplex(3);
-        let (tx, _) = tokio::sync::broadcast::channel(16);
-        let reader = super::stream_reader(db.clone(), tx, "fixture".into(), reader);
+        let reader = super::stream_reader(db.clone(), "fixture".into(), reader);
         for byte in "中文完成\n\nOPENAI_API_KEY=fixture-secret\n尾行".as_bytes() {
             writer.write_all(&[*byte]).await.unwrap();
         }
@@ -327,8 +258,7 @@ mod tests {
         let db = PanelDb::open(":memory:").unwrap();
         db.create_job("fixture", "fixture", "fixture").unwrap();
         let (mut writer, reader) = tokio::io::duplex(1024);
-        let (tx, _) = tokio::sync::broadcast::channel(16);
-        let reader = super::stream_reader(db.clone(), tx, "fixture".into(), reader);
+        let reader = super::stream_reader(db.clone(), "fixture".into(), reader);
         writer
             .write_all("下载 10%\r下载 20%\r\nOPENAI_API_KEY=fixture-secret\r".as_bytes())
             .await
@@ -363,7 +293,6 @@ mod tests {
     async fn terminal_event_releases_group_after_all_output_is_drained() {
         let db = PanelDb::open(":memory:").unwrap();
         let runner = JobRunner::new(db.clone());
-        let mut events = runner.subscribe();
         let id = runner
             .start_exclusive_process_job(
                 "fixture",
@@ -375,17 +304,15 @@ mod tests {
                 "drain",
             )
             .unwrap();
-        wait_for_job_status(&mut events, &id, "succeeded").await;
+        wait_for_job_status(&runner, &id, "succeeded").await;
         assert_eq!(db.job(&id).unwrap().unwrap().output, "starttail");
-        assert!(runner.exclusive_group_job("drain").is_none());
         assert!(runner.running.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn exclusive_shell_jobs_reject_same_group_until_finished() {
         let db = PanelDb::open(":memory:").unwrap();
-        let runner = JobRunner::new(db);
-        let mut events = runner.subscribe();
+        let runner = JobRunner::new(db.clone());
 
         let first = runner
             .start_exclusive_process_job(
@@ -405,8 +332,8 @@ mod tests {
         );
         assert!(second.is_err());
 
-        wait_for_job_status(&mut events, &first, "succeeded").await;
-        assert!(runner.exclusive_group_job("panel_update").is_none());
+        wait_for_job_status(&runner, &first, "succeeded").await;
+        assert!(runner.running.lock().unwrap().is_empty());
 
         let third = runner.start_exclusive_process_job(
             "panel_update_prune",
@@ -417,24 +344,23 @@ mod tests {
         assert!(third.is_ok());
     }
 
-    async fn wait_for_job_status(
-        events: &mut tokio::sync::broadcast::Receiver<super::JobEvent>,
-        job_id: &str,
-        status: &str,
-    ) {
-        let timeout = tokio::time::sleep(Duration::from_secs(3));
-        tokio::pin!(timeout);
-        loop {
-            tokio::select! {
-                _ = &mut timeout => panic!("timed out waiting for job {job_id} to reach {status}"),
-                event = events.recv() => {
-                    let event = event.expect("job event");
-                    if event.job_id == job_id && event.status == status {
-                        return;
-                    }
+    async fn wait_for_job_status(runner: &JobRunner, job_id: &str, status: &str) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if runner
+                    .db
+                    .job(job_id)
+                    .unwrap()
+                    .is_some_and(|j| j.status == status)
+                    && runner.running.lock().unwrap().is_empty()
+                {
+                    break;
                 }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }
+        })
+        .await
+        .expect("job completes and releases its group");
     }
 
     #[test]

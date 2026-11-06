@@ -96,7 +96,13 @@ impl SearchUseCases {
                         request.session_key.as_deref().unwrap(),
                     )?]
                 } else {
-                    crate::grokbot::list(&self.grokbot, &Default::default())?
+                    crate::grokbot::list(
+                        &self.grokbot,
+                        &crate::provider_sessions::ProviderListRequest {
+                            limit: Some(MAX_SESSIONS),
+                            ..Default::default()
+                        },
+                    )?
                 };
                 self.search_provider_events(
                     &request,
@@ -166,11 +172,6 @@ impl SearchUseCases {
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
                 break;
-            }
-            if request.scope == SearchScope::Thread
-                && request.session_key.as_deref() != Some(summary.id.as_str())
-            {
-                continue;
             }
             let metadata = strip_memory_metadata(&format!(
                 "{} {} {}",
@@ -242,11 +243,6 @@ impl SearchUseCases {
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
                 break;
-            }
-            if request.scope == SearchScope::Thread
-                && request.session_key.as_deref() != Some(summary.id.as_str())
-            {
-                continue;
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
@@ -320,11 +316,6 @@ impl SearchUseCases {
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
                 break;
-            }
-            if request.scope == SearchScope::Thread
-                && request.session_key.as_deref() != Some(summary.session_key.as_str())
-            {
-                continue;
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
@@ -454,7 +445,7 @@ impl SearchUseCases {
 
     fn search_provider_events(
         &self,
-        request: &SessionSearchRequest,
+        _request: &SessionSearchRequest,
         needle: &str,
         summaries: Vec<crate::provider_sessions::ProviderSessionSummary>,
         load: impl Fn(
@@ -467,11 +458,6 @@ impl SearchUseCases {
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
                 break;
-            }
-            if request.scope == SearchScope::Thread
-                && request.session_key.as_deref() != Some(summary.session_key.as_str())
-            {
-                continue;
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));

@@ -175,6 +175,8 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub grokbot_sessions: bool,
     #[serde(default)]
+    pub github_ci: bool,
+    #[serde(default)]
     pub grokbot_notifications: bool,
     #[serde(default)]
     pub dsh_sessions: bool,
@@ -284,6 +286,7 @@ pub fn system_capabilities_for_surface(
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         dsh_notifications: platform.kind == PlatformKind::Macos
             && host_surface == HostSurface::DesktopEmbeddedTauri,
+        github_ci: Capability::Probe.is_supported_on_surface(platform, host_surface),
         grokbot_sessions: platform.kind == PlatformKind::Macos
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         grokbot_notifications: platform.kind == PlatformKind::Macos

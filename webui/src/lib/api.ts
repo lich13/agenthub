@@ -19,6 +19,7 @@ export {
 } from "./api/system";
 export {
   getProbeStatus,
+  getGithubCiStatus,
   getProbeSettings,
   saveProbeSettings,
   getProbeEvents,

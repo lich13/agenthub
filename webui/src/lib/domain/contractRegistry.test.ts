@@ -11,15 +11,6 @@ import {
   sharedContractActions
 } from "./contractRegistry";
 import { contractDtoNameSet, contractDtoNames } from "./contractDtoMap";
-import {
-  desktopTauriOnlyVisualSurfaces,
-  remoteApiOnlyVisualSurfaces,
-  macosForbiddenVisualSurfaces,
-  sharedActionLabels,
-  sharedCorePanelTitles,
-  sharedDisabledStates,
-  sharedNavigationLabels
-} from "./visualContract";
 
 type ContractAction = {
   id: string;
@@ -196,20 +187,6 @@ describe("contract registry", () => {
     }
   });
 
-  test("declares the shared visual vocabulary used by both WebUI and Tauri shells", () => {
-    const visual = contract().visual;
-    expect(visual.navigation).toEqual([...sharedNavigationLabels]);
-    expect(visual.corePanelTitles).toEqual([...sharedCorePanelTitles]);
-    expect(visual.actionLabels).toEqual(sharedActionLabels);
-    expect(visual.disabledStates).toEqual(sharedDisabledStates);
-    expect(visual.remoteApiOnly).toEqual([...remoteApiOnlyVisualSurfaces]);
-    expect(visual.desktopTauriOnly).toEqual([...desktopTauriOnlyVisualSurfaces]);
-    expect(visual.forbidden.desktopEmbeddedTauri).toEqual([...macosForbiddenVisualSurfaces]);
-
-    const visualContractSource = repositoryFile("webui/src/lib/domain/visualContract.ts");
-    expect(visualContractSource).not.toContain("./contractRegistry");
-    expect(visualContractSource).not.toContain("agenthub-contract.json");
-  });
 
   test("covers WebUI runtime command wrappers without ad hoc command strings", () => {
     const commandLiterals = apiCommandLiterals();

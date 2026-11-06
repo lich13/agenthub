@@ -54,15 +54,9 @@ export function GrokBotWorkspace() {
   const latestReply = useMemo(() => latestAssistantReply(events), [events]);
   const usePath = async (item: ProviderSessionSummary, reveal: boolean) => {
     try {
-      const current = await readArchivableProviderSession("grokbot", { sessionKey: item.sessionKey, limit: 1 });
-      if (!current.summary.path) {
-        setFeedback("未缓存");
-        void sessions.refetch();
-        void detail.refetch();
-        return;
-      }
-      if (reveal) await revealLocalPath(current.summary.path);
-      else await copy(current.summary.path, "已复制路径");
+      if (!item.path) return;
+      if (reveal) await revealLocalPath(item.path);
+      else await copy(item.path, "已复制路径");
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "无法读取路径");
     }
@@ -72,16 +66,19 @@ export function GrokBotWorkspace() {
     { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, disabled: !item.path, run: () => void usePath(item, false) },
     { id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />, disabled: !item.path || !canRevealLocalPath(), run: () => void usePath(item, true) },
   ];
-  const error = sessions.error ?? (detail.isFetchNextPageError ? null : detail.error);
+  const error = detail.isFetchNextPageError ? null : detail.error;
   return (
     <WorkspaceSplitShell hasSelection={Boolean(selectedKey)} sidebar={
       <>
         <WorkspaceListHeader agent="grokbot" title="Grok Bot" count={sessions.data?.length} onRefresh={() => { void sessions.refetch(); void detail.refetch(); }} refreshDisabled={sessions.isFetching || detail.isFetching} />
         <WorkspaceSearchInput value={query} onChange={setQuery} placeholder="搜索 Grok Bot" />
         <div className="provider-list-scroll">
+          {narrow && !selectedKey && feedback && <div role="status" className="task-feedback">{feedback}</div>}
+          {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
+          {!sessions.isLoading && !sessions.error && !sessions.data?.length && <div className="muted-row">未发现 Grok Bot 会话</div>}
           {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
           {sessions.data?.map(item => (
-            <RenameableSession key={item.sessionKey} title={providerSessionLabel(item)} className={`provider-session ${selected?.sessionKey === item.sessionKey ? "selected" : ""}`}
+            <RenameableSession selected={selected?.sessionKey === item.sessionKey} key={item.sessionKey} title={providerSessionLabel(item)} className={`provider-session ${selected?.sessionKey === item.sessionKey ? "selected" : ""}`}
               onSelect={() => { setSelectedKey(item.sessionKey); setPendingSearch(null); setFeedback(""); }} menuActions={actions(item)}>
               <ProviderSessionRowBody title={providerSessionLabel(item)} statusText={grokBotStatus(item)} storageSize={item.storageSize} />
             </RenameableSession>
@@ -112,8 +109,7 @@ export function GrokBotWorkspace() {
 }
 
 function grokBotStatus(item: ProviderSessionSummary): string {
-  if (!item.path) return "未缓存";
   if (item.status === "authorization") return "需要授权";
   if (item.status === "reply_needed") return "需要回复";
-  return "近期缓存";
+  return item.path ? "近期缓存" : "未缓存";
 }

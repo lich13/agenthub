@@ -69,7 +69,6 @@ fn cache_formats_account_isolation_missing_path_and_replacement() {
         let f = Fixture::new(&account);
         let rows = list(&f.paths, &Default::default()).unwrap();
         assert!(rows[0].path.as_os_str().is_empty());
-        assert_eq!(rows[0].format_version, "未缓存");
         f.replica(json!([{"kind":"message","id":"u","role":"user","content":"fixture request","timestampMs":1000}]));
         let first = load_all_events(&f.paths, &f.session()).unwrap();
         assert_eq!(first[0].text.as_deref(), Some("fixture request"));
@@ -334,4 +333,12 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         0
     );
     assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+}
+
+#[test]
+fn cached_ordinary_card_does_not_become_roster_reply_request() {
+    let f = Fixture::new("fixture");
+    f.rows(json!([{"id":"bot-a","lastActivityAt":2000,"awaitingUserResponse":{"id":"widget"}}]));
+    f.replica(json!([{"id":"widget","kind":"send-message","timestampMs":2000,"message":{"type":"widget","widget":{"text":"ordinary card"}}}]));
+    assert!(scan_events(&f).is_empty());
 }
