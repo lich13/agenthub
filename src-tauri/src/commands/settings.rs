@@ -65,15 +65,11 @@ pub fn getProbeEvents(
 #[tauri::command(rename = "cleanup.hiddenDryRun")]
 pub async fn dryRunHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
-    request: Option<agenthub_core::archive::hidden_scan::HiddenScanRequest>,
+    request: agenthub_core::archive::hidden_scan::HiddenScanRequest,
 ) -> Result<agenthub_core::archive::HiddenThreadDeletePlan, String> {
     agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
         .cleanup()
-        .scan_hidden(
-            state.codex_paths(),
-            "desktop".into(),
-            request.unwrap_or_default(),
-        )
+        .scan_hidden(state.codex_paths(), "desktop".into(), request)
         .await
         .map_err(|err| err.to_string())
 }

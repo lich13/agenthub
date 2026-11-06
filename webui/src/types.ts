@@ -403,7 +403,7 @@ export type HiddenThreadDeletePlan = {
   integrity: string;
 };
 
-export type HiddenScanRequest = { mode?: "start" | "poll" | "cancel"; scanId?: string; cursor?: number; limit?: number };
+export type HiddenScanRequest = { mode: "start" | "poll" | "cancel"; scanId?: string; cursor?: number; limit?: number };
 export type HiddenScanProgress = {
   id: string; phase: "preparing" | "scanning" | "complete" | "stopping" | "stopped" | "failed";
   processed: number; total: number; cursor: number; nextCursor: number; hasMore: boolean; error: string | null;
@@ -708,13 +708,14 @@ export type GithubCiRun = {
   repository_id: number;
   repository_name: string;
 };
-export type GithubCiRequest = { refresh?: boolean };
+export type GithubCiRequest = { refresh?: boolean; cached_only?: boolean };
 export type GithubCiStatus = {
   account: GithubCiAccount | null;
   repositories: GithubCiRepository[];
   runs: GithubCiRun[];
   enabled: boolean;
   last_scan_ms: number;
+  baseline_ms?: number;
   error: string | null;
   refreshing: boolean;
 };

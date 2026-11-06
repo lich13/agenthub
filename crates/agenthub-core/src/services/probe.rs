@@ -1651,7 +1651,6 @@ mod tests {
 
     #[test]
     fn live_provider_sessions_cache_is_keyed_by_sandbox_root_and_codex_home_and_evicts_on_idle() {
-        let _cache_test = crate::read_cache::CACHE_TEST_LOCK.lock().unwrap();
         super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
         let root_a = std::env::temp_dir().join(format!(
             "agenthub-probe-cache-a-{}-{}",
@@ -1748,7 +1747,7 @@ mod tests {
         let sessions_b = super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[]);
         assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
 
-        crate::evict_idle_detail_caches(std::time::Duration::ZERO);
+        super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
         assert!(super::LIVE_PROVIDER_SESSIONS_CACHE
             .lock()
             .unwrap()

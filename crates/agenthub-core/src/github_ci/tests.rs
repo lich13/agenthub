@@ -170,12 +170,12 @@ fn only_success_failure_timeout_notify_and_history_is_bounded() {
     .collect();
     reconcile(&mut state, account(), runs, true, false, time + 2000);
     assert_eq!(state.pending.len(), 3);
-    let mut runs = (0..MAX_RUNS + 100)
+    let mut runs = (0..1100)
         .map(|i| run(i as u64, "completed", Some("success"), 1, time - 1000))
         .collect::<Vec<_>>();
     runs.push(run(9000, "in_progress", None, 1, time - 10000));
     reconcile(&mut state, account(), runs, true, true, time);
-    assert_eq!(state.snapshot.runs.len(), MAX_RUNS + 1);
+    assert_eq!(state.snapshot.runs.len(), 1101);
     assert!(state.snapshot.runs.iter().any(|r| r.id == 9000));
 }
 #[tokio::test]
@@ -192,7 +192,15 @@ async fn disabled_monitor_does_not_read_gh_or_write_on_idle_and_status_requests_
     }
     assert_eq!(before, fixture.db.get_setting(STATE).unwrap());
     assert!(monitor.token.is_empty());
-    let result = status(&fixture.db, &config, false).unwrap();
+    let result = status(
+        &fixture.db,
+        &config,
+        Request {
+            refresh: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(result.refreshing);
     assert!(!result.enabled);
     assert!(request_ms(&fixture.db).unwrap() > 0);
@@ -209,7 +217,15 @@ async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
     let mut monitor = Monitor::new().unwrap();
     monitor.retry_at = now() + 120000;
     for _ in 0..2 {
-        status(&fixture.db, &config, true).unwrap();
+        status(
+            &fixture.db,
+            &config,
+            Request {
+                refresh: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(monitor
             .tick_with_token(&fixture.db, &config, async {
                 panic!("credentials must not be read during cooldown")
@@ -217,7 +233,15 @@ async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
             .await
             .unwrap()
             .is_empty());
-        let status = status(&fixture.db, &config, false).unwrap();
+        let status = status(
+            &fixture.db,
+            &config,
+            Request {
+                refresh: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(!status.refreshing);
         assert!(status.error.unwrap().contains("限流"));
     }
@@ -502,7 +526,15 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
     server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
     let mut monitor = server.monitor();
     let config = Config::default();
-    status(&fixture.db, &config, true).unwrap();
+    status(
+        &fixture.db,
+        &config,
+        Request {
+            refresh: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let during = now() + 1;
     monitor
         .tick_with_token(&fixture.db, &config, async {
@@ -515,7 +547,18 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
         .await
         .unwrap();
     let stored = fixture.db.get_setting(STATE).unwrap();
-    assert!(!status(&fixture.db, &config, false).unwrap().refreshing);
+    assert!(
+        !status(
+            &fixture.db,
+            &config,
+            Request {
+                refresh: false,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .refreshing
+    );
     assert_eq!(load(&fixture.db).unwrap().request_ms, during);
     monitor
         .tick_with_token(&fixture.db, &config, async { panic!("idle must not scan") })
@@ -609,4 +652,28 @@ fn batch_acknowledgement_preserves_unprocessed_events_and_old_state_is_readable(
         .contains("retry_at_ms"));
     acknowledge(&fixture.db, &[events[0].key()]).unwrap();
     assert_eq!(load(&fixture.db).unwrap().pending, state.pending);
+}
+
+#[test]
+fn cached_status_never_requests_scan_and_exposes_monitor_baseline() {
+    let fixture = Database::new();
+    let config = Config::default();
+    let cached = Request {
+        refresh: true,
+        cached_only: true,
+    };
+    let empty = status(&fixture.db, &config, cached.clone()).unwrap();
+    assert_eq!(empty.last_scan_ms, 0);
+    assert!(!empty.refreshing);
+    assert!(fixture.db.get_setting(REFRESH).unwrap().is_none());
+    let state = Stored {
+        baseline_ms: 123,
+        ..Default::default()
+    };
+    save(&fixture.db, &state).unwrap();
+    assert_eq!(
+        status(&fixture.db, &config, cached).unwrap().baseline_ms,
+        123
+    );
+    assert!(fixture.db.get_setting(REFRESH).unwrap().is_none());
 }

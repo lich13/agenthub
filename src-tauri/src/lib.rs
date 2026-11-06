@@ -1,3 +1,4 @@
+mod ci_notifications;
 mod codex_desktop;
 mod commands;
 mod desktop_boot;
@@ -132,6 +133,7 @@ pub fn run() {
             ));
             app.manage(remote);
             app.manage(state);
+            ci_notifications::start(app.handle());
             let main_window_config = app
                 .config()
                 .app

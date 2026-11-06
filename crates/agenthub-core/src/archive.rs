@@ -45,13 +45,14 @@ pub struct HiddenThreadDeletePlan {
 
 pub(crate) fn list_archived_threads(paths: &CodexPaths) -> Result<Vec<HiddenThreadCandidate>> {
     let conn = crate::selected_codex::open(paths, false)?;
+    conn.execute_batch("BEGIN DEFERRED")?;
     let rows = hidden_visibility_rows(&conn, &crate::scan_work::ScanWork::default())?;
     let roots = rows
         .iter()
         .filter(|r| r.archived)
         .map(|r| r.id.clone())
         .collect::<Vec<_>>();
-    let edges = crate::selected_codex::tree::spawn_edges_with_connection(&conn)?;
+    let edges = visibility_edges(&conn, &rows)?;
     let ids = crate::selected_codex::tree::descendants_from_edges(&edges, &roots)?;
     let by_id: BTreeMap<_, _> = rows.iter().map(|r| (r.id.as_str(), r)).collect();
     Ok(ids
@@ -70,53 +71,7 @@ pub(crate) fn list_archived_threads(paths: &CodexPaths) -> Result<Vec<HiddenThre
 }
 
 pub(crate) fn plan_delete_hidden_candidates(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
-    let work = crate::scan_work::ScanWork::default();
-    let conn = crate::selected_codex::open(paths, false)?;
-    conn.busy_timeout(std::time::Duration::from_secs(2))?;
-    let rows = hidden_visibility_rows(&conn, &work)?;
-    let mut visible_threads = 0;
-    let mut hidden_ids = Vec::new();
-    let mut source_counts = BTreeMap::new();
-    let mut archived_threads = 0;
-    for row in &rows {
-        if row.archived {
-            archived_threads += 1;
-        } else if let Some(category) = &row.hidden_category {
-            hidden_ids.push(row.id.clone());
-            *source_counts.entry(category.clone()).or_insert(0) += 1;
-        } else {
-            visible_threads += 1;
-        }
-    }
-    let hidden_ids = crate::selected_codex::tree::descendants(paths, &hidden_ids)?;
-    let row_by_id: BTreeMap<&str, &HiddenVisibilityRow> =
-        rows.iter().map(|row| (row.id.as_str(), row)).collect();
-    let candidates = hidden_ids
-        .iter()
-        .map(|id| {
-            let row = row_by_id.get(id.as_str()).copied();
-            HiddenThreadCandidate {
-                id: id.clone(),
-                title: row.map_or_else(|| id.clone(), |r| r.title.clone()),
-                fingerprint: row.map(|r| r.fingerprint.clone()),
-                allowed: true,
-                reason: None,
-            }
-        })
-        .collect();
-    Ok(HiddenThreadDeletePlan {
-        scan: None,
-        total_threads: rows.len() as u64,
-        visible_threads,
-        hidden_threads: hidden_ids.len() as u64,
-        archived_threads,
-        session_index_lines: 0,
-        rollout_files: 0,
-        hidden_ids,
-        candidates,
-        source_counts,
-        integrity: "not_checked".into(),
-    })
+    hidden_delete_plan_with_work(paths, &crate::scan_work::ScanWork::default())
 }
 
 pub(crate) fn hidden_delete_plan_with_work(
@@ -162,7 +117,8 @@ pub(crate) fn scan_hidden(
             visible_threads += 1;
         }
     }
-    let hidden_ids = crate::selected_codex::tree::descendants(paths, &hidden_ids)?;
+    let edges = visibility_edges(&conn, &rows)?;
+    let hidden_ids = crate::selected_codex::tree::descendants_from_edges(&edges, &hidden_ids)?;
     let plan = HiddenThreadDeletePlan {
         scan: None,
         total_threads: rows.len() as u64,
@@ -196,6 +152,23 @@ pub(crate) fn scan_hidden(
         )?;
     }
     Ok(plan)
+}
+
+fn visibility_edges(
+    conn: &Connection,
+    rows: &[HiddenVisibilityRow],
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in rows {
+        for parent in &row.parent_ids {
+            edges
+                .entry(parent.clone())
+                .or_default()
+                .insert(row.id.clone());
+        }
+    }
+    crate::selected_codex::tree::append_spawn_table_edges(conn, &mut edges)?;
+    Ok(edges)
 }
 
 #[derive(Debug)]
@@ -283,6 +256,7 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
     let source_expr = first_existing(columns, &["source"]).unwrap_or("NULL");
     let parent_thread_expr =
         first_existing(columns, &["parent_thread_id", "parentThreadId"]).unwrap_or("NULL");
+    let alternate_parent_expr = first_existing(columns, &["parentThreadId"]).unwrap_or("NULL");
     let agent_path_expr = first_existing(columns, &["agent_path", "agentPath"]).unwrap_or("NULL");
     let agent_nickname_expr =
         first_existing(columns, &["agent_nickname", "agentNickname"]).unwrap_or("NULL");
@@ -296,7 +270,7 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
         "id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END, \
          {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, \
          {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, \
-         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT)"
+         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT), {alternate_parent_expr}"
     );
     VisibilitySelectSql {
         select_cols,
@@ -310,7 +284,8 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
     let archived = archived_flag != 0;
     let thread_source: Option<String> = row.get(2).ok();
     let source: Option<String> = row.get(3).ok();
-    let parent_thread_id: Option<String> = row.get(4).ok();
+    let alternate_parent: Option<String> = row.get(13).ok();
+    let parent_thread_id: Option<String> = row.get(4).ok().or_else(|| alternate_parent.clone());
     let agent_path: Option<String> = row.get(5).ok();
     let agent_nickname: Option<String> = row.get(6).ok();
     let agent_role: Option<String> = row.get(7).ok();
@@ -341,7 +316,12 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
         has_user_event,
         title.as_deref(),
     );
-    let parent_ids = extract_row_parents(parent_thread_id.as_deref(), source.as_deref());
+    let mut parent_ids = extract_row_parents(parent_thread_id.as_deref(), source.as_deref());
+    if let Some(parent) =
+        alternate_parent.filter(|parent| !parent.is_empty() && !parent_ids.contains(parent))
+    {
+        parent_ids.push(parent);
+    }
     Ok(HiddenVisibilityRow {
         title: title.unwrap_or_else(|| id.clone()),
         id,
@@ -494,6 +474,31 @@ mod tests {
     };
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn one_visibility_snapshot_preserves_every_parent_source() {
+        let root = hidden_cleanup_fixture("parent-sources");
+        let paths = CodexPaths::new(&root);
+        let conn = Connection::open(paths.state_db()).unwrap();
+        conn.execute_batch("ALTER TABLE threads ADD COLUMN parentThreadId TEXT;")
+            .unwrap();
+        conn.execute("UPDATE threads SET parent_thread_id='snake-parent', parentThreadId='camel-parent', source=?1 WHERE id='hidden-subagent'",
+            [json!({"parent_thread_id":"json-parent", "subagent":{"thread_spawn":{"parent_thread_id":"spawn-parent"}}}).to_string()]).unwrap();
+        let rows =
+            super::hidden_visibility_rows(&conn, &crate::scan_work::ScanWork::default()).unwrap();
+        let edges = super::visibility_edges(&conn, &rows).unwrap();
+        for parent in [
+            "snake-parent",
+            "camel-parent",
+            "json-parent",
+            "spawn-parent",
+            "main-visible",
+        ] {
+            assert!(edges[parent].contains("hidden-subagent"));
+        }
+        drop(conn);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn plan_delete_hidden_selects_non_archived_hidden_threads() {

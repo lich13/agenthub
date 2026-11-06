@@ -1,6 +1,6 @@
 import type { HiddenScanRequest, HiddenThreadDeletePlan } from "../../types";
 
-type Send = (request?: HiddenScanRequest) => Promise<HiddenThreadDeletePlan>;
+type Send = (request: HiddenScanRequest) => Promise<HiddenThreadDeletePlan>;
 
 export function mergeHiddenScanPage(current: HiddenThreadDeletePlan | null, page: HiddenThreadDeletePlan): HiddenThreadDeletePlan {
   const scan = page.scan;
@@ -38,10 +38,8 @@ export class HiddenScanRunner {
       .then(() => undefined, () => undefined);
   }
 
-  async run(progressSupported: boolean): Promise<HiddenThreadDeletePlan> {
-    // Progress arrived in 1.2.20. Older protocol-2 services keep the single-call
-    // path; cancellation there only discards client results.
-    let response = await this.send(progressSupported ? { mode: "start", limit: 100 } : undefined);
+  async run(): Promise<HiddenThreadDeletePlan> {
+    let response = await this.send({ mode: "start", limit: 100 });
     while (true) {
       if (this.controller.signal.aborted) {
         // Retain only rows already shown. A late start still supplies the ID to cancel.

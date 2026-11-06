@@ -246,33 +246,41 @@ fn discover_all_sessions(paths: &DshPaths) -> Result<Vec<DiscoveredSession>> {
             if valid_id(&id).is_err() {
                 continue;
             }
-            let Ok(Some((version, compressed, log_path))) = pick_generation(&entry.path()) else {
-                continue;
-            };
-            let Ok(header) = read_header_json(&log_path, compressed, &id) else {
-                continue;
-            };
-            let parent_subagent_of = if header["origin"].as_str() == Some("subagent") {
-                header["parentSession"]
-                    .as_str()
-                    .filter(|p| valid_id(p).is_ok())
-                    .map(str::to_owned)
-            } else {
-                None
-            };
-            out.push(DiscoveredSession {
-                id,
-                project_key: project_key.clone(),
-                dir: entry.path(),
-                log_path,
-                version,
-                compressed,
-                header,
-                parent_subagent_of,
-            });
+            if let Ok(Some(session)) = discover_session(entry.path(), project_key.clone(), &id) {
+                out.push(session);
+            }
         }
     }
     Ok(out)
+}
+
+fn discover_session(
+    dir: PathBuf,
+    project_key: String,
+    id: &str,
+) -> Result<Option<DiscoveredSession>> {
+    let Some((version, compressed, log_path)) = pick_generation(&dir)? else {
+        return Ok(None);
+    };
+    let header = read_header_json(&log_path, compressed, id)?;
+    let parent_subagent_of = if header["origin"].as_str() == Some("subagent") {
+        header["parentSession"]
+            .as_str()
+            .filter(|p| valid_id(p).is_ok())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(Some(DiscoveredSession {
+        id: id.into(),
+        project_key,
+        dir,
+        log_path,
+        version,
+        compressed,
+        header,
+        parent_subagent_of,
+    }))
 }
 
 fn decode_log_lines(
@@ -687,10 +695,34 @@ pub fn list_sessions(
 
 fn find_root_session(paths: &DshPaths, id: &str) -> Result<DiscoveredSession> {
     valid_id(id)?;
-    discover_all_sessions(paths)?
-        .into_iter()
-        .find(|s| s.id == id && !s.is_subagent())
-        .with_context(|| format!("未找到 DeepSeek Harness 会话：{id}"))
+    ensure!(paths.home.is_absolute(), "DSH_HOME 必须是绝对路径");
+    if directory(&paths.home)? {
+        standard_layout(paths)?;
+        let root = paths.home.join("sessions");
+        if directory(&root)? {
+            for project in fs::read_dir(root)? {
+                let project = project?;
+                let kind = project.file_type()?;
+                let key = project.file_name().to_string_lossy().into_owned();
+                if !kind.is_dir() || kind.is_symlink() || key == "resume-pins" {
+                    continue;
+                }
+                let dir = project.path().join(id);
+                let Ok(metadata) = fs::symlink_metadata(&dir) else {
+                    continue;
+                };
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    continue;
+                }
+                if let Ok(Some(session)) = discover_session(dir, key, id) {
+                    if !session.is_subagent() {
+                        return Ok(session);
+                    }
+                }
+            }
+        }
+    }
+    bail!("未找到 DeepSeek Harness 会话：{id}")
 }
 
 pub fn session_summary(paths: &DshPaths, id: &str) -> Result<ProviderSessionSummary> {

@@ -865,6 +865,15 @@ async fn github_ci_rpc_and_single_notification_switch_patches_work_for_nested_an
 {
     let (state, _dir, config_path) = rpc_test_state_with_config_file();
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
+    let cached = request_rpc_json(
+        state.clone(),
+        "github.ci.status",
+        r#"{"cached_only":true,"refresh":true}"#,
+    )
+    .await;
+    assert_eq!(cached["refreshing"], false);
+    assert_eq!(cached["baseline_ms"], 0);
+    assert!(state.db.get_setting("github_ci_refresh").unwrap().is_none());
     let initial = request_rpc_json(state.clone(), "github.ci.status", "{}").await;
     assert_eq!(initial["enabled"], false);
     assert_eq!(initial["account"], serde_json::Value::Null);

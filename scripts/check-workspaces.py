@@ -4,9 +4,8 @@ from pathlib import Path
 import re
 import tomllib
 
-# Existing intentional lock difference. Upgrades review this exact pair rather
-# than forcing Tauri's unrelated transitive major versions to match the server.
-KNOWN_LOCK_DIFFERENCES = {"toml": ("0.8.23", "0.8.2")}
+# Shared direct dependencies must resolve consistently across both workspaces.
+KNOWN_LOCK_DIFFERENCES = {}
 
 
 def load(root, name):

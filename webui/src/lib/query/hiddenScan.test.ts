@@ -41,8 +41,8 @@ function scanPlan(candidates: HiddenThreadCandidate[], scan: HiddenScanProgress)
   };
 }
 
-function legacyPlan(): HiddenThreadDeletePlan {
-  const candidates = [candidate("legacy-thread")];
+function cancelResponse(): HiddenThreadDeletePlan {
+  const candidates = [candidate("discarded-thread")];
   return {
     total_threads: 1,
     visible_threads: 0,
@@ -70,14 +70,14 @@ describe("hidden thread scan paging", () => {
       [candidate("thread-b")],
       progress({ phase: "complete", processed: 2, cursor: 1, nextCursor: 2, hasMore: false })
     );
-    const send = vi.fn(async (request?: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
+    const send = vi.fn(async (request: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
       if (request?.mode === "start") return first;
       if (request?.mode === "poll") return second;
       throw new Error("Unexpected scan request");
     });
     const updates: HiddenThreadDeletePlan[] = [];
 
-    const result = await new HiddenScanRunner(send, plan => updates.push(plan)).run(true);
+    const result = await new HiddenScanRunner(send, plan => updates.push(plan)).run();
 
     expect(send).toHaveBeenNthCalledWith(1, { mode: "start", limit: 100 });
     expect(send).toHaveBeenNthCalledWith(2, { mode: "poll", scanId: "scan-fixture", cursor: 1, limit: 100 });
@@ -125,14 +125,14 @@ describe("hidden thread scan paging", () => {
 
   test("stopping before the initial response hides its late candidates and never starts a poll", async () => {
     const firstResponse = deferred<HiddenThreadDeletePlan>();
-    const send = vi.fn((request?: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
+    const send = vi.fn((request: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
       if (request?.mode === "start") return firstResponse.promise;
-      if (request?.mode === "cancel") return Promise.resolve(legacyPlan());
+      if (request?.mode === "cancel") return Promise.resolve(cancelResponse());
       return Promise.reject(new Error("A stopped scan must not poll"));
     });
     const update = vi.fn();
     const runner = new HiddenScanRunner(send, update);
-    const running = runner.run(true);
+    const running = runner.run();
 
     await runner.stop();
     expect(send).toHaveBeenCalledExactlyOnceWith({ mode: "start", limit: 100 });
@@ -156,18 +156,18 @@ describe("hidden thread scan paging", () => {
     const first = scanPlan([candidate("visible-thread")], progress({ processed: 1, nextCursor: 1 }));
     const latePage = deferred<HiddenThreadDeletePlan>();
     const pollStarted = deferred<void>();
-    const send = vi.fn((request?: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
+    const send = vi.fn((request: HiddenScanRequest): Promise<HiddenThreadDeletePlan> => {
       if (request?.mode === "start") return Promise.resolve(first);
       if (request?.mode === "poll") {
         pollStarted.resolve();
         return latePage.promise;
       }
-      if (request?.mode === "cancel") return Promise.resolve(legacyPlan());
+      if (request?.mode === "cancel") return Promise.resolve(cancelResponse());
       return Promise.reject(new Error("A stopped scan must not issue another request"));
     });
     const update = vi.fn();
     const runner = new HiddenScanRunner(send, update);
-    const running = runner.run(true);
+    const running = runner.run();
 
     await pollStarted.promise;
     await runner.stop();
@@ -187,15 +187,4 @@ describe("hidden thread scan paging", () => {
     expect(update.mock.calls[0][0].candidates.map((item: HiddenThreadCandidate) => item.id)).toEqual(["visible-thread"]);
   });
 
-  test("uses one legacy dry-run request when progress scans are unsupported", async () => {
-    const legacy = legacyPlan();
-    const send = vi.fn(async (_request?: HiddenScanRequest) => legacy);
-    const updates: HiddenThreadDeletePlan[] = [];
-
-    const result = await new HiddenScanRunner(send, plan => updates.push(plan)).run(false);
-
-    expect(send).toHaveBeenCalledExactlyOnceWith(undefined);
-    expect(result).toBe(legacy);
-    expect(updates).toEqual([legacy]);
-  });
 });

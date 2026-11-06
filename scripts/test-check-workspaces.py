@@ -24,7 +24,7 @@ SHARED_VERSIONS = {
     "tokio": "1.52.3",
     "toml": "0.8.23",
 }
-DESKTOP_VERSIONS = {**SHARED_VERSIONS, "toml": "0.8.2"}
+DESKTOP_VERSIONS = dict(SHARED_VERSIONS)
 
 
 def write(path, content):
@@ -125,7 +125,7 @@ class WorkspaceCheckTests(unittest.TestCase):
         self.root = Path(temporary.name)
         make_fixture(self.root)
 
-    def test_eight_shared_dependency_edges_and_known_toml_difference_pass(self):
+    def test_matching_shared_dependency_edges_pass(self):
         self.assertEqual(check_workspaces.check(self.root), 8)
 
     def test_unrelated_tauri_lock_versions_do_not_change_direct_resolutions(self):

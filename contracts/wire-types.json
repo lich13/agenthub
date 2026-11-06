@@ -753,7 +753,7 @@
           {
             "name": "mode",
             "serde": [],
-            "type": "Option < HiddenScanMode >"
+            "type": "HiddenScanMode"
           },
           {
             "name": "scan_id",
@@ -3460,6 +3460,13 @@
               "serde (default)"
             ],
             "type": "bool"
+          },
+          {
+            "name": "cached_only",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -3576,6 +3583,11 @@
           },
           {
             "name": "last_scan_ms",
+            "serde": [],
+            "type": "i64"
+          },
+          {
+            "name": "baseline_ms",
             "serde": [],
             "type": "i64"
           },
@@ -9191,16 +9203,6 @@
             "name": "detail",
             "serde": [],
             "type": "ThreadDetailPlan"
-          },
-          {
-            "name": "response_kind",
-            "serde": [],
-            "type": "ThreadDetailResponseKind"
-          },
-          {
-            "name": "include_active_job",
-            "serde": [],
-            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -9236,24 +9238,6 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
-      "ThreadDetailResponseKind": {
-        "kind": "enum",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ],
-        "variants": [
-          {
-            "fields": [],
-            "name": "Detail",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Blocks",
-            "serde": []
-          }
-        ]
-      },
       "ThreadListPlan": {
         "fields": [
           {
@@ -9282,45 +9266,12 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
-      "ThreadListReadModelView": {
-        "fields": [
-          {
-            "name": "overview",
-            "serde": [],
-            "type": "ThreadsOverview"
-          },
-          {
-            "name": "threads",
-            "serde": [],
-            "type": "Vec < ThreadSummary >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "ThreadListReadPlan": {
         "fields": [
           {
             "name": "list",
             "serde": [],
             "type": "ThreadListPlan"
-          },
-          {
-            "name": "include_hidden_thread_ids",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "include_archived_thread_ids",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "include_running_jobs",
-            "serde": [],
-            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -10838,7 +10789,7 @@
     },
     "webui/src/lib/api/jobs.ts": {
       "calls": [
-        "callCommand<HiddenThreadDeletePlan>(\"cleanup.hiddenDryRun\",request?{request}:{})",
+        "callCommand<HiddenThreadDeletePlan>(\"cleanup.hiddenDryRun\",{request})",
         "callCommand<JobRecord[]|OptionalResult<JobRecord[]>>(\"jobs.list\",{limit:30})",
         "callCommand<JobRecord>(\"jobs.detail\",{id,includeOutput})",
         "callCommand<UnifiedCleanupPlan>(\"cleanup.unifiedDryRun\",request?{request}:{})",
@@ -10994,9 +10945,9 @@
         "DesktopJobDetailRequest": "exporttypeDesktopJobDetailRequest={id:string;includeOutput?:boolean};",
         "GithubCiAccount": "exporttypeGithubCiAccount={id:number;login:string};",
         "GithubCiRepository": "exporttypeGithubCiRepository={id:number;full_name:string;archived:boolean};",
-        "GithubCiRequest": "exporttypeGithubCiRequest={refresh?:boolean};",
+        "GithubCiRequest": "exporttypeGithubCiRequest={refresh?:boolean;cached_only?:boolean};",
         "GithubCiRun": "exporttypeGithubCiRun={id:number;run_attempt:number;name:string|null;head_branch:string|null;head_sha:string;status:string;conclusion:string|null;html_url:string;created_at:string;updated_at:string;repository_id:number;repository_name:string;};",
-        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;error:string|null;refreshing:boolean;};",
+        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;baseline_ms?:number;error:string|null;refreshing:boolean;};",
         "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
         "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
         "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",
@@ -11004,7 +10955,7 @@
         "GrokSessionDetail": "exporttypeGrokSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;totalEvents?:number;hasMore?:boolean;beforeCursor?:string|null;summary:GrokSessionSummary;events:GrokHistoryEvent[]};",
         "GrokSessionSummary": "exporttypeGrokSessionSummary={deletionEligibility?:{allowed:boolean;reason:string|null}|null;storageSize?:SessionStorageSize|null;handoffPath?:string|null;id:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;};",
         "HiddenScanProgress": "exporttypeHiddenScanProgress={id:string;phase:\"preparing\"|\"scanning\"|\"complete\"|\"stopping\"|\"stopped\"|\"failed\";processed:number;total:number;cursor:number;nextCursor:number;hasMore:boolean;error:string|null;};",
-        "HiddenScanRequest": "exporttypeHiddenScanRequest={mode?:\"start\"|\"poll\"|\"cancel\";scanId?:string;cursor?:number;limit?:number};",
+        "HiddenScanRequest": "exporttypeHiddenScanRequest={mode:\"start\"|\"poll\"|\"cancel\";scanId?:string;cursor?:number;limit?:number};",
         "HiddenThreadCandidate": "exporttypeHiddenThreadCandidate=HiddenThreadSelection&{title:string;allowed:boolean;reason:string|null};",
         "HiddenThreadDeletePlan": "exporttypeHiddenThreadDeletePlan={scan?:HiddenScanProgress|null;total_threads:number;visible_threads:number;hidden_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;hidden_ids:string[];candidates:HiddenThreadCandidate[];hidden_source_counts:Record<string,number>;integrity:string;};",
         "HiddenThreadItemResult": "exporttypeHiddenThreadItemResult={id:string;status:\"deleted\"|\"skipped\"|\"failed\";reason:string|null;residuals?:string[]};",

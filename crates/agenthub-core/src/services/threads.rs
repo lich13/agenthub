@@ -43,9 +43,6 @@ pub struct ThreadListPlan {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListReadPlan {
     pub list: ThreadListPlan,
-    pub include_hidden_thread_ids: bool,
-    pub include_archived_thread_ids: bool,
-    pub include_running_jobs: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,19 +64,10 @@ pub struct ThreadDetailPlan {
     pub before: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ThreadDetailResponseKind {
-    Detail,
-    Blocks,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailReadPlan {
     pub detail: ThreadDetailPlan,
-    pub response_kind: ThreadDetailResponseKind,
-    pub include_active_job: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,13 +88,6 @@ pub struct ThreadReadModelInputs {
     pub running_jobs: Vec<JobRecord>,
     pub hidden_thread_ids: HashSet<String>,
     pub archived_thread_ids: HashSet<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadListReadModelView {
-    pub overview: ThreadsOverview,
-    pub threads: Vec<ThreadSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +138,7 @@ pub fn thread_list_read_model(
     platform: &PlatformPaths,
     inputs: ThreadReadModelInputs,
     query: ThreadsQuery,
-) -> anyhow::Result<ThreadListReadModelView> {
+) -> anyhow::Result<ThreadsOverview> {
     require_capability(platform, Capability::Threads)?;
     let overview = build_threads_overview(
         inputs.threads,
@@ -166,18 +147,14 @@ pub fn thread_list_read_model(
         &inputs.hidden_thread_ids,
         &inputs.archived_thread_ids,
     );
-    Ok(ThreadListReadModelView {
-        threads: overview.threads.clone(),
-        overview,
-    })
+    Ok(overview)
 }
 
 fn visibility_ids_for_running_jobs(
     paths: &crate::codex::CodexPaths,
     running_jobs: &[JobRecord],
-    include_visibility_ids: bool,
 ) -> (HashSet<String>, HashSet<String>) {
-    if running_jobs.is_empty() || !include_visibility_ids {
+    if running_jobs.is_empty() {
         Default::default()
     } else {
         crate::codex::hidden_and_archived_thread_ids(paths).unwrap_or_default()
@@ -195,11 +172,8 @@ pub fn load_thread_read_model_inputs(
         plan.list.query.q.as_deref(),
         plan.list.fetch_limit,
     )?;
-    let (hidden_thread_ids, archived_thread_ids) = visibility_ids_for_running_jobs(
-        paths,
-        &running_jobs,
-        plan.include_hidden_thread_ids || plan.include_archived_thread_ids,
-    );
+    let (hidden_thread_ids, archived_thread_ids) =
+        visibility_ids_for_running_jobs(paths, &running_jobs);
     Ok(ThreadReadModelInputs {
         threads,
         running_jobs,
@@ -217,7 +191,7 @@ pub fn load_threads_with_runtime_state(
 ) -> anyhow::Result<Vec<ThreadSummary>> {
     let raw_threads = crate::codex::list_threads(paths, archived, q, fetch_limit)?;
     let (hidden_thread_ids, archived_thread_ids) =
-        visibility_ids_for_running_jobs(paths, running_jobs, true);
+        visibility_ids_for_running_jobs(paths, running_jobs);
     Ok(apply_thread_list_runtime_state(
         raw_threads,
         ThreadListRuntimeState {
@@ -265,9 +239,6 @@ pub fn plan_thread_list_read(
 ) -> anyhow::Result<ThreadListReadPlan> {
     Ok(ThreadListReadPlan {
         list: plan_threads_list_request(platform, query)?,
-        include_hidden_thread_ids: true,
-        include_archived_thread_ids: true,
-        include_running_jobs: true,
     })
 }
 
@@ -293,8 +264,6 @@ pub fn plan_thread_detail_read(
 ) -> anyhow::Result<ThreadDetailReadPlan> {
     Ok(ThreadDetailReadPlan {
         detail: plan_thread_detail_request(platform, request)?,
-        response_kind: ThreadDetailResponseKind::Detail,
-        include_active_job: true,
     })
 }
 
@@ -323,8 +292,6 @@ pub fn plan_thread_blocks_read(
 ) -> anyhow::Result<ThreadDetailReadPlan> {
     Ok(ThreadDetailReadPlan {
         detail: plan_thread_blocks_request(platform, id, limit, before)?,
-        response_kind: ThreadDetailResponseKind::Blocks,
-        include_active_job: true,
     })
 }
 
@@ -555,7 +522,7 @@ mod tests {
         services::threads::{
             apply_thread_detail_runtime_state, build_threads_overview, filter_thread_summaries,
             merge_running_jobs, plan_thread_blocks_read, plan_thread_detail_read,
-            plan_thread_list_read, thread_list_fetch_limit, ThreadDetailResponseKind, ThreadsQuery,
+            plan_thread_list_read, thread_list_fetch_limit, ThreadsQuery,
         },
     };
 
@@ -726,9 +693,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(list.include_hidden_thread_ids);
-        assert!(list.include_archived_thread_ids);
-        assert!(list.include_running_jobs);
         assert_eq!(list.list.query.archived, Some(true));
         assert_eq!(list.list.query.q.as_deref(), Some("task"));
         assert_eq!(list.list.fetch_limit, 25);
@@ -744,8 +708,6 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(detail.include_active_job);
-        assert_eq!(detail.response_kind, ThreadDetailResponseKind::Detail);
         assert_eq!(detail.detail.thread_id, "thread-a");
         assert_eq!(
             detail.detail.block_limit,
@@ -753,8 +715,6 @@ mod tests {
         );
 
         let blocks = plan_thread_blocks_read(&macos, " thread-a ", Some(0), None).unwrap();
-        assert!(blocks.include_active_job);
-        assert_eq!(blocks.response_kind, ThreadDetailResponseKind::Blocks);
         assert_eq!(blocks.detail.block_limit, Some(1));
 
         assert!(plan_thread_list_read(&windows, ThreadsQuery::default()).is_err());

@@ -909,6 +909,33 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
     Ok(editor.finish())
 }
 
+/// Replace the actual configuration file without exposing a truncated TOML document.
+pub fn write_config_atomic(path: &Path, updated: &str) -> Result<()> {
+    use std::io::Write;
+    let target = fs::canonicalize(path)?;
+    let permissions = fs::metadata(&target)?.permissions();
+    let candidate = target.with_extension(format!("config-{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&candidate)?;
+    let result = (|| -> Result<()> {
+        file.set_permissions(permissions)?;
+        file.write_all(updated.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&candidate, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&candidate);
+    }
+    result
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
     use std::io::Write;
@@ -1376,5 +1403,36 @@ workspace = "/home/ubuntu/codex-workspace"
         ] {
             assert!(!serialized.contains(retired), "retired field {retired}");
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod atomic_write_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn replaces_complete_content_preserving_permissions_and_symlink() {
+        let root = std::env::temp_dir().join(format!("agenthub-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("config.toml");
+        let link = root.join("config-link.toml");
+        fs::write(&target, "enabled = false\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&target, &link).unwrap();
+        write_config_atomic(&link, "enabled = true\n").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "enabled = true\n");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        assert!(write_config_atomic(&root.join("missing.toml"), "unused").is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
     }
 }

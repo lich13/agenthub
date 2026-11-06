@@ -308,7 +308,7 @@ impl PanelDb {
         if now.saturating_sub(last) < 3600 {
             return Ok(());
         }
-        self.maintain_probe_events(retention_days, 100_000, false)?;
+        self.maintain_probe_events(retention_days, 100_000)?;
         let marker_cutoff = now - i64::from(retention_days.clamp(7, 3650)) * 86_400;
         {
             let conn = self.conn.lock().expect("db mutex");

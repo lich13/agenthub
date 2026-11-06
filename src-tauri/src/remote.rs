@@ -100,7 +100,7 @@ impl RemoteConnections {
         s.changing = true;
         Ok(ChangeGuard(self.state.clone()))
     }
-    fn view(&self) -> RemoteConnectionView {
+    pub(crate) fn view(&self) -> RemoteConnectionView {
         let s = self.state.lock().expect("connection");
         let active = s.prefs.active();
         RemoteConnectionView {
@@ -112,6 +112,10 @@ impl RemoteConnections {
             active_machine_name: active.map(|m| m.name.clone()),
             machines: s.prefs.machines.clone(),
         }
+    }
+    pub(crate) fn is_current(&self, revision: u64) -> bool {
+        let state = self.state.lock().expect("connection");
+        !state.closed && !state.changing && state.prefs.revision == revision
     }
     fn persist(&self, prefs: &Preferences) -> Result<(), String> {
         let mut f = tempfile::Builder::new()
@@ -248,7 +252,7 @@ impl RemoteConnections {
         }
         failed.close();
     }
-    async fn invoke(&self, request: &RemoteInvokeRequest) -> Result<Value, String> {
+    pub(crate) async fn invoke(&self, request: &RemoteInvokeRequest) -> Result<Value, String> {
         self.invoke_with(request, Self::reconnect).await
     }
     async fn invoke_with<F, Fut>(
@@ -470,6 +474,19 @@ pub async fn remoteInvoke(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn ci_delivery_rejects_changed_changing_and_closed_connections() {
+        let (_root, connections) = remote_fixture();
+        let revision = connections.view().revision;
+        assert!(connections.is_current(revision));
+        assert!(!connections.is_current(revision + 1));
+        connections.state.lock().unwrap().changing = true;
+        assert!(!connections.is_current(revision));
+        connections.state.lock().unwrap().changing = false;
+        connections.disconnect();
+        assert!(!connections.is_current(revision));
+    }
 
     fn remote_fixture() -> (tempfile::TempDir, RemoteConnections) {
         let root = tempfile::tempdir().unwrap();

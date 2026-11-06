@@ -14,9 +14,10 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HiddenScanMode {
+    #[default]
     Start,
     Poll,
     Cancel,
@@ -25,7 +26,7 @@ pub enum HiddenScanMode {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HiddenScanRequest {
-    pub mode: Option<HiddenScanMode>,
+    pub mode: HiddenScanMode,
     pub scan_id: Option<String>,
     pub cursor: Option<usize>,
     pub limit: Option<usize>,
@@ -175,24 +176,7 @@ pub async fn request(
     request: HiddenScanRequest,
 ) -> Result<HiddenThreadDeletePlan> {
     let source = paths.home.canonicalize().context("原生会话目录不可用")?;
-    let Some(mode) = request.mode else {
-        ensure!(
-            request.scan_id.is_none() && request.cursor.is_none() && request.limit.is_none(),
-            "缺少扫描模式"
-        );
-        let slot = SLOTS
-            .clone()
-            .try_acquire_owned()
-            .context("扫描任务已达上限，请稍后重试")?;
-        let work = ScanWork::new(false);
-        let active = SourceLease::acquire(source)?;
-        return crate::read_tasks::spawn_blocking(move || {
-            let _slot = slot;
-            let _active = active;
-            super::hidden_delete_plan_with_work(&paths, &work)
-        })
-        .await?;
-    };
+    let mode = request.mode;
     let limit = request.limit.unwrap_or(100);
     ensure!((1..=100).contains(&limit), "扫描每页必须为 1 至 100 项");
     let cursor = request.cursor.unwrap_or(0);

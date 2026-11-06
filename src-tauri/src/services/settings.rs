@@ -83,7 +83,7 @@ fn probe_save_settings_with_state_and_repair(
     }
     let text = std::fs::read_to_string(&config_path)?;
     let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
-    std::fs::write(&config_path, updated)?;
+    agenthub_core::config::write_config_atomic(&config_path, &updated)?;
     let response_config = Config::load(&config_path)?;
     for secret_write in plan.secret_writes {
         state.db.set_secret_setting_bytes(

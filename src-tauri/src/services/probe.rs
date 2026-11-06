@@ -28,7 +28,7 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
 
 pub async fn desktop_github_ci_status(
     state: &DesktopState,
-    refresh: bool,
+    request: agenthub_core::github_ci::Request,
 ) -> std::result::Result<agenthub_core::github_ci::Snapshot, String> {
     let config = state.config();
     let snapshot = agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
@@ -36,13 +36,17 @@ pub async fn desktop_github_ci_status(
         state.platform(),
         state.host_surface(),
     )
-    .github_ci(&state.db, agenthub_core::github_ci::Request { refresh })
+    .github_ci(&state.db, request.clone())
     .map_err(|error| error.to_string())?;
-    if !config.probe.monitor_enabled() && snapshot.refreshing {
+    if config.probe.monitor_enabled() {
+        *state.github_ci.lock().await = None;
+    }
+    if !request.cached_only && !config.probe.monitor_enabled() && snapshot.refreshing {
         let mut monitor = state.github_ci.lock().await;
         let config = state.config();
         if config.probe.monitor_enabled() {
-            return agenthub_core::github_ci::status(&state.db, &config, false)
+            *monitor = None;
+            return agenthub_core::github_ci::status(&state.db, &config, Default::default())
                 .map_err(|error| error.to_string());
         }
         if monitor.is_none() {
@@ -55,7 +59,11 @@ pub async fn desktop_github_ci_status(
             .tick(&state.db, &config)
             .await
             .map_err(|error| error.to_string())?;
-        return agenthub_core::github_ci::status(&state.db, &state.config(), false)
+        let config = state.config();
+        if config.probe.monitor_enabled() {
+            *monitor = None;
+        }
+        return agenthub_core::github_ci::status(&state.db, &config, Default::default())
             .map_err(|error| error.to_string());
     }
     Ok(snapshot)
@@ -88,15 +96,52 @@ mod ci_tests {
             db,
             PlatformPaths::for_kind(PlatformKind::Macos),
         );
-        let result = desktop_github_ci_status(&state, false).await.unwrap();
+        let result = desktop_github_ci_status(
+            &state,
+            agenthub_core::github_ci::Request {
+                refresh: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(!result.refreshing);
         assert!(state.github_ci.lock().await.is_none());
+        *state.github_ci.lock().await = Some(agenthub_core::github_ci::Monitor::new().unwrap());
         config.probe.enabled = true;
         config.probe.notifications.notify_github_ci = true;
         assert!(config.probe.monitor_enabled());
         state.replace_config(config);
-        let result = desktop_github_ci_status(&state, true).await.unwrap();
+        let result = desktop_github_ci_status(
+            &state,
+            agenthub_core::github_ci::Request {
+                refresh: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(result.refreshing);
         assert!(state.github_ci.lock().await.is_none());
+    }
+    #[tokio::test]
+    async fn cached_only_never_initializes_a_desktop_monitor() {
+        let state = DesktopState::new(
+            Config::default(),
+            PanelDb::open(":memory:").unwrap(),
+            PlatformPaths::for_kind(PlatformKind::Macos),
+        );
+        let snapshot = desktop_github_ci_status(
+            &state,
+            agenthub_core::github_ci::Request {
+                refresh: true,
+                cached_only: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!snapshot.refreshing);
+        assert!(state.github_ci.lock().await.is_none());
+        assert!(state.db.get_setting("github_ci_refresh").unwrap().is_none());
     }
 }

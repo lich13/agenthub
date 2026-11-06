@@ -178,20 +178,16 @@ pub async fn github_ci(
     }
     let run = &event.run;
     let kind = run.notification_kind().unwrap_or("failure");
+    let (title, body) = run.notification_text(&config.codex.host_label);
     let mut request = super::notification_format::request(
         "GitHub CI",
         kind,
         &run.repository_name,
         "",
-        &format!(
-            "{}\n{}\n{} · {}",
-            run.name.as_deref().unwrap_or("CI"),
-            run.head_branch.as_deref().unwrap_or(""),
-            run.head_sha.chars().take(7).collect::<String>(),
-            run.conclusion.as_deref().unwrap_or("")
-        ),
+        &body,
         &key,
     );
+    request.title = title;
     request.url = Some(run.html_url.clone());
     let candidate = queued_candidate(
         config,

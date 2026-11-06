@@ -72,6 +72,14 @@ pub(crate) fn spawn_edges_with_connection(
             edges.entry(parent.into()).or_default().insert(id.into());
         }
     }
+    append_spawn_table_edges(conn, &mut edges)?;
+    Ok(edges)
+}
+
+pub(crate) fn append_spawn_table_edges(
+    conn: &Connection,
+    edges: &mut BTreeMap<String, BTreeSet<String>>,
+) -> Result<()> {
     let columns = crate::archive::table_columns(conn, "thread_spawn_edges")?;
     if columns.contains("parent_thread_id") && columns.contains("child_thread_id") {
         let mut stmt =
@@ -81,7 +89,7 @@ pub(crate) fn spawn_edges_with_connection(
             edges.entry(parent).or_default().insert(child);
         }
     }
-    Ok(edges)
+    Ok(())
 }
 
 pub(crate) fn descendants_from_edges(

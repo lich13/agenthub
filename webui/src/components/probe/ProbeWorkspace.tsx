@@ -170,6 +170,8 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
         </div>
       </header>
 
+      {capabilities.githubCi && <GithubCiCard draft={draft} setDraft={setDraft} saving={saveMutation.isPending} saveStatus={saveTarget === "ci" ? saveStatus : null} onSave={() => saveSettings(undefined, "ci")} />}
+
       <Panel title="通知配置与快捷开关" icon={<SlidersHorizontal size={18} />} className="wide-panel">
         {settings.error && <div role="alert" className="form-error">{settings.error.message}</div>}
         {actionStatus && (
@@ -222,7 +224,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
         )}
       </Panel>
 
-      {capabilities.githubCi && <GithubCiCard draft={draft} setDraft={setDraft} saving={saveMutation.isPending} saveStatus={saveTarget === "ci" ? saveStatus : null} onSave={() => saveSettings(undefined, "ci")} />}
+
 
       {hooksHostMatrix}
 

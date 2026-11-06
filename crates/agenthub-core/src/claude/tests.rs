@@ -833,7 +833,6 @@ fn oversized_unrelated_file_does_not_hide_readable_sessions_and_cache_is_reused(
 
 #[test]
 fn claude_summary_list_caches_many_transcripts_and_refreshes_one_append() {
-    let _cache_test = crate::read_cache::CACHE_TEST_LOCK.lock().unwrap();
     const SESSION_COUNT: usize = 70;
 
     let f = Fixture::new();
@@ -2366,21 +2365,4 @@ fn notification_snapshots_reuse_lightweight_probe_cache_without_rereading_or_tou
     let third = notification_snapshots(&f.paths).unwrap();
     assert!(reader::BODY_RECORDS.with(|c| c.get()) >= 4);
     assert_eq!(third.streams[0].events.len(), 2);
-}
-
-#[test]
-fn idle_eviction_releases_summary_snapshots_and_rebuilds_the_same_content() {
-    let _cache_test = crate::read_cache::CACHE_TEST_LOCK.lock().unwrap();
-    let fixture = Fixture::new();
-    fixture.complete();
-    let first = reader::summary(&fixture.file).unwrap();
-    assert!(std::sync::Arc::ptr_eq(
-        &first,
-        &reader::summary(&fixture.file).unwrap()
-    ));
-    super::evict_idle_detail_cache(std::time::Duration::ZERO);
-    let rebuilt = reader::summary(&fixture.file).unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&first, &rebuilt));
-    assert_eq!(first.title, rebuilt.title);
-    assert_eq!(first.message_count, rebuilt.message_count);
 }

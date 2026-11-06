@@ -13,11 +13,12 @@ use tokio::process::Command;
 pub struct Request {
     #[serde(default)]
     pub refresh: bool,
+    #[serde(default)]
+    pub cached_only: bool,
 }
 
 const STATE: &str = "github_ci_state";
 const REFRESH: &str = "github_ci_refresh";
-const MAX_RUNS: usize = 1000;
 pub const POLL_SECONDS: i64 = 60;
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -69,6 +70,32 @@ impl Run {
             _ => None,
         }
     }
+    pub fn notification_text(&self, machine: &str) -> (String, String) {
+        let result = match self.conclusion.as_deref() {
+            Some("success") => "成功",
+            Some("timed_out") => "超时",
+            _ => "失败",
+        };
+        let clean = |value: &str| {
+            crate::security::redact_output(value)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(100)
+                .collect::<String>()
+        };
+        (
+            format!("GitHub CI｜{result}｜{}", clean(&self.repository_name)),
+            format!(
+                "{}\n{}\n{} · {}",
+                clean(machine),
+                clean(self.name.as_deref().unwrap_or("CI")),
+                clean(self.head_branch.as_deref().unwrap_or("")),
+                self.head_sha.chars().take(7).collect::<String>()
+            ),
+        )
+    }
     fn finished_ms(&self) -> i64 {
         chrono::DateTime::parse_from_rfc3339(&self.updated_at).map_or(0, |d| d.timestamp_millis())
     }
@@ -95,6 +122,7 @@ pub struct Snapshot {
     pub runs: Vec<Run>,
     pub enabled: bool,
     pub last_scan_ms: i64,
+    pub baseline_ms: i64,
     pub error: Option<String>,
     pub refreshing: bool,
 }
@@ -129,14 +157,18 @@ fn request_ms(db: &PanelDb) -> Result<i64> {
 pub fn enabled(config: &Config) -> bool {
     config.probe.enabled && config.probe.notifications.notify_github_ci
 }
-pub fn status(db: &PanelDb, config: &Config, refresh: bool) -> Result<Snapshot> {
+pub fn status(db: &PanelDb, config: &Config, options: Request) -> Result<Snapshot> {
     let stored = load(db)?;
     let mut snapshot = stored.snapshot;
     let mut request = request_ms(db)?;
-    if (refresh || snapshot.last_scan_ms == 0) && request <= stored.request_ms {
+    if !options.cached_only
+        && (options.refresh || snapshot.last_scan_ms == 0)
+        && request <= stored.request_ms
+    {
         request = now();
         db.set_setting(REFRESH, &request.to_string())?;
     }
+    snapshot.baseline_ms = stored.baseline_ms;
     snapshot.enabled = enabled(config);
     snapshot.refreshing = request > stored.request_ms;
     Ok(snapshot)
@@ -531,16 +563,8 @@ fn reconcile(
         state.baseline_ms = time;
     }
 }
-fn retain_summaries(runs: &mut Vec<Run>) {
+fn retain_summaries(runs: &mut [Run]) {
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.id.cmp(&a.id)));
-    let mut completed = 0;
-    runs.retain(|run| {
-        if run.status != "completed" {
-            return true;
-        }
-        completed += 1;
-        completed <= MAX_RUNS
-    });
 }
 async fn gh_token() -> Result<String> {
     let program = std::env::var_os("PATH")

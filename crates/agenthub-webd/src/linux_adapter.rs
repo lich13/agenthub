@@ -24,7 +24,7 @@ pub fn apply_probe_settings_save_plan(
 ) -> Result<Config> {
     let text = fs::read_to_string(config_path)?;
     let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
-    fs::write(config_path, updated)?;
+    agenthub_core::config::write_config_atomic(config_path, &updated)?;
     let response_config = Config::load(config_path)?;
 
     for write in &plan.secret_writes {
@@ -82,11 +82,7 @@ pub fn list_threads_read_model(
         .threads()
         .list_read(query)?;
     let paths = state.codex_paths();
-    let running_jobs = if plan.include_running_jobs {
-        state.db.running_thread_jobs()?
-    } else {
-        Vec::new()
-    };
+    let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
     let view = thread_service::thread_list_read_model(&platform, inputs, plan.list.query)?;
     Ok(view.threads)

@@ -8,6 +8,25 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.5": {
+        "summary": ["增加 CI 双通道结果通知与顶部展示，优化数据库维护、会话读取和配置保存"],
+        "features": [
+            "GitHub CI 卡片移至 Probe 顶部；成功、失败和超时结果支持 Bark 与 macOS 通知，通知显示机器、工作流和提交，点击可打开对应 GitHub 运行。",
+            "Mac 在 App 运行、后台或最小化期间观察当前连接机器的 CI；首次观察不补发历史结果，退出 App 后 Bark 继续按既有配置推送。",
+        ],
+        "fixes": [
+            "去重按事件身份原子认领或续期，过期通知标记批量删除，减少事件与保留期维护的数据库扫描和写入。",
+            "隐藏及归档线程扫描复用同一读取中的父子关系，DSH 单会话读取按目标定位，线程列表移除重复复制。",
+            "Probe 设置在两端原子保存并保留权限；后台接管后释放桌面 CI 查询缓存，移除无用依赖和无调用代码。",
+            "CI 不再按全局完成记录数截断；保留每仓库最近 10 条、目录分页、界面筛选后 20 条及已有 Bark 投递状态。",
+        ],
+        "migration": [
+            "API 协议保持 2，数据库 schema 保持 3；先升级服务端再安装 App，保留用户数据、凭据、监控开关和 Bark 加密队列。",
+            "Mac 通知沿用 CI 监控开关，需要允许 AgentHub 系统通知；只发送成功、失败及超时，排队和运行中仅在界面显示。",
+            "CI 仍每 60 秒扫描每仓库最新 10 条，Mac 每 60 秒读取缓存；窗口外的旧运行或旧重跑不保证发现。",
+            "支持新安装及已完成 v2.1.0 迁移的配置；更早版本先经过 v2.1.0，早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.4": {
         "features": [
             "GitHub CI 每个仓库只读取最新 10 条，全部仓库列表筛选后最多展示 20 条；仓库选择框统一宽度、高度、字体与箭头。",
@@ -423,8 +442,8 @@ def render(version: str, *, updater: bool = False) -> str:
         if not features and not fixes:
             raise SystemExit(f"version {version} has no features or fixes in VERSION_NOTES")
         if updater:
-            return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
-        summary_items = [item.rstrip("。") for item in [*features, *fixes] if item]
+            return f"AgentHub {version}：" + "；".join(item.rstrip("。") for item in highlights(version)[:2])
+        summary_items = [item.rstrip("。") for item in entry.get("summary", [*features, *fixes]) if item]
         sections: dict[str, list[str]] = {
             "版本概览": [
                 f"AgentHub {version}：{'；'.join(summary_items)}；API 协议保持 2。"
@@ -446,8 +465,8 @@ def render(version: str, *, updater: bool = False) -> str:
                     "Linux x86_64：服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
                 ],
                 "升级提示": [
-                    "先升级远端服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验各 Agent 会话列表、Probe 状态与全平台线程清理。",
-                    "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                    "先升级远端服务，再原地覆盖安装本机 macOS App（AgentHub.app）；保留既有数据与用户配置。",
+                    "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程。",
                     "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
                 ],
             }
@@ -460,7 +479,7 @@ def render(version: str, *, updater: bool = False) -> str:
         return "\n".join(lines)
 
     if updater:
-        return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
+        return f"AgentHub {version}：" + "；".join(item.rstrip("。") for item in highlights(version)[:2])
 
     has_remote_api = version_parts >= (1, 2, 0)
     has_linux_desktop = version_parts < (1, 1, 0)

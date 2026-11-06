@@ -27,11 +27,7 @@ pub(crate) fn thread_summaries_with_query(
     let paths = state.codex_paths();
     let use_cases = AgentHubUseCases::new(state.platform()).threads();
     let plan = use_cases.list_read(query)?;
-    let running_jobs = if plan.include_running_jobs {
-        state.db.running_thread_jobs()?
-    } else {
-        Vec::new()
-    };
+    let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
     let view = thread_service::thread_list_read_model(state.platform(), inputs, plan.list.query)?;
     Ok(view.threads)

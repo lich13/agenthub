@@ -4212,7 +4212,7 @@ last_error = "old agenthub request hook"
         let first_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
             .await
             .unwrap();
-        db.maintain_probe_events(1, 100, false).unwrap();
+        db.maintain_probe_events(1, 100).unwrap();
         let second_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
             .await
             .unwrap();

@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.1.4"
+version = "2.1.5"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/lich13/agenthub"
@@ -16,7 +16,6 @@ rust-version = "1.99"
 libc = "0.2"
 anyhow = "1.0"
 aes-gcm = "0.10"
-subtle = "2.6"
 axum = { version = "0.7", features = ["macros"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -31,7 +30,6 @@ serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "process", "sync", "io-util", "io-std", "net"] }
 toml = "0.8"
-toml_edit = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"

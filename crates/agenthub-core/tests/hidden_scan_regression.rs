@@ -36,7 +36,7 @@ async fn hidden_scan_paginates_repeatably_and_keeps_its_candidate_snapshot() {
         fixture.paths(),
         owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -121,7 +121,7 @@ async fn hidden_scan_rejects_other_owners_and_sources_and_stops_for_its_owner() 
         fixture.paths(),
         owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -212,7 +212,7 @@ async fn hidden_scan_rejects_a_second_active_scan_for_the_same_source() {
         fixture.paths(),
         owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -230,7 +230,7 @@ async fn hidden_scan_rejects_a_second_active_scan_for_the_same_source() {
         fixture.paths(),
         format!("different-owner-{}", Uuid::new_v4()),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -265,7 +265,7 @@ async fn hidden_scan_limits_active_contexts_to_two() {
         first_fixture.paths(),
         first_owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -277,7 +277,7 @@ async fn hidden_scan_limits_active_contexts_to_two() {
         second_fixture.paths(),
         second_owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -292,7 +292,7 @@ async fn hidden_scan_limits_active_contexts_to_two() {
         third_fixture.paths(),
         format!("slot-three-owner-{}", Uuid::new_v4()),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(PAGE_SIZE),
             ..HiddenScanRequest::default()
         },
@@ -377,7 +377,7 @@ async fn scan_all(
         fixture.paths(),
         owner.to_owned(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(limit),
             ..HiddenScanRequest::default()
         },
@@ -492,7 +492,7 @@ async fn poll_page(
 
 fn poll_request(scan_id: &str, cursor: usize, limit: usize) -> HiddenScanRequest {
     HiddenScanRequest {
-        mode: Some(HiddenScanMode::Poll),
+        mode: HiddenScanMode::Poll,
         scan_id: Some(scan_id.to_owned()),
         cursor: Some(cursor),
         limit: Some(limit),
@@ -501,7 +501,7 @@ fn poll_request(scan_id: &str, cursor: usize, limit: usize) -> HiddenScanRequest
 
 fn cancel_request(scan_id: &str, limit: usize) -> HiddenScanRequest {
     HiddenScanRequest {
-        mode: Some(HiddenScanMode::Cancel),
+        mode: HiddenScanMode::Cancel,
         scan_id: Some(scan_id.to_owned()),
         limit: Some(limit),
         ..HiddenScanRequest::default()

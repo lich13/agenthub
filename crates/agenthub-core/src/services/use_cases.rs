@@ -12,8 +12,8 @@ use crate::{
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
         system::{self, Capability, HostSurface, SystemCapabilities},
         threads::{
-            self, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest, ThreadListPlan,
-            ThreadListReadPlan, ThreadsQuery,
+            self, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest, ThreadListReadPlan,
+            ThreadsQuery,
         },
     },
     update::{analyze_job_failure, JobFailureAnalysis},
@@ -101,7 +101,7 @@ impl<'a> AgentHubUseCases<'a> {
             db,
             self.config
                 .ok_or_else(|| anyhow::anyhow!("configuration required"))?,
-            request.refresh,
+            request,
         )
     }
 
@@ -254,16 +254,8 @@ impl<'a> ThreadUseCases<'a> {
         crate::codex::subagents::read_subagent_detail(paths, request)
     }
 
-    pub fn list(self, query: ThreadsQuery) -> Result<ThreadListPlan> {
-        threads::plan_threads_list_request(self.platform, query)
-    }
-
     pub fn list_read(self, query: ThreadsQuery) -> Result<ThreadListReadPlan> {
         threads::plan_thread_list_read(self.platform, query)
-    }
-
-    pub fn detail(self, request: ThreadDetailRequest) -> Result<ThreadDetailPlan> {
-        threads::plan_thread_detail_request(self.platform, request)
     }
 
     pub fn detail_read(self, request: ThreadDetailRequest) -> Result<ThreadDetailReadPlan> {

@@ -31,14 +31,6 @@ pub struct PanelDb {
     crypto: SecretBox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NotificationRetentionCounts {
-    pub event_count: usize,
-    pub dedupe_count: usize,
-    pub pending_event_count: usize,
-    pub pending_dedupe_count: usize,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeEvent {
     pub id: String,
@@ -641,14 +633,13 @@ impl PanelDb {
     ) -> Result<bool> {
         let now = Self::now();
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "DELETE FROM probe_dedupe WHERE expires_at <= ?1",
-            params![now],
-        )?;
         let changed = conn.execute(
             r#"
-            INSERT OR IGNORE INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+            INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
             VALUES(?1, ?2, ?3, ?4)
+            ON CONFLICT(namespace, dedupe_key) DO UPDATE
+            SET expires_at = excluded.expires_at, created_at = excluded.created_at
+            WHERE probe_dedupe.expires_at <= excluded.created_at
             "#,
             params![namespace, dedupe_key, now + ttl_seconds.max(1), now],
         )?;
@@ -762,61 +753,14 @@ impl PanelDb {
         .map_err(Into::into)
     }
 
-    pub fn notification_retention_counts(
-        &self,
-        retention_days: u32,
-    ) -> Result<NotificationRetentionCounts> {
-        let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        let event_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| row.get(0))?;
-        let dedupe_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row.get(0))?;
-        let pending_event_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM probe_events WHERE created_at < ?1",
-            params![cutoff],
-            |row| row.get(0),
-        )?;
-        let pending_dedupe_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM probe_dedupe WHERE expires_at <= ?1",
-            params![now],
-            |row| row.get(0),
-        )?;
-        Ok(NotificationRetentionCounts {
-            event_count: event_count as usize,
-            dedupe_count: dedupe_count as usize,
-            pending_event_count: pending_event_count as usize,
-            pending_dedupe_count: pending_dedupe_count as usize,
-        })
-    }
-
     pub fn maintain_probe_events(
         &self,
         retention_days: u32,
         max_delete_rows: u32,
-        dry_run: bool,
     ) -> Result<(usize, usize)> {
         let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
         let limit = i64::from(max_delete_rows.max(1));
         let conn = self.conn.lock().expect("db mutex");
-        if dry_run {
-            let event_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM (
-                SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
-            )",
-            params![cutoff, limit],
-            |row| row.get(0),
-        )?;
-            let dedupe_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM (
-                SELECT rowid FROM probe_dedupe WHERE expires_at <= ?1 ORDER BY expires_at ASC LIMIT ?2
-            )",
-            params![Self::now(), limit],
-            |row| row.get(0),
-        )?;
-            return Ok((event_count as usize, dedupe_count as usize));
-        }
         let events_deleted = conn.execute(
             "DELETE FROM probe_events WHERE rowid IN (
                 SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
@@ -857,10 +801,15 @@ impl PanelDb {
                 stmt.query_map(params![marker_cutoff, limit], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for key in candidate_markers {
-            if !protected_markers.contains(&key) {
-                conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
-            }
+        let expired_markers: Vec<_> = candidate_markers
+            .into_iter()
+            .filter(|key| !protected_markers.contains(key))
+            .collect();
+        if !expired_markers.is_empty() {
+            conn.execute(
+                "DELETE FROM settings WHERE key IN (SELECT value FROM json_each(?1))",
+                [serde_json::to_string(&expired_markers)?],
+            )?;
         }
         conn.execute(
             "DELETE FROM probe_notification_deliveries WHERE rowid IN (
@@ -1017,6 +966,45 @@ mod tests {
     }
 
     #[test]
+    fn dedupe_renews_only_expired_identity_and_has_one_concurrent_winner() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let now = PanelDb::now();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO probe_dedupe VALUES ('fixture','renew',?1,?1),('fixture','other',?1,?1)", [now-1]).unwrap();
+        }
+        assert!(db.claim_probe_dedupe("fixture", "renew", 60).unwrap());
+        assert!(!db.claim_probe_dedupe("fixture", "renew", 60).unwrap());
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM probe_dedupe WHERE dedupe_key='other'",
+                    [],
+                    |r| r.get::<_, usize>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let threads = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    db.claim_probe_dedupe("fixture", "concurrent", 60).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            threads
+                .into_iter()
+                .map(|thread| usize::from(thread.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
+    }
+
+    #[test]
     fn probe_events_and_dedupe_persist_recent_runtime_state() {
         let db = PanelDb::open(":memory:").unwrap();
 
@@ -1100,25 +1088,30 @@ mod tests {
             .unwrap();
         }
 
-        let dry_run = db.maintain_probe_events(1, 2, true).unwrap();
-        assert_eq!(dry_run, (2, 2));
-
-        let deleted = db.maintain_probe_events(1, 2, false).unwrap();
+        let deleted = db.maintain_probe_events(1, 2).unwrap();
         assert_eq!(deleted, (2, 2));
 
-        let counts = db.notification_retention_counts(1).unwrap();
-        assert_eq!(counts.event_count, 2);
-        assert_eq!(counts.dedupe_count, 2);
-        assert_eq!(counts.pending_event_count, 1);
-        assert_eq!(counts.pending_dedupe_count, 1);
+        {
+            let conn = db.conn.lock().unwrap();
+            for table in ["probe_events", "probe_dedupe"] {
+                let count: usize = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(count, 2);
+            }
+        }
 
-        let deleted = db.maintain_probe_events(1, 10, false).unwrap();
+        let deleted = db.maintain_probe_events(1, 10).unwrap();
         assert_eq!(deleted, (1, 1));
-        let counts = db.notification_retention_counts(1).unwrap();
-        assert_eq!(counts.event_count, 1);
-        assert_eq!(counts.dedupe_count, 1);
-        assert_eq!(counts.pending_event_count, 0);
-        assert_eq!(counts.pending_dedupe_count, 0);
+        {
+            let conn = db.conn.lock().unwrap();
+            for table in ["probe_events", "probe_dedupe"] {
+                let count: usize = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(count, 1);
+            }
+        }
     }
 
     #[test]
@@ -1244,7 +1237,7 @@ mod tests {
             ],
         )
         .unwrap();
-        db.maintain_probe_events(7, 100, false).unwrap();
+        db.maintain_probe_events(7, 100).unwrap();
         assert!(db
             .get_setting("probe_async_question_delivery:active-top-n")
             .unwrap()

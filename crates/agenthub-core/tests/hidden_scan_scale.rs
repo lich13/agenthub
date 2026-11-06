@@ -56,7 +56,7 @@ async fn run_hidden_scan_fixture(
         fixture.paths(),
         owner.clone(),
         HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
+            mode: HiddenScanMode::Start,
             limit: Some(100),
             ..HiddenScanRequest::default()
         },
@@ -106,7 +106,7 @@ async fn run_hidden_scan_fixture(
             fixture.paths(),
             owner.clone(),
             HiddenScanRequest {
-                mode: Some(HiddenScanMode::Poll),
+                mode: HiddenScanMode::Poll,
                 scan_id: Some(scan_id.clone()),
                 cursor: Some(cursor),
                 limit: Some(100),

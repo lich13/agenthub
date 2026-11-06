@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.4"
+version = "2.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -61,11 +61,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "subtle",
  "syn",
  "tokio",
  "toml",
- "toml_edit",
  "url",
  "uuid",
  "walkdir",
@@ -74,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.4"
+version = "2.1.5"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -82,7 +80,6 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "rand 0.8.6",
  "reqwest",
  "rusqlite",
  "serde",

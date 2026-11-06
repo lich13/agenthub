@@ -411,7 +411,7 @@ mod tests {
         .unwrap();
         let marker_key = active_keys.get("main").unwrap().clone();
         // Backdate marker's updated_at by 10 days; pruning must skip active top-N marker and scan renews it.
-        fixture.db.maintain_probe_events(7, 1000, false).unwrap();
+        fixture.db.maintain_probe_events(7, 1000).unwrap();
         assert!(fixture.db.get_setting(&marker_key).unwrap().is_some());
 
         // Clear file fingerprint cache to simulate cold restart rescan of top-N threads: must NOT repush!
