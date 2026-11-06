@@ -695,12 +695,26 @@ export type UnifiedCleanupResult = {
 export type GithubCiAccount = { id: number; login: string };
 export type GithubCiRepository = { id: number; full_name: string; archived: boolean };
 export type GithubCiRun = {
-  id: number; run_attempt: number; name: string | null; head_branch: string | null;
-  head_sha: string; status: string; conclusion: string | null; html_url: string;
-  created_at: string; updated_at: string; repository_id: number; repository_name: string;
+  id: number;
+  run_attempt: number;
+  name: string | null;
+  head_branch: string | null;
+  head_sha: string;
+  status: string;
+  conclusion: string | null;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  repository_id: number;
+  repository_name: string;
 };
 export type GithubCiRequest = { refresh?: boolean };
 export type GithubCiStatus = {
-  account: GithubCiAccount | null; repositories: GithubCiRepository[]; runs: GithubCiRun[];
-  enabled: boolean; last_scan_ms: number; error: string | null; refreshing: boolean; retry_at_ms: number | null;
+  account: GithubCiAccount | null;
+  repositories: GithubCiRepository[];
+  runs: GithubCiRun[];
+  enabled: boolean;
+  last_scan_ms: number;
+  error: string | null;
+  refreshing: boolean;
 };

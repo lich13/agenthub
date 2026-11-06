@@ -461,7 +461,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
         }
     };
     match &paths.rpc_mode {
-        RpcMode::OfflineOnly => return Ok(None),
+        RpcMode::OfflineOnly => Ok(None),
         RpcMode::Fixed { port, token } => {
             if let Some(value) = try_endpoint(*port, token)? {
                 return Ok(Some((
@@ -472,6 +472,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
                     value,
                 )));
             }
+            Ok(None)
         }
         RpcMode::AutoDiscover => {
             match get_cached_live_endpoint() {
@@ -507,10 +508,9 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
                 }
             }
             record_endpoint_failure(!candidates.is_empty());
-            return Ok(None);
+            Ok(None)
         }
     }
-    Ok(None)
 }
 
 #[derive(Debug, Default, Clone)]

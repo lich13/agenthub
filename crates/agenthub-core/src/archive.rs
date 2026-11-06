@@ -69,10 +69,6 @@ pub(crate) fn list_archived_threads(paths: &CodexPaths) -> Result<Vec<HiddenThre
         .collect())
 }
 
-pub fn plan_delete_hidden(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
-    hidden_delete_plan(paths)
-}
-
 pub(crate) fn plan_delete_hidden_candidates(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
     let work = crate::scan_work::ScanWork::default();
     let conn = crate::selected_codex::open(paths, false)?;
@@ -121,11 +117,6 @@ pub(crate) fn plan_delete_hidden_candidates(paths: &CodexPaths) -> Result<Hidden
         source_counts,
         integrity: "not_checked".into(),
     })
-}
-
-fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
-    let work = crate::scan_work::ScanWork::default();
-    hidden_delete_plan_with_work(paths, &work)
 }
 
 pub(crate) fn hidden_delete_plan_with_work(
@@ -491,7 +482,7 @@ fn archived_sql_condition(columns: &HashSet<String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::plan_delete_hidden;
+    use super::hidden_delete_plan_with_work;
     use crate::codex::CodexPaths;
     use rusqlite::Connection;
     use serde_json::json;
@@ -508,7 +499,11 @@ mod tests {
     fn plan_delete_hidden_selects_non_archived_hidden_threads() {
         let root = hidden_cleanup_fixture("plan-hidden");
 
-        let plan = plan_delete_hidden(&CodexPaths::new(&root)).unwrap();
+        let plan = hidden_delete_plan_with_work(
+            &CodexPaths::new(&root),
+            &crate::scan_work::ScanWork::default(),
+        )
+        .unwrap();
 
         assert_eq!(plan.total_threads, 4);
         assert_eq!(plan.visible_threads, 1);

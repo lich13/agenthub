@@ -1344,15 +1344,42 @@ async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
 }
 
 fn ci_event(fixture: &Fixture) -> agenthub_core::github_ci::Event {
-    serde_json::from_value(json!({"observed_ms":Utc::now().timestamp_millis(),"account":{"id":1,"login":"fixture"},"run":{
-        "id":42,"run_attempt":1,"name":"CI","head_branch":"main","head_sha":"0123456789","status":"completed","conclusion":"success",
-        "html_url":"https://github.com/fixture/repo/actions/runs/42","repository_id":10,"repository_name":"fixture/repo",
-        "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:01:00Z"
-    },"fixture_ms":fixture.event_ms()})).unwrap()
+    serde_json::from_value(json!({
+        "observed_ms": Utc::now().timestamp_millis(),
+        "account": {"id": 1, "login": "fixture"},
+        "run": {
+            "id": 42,
+            "run_attempt": 1,
+            "name": "CI",
+            "head_branch": "main",
+            "head_sha": "0123456789",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://example.invalid/actions/runs/42?attempt=1",
+            "repository_id": 10,
+            "repository_name": "fixture/repo",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:01:00Z"
+        },
+        "fixture_ms": fixture.event_ms()
+    }))
+    .unwrap()
 }
+
 fn store_ci(fixture: &Fixture, event: &agenthub_core::github_ci::Event) {
-    fixture.db.set_setting("github_ci_state", &json!({"snapshot":{"enabled":true,"account":event.account,"runs":[event.run]},"baseline_ms":event.observed_ms-1000}).to_string()).unwrap();
+    fixture
+        .db
+        .set_setting(
+            "github_ci_state",
+            &json!({
+                "snapshot": {"enabled": true, "account": event.account, "runs": [event.run]},
+                "baseline_ms": event.observed_ms - 1000
+            })
+            .to_string(),
+        )
+        .unwrap();
 }
+
 #[tokio::test]
 async fn github_ci_delivery_uses_run_link_and_deduplicates_after_restart() {
     let mut fixture = Fixture::new().await;
@@ -1363,7 +1390,7 @@ async fn github_ci_delivery_uses_run_link_and_deduplicates_after_restart() {
         .await
         .unwrap();
     assert_eq!(fixture.bark.count(), 1);
-    assert_eq!(fixture.bark.requests()[0].body["url"], event.run.url());
+    assert_eq!(fixture.bark.requests()[0].body["url"], event.run.html_url);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     github_ci(&fixture.config, &reopened, event.clone())
         .await
@@ -1410,4 +1437,61 @@ fn older_bark_payload_without_run_url_still_deserializes() {
         serde_json::from_value(json!({"title":"fixture","body":"fixture","dedupe_key":"fixture"}))
             .unwrap();
     assert!(request.url.is_none());
+}
+
+#[tokio::test]
+async fn github_ci_batch_acknowledges_success_before_an_enqueue_failure() {
+    let mut fixture = Fixture::new().await;
+    fixture.config.probe.notifications.notify_github_ci = true;
+    let first = ci_event(&fixture);
+    let mut second = first.clone();
+    second.run.id += 1;
+    let events = vec![first.clone(), second.clone()];
+    fixture
+        .db
+        .set_setting(
+            "github_ci_state",
+            &json!({
+                "snapshot": {"enabled": true, "account": first.account, "runs": [first.run, second.run]},
+                "baseline_ms": first.observed_ms - 1000,
+                "pending": events
+            })
+            .to_string(),
+        )
+        .unwrap();
+    fixture
+        .connection()
+        .execute_batch(&format!(
+            "CREATE TRIGGER fail_ci_enqueue BEFORE INSERT ON probe_notification_deliveries
+             WHEN NEW.event_key='{}'
+             BEGIN SELECT RAISE(FAIL, 'fixture enqueue failure'); END;",
+            second.key()
+        ))
+        .unwrap();
+    assert!(
+        crate::github_ci_monitor::deliver_events(&fixture.db, events, || Ok(fixture
+            .config
+            .clone()))
+        .await
+        .is_err()
+    );
+    let raw = fixture.db.get_setting("github_ci_state").unwrap().unwrap();
+    let state: Value = serde_json::from_str(&raw).unwrap();
+    let pending: Vec<agenthub_core::github_ci::Event> =
+        serde_json::from_value(state["pending"].clone()).unwrap();
+    assert_eq!(pending, vec![second]);
+    assert_eq!(fixture.bark.count(), 1);
+    fixture
+        .connection()
+        .execute_batch("DROP TRIGGER fail_ci_enqueue")
+        .unwrap();
+    crate::github_ci_monitor::deliver_events(&fixture.db, pending, || Ok(fixture.config.clone()))
+        .await
+        .unwrap();
+    assert_eq!(fixture.bark.count(), 2);
+    let raw = fixture.db.get_setting("github_ci_state").unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).unwrap()["pending"],
+        json!([])
+    );
 }

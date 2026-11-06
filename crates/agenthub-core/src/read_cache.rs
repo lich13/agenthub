@@ -228,6 +228,10 @@ impl<T: Clone> ReadCache<T> {
     }
 }
 
+// Tests that expire all shared caches must not interrupt cache-hit assertions.
+#[cfg(test)]
+pub(crate) static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,8 +25,7 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
         .map_err(|err| err.to_string())?;
     agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
         platform,
-        config.probe.enabled
-            && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
+        config.probe.monitor_enabled(),
     )
     .map_err(|err| err.to_string())
 }

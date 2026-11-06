@@ -52,19 +52,16 @@ export function GrokBotWorkspace() {
   const groupedEvents = useMemo(() => groupProviderEvents(events, "Grok Bot"), [events]);
   const timelineEntries = useMemo(() => groupedTimelineEntries("grokbot", detail.data?.timeline, groupedEvents), [detail.data?.timeline, groupedEvents]);
   const latestReply = useMemo(() => latestAssistantReply(events), [events]);
-  const usePath = async (item: ProviderSessionSummary, reveal: boolean) => {
-    try {
-      if (!item.path) return;
-      if (reveal) await revealLocalPath(item.path);
-      else await copy(item.path, "已复制路径");
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "无法读取路径");
-    }
-  };
   const actions = (item: ProviderSessionSummary): ThreadMenuAction[] => [
     { id: "copy-id", label: "复制 ID", icon: <Copy size={15} />, run: () => void copy(item.id, "已复制 ID") },
-    { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, disabled: !item.path, run: () => void usePath(item, false) },
-    { id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />, disabled: !item.path || !canRevealLocalPath(), run: () => void usePath(item, true) },
+    { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, disabled: !item.path, run: () => void copy(item.path, "已复制路径") },
+    {
+      id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />,
+      disabled: !item.path || !canRevealLocalPath(),
+      run: () => {
+        void revealLocalPath(item.path).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在"));
+      },
+    },
   ];
   const error = detail.isFetchNextPageError ? null : detail.error;
   return (

@@ -2,7 +2,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并支持通过系统 SSH 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
-v2.1.3 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
+v2.1.4 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
 
 ## 核心能力
 
@@ -12,7 +12,7 @@ v2.1.3 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 - **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
 - **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、六个 Provider 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
-- **GitHub CI 与 Bark**：在所选机器的「Probe → GitHub CI」读取当前 `github.com` 活跃 `gh` 账号，自动发现账号名下的公开、私有及 fork 仓库；每 60 秒刷新运行，每 10 分钟刷新仓库。首次启用、重新启用和切换账号不补发旧结果，之后按每次运行尝试推送成功、失败及超时；通知可打开对应 GitHub 工作流。两端默认关闭，选择一端开启监控并启用 Bark。
+- **GitHub CI 与 Bark**：在所选机器的「Probe → GitHub CI」读取当前 `github.com` 活跃 `gh` 账号，自动发现账号名下的公开、私有及 fork 仓库；每 60 秒读取每仓库首页 10 条运行，每 10 分钟刷新仓库目录；按仓库筛选后最多展示 20 条，窗口外的旧运行及旧重跑不保证发现。全部后台监控关闭时，本机仍支持首次读取和手动刷新，不启动额外守护进程或发送通知。首次启用、重新启用和切换账号不补发旧结果，之后按每次运行尝试推送成功、失败及超时；通知可打开对应 GitHub 工作流。两端默认关闭，选择一端开启监控并启用 Bark。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
 - **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；直接选择本机 OpenSSH 配置及 Include 中保存的 Host，复用密钥、ssh-agent 与跳板配置，并支持「安装并连接」同版本服务。切换机器隔离缓存、分页及迟到响应；已受理后台任务继续执行，不阻止切换。
 
@@ -35,7 +35,7 @@ v2.1.3 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 ## 阅读、分页与体积统计
 
 - **双向无感分页與锚点保持**：各 Provider 主会话与 Codex 子智能体详情均支持上滚至距顶部 `200px` 时自动加载较早历史分页，轮询、追加消息与展开工具组时严格保持当前可见消息像素偏移，不跳回底部。
-- **有界内存与读取复用**：服务端按文件身份及修改信息复用未变化的列表和历史。Grok Bot、Antigravity 与 DSH 共享最多 **32 MiB／64 项**历史缓存，DSH 摘要按 **8 MiB／2000 项**淘汰旧项；超过预算仍正常读取。Antigravity 运行中会话继续读取原生状态，文件替换、截断或修改会使缓存失效。详情缓存空闲 TTL 为 **300 秒（5 分钟）**；窗口隐藏时前端暂停常规轮询，恢复可见时立即刷新。
+- **有界内存与读取复用**：服务端按文件身份及修改信息复用未变化的列表和历史。Grok Bot、Antigravity 与 DSH 共享最多 **32 MiB／64 项**历史缓存，DSH 摘要按 **8 MiB／2000 项**淘汰旧项；超过预算仍正常读取。Antigravity 运行中会话继续读取原生状态，文件替换、截断或修改会使缓存失效。详情、Claude 摘要与 Codex 问答缓存共用 **300 秒（5 分钟）**空闲释放入口，再次访问按原生数据重建；窗口隐藏时前端暂停常规轮询，恢复可见时立即刷新。
 - **线程体积分级（K／M／G）**：五大平台会话卡片右侧以等宽数字展示实际字节大小，按统一阈值着色：**`< 100 MiB` 绿色**、**`100 MiB – 300 MiB` 琥珀色**、**`>= 300 MiB` 红色**；未知或后台统计中显示灰色 `—`，部分下限结果标 `≥`。统计仅涵盖已确认归属的 rollout、会话 JSONL、专属子目录与压缩日志，不计入项目代码工作目录，也不跟随符号链接。
 
 ## 会话删除与全平台清理安全边界
@@ -85,7 +85,7 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 
 ## 发布资产
 
-当前源码版本为 **2.1.3**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.4**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；

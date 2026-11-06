@@ -562,7 +562,30 @@ export function demoJob(id: string): JobRecord {
 }
 
 export function demoGithubCiStatus(): import("../../types").GithubCiStatus {
-  return { account: { id: 1, login: "octocat" }, enabled: false, refreshing: false, error: null, retry_at_ms: null, last_scan_ms: Date.now(),
-    repositories: [{ id: 1, full_name: "octocat/AgentHub", archived: false }, { id: 2, full_name: "octocat/desktop-workflow-integration", archived: false }],
-    runs: ["success", "failure", null, "timed_out", "cancelled"].map((conclusion, i) => ({ id: i + 1, run_attempt: 1, name: i === 1 ? "Build and validate cross-platform desktop distributions" : ["Release", "CI", "Desktop checks", "Integration", "Lint"][i], head_branch: i === 2 ? "feature/github-ci-notifications" : "main", head_sha: "a1b2c3d4", status: conclusion ? "completed" : "in_progress", conclusion, html_url: "https://github.com/octocat/AgentHub/actions/runs/1", created_at: "2026-11-06T04:00:00Z", updated_at: "2026-11-06T04:10:00Z", repository_id: i === 1 ? 2 : 1, repository_name: i === 1 ? "octocat/desktop-workflow-integration" : "octocat/AgentHub" })) };
+  return {
+    account: { id: 1, login: "octocat" },
+    enabled: false,
+    refreshing: false,
+    error: null,
+    last_scan_ms: Date.now(),
+    repositories: [
+      { id: 1, full_name: "octocat/AgentHub", archived: false },
+      { id: 2, full_name: "octocat/desktop-workflow-integration", archived: false },
+    ],
+    runs: ["success", "failure", null, "timed_out", "cancelled"].map((conclusion, i) => ({
+      id: i + 1,
+      run_attempt: 1,
+      name: i === 1 ? "Build and validate cross-platform desktop distributions"
+        : ["Release", "CI", "Desktop checks", "Integration", "Lint"][i],
+      head_branch: i === 2 ? "feature/github-ci-notifications" : "main",
+      head_sha: "a1b2c3d4",
+      status: conclusion ? "completed" : "in_progress",
+      conclusion,
+      html_url: "https://github.com/octocat/AgentHub/actions/runs/1",
+      created_at: "2026-11-06T04:00:00Z",
+      updated_at: "2026-11-06T04:10:00Z",
+      repository_id: i === 1 ? 2 : 1,
+      repository_name: i === 1 ? "octocat/desktop-workflow-integration" : "octocat/AgentHub",
+    })),
+  };
 }

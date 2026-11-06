@@ -87,7 +87,7 @@ fn baseline_running_completion_restart_rerun_and_disable() {
     assert_eq!(state.pending[0].run.id, 2);
     save(&db.db, &state).unwrap();
     let key = state.pending[0].key();
-    acknowledge(&db.db, &key).unwrap();
+    acknowledge(&db.db, std::slice::from_ref(&key)).unwrap();
     let mut state = load(&db.db).unwrap();
     reconcile(&mut state, account(), complete, true, false, time + 3000);
     assert!(state.pending.is_empty());
@@ -130,7 +130,7 @@ fn baseline_running_completion_restart_rerun_and_disable() {
     assert!(state.pending.is_empty());
 }
 #[test]
-fn completion_during_initial_scan_is_new_but_older_history_is_not() {
+fn initial_scan_skips_all_completed_runs() {
     let time = now();
     let mut state = Stored::default();
     reconcile(
@@ -144,8 +144,7 @@ fn completion_during_initial_scan_is_new_but_older_history_is_not() {
         true,
         time,
     );
-    assert_eq!(state.pending.len(), 1);
-    assert_eq!(state.pending[0].run.id, 2);
+    assert!(state.pending.is_empty());
 }
 
 #[test]
@@ -185,11 +184,11 @@ async fn disabled_monitor_does_not_read_gh_or_write_on_idle_and_status_requests_
     let config = Config::default();
     assert!(!enabled(&config));
     let mut monitor = Monitor::new().unwrap();
-    assert!(!monitor.tick(&fixture.db, &config).await.unwrap());
+    assert!(monitor.tick(&fixture.db, &config).await.unwrap().is_empty());
     let before = fixture.db.get_setting(STATE).unwrap();
     assert!(before.is_none());
     for _ in 0..10 {
-        assert!(!monitor.tick(&fixture.db, &config).await.unwrap());
+        assert!(monitor.tick(&fixture.db, &config).await.unwrap().is_empty());
     }
     assert_eq!(before, fixture.db.get_setting(STATE).unwrap());
     assert!(monitor.token.is_empty());
@@ -200,17 +199,28 @@ async fn disabled_monitor_does_not_read_gh_or_write_on_idle_and_status_requests_
 }
 
 #[tokio::test]
-async fn restarting_during_rate_limit_waits_without_reading_credentials() {
+async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
     let fixture = Database::new();
     let mut config = Config::default();
     config.probe.notifications.notify_github_ci = true;
     let mut state = Stored::default();
-    state.snapshot.retry_at_ms = Some(now() + 120000);
+    state.snapshot.last_scan_ms = now() - 1000;
     save(&fixture.db, &state).unwrap();
-    status(&fixture.db, &config, true).unwrap();
     let mut monitor = Monitor::new().unwrap();
-    assert!(!monitor.tick(&fixture.db, &config).await.unwrap());
-    assert!(!monitor.tick(&fixture.db, &config).await.unwrap());
+    monitor.retry_at = now() + 120000;
+    for _ in 0..2 {
+        status(&fixture.db, &config, true).unwrap();
+        assert!(monitor
+            .tick_with_token(&fixture.db, &config, async {
+                panic!("credentials must not be read during cooldown")
+            })
+            .await
+            .unwrap()
+            .is_empty());
+        let status = status(&fixture.db, &config, false).unwrap();
+        assert!(!status.refreshing);
+        assert!(status.error.unwrap().contains("限流"));
+    }
     assert!(monitor.token.is_empty());
 }
 
@@ -335,7 +345,7 @@ impl Drop for Server {
     }
 }
 #[tokio::test]
-async fn reads_owned_private_and_fork_repositories_pages_caches_and_tracks_old_running_runs() {
+async fn reads_owned_private_and_fork_repository_pages_with_conditional_requests() {
     let server = Server::new().await;
     let mut monitor = server.monitor();
     let time = 1_800_000_000_000;
@@ -350,7 +360,7 @@ async fn reads_owned_private_and_fork_repositories_pages_caches_and_tracks_old_r
         "/repos-page2",
         json!([{"id":11,"full_name":"fixture/fork","fork":true}]),
     );
-    let path = "/repos/fixture/repo/actions/runs?per_page=100";
+    let path = "/repos/fixture/repo/actions/runs?per_page=10";
     server.reply(
         path,
         200,
@@ -358,7 +368,7 @@ async fn reads_owned_private_and_fork_repositories_pages_caches_and_tracks_old_r
         "ETag: \"run-one\"\r\n",
     );
     server.set(
-        "/repos/fixture/fork/actions/runs?per_page=100",
+        "/repos/fixture/fork/actions/runs?per_page=10",
         json!({"workflow_runs":[]}),
     );
     let mut state = Stored::default();
@@ -375,17 +385,6 @@ async fn reads_owned_private_and_fork_repositories_pages_caches_and_tracks_old_r
         .unwrap()
         .iter()
         .any(|s| s.to_lowercase().contains("if-none-match: \"run-one\"")));
-    state
-        .snapshot
-        .runs
-        .push(run(2, "in_progress", None, 1, time));
-    server.set(
-        "/repos/fixture/repo/actions/runs/2",
-        json!(run(2, "completed", Some("success"), 1, time + 2000)),
-    );
-    monitor.scan(&mut state, true, time + 3000).await.unwrap();
-    assert_eq!(state.pending.len(), 1);
-    assert_eq!(state.pending[0].run.id, 2);
     assert_eq!(
         server
             .requests
@@ -408,17 +407,17 @@ async fn account_switch_rebaselines_and_rate_limit_keeps_unvisited_repositories(
         json!([{"id":10,"full_name":"fixture/repo"},{"id":11,"full_name":"fixture/fork"}]),
     );
     server.set(
-        "/repos/fixture/repo/actions/runs?per_page=100",
+        "/repos/fixture/repo/actions/runs?per_page=10",
         json!({"workflow_runs":[run(1,"in_progress",None,1,time)]}),
     );
     server.set(
-        "/repos/fixture/fork/actions/runs?per_page=100",
+        "/repos/fixture/fork/actions/runs?per_page=10",
         json!({"workflow_runs":[run(2,"in_progress",None,1,time)]}),
     );
     let mut state = Stored::default();
     monitor.scan(&mut state, true, time).await.unwrap();
     server.reply(
-        "/repos/fixture/repo/actions/runs?per_page=100",
+        "/repos/fixture/repo/actions/runs?per_page=10",
         429,
         json!({}),
         "Retry-After: 90\r\n",
@@ -428,7 +427,7 @@ async fn account_switch_rebaselines_and_rate_limit_keeps_unvisited_repositories(
     assert_eq!(state.snapshot.runs.len(), 2);
     server.set("/user", json!({"id":2,"login":"changed"}));
     server.set(
-        "/repos/fixture/repo/actions/runs?per_page=100",
+        "/repos/fixture/repo/actions/runs?per_page=10",
         json!({"workflow_runs":[run(1,"completed",Some("success"),1,time+1000)]}),
     );
     monitor.retry_at = 0;
@@ -437,7 +436,7 @@ async fn account_switch_rebaselines_and_rate_limit_keeps_unvisited_repositories(
     assert!(state.pending.is_empty());
 }
 #[tokio::test]
-async fn workflow_pagination_includes_old_running_and_rerun_attempts_and_errors_are_safe() {
+async fn workflow_reads_only_first_page_and_errors_are_safe() {
     let server = Server::new().await;
     let mut monitor = server.monitor();
     let time = 1_800_000_000_000;
@@ -446,15 +445,8 @@ async fn workflow_pagination_includes_old_running_and_rerun_attempts_and_errors_
         full_name: "fixture/repo".into(),
         archived: false,
     };
-    let state = Stored {
-        snapshot: Snapshot {
-            last_scan_ms: time,
-            ..Snapshot::default()
-        },
-        ..Stored::default()
-    };
     server.reply(
-        "/repos/fixture/repo/actions/runs?per_page=100",
+        "/repos/fixture/repo/actions/runs?per_page=10",
         200,
         json!({"workflow_runs":[run(2,"completed",Some("success"),1,time-2000)]}),
         &format!("Link: <{}/runs-page2>; rel=\"next\"\r\n", server.url),
@@ -463,22 +455,20 @@ async fn workflow_pagination_includes_old_running_and_rerun_attempts_and_errors_
         "/runs-page2",
         json!({"workflow_runs":[run(1,"in_progress",None,1,time-10000)]}),
     );
-    let initial = monitor
-        .repository_runs(&repo, &Stored::default())
-        .await
-        .unwrap();
-    assert_eq!(initial.len(), 2);
-    assert!(initial
-        .iter()
-        .any(|r| r.id == 1 && r.status == "in_progress"));
+    let initial = monitor.repository_runs(&repo).await.unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].id, 2);
     server.set(
         "/runs-page2",
         json!({"workflow_runs":[run(1,"completed",Some("failure"),2,time+1000)]}),
     );
-    assert_eq!(
-        monitor.repository_runs(&repo, &state).await.unwrap().len(),
-        2
-    );
+    assert_eq!(monitor.repository_runs(&repo).await.unwrap().len(), 1);
+    assert!(!server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.contains("/runs-page2")));
     server.reply(
         "/user",
         401,
@@ -502,4 +492,121 @@ async fn workflow_pagination_includes_old_running_and_rerun_attempts_and_errors_
     );
     assert!(monitor.get::<Account>("/user").await.is_err());
     assert!(monitor.retry_at > now() + 100000);
+}
+
+#[tokio::test]
+async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    server.set("/user", json!(account()));
+    server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+    let mut monitor = server.monitor();
+    let config = Config::default();
+    status(&fixture.db, &config, true).unwrap();
+    let during = now() + 1;
+    monitor
+        .tick_with_token(&fixture.db, &config, async {
+            fixture
+                .db
+                .set_setting(REFRESH, &during.to_string())
+                .unwrap();
+            Ok("fixture-only".into())
+        })
+        .await
+        .unwrap();
+    let stored = fixture.db.get_setting(STATE).unwrap();
+    assert!(!status(&fixture.db, &config, false).unwrap().refreshing);
+    assert_eq!(load(&fixture.db).unwrap().request_ms, during);
+    monitor
+        .tick_with_token(&fixture.db, &config, async { panic!("idle must not scan") })
+        .await
+        .unwrap();
+    assert_eq!(stored, fixture.db.get_setting(STATE).unwrap());
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn settings_reset_during_scan_is_preserved() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    server.set("/user", json!(account()));
+    server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    let mut state = Stored::default();
+    state.snapshot.enabled = true;
+    state.baseline_ms = now() - 1000;
+    save(&fixture.db, &state).unwrap();
+    let events = monitor
+        .tick_with_token(&fixture.db, &config, async {
+            settings_changed(&fixture.db, &config, &Config::default()).unwrap();
+            Ok("fixture-only".into())
+        })
+        .await
+        .unwrap();
+    assert!(events.is_empty());
+    let state = load(&fixture.db).unwrap();
+    assert_eq!(state.baseline_ms, 0);
+    assert!(!state.snapshot.enabled);
+    assert!(state.snapshot.account.is_none());
+}
+
+#[tokio::test]
+async fn repository_refresh_removes_only_obsolete_run_cache_entries() {
+    let server = Server::new().await;
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([{"id":10,"full_name":"fixture/repo"}]),
+    );
+    server.set(
+        "/repos/fixture/repo/actions/runs?per_page=10",
+        json!({"workflow_runs":[]}),
+    );
+    let mut monitor = server.monitor();
+    let mut state = Stored::default();
+    monitor.scan(&mut state, false, now()).await.unwrap();
+    assert_eq!(monitor.cache.len(), 3);
+    server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+    monitor
+        .scan(&mut state, false, now() + 600001)
+        .await
+        .unwrap();
+    assert_eq!(monitor.cache.len(), 2);
+    assert!(monitor
+        .cache
+        .keys()
+        .all(|url| !url.contains("/repos/fixture/")));
+}
+
+#[test]
+fn batch_acknowledgement_preserves_unprocessed_events_and_old_state_is_readable() {
+    let fixture = Database::new();
+    let time = now();
+    let events = (1..=3)
+        .map(|id| Event {
+            account: account(),
+            observed_ms: time,
+            run: run(id, "completed", Some("success"), 1, time),
+        })
+        .collect::<Vec<_>>();
+    fixture
+        .db
+        .set_setting(
+            STATE,
+            &json!({"snapshot":{"retry_at_ms":time+60000},"pending":events}).to_string(),
+        )
+        .unwrap();
+    acknowledge(&fixture.db, &[events[0].key(), events[1].key()]).unwrap();
+    let state = load(&fixture.db).unwrap();
+    assert_eq!(state.pending, vec![events[2].clone()]);
+    assert!(!fixture
+        .db
+        .get_setting(STATE)
+        .unwrap()
+        .unwrap()
+        .contains("retry_at_ms"));
+    acknowledge(&fixture.db, &[events[0].key()]).unwrap();
+    assert_eq!(load(&fixture.db).unwrap().pending, state.pending);
 }

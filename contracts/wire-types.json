@@ -3588,11 +3588,6 @@
             "name": "refreshing",
             "serde": [],
             "type": "bool"
-          },
-          {
-            "name": "retry_at_ms",
-            "serde": [],
-            "type": "Option < i64 >"
           }
         ],
         "kind": "struct",
@@ -8918,37 +8913,6 @@
           }
         ]
       },
-      "CapabilityGatePlan": {
-        "fields": [
-          {
-            "name": "capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
-            "name": "platform",
-            "serde": [],
-            "type": "PlatformKind"
-          },
-          {
-            "name": "host_surface",
-            "serde": [],
-            "type": "HostSurface"
-          },
-          {
-            "name": "supported",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "error",
-            "serde": [],
-            "type": "Option < String >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "HostSurface": {
         "kind": "enum",
         "serde": [
@@ -11032,7 +10996,7 @@
         "GithubCiRepository": "exporttypeGithubCiRepository={id:number;full_name:string;archived:boolean};",
         "GithubCiRequest": "exporttypeGithubCiRequest={refresh?:boolean};",
         "GithubCiRun": "exporttypeGithubCiRun={id:number;run_attempt:number;name:string|null;head_branch:string|null;head_sha:string;status:string;conclusion:string|null;html_url:string;created_at:string;updated_at:string;repository_id:number;repository_name:string;};",
-        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;error:string|null;refreshing:boolean;retry_at_ms:number|null;};",
+        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;error:string|null;refreshing:boolean;};",
         "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
         "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
         "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",

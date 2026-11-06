@@ -2,7 +2,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codex::ThreadDetail,
     config::Config,
     db::JobRecord,
     platform::PlatformPaths,
@@ -13,8 +12,8 @@ use crate::{
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
         system::{self, Capability, HostSurface, SystemCapabilities},
         threads::{
-            self, ThreadBlocksPage, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest,
-            ThreadListPlan, ThreadListReadPlan, ThreadsQuery,
+            self, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest, ThreadListPlan,
+            ThreadListReadPlan, ThreadsQuery,
         },
     },
     update::{analyze_job_failure, JobFailureAnalysis},
@@ -289,10 +288,6 @@ impl<'a> ThreadUseCases<'a> {
         threads::plan_thread_blocks_read(self.platform, thread_id, limit, before)
     }
 
-    pub fn blocks_page(self, detail: ThreadDetail, plan: &ThreadDetailPlan) -> ThreadBlocksPage {
-        threads::thread_blocks_page_for_plan(detail, plan)
-    }
-
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
         jobs::plan_thread_archive_with_capability(self.platform, thread_id)
     }
@@ -330,14 +325,6 @@ impl<'a> JobUseCases<'a> {
 
     pub fn response(self, job: JobRecord) -> JobResponse {
         job_response(job)
-    }
-
-    pub fn list_response(self, jobs: Vec<JobRecord>) -> Vec<JobResponse> {
-        jobs.into_iter().map(job_response).collect()
-    }
-
-    pub fn detail_response(self, job: Option<JobRecord>) -> Option<JobResponse> {
-        job.map(job_response)
     }
 }
 

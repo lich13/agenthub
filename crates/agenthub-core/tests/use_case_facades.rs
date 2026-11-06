@@ -77,7 +77,7 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
         .as_deref()
         .is_some_and(|value| !value.is_empty()));
 
-    let listed = use_cases.jobs().list_response(vec![
+    let listed = vec![
         JobRecord {
             id: "job-a".to_string(),
             kind: "codex".to_string(),
@@ -104,7 +104,10 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
             output: "ok".to_string(),
             error: None,
         },
-    ]);
+    ]
+    .into_iter()
+    .map(|job| use_cases.jobs().response(job))
+    .collect::<Vec<_>>();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].job.id, "job-a");
     assert!(listed[0].failure_analysis.is_some());
@@ -113,24 +116,20 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
     assert!(listed[1].analysis.is_none());
     assert!(listed[1].explanation.is_none());
 
-    let detail_response = use_cases
-        .jobs()
-        .detail_response(Some(JobRecord {
-            id: "job-c".to_string(),
-            kind: "codex".to_string(),
-            status: "succeeded".to_string(),
-            title: "Codex".to_string(),
-            thread_id: Some("thread-c".to_string()),
-            turn_id: None,
-            started_at: 5,
-            finished_at: Some(6),
-            exit_code: Some(0),
-            output: "done".to_string(),
-            error: None,
-        }))
-        .unwrap();
+    let detail_response = use_cases.jobs().response(JobRecord {
+        id: "job-c".to_string(),
+        kind: "codex".to_string(),
+        status: "succeeded".to_string(),
+        title: "Codex".to_string(),
+        thread_id: Some("thread-c".to_string()),
+        turn_id: None,
+        started_at: 5,
+        finished_at: Some(6),
+        exit_code: Some(0),
+        output: "done".to_string(),
+        error: None,
+    });
     assert_eq!(detail_response.job.id, "job-c");
-    assert!(use_cases.jobs().detail_response(None).is_none());
 }
 
 #[test]

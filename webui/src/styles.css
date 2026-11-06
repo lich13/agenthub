@@ -935,15 +935,16 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
   .session-search-panel { width: calc(100vw - 20px); max-height: calc(100dvh - var(--mt) - 28px); }
 }
 
-.github-ci-toolbar, .github-ci-filter, .github-ci-toggle, .github-ci-run-main, .github-ci-run-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.github-ci-toolbar, .github-ci-toggle, .github-ci-run-main, .github-ci-run-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .github-ci-toolbar { flex-wrap: wrap; }
 .github-ci-account { font-size: 15px; font-weight: 600; flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; }
-.github-ci-toggle, .github-ci-filter, .github-ci-run-meta { font-size: 13px; }
+.github-ci-toggle, .github-ci-filter, .github-ci-count, .github-ci-run-meta { font-size: 13px; }
 .github-ci-toggle { min-height: 36px; border: 0; }
 .github-ci-toggle input { margin: 0; }
-.github-ci-filter { margin: 16px 0 8px; color: var(--fg2); }
-.github-ci-filter select { min-width: 0; max-width: min(70%, 380px); flex: 1; min-height: 36px; padding: 7px 11px; border: var(--b2); border-radius: 8px; background: var(--e); font-size: 13px; }
-.github-ci-filter > span { white-space: nowrap; }
+.github-ci-filter { display: block; position: relative; margin: 16px 0 8px; }
+.github-ci-filter select { min-width: 0; height: 36px; line-height: 20px; padding-right: 36px; font-size: 13px; appearance: none; -webkit-appearance: none; }
+.github-ci-filter > svg { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--fg2); }
+.github-ci-count { color: var(--fg2); white-space: nowrap; }
 .github-ci-runs { max-height: 480px; overflow: auto; }
 .github-ci-run { padding: 14px 0; border-top: 1px solid var(--bd); }
 .github-ci-run-main { justify-content: space-between; }

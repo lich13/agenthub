@@ -17,16 +17,5 @@ pub async fn getGithubCiStatus(
     state: tauri::State<'_, DesktopState>,
     refresh: Option<bool>,
 ) -> Result<agenthub_core::github_ci::Snapshot, String> {
-    agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
-        &state.config(),
-        state.platform(),
-        state.host_surface(),
-    )
-    .github_ci(
-        &state.db,
-        agenthub_core::github_ci::Request {
-            refresh: refresh.unwrap_or(false),
-        },
-    )
-    .map_err(|e| e.to_string())
+    probe_service::desktop_github_ci_status(&state, refresh.unwrap_or(false)).await
 }

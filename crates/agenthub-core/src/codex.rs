@@ -33,13 +33,13 @@ pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,
 };
-pub(crate) use rollout_events::{
-    evict_idle_detail_cache, hidden_thread_metadata_category, rollout_has_confirmed_inactive_state,
-    rollout_has_running_signal, ThreadVisibilityMetadata,
-};
 use rollout_events::{
     first_user_message_title, is_usable_thread_title, scan_rollout,
     should_repair_thread_title_from_local_metadata,
+};
+pub(crate) use rollout_events::{
+    hidden_thread_metadata_category, rollout_has_confirmed_inactive_state,
+    rollout_has_running_signal, ThreadVisibilityMetadata,
 };
 pub use rollout_events::{
     is_macos_network_volume_path, message_blocks_from_events,
@@ -66,6 +66,11 @@ pub use user_input::{
     is_async_question_tool, is_question_tool, normalize_user_input_questions,
     rollout_async_questions, AsyncQuestionCall,
 };
+
+pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
+    rollout_events::evict_idle_detail_cache(max_idle);
+    user_input::evict_idle_question_cache(max_idle);
+}
 
 pub fn list_threads(
     paths: &CodexPaths,

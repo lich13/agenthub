@@ -310,10 +310,15 @@ fn native_question_answers(text: &str) -> Option<Vec<(String, usize)>> {
         .collect()
 }
 
+static QUESTION_CACHE: crate::read_cache::ReadCache<Vec<AsyncQuestionCall>> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::CODEX_QUESTION_CACHE_BYTES);
+
+pub(crate) fn evict_idle_question_cache(max_idle: std::time::Duration) {
+    QUESTION_CACHE.evict_idle(max_idle);
+}
+
 pub fn rollout_async_questions(path: &Path) -> Result<Vec<AsyncQuestionCall>> {
-    static CACHE: crate::read_cache::ReadCache<Vec<AsyncQuestionCall>> =
-        crate::read_cache::ReadCache::new(crate::resource_limits::CODEX_QUESTION_CACHE_BYTES);
-    CACHE.read(
+    QUESTION_CACHE.read(
         path,
         |calls, _| {
             calls

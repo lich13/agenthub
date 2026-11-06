@@ -188,48 +188,6 @@ pub struct SystemCapabilities {
     pub prune_backups: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CapabilityGatePlan {
-    pub capability: Capability,
-    pub platform: PlatformKind,
-    pub host_surface: HostSurface,
-    pub supported: bool,
-    pub error: Option<String>,
-}
-
-pub fn capability_gate_plan(
-    platform: &PlatformPaths,
-    capability: Capability,
-) -> CapabilityGatePlan {
-    capability_gate_plan_for_surface(
-        platform,
-        HostSurface::default_for_platform(platform),
-        capability,
-    )
-}
-
-pub fn capability_gate_plan_for_surface(
-    platform: &PlatformPaths,
-    host_surface: HostSurface,
-    capability: Capability,
-) -> CapabilityGatePlan {
-    let supported = capability.is_supported_on_surface(platform, host_surface);
-    CapabilityGatePlan {
-        capability,
-        platform: platform.kind,
-        host_surface,
-        supported,
-        error: (!supported).then(|| {
-            format!(
-                "{} is unavailable on {} {}",
-                capability.as_str(),
-                platform_kind_label(platform.kind),
-                host_surface.as_str()
-            )
-        }),
-    }
-}
-
 pub fn require_capability(platform: &PlatformPaths, capability: Capability) -> Result<()> {
     require_capability_for_surface(
         platform,
@@ -315,8 +273,8 @@ fn platform_kind_label(kind: PlatformKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        capability_gate_plan, capability_gate_plan_for_surface, require_capability,
-        system_capabilities, system_capabilities_for_surface, Capability, HostSurface,
+        require_capability, system_capabilities, system_capabilities_for_surface, Capability,
+        HostSurface,
     };
     use crate::{
         config::Config,
@@ -370,45 +328,5 @@ mod tests {
         assert!(require_capability(&platform, Capability::Settings).is_err());
         assert!(!matrix.thread_cleanup);
         assert!(!matrix.thread_archive_actions);
-    }
-
-    #[test]
-    fn capability_gate_plan_matches_require_capability_without_host_specific_advice() {
-        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
-        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
-        let windows = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
-
-        for platform in [&linux, &macos, &windows] {
-            for capability in Capability::all() {
-                let plan = capability_gate_plan(platform, *capability);
-                assert_eq!(plan.capability, *capability);
-                assert_eq!(plan.platform, platform.kind);
-                assert_eq!(
-                    plan.supported,
-                    require_capability(platform, *capability).is_ok(),
-                    "{capability:?} on {:?}",
-                    platform.kind
-                );
-                if !plan.supported {
-                    let message = plan
-                        .error
-                        .as_deref()
-                        .expect("unsupported capability should include a neutral error");
-                    assert!(message.contains(capability.as_str()));
-                    assert!(!message.contains("systemctl"));
-                    assert!(!message.contains("Nginx"));
-                    assert!(!message.contains("sudo"));
-                    assert!(!message.contains("/opt/agenthub"));
-                }
-            }
-        }
-
-        let plan = capability_gate_plan_for_surface(
-            &linux,
-            HostSurface::DesktopEmbeddedTauri,
-            Capability::LinuxUpdateJob,
-        );
-        assert!(!plan.supported);
-        assert_eq!(plan.host_surface, HostSurface::DesktopEmbeddedTauri);
     }
 }

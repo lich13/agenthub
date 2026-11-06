@@ -25,3 +25,78 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
     status.provider_notifications = state.db.native_notification_status()?;
     Ok(status)
 }
+
+pub async fn desktop_github_ci_status(
+    state: &DesktopState,
+    refresh: bool,
+) -> std::result::Result<agenthub_core::github_ci::Snapshot, String> {
+    let config = state.config();
+    let snapshot = agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
+        &config,
+        state.platform(),
+        state.host_surface(),
+    )
+    .github_ci(&state.db, agenthub_core::github_ci::Request { refresh })
+    .map_err(|error| error.to_string())?;
+    if !config.probe.monitor_enabled() && snapshot.refreshing {
+        let mut monitor = state.github_ci.lock().await;
+        let config = state.config();
+        if config.probe.monitor_enabled() {
+            return agenthub_core::github_ci::status(&state.db, &config, false)
+                .map_err(|error| error.to_string());
+        }
+        if monitor.is_none() {
+            *monitor =
+                Some(agenthub_core::github_ci::Monitor::new().map_err(|error| error.to_string())?);
+        }
+        monitor
+            .as_mut()
+            .expect("initialized CI monitor")
+            .tick(&state.db, &config)
+            .await
+            .map_err(|error| error.to_string())?;
+        return agenthub_core::github_ci::status(&state.db, &state.config(), false)
+            .map_err(|error| error.to_string());
+    }
+    Ok(snapshot)
+}
+
+#[cfg(test)]
+mod ci_tests {
+    use super::*;
+    use agenthub_core::{
+        config::Config,
+        db::PanelDb,
+        platform::{PlatformKind, PlatformPaths},
+    };
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn cached_disabled_status_needs_no_monitor_and_ci_only_uses_the_daemon() {
+        let mut config = Config::default();
+        config.probe.error_monitor.enabled = false;
+        config.probe.notifications.enabled = false;
+        config.probe.notifications.notify_github_ci = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_setting(
+            "github_ci_state",
+            &json!({"snapshot":{"last_scan_ms":1}}).to_string(),
+        )
+        .unwrap();
+        let state = DesktopState::new(
+            config.clone(),
+            db,
+            PlatformPaths::for_kind(PlatformKind::Macos),
+        );
+        let result = desktop_github_ci_status(&state, false).await.unwrap();
+        assert!(!result.refreshing);
+        assert!(state.github_ci.lock().await.is_none());
+        config.probe.enabled = true;
+        config.probe.notifications.notify_github_ci = true;
+        assert!(config.probe.monitor_enabled());
+        state.replace_config(config);
+        let result = desktop_github_ci_status(&state, true).await.unwrap();
+        assert!(result.refreshing);
+        assert!(state.github_ci.lock().await.is_none());
+    }
+}

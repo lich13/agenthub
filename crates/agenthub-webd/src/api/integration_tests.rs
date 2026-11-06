@@ -898,9 +898,11 @@ async fn github_ci_rpc_and_single_notification_switch_patches_work_for_nested_an
             }
         }
     }
-    assert!(agenthub_core::github_ci::pending(&state.db)
-        .unwrap()
-        .is_empty());
+    let stored = state.db.get_setting("github_ci_state").unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored).unwrap()["pending"],
+        json!([])
+    );
 }
 
 #[tokio::test]

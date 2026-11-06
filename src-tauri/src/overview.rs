@@ -28,6 +28,7 @@ pub struct DesktopState {
     config: Arc<RwLock<Config>>,
     pub db: PanelDb,
     pub jobs: JobRunner,
+    pub(crate) github_ci: Arc<tokio::sync::Mutex<Option<agenthub_core::github_ci::Monitor>>>,
     platform: PlatformPaths,
     host_surface: HostSurface,
 }
@@ -53,6 +54,7 @@ impl DesktopState {
             config: Arc::new(RwLock::new(config)),
             db,
             jobs,
+            github_ci: Arc::new(tokio::sync::Mutex::new(None)),
             platform,
             host_surface: HostSurface::DesktopEmbeddedTauri,
         }

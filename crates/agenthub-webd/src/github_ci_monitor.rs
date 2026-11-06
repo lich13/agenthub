@@ -11,15 +11,8 @@ pub(super) fn spawn(config_path: PathBuf) {
             let result = async {
                 let config = cache.load_config(&config_path)?;
                 let db = cache.panel_db(&config)?;
-                if !monitor.tick(&db, &config).await? {
-                    return Ok(());
-                }
-                for event in agenthub_core::github_ci::pending(&db)? {
-                    let current = cache.load_config(&config_path)?;
-                    let key = event.key();
-                    notification_delivery::github_ci(&current, &db, event).await?;
-                    agenthub_core::github_ci::acknowledge(&db, &key)?;
-                }
+                let events = monitor.tick(&db, &config).await?;
+                deliver_events(&db, events, || cache.load_config(&config_path)).await?;
                 Ok::<_, anyhow::Error>(())
             }
             .await;
@@ -29,4 +22,28 @@ pub(super) fn spawn(config_path: PathBuf) {
             time::sleep(Duration::from_secs(2)).await;
         }
     });
+}
+
+pub(super) async fn deliver_events(
+    db: &PanelDb,
+    events: Vec<agenthub_core::github_ci::Event>,
+    mut load_config: impl FnMut() -> Result<Config>,
+) -> Result<()> {
+    let mut acknowledged = Vec::new();
+    let mut delivery_result = Ok(());
+    for event in events {
+        let key = event.key();
+        let result = async {
+            let current = load_config()?;
+            notification_delivery::github_ci(&current, db, event).await
+        }
+        .await;
+        if let Err(error) = result {
+            delivery_result = Err(error);
+            break;
+        }
+        acknowledged.push(key);
+    }
+    agenthub_core::github_ci::acknowledge(db, &acknowledged)?;
+    delivery_result
 }

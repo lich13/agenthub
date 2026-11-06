@@ -192,7 +192,7 @@ pub async fn github_ci(
         ),
         &key,
     );
-    request.url = Some(run.url());
+    request.url = Some(run.html_url.clone());
     let candidate = queued_candidate(
         config,
         db,

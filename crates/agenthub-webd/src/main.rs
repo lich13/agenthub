@@ -631,11 +631,7 @@ async fn install_probe_hooks_with_repair(
     let error_monitor_launch_agent = if dry_run {
         Value::Null
     } else {
-        repair_error_monitor(
-            &platform,
-            config.probe.enabled
-                && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
-        )?
+        repair_error_monitor(&platform, config.probe.monitor_enabled())?
     };
     let launch_agent_changed = error_monitor_launch_agent
         .get("changed")

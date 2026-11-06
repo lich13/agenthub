@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::{header, Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{HashMap, HashSet},
     time::Duration,
 };
 use tokio::process::Command;
@@ -69,12 +69,6 @@ impl Run {
             _ => None,
         }
     }
-    pub fn url(&self) -> String {
-        format!(
-            "https://github.com/{}/actions/runs/{}",
-            self.repository_name, self.id
-        )
-    }
     fn finished_ms(&self) -> i64 {
         chrono::DateTime::parse_from_rfc3339(&self.updated_at).map_or(0, |d| d.timestamp_millis())
     }
@@ -103,7 +97,6 @@ pub struct Snapshot {
     pub last_scan_ms: i64,
     pub error: Option<String>,
     pub refreshing: bool,
-    pub retry_at_ms: Option<i64>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -177,13 +170,16 @@ pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result
     Ok(())
 }
 
-pub fn pending(db: &PanelDb) -> Result<Vec<Event>> {
-    Ok(load(db)?.pending)
-}
-pub fn acknowledge(db: &PanelDb, key: &str) -> Result<()> {
-    let mut s = load(db)?;
-    s.pending.retain(|e| e.key() != key);
-    save(db, &s)
+pub fn acknowledge(db: &PanelDb, keys: &[String]) -> Result<()> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let keys: HashSet<_> = keys.iter().map(String::as_str).collect();
+    let mut state = load(db)?;
+    state
+        .pending
+        .retain(|event| !keys.contains(event.key().as_str()));
+    save(db, &state)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -223,16 +219,24 @@ impl Monitor {
             active: None,
         })
     }
-    pub async fn tick(&mut self, db: &PanelDb, config: &Config) -> Result<bool> {
+    pub async fn tick(&mut self, db: &PanelDb, config: &Config) -> Result<Vec<Event>> {
+        self.tick_with_token(db, config, gh_token()).await
+    }
+
+    async fn tick_with_token(
+        &mut self,
+        db: &PanelDb,
+        config: &Config,
+        token: impl std::future::Future<Output = Result<String>>,
+    ) -> Result<Vec<Event>> {
         let request = request_ms(db)?;
         let active = enabled(config);
         let time = now();
         if self.active == Some(active)
-            && (time < self.retry_at
-                || (request <= self.request_ms
-                    && (!active || time - self.last_poll_ms < POLL_SECONDS * 1000)))
+            && request <= self.request_ms
+            && (time < self.retry_at || !active || time - self.last_poll_ms < POLL_SECONDS * 1000)
         {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         let mut state = load(db)?;
         let baseline_before = state.baseline_ms;
@@ -248,16 +252,17 @@ impl Monitor {
             if serde_json::to_string(&state)? != before {
                 save(db, &state)?;
             }
-            return Ok(false);
+            return Ok(Vec::new());
         }
-        self.retry_at = self
-            .retry_at
-            .max(state.snapshot.retry_at_ms.unwrap_or_default());
         if time < self.retry_at {
-            return Ok(false);
+            state.request_ms = request;
+            self.request_ms = request;
+            state.snapshot.error = Some("GitHub 请求限流，稍后刷新".into());
+            save(db, &state)?;
+            return Ok(Vec::new());
         }
         let result = async {
-            let token = gh_token().await?;
+            let token = token.await?;
             if token != self.token {
                 self.cache.clear();
                 self.token = token;
@@ -265,26 +270,22 @@ impl Monitor {
             self.scan(&mut state, active, time).await
         }
         .await;
-        // A settings save can reset the baseline while GitHub is responding.
-        // Leave that reset intact and let the next tick read the new config.
+        // Settings may reset the baseline while GitHub is responding. A refresh,
+        // however, is satisfied by this scan instead of discarding its results.
         let current = load(db)?;
-        if request_ms(db)? != request
-            || current.baseline_ms != baseline_before
-            || current.snapshot.enabled != enabled_before
-        {
+        if current.baseline_ms != baseline_before || current.snapshot.enabled != enabled_before {
             self.active = None;
-            return Ok(false);
+            return Ok(Vec::new());
         }
-        state.request_ms = request;
-        self.request_ms = request;
+        state.request_ms = request_ms(db)?;
+        self.request_ms = state.request_ms;
         self.last_poll_ms = now();
-        state.snapshot.error = result.err().map(|e| e.to_string());
-        state.snapshot.retry_at_ms = (self.retry_at > time).then_some(self.retry_at);
+        state.snapshot.error = result.err().map(|error| error.to_string());
         if serde_json::to_string(&state)? != before {
             state.snapshot.last_scan_ms = time;
             save(db, &state)?;
         }
-        Ok(true)
+        Ok(state.pending)
     }
     async fn get<T: DeserializeOwned + Serialize>(
         &mut self,
@@ -367,9 +368,6 @@ impl Monitor {
             .json()
             .await
             .map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
-        if self.cache.len() >= 256 {
-            self.cache.clear();
-        }
         self.cache.insert(
             url,
             Cached {
@@ -399,6 +397,19 @@ impl Monitor {
                 repositories.extend(page);
                 next = more;
             }
+            let run_urls: HashSet<_> = repositories
+                .iter()
+                .filter(|repo| !repo.archived)
+                .map(|repo| {
+                    format!(
+                        "{}/repos/{}/actions/runs?per_page=10",
+                        self.api, repo.full_name
+                    )
+                })
+                .collect();
+            let repositories_prefix = format!("{}/repos/", self.api);
+            self.cache
+                .retain(|url, _| !url.starts_with(&repositories_prefix) || run_urls.contains(url));
             state.snapshot.repositories = repositories;
             state.repositories_at_ms = time;
         }
@@ -410,7 +421,7 @@ impl Monitor {
             if repo.archived {
                 continue;
             }
-            let result = self.repository_runs(repo, state).await;
+            let result = self.repository_runs(repo).await;
             match result {
                 Ok(mut incoming) => runs.append(&mut incoming),
                 Err(e) => {
@@ -447,49 +458,22 @@ impl Monitor {
         }
         Ok(())
     }
-    async fn repository_runs(&mut self, repo: &Repository, state: &Stored) -> Result<Vec<Run>> {
-        let mut path = Some(format!(
-            "/repos/{}/actions/runs?per_page=100",
-            repo.full_name
-        ));
-        let mut runs = BTreeMap::new();
-        while let Some(url) = path {
-            let (page, next) = self.get::<RunPage>(&url).await?;
-            for mut run in page.workflow_runs {
+    async fn repository_runs(&mut self, repo: &Repository) -> Result<Vec<Run>> {
+        let (page, _) = self
+            .get::<RunPage>(&format!(
+                "/repos/{}/actions/runs?per_page=10",
+                repo.full_name
+            ))
+            .await?;
+        Ok(page
+            .workflow_runs
+            .into_iter()
+            .map(|mut run| {
                 run.repository_id = repo.id;
                 run.repository_name = repo.full_name.clone();
-                runs.insert(run.id, run);
-            }
-            // Reruns retain their original creation order. Read every page so
-            // an old run's new attempt, or a long-running job, cannot disappear.
-            // Retain only the bounded summaries and all unfinished runs.
-            if runs.len() > MAX_RUNS {
-                let mut summaries = runs.into_values().collect::<Vec<_>>();
-                retain_summaries(&mut summaries);
-                runs = summaries.into_iter().map(|run| (run.id, run)).collect();
-            }
-            path = next;
-        }
-        for old in state
-            .snapshot
-            .runs
-            .iter()
-            .filter(|r| r.repository_id == repo.id && r.status != "completed")
-        {
-            if runs.contains_key(&old.id) {
-                continue;
-            }
-            let (mut run, _) = self
-                .get::<Run>(&format!(
-                    "/repos/{}/actions/runs/{}",
-                    repo.full_name, old.id
-                ))
-                .await?;
-            run.repository_id = repo.id;
-            run.repository_name = repo.full_name.clone();
-            runs.insert(run.id, run);
-        }
-        Ok(runs.into_values().collect())
+                run
+            })
+            .collect())
     }
 }
 fn reconcile(
@@ -511,13 +495,10 @@ fn reconcile(
                 .runs
                 .iter()
                 .find(|old| old.id == run.id && old.repository_id == run.repository_id);
-            let newly_finished = if baseline {
-                run.finished_ms() > time
-            } else {
-                old.map_or(run.finished_ms() > state.baseline_ms, |old| {
+            let newly_finished = !baseline
+                && old.map_or(run.finished_ms() > state.baseline_ms, |old| {
                     old.run_attempt != run.run_attempt || old.status != "completed"
-                })
-            };
+                });
             if run.notification_kind().is_some()
                 && newly_finished
                 && !state.pending.iter().any(|e| {

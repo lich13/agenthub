@@ -800,21 +800,21 @@ impl PanelDb {
         let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
         let limit = i64::from(max_delete_rows.max(1));
         let conn = self.conn.lock().expect("db mutex");
-        let event_count: i64 = conn.query_row(
+        if dry_run {
+            let event_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM (
                 SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
             )",
             params![cutoff, limit],
             |row| row.get(0),
         )?;
-        let dedupe_count: i64 = conn.query_row(
+            let dedupe_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM (
                 SELECT rowid FROM probe_dedupe WHERE expires_at <= ?1 ORDER BY expires_at ASC LIMIT ?2
             )",
             params![Self::now(), limit],
             |row| row.get(0),
         )?;
-        if dry_run {
             return Ok((event_count as usize, dedupe_count as usize));
         }
         let events_deleted = conn.execute(

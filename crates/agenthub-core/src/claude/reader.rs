@@ -122,9 +122,15 @@ static PROBE_CACHE: crate::read_cache::ReadCache<crate::native_probe::NativeStre
         .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
         .with_native_metadata();
 
+static SUMMARY_CACHE: crate::read_cache::ReadCache<Arc<Parsed>> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::CLAUDE_SUMMARY_CACHE_BYTES)
+        .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
+        .with_native_metadata();
+
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
     PROBE_CACHE.evict_idle(max_idle);
+    SUMMARY_CACHE.evict_idle(max_idle);
     super::activity::evict_idle_cache(max_idle);
 }
 
@@ -285,11 +291,7 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
     // A list may contain many more sources than the body cache can retain.
     // Keep only summary fields here, so revisiting an inactive list cannot
     // repeatedly evict and reparse every large transcript.
-    static CACHE: crate::read_cache::ReadCache<Arc<Parsed>> =
-        crate::read_cache::ReadCache::new(crate::resource_limits::CLAUDE_SUMMARY_CACHE_BYTES)
-            .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
-            .with_native_metadata();
-    CACHE.read(
+    SUMMARY_CACHE.read(
         path,
         |parsed, _| {
             512 + (parsed.id.len()

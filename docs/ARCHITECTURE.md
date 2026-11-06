@@ -6,9 +6,11 @@
 
 `github.ci.status` 通过 AgentHubUseCases 及薄 Tauri／SSH RPC 适配返回账号与运行摘要；`github_ci` 为可选能力，旧服务不显示面板。配置沿用 `probe.settings.get/save` 的 `notifications.notify_github_ci`，默认 false，监控还受 Probe 主开关控制。Bark 的启停独立控制实际投递。
 
-现有 serve／monitor 启动独立扫描循环。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接与 ETag；账号名下仓库含私有仓库和 fork，每 10 分钟刷新，运行每 60 秒查询且支持手动刷新。遍历分页以识别旧 run 的新 attempt，保留最近 1000 个完成摘要及全部在途任务；限流等待同时留存，重启不提前重试。运行日志和产物通过 GitHub 查看。
+现有 serve／monitor 启动独立扫描循环，App 与 Hook 的后台启动判断均包含 CI 开关。全部后台监控关闭时，DesktopState 惰性持有一个串行复用的 Monitor，只在首次读取／手动刷新时查询，不启动守护进程或发送通知。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接、ETag 及同源校验；账号名下公开／私有／fork 仓库目录每 10 分钟分页刷新，并淘汰已消失仓库的运行缓存。每 60 秒仅查询各仓库首页 `per_page=10`，不翻运行历史或追查窗口外旧运行／旧重跑。前端先筛选仓库，再按现有更新时间最多展示 20 条，展示上限不限制通知判断。运行日志和产物通过 GitHub 查看。
 
-现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化跳过已有完成记录，在途任务结束仍通知。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 使用对应 workflow run 链接。
+扫描期间新增刷新请求由本轮结果满足，设置启停或基线变化仍丢弃旧结果。限流时间只留在 Monitor 内存，限流期间的刷新及时结束并返回现有错误；状态保留首次读取需要的 last_scan_ms，旧版含 retry_at_ms 的状态可读取但不再写入或公开该字段。
+
+现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化的基线轮跳过全部已完成记录，在途任务结束仍通知。Monitor::tick 直接返回可投递事件，Stored.pending 继续持久化；成功处理的事件批量确认一次，中途失败保留尚未处理项。过期事件过滤、首发有效性和加密队列重试复核保持。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 直接使用 GitHub 返回的 html_url。通知历史实际删除直接采用 SQL 删除结果计数，只有 dry-run 执行预览计数，保留期和范围不变。
 
 ## 运行架构与模块
 
@@ -278,6 +280,8 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 | WebView 指令切片 / 上下文投影 / Markdown 树 | 各 512 项、各 8MiB，分别计重 |
 
 Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入现有缓存预算；revision 在快照生成时按实际内容计算，不新增增量变更日志，保留保守旧页重读。Antigravity 在线缓存修订只依据会话 ID 与摘要，终态判断复用来源层结果，身份、解析或提前空页错误明确返回且不进入缓存。分页以首批总数为目标，末页允许因原生追加超出目标，不设 50,000 步硬上限；仅服务不可达或无在线内容时回退离线。
+
+Claude 摘要与 Codex 问答缓存接入既有 5 分钟空闲释放入口，不新增定时器；释放缓存引用后再次读取按原数据重建。
 
 上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、恢复的语法树、DOM 与并发请求有额外内存；App、helper、远程服务和 WebView 又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
 

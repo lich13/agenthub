@@ -577,6 +577,13 @@ impl Config {
 }
 
 impl ProbeConfig {
+    pub fn monitor_enabled(&self) -> bool {
+        self.enabled
+            && (self.error_monitor.enabled
+                || self.notifications.enabled
+                || self.notifications.notify_github_ci)
+    }
+
     pub fn normalize(&mut self) {
         self.poll_seconds = self.poll_seconds.clamp(5, 3_600);
         self.recent_limit = self.recent_limit.clamp(1, 500);

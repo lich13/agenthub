@@ -158,3 +158,23 @@ fn reader_and_message_timeline_agree_after_ack_and_partial_answer() {
     assert_eq!(question.questions[0].id, "q2");
     assert!(blocks.iter().any(|b| b.role == "user"));
 }
+
+#[test]
+fn idle_question_cache_rebuild_preserves_answers() {
+    let path =
+        std::env::temp_dir().join(format!("agenthub-questions-{}.jsonl", uuid::Uuid::new_v4()));
+    std::fs::write(
+        &path,
+        format!("{}\n{}\n", question("call-a"), answer("call-a", 0)),
+    )
+    .unwrap();
+    let before = rollout_async_questions(&path).unwrap();
+    evict_idle_question_cache(std::time::Duration::ZERO);
+    let after = rollout_async_questions(&path).unwrap();
+    assert_eq!(before.len(), after.len());
+    assert_eq!(before[0].content_hash, after[0].content_hash);
+    assert_eq!(before[0].answered, after[0].answered);
+    assert_eq!(before[0].call_id, after[0].call_id);
+    assert_eq!(after[0].pending().unwrap().questions.len(), 1);
+    std::fs::remove_file(path).unwrap();
+}
