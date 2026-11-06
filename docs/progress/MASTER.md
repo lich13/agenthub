@@ -1,12 +1,12 @@
 # AgentHub（AgentHub）当前状态（维护者）
 
-## v2.1.5 源码变更
-
-新增 CI 成功、失败及超时的 Mac 系统通知，沿用 Bark 通道并将 CI 卡片置于 Probe 顶部。桌面运行期间观察当前机器缓存，首次观察不补发历史结果。数据库去重及标记清理、隐藏扫描、DSH 定位和线程列表移除重复工作；Probe 配置改为保留权限的原子替换，精简无用依赖及内部死代码。协议 2、schema 3 保持。
-
 ## 当前版本
 
-当前正式版本为 [**v2.1.4**](https://github.com/lich13/agenthub/releases/tag/v2.1.4)。发布提交 [`e1b0ac8`](https://github.com/lich13/agenthub/commit/e1b0ac8a52fe24ab3636ce461604339fdd116714) 的 [main CI](https://github.com/lich13/agenthub/actions/runs/42218427846) 与[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/42218427445) 全部通过，八项正式资产已发布。对应 CI 产物已部署服务端并原地升级 Mac：服务端 `agenthub-webd 2.1.4`、service `active`、health `ok`；Mac App 从 2.1.3 原地升级到 2.1.4 并启动，未保留旧版副本。服务端保留安装器回退材料，未执行回退。协议 2、schema 3 保持，未操作用户监控开关。
+当前正式版本为 [**v2.1.5**](https://github.com/lich13/agenthub/releases/tag/v2.1.5)。发布提交 [`a0bee0f`](https://github.com/lich13/agenthub/commit/a0bee0f3f5d964fc1a9035a1891affaac15fdcb6) 的[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/42305281573) 全部通过，包含完整前端、后端及 macOS Tauri 检查，八项正式资产已发布。对应 CI 产物已部署服务端并原地升级 Mac：服务端 `agenthub-webd 2.1.5`、service `active`、health `ok`；Mac App 从 2.1.4 原地升级到 2.1.5 并启动，未保留旧版副本。服务端保留安装器回退材料，未执行回退。协议 2、schema 3 保持，未操作用户监控开关。
+
+## v2.1.5 已交付
+
+新增 CI 成功、失败及超时的 Mac 系统通知，沿用 Bark 通道并将 CI 卡片置于 Probe 顶部。桌面运行期间观察当前机器缓存，首次观察不补发历史结果。数据库去重及标记清理、隐藏扫描、DSH 定位和线程列表移除重复工作；Probe 配置改为保留权限的原子替换，精简无用依赖及内部死代码。协议 2、schema 3 保持。
 
 ## v2.1.4 已交付
 
