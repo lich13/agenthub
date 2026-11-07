@@ -149,3 +149,5 @@ Claude native command envelopes render as the slash command and exact arguments.
 
 - CI 系统通知在 macOS App 运行期间每 60 秒串行读取当前机器缓存，不依赖 WebUI 可见性；`cached_only` 不触发扫描，`baseline_ms` 沿用既有监控基线。首次观察、换机、切号、重新启用不补发旧结果；仅成功、失败、超时，点击打开对应运行。复用原生 UserNotifications 和已有 SSH 通道，观察去重只在内存；Bark 的持久化、确认与重试独立保留。
 - 隐藏清理扫描只接受 start/poll/cancel，复用同一连接中的线程行与父子关系；保留两种父 ID 字段及 spawn edges、固定候选、分页和取消。通知保留期维护不提供 dry-run 统计，标记批量删除保留保护集合；Probe 配置通过共同原子写入入口替换实际文件并保留权限。
+
+- 关闭的 Provider／错误监控只在状态或统计变化时写库，启用时保留扫描时间；Claude Hook 配置只为启用的 Claude 读取。Probe 聚合沿用受限阻塞读取任务。Mac CI 每次 App 运行首次观察启用时请求一次授权，消费前校验来源，已接受通知按原机器名发送；不增加轮询清锁或授权重试状态。

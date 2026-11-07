@@ -14,7 +14,7 @@ fn client() -> Option<&'static Client> {
     static CLIENT: OnceLock<Option<Client>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
-            Client::builder()
+            agenthub_core::http_client_builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(8))
                 .pool_idle_timeout(Duration::from_secs(90))

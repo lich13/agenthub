@@ -1249,7 +1249,10 @@ pub fn rename_session(
     let mut cache_outcome = Outcome::default();
     let _ = remove_cache(paths, id, &mut cache_outcome);
 
-    session_summary(paths, id)
+    let archived = registry(paths)?
+        .map(|index| index.archived)
+        .unwrap_or_default();
+    Ok(build_summary(paths, &session, &archived))
 }
 
 fn ensure_registered_in_workspace(value: &mut Value, id: &str, cwd: &str) {
@@ -1324,8 +1327,12 @@ pub fn set_archived_checked(
     check_stopped()?;
     let root = find_root_session(paths, id)?;
     let cwd = root.header["cwd"].as_str().unwrap_or("");
-
-    if let Some(index) = registry(paths)? {
+    let index = registry(paths)?;
+    let mut archived_set = index
+        .as_ref()
+        .map(|index| index.archived.clone())
+        .unwrap_or_default();
+    if let Some(index) = index {
         let mut value = index.value.clone();
         if archived {
             ensure_registered_in_workspace(&mut value, id, cwd);
@@ -1388,7 +1395,12 @@ pub fn set_archived_checked(
         fs::rename(&tmp, &ws_path)?;
     }
 
-    session_summary(paths, id)
+    if archived {
+        archived_set.insert(id.to_owned());
+    } else {
+        archived_set.remove(id);
+    }
+    Ok(build_summary(paths, &root, &archived_set))
 }
 
 fn find_subagent_descendants(all: &[DiscoveredSession], root_id: &str) -> Vec<String> {
@@ -1469,9 +1481,16 @@ pub fn preview_batch_item_checked(
     check_stopped: impl Fn() -> Result<()>,
 ) -> Result<SessionBatchItem> {
     check_stopped()?;
-    let _reg = registry(paths)?;
-    let all = discover_all_sessions(paths)?;
-    let summary = session_summary(paths, key)?;
+    let archived = registry(paths)?
+        .map(|index| index.archived)
+        .unwrap_or_default();
+    let root = find_root_session(paths, key)?;
+    let summary = build_summary(paths, &root, &archived);
+    let all = if operation == SessionOperation::Delete {
+        discover_all_sessions(paths)?
+    } else {
+        vec![root]
+    };
     if operation == SessionOperation::Delete && !summary.can_delete {
         bail!(
             "{}",
@@ -1716,6 +1735,76 @@ pub fn execute_batch_item_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locator_handles_plain_compressed_and_excludes_subagents_and_unsafe_paths() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-locate-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        for (id, compressed, subagent) in [
+            ("plain", false, false),
+            ("compressed", true, false),
+            ("child", false, true),
+        ] {
+            let dir = home.join("sessions/project").join(id);
+            fs::create_dir_all(&dir).unwrap();
+            let header = json!({"type":"session","version":4,"id":id,"cwd":"/workspace/fixture","origin":if subagent {"subagent"} else {"user"}});
+            if compressed {
+                write_zstd_frames(&dir.join("session.v4.jsonl.zstd"), &[header]);
+            } else {
+                fs::write(dir.join("session.v4.jsonl"), format!("{header}\n")).unwrap();
+            }
+        }
+        for id in ["plain", "compressed"] {
+            let found = find_root_session(&paths, id).unwrap();
+            assert_eq!(found.id, id);
+            assert_eq!(found.compressed, id == "compressed");
+            let preview =
+                preview_batch_item_checked(&paths, id, SessionOperation::Archive, true, || Ok(()))
+                    .unwrap();
+            assert!(preview.descendants.is_empty());
+            assert!(
+                set_archived_checked(&paths, id, true, || Ok(()))
+                    .unwrap()
+                    .archived
+            );
+            assert!(
+                !set_archived_checked(&paths, id, false, || Ok(()))
+                    .unwrap()
+                    .archived
+            );
+            assert_eq!(
+                rename_session(&paths, id, "Updated title").unwrap().title,
+                "Updated title"
+            );
+        }
+        for id in ["child", "missing", "../plain", "/plain"] {
+            assert!(find_root_session(&paths, id).is_err(), "{id}");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = home.join("outside");
+            fs::create_dir(&outside).unwrap();
+            fs::write(
+                outside.join("session.v4.jsonl"),
+                "{\"type\":\"session\",\"version\":4,\"id\":\"linked\"}\n",
+            )
+            .unwrap();
+            symlink(&outside, home.join("sessions/project/linked")).unwrap();
+            assert!(find_root_session(&paths, "linked").is_err());
+            let external_project = home.join("external-project");
+            fs::create_dir_all(external_project.join("linked-project")).unwrap();
+            fs::write(
+                external_project.join("linked-project/session.v4.jsonl"),
+                "{\"type\":\"session\",\"version\":4,\"id\":\"linked-project\"}\n",
+            )
+            .unwrap();
+            symlink(&external_project, home.join("sessions/project-link")).unwrap();
+            assert!(find_root_session(&paths, "linked-project").is_err());
+        }
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn delete_keeps_children_created_after_confirmation() {

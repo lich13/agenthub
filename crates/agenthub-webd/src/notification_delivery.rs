@@ -177,18 +177,17 @@ pub async fn github_ci(
         return Ok(());
     }
     let run = &event.run;
-    let kind = run.notification_kind().unwrap_or("failure");
     let (title, body) = run.notification_text(&config.codex.host_label);
-    let mut request = super::notification_format::request(
-        "GitHub CI",
-        kind,
-        &run.repository_name,
-        "",
-        &body,
-        &key,
-    );
-    request.title = title;
-    request.url = Some(run.html_url.clone());
+    let request = super::ProbeBarkRequest {
+        title,
+        body: super::notification_format::redacted_summary(&body),
+        url: Some(run.html_url.clone()),
+        dedupe_key: key.clone(),
+        presentation: Some(super::notification_format::Presentation {
+            provider: "GitHub CI".into(),
+            urgent: false,
+        }),
+    };
     let candidate = queued_candidate(
         config,
         db,

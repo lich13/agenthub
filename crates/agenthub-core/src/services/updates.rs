@@ -127,21 +127,6 @@ pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed Tauri updater f
 pub const MACOS_UPDATER_NO_UPDATE_OUTPUT: &str = "no signed app update available\n";
 const MACOS_UPDATER_AVAILABLE_PREFIX: &str = "signed app update available ";
 
-pub fn update_status(
-    _config: &Config,
-    platform: &PlatformPaths,
-    latest_version: Option<&str>,
-    last_error: Option<&str>,
-) -> UpdateStatus {
-    update_status_for_surface(
-        _config,
-        platform,
-        HostSurface::default_for_platform(platform),
-        latest_version,
-        last_error,
-    )
-}
-
 pub fn update_status_for_surface(
     _config: &Config,
     platform: &PlatformPaths,
@@ -179,23 +164,6 @@ pub fn update_status_for_surface(
     }
 }
 
-pub fn update_status_with_recent_check_job(
-    config: &Config,
-    platform: &PlatformPaths,
-    latest_version: Option<&str>,
-    last_error: Option<&str>,
-    recent_check_job: Option<&JobRecord>,
-) -> UpdateStatus {
-    update_status_with_recent_check_job_for_surface(
-        config,
-        platform,
-        HostSurface::default_for_platform(platform),
-        latest_version,
-        last_error,
-        recent_check_job,
-    )
-}
-
 pub fn update_status_with_recent_check_job_for_surface(
     config: &Config,
     platform: &PlatformPaths,
@@ -213,14 +181,6 @@ pub fn update_status_with_recent_check_job_for_surface(
         derive_macos_recent_check_status(&mut status, job, config, platform, host_surface);
     }
     status
-}
-
-pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> UpdateJobPlan {
-    update_job_plan_for_surface(
-        platform,
-        HostSurface::default_for_platform(platform),
-        action,
-    )
 }
 
 pub fn update_job_plan_for_surface(

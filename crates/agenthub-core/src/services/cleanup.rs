@@ -52,8 +52,6 @@ impl UnifiedCleanupPaths {
 pub struct UnifiedCleanupDryRunRequest {
     #[serde(default)]
     pub scopes: Vec<String>,
-    #[serde(default)]
-    pub include_codex_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,7 +175,6 @@ fn dry_run_single_scope(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     scope: &str,
-    scan_hidden: bool,
 ) -> Result<UnifiedCleanupScopePlan> {
     let (provider, label) = scope_meta(scope)?;
     let mut out = UnifiedCleanupScopePlan {
@@ -214,25 +211,7 @@ fn dry_run_single_scope(
             Err(err) => out.issues.push(err.to_string()),
         },
         SCOPE_CODEX_HIDDEN => {
-            if !scan_hidden {
-                out.scanned = false;
-                return Ok(out);
-            }
-            match archive::plan_delete_hidden_candidates(&paths.codex) {
-                Ok(plan) => {
-                    let bytes_map = crate::selected_codex::tree::estimate_bytes_batch(
-                        &paths.codex,
-                        &plan.hidden_ids,
-                    );
-                    for c in plan.candidates {
-                        let bytes = bytes_map.get(&c.id).copied().unwrap_or(0);
-                        let blocked = (!c.allowed)
-                            .then(|| c.reason.unwrap_or_else(|| "当前线程暂不可清理".into()));
-                        push_candidate(&mut out, c.id, c.title, bytes, c.fingerprint, blocked);
-                    }
-                }
-                Err(err) => out.issues.push(err.to_string()),
-            }
+            out.scanned = false;
         }
         SCOPE_ANTIGRAVITY_ARCHIVED => {
             if platform.kind != crate::platform::PlatformKind::Macos {
@@ -351,11 +330,9 @@ pub fn dry_run_unified_with_capability(
             .filter(|s| request.scopes.iter().any(|req| req == s))
             .collect()
     };
-    let explicit_hidden = request.scopes.iter().any(|s| s == SCOPE_CODEX_HIDDEN);
-    let scan_hidden = request.include_codex_hidden || explicit_hidden;
     let mut plan = UnifiedCleanupPlan::default();
     for scope in requested {
-        let item = dry_run_single_scope(platform, paths, scope, scan_hidden)?;
+        let item = dry_run_single_scope(platform, paths, scope)?;
         plan.total_candidates += item.candidate_count;
         plan.total_deletable += item.deletable_count;
         plan.total_estimated_bytes = plan
@@ -457,7 +434,7 @@ fn execute_codex_scope(
     let edge_cols = archive::table_columns(&conn, "thread_spawn_edges")?;
     let has_spawn_edges =
         edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
-    let edges = crate::selected_codex::tree::spawn_edges(codex)?;
+    let edges = crate::selected_codex::tree::spawn_edges_with_connection(&conn)?;
 
     run_scope_targets(scope_targets, scope_res, stopped_early, |id, req_fp| {
         let verified_fp = if is_hidden {
@@ -958,10 +935,7 @@ mod tests {
         let linux_plan = super::dry_run_unified_with_capability(
             &linux,
             &paths,
-            super::UnifiedCleanupDryRunRequest {
-                scopes: Vec::new(),
-                include_codex_hidden: true,
-            },
+            super::UnifiedCleanupDryRunRequest { scopes: Vec::new() },
         )
         .unwrap();
         let ag_linux = linux_plan
@@ -974,10 +948,7 @@ mod tests {
         let mac_plan = super::dry_run_unified_with_capability(
             &macos,
             &paths,
-            super::UnifiedCleanupDryRunRequest {
-                scopes: Vec::new(),
-                include_codex_hidden: true,
-            },
+            super::UnifiedCleanupDryRunRequest { scopes: Vec::new() },
         )
         .unwrap();
         assert_eq!(mac_plan.total_deletable, 2);
@@ -1162,16 +1133,12 @@ mod tests {
             )
             .unwrap();
         }
-        let codex_plan = super::dry_run_unified_with_capability(
-            &macos,
-            &paths,
-            super::UnifiedCleanupDryRunRequest {
-                scopes: vec![super::SCOPE_CODEX_HIDDEN.into()],
-                include_codex_hidden: true,
-            },
+        let codex_plan = crate::archive::hidden_delete_plan_with_work(
+            &paths.codex,
+            &crate::scan_work::ScanWork::default(),
         )
         .unwrap();
-        let hidden_targets: Vec<super::UnifiedCleanupTargetSelection> = codex_plan.scopes[0]
+        let hidden_targets: Vec<super::UnifiedCleanupTargetSelection> = codex_plan
             .candidates
             .iter()
             .map(|c| super::UnifiedCleanupTargetSelection {

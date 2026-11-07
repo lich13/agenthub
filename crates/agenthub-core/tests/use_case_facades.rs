@@ -26,9 +26,8 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
             limit: Some(25),
         })
         .unwrap();
-    assert_eq!(list.list.required_capability, Capability::Threads);
-    assert_eq!(list.list.query.archived, Some(true));
-    assert_eq!(list.list.query.q.as_deref(), Some("build"));
+    assert_eq!(list.query.archived, Some(true));
+    assert_eq!(list.query.q.as_deref(), Some("build"));
 
     let detail = use_cases
         .threads()
@@ -39,7 +38,7 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
             before: None,
         })
         .unwrap();
-    assert_eq!(detail.detail.thread_id, "thread-a");
+    assert_eq!(detail.thread_id, "thread-a");
 
     let job_list = use_cases.jobs().list(Some(500)).unwrap();
     assert_eq!(job_list.required_capability, Capability::JobHistory);

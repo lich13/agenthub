@@ -41,14 +41,16 @@ impl Observer {
             .map(|run| {
                 let key = (run.repository_id, run.id);
                 let eligible = run.notification_kind().is_some();
-                let changed = self.runs.get(&key).map_or_else(
-                    || {
-                        chrono::DateTime::parse_from_rfc3339(&run.updated_at)
-                            .is_ok_and(|time| time.timestamp_millis() > self.baseline_ms)
-                    },
-                    |(attempt, completed)| *attempt != run.run_attempt || !completed,
-                );
-                if !initial && eligible && changed {
+                if !initial
+                    && eligible
+                    && self.runs.get(&key).map_or_else(
+                        || {
+                            chrono::DateTime::parse_from_rfc3339(&run.updated_at)
+                                .is_ok_and(|time| time.timestamp_millis() > self.baseline_ms)
+                        },
+                        |(attempt, completed)| *attempt != run.run_attempt || !completed,
+                    )
+                {
                     events.push(Event {
                         observed_ms: snapshot.last_scan_ms,
                         account: account.clone(),
@@ -70,15 +72,17 @@ pub(crate) fn start(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut observer = Observer::default();
+        #[cfg(target_os = "macos")]
+        let mut authorization_requested = false;
         loop {
             let remote = app.state::<crate::remote::RemoteConnections>();
             let source = remote.view();
-            if remote.is_current(source.revision) {
-                let request = Request {
-                    cached_only: true,
-                    ..Default::default()
-                };
-                let result = if source.target == MachineTarget::Remote {
+            let request = Request {
+                cached_only: true,
+                ..Default::default()
+            };
+            let result = if source.target == MachineTarget::Remote {
+                Some(
                     remote
                         .invoke(&RemoteInvokeRequest {
                             revision: source.revision,
@@ -89,32 +93,49 @@ pub(crate) fn start(app: &tauri::AppHandle) {
                         .and_then(|value| {
                             serde_json::from_value::<Snapshot>(value)
                                 .map_err(|_| "CI 状态不可用".into())
-                        })
+                        }),
+                )
+            } else {
+                let state = app.state::<crate::DesktopState>().inner().clone();
+                let config = state.config();
+                if !agenthub_core::github_ci::enabled(&config) {
+                    observer = Observer::default();
+                    None
                 } else {
-                    let state = app.state::<crate::DesktopState>().inner().clone();
-                    if state.config().probe.monitor_enabled() {
-                        *state.github_ci.lock().await = None;
-                    }
-                    tauri::async_runtime::spawn_blocking(move || {
-                        let config = state.config();
-                        agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
-                            &config, state.platform(), state.host_surface(),
-                        ).github_ci(&state.db, request).map_err(|_| "CI 状态不可用".to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|_| Err("CI 状态不可用".into()))
-                };
-                if remote.is_current(source.revision) {
-                    if let Ok(snapshot) = result {
-                        let machine = source
-                            .active_machine_name
-                            .as_deref()
-                            .filter(|_| source.target == MachineTarget::Remote)
-                            .unwrap_or("本机");
-                        for event in observer.observe(source.revision, &snapshot) {
-                            #[cfg(target_os = "macos")]
-                            native::send(&app, source.revision, machine, &event);
-                        }
+                    Some(
+                        tauri::async_runtime::spawn_blocking(move || {
+                            agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
+                                &config,
+                                state.platform(),
+                                state.host_surface(),
+                            )
+                            .github_ci(&state.db, request)
+                            .map_err(|_| "CI 状态不可用".to_string())
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("CI 状态不可用".into())),
+                    )
+                }
+            };
+            #[cfg(target_os = "macos")]
+            if !authorization_requested
+                && result
+                    .as_ref()
+                    .is_some_and(|result| result.as_ref().is_ok_and(|snapshot| snapshot.enabled))
+            {
+                authorization_requested = true;
+                native::request_authorization(&app).await;
+            }
+            if remote.is_current(source.revision) {
+                if let Some(Ok(snapshot)) = result {
+                    let machine = source
+                        .active_machine_name
+                        .as_deref()
+                        .filter(|_| source.target == MachineTarget::Remote)
+                        .unwrap_or("本机");
+                    for event in observer.observe(source.revision, &snapshot) {
+                        #[cfg(target_os = "macos")]
+                        native::send(source.revision, machine, &event);
                     }
                 }
             }

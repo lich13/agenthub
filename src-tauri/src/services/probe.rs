@@ -38,9 +38,6 @@ pub async fn desktop_github_ci_status(
     )
     .github_ci(&state.db, request.clone())
     .map_err(|error| error.to_string())?;
-    if config.probe.monitor_enabled() {
-        *state.github_ci.lock().await = None;
-    }
     if !request.cached_only && !config.probe.monitor_enabled() && snapshot.refreshing {
         let mut monitor = state.github_ci.lock().await;
         let config = state.config();
@@ -53,16 +50,16 @@ pub async fn desktop_github_ci_status(
             *monitor =
                 Some(agenthub_core::github_ci::Monitor::new().map_err(|error| error.to_string())?);
         }
-        monitor
+        let result = monitor
             .as_mut()
             .expect("initialized CI monitor")
             .tick(&state.db, &config)
-            .await
-            .map_err(|error| error.to_string())?;
+            .await;
         let config = state.config();
         if config.probe.monitor_enabled() {
             *monitor = None;
         }
+        result.map_err(|error| error.to_string())?;
         return agenthub_core::github_ci::status(&state.db, &config, Default::default())
             .map_err(|error| error.to_string());
     }
@@ -124,6 +121,39 @@ mod ci_tests {
         assert!(result.refreshing);
         assert!(state.github_ci.lock().await.is_none());
     }
+    #[tokio::test]
+    async fn manual_refresh_hands_off_if_background_monitor_starts_while_waiting() {
+        let mut config = Config::default();
+        config.probe.enabled = false;
+        let state = DesktopState::new(
+            config.clone(),
+            PanelDb::open(":memory:").unwrap(),
+            PlatformPaths::for_kind(PlatformKind::Macos),
+        );
+        let mut held = state.github_ci.lock().await;
+        *held = Some(agenthub_core::github_ci::Monitor::new().unwrap());
+        let query = desktop_github_ci_status(
+            &state,
+            agenthub_core::github_ci::Request {
+                refresh: true,
+                ..Default::default()
+            },
+        );
+        tokio::pin!(query);
+        tokio::select! {
+            biased;
+            _ = &mut query => panic!("manual query must wait for its monitor"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert!(state.db.get_setting("github_ci_refresh").unwrap().is_some());
+        config.probe.enabled = true;
+        config.probe.notifications.notify_github_ci = true;
+        state.replace_config(config);
+        drop(held);
+        assert!(query.await.unwrap().refreshing);
+        assert!(state.github_ci.lock().await.is_none());
+    }
+
     #[tokio::test]
     async fn cached_only_never_initializes_a_desktop_monitor() {
         let state = DesktopState::new(

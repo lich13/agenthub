@@ -16,13 +16,12 @@ pub async fn getProbeStatus(
 pub async fn getGithubCiStatus(
     state: tauri::State<'_, DesktopState>,
     refresh: Option<bool>,
-    cached_only: Option<bool>,
 ) -> Result<agenthub_core::github_ci::Snapshot, String> {
     probe_service::desktop_github_ci_status(
         &state,
         agenthub_core::github_ci::Request {
             refresh: refresh.unwrap_or(false),
-            cached_only: cached_only.unwrap_or(false),
+            cached_only: false,
         },
     )
     .await

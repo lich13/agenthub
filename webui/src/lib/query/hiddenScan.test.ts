@@ -64,6 +64,13 @@ function deferred<T>() {
 }
 
 describe("hidden thread scan paging", () => {
+  test("missing progress fails without silently accepting a synchronous preview", async () => {
+    const send = vi.fn(async () => cancelResponse());
+    const update = vi.fn();
+    await expect(new HiddenScanRunner(send, update).run()).rejects.toThrow("扫描响应缺少进度");
+    expect(update).not.toHaveBeenCalled();
+  });
+
   test("accumulates pages and polls from the next candidate cursor", async () => {
     const first = scanPlan([candidate("thread-a")], progress({ processed: 1, nextCursor: 1 }));
     const second = scanPlan(

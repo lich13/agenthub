@@ -52,7 +52,10 @@ pub(super) fn request(
 }
 
 pub(super) fn summary(input: &str) -> String {
-    let input = agenthub_core::security::redact_output(input);
+    redacted_summary(&agenthub_core::security::redact_output(input))
+}
+
+pub(super) fn redacted_summary(input: &str) -> String {
     let mut lines = Vec::new();
     let mut fenced = false;
     let mut hidden = false;

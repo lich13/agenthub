@@ -64,7 +64,7 @@ pub async fn evict_idle_cache(max_idle: Duration) {
 type Endpoint = antigravity::sessions::DiscoveredAntigravityEndpoint;
 
 fn client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
+    Ok(agenthub_core::http_client_builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(5))

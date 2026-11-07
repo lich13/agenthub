@@ -1,7 +1,7 @@
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 use agenthub_core::services::use_cases::AgentHubUseCases;
 use agenthub_core::{
-    config::{patch_probe_config_toml, Config},
+    config::Config,
     probe::redact_probe_event_for_output,
     services::{
         jobs as job_service, probe as probe_service,
@@ -81,17 +81,8 @@ fn probe_save_settings_with_state_and_repair(
     if !config_path.exists() {
         anyhow::bail!("config file not found: {}", config_path.display());
     }
-    let text = std::fs::read_to_string(&config_path)?;
-    let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
-    agenthub_core::config::write_config_atomic(&config_path, &updated)?;
-    let response_config = Config::load(&config_path)?;
-    for secret_write in plan.secret_writes {
-        state.db.set_secret_setting_bytes(
-            &secret_write.setting_key,
-            secret_write.secret_value.as_bytes(),
-        )?;
-    }
-    agenthub_core::github_ci::settings_changed(&state.db, &config, &response_config)?;
+    let response_config =
+        settings_service::apply_probe_settings_save_plan(&config_path, &state.db, &config, plan)?;
     state.replace_config(response_config.clone());
     repair_error_monitor(&response_config, state.platform())?;
     probe_settings_with_state(state)

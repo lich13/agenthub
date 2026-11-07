@@ -121,10 +121,6 @@ impl Capability {
         }
     }
 
-    pub fn is_supported_on(self, platform: &PlatformPaths) -> bool {
-        self.is_supported_on_surface(platform, HostSurface::default_for_platform(platform))
-    }
-
     pub fn is_supported_on_surface(self, platform: &PlatformPaths, surface: HostSurface) -> bool {
         let shared_core = matches!(platform.kind, PlatformKind::Linux | PlatformKind::Macos);
         let linux_server_api =

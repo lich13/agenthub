@@ -55,7 +55,7 @@ async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> 
         tag_name: String,
     }
     let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let release: Release = reqwest::Client::builder()
+    let release: Release = agenthub_core::http_client_builder()
         .timeout(Duration::from_secs(8))
         .build()?
         .get(url)
@@ -80,7 +80,7 @@ async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
     }
     let encoded = package.replace('/', "%2F");
     let url = format!("https://registry.npmjs.org/{encoded}");
-    let package: PackageInfo = reqwest::Client::builder()
+    let package: PackageInfo = agenthub_core::http_client_builder()
         .timeout(Duration::from_secs(8))
         .build()?
         .get(url)

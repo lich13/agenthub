@@ -26,23 +26,13 @@ pub struct ThreadsQuery {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadsOverview {
     pub threads: Vec<ThreadSummary>,
-    pub query: ThreadsQuery,
-    pub fetch_limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListPlan {
-    pub required_capability: Capability,
     pub query: ThreadsQuery,
     pub fetch_limit: usize,
-    pub response_limit: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadListReadPlan {
-    pub list: ThreadListPlan,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,12 +52,6 @@ pub struct ThreadDetailPlan {
     pub block_limit: Option<usize>,
     pub full: bool,
     pub before: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadDetailReadPlan {
-    pub detail: ThreadDetailPlan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +74,6 @@ pub struct ThreadReadModelInputs {
     pub archived_thread_ids: HashSet<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadDetailReadModelView {
-    pub detail: ThreadDetail,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ThreadListRuntimeState<'a> {
     pub running_jobs: &'a [JobRecord],
@@ -111,7 +89,6 @@ pub fn build_threads_overview(
     archived_thread_ids: &HashSet<String>,
 ) -> ThreadsOverview {
     let response_limit = requested_thread_limit(query.limit);
-    let fetch_limit = thread_list_fetch_limit(query.limit);
     let threads = apply_thread_list_runtime_state(
         threads,
         ThreadListRuntimeState {
@@ -127,11 +104,7 @@ pub fn build_threads_overview(
         response_limit,
     );
 
-    ThreadsOverview {
-        threads,
-        query,
-        fetch_limit,
-    }
+    ThreadsOverview { threads }
 }
 
 pub fn thread_list_read_model(
@@ -163,14 +136,14 @@ fn visibility_ids_for_running_jobs(
 
 pub fn load_thread_read_model_inputs(
     paths: &crate::codex::CodexPaths,
-    plan: &ThreadListReadPlan,
+    plan: &ThreadListPlan,
     running_jobs: Vec<JobRecord>,
 ) -> anyhow::Result<ThreadReadModelInputs> {
     let threads = crate::codex::list_threads(
         paths,
-        plan.list.query.archived.unwrap_or(false),
-        plan.list.query.q.as_deref(),
-        plan.list.fetch_limit,
+        plan.query.archived.unwrap_or(false),
+        plan.query.q.as_deref(),
+        plan.fetch_limit,
     )?;
     let (hidden_thread_ids, archived_thread_ids) =
         visibility_ids_for_running_jobs(paths, &running_jobs);
@@ -206,10 +179,10 @@ pub fn thread_detail_read_model(
     platform: &PlatformPaths,
     detail: ThreadDetail,
     active_job: Option<JobRecord>,
-) -> anyhow::Result<ThreadDetailReadModelView> {
+) -> anyhow::Result<ThreadDetail> {
     require_capability(platform, Capability::Threads)?;
     let detail = apply_thread_detail_runtime_state(detail, active_job.as_ref());
-    Ok(ThreadDetailReadModelView { detail })
+    Ok(detail)
 }
 
 pub fn plan_threads_list_request(
@@ -223,23 +196,8 @@ pub fn plan_threads_list_request(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let response_limit = requested_thread_limit(query.limit);
     let fetch_limit = thread_list_fetch_limit(query.limit);
-    Ok(ThreadListPlan {
-        required_capability: Capability::Threads,
-        query,
-        fetch_limit,
-        response_limit,
-    })
-}
-
-pub fn plan_thread_list_read(
-    platform: &PlatformPaths,
-    query: ThreadsQuery,
-) -> anyhow::Result<ThreadListReadPlan> {
-    Ok(ThreadListReadPlan {
-        list: plan_threads_list_request(platform, query)?,
-    })
+    Ok(ThreadListPlan { query, fetch_limit })
 }
 
 pub fn plan_thread_detail_request(
@@ -258,15 +216,6 @@ pub fn plan_thread_detail_request(
     })
 }
 
-pub fn plan_thread_detail_read(
-    platform: &PlatformPaths,
-    request: ThreadDetailRequest,
-) -> anyhow::Result<ThreadDetailReadPlan> {
-    Ok(ThreadDetailReadPlan {
-        detail: plan_thread_detail_request(platform, request)?,
-    })
-}
-
 pub fn plan_thread_blocks_request(
     platform: &PlatformPaths,
     id: &str,
@@ -282,17 +231,6 @@ pub fn plan_thread_blocks_request(
             before,
         },
     )
-}
-
-pub fn plan_thread_blocks_read(
-    platform: &PlatformPaths,
-    id: &str,
-    limit: Option<usize>,
-    before: Option<String>,
-) -> anyhow::Result<ThreadDetailReadPlan> {
-    Ok(ThreadDetailReadPlan {
-        detail: plan_thread_blocks_request(platform, id, limit, before)?,
-    })
 }
 
 pub fn window_thread_detail_for_plan(
@@ -521,8 +459,8 @@ mod tests {
         platform::{PlatformKind, PlatformPaths},
         services::threads::{
             apply_thread_detail_runtime_state, build_threads_overview, filter_thread_summaries,
-            merge_running_jobs, plan_thread_blocks_read, plan_thread_detail_read,
-            plan_thread_list_read, thread_list_fetch_limit, ThreadsQuery,
+            merge_running_jobs, plan_thread_blocks_request, plan_thread_detail_request,
+            plan_threads_list_request, thread_list_fetch_limit, ThreadsQuery,
         },
     };
 
@@ -562,8 +500,6 @@ mod tests {
             &archived,
         );
 
-        assert_eq!(overview.query.archived, Some(false));
-        assert_eq!(overview.fetch_limit, 10);
         assert_eq!(
             overview
                 .threads
@@ -683,7 +619,7 @@ mod tests {
         let macos = PlatformPaths::for_kind(PlatformKind::Macos);
         let windows = PlatformPaths::for_kind(PlatformKind::Windows);
 
-        let list = plan_thread_list_read(
+        let list = plan_threads_list_request(
             &linux,
             ThreadsQuery {
                 archived: Some(true),
@@ -693,12 +629,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(list.list.query.archived, Some(true));
-        assert_eq!(list.list.query.q.as_deref(), Some("task"));
-        assert_eq!(list.list.fetch_limit, 25);
-        assert_eq!(list.list.response_limit, 25);
+        assert_eq!(list.query.archived, Some(true));
+        assert_eq!(list.query.q.as_deref(), Some("task"));
+        assert_eq!(list.fetch_limit, 25);
 
-        let detail = plan_thread_detail_read(
+        let detail = plan_thread_detail_request(
             &macos,
             super::ThreadDetailRequest {
                 id: " thread-a ".to_string(),
@@ -708,17 +643,17 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(detail.detail.thread_id, "thread-a");
+        assert_eq!(detail.thread_id, "thread-a");
         assert_eq!(
-            detail.detail.block_limit,
+            detail.block_limit,
             Some(super::THREAD_DETAIL_MAX_BLOCK_LIMIT)
         );
 
-        let blocks = plan_thread_blocks_read(&macos, " thread-a ", Some(0), None).unwrap();
-        assert_eq!(blocks.detail.block_limit, Some(1));
+        let blocks = plan_thread_blocks_request(&macos, " thread-a ", Some(0), None).unwrap();
+        assert_eq!(blocks.block_limit, Some(1));
 
-        assert!(plan_thread_list_read(&windows, ThreadsQuery::default()).is_err());
-        assert!(plan_thread_blocks_read(&windows, "thread-a", None, None).is_err());
+        assert!(plan_threads_list_request(&windows, ThreadsQuery::default()).is_err());
+        assert!(plan_thread_blocks_request(&windows, "thread-a", None, None).is_err());
     }
 
     #[test]

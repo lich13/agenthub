@@ -4,7 +4,7 @@ type Send = (request: HiddenScanRequest) => Promise<HiddenThreadDeletePlan>;
 
 export function mergeHiddenScanPage(current: HiddenThreadDeletePlan | null, page: HiddenThreadDeletePlan): HiddenThreadDeletePlan {
   const scan = page.scan;
-  if (!scan) return page;
+  if (!scan) throw new Error("扫描响应缺少进度，请重新扫描");
   if (current?.scan && current.scan.id !== scan.id) throw new Error("扫描身份已变化，请重新扫描");
   const previous = current?.candidates ?? [];
   if (scan.cursor !== previous.length || scan.nextCursor !== scan.cursor + page.candidates.length
@@ -50,8 +50,7 @@ export class HiddenScanRunner {
       }
       this.plan = mergeHiddenScanPage(this.plan, response);
       this.update(this.plan);
-      const scan = this.plan.scan;
-      if (!scan) return this.plan;
+      const scan = this.plan.scan!;
       if (scan.phase === "failed") throw new Error(scan.error || "隐藏线程扫描失败");
       if ((scan.phase === "complete" && !scan.hasMore) || scan.phase === "stopped") return this.plan;
       if (!scan.hasMore) await pause(this.controller.signal);

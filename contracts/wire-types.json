@@ -5774,13 +5774,6 @@
               "serde (default)"
             ],
             "type": "Vec < String >"
-          },
-          {
-            "name": "include_codex_hidden",
-            "serde": [
-              "serde (default)"
-            ],
-            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -9184,32 +9177,6 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
-      "ThreadDetailReadModelView": {
-        "fields": [
-          {
-            "name": "detail",
-            "serde": [],
-            "type": "ThreadDetail"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "ThreadDetailReadPlan": {
-        "fields": [
-          {
-            "name": "detail",
-            "serde": [],
-            "type": "ThreadDetailPlan"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "ThreadDetailRequest": {
         "fields": [
           {
@@ -9241,11 +9208,6 @@
       "ThreadListPlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "query",
             "serde": [],
             "type": "ThreadsQuery"
@@ -9254,24 +9216,6 @@
             "name": "fetch_limit",
             "serde": [],
             "type": "usize"
-          },
-          {
-            "name": "response_limit",
-            "serde": [],
-            "type": "usize"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "ThreadListReadPlan": {
-        "fields": [
-          {
-            "name": "list",
-            "serde": [],
-            "type": "ThreadListPlan"
           }
         ],
         "kind": "struct",
@@ -9285,16 +9229,6 @@
             "name": "threads",
             "serde": [],
             "type": "Vec < ThreadSummary >"
-          },
-          {
-            "name": "query",
-            "serde": [],
-            "type": "ThreadsQuery"
-          },
-          {
-            "name": "fetch_limit",
-            "serde": [],
-            "type": "usize"
           }
         ],
         "kind": "struct",
@@ -10792,7 +10726,7 @@
         "callCommand<HiddenThreadDeletePlan>(\"cleanup.hiddenDryRun\",{request})",
         "callCommand<JobRecord[]|OptionalResult<JobRecord[]>>(\"jobs.list\",{limit:30})",
         "callCommand<JobRecord>(\"jobs.detail\",{id,includeOutput})",
-        "callCommand<UnifiedCleanupPlan>(\"cleanup.unifiedDryRun\",request?{request}:{})",
+        "callCommand<UnifiedCleanupPlan>(\"cleanup.unifiedDryRun\",{request})",
         "callCommand<UnifiedCleanupResult>(\"cleanup.unifiedExecute\",{request})"
       ],
       "types": {}
@@ -11003,7 +10937,7 @@
         "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",
         "TimelineEntry": "exporttypeTimelineEntry={id:string;title:string;preview?:string};",
         "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;fingerprint?:string|null;blockedReason:string|null;};",
-        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[];includeCodexHidden?:boolean};",
+        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[]};",
         "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[];targets?:UnifiedCleanupTargetSelection[];};",
         "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
         "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};",

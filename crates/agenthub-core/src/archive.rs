@@ -70,10 +70,7 @@ pub(crate) fn list_archived_threads(paths: &CodexPaths) -> Result<Vec<HiddenThre
         .collect())
 }
 
-pub(crate) fn plan_delete_hidden_candidates(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
-    hidden_delete_plan_with_work(paths, &crate::scan_work::ScanWork::default())
-}
-
+#[cfg(test)]
 pub(crate) fn hidden_delete_plan_with_work(
     paths: &CodexPaths,
     work: &crate::scan_work::ScanWork,
@@ -256,7 +253,6 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
     let source_expr = first_existing(columns, &["source"]).unwrap_or("NULL");
     let parent_thread_expr =
         first_existing(columns, &["parent_thread_id", "parentThreadId"]).unwrap_or("NULL");
-    let alternate_parent_expr = first_existing(columns, &["parentThreadId"]).unwrap_or("NULL");
     let agent_path_expr = first_existing(columns, &["agent_path", "agentPath"]).unwrap_or("NULL");
     let agent_nickname_expr =
         first_existing(columns, &["agent_nickname", "agentNickname"]).unwrap_or("NULL");
@@ -270,7 +266,7 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
         "id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END, \
          {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, \
          {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, \
-         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT), {alternate_parent_expr}"
+         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT)"
     );
     VisibilitySelectSql {
         select_cols,
@@ -284,8 +280,7 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
     let archived = archived_flag != 0;
     let thread_source: Option<String> = row.get(2).ok();
     let source: Option<String> = row.get(3).ok();
-    let alternate_parent: Option<String> = row.get(13).ok();
-    let parent_thread_id: Option<String> = row.get(4).ok().or_else(|| alternate_parent.clone());
+    let parent_thread_id: Option<String> = row.get(4).ok();
     let agent_path: Option<String> = row.get(5).ok();
     let agent_nickname: Option<String> = row.get(6).ok();
     let agent_role: Option<String> = row.get(7).ok();
@@ -316,12 +311,7 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
         has_user_event,
         title.as_deref(),
     );
-    let mut parent_ids = extract_row_parents(parent_thread_id.as_deref(), source.as_deref());
-    if let Some(parent) =
-        alternate_parent.filter(|parent| !parent.is_empty() && !parent_ids.contains(parent))
-    {
-        parent_ids.push(parent);
-    }
+    let parent_ids = extract_row_parents(parent_thread_id.as_deref(), source.as_deref());
     Ok(HiddenVisibilityRow {
         title: title.unwrap_or_else(|| id.clone()),
         id,
@@ -480,21 +470,29 @@ mod tests {
         let root = hidden_cleanup_fixture("parent-sources");
         let paths = CodexPaths::new(&root);
         let conn = Connection::open(paths.state_db()).unwrap();
-        conn.execute_batch("ALTER TABLE threads ADD COLUMN parentThreadId TEXT;")
-            .unwrap();
-        conn.execute("UPDATE threads SET parent_thread_id='snake-parent', parentThreadId='camel-parent', source=?1 WHERE id='hidden-subagent'",
+        conn.execute("UPDATE threads SET parent_thread_id='column-parent', source=?1 WHERE id='hidden-subagent'",
             [json!({"parent_thread_id":"json-parent", "subagent":{"thread_spawn":{"parent_thread_id":"spawn-parent"}}}).to_string()]).unwrap();
-        let rows =
-            super::hidden_visibility_rows(&conn, &crate::scan_work::ScanWork::default()).unwrap();
-        let edges = super::visibility_edges(&conn, &rows).unwrap();
-        for parent in [
-            "snake-parent",
-            "camel-parent",
-            "json-parent",
-            "spawn-parent",
-            "main-visible",
-        ] {
-            assert!(edges[parent].contains("hidden-subagent"));
+        for column in ["parent_thread_id", "parentThreadId"] {
+            if column == "parentThreadId" {
+                conn.execute_batch(
+                    "ALTER TABLE threads RENAME COLUMN parent_thread_id TO parentThreadId;",
+                )
+                .unwrap();
+            }
+            let rows = super::hidden_visibility_rows(&conn, &crate::scan_work::ScanWork::default())
+                .unwrap();
+            let edges = super::visibility_edges(&conn, &rows).unwrap();
+            for parent in [
+                "column-parent",
+                "json-parent",
+                "spawn-parent",
+                "main-visible",
+            ] {
+                assert!(
+                    edges[parent].contains("hidden-subagent"),
+                    "{column}: {parent}"
+                );
+            }
         }
         drop(conn);
         fs::remove_dir_all(root).unwrap();

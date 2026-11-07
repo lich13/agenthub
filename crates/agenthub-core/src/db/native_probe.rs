@@ -73,7 +73,7 @@ impl PanelDb {
         } else {
             prior.map_or(0, |(_, ts)| ts)
         };
-        tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count",
+        tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms OR stream_count!=excluded.stream_count OR error_count!=excluded.error_count OR (excluded.enabled AND scanned_at!=excluded.scanned_at)",
             params![provider.as_str(), enabled, activated_ms, Self::now(), scan.streams.len(), scan.errors])?;
         if !enabled {
             tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'", params![provider.as_str(),Self::now()])?;
@@ -591,6 +591,68 @@ mod tests {
         drop(db);
         std::fs::remove_file(p).unwrap();
     }
+    #[test]
+    fn disabled_poll_preserves_database_until_statistics_change() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let mut c = config();
+        c.probe.notifications.notify_grok = false;
+        let mut empty = NativeScan {
+            streams: vec![],
+            errors: 0,
+        };
+        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
+            .unwrap();
+        let changes = {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("UPDATE native_probe_providers SET scanned_at=1", [])
+                .unwrap();
+            conn.query_row("SELECT total_changes()", [], |row| row.get::<_, u64>(0))
+                .unwrap()
+        };
+        for _ in 0..3 {
+            db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
+                .unwrap();
+        }
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT total_changes()", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            changes
+        );
+        empty.errors = 1;
+        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
+            .unwrap();
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT total_changes()", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            changes + 1
+        );
+        c.probe.notifications.notify_grok = true;
+        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE native_probe_providers SET scanned_at=1", [])
+            .unwrap();
+        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
+            .unwrap();
+        let scanned: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT scanned_at FROM native_probe_providers", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(scanned > 1);
+    }
+
     #[test]
     fn disabled_provider_and_reenabled_provider_never_replay_history() {
         let db = PanelDb::open(":memory:").unwrap();

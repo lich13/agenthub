@@ -27,12 +27,6 @@ pub struct ProbeStatusAggregation {
     pub active_sessions: Vec<probe_core::ProbeLiveSession>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ProbeStatusFacadePlan {
-    pub required_capability: Capability,
-    pub status: ProbeStatusAggregation,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ProbeUseCases<'a> {
     config: &'a Config,
@@ -42,13 +36,6 @@ pub struct ProbeUseCases<'a> {
 impl<'a> ProbeUseCases<'a> {
     pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
         Self { config, platform }
-    }
-
-    pub fn claude_hooks(
-        self,
-        request: crate::claude::hooks::ClaudeHooksRequest,
-    ) -> Result<crate::claude::hooks::ClaudeHooksStatus> {
-        self.provider_hooks(crate::claude::hooks::HookProvider::Claude, request)
     }
 
     pub fn provider_hooks(
@@ -67,14 +54,6 @@ impl<'a> ProbeUseCases<'a> {
             &self.platform.config_file,
             request,
         )
-    }
-
-    pub fn status(self) -> Result<ProbeStatusFacadePlan> {
-        probe_status_with_capability(self.config, self.platform)
-    }
-
-    pub fn action(self, action: ProbeAction) -> Result<ProbeActionPlan> {
-        plan_probe_action(self.config, self.platform, action)
     }
 
     pub fn action_with_device_key(
@@ -201,17 +180,6 @@ pub struct ProbeActionPlan {
     pub diagnostic_plan: Option<probe_core::ProbeActionPlan>,
 }
 
-pub fn probe_status_with_capability(
-    config: &Config,
-    platform: &PlatformPaths,
-) -> Result<ProbeStatusFacadePlan> {
-    require_capability(platform, Capability::Probe)?;
-    Ok(ProbeStatusFacadePlan {
-        required_capability: Capability::Probe,
-        status: aggregate_probe_status(config),
-    })
-}
-
 pub fn probe_status_snapshot_view(
     mut value: Value,
     snapshot_age_seconds: i64,
@@ -230,23 +198,6 @@ pub fn probe_status_snapshot_view(
         );
     }
     value
-}
-
-pub fn plan_probe_action(
-    config: &Config,
-    platform: &PlatformPaths,
-    action: ProbeAction,
-) -> Result<ProbeActionPlan> {
-    plan_probe_action_with_device_key(config, platform, action, false)
-}
-
-pub fn plan_probe_action_with_config_path(
-    config: &Config,
-    platform: &PlatformPaths,
-    action: ProbeAction,
-    config_path: impl AsRef<Path>,
-) -> Result<ProbeActionPlan> {
-    plan_probe_action_with_device_key_and_config_path(config, platform, action, false, config_path)
 }
 
 pub fn plan_probe_action_with_device_key(
@@ -350,12 +301,6 @@ type LiveProviderSessionsCacheEntry = (
 
 static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<Option<LiveProviderSessionsCacheEntry>> =
     std::sync::Mutex::new(None);
-
-pub fn invalidate_live_provider_sessions_cache() {
-    if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-        *guard = None;
-    }
-}
 
 pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Duration) {
     if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
@@ -1435,9 +1380,8 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_probe_action, probe_bark_delivery_decision, probe_bark_status_label,
-        probe_passive_thread_notification_plan, probe_status_with_capability, ProbeAction,
-        ProbeExecutionKind,
+        plan_probe_action_with_device_key, probe_bark_delivery_decision, probe_bark_status_label,
+        probe_passive_thread_notification_plan, ProbeAction, ProbeExecutionKind,
     };
     use crate::{
         codex::{ThreadStatus, ThreadSummary},
@@ -1447,33 +1391,12 @@ mod tests {
     };
 
     #[test]
-    fn probe_status_facade_requires_probe_capability() {
-        let config = Config::for_platform_kind(PlatformKind::Linux);
-        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
-
-        let status = probe_status_with_capability(&config, &platform)
-            .expect("Linux should allow probe facade");
-
-        assert_eq!(status.required_capability, Capability::Probe);
-    }
-
-    #[test]
-    fn probe_status_facade_rejects_unsupported_platform() {
-        let config = Config::for_platform_kind(PlatformKind::Windows);
-        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
-
-        let err = probe_status_with_capability(&config, &platform)
-            .expect_err("Windows should not expose probe facade");
-
-        assert!(err.to_string().contains("probe is unavailable on windows"));
-    }
-
-    #[test]
     fn probe_action_plans_are_platform_scoped_and_include_execution_contracts() {
         let linux_config = Config::for_platform_kind(PlatformKind::Linux);
         let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-        let bark = plan_probe_action(&linux_config, &linux, ProbeAction::BarkTest)
-            .expect("Linux should allow fixed Probe jobs");
+        let bark =
+            plan_probe_action_with_device_key(&linux_config, &linux, ProbeAction::BarkTest, false)
+                .expect("Linux should allow fixed Probe jobs");
 
         assert_eq!(bark.required_capability, Capability::Probe);
         assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
@@ -1481,8 +1404,13 @@ mod tests {
 
         let windows_config = Config::for_platform_kind(PlatformKind::Windows);
         let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-        let bark_err = plan_probe_action(&windows_config, &windows, ProbeAction::BarkTest)
-            .expect_err("Windows should not allow Probe actions");
+        let bark_err = plan_probe_action_with_device_key(
+            &windows_config,
+            &windows,
+            ProbeAction::BarkTest,
+            false,
+        )
+        .expect_err("Windows should not allow Probe actions");
         assert!(bark_err
             .to_string()
             .contains("probe is unavailable on windows"));
@@ -1639,7 +1567,9 @@ mod tests {
 
         let platform =
             PlatformPaths::for_kind_with_home(crate::platform::PlatformKind::Linux, &root);
-        let remove_plan = plan_probe_action(&config, &platform, ProbeAction::RemoveHooks).unwrap();
+        let remove_plan =
+            plan_probe_action_with_device_key(&config, &platform, ProbeAction::RemoveHooks, false)
+                .unwrap();
         assert_eq!(remove_plan.action, ProbeAction::RemoveHooks);
         assert_eq!(
             remove_plan.job.as_ref().map(|j| j.kind.as_str()),

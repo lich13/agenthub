@@ -448,10 +448,22 @@ impl Config {
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+        Self::from_text(&text, path)
+    }
+
+    fn from_text(text: &str, path: &Path) -> Result<Self> {
         let mut config: Self =
-            toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
+            toml::from_str(text).with_context(|| format!("parse config {}", path.display()))?;
         config.load_sibling_env(path)?;
         config.normalize()?;
+        Ok(config)
+    }
+
+    pub fn save_probe_patch(path: &Path, patch: &ProbeConfigFilePatch) -> Result<Self> {
+        let text = fs::read_to_string(path)?;
+        let updated = patch_probe_config_toml(&text, patch)?;
+        let config = Self::from_text(&updated, path)?;
+        write_config_atomic(path, &updated)?;
         Ok(config)
     }
 
@@ -911,35 +923,19 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 
 /// Replace the actual configuration file without exposing a truncated TOML document.
 pub fn write_config_atomic(path: &Path, updated: &str) -> Result<()> {
-    use std::io::Write;
     let target = fs::canonicalize(path)?;
     let permissions = fs::metadata(&target)?.permissions();
-    let candidate = target.with_extension(format!("config-{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&candidate)?;
-    let result = (|| -> Result<()> {
-        file.set_permissions(permissions)?;
-        file.write_all(updated.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&candidate, &target)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&candidate);
-    }
-    result
+    write_atomic(&target, updated, Some(permissions))
 }
 
 #[cfg(any(target_os = "macos", test))]
 fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
+    write_atomic(path, updated, None)
+}
+
+fn write_atomic(path: &Path, updated: &str, permissions: Option<fs::Permissions>) -> Result<()> {
     use std::io::Write;
-    let candidate = path.with_extension(format!("key-{}.tmp", uuid::Uuid::new_v4()));
+    let candidate = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -949,6 +945,9 @@ fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
     }
     let mut file = options.open(&candidate)?;
     let result = (|| -> Result<()> {
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.write_all(updated.as_bytes())?;
         file.sync_all()?;
         fs::rename(&candidate, path)?;
@@ -1410,6 +1409,50 @@ workspace = "/home/ubuntu/codex-workspace"
 mod atomic_write_tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn saved_patch_loads_env_and_normalizes_before_replacing_symlink_target() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-config-save-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("config.toml");
+        let link = root.join("config-link.toml");
+        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &root);
+        fs::write(&target, toml::to_string(&config).unwrap()).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&target, &link).unwrap();
+        let key = SecretBox::random_key_material();
+        write_runtime_env(&root.join("env"), &format!("AGENTHUB_SECRET_KEY={key}\n")).unwrap();
+        let saved = Config::save_probe_patch(
+            &link,
+            &ProbeConfigFilePatch {
+                probe: Some(ProbeSettingsPatch {
+                    enabled: Some(true),
+                    poll_seconds: Some(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(saved.probe.enabled);
+        assert_eq!(saved.probe.poll_seconds, 5);
+        assert_eq!(saved.security.secret_key, key);
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(
+            fs::metadata(root.join("env")).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(Config::load(&link).unwrap().probe, saved.probe);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn replaces_complete_content_preserving_permissions_and_symlink() {

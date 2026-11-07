@@ -123,6 +123,11 @@ impl ProbeRuntime {
     }
 
     pub async fn status(&self) -> Result<ProbeStatus> {
+        let runtime = Self::new(self.config.clone(), self.paths.clone());
+        crate::read_tasks::spawn_blocking(move || runtime.status_blocking()).await?
+    }
+
+    fn status_blocking(&self) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
         let aggregation = aggregate_probe_status(&self.config);
         let hook_status = self.hook_status();

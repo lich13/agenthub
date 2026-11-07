@@ -128,7 +128,7 @@ fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effec
     let view = thread_detail_read_model(&platform, detail, None)
         .expect("core should own detail read-model");
 
-    assert_eq!(view.detail.summary.status, ThreadStatus::Recent);
+    assert_eq!(view.summary.status, ThreadStatus::Recent);
     assert!(serde_json::to_value(&view)
         .unwrap()
         .get("autosubmitEffects")

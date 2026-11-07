@@ -11,10 +11,7 @@ use crate::{
         probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
         system::{self, Capability, HostSurface, SystemCapabilities},
-        threads::{
-            self, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest, ThreadListReadPlan,
-            ThreadsQuery,
-        },
+        threads::{self, ThreadDetailPlan, ThreadDetailRequest, ThreadListPlan, ThreadsQuery},
     },
     update::{analyze_job_failure, JobFailureAnalysis},
 };
@@ -56,14 +53,6 @@ impl<'a> AgentHubUseCases<'a> {
             config: None,
             platform,
             host_surface: HostSurface::default_for_platform(platform),
-        }
-    }
-
-    pub fn new_for_surface(platform: &'a PlatformPaths, host_surface: HostSurface) -> Self {
-        Self {
-            config: None,
-            platform,
-            host_surface,
         }
     }
 
@@ -254,12 +243,12 @@ impl<'a> ThreadUseCases<'a> {
         crate::codex::subagents::read_subagent_detail(paths, request)
     }
 
-    pub fn list_read(self, query: ThreadsQuery) -> Result<ThreadListReadPlan> {
-        threads::plan_thread_list_read(self.platform, query)
+    pub fn list_read(self, query: ThreadsQuery) -> Result<ThreadListPlan> {
+        threads::plan_threads_list_request(self.platform, query)
     }
 
-    pub fn detail_read(self, request: ThreadDetailRequest) -> Result<ThreadDetailReadPlan> {
-        threads::plan_thread_detail_read(self.platform, request)
+    pub fn detail_read(self, request: ThreadDetailRequest) -> Result<ThreadDetailPlan> {
+        threads::plan_thread_detail_request(self.platform, request)
     }
 
     pub fn blocks(
@@ -276,8 +265,8 @@ impl<'a> ThreadUseCases<'a> {
         thread_id: &str,
         limit: Option<usize>,
         before: Option<String>,
-    ) -> Result<ThreadDetailReadPlan> {
-        threads::plan_thread_blocks_read(self.platform, thread_id, limit, before)
+    ) -> Result<ThreadDetailPlan> {
+        threads::plan_thread_blocks_request(self.platform, thread_id, limit, before)
     }
 
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {

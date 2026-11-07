@@ -230,29 +230,13 @@ pub async fn request(
                     }
                     !(previous.work.expired() && previous.finished.load(Ordering::Acquire))
                 });
-                ensure!(
-                    !jobs.values().any(|previous| previous.source == job.source
-                        && !previous.finished.load(Ordering::Acquire)),
-                    "该来源已有扫描正在进行或停止，请稍后重试"
-                );
-                if jobs.len() >= 2 {
-                    let oldest = jobs
-                        .values()
-                        .filter(|previous| previous.finished.load(Ordering::Acquire))
-                        .min_by_key(|previous| previous.created)
-                        .map(|previous| previous.id.clone());
-                    if let Some(id) = oldest {
-                        jobs.remove(&id);
-                    }
-                }
-                ensure!(jobs.len() < 2, "扫描任务已达上限，请稍后重试");
                 jobs.insert(job.id.clone(), job.clone());
             }
             let worker = job.clone();
             tokio::spawn(async move {
+                let _active = active;
                 let task = worker.clone();
                 let outcome = crate::read_tasks::spawn_blocking(move || {
-                    let _active = active;
                     super::scan_hidden(&paths, &task.work, |plan, candidate| {
                         task.work.check()?;
                         let mut state = task

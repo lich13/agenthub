@@ -1614,6 +1614,16 @@ fn store_probe_error_monitor_status(
     db: &PanelDb,
     status: ProbeErrorMonitorRuntimeStatus,
 ) -> Result<()> {
+    if status.status == "disabled" {
+        if let Some(raw) = db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)? {
+            if let Ok(mut previous) = serde_json::from_str::<ProbeErrorMonitorRuntimeStatus>(&raw) {
+                previous.last_scan_at = status.last_scan_at;
+                if previous == status {
+                    return Ok(());
+                }
+            }
+        }
+    }
     db.set_setting(
         PROBE_ERROR_MONITOR_STATUS_SETTING,
         &serde_json::to_string(&status)?,
@@ -1741,6 +1751,51 @@ mod tests {
     use rusqlite::{params, Connection};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::SystemTime;
+
+    #[test]
+    fn disabled_error_monitor_retains_timestamp_until_status_changes() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let mut status = ProbeErrorMonitorRuntimeStatus {
+            status: "disabled".into(),
+            last_scan_at: 1,
+            last_error: None,
+            rows_seen: 0,
+            new_incidents: 0,
+            incident_count: 0,
+            cursor: None,
+        };
+        store_probe_error_monitor_status(&db, status.clone()).unwrap();
+        status.last_scan_at = 2;
+        store_probe_error_monitor_status(&db, status.clone()).unwrap();
+        let saved: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+            &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.last_scan_at, 1);
+        status.incident_count = 1;
+        store_probe_error_monitor_status(&db, status.clone()).unwrap();
+        let saved: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+            &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved, status);
+        status.status = "watching".into();
+        for timestamp in [3, 4] {
+            status.last_scan_at = timestamp;
+            store_probe_error_monitor_status(&db, status.clone()).unwrap();
+            let saved: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+                &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved, status);
+        }
+    }
 
     #[tokio::test]
     async fn unsupported_probe_cli_actions_do_not_report_fake_success() {

@@ -236,7 +236,7 @@ pub struct Monitor {
 impl Monitor {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
+            client: crate::http_client_builder()
                 .user_agent("AgentHub")
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(5))
@@ -521,24 +521,24 @@ fn reconcile(
         state.baseline_ms = 0;
     }
     if active {
+        let mut previous = HashMap::with_capacity(state.snapshot.runs.len());
+        for run in &state.snapshot.runs {
+            previous.entry((run.repository_id, run.id)).or_insert(run);
+        }
+        let mut pending: HashSet<_> = state
+            .pending
+            .iter()
+            .map(|event| (event.run.repository_id, event.run.id, event.run.run_attempt))
+            .collect();
         for run in &runs {
-            let old = state
-                .snapshot
-                .runs
-                .iter()
-                .find(|old| old.id == run.id && old.repository_id == run.repository_id);
-            let newly_finished = !baseline
-                && old.map_or(run.finished_ms() > state.baseline_ms, |old| {
-                    old.run_attempt != run.run_attempt || old.status != "completed"
-                });
-            if run.notification_kind().is_some()
-                && newly_finished
-                && !state.pending.iter().any(|e| {
-                    e.run.id == run.id
-                        && e.run.run_attempt == run.run_attempt
-                        && e.run.repository_id == run.repository_id
-                })
-            {
+            if baseline || run.notification_kind().is_none() {
+                continue;
+            }
+            let newly_finished = previous.get(&(run.repository_id, run.id)).map_or_else(
+                || run.finished_ms() > state.baseline_ms,
+                |old| old.run_attempt != run.run_attempt || old.status != "completed",
+            );
+            if newly_finished && pending.insert((run.repository_id, run.id, run.run_attempt)) {
                 state.pending.push(Event {
                     observed_ms: time,
                     account: account.clone(),
@@ -548,13 +548,24 @@ fn reconcile(
         }
     }
     retain_summaries(&mut runs);
-    state.pending.retain(|e| {
-        runs.iter().any(|r| {
-            r.id == e.run.id
-                && r.repository_id == e.run.repository_id
-                && r.run_attempt == e.run.run_attempt
-                && r.conclusion == e.run.conclusion
+    let current: HashSet<_> = runs
+        .iter()
+        .map(|run| {
+            (
+                run.repository_id,
+                run.id,
+                run.run_attempt,
+                run.conclusion.as_deref(),
+            )
         })
+        .collect();
+    state.pending.retain(|e| {
+        current.contains(&(
+            e.run.repository_id,
+            e.run.id,
+            e.run.run_attempt,
+            e.run.conclusion.as_deref(),
+        ))
     });
     state.snapshot.runs = runs;
     state.snapshot.account = Some(account);

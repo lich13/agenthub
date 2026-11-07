@@ -266,9 +266,10 @@ mod tests {
             "checking signed Tauri updater feed\nno signed app update available\n",
         );
 
-        let status = updates::update_status_with_recent_check_job(
+        let status = updates::update_status_with_recent_check_job_for_surface(
             &config,
             &platform,
+            agenthub_core::services::system::HostSurface::default_for_platform(&platform),
             None,
             None,
             Some(&job),

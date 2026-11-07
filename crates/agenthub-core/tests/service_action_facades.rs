@@ -10,8 +10,8 @@ use agenthub_core::{
             rename_thread_response, thread_state_action_response, ThreadRenameRequest,
         },
         probe::{
-            plan_probe_action, plan_probe_action_with_config_path, ProbeAction, ProbeExecutionKind,
-            ProbeUseCases,
+            plan_probe_action_with_device_key, plan_probe_action_with_device_key_and_config_path,
+            ProbeAction, ProbeExecutionKind, ProbeUseCases,
         },
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
@@ -85,7 +85,8 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
     );
     assert!("unknown".parse::<ProbeAction>().is_err());
 
-    let bark = plan_probe_action(&config, &platform, ProbeAction::BarkTest).unwrap();
+    let bark = plan_probe_action_with_device_key(&config, &platform, ProbeAction::BarkTest, false)
+        .unwrap();
     assert_eq!(bark.required_capability, Capability::Probe);
     assert_eq!(bark.action, ProbeAction::BarkTest);
     assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
@@ -112,7 +113,9 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-    let default_plan = plan_probe_action(&config, &platform, ProbeAction::BarkTest).unwrap();
+    let default_plan =
+        plan_probe_action_with_device_key(&config, &platform, ProbeAction::BarkTest, false)
+            .unwrap();
     let default_command = &default_plan.job.as_ref().unwrap().command;
     assert_eq!(
         default_command,
@@ -120,10 +123,11 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
     );
 
     let custom_config = std::path::Path::new("/tmp/agenthub custom/config.toml");
-    let override_plan = plan_probe_action_with_config_path(
+    let override_plan = plan_probe_action_with_device_key_and_config_path(
         &config,
         &platform,
         ProbeAction::BarkTest,
+        false,
         custom_config,
     )
     .unwrap();
@@ -147,8 +151,9 @@ fn probe_action_capability_gate_rejects_unsupported_platforms() {
     let config = Config::for_platform_kind(PlatformKind::Windows);
     let platform = PlatformPaths::for_kind(PlatformKind::Windows);
 
-    let err = plan_probe_action(&config, &platform, ProbeAction::InstallHooks)
-        .expect_err("Windows must not expose Probe actions");
+    let err =
+        plan_probe_action_with_device_key(&config, &platform, ProbeAction::InstallHooks, false)
+            .expect_err("Windows must not expose Probe actions");
 
     assert!(err.to_string().contains("probe is unavailable on windows"));
 }
@@ -201,7 +206,9 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let probe = ProbeUseCases::new(&linux_config, &linux);
-    let bark = probe.action(ProbeAction::BarkTest).unwrap();
+    let bark = probe
+        .action_with_device_key(ProbeAction::BarkTest, false)
+        .unwrap();
     assert_eq!(bark.required_capability, Capability::Probe);
     assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
     assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
@@ -291,8 +298,6 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
         },
     )
     .unwrap();
-    assert_eq!(list.required_capability, Capability::Threads);
-    assert_eq!(list.response_limit, 25);
     assert_eq!(list.fetch_limit, 25);
     assert_eq!(list.query.q.as_deref(), Some("work"));
 

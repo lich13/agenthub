@@ -1,6 +1,6 @@
 [package]
 name = "agenthub-desktop"
-version = "2.1.5"
+version = "2.1.6"
 description = "AgentHub macOS desktop console"
 authors = ["AgentHub contributors"]
 license = "MIT"
@@ -44,7 +44,17 @@ keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
 block2 = "=0.6.2"
-objc2-user-notifications = { version = "=0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger"] }
+objc2-user-notifications = { version = "=0.3.2", default-features = false, features = [
+  "std",
+  "block2",
+  "UNUserNotificationCenter",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSString"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep"] }
 

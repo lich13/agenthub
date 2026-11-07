@@ -113,7 +113,7 @@ export function useUnifiedCleanupActions(input: {
       mutationFn: (request?: UnifiedCleanupDryRunRequest) => {
         requireThreadCleanup();
         return dryRunUnifiedCleanup(
-          request ?? { includeCodexHidden: capabilities.hiddenCleanupScan !== true }
+          request ?? {}
         );
       },
       onSuccess: input.onUnifiedDryRun

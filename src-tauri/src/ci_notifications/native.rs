@@ -9,7 +9,6 @@ use objc2::{
 use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::*;
 use std::cell::RefCell;
-use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 define_class!(
@@ -68,7 +67,29 @@ pub(super) fn install(app: tauri::AppHandle) {
     DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
 }
 
-pub(super) fn send(app: &tauri::AppHandle, revision: u64, machine: &str, event: &Event) {
+pub(super) async fn request_authorization(app: &tauri::AppHandle) {
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    if app
+        .run_on_main_thread(move || {
+            let completed = RcBlock::new(move |_granted: Bool, error: *mut NSError| {
+                if !error.is_null() {
+                    eprintln!("CI system notification authorization failed");
+                }
+                let _ = sent.try_send(());
+            });
+            UNUserNotificationCenter::currentNotificationCenter()
+                .requestAuthorizationWithOptions_completionHandler(
+                    UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+                    &completed,
+                );
+        })
+        .is_ok()
+    {
+        received.recv().await;
+    }
+}
+
+pub(super) fn send(revision: u64, machine: &str, event: &Event) {
     let (title, body) = event.run.notification_text(machine);
     let identifier = format!(
         "{}#agenthub-ci:{}:{}",
@@ -76,43 +97,20 @@ pub(super) fn send(app: &tauri::AppHandle, revision: u64, machine: &str, event: 
         revision,
         event.key()
     );
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if !handle
-            .state::<crate::remote::RemoteConnections>()
-            .is_current(revision)
-        {
-            return;
+    let content = UNMutableNotificationContent::new();
+    content.setTitle(&NSString::from_str(&title));
+    content.setBody(&NSString::from_str(&body));
+    content.setSound(Some(&UNNotificationSound::defaultSound()));
+    let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+        &NSString::from_str(&identifier),
+        &content,
+        None,
+    );
+    let delivered = RcBlock::new(|error: *mut NSError| {
+        if !error.is_null() {
+            eprintln!("CI system notification delivery failed");
         }
-        let authorized = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
-            if !granted.as_bool()
-                || !handle
-                    .state::<crate::remote::RemoteConnections>()
-                    .is_current(revision)
-            {
-                return;
-            }
-            let content = UNMutableNotificationContent::new();
-            content.setTitle(&NSString::from_str(&title));
-            content.setBody(&NSString::from_str(&body));
-            content.setSound(Some(&UNNotificationSound::defaultSound()));
-            let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
-                &NSString::from_str(&identifier),
-                &content,
-                None,
-            );
-            let delivered = RcBlock::new(|error: *mut NSError| {
-                if !error.is_null() {
-                    eprintln!("CI system notification delivery failed");
-                }
-            });
-            UNUserNotificationCenter::currentNotificationCenter()
-                .addNotificationRequest_withCompletionHandler(&request, Some(&delivered));
-        });
-        UNUserNotificationCenter::currentNotificationCenter()
-            .requestAuthorizationWithOptions_completionHandler(
-                UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-                &authorized,
-            );
     });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .addNotificationRequest_withCompletionHandler(&request, Some(&delivered));
 }

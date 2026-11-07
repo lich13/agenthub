@@ -65,7 +65,14 @@ impl DesktopState {
     }
 
     pub fn replace_config(&self, config: Config) {
+        let release_monitor = config.probe.monitor_enabled();
         *self.config.write().expect("desktop config rwlock") = config;
+        if release_monitor {
+            // An in-flight query releases its monitor when it finishes.
+            if let Ok(mut monitor) = self.github_ci.try_lock() {
+                *monitor = None;
+            }
+        }
     }
 
     pub fn resolved_codex_paths(&self) -> agenthub_core::codex::ResolvedCodexPaths {
@@ -164,10 +171,11 @@ mod tests {
     fn fixed_probe_command_uses_platform_daemon_path() {
         let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
         let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
-        let plan = agenthub_core::services::probe::plan_probe_action(
+        let plan = agenthub_core::services::probe::plan_probe_action_with_device_key(
             &config,
             &platform,
             agenthub_core::services::probe::ProbeAction::BarkTest,
+            false,
         )
         .unwrap();
         let command = plan.job.unwrap().command;

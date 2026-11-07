@@ -390,7 +390,11 @@ export function demoOk(): { ok: boolean } {
   return { ok: true };
 }
 
-export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
+export function demoHiddenThreadDeletePlan(request: import("../../types").HiddenScanRequest): HiddenThreadDeletePlan {
+  const ids = ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"];
+  const cursor = request.mode === "start" ? 0 : request.cursor ?? 0;
+  const page = request.mode === "cancel" ? [] : ids.slice(cursor, cursor + (request.limit ?? 100));
+  const nextCursor = cursor + page.length;
   return {
     total_threads: 42,
     visible_threads: 38,
@@ -398,8 +402,18 @@ export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
     archived_threads: 0,
     session_index_lines: 42,
     rollout_files: 42,
-    hidden_ids: ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"],
-    candidates: ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"].map(id => ({ id, title: id, fingerprint: "fixture-fingerprint", allowed: true, reason: null })),
+    hidden_ids: page,
+    candidates: page.map(id => ({ id, title: id, fingerprint: "fixture-fingerprint", allowed: true, reason: null })),
+    scan: {
+      id: "demo-hidden-scan",
+      phase: request.mode === "cancel" ? "stopped" : "complete",
+      processed: ids.length,
+      total: ids.length,
+      cursor,
+      nextCursor,
+      hasMore: nextCursor < ids.length,
+      error: null
+    },
     hidden_source_counts: { exec: 1, subagent: 3 },
     integrity: "ok"
   };
@@ -409,7 +423,6 @@ export function demoUnifiedCleanupPlan(
   fixture: DemoFixtureKey = "macos-tauri",
   request?: UnifiedCleanupDryRunRequest
 ): UnifiedCleanupPlan {
-  const scanHidden = request?.includeCodexHidden !== false || Boolean(request?.scopes?.includes("codex_hidden"));
   const macos = fixture === "macos-tauri";
   const allScopes = [
     {
@@ -433,20 +446,12 @@ export function demoUnifiedCleanupPlan(
       provider: "codex",
       label: "Codex 隐藏线程",
       supported: true,
-      scanned: scanHidden,
+      scanned: false,
       unavailableReason: null,
-      candidateCount: scanHidden ? 4 : 0,
-      deletableCount: scanHidden ? 4 : 0,
-      estimatedBytes: scanHidden ? 16384 : 0,
-      candidates: scanHidden
-        ? ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"].map((id) => ({
-            id,
-            title: id,
-            estimatedBytes: 4096,
-            fingerprint: `fp-${id}`,
-            blockedReason: null
-          }))
-        : [],
+      candidateCount: 0,
+      deletableCount: 0,
+      estimatedBytes: 0,
+      candidates: [],
       issues: []
     },
     {
@@ -516,7 +521,10 @@ export function demoUnifiedCleanupPlan(
 }
 
 export function demoUnifiedCleanupResult(request?: UnifiedCleanupExecuteRequest): UnifiedCleanupResult {
-  const plan = demoUnifiedCleanupPlan("macos-tauri", { includeCodexHidden: true });
+  const plan = demoUnifiedCleanupPlan("macos-tauri");
+  const hidden = plan.scopes.find(item => item.scope === "codex_hidden")!;
+  hidden.deletableCount = request?.targets?.filter(target => target.scope === "codex_hidden").length ?? 0;
+  hidden.estimatedBytes = hidden.deletableCount * 4096;
   const selected = request?.scopes?.length
     ? plan.scopes.filter((item) => request.scopes!.includes(item.scope))
     : plan.scopes.filter((item) => item.deletableCount > 0);

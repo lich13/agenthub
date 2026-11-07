@@ -12,7 +12,7 @@ import { normalizeOptionalResult, USE_DEMO } from "./shared";
 
 export async function dryRunHiddenThreadDelete(request: import("../../types").HiddenScanRequest): Promise<HiddenThreadDeletePlan> {
   if (USE_DEMO) {
-    return (await import("./demo")).demoHiddenThreadDeletePlan();
+    return (await import("./demo")).demoHiddenThreadDeletePlan(request);
   }
   return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", { request });
 }
@@ -35,7 +35,7 @@ export async function getJob(id: string, includeOutput = true): Promise<JobRecor
 
 export async function dryRunUnifiedCleanup(request: UnifiedCleanupDryRunRequest): Promise<UnifiedCleanupPlan> {
   if (USE_DEMO) return (await import("./demo")).demoUnifiedCleanupPlan(undefined, request);
-  return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun", request ? { request } : {});
+  return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun", { request });
 }
 
 export async function startUnifiedCleanup(request: UnifiedCleanupExecuteRequest): Promise<UnifiedCleanupResult> {

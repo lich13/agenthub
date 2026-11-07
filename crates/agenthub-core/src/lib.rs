@@ -31,6 +31,12 @@ pub mod update;
 
 pub use config::Config;
 
+/// Share the updater's ring provider across core and daemon HTTP clients.
+pub fn http_client_builder() -> reqwest::ClientBuilder {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::builder()
+}
+
 pub mod native_probe;
 pub mod provider_sessions;
 

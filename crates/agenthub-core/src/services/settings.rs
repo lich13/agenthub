@@ -412,6 +412,20 @@ pub fn plan_probe_settings_save(
     })
 }
 
+pub fn apply_probe_settings_save_plan(
+    config_path: &std::path::Path,
+    db: &crate::db::PanelDb,
+    before: &Config,
+    plan: ProbeSettingsSavePlan,
+) -> Result<Config> {
+    let config = Config::save_probe_patch(config_path, &plan.config_patch)?;
+    for write in plan.secret_writes {
+        db.set_secret_setting_bytes(&write.setting_key, write.secret_value.as_bytes())?;
+    }
+    crate::github_ci::settings_changed(db, before, &config)?;
+    Ok(config)
+}
+
 pub fn normalize_probe_settings_save_request(
     request: ProbeSettingsSaveRequest,
 ) -> Result<NormalizedProbeSettingsPatch> {

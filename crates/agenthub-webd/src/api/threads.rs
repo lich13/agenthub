@@ -59,7 +59,7 @@ pub(crate) async fn thread_detail(
         })
         .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     match agenthub_core::read_tasks::spawn_blocking(move || {
-        linux_adapter::window_thread_detail_read_model(&state, &plan.detail)
+        linux_adapter::window_thread_detail_read_model(&state, &plan)
     })
     .await
     .map_err(anyhow::Error::from)?

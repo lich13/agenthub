@@ -2,7 +2,7 @@ use crate::{audit::AuditActor, state::AppState};
 use agenthub_core::services::jobs::thread_state_action_response as core_thread_state_action_response;
 use agenthub_core::{
     codex::{self, ThreadDetail, ThreadSummary},
-    config::{patch_probe_config_toml, Config},
+    config::Config,
     db::JobRecord,
     platform::PlatformPaths,
     services::{
@@ -14,7 +14,7 @@ use agenthub_core::{
 };
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::path::Path;
 
 pub fn apply_probe_settings_save_plan(
     state: &AppState,
@@ -22,18 +22,12 @@ pub fn apply_probe_settings_save_plan(
     config_path: &Path,
     plan: settings_service::ProbeSettingsSavePlan,
 ) -> Result<Config> {
-    let text = fs::read_to_string(config_path)?;
-    let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
-    agenthub_core::config::write_config_atomic(config_path, &updated)?;
-    let response_config = Config::load(config_path)?;
-
-    for write in &plan.secret_writes {
-        state
-            .db
-            .set_secret_setting_bytes(&write.setting_key, write.secret_value.as_bytes())?;
-    }
-
-    agenthub_core::github_ci::settings_changed(&state.db, &state.config(), &response_config)?;
+    let response_config = settings_service::apply_probe_settings_save_plan(
+        config_path,
+        &state.db,
+        &state.config(),
+        plan,
+    )?;
     state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -84,7 +78,7 @@ pub fn list_threads_read_model(
     let paths = state.codex_paths();
     let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
-    let view = thread_service::thread_list_read_model(&platform, inputs, plan.list.query)?;
+    let view = thread_service::thread_list_read_model(&platform, inputs, plan.query)?;
     Ok(view.threads)
 }
 
@@ -117,7 +111,7 @@ pub fn load_thread_detail_read_model(
             detail,
             active_job,
         )?;
-        let mut detail = view.detail;
+        let mut detail = view;
         codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
         return Ok(Some(detail));
     }

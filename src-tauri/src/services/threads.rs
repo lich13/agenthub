@@ -29,7 +29,7 @@ pub(crate) fn thread_summaries_with_query(
     let plan = use_cases.list_read(query)?;
     let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
-    let view = thread_service::thread_list_read_model(state.platform(), inputs, plan.list.query)?;
+    let view = thread_service::thread_list_read_model(state.platform(), inputs, plan.query)?;
     Ok(view.threads)
 }
 
@@ -59,12 +59,11 @@ pub(crate) fn thread_detail_with_state(
             full: request.full,
             before: request.before,
         })?;
-    let Some(detail) = load_thread_detail_read_model(state, &plan.detail)? else {
+    let Some(detail) = load_thread_detail_read_model(state, &plan)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::window_thread_detail_for_plan(
-        detail,
-        &plan.detail,
+        detail, &plan,
     )))
 }
 
@@ -75,12 +74,11 @@ pub(crate) fn thread_blocks_with_state(
     let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .blocks_read(&request.id, request.limit, request.before)?;
-    let Some(detail) = load_thread_detail_read_model(state, &plan.detail)? else {
+    let Some(detail) = load_thread_detail_read_model(state, &plan)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::thread_blocks_page_for_plan(
-        detail,
-        &plan.detail,
+        detail, &plan,
     )))
 }
 
@@ -138,7 +136,7 @@ fn load_thread_detail_read_model(
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
     let view = thread_service::thread_detail_read_model(state.platform(), detail, active_job)?;
-    let mut detail = view.detail;
+    let mut detail = view;
     agenthub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
     Ok(Some(detail))
 }

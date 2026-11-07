@@ -454,7 +454,11 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
 
     let precheck = update_service::linux_update_job_spec(
         &config,
-        update_service::update_action_plan(&platform, UpdateAction::Check),
+        update_service::update_job_plan_for_surface(
+            &platform,
+            agenthub_core::services::system::HostSurface::LinuxServerApi,
+            UpdateAction::Check,
+        ),
     )
     .unwrap();
     assert_eq!(precheck.kind, "agenthub_update_check");
@@ -469,7 +473,11 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
 
     let install = update_service::linux_update_job_spec(
         &config,
-        update_service::update_action_plan(&platform, UpdateAction::Install),
+        update_service::update_job_plan_for_surface(
+            &platform,
+            agenthub_core::services::system::HostSurface::LinuxServerApi,
+            UpdateAction::Install,
+        ),
     )
     .unwrap();
     assert_eq!(install.kind, "agenthub_update_install");
@@ -487,7 +495,11 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
 
     let prune = update_service::linux_update_job_spec(
         &config,
-        update_service::update_action_plan(&platform, UpdateAction::Prune),
+        update_service::update_job_plan_for_surface(
+            &platform,
+            agenthub_core::services::system::HostSurface::LinuxServerApi,
+            UpdateAction::Prune,
+        ),
     )
     .unwrap();
     assert_eq!(prune.kind, "agenthub_update_prune");

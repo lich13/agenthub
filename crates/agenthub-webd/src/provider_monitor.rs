@@ -41,7 +41,9 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
             provider,
             &scan,
             config,
-            super::claude_hook::installed(),
+            provider == NativeProvider::Claude
+                && provider.enabled(config)
+                && super::claude_hook::installed(),
         )?;
         snapshots.extend(scan.streams);
     }
