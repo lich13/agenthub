@@ -22,12 +22,6 @@ pub struct ThreadsQuery {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadsOverview {
-    pub threads: Vec<ThreadSummary>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListPlan {
@@ -47,10 +41,8 @@ pub struct ThreadDetailRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailPlan {
-    pub required_capability: Capability,
     pub thread_id: String,
     pub block_limit: Option<usize>,
-    pub full: bool,
     pub before: Option<String>,
 }
 
@@ -87,7 +79,7 @@ pub fn build_threads_overview(
     query: ThreadsQuery,
     hidden_thread_ids: &HashSet<String>,
     archived_thread_ids: &HashSet<String>,
-) -> ThreadsOverview {
+) -> Vec<ThreadSummary> {
     let response_limit = requested_thread_limit(query.limit);
     let threads = apply_thread_list_runtime_state(
         threads,
@@ -104,23 +96,20 @@ pub fn build_threads_overview(
         response_limit,
     );
 
-    ThreadsOverview { threads }
+    threads
 }
 
 pub fn thread_list_read_model(
-    platform: &PlatformPaths,
     inputs: ThreadReadModelInputs,
     query: ThreadsQuery,
-) -> anyhow::Result<ThreadsOverview> {
-    require_capability(platform, Capability::Threads)?;
-    let overview = build_threads_overview(
+) -> Vec<ThreadSummary> {
+    build_threads_overview(
         inputs.threads,
         inputs.running_jobs,
         query,
         &inputs.hidden_thread_ids,
         &inputs.archived_thread_ids,
-    );
-    Ok(overview)
+    )
 }
 
 fn visibility_ids_for_running_jobs(
@@ -176,13 +165,10 @@ pub fn load_threads_with_runtime_state(
 }
 
 pub fn thread_detail_read_model(
-    platform: &PlatformPaths,
     detail: ThreadDetail,
     active_job: Option<JobRecord>,
-) -> anyhow::Result<ThreadDetail> {
-    require_capability(platform, Capability::Threads)?;
-    let detail = apply_thread_detail_runtime_state(detail, active_job.as_ref());
-    Ok(detail)
+) -> ThreadDetail {
+    apply_thread_detail_runtime_state(detail, active_job.as_ref())
 }
 
 pub fn plan_threads_list_request(
@@ -208,10 +194,8 @@ pub fn plan_thread_detail_request(
     let thread_id = required_thread_id(&request.id)?;
     let full = request.full.unwrap_or(false);
     Ok(ThreadDetailPlan {
-        required_capability: Capability::Threads,
         thread_id,
         block_limit: detail_block_limit(request.limit, Some(full)),
-        full,
         before: request.before,
     })
 }
@@ -502,25 +486,20 @@ mod tests {
 
         assert_eq!(
             overview
-                .threads
                 .iter()
                 .map(|thread| thread.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["visible", "new-running"]
         );
         let visible = overview
-            .threads
             .iter()
             .find(|thread| thread.id == "visible")
             .expect("visible running thread");
         assert_eq!(visible.status, ThreadStatus::Running);
         assert_eq!(visible.active_job_id.as_deref(), Some("job-visible"));
         assert_eq!(visible.active_turn_id.as_deref(), Some("turn-visible"));
-        assert!(!overview.threads.iter().any(|thread| thread.id == "hidden"));
-        assert!(!overview
-            .threads
-            .iter()
-            .any(|thread| thread.id == "archived"));
+        assert!(!overview.iter().any(|thread| thread.id == "hidden"));
+        assert!(!overview.iter().any(|thread| thread.id == "archived"));
 
         let archived_overview = build_threads_overview(
             threads,
@@ -535,7 +514,6 @@ mod tests {
         );
         assert_eq!(
             archived_overview
-                .threads
                 .iter()
                 .map(|thread| thread.id.as_str())
                 .collect::<Vec<_>>(),

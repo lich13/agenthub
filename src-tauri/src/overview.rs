@@ -28,7 +28,6 @@ pub struct DesktopState {
     config: Arc<RwLock<Config>>,
     pub db: PanelDb,
     pub jobs: JobRunner,
-    pub(crate) github_ci: Arc<tokio::sync::Mutex<Option<agenthub_core::github_ci::Monitor>>>,
     platform: PlatformPaths,
     host_surface: HostSurface,
 }
@@ -54,7 +53,6 @@ impl DesktopState {
             config: Arc::new(RwLock::new(config)),
             db,
             jobs,
-            github_ci: Arc::new(tokio::sync::Mutex::new(None)),
             platform,
             host_surface: HostSurface::DesktopEmbeddedTauri,
         }
@@ -65,14 +63,7 @@ impl DesktopState {
     }
 
     pub fn replace_config(&self, config: Config) {
-        let release_monitor = config.probe.monitor_enabled();
         *self.config.write().expect("desktop config rwlock") = config;
-        if release_monitor {
-            // An in-flight query releases its monitor when it finishes.
-            if let Ok(mut monitor) = self.github_ci.try_lock() {
-                *monitor = None;
-            }
-        }
     }
 
     pub fn resolved_codex_paths(&self) -> agenthub_core::codex::ResolvedCodexPaths {
@@ -170,15 +161,13 @@ mod tests {
     #[test]
     fn fixed_probe_command_uses_platform_daemon_path() {
         let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
-        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
-        let plan = agenthub_core::services::probe::plan_probe_action_with_device_key(
-            &config,
+        let plan = agenthub_core::services::probe::plan_probe_action(
             &platform,
             agenthub_core::services::probe::ProbeAction::BarkTest,
-            false,
+            &platform.config_file,
         )
         .unwrap();
-        let command = plan.job.unwrap().command;
+        let command = plan.job.command;
 
         assert!(
             command.contains(

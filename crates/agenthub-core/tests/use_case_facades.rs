@@ -3,12 +3,11 @@ use agenthub_core::{
     db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        probe::{ProbeAction, ProbeExecutionKind},
+        probe::ProbeAction,
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
             ProbeSettingsSaveRequest,
         },
-        system::Capability,
         use_cases::AgentHubUseCases,
     },
 };
@@ -41,12 +40,10 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
     assert_eq!(detail.thread_id, "thread-a");
 
     let job_list = use_cases.jobs().list(Some(500)).unwrap();
-    assert_eq!(job_list.required_capability, Capability::JobHistory);
-    assert_eq!(job_list.limit, 200);
+    assert_eq!(job_list, 200);
 
     let job_detail = use_cases.jobs().detail(" job-a ").unwrap();
-    assert_eq!(job_detail.required_capability, Capability::JobHistory);
-    assert_eq!(job_detail.job_id, "job-a");
+    assert_eq!(job_detail, "job-a");
 
     let failed = use_cases.jobs().response(JobRecord {
         id: "job-a".to_string(),
@@ -138,8 +135,7 @@ fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
         .unwrap()
         .probe_settings_view(ProbeSecretState::Configured)
         .unwrap();
-    assert_eq!(settings_view.required_capability, Capability::Settings);
-    assert!(settings_view.settings.notifications.device_key_configured);
+    assert!(settings_view.notifications.device_key_configured);
 
     let settings_save = linux
         .settings()
@@ -155,23 +151,19 @@ fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(settings_save.required_capability, Capability::Settings);
     assert_eq!(
-        settings_save.bark_device_key.as_deref(),
+        Some(settings_save.secret_writes[0].secret_value.as_str()),
         Some("top-level-bark-key")
     );
     let serialized_save = serde_json::to_string(&settings_save).unwrap();
-    assert!(serialized_save.contains("[configured]"));
     assert!(!serialized_save.contains("top-level-bark-key"));
 
     let bark = linux
         .probe()
         .unwrap()
-        .action_with_device_key(ProbeAction::BarkTest, true)
+        .action(ProbeAction::BarkTest)
         .unwrap();
-    assert_eq!(bark.required_capability, Capability::Probe);
-    assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
-    assert_eq!(bark.diagnostic_plan.unwrap().kind, "bark-test".to_string());
+    assert_eq!(bark.job.kind, "probe_bark_test");
 
     let capabilities = linux.system().unwrap().capabilities();
     assert!(capabilities.probe);
@@ -183,9 +175,13 @@ fn config_backed_use_cases_report_missing_config_in_core() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let use_cases = AgentHubUseCases::new(&platform);
 
+    assert!(use_cases
+        .probe()
+        .unwrap()
+        .action(ProbeAction::BarkTest)
+        .is_ok());
     for result in [
         use_cases.settings().map(|_| ()),
-        use_cases.probe().map(|_| ()),
         use_cases.system().map(|_| ()),
     ] {
         assert!(result

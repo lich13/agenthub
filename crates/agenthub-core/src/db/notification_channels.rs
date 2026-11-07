@@ -404,19 +404,4 @@ impl PanelDb {
             )
             .map_err(Into::into)
     }
-
-    pub fn notification_channel_status(&self) -> Result<Value> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut result = serde_json::Map::new();
-        for channel in NotificationChannel::ALL {
-            let mut stmt=conn.prepare("SELECT status,count(*) FROM probe_notification_deliveries WHERE channel=?1 GROUP BY status")?;
-            let counts = stmt
-                .query_map([channel.as_str()], |r| {
-                    Ok((r.get::<_, String>(0)?, json!(r.get::<_, u64>(1)?)))
-                })?
-                .collect::<rusqlite::Result<serde_json::Map<String, Value>>>()?;
-            result.insert(channel.as_str().into(), Value::Object(counts));
-        }
-        Ok(Value::Object(result))
-    }
 }

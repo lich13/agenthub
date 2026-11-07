@@ -123,32 +123,45 @@ pub struct GrokHistoryEvent {
     pub detail: Option<String>,
 }
 
-pub fn list_grok_sessions(
+type SessionDirectories = std::collections::BTreeMap<String, Vec<PathBuf>>;
+
+fn session_directories(root: &Path) -> Result<SessionDirectories> {
+    let mut by_id = SessionDirectories::new();
+    if !root.is_dir() {
+        return Ok(by_id);
+    }
+    for workspace in fs::read_dir(root)? {
+        let workspace = workspace?;
+        if !workspace.file_type()?.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(workspace.path())? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(id) = entry.file_name().to_str() {
+                    by_id.entry(id.to_owned()).or_default().push(entry.path());
+                }
+            }
+        }
+    }
+    Ok(by_id)
+}
+
+fn list_grok_sessions_from_dirs(
     paths: &GrokPaths,
+    by_id: &SessionDirectories,
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<GrokSessionSummary>> {
-    let root = paths.sessions();
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
     let needle = query
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_ascii_lowercase);
     let mut result = Vec::new();
-    for workspace in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
-        let workspace = workspace?;
-        if !workspace.file_type()?.is_dir() {
-            continue;
-        }
-        for session in fs::read_dir(workspace.path())? {
-            let session = session?;
-            if !session.file_type()?.is_dir() {
-                continue;
-            }
-            if let Ok(Some(summary)) = read_summary(&session.path())
-                .or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary(&session.path()))))
+    for dirs in by_id.values() {
+        for dir in dirs {
+            if let Ok(Some(summary)) =
+                read_summary(dir).or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary(dir))))
             {
                 if needle.as_ref().is_some_and(|needle| {
                     !summary.title.to_ascii_lowercase().contains(needle)
@@ -170,6 +183,19 @@ pub fn list_grok_sessions(
     let active = activity::Snapshot::capture_readonly(paths);
     for summary in &mut result {
         active.update_summary(summary);
+    }
+    Ok(result)
+}
+
+pub fn list_grok_sessions(
+    paths: &GrokPaths,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<Vec<GrokSessionSummary>> {
+    let root = paths.sessions();
+    let mut items =
+        list_grok_sessions_from_dirs(paths, &session_directories(&root)?, limit, query)?;
+    for summary in &mut items {
         summary.storage_size = Some(crate::session_storage::directory_size(
             &root,
             &summary.path,
@@ -177,7 +203,25 @@ pub fn list_grok_sessions(
             &summary.id,
         ));
     }
-    Ok(result)
+    Ok(items)
+}
+
+pub(crate) fn probe_sessions(
+    paths: &GrokPaths,
+    limit: usize,
+    candidate: impl Fn(&GrokSessionSummary) -> bool,
+) -> Result<(Vec<GrokSessionSummary>, crate::native_probe::NativeScan)> {
+    let root = paths.sessions().canonicalize()?;
+    let mut by_id = session_directories(&root)?;
+    let items = list_grok_sessions_from_dirs(paths, &by_id, limit, None)?;
+    let selected: std::collections::BTreeSet<_> = items
+        .iter()
+        .filter(|s| candidate(s))
+        .map(|s| s.id.as_str())
+        .collect();
+    by_id.retain(|id, _| selected.contains(id.as_str()));
+    let scan = notification_snapshots_from_dirs(&root, by_id, None)?;
+    Ok((items, scan))
 }
 
 type GrokProbeStamp = (
@@ -217,39 +261,45 @@ fn grok_probe_cache_stamp(
     Ok((identity, stamp))
 }
 
-static GROK_PROBE_CACHE: std::sync::Mutex<std::collections::VecDeque<GrokProbeCacheEntry>> =
-    std::sync::Mutex::new(std::collections::VecDeque::new());
+struct GrokProbeCache {
+    entries: std::collections::VecDeque<GrokProbeCacheEntry>,
+    bytes: u64,
+}
+static GROK_PROBE_CACHE: std::sync::Mutex<GrokProbeCache> = std::sync::Mutex::new(GrokProbeCache {
+    entries: std::collections::VecDeque::new(),
+    bytes: 0,
+});
 
 #[cfg(test)]
 thread_local! { static PROBE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_probe::NativeScan> {
+    if !paths.sessions().exists() {
+        return Ok(crate::native_probe::NativeScan::default());
+    }
+    let root = paths.sessions().canonicalize()?;
+    notification_snapshots_from_dirs(&root, session_directories(&root)?, None)
+}
+
+pub(crate) fn notification_for_event(
+    paths: &GrokPaths,
+    id: &str,
+    event: &crate::native_probe::NativeTurnEvent,
+) -> Result<crate::native_probe::NativeScan> {
+    let root = paths.sessions().canonicalize()?;
+    let by_id = SessionDirectories::from([(id.to_owned(), locate_sessions(paths, id)?)]);
+    notification_snapshots_from_dirs(&root, by_id, Some(event.position))
+}
+
+fn notification_snapshots_from_dirs(
+    root: &Path,
+    by_id: SessionDirectories,
+    current_position: Option<u64>,
+) -> Result<crate::native_probe::NativeScan> {
     use crate::native_probe::{
         grok_events, read_jsonl, NativeProvider, NativeScan, NativeStreamSnapshot,
     };
     let mut scan = NativeScan::default();
-    if !paths.sessions().exists() {
-        return Ok(scan);
-    }
-    let root = paths.sessions().canonicalize()?;
-    let mut by_id: std::collections::BTreeMap<String, Vec<PathBuf>> =
-        std::collections::BTreeMap::new();
-    for workspace in fs::read_dir(&root)? {
-        let workspace = workspace?;
-        if !workspace.file_type()?.is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(workspace.path())? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            by_id.entry(id).or_default().push(entry.path());
-        }
-    }
     for (id, dirs) in by_id {
         let read = (|| -> Result<NativeStreamSnapshot> {
             uuid::Uuid::parse_str(&id).context("invalid Grok session ID")?;
@@ -261,7 +311,7 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
             );
             let canonical_dir = raw_dir.canonicalize()?;
             ensure!(
-                canonical_dir.parent().and_then(Path::parent) == Some(root.as_path()),
+                canonical_dir.parent().and_then(Path::parent) == Some(root),
                 "Grok session escaped sessions root"
             );
             let summary = read_summary_metadata(&canonical_dir)?
@@ -269,25 +319,38 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
             let event_path = canonical_dir.join("events.jsonl");
             let updates_path = canonical_dir.join("updates.jsonl");
             let (identity, stamp) = grok_probe_cache_stamp(&event_path, &updates_path)?;
+            let current_events = if let Some(position) = current_position {
+                let events = read_jsonl(&event_path)?;
+                ensure!(
+                    event_position_current(&events, position),
+                    "Grok turn changed"
+                );
+                Some(events)
+            } else {
+                None
+            };
             let title =
                 crate::native_probe::notification_title(&summary.title, &summary.id, &summary.cwd);
             if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
-                if let Some(pos) = cache.iter().position(|e| {
+                if let Some(pos) = cache.entries.iter().position(|e| {
                     e.session_dir == canonical_dir
                         && e.identity == identity
                         && e.stamp == stamp
                         && e.title == title
                 }) {
-                    let mut hit = cache.remove(pos).expect("grok probe cache entry");
+                    let mut hit = cache.entries.remove(pos).expect("grok probe cache entry");
                     hit.last_accessed = std::time::Instant::now();
                     let out = hit.snapshot.clone();
-                    cache.push_back(hit);
+                    cache.entries.push_back(hit);
                     return Ok(out);
                 }
             }
             #[cfg(test)]
             PROBE_READS.with(|c| c.set(c.get() + 1));
-            let events = read_jsonl(&event_path)?;
+            let events = match current_events {
+                Some(events) => events,
+                None => read_jsonl(&event_path)?,
+            };
             let updates = read_jsonl(&updates_path)?;
             let (turns, settled_count) = grok_events(&id, &events, &updates);
             let snapshot = NativeStreamSnapshot {
@@ -313,16 +376,26 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
                             .sum::<usize>()) as u64;
                 if bytes <= crate::resource_limits::NATIVE_PROBE_CACHE_BYTES {
                     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
-                        cache.retain(|e| e.session_dir != canonical_dir);
-                        while cache.len() >= crate::resource_limits::CLAUDE_SUMMARY_ENTRIES
-                            || cache.iter().map(|e| e.bytes).sum::<u64>() + bytes
+                        if let Some(pos) = cache
+                            .entries
+                            .iter()
+                            .position(|e| e.session_dir == canonical_dir)
+                        {
+                            let old = cache.entries.remove(pos).expect("located cache entry");
+                            cache.bytes -= old.bytes;
+                        }
+                        while cache.entries.len() >= crate::resource_limits::CLAUDE_SUMMARY_ENTRIES
+                            || cache.bytes + bytes
                                 > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES
                         {
-                            if cache.pop_front().is_none() {
+                            if let Some(old) = cache.entries.pop_front() {
+                                cache.bytes -= old.bytes;
+                            } else {
                                 break;
                             }
                         }
-                        cache.push_back(GrokProbeCacheEntry {
+                        cache.bytes += bytes;
+                        cache.entries.push_back(GrokProbeCacheEntry {
                             session_dir: canonical_dir,
                             identity,
                             stamp,
@@ -344,24 +417,11 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
     Ok(scan)
 }
 
-/// Retry validation only; historic terminal events still feed the initial scan unchanged.
-pub(crate) fn notification_event_current(id: &str, position: u64) -> bool {
-    let paths = GrokPaths::default_for_user();
-    let Ok(summary) =
-        resolve_session_with_activity(&paths, id, &activity::Snapshot::capture(&paths))
-    else {
-        return false;
-    };
-    let path = summary.path.join("events.jsonl");
-    let Ok(events) = crate::native_probe::read_jsonl(&path) else {
-        return false;
-    };
-    if position as usize > events.len() {
-        return false;
-    }
-    !events[position as usize..]
-        .iter()
-        .any(|r| matches!(r["type"].as_str(), Some("turn_started" | "turn_ended")))
+fn event_position_current(events: &[Value], position: u64) -> bool {
+    position as usize <= events.len()
+        && !events[position as usize..]
+            .iter()
+            .any(|r| matches!(r["type"].as_str(), Some("turn_started" | "turn_ended")))
 }
 
 pub(crate) fn grok_session_summary(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
@@ -464,7 +524,15 @@ pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     activity::evict_idle_cache(max_idle);
     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
         let now = std::time::Instant::now();
-        cache.retain(|e| now.saturating_duration_since(e.last_accessed) < max_idle);
+        let mut removed = 0;
+        cache.entries.retain(|entry| {
+            let keep = now.saturating_duration_since(entry.last_accessed) < max_idle;
+            if !keep {
+                removed += entry.bytes;
+            }
+            keep
+        });
+        cache.bytes -= removed;
     }
 }
 

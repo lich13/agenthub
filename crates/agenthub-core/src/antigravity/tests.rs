@@ -25,7 +25,16 @@ fn main_completion_uses_explicit_execution_terminal_and_visible_response() {
     r["status"] = json!("CASCADE_RUN_STATUS_IDLE");
 
     // Active child subtrajectory suppresses premature completion
-    let sub_busy = snapshot_with_subagents(ID, &s, &r, true).unwrap();
+    let sub_busy = snapshot_with_context(
+        ID,
+        &s,
+        &r,
+        &TrajectoryLivenessContext {
+            has_active_subagents: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(sub_busy.events.is_empty());
     assert_eq!(sub_busy.settled_count, 0);
 

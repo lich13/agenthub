@@ -438,6 +438,18 @@ pub fn list_claude_sessions(
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<ClaudeSessionSummary>> {
+    let mut items = list_claude_sessions_without_storage(paths, limit, query)?;
+    for item in &mut items {
+        attach_storage_size(paths, item);
+    }
+    Ok(items)
+}
+
+pub(crate) fn list_claude_sessions_without_storage(
+    paths: &ClaudePaths,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<Vec<ClaudeSessionSummary>> {
     let snapshot = activity::Snapshot::capture_readonly(paths);
     let needle = query.unwrap_or("").trim().to_lowercase();
     let files = files(paths)?;
@@ -462,9 +474,6 @@ pub fn list_claude_sessions(
         )),)
     });
     result.truncate(limit.clamp(1, 200));
-    for summary in &mut result {
-        attach_storage_size(paths, summary);
-    }
     Ok(result)
 }
 

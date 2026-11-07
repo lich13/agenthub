@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   applyThreadTitleOverrideToDetail,
   applyThreadTitleOverrides,
@@ -15,8 +15,7 @@ import {
   useThreadDetailHydration,
   useThreadDetailQuery,
   useThreadMessageStoreController,
-  useThreadsQuery,
-  type ThreadMessageStoreController
+  useThreadsQuery
 } from "../lib/query/threads";
 
 export function useConversationController(input: {
@@ -117,37 +116,6 @@ export function useConversationController(input: {
     detailLoading: detail.isLoading,
     nextThreadAfterRemoval,
     selectThread
-  };
-}
-
-export function useConversationRealtimeController(input: {
-  threadId: string;
-  messageStore: ThreadMessageStoreController;
-  messageStreamRef: RefObject<HTMLDivElement>;
-  shouldFollowMessagesRef: MutableRefObject<boolean>;
-  shouldAutoFollowMessageStream: (snapshot: { scrollTop: number; clientHeight: number; scrollHeight: number }) => boolean;
-}) {
-  const threadCache = useThreadCacheActions();
-  const [explicitBottomFollowRevision, setExplicitBottomFollowRevision] = useState(0);
-  const previousThreadIdRef = useRef(input.threadId);
-
-  const updateMessageFollowState = useCallback(() => {
-    input.shouldFollowMessagesRef.current = input.messageStreamRef.current
-      ? input.shouldAutoFollowMessageStream(input.messageStreamRef.current)
-      : true;
-  }, [input]);
-
-  const followNextMessageUpdate = useCallback(() => {
-    input.shouldFollowMessagesRef.current = true;
-    setExplicitBottomFollowRevision((revision) => revision + 1);
-  }, [input]);
-
-
-  return {
-    explicitBottomFollowRevision,
-    previousThreadIdRef,
-    updateMessageFollowState,
-    followNextMessageUpdate
   };
 }
 

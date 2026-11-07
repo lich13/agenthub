@@ -29,13 +29,12 @@ pub struct ProbeStatusAggregation {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProbeUseCases<'a> {
-    config: &'a Config,
     platform: &'a PlatformPaths,
 }
 
 impl<'a> ProbeUseCases<'a> {
-    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
-        Self { config, platform }
+    pub fn new(platform: &'a PlatformPaths) -> Self {
+        Self { platform }
     }
 
     pub fn provider_hooks(
@@ -56,27 +55,8 @@ impl<'a> ProbeUseCases<'a> {
         )
     }
 
-    pub fn action_with_device_key(
-        self,
-        action: ProbeAction,
-        device_key_configured: bool,
-    ) -> Result<ProbeActionPlan> {
-        plan_probe_action_with_device_key(self.config, self.platform, action, device_key_configured)
-    }
-
-    pub fn action_with_device_key_and_config_path(
-        self,
-        action: ProbeAction,
-        device_key_configured: bool,
-        config_path: impl AsRef<Path>,
-    ) -> Result<ProbeActionPlan> {
-        plan_probe_action_with_device_key_and_config_path(
-            self.config,
-            self.platform,
-            action,
-            device_key_configured,
-            config_path,
-        )
+    pub fn action(self, action: ProbeAction) -> Result<ProbeActionPlan> {
+        plan_probe_action(self.platform, action, &self.platform.config_file)
     }
 }
 
@@ -88,12 +68,6 @@ pub enum ProbeAction {
     InstallHooks,
     #[serde(rename = "removeHooks", alias = "hooks-remove")]
     RemoveHooks,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProbeExecutionKind {
-    FixedShellJob,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,11 +147,8 @@ pub struct ProbePassiveMarkerWrite {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeActionPlan {
-    pub required_capability: Capability,
     pub action: ProbeAction,
-    pub execution: ProbeExecutionKind,
-    pub job: Option<ProbeFixedJobSpec>,
-    pub diagnostic_plan: Option<probe_core::ProbeActionPlan>,
+    pub job: ProbeFixedJobSpec,
 }
 
 pub fn probe_status_snapshot_view(
@@ -200,48 +171,15 @@ pub fn probe_status_snapshot_view(
     value
 }
 
-pub fn plan_probe_action_with_device_key(
-    config: &Config,
+pub fn plan_probe_action(
     platform: &PlatformPaths,
     action: ProbeAction,
-    device_key_configured: bool,
-) -> Result<ProbeActionPlan> {
-    plan_probe_action_with_device_key_and_config_path(
-        config,
-        platform,
-        action,
-        device_key_configured,
-        &platform.config_file,
-    )
-}
-
-pub fn plan_probe_action_with_device_key_and_config_path(
-    config: &Config,
-    platform: &PlatformPaths,
-    action: ProbeAction,
-    device_key_configured: bool,
     config_path: impl AsRef<Path>,
 ) -> Result<ProbeActionPlan> {
-    let required_capability = probe_action_capability(action);
-    require_capability(platform, required_capability)?;
-    let config_path = config_path.as_ref();
-    let runtime = probe_core::ProbeRuntime::new(config.clone(), platform.clone());
-    let diagnostic_plan = match action {
-        ProbeAction::BarkTest => Some(runtime.bark_test_plan(device_key_configured)),
-        ProbeAction::InstallHooks => {
-            Some(runtime.plan_action(probe_core::ProbeActionPlanKind::InstallHooks)?)
-        }
-        ProbeAction::RemoveHooks => {
-            Some(runtime.plan_action(probe_core::ProbeActionPlanKind::RemoveHooks)?)
-        }
-    };
-    let job = Some(probe_fixed_job_spec(platform, action, config_path)?);
+    require_capability(platform, probe_action_capability(action))?;
     Ok(ProbeActionPlan {
-        required_capability,
         action,
-        execution: ProbeExecutionKind::FixedShellJob,
-        job,
-        diagnostic_plan,
+        job: probe_fixed_job_spec(platform, action, config_path.as_ref())?,
     })
 }
 
@@ -400,9 +338,11 @@ fn aggregate_active_sessions(
         None => crate::claude::ClaudePaths::default_for_user(),
     };
     if claude_paths.available() {
-        if let Ok(items) =
-            crate::claude::list_claude_sessions(&claude_paths, per_bucket_limit, None)
-        {
+        if let Ok(items) = crate::claude::list_claude_sessions_without_storage(
+            &claude_paths,
+            per_bucket_limit,
+            None,
+        ) {
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
@@ -437,16 +377,12 @@ fn aggregate_active_sessions(
         None => crate::grok::GrokPaths::default_for_user(),
     };
     if grok_paths.sessions().is_dir() {
-        if let Ok(items) = crate::grok::list_grok_sessions(&grok_paths, per_bucket_limit, None) {
-            let stream_buckets = if items.iter().any(|item| {
+        if let Ok((items, scan)) =
+            crate::grok::probe_sessions(&grok_paths, per_bucket_limit, |item| {
                 item.status != "running" && is_updated_within_fresh_window(&item.updated_at, now_ms)
-            }) {
-                crate::grok::notification_snapshots(&grok_paths)
-                    .map(|scan| stream_live_buckets(&scan.streams, now_ms))
-                    .unwrap_or_default()
-            } else {
-                std::collections::HashMap::new()
-            };
+            })
+        {
+            let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
@@ -482,7 +418,9 @@ fn aggregate_active_sessions(
             None => crate::antigravity::sessions::AntigravityPaths::default_for_user(),
         };
         if ag_paths.available() {
-            if let Ok(items) = crate::antigravity::sessions::list_sessions(&ag_paths, &list_req) {
+            if let Ok(items) =
+                crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
+            {
                 for item in items {
                     let bucket = match item.status.as_str() {
                         "running" => Some("running"),
@@ -513,18 +451,14 @@ fn aggregate_active_sessions(
             None => crate::dsh::DshPaths::default_for_user(),
         };
         if dsh_paths.home.join("sessions").is_dir() {
-            if let Ok(items) = crate::dsh::sessions::list_sessions(&dsh_paths, &list_req) {
-                let stream_buckets = if items.iter().any(|item| {
+            if let Ok((items, scan)) =
+                crate::dsh::sessions::probe_sessions(&dsh_paths, &list_req, |item| {
                     item.status != "running"
                         && item.read_error.is_none()
                         && is_updated_within_fresh_window(&item.updated_at, now_ms)
-                }) {
-                    crate::dsh::notifications::scan(&dsh_paths)
-                        .map(|scan| stream_live_buckets(&scan.streams, now_ms))
-                        .unwrap_or_default()
-                } else {
-                    std::collections::HashMap::new()
-                };
+                })
+            {
+                let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
                 for item in items {
                     let bucket = if item.status == "running" {
                         Some("running")
@@ -1380,37 +1314,26 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_probe_action_with_device_key, probe_bark_delivery_decision, probe_bark_status_label,
-        probe_passive_thread_notification_plan, ProbeAction, ProbeExecutionKind,
+        plan_probe_action, probe_bark_delivery_decision, probe_bark_status_label,
+        probe_passive_thread_notification_plan, ProbeAction,
     };
     use crate::{
         codex::{ThreadStatus, ThreadSummary},
         config::Config,
         platform::{PlatformKind, PlatformPaths},
-        services::system::Capability,
     };
 
     #[test]
     fn probe_action_plans_are_platform_scoped_and_include_execution_contracts() {
-        let linux_config = Config::for_platform_kind(PlatformKind::Linux);
         let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-        let bark =
-            plan_probe_action_with_device_key(&linux_config, &linux, ProbeAction::BarkTest, false)
-                .expect("Linux should allow fixed Probe jobs");
+        let bark = plan_probe_action(&linux, ProbeAction::BarkTest, &linux.config_file)
+            .expect("Linux should allow fixed Probe jobs");
 
-        assert_eq!(bark.required_capability, Capability::Probe);
-        assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
-        assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
+        assert_eq!(bark.job.kind, "probe_bark_test");
 
-        let windows_config = Config::for_platform_kind(PlatformKind::Windows);
         let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-        let bark_err = plan_probe_action_with_device_key(
-            &windows_config,
-            &windows,
-            ProbeAction::BarkTest,
-            false,
-        )
-        .expect_err("Windows should not allow Probe actions");
+        let bark_err = plan_probe_action(&windows, ProbeAction::BarkTest, &windows.config_file)
+            .expect_err("Windows should not allow Probe actions");
         assert!(bark_err
             .to_string()
             .contains("probe is unavailable on windows"));
@@ -1568,11 +1491,10 @@ mod tests {
         let platform =
             PlatformPaths::for_kind_with_home(crate::platform::PlatformKind::Linux, &root);
         let remove_plan =
-            plan_probe_action_with_device_key(&config, &platform, ProbeAction::RemoveHooks, false)
-                .unwrap();
+            plan_probe_action(&platform, ProbeAction::RemoveHooks, &platform.config_file).unwrap();
         assert_eq!(remove_plan.action, ProbeAction::RemoveHooks);
         assert_eq!(
-            remove_plan.job.as_ref().map(|j| j.kind.as_str()),
+            Some(remove_plan.job.kind.as_str()),
             Some("probe_hooks_remove")
         );
 

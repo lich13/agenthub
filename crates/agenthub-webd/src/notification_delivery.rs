@@ -984,9 +984,14 @@ async fn local_native_source_state(candidate: &Candidate) -> Option<Result<bool>
         if delivery.provider == native_probe::NativeProvider::Antigravity {
             super::antigravity::source_current(delivery).await
         } else {
-            super::provider_monitor::scan(delivery.provider)
-                .await
-                .and_then(|scan| super::provider_monitor::local_event_current(&scan, delivery))
+            let target = delivery.clone();
+            tokio::task::spawn_blocking(move || {
+                native_probe::scan_event(target.provider, &target.thread_id, &target.event)
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result)
+            .and_then(|scan| super::provider_monitor::local_event_current(&scan, delivery))
         },
     )
 }
@@ -1006,31 +1011,30 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
         Source::Native { delivery } => {
             let provider = delivery.provider;
             let instance = db.notification_instance_id().unwrap_or_default();
-            tokio::task::spawn_blocking(move || native_probe::scan(provider))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .is_some_and(|scan| {
-                    scan.streams.iter().any(|stream| {
-                        native_probe::retry_event_is_current(
-                            provider,
-                            &delivery.thread_id,
-                            &delivery.event,
-                        ) && stream.session_key == delivery.session_key
-                            && stream.id == delivery.thread_id
-                            && stream.events.iter().any(|event| {
-                                (stream.event_key(&delivery.event) == delivery.event_key
-                                    || event.prompt_id.as_deref().is_some_and(|p| {
-                                        stream.prompt_event_key(
-                                            p,
-                                            native_probe::event_category(event),
-                                            &instance,
-                                        ) == delivery.event_key
-                                    }))
-                                    && native_probe::same_event(event, &delivery.event)
-                            })
-                    })
+            let target = delivery.clone();
+            tokio::task::spawn_blocking(move || {
+                native_probe::scan_event(provider, &target.thread_id, &target.event)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|scan| {
+                scan.streams.iter().any(|stream| {
+                    stream.session_key == delivery.session_key
+                        && stream.id == delivery.thread_id
+                        && stream.events.iter().any(|event| {
+                            (stream.event_key(&delivery.event) == delivery.event_key
+                                || event.prompt_id.as_deref().is_some_and(|p| {
+                                    stream.prompt_event_key(
+                                        p,
+                                        native_probe::event_category(event),
+                                        &instance,
+                                    ) == delivery.event_key
+                                }))
+                                && native_probe::same_event(event, &delivery.event)
+                        })
                 })
+            })
         }
         Source::ClaudeHook { .. } => unreachable!("Claude source checked above"),
         Source::Codex {

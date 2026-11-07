@@ -327,14 +327,6 @@ pub fn configured(paths: &ClaudePaths, binary: &Path) -> bool {
     configured_path(&paths.config.join("settings.json"), binary, HANDLER)
 }
 
-pub fn provider_configured(provider: HookProvider, binary: &Path) -> bool {
-    configured_path(
-        &provider.default_settings_path(),
-        binary,
-        provider.handler(),
-    )
-}
-
 pub fn configured_path(settings_path: &Path, binary: &Path, handler: &str) -> bool {
     read(settings_path)
         .and_then(|bytes| checked(bytes.as_deref()))

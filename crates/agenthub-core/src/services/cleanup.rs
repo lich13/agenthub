@@ -49,10 +49,7 @@ impl UnifiedCleanupPaths {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnifiedCleanupDryRunRequest {
-    #[serde(default)]
-    pub scopes: Vec<String>,
-}
+pub struct UnifiedCleanupDryRunRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -315,23 +312,11 @@ fn dry_run_single_scope(
 pub fn dry_run_unified_with_capability(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
-    request: UnifiedCleanupDryRunRequest,
+    _request: UnifiedCleanupDryRunRequest,
 ) -> Result<UnifiedCleanupPlan> {
     require_capability(platform, Capability::ThreadCleanup)?;
-    let requested: Vec<&str> = if request.scopes.is_empty() {
-        ALL_UNIFIED_SCOPES.to_vec()
-    } else {
-        for s in &request.scopes {
-            scope_meta(s)?;
-        }
-        ALL_UNIFIED_SCOPES
-            .iter()
-            .copied()
-            .filter(|s| request.scopes.iter().any(|req| req == s))
-            .collect()
-    };
     let mut plan = UnifiedCleanupPlan::default();
-    for scope in requested {
+    for scope in ALL_UNIFIED_SCOPES {
         let item = dry_run_single_scope(platform, paths, scope)?;
         plan.total_candidates += item.candidate_count;
         plan.total_deletable += item.deletable_count;
@@ -551,34 +536,20 @@ fn execute_dsh_archived_scope(
     scope_res: &mut UnifiedCleanupScopeResult,
     stopped_early: &mut bool,
 ) -> Result<()> {
-    let recomputed = crate::dsh::preview(dsh)?;
-    scope_res.issues.extend(recomputed.issues);
-    let allowed_map: std::collections::BTreeMap<&str, &crate::dsh::DshArchiveCandidate> =
-        recomputed
-            .candidates
-            .iter()
-            .map(|c| (c.id.as_str(), c))
-            .collect();
     let mut verified_targets = Vec::new();
-    run_scope_targets(scope_targets, scope_res, stopped_early, |id, req_fp| {
-        let Some(c) = allowed_map.get(id) else {
-            return Ok(TargetStepOutcome::Skipped(
-                "目标不在当前已归档允许集合中，已跳过".into(),
-            ));
-        };
-        if let Some(reason) = &c.reason {
-            return Ok(TargetStepOutcome::Failed(Some(reason.clone()), Vec::new()));
+    for target in scope_targets {
+        if let Some(archive_id) = target.fingerprint {
+            verified_targets.push(crate::dsh::DshArchiveSelection {
+                id: target.id,
+                archive_id,
+            });
+        } else {
+            scope_res.skipped_count += 1;
+            scope_res
+                .issues
+                .push(format!("{}: 缺少预览指纹，已跳过", target.id));
         }
-        if c.archive_id != req_fp {
-            return Ok(TargetStepOutcome::Skipped("归档指纹已变化，已跳过".into()));
-        }
-        verified_targets.push(crate::dsh::DshArchiveSelection {
-            id: id.to_owned(),
-            archive_id: req_fp.to_owned(),
-        });
-        Ok(TargetStepOutcome::Deleted(0))
-    })?;
-    scope_res.deleted_count = 0;
+    }
     if !*stopped_early && !verified_targets.is_empty() {
         match crate::dsh::execute(
             dsh,
@@ -935,7 +906,7 @@ mod tests {
         let linux_plan = super::dry_run_unified_with_capability(
             &linux,
             &paths,
-            super::UnifiedCleanupDryRunRequest { scopes: Vec::new() },
+            super::UnifiedCleanupDryRunRequest::default(),
         )
         .unwrap();
         let ag_linux = linux_plan
@@ -948,7 +919,7 @@ mod tests {
         let mac_plan = super::dry_run_unified_with_capability(
             &macos,
             &paths,
-            super::UnifiedCleanupDryRunRequest { scopes: Vec::new() },
+            super::UnifiedCleanupDryRunRequest::default(),
         )
         .unwrap();
         assert_eq!(mac_plan.total_deletable, 2);

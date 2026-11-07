@@ -72,15 +72,9 @@ pub(crate) fn start(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut observer = Observer::default();
-        #[cfg(target_os = "macos")]
-        let mut authorization_requested = false;
         loop {
             let remote = app.state::<crate::remote::RemoteConnections>();
             let source = remote.view();
-            let request = Request {
-                cached_only: true,
-                ..Default::default()
-            };
             let result = if source.target == MachineTarget::Remote {
                 Some(
                     remote
@@ -109,7 +103,7 @@ pub(crate) fn start(app: &tauri::AppHandle) {
                                 state.platform(),
                                 state.host_surface(),
                             )
-                            .github_ci(&state.db, request)
+                            .github_ci(&state.db, Request { cached_only: true, ..Default::default() })
                             .map_err(|_| "CI 状态不可用".to_string())
                         })
                         .await
@@ -117,15 +111,6 @@ pub(crate) fn start(app: &tauri::AppHandle) {
                     )
                 }
             };
-            #[cfg(target_os = "macos")]
-            if !authorization_requested
-                && result
-                    .as_ref()
-                    .is_some_and(|result| result.as_ref().is_ok_and(|snapshot| snapshot.enabled))
-            {
-                authorization_requested = true;
-                native::request_authorization(&app).await;
-            }
             if remote.is_current(source.revision) {
                 if let Some(Ok(snapshot)) = result {
                     let machine = source
@@ -133,9 +118,10 @@ pub(crate) fn start(app: &tauri::AppHandle) {
                         .as_deref()
                         .filter(|_| source.target == MachineTarget::Remote)
                         .unwrap_or("本机");
-                    for event in observer.observe(source.revision, &snapshot) {
-                        #[cfg(target_os = "macos")]
-                        native::send(source.revision, machine, &event);
+                    let events = observer.observe(source.revision, &snapshot);
+                    #[cfg(target_os = "macos")]
+                    if !events.is_empty() {
+                        native::send_authorized(machine.to_owned(), events);
                     }
                 }
             }

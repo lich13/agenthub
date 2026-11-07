@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use agenthub_core::{
     codex::{ThreadDetail, ThreadStatus, ThreadSummary},
     db::JobRecord,
-    platform::{PlatformKind, PlatformPaths},
     services::{
         probe::{probe_status_snapshot_view, ProbeSnapshotStatus},
         threads::{thread_detail_read_model, thread_list_read_model, ThreadReadModelInputs},
@@ -13,12 +12,10 @@ use serde_json::json;
 
 #[test]
 fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let known_running_job = running_job("job-running", "known-thread", Some("turn-running"), 20);
     let new_running_job = running_job("job-new", "new-running-thread", None, 30);
 
     let view = thread_list_read_model(
-        &platform,
         ThreadReadModelInputs {
             threads: vec![
                 thread(
@@ -51,11 +48,9 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             q: None,
             limit: Some(20),
         },
-    )
-    .expect("thread read model should be planned in core");
+    );
 
     let ids = view
-        .threads
         .iter()
         .map(|thread| thread.id.as_str())
         .collect::<Vec<_>>();
@@ -65,8 +60,7 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
     assert!(ids.contains(&"idle-thread"));
     assert!(!ids.contains(&"archived-thread"));
     assert_eq!(
-        view.threads
-            .iter()
+        view.iter()
             .find(|thread| thread.id == "known-thread")
             .map(|thread| &thread.status),
         Some(&ThreadStatus::Running)
@@ -77,7 +71,6 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
         .is_none());
 
     let idle_view = thread_list_read_model(
-        &platform,
         ThreadReadModelInputs {
             threads: vec![thread(
                 "idle-thread",
@@ -93,8 +86,7 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             q: None,
             limit: Some(20),
         },
-    )
-    .expect("idle read model must remain read-only");
+    );
 
     assert!(serde_json::to_value(&idle_view)
         .unwrap()
@@ -104,7 +96,6 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
 
 #[test]
 fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effect() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let detail = ThreadDetail {
         timeline: None,
         after_cursor: None,
@@ -125,8 +116,7 @@ fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effec
         before_cursor: None,
     };
 
-    let view = thread_detail_read_model(&platform, detail, None)
-        .expect("core should own detail read-model");
+    let view = thread_detail_read_model(detail, None);
 
     assert_eq!(view.summary.status, ThreadStatus::Recent);
     assert!(serde_json::to_value(&view)

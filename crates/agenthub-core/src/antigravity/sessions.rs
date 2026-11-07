@@ -865,7 +865,7 @@ fn make_summary(
     } else {
         "idle"
     };
-    let mut summary = ProviderSessionSummary {
+    ProviderSessionSummary {
         storage_size: None,
         session_key: id.clone(),
         path: paths.canonical_path(&id),
@@ -887,9 +887,7 @@ fn make_summary(
             .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
         read_error: None,
         read_warning: None,
-    };
-    attach_storage_size(paths, &mut summary);
-    summary
+    }
 }
 
 fn active_subagent_roots_from_summaries(
@@ -1166,6 +1164,17 @@ pub fn list_sessions(
     paths: &AntigravityPaths,
     request: &ProviderListRequest,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    let mut items = list_sessions_without_storage(paths, request)?;
+    for item in &mut items {
+        attach_storage_size(paths, item);
+    }
+    Ok(items)
+}
+
+pub(crate) fn list_sessions_without_storage(
+    paths: &AntigravityPaths,
+    request: &ProviderListRequest,
+) -> Result<Vec<ProviderSessionSummary>> {
     let limit = request.limit.unwrap_or(200).clamp(1, 1000);
     let all = list_all_summaries(paths)?;
     Ok(all
@@ -1181,10 +1190,12 @@ pub fn list_sessions(
 
 pub fn session_summary(paths: &AntigravityPaths, key: &str) -> Result<ProviderSessionSummary> {
     valid_cascade_id(key)?;
-    list_summaries_filtered(paths, Some(key))?
+    let mut summary = list_summaries_filtered(paths, Some(key))?
         .into_iter()
         .next()
-        .with_context(|| format!("未找到 Antigravity 会话：{key}"))
+        .with_context(|| format!("未找到 Antigravity 会话：{key}"))?;
+    attach_storage_size(paths, &mut summary);
+    Ok(summary)
 }
 
 fn map_cortex_status(status: &str) -> &'static str {
@@ -2157,7 +2168,8 @@ pub fn session_detail(
     paths: &AntigravityPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
-    let (summary, events) = summary_and_events(paths, &request.session_key)?;
+    let (mut summary, events) = summary_and_events(paths, &request.session_key)?;
+    attach_storage_size(paths, &mut summary);
     paginate_provider_detail(summary, &events, request)
 }
 

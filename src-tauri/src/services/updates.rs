@@ -54,15 +54,14 @@ pub(crate) async fn check_update_status(
     let job =
         native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Check)
             .map_err(|err| err.to_string())?;
-    let execution = NativeUpdateJobExecution::start(&state, &job).map_err(|err| err.to_string())?;
+    let job_id = start_update_job(&state, &job).map_err(|err| err.to_string())?;
 
-    match check_update(&app, &state, execution.job_id()).await {
+    match check_update(&app, &state, &job_id).await {
         Ok(status) => {
-            execution.finish_success(&state);
-            let job_id = execution.job_id().to_string();
+            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
             Ok(DesktopUpdateCheckResponse { job_id, status })
         }
-        Err(err) => Err(execution.finish_error(&state, err)),
+        Err(err) => Err(finish_update_error(&state, &job_id, err)),
     }
 }
 
@@ -73,18 +72,17 @@ pub(crate) async fn install_update_and_restart(
     let job =
         native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Install)
             .map_err(|err| err.to_string())?;
-    let execution = NativeUpdateJobExecution::start(&state, &job).map_err(|err| err.to_string())?;
+    let job_id = start_update_job(&state, &job).map_err(|err| err.to_string())?;
 
-    match install_update(&app, &state, execution.job_id()).await {
+    match install_update(&app, &state, &job_id).await {
         Ok(installed) => {
-            execution.finish_success(&state);
+            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
             if installed {
                 app.restart();
             }
-            let job_id = execution.job_id().to_string();
             Ok(DesktopUpdateInstallResponse { job_id, installed })
         }
-        Err(err) => Err(execution.finish_error(&state, err)),
+        Err(err) => Err(finish_update_error(&state, &job_id, err)),
     }
 }
 
@@ -100,63 +98,35 @@ fn update_job_id(spec: &updates::MacosUpdaterJobSpec) -> String {
     )
 }
 
-#[derive(Debug)]
-struct NativeUpdateJobPlan {
-    spec: updates::MacosUpdaterJobSpec,
+fn start_update_job(state: &DesktopState, spec: &updates::MacosUpdaterJobSpec) -> Result<String> {
+    let id = update_job_id(spec);
+    state.db.create_job(&id, &spec.kind, &spec.title)?;
+    state.db.append_job_output(&id, &spec.initial_output)?;
+    Ok(id)
 }
 
-#[derive(Debug)]
-struct NativeUpdateJobExecution {
-    job_id: String,
-}
-
-impl NativeUpdateJobExecution {
-    fn start(state: &DesktopState, plan: &NativeUpdateJobPlan) -> Result<Self> {
-        let id = update_job_id(&plan.spec);
-        state
-            .db
-            .create_job(&id, &plan.spec.kind, &plan.spec.title)?;
-        state.db.append_job_output(&id, &plan.spec.initial_output)?;
-        Ok(Self { job_id: id })
-    }
-
-    fn job_id(&self) -> &str {
-        &self.job_id
-    }
-
-    fn finish_success(&self, state: &DesktopState) {
-        let _ = state
-            .db
-            .finish_job(&self.job_id, "succeeded", Some(0), None);
-    }
-
-    fn finish_error(&self, state: &DesktopState, err: anyhow::Error) -> String {
-        let message = err.to_string();
-        let _ = state
-            .db
-            .append_job_output(&self.job_id, &format!("error: {message}\n"));
-        let _ = state
-            .db
-            .finish_job(&self.job_id, "failed", None, Some(&message));
-        message
-    }
+fn finish_update_error(state: &DesktopState, job_id: &str, err: anyhow::Error) -> String {
+    let message = err.to_string();
+    let _ = state
+        .db
+        .append_job_output(job_id, &format!("error: {message}\n"));
+    let _ = state.db.finish_job(job_id, "failed", None, Some(&message));
+    message
 }
 
 fn native_update_job_plan_for_action(
     config: &Config,
     platform: &PlatformPaths,
     action: UpdateAction,
-) -> Result<NativeUpdateJobPlan> {
+) -> Result<updates::MacosUpdaterJobSpec> {
     let plan = updates::plan_update_action_for_surface(
         config,
         platform,
         agenthub_core::services::system::HostSurface::DesktopEmbeddedTauri,
         action,
     )?;
-    let spec = plan
-        .macos_job
-        .ok_or_else(|| anyhow::anyhow!("update action did not produce a macOS updater job spec"))?;
-    Ok(NativeUpdateJobPlan { spec })
+    plan.macos_job
+        .ok_or_else(|| anyhow::anyhow!("update action did not produce a macOS updater job spec"))
 }
 
 async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Result<UpdateStatus> {
@@ -248,13 +218,13 @@ mod tests {
 
         let check =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Check).unwrap();
-        assert_eq!(check.spec.kind, "agenthub_update_check");
-        assert!(update_job_id(&check.spec).starts_with("desktop-update-check-"));
+        assert_eq!(check.kind, "agenthub_update_check");
+        assert!(update_job_id(&check).starts_with("desktop-update-check-"));
 
         let install =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
-        assert_eq!(install.spec.kind, "agenthub_update_install");
-        assert!(update_job_id(&install.spec).starts_with("desktop-update-install-"));
+        assert_eq!(install.kind, "agenthub_update_install");
+        assert!(update_job_id(&install).starts_with("desktop-update-install-"));
     }
 
     #[test]

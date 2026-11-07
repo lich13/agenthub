@@ -14,13 +14,6 @@ pub(crate) struct DesktopActionResponse {
     pub data: Option<Value>,
 }
 
-impl DesktopActionResponse {
-    pub(crate) fn with_data(mut self, data: Value) -> Self {
-        self.data = Some(data);
-        self
-    }
-}
-
 impl From<job_service::ActionResponse> for DesktopActionResponse {
     fn from(value: job_service::ActionResponse) -> Self {
         Self {

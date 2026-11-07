@@ -1,12 +1,10 @@
 import { describe, expect, test } from "vitest";
 import type {
-  GrokSessionSummary,
   HiddenScanProgress,
   HiddenThreadDeletePlan,
   UpdateStatus
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
-import { canPreviewGrokDelete } from "../../components/grok/GrokWorkspace";
 import {
   canStartHiddenThreadDelete,
   failureCategoryLabel,
@@ -53,18 +51,6 @@ describe("probeStateLabel", () => {
   });
 });
 
-function archivePlan(): ArchiveDeletePlan {
-  return {
-    total_threads: 9,
-    active_threads: 7,
-    archived_threads: 2,
-    session_index_lines: 9,
-    rollout_files: 9,
-    archived_ids: ["a", "b"],
-    integrity: "ok"
-  };
-}
-
 function hiddenPlan(): HiddenThreadDeletePlan {
   return {
     total_threads: 9,
@@ -78,20 +64,9 @@ function hiddenPlan(): HiddenThreadDeletePlan {
       { id: "child-a", title: "child a", fingerprint: "fingerprint-a", allowed: true, reason: null },
       { id: "child-b", title: "child b", fingerprint: "fingerprint-b", allowed: true, reason: null }
     ],
+    scan: { id: "fixture-scan", phase: "complete", processed: 2, total: 2, cursor: 0, nextCursor: 2, hasMore: false, error: null },
     hidden_source_counts: { subagent: 2 },
     integrity: "ok"
-  };
-}
-
-function grokSession(overrides: Partial<GrokSessionSummary> = {}): GrokSessionSummary {
-  return {
-    id: "grok-fixture",
-    title: "Fixture session",
-    cwd: "/tmp/fixture",
-    path: "/tmp/fixture/session.jsonl",
-    messageCount: 1,
-    status: "unknown",
-    ...overrides
   };
 }
 
@@ -153,19 +128,6 @@ describe("runtime view-model helpers", () => {
     expect(canStartHiddenThreadDelete(completedWithMissingCandidates)).toBe(false);
   });
 
-  test("Grok deletion ignores activity and legacy protection", () => {
-    expect(canPreviewGrokDelete(grokSession({
-      status: "running",
-      deletionEligibility: { allowed: true, reason: null }
-    }))).toBe(true);
-    expect(canPreviewGrokDelete(grokSession({
-      status: "recent",
-      deletionEligibility: { allowed: false, reason: "fixture active task" }
-    }))).toBe(true);
-    expect(canPreviewGrokDelete(grokSession({ status: "recent" }))).toBe(true);
-    expect(canPreviewGrokDelete(grokSession({ status: "running" }))).toBe(true);
-    expect(canPreviewGrokDelete(grokSession({ status: "recent", deletionEligibility: null }))).toBe(true);
-  });
 
   test("host policy uses host surface instead of incidental update flags", () => {
     expect(failureCategoryLabel("systemd_failure", {

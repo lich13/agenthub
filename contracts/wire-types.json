@@ -4268,70 +4268,6 @@
       }
     },
     "crates/agenthub-core/src/probe.rs": {
-      "ProbeActionPlan": {
-        "fields": [
-          {
-            "name": "plan_id",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "kind",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "title",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "summary",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "steps",
-            "serde": [],
-            "type": "Vec < String >"
-          },
-          {
-            "name": "payload",
-            "serde": [],
-            "type": "Value"
-          },
-          {
-            "name": "requires_confirmation",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "command",
-            "serde": [],
-            "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
-      "ProbeActionPlanKind": {
-        "kind": "enum",
-        "serde": [
-          "serde (rename_all = \"snake_case\")"
-        ],
-        "variants": [
-          {
-            "fields": [],
-            "name": "InstallHooks",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "RemoveHooks",
-            "serde": []
-          }
-        ]
-      },
       "ProbeBuiltEvent": {
         "fields": [
           {
@@ -4407,67 +4343,6 @@
               "serde (skip)"
             ],
             "type": "Option < String >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
-      "ProbeDiagnostics": {
-        "fields": [
-          {
-            "name": "doctor_status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "lifecycle_status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "configured_codex_home",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "resolved_codex_home",
-            "serde": [],
-            "type": "PathBuf"
-          },
-          {
-            "name": "codex_home_source",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "discovery_warnings",
-            "serde": [],
-            "type": "Vec < String >"
-          },
-          {
-            "name": "host_label",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "runtime_version",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "managed_boundaries",
-            "serde": [],
-            "type": "Vec < String >"
-          },
-          {
-            "name": "effective_constants",
-            "serde": [],
-            "type": "Value"
-          },
-          {
-            "name": "repair_suggestions",
-            "serde": [],
-            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -4618,24 +4493,9 @@
       "ProbeHookStatus": {
         "fields": [
           {
-            "name": "status",
-            "serde": [],
-            "type": "String"
-          },
-          {
             "name": "hook_status",
             "serde": [],
             "type": "String"
-          },
-          {
-            "name": "installed",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "managed",
-            "serde": [],
-            "type": "bool"
           },
           {
             "name": "hook_command",
@@ -4656,87 +4516,6 @@
             "name": "empty_group_count",
             "serde": [],
             "type": "usize"
-          },
-          {
-            "name": "restart_required_after_install",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "supported_events",
-            "serde": [],
-            "type": "Vec < String >"
-          },
-          {
-            "name": "dedupe_namespace",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "dedupe_ttl_seconds",
-            "serde": [],
-            "type": "i64"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
-      "ProbeLifecycleStatus": {
-        "fields": [
-          {
-            "name": "status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "lifecycle_status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "platform",
-            "serde": [],
-            "type": "PlatformKind"
-          },
-          {
-            "name": "service_kind",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "service_name",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "enabled",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "hooks_enabled",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "notifications_enabled",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "poll_seconds",
-            "serde": [],
-            "type": "u64"
-          },
-          {
-            "name": "recent_limit",
-            "serde": [],
-            "type": "usize"
-          },
-          {
-            "name": "next_actions",
-            "serde": [],
-            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -5767,15 +5546,7 @@
         ]
       },
       "UnifiedCleanupDryRunRequest": {
-        "fields": [
-          {
-            "name": "scopes",
-            "serde": [
-              "serde (default)"
-            ],
-            "type": "Vec < String >"
-          }
-        ],
+        "fields": [],
         "kind": "struct",
         "serde": [
           "serde (rename_all = \"camelCase\")"
@@ -7233,11 +7004,6 @@
       "ThreadStateActionPlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "command",
             "serde": [],
             "type": "String"
@@ -7246,11 +7012,6 @@
             "name": "thread_id",
             "serde": [],
             "type": "String"
-          },
-          {
-            "name": "archived",
-            "serde": [],
-            "type": "Option < bool >"
           },
           {
             "name": "name",
@@ -7326,29 +7087,14 @@
       "ProbeActionPlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "action",
             "serde": [],
             "type": "ProbeAction"
           },
           {
-            "name": "execution",
-            "serde": [],
-            "type": "ProbeExecutionKind"
-          },
-          {
             "name": "job",
             "serde": [],
-            "type": "Option < ProbeFixedJobSpec >"
-          },
-          {
-            "name": "diagnostic_plan",
-            "serde": [],
-            "type": "Option < probe_core :: ProbeActionPlan >"
+            "type": "ProbeFixedJobSpec"
           }
         ],
         "kind": "struct",
@@ -7467,19 +7213,6 @@
         ],
         "kind": "struct",
         "serde": []
-      },
-      "ProbeExecutionKind": {
-        "kind": "enum",
-        "serde": [
-          "serde (rename_all = \"snake_case\")"
-        ],
-        "variants": [
-          {
-            "fields": [],
-            "name": "FixedShellJob",
-            "serde": []
-          }
-        ]
       },
       "ProbeFixedJobSpec": {
         "fields": [
@@ -8302,17 +8035,6 @@
         "kind": "struct",
         "serde": []
       },
-      "ProbeConfigWritePlan": {
-        "fields": [
-          {
-            "name": "patch",
-            "serde": [],
-            "type": "ProbeConfigFilePatch"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "ProbeNotificationsSavePatch": {
         "fields": [
           {
@@ -8678,36 +8400,14 @@
       "ProbeSettingsSavePlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "config_patch",
             "serde": [],
             "type": "ProbeConfigFilePatch"
           },
           {
-            "name": "config_write",
-            "serde": [],
-            "type": "Option < ProbeConfigWritePlan >"
-          },
-          {
-            "name": "bark_device_key",
-            "serde": [
-              "serde (default , skip_serializing)"
-            ],
-            "type": "Option < String >"
-          },
-          {
             "name": "secret_writes",
             "serde": [],
             "type": "Vec < SecretSettingWritePlan >"
-          },
-          {
-            "name": "audit_detail",
-            "serde": [],
-            "type": "Value"
           }
         ],
         "kind": "struct",
@@ -8734,22 +8434,6 @@
         "kind": "struct",
         "serde": []
       },
-      "ProbeSettingsViewPlan": {
-        "fields": [
-          {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
-            "name": "settings",
-            "serde": [],
-            "type": "SettingsView"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "SecretSettingWritePlan": {
         "fields": [
           {
@@ -8762,11 +8446,6 @@
             "serde": [
               "serde (default , skip_serializing)"
             ],
-            "type": "String"
-          },
-          {
-            "name": "audit_value",
-            "serde": [],
             "type": "String"
           }
         ],
@@ -8893,11 +8572,6 @@
           },
           {
             "fields": [],
-            "name": "CodexDeleteTree",
-            "serde": []
-          },
-          {
-            "fields": [],
             "name": "ThreadArchiveActions",
             "serde": []
           },
@@ -8995,13 +8669,6 @@
             "type": "bool"
           },
           {
-            "name": "dsh_archive_cleanup",
-            "serde": [
-              "serde (default)"
-            ],
-            "type": "bool"
-          },
-          {
             "name": "antigravity_notifications",
             "serde": [
               "serde (default)"
@@ -9051,15 +8718,10 @@
             "type": "bool"
           },
           {
-            "name": "codex_delete_tree",
+            "name": "thread_archive_actions",
             "serde": [
               "serde (default)"
             ],
-            "type": "bool"
-          },
-          {
-            "name": "thread_archive_actions",
-            "serde": [],
             "type": "bool"
           },
           {
@@ -9147,11 +8809,6 @@
       "ThreadDetailPlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "thread_id",
             "serde": [],
             "type": "String"
@@ -9160,11 +8817,6 @@
             "name": "block_limit",
             "serde": [],
             "type": "Option < usize >"
-          },
-          {
-            "name": "full",
-            "serde": [],
-            "type": "bool"
           },
           {
             "name": "before",
@@ -9216,19 +8868,6 @@
             "name": "fetch_limit",
             "serde": [],
             "type": "usize"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "ThreadsOverview": {
-        "fields": [
-          {
-            "name": "threads",
-            "serde": [],
-            "type": "Vec < ThreadSummary >"
           }
         ],
         "kind": "struct",
@@ -9336,24 +8975,9 @@
       "UpdateActionPlan": {
         "fields": [
           {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
             "name": "action",
             "serde": [],
             "type": "UpdateAction"
-          },
-          {
-            "name": "method",
-            "serde": [],
-            "type": "UpdateExecutionMethod"
-          },
-          {
-            "name": "platform",
-            "serde": [],
-            "type": "PlatformKind"
           },
           {
             "name": "linux_job",
@@ -9463,11 +9087,6 @@
             "type": "UpdateExecutionMethod"
           },
           {
-            "name": "platform",
-            "serde": [],
-            "type": "PlatformKind"
-          },
-          {
             "name": "exclusive",
             "serde": [],
             "type": "bool"
@@ -9572,42 +9191,6 @@
       }
     },
     "crates/agenthub-core/src/services/use_cases.rs": {
-      "JobDetailPlan": {
-        "fields": [
-          {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
-            "name": "job_id",
-            "serde": [],
-            "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "JobListPlan": {
-        "fields": [
-          {
-            "name": "required_capability",
-            "serde": [],
-            "type": "Capability"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "u32"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "JobResponse": {
         "fields": [
           {
@@ -10928,7 +10511,7 @@
         "SubagentCollection": "exporttypeSubagentCollection={agents:SubagentActivity[];counts:Record<SubagentActivity[\"status\"],number>;complete:boolean;warning?:string|null;};",
         "SubagentDetailRequest": "exporttypeSubagentDetailRequest={rootThreadId:string;agentId:string;limit?:number;before?:string|null;};",
         "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
-        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;dsh_archive_cleanup?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;grokbot_sessions?:boolean;github_ci?:boolean;grokbot_notifications?:boolean;codex_delete_tree?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
+        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;grokbot_sessions?:boolean;github_ci?:boolean;grokbot_notifications?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
         "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
         "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
         "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",
@@ -10937,7 +10520,7 @@
         "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",
         "TimelineEntry": "exporttypeTimelineEntry={id:string;title:string;preview?:string};",
         "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;fingerprint?:string|null;blockedReason:string|null;};",
-        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[]};",
+        "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest=Record<string,never>;",
         "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[];targets?:UnifiedCleanupTargetSelection[];};",
         "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
         "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};",

@@ -131,9 +131,7 @@ export function useUnifiedCleanupActions(input: {
         });
         scan.current = runner;
         try {
-          const result = await runner.run();
-          if (valid()) input.onHiddenDryRun(result);
-          return result;
+          return await runner.run();
         } catch (error) {
           void runner.stop();
           throw error;

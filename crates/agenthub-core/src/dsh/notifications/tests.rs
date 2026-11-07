@@ -251,3 +251,83 @@ fn plaintext_partial_tail_and_unknown_required_events_are_not_published() {
         .consume(br#"{"type":"future-required","seq":0,"time":1800000000000,"data":{}}"#)
         .is_err());
 }
+
+#[test]
+fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
+    let root = std::env::temp_dir().join(format!("agenthub-dsh-cache-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&root).unwrap();
+    let paths = DshPaths {
+        home: root.as_path().to_path_buf(),
+    };
+    for i in 0..80 {
+        let id = format!("fixture-{i}");
+        let dir = root.as_path().join("sessions/project").join(&id);
+        fs::create_dir_all(&dir).unwrap();
+        let mut rows = lines();
+        rows[0] = format!(
+            "{}\n",
+            json!({"type":"session","version":4,"id":id,"isSeeded":false,"cwd":"/workspace/fixture"})
+        )
+        .into_bytes();
+        fs::write(dir.join("session.v4.jsonl"), rows.concat()).unwrap();
+    }
+    let full = scan(&paths).unwrap();
+    assert_eq!(full.streams.len(), 80);
+    {
+        let cache = CACHE.lock().unwrap();
+        assert_eq!(
+            cache
+                .entries
+                .iter()
+                .filter(|e| e.path.starts_with(root.as_path()))
+                .count(),
+            80
+        );
+        assert_eq!(
+            cache.bytes,
+            cache.entries.iter().map(|e| e.bytes).sum::<usize>()
+        );
+    }
+    let request = crate::provider_sessions::ProviderListRequest {
+        limit: Some(1),
+        q: Some("fixture-0".into()),
+        ..Default::default()
+    };
+    let (items, candidates) =
+        crate::dsh::sessions::probe_sessions(&paths, &request, |_| true).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].storage_size.is_none());
+    assert_eq!(candidates.streams.len(), 1);
+    assert!(
+        crate::dsh::sessions::list_sessions(&paths, &request).unwrap()[0]
+            .storage_size
+            .is_some()
+    );
+    let unrelated = root
+        .as_path()
+        .join("sessions/project/fixture-1/session.v4.jsonl");
+    fs::write(&unrelated, "broken\n").unwrap();
+    let targeted = scan_selected(&paths, Some("fixture-0")).unwrap();
+    assert_eq!(targeted.errors, 0);
+    assert_eq!(targeted.streams.len(), 1);
+    assert_eq!(
+        targeted.streams[0].events,
+        full.streams
+            .iter()
+            .find(|s| s.id == "fixture-0")
+            .unwrap()
+            .events
+    );
+    let duplicate = root.as_path().join("sessions/other/fixture-0");
+    fs::create_dir_all(&duplicate).unwrap();
+    fs::copy(
+        root.as_path()
+            .join("sessions/project/fixture-0/session.v4.jsonl"),
+        duplicate.join("session.v4.jsonl"),
+    )
+    .unwrap();
+    let ambiguous = scan_selected(&paths, Some("fixture-0")).unwrap();
+    assert!(ambiguous.streams.is_empty());
+    assert_eq!(ambiguous.errors, 1);
+    fs::remove_dir_all(root).unwrap();
+}

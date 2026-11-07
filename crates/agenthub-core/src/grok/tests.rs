@@ -991,6 +991,20 @@ fn notification_snapshots_and_list_sessions_avoid_detail_cache_thrashing_and_rer
     assert_eq!(PROBE_READS.with(|c| c.get()), 1);
     assert_eq!(s2.streams[0].events, s1.streams[0].events);
 
+    let (probe_items, candidate_scan) = probe_sessions(&paths, 1, |_| true).unwrap();
+    assert!(probe_items[0].storage_size.is_none());
+    assert_eq!(candidate_scan.streams[0].events, s1.streams[0].events);
+    assert_eq!(
+        notification_for_event(&paths, &id, &s1.streams[0].events[0])
+            .unwrap()
+            .streams
+            .len(),
+        1
+    );
+    let shared_a = crate::native_probe::read_jsonl(&events_path).unwrap();
+    let shared_b = crate::native_probe::read_jsonl(&events_path).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&shared_a, &shared_b));
+
     // 3. Modifying events.jsonl invalidates GROK_PROBE_CACHE and picks up the new in-progress turn.
     use std::io::Write;
     writeln!(
@@ -1001,6 +1015,12 @@ fn notification_snapshots_and_list_sessions_avoid_detail_cache_thrashing_and_rer
         "{{\"type\":\"turn_started\",\"session_id\":\"{id}\",\"session_relationship\":\"primary\",\"ts\":\"2026-10-30T01:01:00Z\"}}"
     )
     .unwrap();
+    assert!(
+        notification_for_event(&paths, &id, &s1.streams[0].events[0])
+            .unwrap()
+            .streams
+            .is_empty()
+    );
     let s3 = notification_snapshots(&paths).unwrap();
     assert_eq!(PROBE_READS.with(|c| c.get()), 2);
     assert_eq!(s3.streams[0].record_count, 3);

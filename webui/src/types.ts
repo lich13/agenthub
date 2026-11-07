@@ -315,7 +315,6 @@ export type SystemCapabilities = {
   prune_backups: boolean;
   thread_cleanup?: boolean;
   hidden_cleanup_scan?: boolean;
-  dsh_archive_cleanup?: boolean;
   antigravity_notifications?: boolean;
   dsh_notifications?: boolean;
   antigravity_sessions?: boolean;
@@ -323,7 +322,6 @@ export type SystemCapabilities = {
   grokbot_sessions?: boolean;
   github_ci?: boolean;
   grokbot_notifications?: boolean;
-  codex_delete_tree?: boolean;
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;
   thread_subagents?: boolean;
@@ -635,7 +633,7 @@ export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
 export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean; configPath?: string };
 
-export type UnifiedCleanupDryRunRequest = { scopes?: string[] };
+export type UnifiedCleanupDryRunRequest = Record<string, never>;
 export type UnifiedCleanupCandidate = {
   id: string;
   title: string;

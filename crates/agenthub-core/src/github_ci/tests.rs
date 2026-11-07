@@ -179,7 +179,7 @@ fn only_success_failure_timeout_notify_and_history_is_bounded() {
     assert!(state.snapshot.runs.iter().any(|r| r.id == 9000));
 }
 #[tokio::test]
-async fn disabled_monitor_does_not_read_gh_or_write_on_idle_and_status_requests_refresh() {
+async fn disabled_monitor_and_manual_refresh_only_read_cached_results() {
     let fixture = Database::new();
     let config = Config::default();
     assert!(!enabled(&config));
@@ -196,14 +196,27 @@ async fn disabled_monitor_does_not_read_gh_or_write_on_idle_and_status_requests_
         &fixture.db,
         &config,
         Request {
-            refresh: false,
+            refresh: true,
             ..Default::default()
         },
     )
     .unwrap();
-    assert!(result.refreshing);
+    assert!(!result.refreshing);
     assert!(!result.enabled);
-    assert!(request_ms(&fixture.db).unwrap() > 0);
+    assert_eq!(request_ms(&fixture.db).unwrap(), 0);
+    fixture.db.set_setting(REFRESH, &now().to_string()).unwrap();
+    assert!(monitor
+        .tick_with_token(&fixture.db, &config, async {
+            panic!("disabled CI must not read credentials even with an old refresh request")
+        })
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(
+        !status(&fixture.db, &config, Request::default())
+            .unwrap()
+            .refreshing
+    );
 }
 
 #[tokio::test]
@@ -525,7 +538,8 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
     server.set("/user", json!(account()));
     server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
     let mut monitor = server.monitor();
-    let config = Config::default();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
     status(
         &fixture.db,
         &config,

@@ -329,15 +329,6 @@ export function probeNumberInputDraftValue(value: string): ProbeNumericDraftValu
   return Number.isFinite(numeric) ? Math.trunc(numeric) : "";
 }
 
-export type ProbeEventDisplay = {
-  title: string;
-  summary: string;
-  bark: string;
-  dedupe: string;
-  source: string;
-  time: string;
-};
-
 export type ProbeEventCardTone = "success" | "warning" | "danger" | "muted";
 
 export type ProbeEventCard = {
@@ -351,18 +342,6 @@ export type ProbeEventCard = {
   dedupe: { label: string; tone: ProbeEventCardTone };
   details: Array<{ label: string; value: string }>;
 };
-
-export function probeEventDisplay(event: ProbeEvent): ProbeEventDisplay {
-  const card = probeEventCard(event);
-  return {
-    title: card.title,
-    summary: card.summary,
-    bark: card.bark.label,
-    dedupe: card.dedupe.label,
-    source: card.source,
-    time: card.time,
-  };
-}
 
 export function probeEventCard(event: ProbeEvent): ProbeEventCard {
   const payload = probeEventPayload(event);
@@ -439,14 +418,6 @@ function probeEventBarkDetail(bark: Record<string, unknown> | null): string {
   ].filter(Boolean).join(" · ");
 }
 
-export function probeEventReadableSummary(event: ProbeEvent): string {
-  return structuredProbeEventSummary(event, probeEventPayload(event));
-}
-
-export function probeEventBarkStatus(event: ProbeEvent): string {
-  return probeEventBarkBadge(event).label;
-}
-
 export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {
   const bark = recordFromRecord(probeEventPayload(event), "bark");
   if (!bark) return { label: "Bark 未记录", tone: "muted" };
@@ -485,10 +456,6 @@ export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: P
   };
   const detail = categories[reason];
   return { label: `Bark ${unknown ? "结果未确认" : "发送失败"}${detail ? ` · ${detail}` : ""}`, tone: "warning" };
-}
-
-export function probeEventDedupeStatus(event: ProbeEvent): string {
-  return probeEventDedupeBadge(event).label;
 }
 
 export function probeEventDedupeBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {

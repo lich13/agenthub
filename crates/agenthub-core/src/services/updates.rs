@@ -80,7 +80,6 @@ pub struct UpdateStatus {
 pub struct UpdateJobPlan {
     pub action: UpdateAction,
     pub method: UpdateExecutionMethod,
-    pub platform: PlatformKind,
     pub exclusive: bool,
 }
 
@@ -115,10 +114,7 @@ pub struct MacosUpdaterJobSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateActionPlan {
-    pub required_capability: Capability,
     pub action: UpdateAction,
-    pub method: UpdateExecutionMethod,
-    pub platform: PlatformKind,
     pub linux_job: Option<LinuxUpdateJobSpec>,
     pub macos_job: Option<MacosUpdaterJobSpec>,
 }
@@ -191,7 +187,6 @@ pub fn update_job_plan_for_surface(
     UpdateJobPlan {
         action,
         method: execution_method_for_surface(platform.kind, host_surface),
-        platform: platform.kind,
         exclusive: platform.kind == PlatformKind::Linux
             && host_surface == HostSurface::LinuxServerApi,
     }
@@ -230,10 +225,7 @@ pub fn plan_update_action_for_surface(
         }
     };
     Ok(UpdateActionPlan {
-        required_capability,
         action,
-        method: job_plan.method,
-        platform: job_plan.platform,
         linux_job,
         macos_job,
     })
@@ -261,12 +253,6 @@ pub fn macos_updater_no_update_output() -> &'static str {
 }
 
 pub fn linux_update_job_spec(_config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
-    if plan.method != UpdateExecutionMethod::LinuxSystemdJob {
-        anyhow::bail!("only Linux WebUI can start server update jobs");
-    }
-    if plan.platform != PlatformKind::Linux {
-        anyhow::bail!("only Linux WebUI can start server update jobs");
-    }
     let exclusive_group = plan.exclusive.then(|| "agenthub-webd-update".to_string());
     let spec = match plan.action {
         UpdateAction::Check => LinuxUpdateJobSpec {
@@ -288,7 +274,6 @@ pub fn linux_update_job_spec(_config: &Config, plan: UpdateJobPlan) -> Result<Li
             exclusive_group,
         },
     };
-    spec.process_command()?;
     Ok(spec)
 }
 
@@ -471,11 +456,10 @@ impl From<JobFailureCategory> for UpdateFailureCategory {
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_update_action, UpdateAction, UpdateExecutionMethod};
+    use super::{plan_update_action, UpdateAction};
     use crate::{
         config::Config,
         platform::{PlatformKind, PlatformPaths},
-        services::system::Capability,
     };
 
     #[test]
@@ -486,8 +470,6 @@ mod tests {
         let plan = plan_update_action(&config, &platform, UpdateAction::Install)
             .expect("Linux should allow update shell jobs");
 
-        assert_eq!(plan.required_capability, Capability::LinuxUpdateJob);
-        assert_eq!(plan.method, UpdateExecutionMethod::LinuxSystemdJob);
         let job = plan
             .linux_job
             .expect("Linux update action should create a shell job spec");
@@ -504,8 +486,6 @@ mod tests {
         let plan = plan_update_action(&config, &platform, UpdateAction::Install)
             .expect("macOS should plan native updater installs");
 
-        assert_eq!(plan.required_capability, Capability::AppUpdater);
-        assert_eq!(plan.method, UpdateExecutionMethod::MacosTauriUpdater);
         assert!(plan.linux_job.is_none());
         assert_eq!(
             plan.macos_job.as_ref().unwrap().kind,

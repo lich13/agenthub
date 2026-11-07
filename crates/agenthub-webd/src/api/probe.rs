@@ -83,7 +83,7 @@ pub(crate) async fn start_probe_action(
     let auth = crate::audit::actor();
     let platform = linux_update_platform();
     let config_path = probe_config_path();
-    let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;
+    let plan = probe_service::plan_probe_action(&platform, action, &config_path)?;
     let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)
         .map_err(|err| api_error(ApiErrorKind::Conflict, &err.to_string()))?;
     ok(json!({"job_id": id}))
@@ -243,7 +243,7 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
     let plan = AgentHubUseCases::with_config(config, &platform)
         .settings()?
         .probe_settings_view(secret_state)?;
-    serde_json::to_value(plan.settings).map_err(anyhow::Error::from)
+    serde_json::to_value(plan).map_err(anyhow::Error::from)
 }
 
 pub(crate) async fn load_probe_threads(

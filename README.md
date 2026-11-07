@@ -2,7 +2,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并支持通过系统 SSH 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
-v2.1.6 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
+v2.1.7 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
 
 ## 核心能力
 
@@ -12,7 +12,7 @@ v2.1.6 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 - **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
 - **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、六个 Provider 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
-- **GitHub CI 通知**：Probe 顶部展示所选机器当前 `github.com` 活跃 `gh` 账号的 CI；每 60 秒读取每仓库首页 10 条，每 10 分钟刷新公开、私有及 fork 仓库目录，筛选后最多展示 20 条。监控默认关闭，开启后成功、失败和超时发往已启用的 Bark 与获准的 Mac 系统通知，点击可打开对应 GitHub 运行。Mac 在 App 运行及最小化时每 60 秒观察当前机器缓存，退出后 Bark 继续工作；首次观察、重新启用和切号不补发历史结果。全部后台监控关闭时仍可手动查询；窗口外的旧运行及旧重跑不保证发现。
+- **GitHub CI 通知**：Probe 顶部展示所选机器当前 `github.com` 活跃 `gh` 账号的 CI；每 60 秒读取每仓库首页 10 条，每 10 分钟刷新公开、私有及 fork 仓库目录，筛选后最多展示 20 条。监控默认关闭，开启后成功、失败和超时发往已启用的 Bark 与获准的 Mac 系统通知，点击可打开对应 GitHub 运行。Mac 在 App 运行及最小化时每 60 秒观察当前机器缓存，退出后 Bark 继续工作；首次观察、重新启用和切号不补发历史结果。关闭 CI 时仅显示缓存，手动刷新不会查询新结果；窗口外的旧运行及旧重跑不保证发现。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
 - **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；直接选择本机 OpenSSH 配置及 Include 中保存的 Host，复用密钥、ssh-agent 与跳板配置，并支持「安装并连接」同版本服务。切换机器隔离缓存、分页及迟到响应；已受理后台任务继续执行，不阻止切换。
 

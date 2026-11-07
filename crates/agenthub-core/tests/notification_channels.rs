@@ -1089,7 +1089,7 @@ fn secret_and_pending_body_are_encrypted_and_status_never_returns_the_token() {
     assert_eq!(due[0].payload, payload());
     assert!(!due[0].payload.to_string().contains(FIXTURE_TOKEN));
     assert!(!db
-        .notification_channel_status()
+        .native_notification_status()
         .unwrap()
         .to_string()
         .contains(FIXTURE_TOKEN));

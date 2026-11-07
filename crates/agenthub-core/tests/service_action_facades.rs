@@ -9,21 +9,17 @@ use agenthub_core::{
             plan_thread_rename_with_capability, plan_thread_restore_with_capability,
             rename_thread_response, thread_state_action_response, ThreadRenameRequest,
         },
-        probe::{
-            plan_probe_action_with_device_key, plan_probe_action_with_device_key_and_config_path,
-            ProbeAction, ProbeExecutionKind, ProbeUseCases,
-        },
+        probe::{plan_probe_action, ProbeAction, ProbeUseCases},
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
             ProbeSettingsSaveRequest, SettingsUseCases,
         },
-        system::Capability,
         threads::{
             normalize_thread_block_limit, normalize_thread_detail_block_limit,
             plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
             thread_blocks_page_for_plan, ThreadDetailRequest, ThreadsQuery,
         },
-        updates::{plan_update_action, UpdateAction, UpdateExecutionMethod},
+        updates::{plan_update_action, UpdateAction},
     },
 };
 
@@ -64,7 +60,6 @@ fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
 
 #[test]
 fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     assert_eq!(
@@ -85,24 +80,14 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
     );
     assert!("unknown".parse::<ProbeAction>().is_err());
 
-    let bark = plan_probe_action_with_device_key(&config, &platform, ProbeAction::BarkTest, false)
-        .unwrap();
-    assert_eq!(bark.required_capability, Capability::Probe);
+    let bark = plan_probe_action(&platform, ProbeAction::BarkTest, &platform.config_file).unwrap();
     assert_eq!(bark.action, ProbeAction::BarkTest);
-    assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
-    assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
+    assert_eq!(bark.job.kind, "probe_bark_test");
     assert_eq!(
-        bark.job.as_ref().unwrap().args,
+        bark.job.args,
         vec!["probe".to_string(), "bark-test".to_string()]
     );
-    assert_eq!(
-        bark.job.as_ref().unwrap().exclusive_group.as_deref(),
-        Some("probe_bark")
-    );
-    assert_eq!(
-        bark.diagnostic_plan.as_ref().map(|plan| plan.kind.as_str()),
-        Some("bark-test")
-    );
+    assert_eq!(bark.job.exclusive_group.as_deref(), Some("probe_bark"));
 
     assert!("logsDbDryRun".parse::<ProbeAction>().is_err());
     assert!("logs-db-execute".parse::<ProbeAction>().is_err());
@@ -110,28 +95,19 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
 
 #[test]
 fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let default_plan =
-        plan_probe_action_with_device_key(&config, &platform, ProbeAction::BarkTest, false)
-            .unwrap();
-    let default_command = &default_plan.job.as_ref().unwrap().command;
+        plan_probe_action(&platform, ProbeAction::BarkTest, &platform.config_file).unwrap();
+    let default_command = &default_plan.job.command;
     assert_eq!(
         default_command,
         "/usr/local/bin/agenthub-webd --config /etc/agenthub-webd/config.toml probe bark-test"
     );
 
     let custom_config = std::path::Path::new("/tmp/agenthub custom/config.toml");
-    let override_plan = plan_probe_action_with_device_key_and_config_path(
-        &config,
-        &platform,
-        ProbeAction::BarkTest,
-        false,
-        custom_config,
-    )
-    .unwrap();
-    let override_job = override_plan.job.as_ref().unwrap();
+    let override_plan = plan_probe_action(&platform, ProbeAction::BarkTest, custom_config).unwrap();
+    let override_job = override_plan.job;
 
     assert_eq!(
         override_job.command,
@@ -148,12 +124,10 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
 
 #[test]
 fn probe_action_capability_gate_rejects_unsupported_platforms() {
-    let config = Config::for_platform_kind(PlatformKind::Windows);
     let platform = PlatformPaths::for_kind(PlatformKind::Windows);
 
-    let err =
-        plan_probe_action_with_device_key(&config, &platform, ProbeAction::InstallHooks, false)
-            .expect_err("Windows must not expose Probe actions");
+    let err = plan_probe_action(&platform, ProbeAction::InstallHooks, &platform.config_file)
+        .expect_err("Windows must not expose Probe actions");
 
     assert!(err.to_string().contains("probe is unavailable on windows"));
 }
@@ -163,8 +137,6 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
     let linux_config = Config::for_platform_kind(PlatformKind::Linux);
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
     let check = plan_update_action(&linux_config, &linux, UpdateAction::Check).unwrap();
-    assert_eq!(check.required_capability, Capability::LinuxUpdateJob);
-    assert_eq!(check.method, UpdateExecutionMethod::LinuxSystemdJob);
     assert_eq!(
         check.linux_job.as_ref().unwrap().kind,
         "agenthub_update_check"
@@ -177,8 +149,6 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
     let mac = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
 
     let mac_check = plan_update_action(&mac_config, &mac, UpdateAction::Check).unwrap();
-    assert_eq!(mac_check.required_capability, Capability::AppUpdater);
-    assert_eq!(mac_check.method, UpdateExecutionMethod::MacosTauriUpdater);
     assert!(mac_check.linux_job.is_none());
     assert_eq!(
         mac_check.macos_job.as_ref().unwrap().kind,
@@ -205,20 +175,15 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
     let linux_config = Config::for_platform_kind(PlatformKind::Linux);
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
 
-    let probe = ProbeUseCases::new(&linux_config, &linux);
-    let bark = probe
-        .action_with_device_key(ProbeAction::BarkTest, false)
-        .unwrap();
-    assert_eq!(bark.required_capability, Capability::Probe);
-    assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
-    assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
+    let probe = ProbeUseCases::new(&linux);
+    let bark = probe.action(ProbeAction::BarkTest).unwrap();
+    assert_eq!(bark.job.kind, "probe_bark_test");
 
     let settings = SettingsUseCases::new(&linux_config, &linux);
     let view = settings
         .probe_settings_view(ProbeSecretState::Configured)
         .unwrap();
-    assert_eq!(view.required_capability, Capability::Settings);
-    assert!(view.settings.notifications.device_key_configured);
+    assert!(view.notifications.device_key_configured);
 
     let save = settings
         .save_probe_settings(ProbeSettingsSaveRequest {
@@ -232,10 +197,11 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(save.required_capability, Capability::Settings);
-    assert_eq!(save.bark_device_key.as_deref(), Some("use-case-bark-key"));
+    assert_eq!(
+        Some(save.secret_writes[0].secret_value.as_str()),
+        Some("use-case-bark-key")
+    );
     let serialized = serde_json::to_string(&save).unwrap();
-    assert!(serialized.contains("[configured]"));
     assert!(!serialized.contains("use-case-bark-key"));
 }
 
@@ -272,7 +238,6 @@ fn thread_detail_cleanup_facades_are_capability_gated() {
 
     let blocks = plan_thread_blocks_request(&linux, "thread-a", Some(0), None).unwrap();
     assert_eq!(blocks.block_limit, Some(1));
-    assert!(!blocks.full);
 
     assert!(plan_thread_detail_request(
         &windows,

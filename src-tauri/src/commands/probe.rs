@@ -24,5 +24,4 @@ pub async fn getGithubCiStatus(
             cached_only: false,
         },
     )
-    .await
 }

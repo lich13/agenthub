@@ -36,7 +36,7 @@ pub(crate) fn jobs_with_state(
     let plan = use_cases.jobs().list(request.limit)?;
     Ok(state
         .db
-        .list_jobs(plan.limit)?
+        .list_jobs(plan)?
         .into_iter()
         .map(|job| use_cases.jobs().response(job).into())
         .collect())
@@ -50,7 +50,7 @@ pub(crate) fn job_detail_with_state(
     let plan = use_cases.jobs().detail(&request.id)?;
     Ok(state
         .db
-        .job_with_output(&plan.job_id, request.include_output.unwrap_or(true))?
+        .job_with_output(&plan, request.include_output.unwrap_or(true))?
         .map(|job| use_cases.jobs().response(job).into()))
 }
 

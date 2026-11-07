@@ -16,20 +16,6 @@ use crate::{
     update::{analyze_job_failure, JobFailureAnalysis},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JobListPlan {
-    pub required_capability: Capability,
-    pub limit: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JobDetailPlan {
-    pub required_capability: Capability,
-    pub job_id: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobResponse {
@@ -171,10 +157,7 @@ impl<'a> AgentHubUseCases<'a> {
     }
 
     pub fn probe(self) -> Result<ProbeUseCases<'a>> {
-        Ok(CoreProbeUseCases::new(
-            self.config_required()?,
-            self.platform,
-        ))
+        Ok(CoreProbeUseCases::new(self.platform))
     }
 
     pub fn system(self) -> Result<SystemUseCases<'a>> {
@@ -260,15 +243,6 @@ impl<'a> ThreadUseCases<'a> {
         threads::plan_thread_blocks_request(self.platform, thread_id, limit, before)
     }
 
-    pub fn blocks_read(
-        self,
-        thread_id: &str,
-        limit: Option<usize>,
-        before: Option<String>,
-    ) -> Result<ThreadDetailPlan> {
-        threads::plan_thread_blocks_request(self.platform, thread_id, limit, before)
-    }
-
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
         jobs::plan_thread_archive_with_capability(self.platform, thread_id)
     }
@@ -288,20 +262,14 @@ pub struct JobUseCases<'a> {
 }
 
 impl<'a> JobUseCases<'a> {
-    pub fn list(self, limit: Option<u32>) -> Result<JobListPlan> {
+    pub fn list(self, limit: Option<u32>) -> Result<u32> {
         system::require_capability(self.platform, Capability::JobHistory)?;
-        Ok(JobListPlan {
-            required_capability: Capability::JobHistory,
-            limit: normalize_job_list_limit(limit),
-        })
+        Ok(normalize_job_list_limit(limit))
     }
 
-    pub fn detail(self, job_id: &str) -> Result<JobDetailPlan> {
+    pub fn detail(self, job_id: &str) -> Result<String> {
         system::require_capability(self.platform, Capability::JobHistory)?;
-        Ok(JobDetailPlan {
-            required_capability: Capability::JobHistory,
-            job_id: required_job_id(job_id)?,
-        })
+        required_job_id(job_id)
     }
 
     pub fn response(self, job: JobRecord) -> JobResponse {

@@ -399,7 +399,3 @@ function renderGrokEvent(
 export function grokSessionLabel(session: GrokSessionSummary): string {
   return session.title || session.id;
 }
-
-export function canPreviewGrokDelete(_session: GrokSessionSummary): boolean {
-  return true;
-}

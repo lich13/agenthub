@@ -32,10 +32,8 @@ pub struct ThreadRenameRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStateActionPlan {
-    pub required_capability: Capability,
     pub command: String,
     pub thread_id: String,
-    pub archived: Option<bool>,
     pub name: Option<String>,
 }
 
@@ -60,10 +58,8 @@ pub fn plan_thread_rename_with_capability(
     require_capability(platform, Capability::ThreadArchiveActions)?;
     let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
     Ok(ThreadStateActionPlan {
-        required_capability: Capability::ThreadArchiveActions,
         command: commands::THREADS_RENAME.to_string(),
-        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
-        archived: None,
+        thread_id: required_command_thread_id(&request.thread_id)?,
         name: Some(name),
     })
 }
@@ -139,23 +135,13 @@ pub fn thread_state_action_response(plan: &ThreadStateActionPlan) -> Result<Acti
     }
 }
 
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
 fn non_empty_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn required_command_thread_id(
-    request_thread_id: Option<&str>,
-    message_thread_id: Option<&str>,
-) -> Result<String> {
-    non_empty(request_thread_id)
-        .or_else(|| non_empty(message_thread_id))
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("thread_id is required"))
+fn required_command_thread_id(thread_id: &str) -> Result<String> {
+    non_empty_owned(thread_id).ok_or_else(|| anyhow!("thread_id is required"))
 }
 
 fn plan_thread_archive_state_action(
@@ -165,15 +151,13 @@ fn plan_thread_archive_state_action(
 ) -> Result<ThreadStateActionPlan> {
     require_capability(platform, Capability::ThreadArchiveActions)?;
     Ok(ThreadStateActionPlan {
-        required_capability: Capability::ThreadArchiveActions,
         command: if archived {
             commands::THREADS_ARCHIVE
         } else {
             commands::THREADS_RESTORE
         }
         .to_string(),
-        thread_id: required_command_thread_id(Some(thread_id), None)?,
-        archived: Some(archived),
+        thread_id: required_command_thread_id(thread_id)?,
         name: None,
     })
 }

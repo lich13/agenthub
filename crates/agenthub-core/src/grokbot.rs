@@ -518,6 +518,10 @@ fn pending_events(row: &Value, replica: Option<&Value>) -> Vec<NativeTurnEvent> 
     pending
 }
 pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
+    scan_selected(paths, None)
+}
+
+pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<NativeScan> {
     let Some((scope, roster)) = roster(paths)? else {
         return Ok(NativeScan::default());
     };
@@ -527,6 +531,9 @@ pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
             scan.errors += 1;
             continue;
         };
+        if selected.is_some_and(|selected| selected != id) {
+            continue;
+        }
         let replica = match read_slice(&paths.persistence, &replica_key(&scope, id), 1) {
             Ok(v) => v,
             Err(_) => {

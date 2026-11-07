@@ -342,3 +342,24 @@ fn cached_ordinary_card_does_not_become_roster_reply_request() {
     f.replica(json!([{"id":"widget","kind":"send-message","timestampMs":2000,"message":{"type":"widget","widget":{"text":"ordinary card"}}}]));
     assert!(scan_events(&f).is_empty());
 }
+
+#[test]
+fn targeted_notification_scan_does_not_read_other_bot_transcripts() {
+    let f = Fixture::new("fixture.account");
+    f.rows(json!([
+        {"id":"bot-a","name":"Target","lastActivityAt":2000,"awaitingUserResponse":{"id":"question-a"}},
+        {"id":"bot-b","name":"Other","lastActivityAt":2000}
+    ]));
+    f.replica(json!([]));
+    f.write(
+        &replica_key(&f.scope, "bot-b"),
+        1,
+        json!({"entries":"broken"}),
+    );
+    let selected = scan_selected(&f.paths, Some("bot-a")).unwrap();
+    assert_eq!(selected.errors, 0);
+    assert_eq!(selected.streams.len(), 1);
+    assert_eq!(selected.streams[0].session_key, f.session());
+    assert_eq!(selected.streams[0].events.len(), 1);
+    assert_eq!(scan(&f.paths).unwrap().errors, 1);
+}

@@ -565,23 +565,6 @@ pub fn snapshot(id: &str, summary: &Value, response: &Value) -> Result<NativeStr
     snapshot_with_context(id, summary, response, &TrajectoryLivenessContext::default())
 }
 
-pub fn snapshot_with_subagents(
-    id: &str,
-    summary: &Value,
-    response: &Value,
-    has_active_subagents: bool,
-) -> Result<NativeStreamSnapshot> {
-    snapshot_with_context(
-        id,
-        summary,
-        response,
-        &TrajectoryLivenessContext {
-            has_active_subagents,
-            ..Default::default()
-        },
-    )
-}
-
 pub fn snapshot_with_context(
     id: &str,
     summary: &Value,

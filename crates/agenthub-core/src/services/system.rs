@@ -73,7 +73,6 @@ pub enum Capability {
     JobHistory,
     AppUpdater,
     ThreadCleanup,
-    CodexDeleteTree,
     ThreadArchiveActions,
     Systemd,
     LinuxUpdateJob,
@@ -91,7 +90,6 @@ impl Capability {
         Capability::JobHistory,
         Capability::AppUpdater,
         Capability::ThreadCleanup,
-        Capability::CodexDeleteTree,
         Capability::ThreadArchiveActions,
         Capability::Systemd,
         Capability::LinuxUpdateJob,
@@ -113,7 +111,6 @@ impl Capability {
             Self::JobHistory => "job_history",
             Self::AppUpdater => "app_updater",
             Self::ThreadCleanup => "thread_cleanup",
-            Self::CodexDeleteTree => "codex_delete_tree",
             Self::ThreadArchiveActions => "thread_archive_actions",
             Self::Systemd => "systemd",
             Self::LinuxUpdateJob => "linux_update_job",
@@ -137,7 +134,6 @@ impl Capability {
             | Self::Settings
             | Self::JobHistory
             | Self::ThreadCleanup
-            | Self::CodexDeleteTree
             | Self::ThreadArchiveActions => linux_server_api || desktop_embedded,
             Self::AppUpdater => linux_server_api || desktop_embedded,
             Self::Systemd | Self::LinuxUpdateJob | Self::PruneBackups => linux_server_api,
@@ -161,8 +157,6 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub hidden_cleanup_scan: bool,
     #[serde(default)]
-    pub dsh_archive_cleanup: bool,
-    #[serde(default)]
     pub antigravity_notifications: bool,
     #[serde(default)]
     pub dsh_notifications: bool,
@@ -177,7 +171,6 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub dsh_sessions: bool,
     #[serde(default)]
-    pub codex_delete_tree: bool,
     pub thread_archive_actions: bool,
     pub systemd: bool,
     pub linux_update_job: bool,
@@ -208,19 +201,12 @@ pub fn require_capability_for_surface(
     )
 }
 
-pub fn system_capabilities(config: &Config, platform: &PlatformPaths) -> SystemCapabilities {
-    system_capabilities_for_surface(
-        config,
-        platform,
-        HostSurface::default_for_platform(platform),
-    )
-}
-
 pub fn system_capabilities_for_surface(
     _config: &Config,
     platform: &PlatformPaths,
     host_surface: HostSurface,
 ) -> SystemCapabilities {
+    let thread_cleanup = Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface);
     SystemCapabilities {
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
         thread_subagents: Capability::ThreadSubagents
@@ -231,11 +217,8 @@ pub fn system_capabilities_for_surface(
         settings: Capability::Settings.is_supported_on_surface(platform, host_surface),
         job_history: Capability::JobHistory.is_supported_on_surface(platform, host_surface),
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),
-        thread_cleanup: Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface),
-        hidden_cleanup_scan: Capability::ThreadCleanup
-            .is_supported_on_surface(platform, host_surface),
-        dsh_archive_cleanup: Capability::ThreadCleanup
-            .is_supported_on_surface(platform, host_surface),
+        thread_cleanup,
+        hidden_cleanup_scan: thread_cleanup,
         antigravity_notifications: platform.kind == PlatformKind::Macos
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         dsh_notifications: platform.kind == PlatformKind::Macos
@@ -247,8 +230,6 @@ pub fn system_capabilities_for_surface(
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         antigravity_sessions: Capability::Threads.is_supported_on_surface(platform, host_surface),
         dsh_sessions: Capability::Threads.is_supported_on_surface(platform, host_surface),
-        codex_delete_tree: Capability::CodexDeleteTree
-            .is_supported_on_surface(platform, host_surface),
         thread_archive_actions: Capability::ThreadArchiveActions
             .is_supported_on_surface(platform, host_surface),
         systemd: Capability::Systemd.is_supported_on_surface(platform, host_surface),
@@ -268,10 +249,7 @@ fn platform_kind_label(kind: PlatformKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        require_capability, system_capabilities, system_capabilities_for_surface, Capability,
-        HostSurface,
-    };
+    use super::{require_capability, system_capabilities_for_surface, Capability, HostSurface};
     use crate::{
         config::Config,
         platform::{PlatformKind, PlatformPaths},
@@ -318,7 +296,11 @@ mod tests {
     fn capability_matrix_matches_neutral_capability_gate() {
         let config = Config::for_platform_kind(crate::platform::PlatformKind::Windows);
         let platform = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
-        let matrix = system_capabilities(&config, &platform);
+        let matrix = system_capabilities_for_surface(
+            &config,
+            &platform,
+            HostSurface::default_for_platform(&platform),
+        );
 
         assert!(!matrix.settings);
         assert!(require_capability(&platform, Capability::Settings).is_err());

@@ -19,7 +19,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use uuid::Uuid;
 
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_QUESTION_HOOK_MATCHER: &str = r"^(functions\.)?request_user_input(_async)?$";
@@ -124,14 +123,16 @@ impl ProbeRuntime {
 
     pub async fn status(&self) -> Result<ProbeStatus> {
         let runtime = Self::new(self.config.clone(), self.paths.clone());
-        crate::read_tasks::spawn_blocking(move || runtime.status_blocking()).await?
+        crate::read_tasks::spawn_blocking(move || runtime.status_blocking())
+            .await
+            .map_err(Into::into)
     }
 
-    fn status_blocking(&self) -> Result<ProbeStatus> {
+    fn status_blocking(&self) -> ProbeStatus {
         let resolved = self.resolved_codex_paths();
         let aggregation = aggregate_probe_status(&self.config);
         let hook_status = self.hook_status();
-        Ok(ProbeStatus {
+        ProbeStatus {
             provider_notifications: json!([]),
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
@@ -195,49 +196,6 @@ impl ProbeRuntime {
             logs_db_source: resolved.logs_db_source.clone(),
             discovery_warnings: resolved.discovery_warnings.clone(),
             host_label: self.config.codex.host_label.clone(),
-        })
-    }
-
-    pub fn diagnostics(&self) -> ProbeDiagnostics {
-        let resolved = self.resolved_codex_paths();
-        ProbeDiagnostics {
-            doctor_status: self.doctor_status_text(),
-            lifecycle_status: self.lifecycle_status_text(),
-            configured_codex_home: resolved.configured_codex_home,
-            resolved_codex_home: resolved.home,
-            codex_home_source: resolved.codex_home_source,
-            discovery_warnings: resolved.discovery_warnings,
-            host_label: self.config.codex.host_label.clone(),
-            runtime_version: env!("CARGO_PKG_VERSION").to_string(),
-            managed_boundaries: vec![
-                "只读取本地 Codex 状态库、session_index、rollout 与 logs_2.sqlite".to_string(),
-                "不开放任意 shell".to_string(),
-                "不执行自动回复或隐藏桌面控制".to_string(),
-            ],
-            effective_constants: json!({
-                "thread_probe_uses_local_read_model": true,
-                "delete_uses_existing_dry_run_confirm_flow": true,
-                "hidden_desktop_control": false,
-                "auto_reply": false,
-                "bark_payload_contains_device_key": false
-            }),
-            repair_suggestions: self.repair_suggestions(),
-        }
-    }
-
-    pub fn lifecycle_status(&self) -> ProbeLifecycleStatus {
-        ProbeLifecycleStatus {
-            status: self.lifecycle_status_text(),
-            lifecycle_status: self.lifecycle_status_text(),
-            platform: self.paths.kind,
-            service_kind: self.paths.service_kind.clone(),
-            service_name: self.paths.service_name.clone(),
-            enabled: self.config.probe.enabled,
-            hooks_enabled: self.config.probe.hooks.manage_stop_hook,
-            notifications_enabled: self.config.probe.notifications.enabled,
-            poll_seconds: self.config.probe.poll_seconds,
-            recent_limit: self.config.probe.recent_limit,
-            next_actions: self.lifecycle_next_actions(),
         }
     }
 
@@ -272,123 +230,11 @@ impl ProbeRuntime {
         }
         .to_string();
         ProbeHookStatus {
-            status: status.clone(),
-            hook_status: status.clone(),
-            installed: audit.expected_installed,
-            managed: status == "managed",
+            hook_status: status,
             hook_command,
             actual_commands: audit.actual_commands,
             stale_command_count: audit.stale_command_count,
             empty_group_count: audit.empty_group_count,
-            restart_required_after_install: false,
-            supported_events: vec![
-                "hook-stop".to_string(),
-                "pre-tool-use-hook".to_string(),
-                "notify-completion".to_string(),
-            ],
-            dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
-            dedupe_ttl_seconds: PROBE_EVENT_TTL_SECONDS,
-        }
-    }
-
-    pub fn plan_action(&self, kind: ProbeActionPlanKind) -> Result<ProbeActionPlan> {
-        let suffix = Uuid::new_v4()
-            .simple()
-            .to_string()
-            .chars()
-            .take(12)
-            .collect::<String>();
-        match kind {
-            ProbeActionPlanKind::InstallHooks => Ok(ProbeActionPlan {
-                plan_id: format!("probe-hooks-{suffix}"),
-                kind: "hooks-install".to_string(),
-                title: "安装探针 Hook".to_string(),
-                summary: "将 Codex Stop Hook 指向 AgentHub 内建 Probe 子命令".to_string(),
-                steps: vec![
-                    format!(
-                        "备份 {} 后写入 Stop Hook",
-                        self.resolved_codex_paths()
-                            .home
-                            .join("hooks.json")
-                            .display()
-                    ),
-                    format!("Stop Hook 命令包含 `{}`", self.hook_command()),
-                    "不重载任何外部 Codex 服务".to_string(),
-                ],
-                payload: json!({
-                    "codex_home": self.resolved_codex_paths().home,
-                    "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
-                    "codex_home_source": self.resolved_codex_paths().codex_home_source,
-                    "hook_command": self.hook_command(),
-                    "restart_required_after_install": false,
-                }),
-                requires_confirmation: true,
-                command: "agenthub-webd probe hooks-install".to_string(),
-            }),
-            ProbeActionPlanKind::RemoveHooks => Ok(ProbeActionPlan {
-                plan_id: format!("probe-hooks-remove-{suffix}"),
-                kind: "hooks-remove".to_string(),
-                title: "卸载探针 Hook".to_string(),
-                summary: "备份 hooks.json 后精确移除 AgentHub 托管的 Codex Stop 与 PreToolUse Hook，保留用户自定义第三方 Hook".to_string(),
-                steps: vec![
-                    format!(
-                        "备份 {} 后移除 AgentHub 托管 Hook",
-                        self.resolved_codex_paths()
-                            .home
-                            .join("hooks.json")
-                            .display()
-                    ),
-                    "清理空组并保留其他第三方 Hook".to_string(),
-                    "将 manage_stop_hook 置为 false".to_string(),
-                ],
-                payload: json!({
-                    "codex_home": self.resolved_codex_paths().home,
-                    "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
-                    "codex_home_source": self.resolved_codex_paths().codex_home_source,
-                }),
-                requires_confirmation: true,
-                command: "agenthub-webd probe hooks-remove".to_string(),
-            }),
-        }
-    }
-
-    pub fn bark_test_plan(&self, device_key_configured: bool) -> ProbeActionPlan {
-        let suffix = Uuid::new_v4()
-            .simple()
-            .to_string()
-            .chars()
-            .take(12)
-            .collect::<String>();
-        ProbeActionPlan {
-            plan_id: format!("probe-bark-test-{suffix}"),
-            kind: "bark-test".to_string(),
-            title: "AgentHub 推送测试".to_string(),
-            summary: "发送一条固定的 Probe 测试通知，计划和审计记录只保留脱敏配置状态".to_string(),
-            steps: vec![
-                if self.config.probe.notifications.enabled {
-                    "检查 Bark 通知开关已启用".to_string()
-                } else {
-                    "Bark 通知未启用，测试将跳过外发".to_string()
-                },
-                if device_key_configured {
-                    "使用已配置的 Bark device key，计划中不展示密钥".to_string()
-                } else {
-                    "未配置 Bark device key，测试不会外发".to_string()
-                },
-            ],
-            payload: json!({
-                "enabled": self.config.probe.notifications.enabled,
-                "configured": device_key_configured,
-                "server_url": self.config.probe.notifications.server_url,
-                "device_key": if device_key_configured { "[configured]" } else { "[missing]" },
-                "bark_payload": {
-                    "title": "AgentHub 推送测试",
-                    "body": bark_test_body()
-                },
-                "redacted_fields": ["device_key", "sound", "group", "url"]
-            }),
-            requires_confirmation: false,
-            command: "agenthub-webd probe bark-test".to_string(),
         }
     }
 
@@ -638,27 +484,6 @@ impl ProbeRuntime {
         }
         .to_string()
     }
-
-    fn lifecycle_next_actions(&self) -> Vec<String> {
-        let mut actions = Vec::new();
-        if self.config.probe.hooks.manage_stop_hook {
-            actions.push("probe-hook-ready".to_string());
-        } else {
-            actions.push("install-probe-hook".to_string());
-        }
-        actions
-    }
-
-    fn repair_suggestions(&self) -> Vec<String> {
-        let mut suggestions = Vec::new();
-        if !self.config.probe.enabled {
-            suggestions.push("enable Probe runtime in config".to_string());
-        }
-        if !self.config.probe.hooks.manage_stop_hook {
-            suggestions.push("enable Stop hook management before installing hooks".to_string());
-        }
-        suggestions
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -796,13 +621,6 @@ pub fn remove_agenthub_managed_hooks(root: &mut Value) -> bool {
     changed
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProbeActionPlanKind {
-    InstallHooks,
-    RemoveHooks,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeLiveSession {
     pub provider: String,
@@ -814,33 +632,6 @@ pub struct ProbeLiveSession {
     pub updated_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProbeActionPlan {
-    pub plan_id: String,
-    pub kind: String,
-    pub title: String,
-    pub summary: String,
-    pub steps: Vec<String>,
-    pub payload: Value,
-    pub requires_confirmation: bool,
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProbeLifecycleStatus {
-    pub status: String,
-    pub lifecycle_status: String,
-    pub platform: PlatformKind,
-    pub service_kind: String,
-    pub service_name: String,
-    pub enabled: bool,
-    pub hooks_enabled: bool,
-    pub notifications_enabled: bool,
-    pub poll_seconds: u64,
-    pub recent_limit: usize,
-    pub next_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -900,35 +691,13 @@ pub struct ProbeStatus {
     pub host_label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProbeDiagnostics {
-    pub doctor_status: String,
-    pub lifecycle_status: String,
-    pub configured_codex_home: Option<String>,
-    pub resolved_codex_home: PathBuf,
-    pub codex_home_source: String,
-    pub discovery_warnings: Vec<String>,
-    pub host_label: String,
-    pub runtime_version: String,
-    pub managed_boundaries: Vec<String>,
-    pub effective_constants: Value,
-    pub repair_suggestions: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeHookStatus {
-    pub status: String,
     pub hook_status: String,
-    pub installed: bool,
-    pub managed: bool,
     pub hook_command: String,
     pub actual_commands: Vec<String>,
     pub stale_command_count: usize,
     pub empty_group_count: usize,
-    pub restart_required_after_install: bool,
-    pub supported_events: Vec<String>,
-    pub dedupe_namespace: String,
-    pub dedupe_ttl_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1043,14 +812,6 @@ impl ProbeEventInput {
         self
     }
 
-    pub fn with_last_assistant_message(mut self, message: Option<&str>) -> Self {
-        self.last_assistant_message = message.map(ToString::to_string);
-        if self.last_assistant_message.is_some() && self.body_source.is_none() {
-            self.body_source = Some("last_assistant_message".to_string());
-        }
-        self
-    }
-
     pub fn with_passive_scan_source(mut self) -> Self {
         self.scan_source = Some("passive-scan".to_string());
         self.ttl_seconds = Some(PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS);
@@ -1112,10 +873,6 @@ impl ProbeEventInput {
 
     pub fn thread_title(&self) -> Option<&str> {
         self.thread_title.as_deref()
-    }
-
-    pub fn is_notify_completion(&self) -> bool {
-        matches!(self.kind, ProbeEventInputKind::NotifyCompletion)
     }
 
     fn event_kind(&self) -> &str {
@@ -1623,13 +1380,6 @@ fn probe_bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
         .enumerate()
         .map(|(index, chunk)| format!("第 {}/{} 段\n\n{chunk}", index + 1, chunk_count))
         .collect()
-}
-
-pub fn safe_thread_probe_id(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
 }
 
 fn dedupe_component(value: &str) -> String {

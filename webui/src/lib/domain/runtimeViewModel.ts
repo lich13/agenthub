@@ -24,11 +24,7 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 }
 
 export const OPS_PANEL_TITLES = {
-  updates: "本机 App 更新",
   unifiedCleanup: "全平台线程清理",
-  archivedCleanup: "归档线程清理",
-  hiddenCleanup: "隐藏线程清理",
-  dshArchiveCleanup: "DSH 归档清理",
   jobs: "Job History"
 } as const;
 
@@ -93,8 +89,8 @@ export const UNIFIED_CLEANUP_SCOPES: readonly UnifiedCleanupScopeMeta[] = [
 ];
 
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
-  return Boolean(plan) && (!plan!.scan || (plan!.scan!.phase === "complete" && !plan!.scan!.hasMore
-    && plan!.candidates.length === plan!.scan!.total)) && Boolean(plan!.candidates?.length);
+  return Boolean(plan?.scan && plan.scan.phase === "complete" && !plan.scan.hasMore
+    && plan.candidates.length === plan.scan.total && plan.candidates.length > 0);
 }
 
 export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
@@ -236,12 +232,6 @@ export function probeThreadsByStatus(status?: Pick<ProbeStatus, "running_threads
   };
 }
 
-export function probeRunningCountValue(status?: Pick<ProbeStatus, "running_count" | "running_threads"> | null): string {
-  const backendCount = typeof status?.running_count === "number" ? Math.max(0, status.running_count) : 0;
-  const threadCount = status?.running_threads?.length ?? 0;
-  return String(backendCount > 0 ? backendCount : threadCount);
-}
-
 export function probeSettingsAfterBarkSave<T extends { notifications: { device_key_configured?: boolean } }>(
   saved: T,
   submittedDeviceKey?: string | null,
@@ -270,29 +260,13 @@ export type ProbeLiveSessionsByBucket = {
 };
 
 export function probeLiveSessionsByBucket(
-  status?: Pick<ProbeStatus, "active_sessions" | "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null
+  status?: Pick<ProbeStatus, "active_sessions"> | null
 ): ProbeLiveSessionsByBucket {
-  if (Array.isArray(status?.active_sessions) && status.active_sessions.length > 0) {
-    return {
-      running: status.active_sessions.filter((item) => item.bucket === "running"),
-      replyNeeded: status.active_sessions.filter((item) => item.bucket === "reply_needed"),
-      recoverable: status.active_sessions.filter((item) => item.bucket === "recoverable")
-    };
-  }
-  const mapCodex = (threads: ThreadSummary[] | undefined, bucket: "running" | "reply_needed" | "recoverable") =>
-    (threads ?? []).map((thread) => ({
-      provider: "codex",
-      id: thread.id,
-      session_key: thread.id,
-      title: thread.title?.trim() ? thread.title : thread.id,
-      bucket,
-      updated_at: thread.updated_at,
-      cwd: thread.cwd
-    }));
+  const sessions = status?.active_sessions ?? [];
   return {
-    running: mapCodex(status?.running_threads, "running"),
-    replyNeeded: mapCodex(status?.reply_needed_threads, "reply_needed"),
-    recoverable: mapCodex(status?.recoverable_threads, "recoverable")
+    running: sessions.filter(item => item.bucket === "running"),
+    replyNeeded: sessions.filter(item => item.bucket === "reply_needed"),
+    recoverable: sessions.filter(item => item.bucket === "recoverable")
   };
 }
 
@@ -471,11 +445,11 @@ export function mergeHiddenScanIntoUnifiedPlan(
   current: UnifiedCleanupPlan | null,
   hiddenPlan: HiddenThreadDeletePlan
 ): UnifiedCleanupPlan {
-  const scanComplete = !hiddenPlan.scan || (
+  const scanComplete = Boolean(hiddenPlan.scan && (
     hiddenPlan.scan.phase === "complete"
     && !hiddenPlan.scan.hasMore
     && hiddenPlan.candidates.length === hiddenPlan.scan.total
-  );
+  ));
   const candidates = hiddenPlan.candidates.map((item) => ({
     id: item.id,
     title: item.title || item.id,
@@ -609,17 +583,15 @@ export function unifiedCleanupUnsuccessfulItems(
 }
 
 function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KiB", "MiB", "GiB"];
   let value = bytes / 1024;
-  for (const unit of units) {
-    if (value < 1024 || unit === units[units.length - 1]) {
-      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
-    }
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
     value /= 1024;
+    index += 1;
   }
-  return `${bytes} B`;
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[index]}`;
 }
 
 export function failureCategoryLabel(category: string, input?: RuntimeCapabilityInput): string {

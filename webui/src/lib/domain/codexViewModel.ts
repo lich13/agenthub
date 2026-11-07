@@ -108,31 +108,6 @@ export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(cur
   return next;
 }
 
-export function mergeThreadDetailSummaryFromList(detail: ThreadDetail, incoming: Partial<ThreadSummary>): ThreadDetail {
-  return {
-    ...detail,
-    summary: mergeIncomingThreadSummary(detail.summary, incoming) as ThreadSummary
-  };
-}
-
-export function threadMatchesListFilter(thread: Partial<ThreadSummary>, status = "all", q = ""): boolean {
-  if (!isVisibleMainThread(thread, status === "archived")) return false;
-  if (status !== "all") {
-    if (status === "running" && !isThreadListItemRunning(thread)) return false;
-    if (status === "reply-needed" && thread.status !== "ReplyNeeded") return false;
-    if (status === "recoverable" && thread.status !== "Recoverable") return false;
-    if (status === "archived" && thread.status !== "Archived") return false;
-    if (!["running", "reply-needed", "recoverable", "archived"].includes(status) && thread.status !== status) return false;
-  }
-  const needle = q.trim().toLowerCase();
-  if (!needle) return true;
-  return [
-    thread.id,
-    thread.title,
-    thread.latest_message
-  ].some((value) => String(value ?? "").toLowerCase().includes(needle));
-}
-
 export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
   const visible = filterVisibleThreadSummaries(threads);
   const removedIndex = visible.findIndex((thread) => thread.id === removedThreadId);
@@ -222,14 +197,6 @@ export function threadStatusLabel(status?: ThreadStatus | string | null): string
   if (status === "Running") return "运行中";
   if (status === "Archived") return "归档";
   return "最近";
-}
-
-export function sourceCountsText(counts?: Record<string, number> | null): string {
-  if (!counts || Object.keys(counts).length === 0) return "暂无";
-  return Object.entries(counts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value}`)
-    .join(" ");
 }
 
 export function extractPlanText(value: string): string {

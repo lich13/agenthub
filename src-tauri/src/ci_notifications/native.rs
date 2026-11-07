@@ -43,9 +43,7 @@ define_class!(
             if &*response.actionIdentifier() == unsafe { UNNotificationDefaultActionIdentifier } {
                 let identifier = response.notification().request().identifier().to_string();
                 if let Some((url, _)) = identifier.rsplit_once("#agenthub-ci:") {
-                    if url.starts_with("https://github.com/") {
-                        let _ = self.ivars().opener().open_url(url, None::<&str>);
-                    }
+                    let _ = self.ivars().opener().open_url(url, None::<&str>);
                 }
             }
             completion.call(());
@@ -67,36 +65,26 @@ pub(super) fn install(app: tauri::AppHandle) {
     DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
 }
 
-pub(super) async fn request_authorization(app: &tauri::AppHandle) {
-    let (sent, mut received) = tokio::sync::mpsc::channel(1);
-    if app
-        .run_on_main_thread(move || {
-            let completed = RcBlock::new(move |_granted: Bool, error: *mut NSError| {
-                if !error.is_null() {
-                    eprintln!("CI system notification authorization failed");
-                }
-                let _ = sent.try_send(());
-            });
-            UNUserNotificationCenter::currentNotificationCenter()
-                .requestAuthorizationWithOptions_completionHandler(
-                    UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-                    &completed,
-                );
-        })
-        .is_ok()
-    {
-        received.recv().await;
-    }
+pub(super) fn send_authorized(machine: String, events: Vec<Event>) {
+    let completed = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+        if !error.is_null() {
+            eprintln!("CI system notification authorization failed");
+        } else if granted.as_bool() {
+            for event in &events {
+                send(&machine, event);
+            }
+        }
+    });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &completed,
+        );
 }
 
-pub(super) fn send(revision: u64, machine: &str, event: &Event) {
+fn send(machine: &str, event: &Event) {
     let (title, body) = event.run.notification_text(machine);
-    let identifier = format!(
-        "{}#agenthub-ci:{}:{}",
-        event.run.html_url,
-        revision,
-        event.key()
-    );
+    let identifier = format!("{}#agenthub-ci:{}", event.run.html_url, event.key());
     let content = UNMutableNotificationContent::new();
     content.setTitle(&NSString::from_str(&title));
     content.setBody(&NSString::from_str(&body));

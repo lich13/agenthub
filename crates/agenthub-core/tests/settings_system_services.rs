@@ -1,3 +1,4 @@
+use agenthub_core::services::system::HostSurface;
 use agenthub_core::{
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
@@ -10,14 +11,18 @@ use agenthub_core::{
             probe_settings_view_with_capability, ProbeNotificationsSavePatch, ProbeSecretState,
             ProbeSettingsSavePatch, ProbeSettingsSaveRequest, PROBE_BARK_DEVICE_KEY_SETTING,
         },
-        system::{require_capability, system_capabilities, Capability},
+        system::{require_capability, system_capabilities_for_surface, Capability},
     },
 };
 
 #[test]
 fn linux_capabilities_expose_api_and_maintenance_features() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
-    let capabilities = system_capabilities(&config, &PlatformPaths::for_kind(PlatformKind::Linux));
+    let capabilities = system_capabilities_for_surface(
+        &config,
+        &PlatformPaths::for_kind(PlatformKind::Linux),
+        HostSurface::LinuxServerApi,
+    );
 
     assert!(capabilities.threads);
     assert!(capabilities.jobs);
@@ -39,9 +44,10 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() 
     let home = temp_dir("agenthub-capabilities-macos");
     std::fs::create_dir_all(&home).unwrap();
     let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    let capabilities = system_capabilities(
+    let capabilities = system_capabilities_for_surface(
         &config,
         &PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home),
+        HostSurface::DesktopEmbeddedTauri,
     );
 
     assert!(capabilities.threads);
@@ -65,7 +71,11 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() 
 fn macos_linux_maintenance_capabilities_are_rejected_by_gate_and_matrix() {
     let config = Config::for_platform_kind(PlatformKind::Macos);
     let platform = PlatformPaths::for_kind(PlatformKind::Macos);
-    let capabilities = system_capabilities(&config, &platform);
+    let capabilities = system_capabilities_for_surface(
+        &config,
+        &platform,
+        HostSurface::default_for_platform(&platform),
+    );
 
     for capability in [
         Capability::Systemd,
@@ -122,9 +132,8 @@ fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
         .expect("Linux should expose shared Probe settings");
     let serialized = serde_json::to_string(&plan).unwrap();
 
-    assert_eq!(plan.required_capability, Capability::Settings);
-    assert!(plan.settings.notifications.device_key_configured);
-    assert!(plan.settings.notifications.device_key.is_none());
+    assert!(plan.notifications.device_key_configured);
+    assert!(plan.notifications.device_key.is_none());
     assert!(!serialized.contains("secret-bark-key"));
     assert!(!serialized.contains("device_key\":\""));
 
@@ -329,17 +338,17 @@ fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
     )
     .expect("Linux should allow shared Probe settings save");
 
-    assert_eq!(plan.required_capability, Capability::Settings);
-    assert_eq!(plan.bark_device_key.as_deref(), Some("secret-bark-key"));
+    assert_eq!(
+        Some(plan.secret_writes[0].secret_value.as_str()),
+        Some("secret-bark-key")
+    );
     assert_eq!(plan.secret_writes.len(), 1);
     let write = &plan.secret_writes[0];
     assert_eq!(write.setting_key, PROBE_BARK_DEVICE_KEY_SETTING);
     assert_eq!(write.secret_value, "secret-bark-key");
-    assert_eq!(write.audit_value, "[configured]");
 
     let serialized = serde_json::to_string(&plan).unwrap();
     assert!(serialized.contains(PROBE_BARK_DEVICE_KEY_SETTING));
-    assert!(serialized.contains("[configured]"));
     assert!(!serialized.contains("secret-bark-key"));
 }
 

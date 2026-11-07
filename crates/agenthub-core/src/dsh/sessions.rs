@@ -221,37 +221,19 @@ fn discover_all_sessions(paths: &DshPaths) -> Result<Vec<DiscoveredSession>> {
         return Ok(Vec::new());
     }
     standard_layout(paths)?;
-    let sessions_root = paths.home.join("sessions");
-    if !directory(&sessions_root)? {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for project in fs::read_dir(&sessions_root)? {
-        let project = project?;
-        let ptype = project.file_type()?;
-        if ptype.is_symlink() || !ptype.is_dir() {
-            continue;
-        }
-        let project_key = project.file_name().to_string_lossy().into_owned();
-        if project_key == "resume-pins" {
-            continue;
-        }
-        for entry in fs::read_dir(project.path())? {
-            let entry = entry?;
-            let etype = entry.file_type()?;
-            if etype.is_symlink() || !etype.is_dir() {
-                continue;
-            }
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if valid_id(&id).is_err() {
-                continue;
-            }
-            if let Ok(Some(session)) = discover_session(entry.path(), project_key.clone(), &id) {
-                out.push(session);
-            }
-        }
-    }
-    Ok(out)
+    let (dirs, _) = super::notifications::session_directories(paths)?;
+    Ok(discover_directories(&dirs))
+}
+
+fn discover_directories(dirs: &[super::notifications::SessionDirectory]) -> Vec<DiscoveredSession> {
+    dirs.iter()
+        .filter(|dir| dir.project != "resume-pins")
+        .filter_map(|dir| {
+            discover_session(dir.path.clone(), dir.project.clone(), &dir.id)
+                .ok()
+                .flatten()
+        })
+        .collect()
 }
 
 fn discover_session(
@@ -380,7 +362,6 @@ struct FoldedMetadata {
     updated_at_ms: Option<i64>,
     message_count: usize,
     open_turn: bool,
-    last_seq: Option<u64>,
 }
 
 static DSH_FOLD_CACHE: crate::read_cache::ReadCache<FoldedMetadata> =
@@ -466,7 +447,6 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
         updated_at_ms,
         message_count,
         open_turn: false,
-        last_seq: None,
     })
 }
 
@@ -511,9 +491,6 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
             return Ok(());
         };
         let seq = row["seq"].as_u64();
-        if let Some(seq) = seq {
-            meta.last_seq = Some(seq);
-        }
         let is_inherited = seq.is_some_and(|s| s < inherited_count);
         if let Some(ts) = row["time"].as_i64() {
             meta.updated_at_ms = Some(meta.updated_at_ms.map_or(ts, |prev| prev.max(ts)));
@@ -627,19 +604,8 @@ fn build_summary(
     } else {
         None
     };
-    let storage_size = if session.dir.is_dir() {
-        Some(session_storage::directory_size(
-            &paths.home,
-            &session.dir,
-            Some(&session.log_path),
-            &format!("dsh:{}", session.id),
-        ))
-    } else {
-        Some(SessionStorageSize::unavailable(StorageScope::Directory))
-    };
-
     ProviderSessionSummary {
-        storage_size,
+        storage_size: None,
         id: session.id.clone(),
         session_key: session.id.clone(),
         title,
@@ -663,21 +629,47 @@ fn build_summary(
     }
 }
 
-pub fn list_sessions(
+fn attach_storage_size(paths: &DshPaths, summary: &mut ProviderSessionSummary) {
+    let dir = summary
+        .path
+        .parent()
+        .expect("DSH log has a session directory");
+    summary.storage_size = Some(if dir.is_dir() {
+        session_storage::directory_size(
+            &paths.home,
+            dir,
+            Some(&summary.path),
+            &format!("dsh:{}", summary.id),
+        )
+    } else {
+        SessionStorageSize::unavailable(StorageScope::Directory)
+    });
+}
+
+fn summary_with_storage(
+    paths: &DshPaths,
+    session: &DiscoveredSession,
+    archived: &BTreeSet<String>,
+) -> ProviderSessionSummary {
+    let mut summary = build_summary(paths, session, archived);
+    attach_storage_size(paths, &mut summary);
+    summary
+}
+
+fn list_discovered(
     paths: &DshPaths,
     request: &ProviderListRequest,
-) -> Result<Vec<ProviderSessionSummary>> {
-    let reg = registry(paths)?;
-    let archived_set = reg.map(|r| r.archived).unwrap_or_default();
-    let discovered = discover_all_sessions(paths)?;
+    discovered: &[DiscoveredSession],
+    archived_set: &BTreeSet<String>,
+) -> Vec<ProviderSessionSummary> {
     let mut items: Vec<ProviderSessionSummary> = discovered
         .iter()
         .filter(|s| !s.is_subagent() && !s.is_internal_no_cwd())
-        .map(|s| build_summary(paths, s, &archived_set))
-        .filter(|item| match request.archived {
-            Some(flag) => item.archived == flag,
+        .filter(|s| match request.archived {
+            Some(flag) => archived_set.contains(&s.id) == flag,
             None => true,
         })
+        .map(|s| build_summary(paths, s, archived_set))
         .filter(|item| matches_query(item, request.q.as_deref()))
         .collect();
 
@@ -690,7 +682,43 @@ pub fn list_sessions(
     });
     let limit = request.limit.unwrap_or(200).clamp(1, 1000);
     items.truncate(limit);
+    items
+}
+
+pub fn list_sessions(
+    paths: &DshPaths,
+    request: &ProviderListRequest,
+) -> Result<Vec<ProviderSessionSummary>> {
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
+    let mut items = list_discovered(paths, request, &discover_all_sessions(paths)?, &archived);
+    for item in &mut items {
+        attach_storage_size(paths, item);
+    }
     Ok(items)
+}
+
+pub(crate) fn probe_sessions(
+    paths: &DshPaths,
+    request: &ProviderListRequest,
+    candidate: impl Fn(&ProviderSessionSummary) -> bool,
+) -> Result<(Vec<ProviderSessionSummary>, crate::native_probe::NativeScan)> {
+    ensure!(paths.home.is_absolute(), "DSH_HOME 必须是绝对路径");
+    standard_layout(paths)?;
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
+    let (dirs, count) = super::notifications::session_directories(paths)?;
+    let items = list_discovered(paths, request, &discover_directories(&dirs), &archived);
+    let selected: BTreeSet<_> = items
+        .iter()
+        .filter(|s| candidate(s))
+        .map(|s| s.id.as_str())
+        .collect();
+    let scan = if count <= 10_000 {
+        super::notifications::scan_directories(&dirs, &archived, |id| selected.contains(id))
+            .unwrap_or_default()
+    } else {
+        crate::native_probe::NativeScan::default()
+    };
+    Ok((items, scan))
 }
 
 fn find_root_session(paths: &DshPaths, id: &str) -> Result<DiscoveredSession> {
@@ -729,7 +757,7 @@ pub fn session_summary(paths: &DshPaths, id: &str) -> Result<ProviderSessionSumm
     let reg = registry(paths)?;
     let archived_set = reg.map(|r| r.archived).unwrap_or_default();
     let found = find_root_session(paths, id)?;
-    Ok(build_summary(paths, &found, &archived_set))
+    Ok(summary_with_storage(paths, &found, &archived_set))
 }
 
 fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
@@ -1066,7 +1094,7 @@ pub fn session_detail(
 ) -> Result<ProviderSessionDetail> {
     let session = find_root_session(paths, &request.session_key)?;
     let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
-    let summary = build_summary(paths, &session, &archived);
+    let summary = summary_with_storage(paths, &session, &archived);
     let events = cached_events(paths, &session)?;
     paginate_provider_detail(summary, &events, request)
 }
@@ -1077,7 +1105,7 @@ pub fn read_attachment(
 ) -> Result<crate::user_message::SessionAttachmentResponse> {
     let session = find_root_session(paths, &request.session_key)?;
     let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
-    let summary = build_summary(paths, &session, &archived);
+    let summary = summary_with_storage(paths, &session, &archived);
     let events = cached_events(paths, &session)?;
     let mut message = events
         .events
@@ -1252,7 +1280,7 @@ pub fn rename_session(
     let archived = registry(paths)?
         .map(|index| index.archived)
         .unwrap_or_default();
-    Ok(build_summary(paths, &session, &archived))
+    Ok(summary_with_storage(paths, &session, &archived))
 }
 
 fn ensure_registered_in_workspace(value: &mut Value, id: &str, cwd: &str) {
@@ -1400,7 +1428,7 @@ pub fn set_archived_checked(
     } else {
         archived_set.remove(id);
     }
-    Ok(build_summary(paths, &root, &archived_set))
+    Ok(summary_with_storage(paths, &root, &archived_set))
 }
 
 fn find_subagent_descendants(all: &[DiscoveredSession], root_id: &str) -> Vec<String> {
@@ -1522,10 +1550,7 @@ pub fn preview_batch_item_checked(
     };
     let mut all_ids = vec![summary.id.clone()];
     all_ids.extend(descendants.iter().cloned());
-    let mut target_paths = collect_owned_paths_for_ids(paths, &all, &all_ids);
-    if target_paths.is_empty() {
-        target_paths.push(summary.path.clone());
-    }
+    let target_paths = collect_owned_paths_for_ids(paths, &all, &all_ids);
     let (_, bytes) = session_delete::size(&target_paths);
     let stamp = file_stamp(&summary.path).ok();
     let fingerprint = hex::encode(Sha256::digest(format!(
@@ -1600,8 +1625,7 @@ pub fn execute_batch_item_checked(
             check_stopped()?;
             let index = registry(paths)?;
             let all = discover_all_sessions(paths)?;
-            let root = all
-                .iter()
+            all.iter()
                 .find(|s| s.id == key && !s.is_subagent())
                 .with_context(|| format!("未找到 DeepSeek Harness 会话：{key}"))?;
             let verified_descendants = find_subagent_descendants(&all, key);
@@ -1614,19 +1638,6 @@ pub fn execute_batch_item_checked(
                     "子会话 {child} 不属于当前主会话，拒绝删除"
                 );
             }
-            ensure!(
-                !is_session_locked_readonly(&root.dir),
-                "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
-            );
-            for child_id in descendants {
-                for child in all.iter().filter(|s| &s.id == child_id) {
-                    ensure!(
-                        !is_session_locked_readonly(&child.dir),
-                        "子会话正在 DeepSeek Harness 中运行，请先退出后再删除"
-                    );
-                }
-            }
-
             let selected: BTreeSet<&str> = descendants.iter().map(String::as_str).collect();
             let mut ordered_ids: Vec<String> = verified_descendants
                 .into_iter()

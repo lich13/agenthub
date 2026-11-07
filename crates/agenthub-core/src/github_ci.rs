@@ -161,7 +161,8 @@ pub fn status(db: &PanelDb, config: &Config, options: Request) -> Result<Snapsho
     let stored = load(db)?;
     let mut snapshot = stored.snapshot;
     let mut request = request_ms(db)?;
-    if !options.cached_only
+    if enabled(config)
+        && !options.cached_only
         && (options.refresh || snapshot.last_scan_ms == 0)
         && request <= stored.request_ms
     {
@@ -170,7 +171,7 @@ pub fn status(db: &PanelDb, config: &Config, options: Request) -> Result<Snapsho
     }
     snapshot.baseline_ms = stored.baseline_ms;
     snapshot.enabled = enabled(config);
-    snapshot.refreshing = request > stored.request_ms;
+    snapshot.refreshing = enabled(config) && request > stored.request_ms;
     Ok(snapshot)
 }
 pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<bool> {
@@ -198,6 +199,8 @@ pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result
     save(db, &state)?;
     if enabled(after) {
         db.set_setting(REFRESH, &now().to_string())?;
+    } else {
+        db.set_setting(REFRESH, "0")?;
     }
     Ok(())
 }
@@ -280,7 +283,9 @@ impl Monitor {
             state.pending.clear();
         }
         self.active = Some(active);
-        if !active && request <= state.request_ms {
+        if !active {
+            state.request_ms = request;
+            self.request_ms = request;
             if serde_json::to_string(&state)? != before {
                 save(db, &state)?;
             }

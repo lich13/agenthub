@@ -623,7 +623,6 @@ describe("archive delete API compatibility", () => {
       buildDemoSystemCapabilities
     } = await import("./domain/demoCore");
     const {
-      demoCodexConfig,
       demoPlatformOverview,
       demoProbeSettings,
       demoSystemCapabilities,
@@ -637,7 +636,6 @@ describe("archive delete API compatibility", () => {
       demoPlatformOverview("macos-tauri"),
       demoSystemCapabilities("macos-tauri"),
       demoUpdateStatus("macos-tauri"),
-      demoCodexConfig("macos-tauri"),
       demoProbeSettings("macos-tauri")
     ];
     const serialized = JSON.stringify(macosFixtures);
@@ -867,7 +865,7 @@ describe("archive delete API compatibility", () => {
       blocks: [],
       raw_event_count: 20
     } satisfies ThreadDetail;
-    const merged = app.mergeThreadDetailSummaryFromList(detail, {
+    const merged = app.mergeIncomingThreadSummary(detail.summary, {
       id: "thread-a",
       title: "未命名线程",
       status: "Running",
@@ -878,7 +876,7 @@ describe("archive delete API compatibility", () => {
     });
 
     expect(merged).not.toBe(detail);
-    expect(merged.summary).toMatchObject({
+    expect(merged).toMatchObject({
       title: "example-user",
       status: "Running",
       latest_message: "正在执行",
@@ -1122,7 +1120,6 @@ describe("archive delete API compatibility", () => {
     expect(app.isActionablePlanBlock(historyPlan, currentPlan)).toBe(false);
     expect(app.isActionableQuestionBlock(currentQuestion, currentQuestion)).toBe(true);
     expect(app.isActionableQuestionBlock(answeredQuestion, currentQuestion)).toBe(false);
-    expect(app.questionAnswerLabels(answeredQuestion, "q1")).toEqual(["B"]);
     expect(app.isResolvedActionBlock(answeredQuestion)).toBe(true);
 
   });
@@ -1374,6 +1371,7 @@ describe("archive delete API compatibility", () => {
       session_index_lines: 9,
       rollout_files: 9,
       hidden_ids: ["child-a", "child-b"],
+    scan: { id: "fixture-scan", phase: "complete", processed: 2, total: 2, cursor: 0, nextCursor: 2, hasMore: false, error: null },
       hidden_source_counts: { exec: 1, subagent: 1 },
       candidates: [{ id: "child-a", title: "Fixture A", fingerprint: "fixture", allowed: true, reason: null }, { id: "child-b", title: "Fixture B", fingerprint: null, allowed: false, reason: "protected" }],
       integrity: "ok"

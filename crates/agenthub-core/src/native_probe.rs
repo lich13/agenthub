@@ -184,11 +184,26 @@ pub fn file_identity(path: &Path) -> Result<String> {
     Ok(hex::encode(digest.finalize()))
 }
 
-pub fn retry_event_is_current(provider: NativeProvider, id: &str, event: &NativeTurnEvent) -> bool {
+pub fn scan_event(
+    provider: NativeProvider,
+    id: &str,
+    event: &NativeTurnEvent,
+) -> Result<NativeScan> {
     match provider {
-        NativeProvider::Grok => crate::grok::notification_event_current(id, event.position),
-        NativeProvider::Claude => true, // Claude snapshots retain terminal events on the valid branch.
-        NativeProvider::Antigravity | NativeProvider::Dsh | NativeProvider::GrokBot => true, // Re-read by the local source verifier.
+        NativeProvider::Grok => crate::grok::notification_for_event(
+            &crate::grok::GrokPaths::default_for_user(),
+            id,
+            event,
+        ),
+        NativeProvider::Dsh => crate::dsh::notifications::scan_selected(
+            &crate::dsh::DshPaths::default_for_user(),
+            Some(id),
+        ),
+        NativeProvider::GrokBot => crate::grokbot::scan_selected(
+            &crate::grokbot::GrokBotPaths::default_for_user(),
+            Some(id),
+        ),
+        NativeProvider::Claude | NativeProvider::Antigravity => scan(provider),
     }
 }
 
@@ -212,14 +227,14 @@ pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     }
 }
 
-static NATIVE_PROBE_CACHE: crate::read_cache::ReadCache<Vec<Value>> =
+static NATIVE_PROBE_CACHE: crate::read_cache::ReadCache<std::sync::Arc<Vec<Value>>> =
     crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
     NATIVE_PROBE_CACHE.evict_idle(max_idle);
 }
 
-pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
+pub(crate) fn read_jsonl(path: &Path) -> Result<std::sync::Arc<Vec<Value>>> {
     NATIVE_PROBE_CACHE.read(
         path,
         |_, size| size.saturating_mul(5),
@@ -252,7 +267,7 @@ pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
                     serde_json::from_slice(&line).context("invalid native notification record")?,
                 );
             }
-            Ok(records)
+            Ok(std::sync::Arc::new(records))
         },
     )
 }

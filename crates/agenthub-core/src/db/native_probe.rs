@@ -284,6 +284,7 @@ impl PanelDb {
         let mut statuses = Vec::new();
         for provider in [
             NativeProvider::Grok,
+            NativeProvider::GrokBot,
             NativeProvider::Claude,
             NativeProvider::Antigravity,
             NativeProvider::Dsh,

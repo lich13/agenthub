@@ -11,7 +11,6 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 pub const PROBE_BARK_DEVICE_KEY_SETTING: &str = "probe_bark_device_key";
 
@@ -41,12 +40,6 @@ pub struct SettingsView {
     pub notifications: ProbeNotificationsSettingsView,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProbeSettingsViewPlan {
-    pub required_capability: Capability,
-    pub settings: SettingsView,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsUseCases<'a> {
     config: &'a Config,
@@ -58,10 +51,7 @@ impl<'a> SettingsUseCases<'a> {
         Self { config, platform }
     }
 
-    pub fn probe_settings_view(
-        self,
-        bark_device_key: ProbeSecretState,
-    ) -> Result<ProbeSettingsViewPlan> {
+    pub fn probe_settings_view(self, bark_device_key: ProbeSecretState) -> Result<SettingsView> {
         probe_settings_view_with_capability(self.config, self.platform, bark_device_key)
     }
 
@@ -147,12 +137,9 @@ pub fn probe_settings_view_with_capability(
     config: &Config,
     platform: &PlatformPaths,
     bark_device_key: ProbeSecretState,
-) -> Result<ProbeSettingsViewPlan> {
+) -> Result<SettingsView> {
     require_capability(platform, Capability::Settings)?;
-    Ok(ProbeSettingsViewPlan {
-        required_capability: Capability::Settings,
-        settings: build_settings_view(config, bark_device_key),
-    })
+    Ok(build_settings_view(config, bark_device_key))
 }
 
 pub fn probe_notifications_settings_view(
@@ -365,23 +352,12 @@ pub struct SecretSettingWritePlan {
     pub setting_key: String,
     #[serde(default, skip_serializing)]
     pub secret_value: String,
-    pub audit_value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeSettingsSavePlan {
-    pub required_capability: Capability,
     pub config_patch: ProbeConfigFilePatch,
-    pub config_write: Option<ProbeConfigWritePlan>,
-    #[serde(default, skip_serializing)]
-    pub bark_device_key: Option<String>,
     pub secret_writes: Vec<SecretSettingWritePlan>,
-    pub audit_detail: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProbeConfigWritePlan {
-    pub patch: ProbeConfigFilePatch,
 }
 
 pub fn plan_probe_settings_save(
@@ -396,19 +372,9 @@ pub fn plan_probe_settings_save(
         .map(bark_device_key_write_plan)
         .into_iter()
         .collect();
-    let config_write = probe_config_file_patch_has_changes(&normalized.config_patch).then(|| {
-        ProbeConfigWritePlan {
-            patch: normalized.config_patch.clone(),
-        }
-    });
-    let audit_detail = probe_settings_save_audit_detail(&config_write, &secret_writes);
     Ok(ProbeSettingsSavePlan {
-        required_capability: Capability::Settings,
         config_patch: normalized.config_patch,
-        config_write,
-        bark_device_key: normalized.bark_device_key,
         secret_writes,
-        audit_detail,
     })
 }
 
@@ -418,7 +384,11 @@ pub fn apply_probe_settings_save_plan(
     before: &Config,
     plan: ProbeSettingsSavePlan,
 ) -> Result<Config> {
-    let config = Config::save_probe_patch(config_path, &plan.config_patch)?;
+    let config = if probe_config_file_patch_has_changes(&plan.config_patch) {
+        Config::save_probe_patch(config_path, &plan.config_patch)?
+    } else {
+        before.clone()
+    };
     for write in plan.secret_writes {
         db.set_secret_setting_bytes(&write.setting_key, write.secret_value.as_bytes())?;
     }
@@ -538,20 +508,7 @@ fn bark_device_key_write_plan(secret_value: &str) -> SecretSettingWritePlan {
     SecretSettingWritePlan {
         setting_key: PROBE_BARK_DEVICE_KEY_SETTING.to_string(),
         secret_value: secret_value.to_string(),
-        audit_value: "[configured]".to_string(),
     }
-}
-
-fn probe_settings_save_audit_detail(
-    config_write: &Option<ProbeConfigWritePlan>,
-    secret_writes: &[SecretSettingWritePlan],
-) -> Value {
-    let mut detail = serde_json::Map::new();
-    detail.insert("config_write".to_string(), json!(config_write.is_some()));
-    for write in secret_writes {
-        detail.insert(write.setting_key.clone(), json!(write.audit_value));
-    }
-    Value::Object(detail)
 }
 
 fn probe_config_file_patch_has_changes(patch: &ProbeConfigFilePatch) -> bool {
@@ -704,10 +661,7 @@ mod tests {
         plan_probe_settings_save, ProbeNotificationsSavePatch, ProbeSettingsSavePatch,
         ProbeSettingsSaveRequest,
     };
-    use crate::{
-        platform::{PlatformKind, PlatformPaths},
-        services::system::Capability,
-    };
+    use crate::platform::{PlatformKind, PlatformPaths};
 
     #[test]
     fn probe_settings_save_plan_normalizes_nested_bark_key_and_patch() {
@@ -731,18 +685,22 @@ mod tests {
         )
         .expect("settings save should be allowed on Linux");
 
-        assert_eq!(plan.required_capability, Capability::Settings);
-        assert_eq!(plan.bark_device_key.as_deref(), Some("bark-key"));
-        let probe = plan.config_patch.probe.expect("probe patch");
+        assert_eq!(
+            Some(plan.secret_writes[0].secret_value.as_str()),
+            Some("bark-key")
+        );
+        let probe = plan.config_patch.probe.as_ref().expect("probe patch");
         assert_eq!(probe.poll_seconds, Some(5));
         assert_eq!(probe.recent_limit, Some(500));
-        let notifications = probe.notifications.expect("notifications patch");
+        let notifications = probe.notifications.as_ref().expect("notifications patch");
         assert_eq!(
             notifications.server_url.as_deref(),
             Some("https://api.day.app")
         );
         assert_eq!(notifications.group.as_deref(), Some("AgentHub"));
-        assert!(plan.config_write.is_some());
+        assert!(super::probe_config_file_patch_has_changes(
+            &plan.config_patch
+        ));
     }
 
     #[test]
@@ -772,15 +730,12 @@ mod tests {
         .expect("macOS should allow shared settings planning");
 
         assert!(plan.config_patch.probe.is_none());
-        assert!(plan.config_write.is_none());
+        assert!(!super::probe_config_file_patch_has_changes(
+            &plan.config_patch
+        ));
         assert_eq!(plan.secret_writes.len(), 1);
         assert_eq!(plan.secret_writes[0].secret_value, "bark-secret");
-        assert_eq!(
-            plan.audit_detail["probe_bark_device_key"],
-            serde_json::json!("[configured]")
-        );
         let serialized = serde_json::to_string(&plan).unwrap();
-        assert!(serialized.contains("[configured]"));
         assert!(!serialized.contains("bark-secret"));
     }
 }

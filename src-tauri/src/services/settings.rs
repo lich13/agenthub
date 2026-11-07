@@ -54,7 +54,7 @@ pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopP
     let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()?
         .probe_settings_view(secret_state)?;
-    Ok(DesktopProbeSettings::from(plan.settings))
+    Ok(DesktopProbeSettings::from(plan))
 }
 
 pub(crate) fn probe_save_settings_with_state(
@@ -100,32 +100,9 @@ pub(crate) fn probe_action_with_state(
     state: &DesktopState,
     action: probe_service::ProbeAction,
 ) -> Result<DesktopActionResponse> {
-    let device_key_configured = state
-        .db
-        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
-        .is_some_and(|value| !value.is_empty());
-    let config = state.config();
-    let plan = AgentHubUseCases::with_config(&config, state.platform())
-        .probe()?
-        .action_with_device_key(action, device_key_configured)?;
-    match plan.execution {
-        probe_service::ProbeExecutionKind::FixedShellJob => {
-            probe_fixed_shell_job_with_state(state, action, plan)
-        }
-    }
-}
-
-pub(crate) fn probe_fixed_shell_job_with_state(
-    state: &DesktopState,
-    action: probe_service::ProbeAction,
-    plan: probe_service::ProbeActionPlan,
-) -> Result<DesktopActionResponse> {
+    let plan = probe_service::ProbeUseCases::new(state.platform()).action(action)?;
     let command = action.as_desktop_command();
-    let diagnostic_plan = plan.diagnostic_plan.clone();
-    let job = plan
-        .job
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Probe action is missing job metadata"))?;
+    let job = &plan.job;
     let binary = state.platform().daemon_binary();
     if !binary.is_file() {
         return Ok(unavailable_action(
@@ -134,8 +111,7 @@ pub(crate) fn probe_fixed_shell_job_with_state(
                 "Probe action requires local agenthub-webd binary; plan is available but job cannot start: {}",
                 binary.display()
             ),
-        )
-        .with_data(serde_json::to_value(diagnostic_plan)?));
+        ));
     }
     let process = probe_service::probe_process_command(
         state.platform(),
@@ -156,7 +132,7 @@ pub(crate) fn probe_fixed_shell_job_with_state(
         "started local Probe job",
         None,
         Some(job_id),
-        Some(serde_json::to_value(diagnostic_plan)?),
+        None,
     ))
 }
 
@@ -285,6 +261,44 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn repeated_full_form_and_key_only_save_preserve_config_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
+        let full_form: ProbeSettingsSaveRequest = serde_json::from_value(serde_json::json!({
+            "codex": { "home": state.config().codex.home },
+            "probe": state.config().probe,
+        }))
+        .unwrap();
+        test_probe_save_settings_with_state(&state, full_form.clone()).unwrap();
+        let before = std::fs::metadata(&platform.config_file).unwrap();
+        for request in [
+            full_form,
+            ProbeSettingsSaveRequest::default(),
+            ProbeSettingsSaveRequest {
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some("fixture-key-only".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ] {
+            test_probe_save_settings_with_state(&state, request).unwrap();
+            let after = std::fs::metadata(&platform.config_file).unwrap();
+            assert_eq!(before.ino(), after.ino());
+            assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        }
+        assert_eq!(
+            state
+                .db
+                .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)
+                .unwrap()
+                .as_deref(),
+            Some(b"fixture-key-only".as_slice())
+        );
+    }
+
     #[test]
     fn probe_settings_save_command_honors_core_capability_gate() {
         let (_temp, state, _platform) = command_test_state(PlatformKind::Windows);
@@ -315,11 +329,10 @@ mod tests {
             std::fs::set_permissions(platform.daemon_binary(), permissions).unwrap();
         }
         assert!(platform.config_file.to_string_lossy().contains(' '));
-        let core_plan = probe_service::plan_probe_action_with_device_key(
-            &state.config(),
+        let core_plan = probe_service::plan_probe_action(
             state.platform(),
             probe_service::ProbeAction::BarkTest,
-            false,
+            &state.platform().config_file,
         )
         .unwrap();
         let expected_process = probe_service::probe_process_command(
@@ -356,8 +369,8 @@ mod tests {
 
         assert!(response.available);
         assert_eq!(job.status, "succeeded");
-        assert_eq!(job.kind, core_plan.job.as_ref().unwrap().kind);
-        assert_eq!(job.title, core_plan.job.as_ref().unwrap().title);
+        assert_eq!(job.kind, core_plan.job.kind);
+        assert_eq!(job.title, core_plan.job.title);
         let expected_output = format!(
             "<--config>\n<{}>\n<probe>\n<bark-test>\n",
             platform.config_file.display()

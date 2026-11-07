@@ -13,7 +13,14 @@ use std::{
 const FILE_LIMIT: u64 = 128 * 1024 * 1024;
 const LINE_LIMIT: usize = 8 * 1024 * 1024;
 const EVENT_LIMIT: usize = 1024;
-static CACHE: Mutex<VecDeque<Cached>> = Mutex::new(VecDeque::new());
+struct NotificationCache {
+    entries: VecDeque<Cached>,
+    bytes: usize,
+}
+static CACHE: Mutex<NotificationCache> = Mutex::new(NotificationCache {
+    entries: VecDeque::new(),
+    bytes: 0,
+});
 
 struct Cached {
     path: PathBuf,
@@ -22,13 +29,22 @@ struct Cached {
     offset: u64,
     anchor: Vec<u8>,
     state: State,
+    bytes: usize,
     last_accessed: std::time::Instant,
 }
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
     if let Ok(mut cache) = CACHE.lock() {
         let now = std::time::Instant::now();
-        cache.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
+        let mut removed = 0;
+        cache.entries.retain(|entry| {
+            let keep = now.saturating_duration_since(entry.last_accessed) < max_idle;
+            if !keep {
+                removed += entry.bytes;
+            }
+            keep
+        });
+        cache.bytes -= removed;
     }
 }
 #[derive(Default)]
@@ -381,9 +397,13 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         .lock()
         .map_err(|_| anyhow::anyhow!("DSH reader unavailable"))?;
     let old = cache
+        .entries
         .iter()
         .position(|c| c.path == path)
-        .and_then(|i| cache.remove(i));
+        .and_then(|i| cache.entries.remove(i));
+    if let Some(old) = &old {
+        cache.bytes -= old.bytes;
+    }
     if old
         .as_ref()
         .is_some_and(|c| c.stamp == before && c.identity == identity)
@@ -391,7 +411,8 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         let mut old = old.unwrap();
         old.last_accessed = std::time::Instant::now();
         let result = old.state.snapshot(id, key, &identity);
-        cache.push_back(old);
+        cache.bytes += old.bytes;
+        cache.entries.push_back(old);
         return result;
     }
     let mut file = regular_file(path)?;
@@ -410,6 +431,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             offset: 0,
             anchor: vec![],
             state: State::default(),
+            bytes: 0,
             last_accessed: std::time::Instant::now(),
         }
     };
@@ -471,23 +493,32 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
     current.stamp = after;
     current.last_accessed = std::time::Instant::now();
     let result = current.state.snapshot(id, key, &identity)?;
-    cache.push_back(current);
-    while cache.len() > crate::resource_limits::SOURCE_CACHE_ENTRIES
-        || cache
+    current.bytes = 512
+        + current.path.as_os_str().len()
+        + current.identity.len()
+        + current.anchor.len()
+        + current.state.last_text.len()
+        + current.state.title.len()
+        + current
+            .state
+            .events
             .iter()
-            .map(|c| {
-                c.state
-                    .events
-                    .iter()
-                    .chain(c.state.pending.values().map(|(e, _, _)| e))
-                    .map(|e| e.body.len() + e.turn_id.len() + 256)
-                    .sum::<usize>()
-                    + c.state.header.as_ref().map_or(0, |h| h.to_string().len())
-            })
+            .chain(current.state.pending.values().map(|(e, _, _)| e))
+            .map(|e| e.body.len() + e.turn_id.len() + 256)
             .sum::<usize>()
-            > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES as usize
-    {
-        cache.pop_front();
+        + current
+            .state
+            .header
+            .as_ref()
+            .map_or(0, |h| h.to_string().len());
+    cache.bytes += current.bytes;
+    cache.entries.push_back(current);
+    while cache.bytes > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES as usize {
+        if let Some(entry) = cache.entries.pop_front() {
+            cache.bytes -= entry.bytes;
+        } else {
+            break;
+        }
     }
     Ok(result)
 }
@@ -499,17 +530,20 @@ fn consume_lines(state: &mut State, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn scan(paths: &DshPaths) -> Result<NativeScan> {
-    let index = registry(paths)?;
+pub(super) struct SessionDirectory {
+    pub project: String,
+    pub id: String,
+    pub path: PathBuf,
+}
+
+pub(super) fn session_directories(paths: &DshPaths) -> Result<(Vec<SessionDirectory>, usize)> {
     let root = paths.home.join("sessions");
     if !directory(&root)? {
-        return Ok(NativeScan::default());
+        return Ok((Vec::new(), 0));
     }
-    let mut scan = NativeScan::default();
-    let mut ids = BTreeSet::new();
-    let mut duplicates = BTreeSet::new();
+    let mut dirs = Vec::new();
     let mut count = 0;
-    for project in fs::read_dir(&root)? {
+    for project in fs::read_dir(root)? {
         let project = project?;
         if !project.file_type()?.is_dir() {
             continue;
@@ -517,40 +551,68 @@ pub fn scan(paths: &DshPaths) -> Result<NativeScan> {
         for entry in fs::read_dir(project.path())? {
             let entry = entry?;
             count += 1;
-            ensure!(count <= 10_000, "DSH source inventory exceeds limit");
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            let name = entry.file_name();
-            let Some(id) = name.to_str().filter(|s| valid_id(s).is_ok()) else {
-                continue;
-            };
-            if index
-                .as_ref()
-                .is_some_and(|index| index.archived.contains(id))
-            {
-                continue;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if valid_id(&id).is_ok() {
+                dirs.push(SessionDirectory {
+                    project: project.file_name().to_string_lossy().into_owned(),
+                    id,
+                    path: entry.path(),
+                });
             }
-            if !ids.insert(id.to_owned()) {
-                duplicates.insert(id.to_owned());
-                scan.errors += 1;
-                continue;
-            }
-            let key = format!("{}/{id}", project.file_name().to_string_lossy());
-            let paths = [
-                entry.path().join("session.v4.jsonl"),
-                entry.path().join("session.v4.jsonl.zstd"),
-            ];
-            let existing = paths.iter().filter(|p| p.exists()).collect::<Vec<_>>();
-            if existing.len() != 1 {
-                scan.errors += 1;
-                continue;
-            }
-            match read(existing[0], id, &key) {
-                Ok(Some(stream)) => scan.streams.push(stream),
-                Ok(None) => {}
-                Err(_) => scan.errors += 1,
-            }
+        }
+    }
+    Ok((dirs, count))
+}
+
+pub fn scan(paths: &DshPaths) -> Result<NativeScan> {
+    scan_selected(paths, None)
+}
+
+pub fn scan_selected(paths: &DshPaths, selected: Option<&str>) -> Result<NativeScan> {
+    let index = registry(paths)?;
+    let (dirs, count) = session_directories(paths)?;
+    ensure!(count <= 10_000, "DSH source inventory exceeds limit");
+    let archived = index.map(|r| r.archived).unwrap_or_default();
+    scan_directories(&dirs, &archived, |id| {
+        selected.is_none_or(|selected| selected == id)
+    })
+}
+
+pub(super) fn scan_directories(
+    dirs: &[SessionDirectory],
+    archived: &BTreeSet<String>,
+    selected: impl Fn(&str) -> bool,
+) -> Result<NativeScan> {
+    let mut scan = NativeScan::default();
+    let mut ids = BTreeSet::new();
+    let mut duplicates = BTreeSet::new();
+    for dir in dirs {
+        let id = &dir.id;
+        if archived.contains(id) || !selected(id) {
+            continue;
+        }
+        if !ids.insert(id.clone()) {
+            duplicates.insert(id.clone());
+            scan.errors += 1;
+            continue;
+        }
+        let key = format!("{}/{id}", dir.project);
+        let paths = [
+            dir.path.join("session.v4.jsonl"),
+            dir.path.join("session.v4.jsonl.zstd"),
+        ];
+        let existing = paths.iter().filter(|p| p.exists()).collect::<Vec<_>>();
+        if existing.len() != 1 {
+            scan.errors += 1;
+            continue;
+        }
+        match read(existing[0], id, &key) {
+            Ok(Some(stream)) => scan.streams.push(stream),
+            Ok(None) => {}
+            Err(_) => scan.errors += 1,
         }
     }
     scan.streams.retain(|s| !duplicates.contains(&s.id));

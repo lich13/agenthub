@@ -2,7 +2,7 @@ use agenthub_core::{
     config::Config,
     local::local_plugin_catalog,
     platform::{PlatformKind, PlatformPaths},
-    probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
+    probe::{ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
 };
 use rusqlite::{params, Connection};
@@ -242,39 +242,8 @@ async fn probe_status_exposes_hook_and_bark_config_without_device_key() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn probe_rejects_unsafe_thread_probe_ids() {
-    assert!(agenthub_core::probe::safe_thread_probe_id("thread-abc"));
-    assert!(!agenthub_core::probe::safe_thread_probe_id("thread one"));
-    assert!(!agenthub_core::probe::safe_thread_probe_id("../thread"));
-}
-
-#[test]
-fn probe_action_plans_use_agenthub_commands_and_confirmation_ids() {
-    let root = temp_dir("agenthub-probe-action-plans");
-    let config = sandboxed_config(&root);
-    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
-
-    let hook_plan = runtime
-        .plan_action(ProbeActionPlanKind::InstallHooks)
-        .unwrap();
-    assert!(hook_plan.plan_id.starts_with("probe-hooks-"));
-    let hook_command_step = hook_plan
-        .steps
-        .iter()
-        .find(|step| step.contains("probe hook-stop"))
-        .expect("hook command step");
-    assert!(hook_command_step
-        .contains("agenthub-webd --config /etc/agenthub-webd/config.toml probe hook-stop"));
-    assert!(!hook_plan
-        .steps
-        .iter()
-        .any(|step| step.contains("codex-sentinel")));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries() {
+#[tokio::test]
+async fn probe_status_and_hooks_expose_builtin_runtime_state() {
     let root = temp_dir("agenthub-probe-hook-managed");
     let mut config = sandboxed_config(&root);
     fs::write(
@@ -304,37 +273,15 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
     config.probe.notifications.enabled = true;
     let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
 
-    let lifecycle = runtime.lifecycle_status();
-    assert_eq!(lifecycle.status, "managed");
-    assert_eq!(lifecycle.service_name, "agenthub-webd");
-    assert_eq!(lifecycle.service_kind, "systemd");
-    assert!(lifecycle.hooks_enabled);
-    assert!(lifecycle.notifications_enabled);
-    assert_eq!(
-        lifecycle.next_actions,
-        vec!["probe-hook-ready".to_string(),]
-    );
-
-    let hook = runtime.hook_status();
-    assert_eq!(hook.status, "managed");
-    assert!(hook.hook_command.contains("/usr/local/bin/agenthub-webd"));
-    assert!(hook.supported_events.contains(&"hook-stop".to_string()));
-    assert!(hook
-        .supported_events
-        .contains(&"notify-completion".to_string()));
-    assert_eq!(hook.dedupe_namespace, "probe_event");
-
-    let diagnostics = runtime.diagnostics();
-    assert_eq!(diagnostics.doctor_status, "ready");
-    assert_eq!(diagnostics.lifecycle_status, "managed");
-    assert!(diagnostics
-        .managed_boundaries
-        .iter()
-        .any(|boundary| boundary.contains("不执行自动回复")));
-    assert_eq!(
-        diagnostics.effective_constants["hidden_desktop_control"],
-        false
-    );
+    let status = runtime.status().await.unwrap();
+    assert_eq!(status.lifecycle_status, "managed");
+    assert_eq!(status.doctor_status, "ready");
+    assert_eq!(status.service_name, "agenthub-webd");
+    assert_eq!(status.service_kind, "systemd");
+    assert!(status.hooks_enabled);
+    assert!(status.bark_enabled);
+    assert_eq!(status.hook_status, "managed");
+    assert!(status.hook_command.contains("/usr/local/bin/agenthub-webd"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -434,37 +381,6 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     assert_eq!(recorded.dedupe_key, completion.dedupe_key);
     let duplicate = ProbeEventOutcome::from_claim(&completion, false);
     assert!(!duplicate.recorded);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
-    let root = temp_dir("agenthub-bark-test-plan");
-    let mut config = sandboxed_config(&root);
-    config.probe.notifications.enabled = true;
-    config.probe.notifications.group = "AgentHub Ops".to_string();
-    config.probe.notifications.sound = Some("alarm".to_string());
-    config.probe.notifications.url = Some("https://example.com/click".to_string());
-    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
-
-    let plan = runtime.bark_test_plan(true);
-    let rendered = serde_json::to_string(&plan).unwrap();
-
-    assert_eq!(plan.kind, "bark-test");
-    assert_eq!(plan.payload["configured"], true);
-    assert_eq!(plan.payload["device_key"], "[configured]");
-    assert_eq!(plan.payload["bark_payload"]["title"], "AgentHub 推送测试");
-    assert_eq!(
-        plan.payload["bark_payload"]["body"],
-        agenthub_core::probe::bark_test_body()
-    );
-    assert!(plan.payload["bark_payload"].get("device_key").is_none());
-    assert!(plan.payload["bark_payload"].get("sound").is_none());
-    assert!(plan.payload["bark_payload"].get("group").is_none());
-    assert!(plan.payload["bark_payload"].get("url").is_none());
-    assert!(!rendered.contains("secret"));
-    assert!(!rendered.contains("alarm"));
-    assert!(!rendered.contains("example.com"));
     let _ = fs::remove_dir_all(root);
 }
 

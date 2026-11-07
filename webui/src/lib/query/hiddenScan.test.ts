@@ -156,7 +156,7 @@ describe("hidden thread scan paging", () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send).toHaveBeenNthCalledWith(2, { mode: "cancel", scanId: "scan-fixture", cursor: 0, limit: 100 });
     expect(send.mock.calls.map(([request]) => request?.mode)).not.toContain("poll");
-    expect(update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledExactlyOnceWith(result);
   });
 
   test("stopping during a poll keeps previously displayed candidates and hides the late page", async () => {
@@ -190,7 +190,8 @@ describe("hidden thread scan paging", () => {
     expect(send).toHaveBeenCalledTimes(3);
     expect(send).toHaveBeenNthCalledWith(3, { mode: "cancel", scanId: "scan-fixture", cursor: 1, limit: 100 });
     expect(send.mock.calls.map(([request]) => request?.mode)).toEqual(["start", "poll", "cancel"]);
-    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenLastCalledWith(result);
     expect(update.mock.calls[0][0].candidates.map((item: HiddenThreadCandidate) => item.id)).toEqual(["visible-thread"]);
   });
 

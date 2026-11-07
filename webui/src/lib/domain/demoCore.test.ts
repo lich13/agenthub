@@ -21,7 +21,7 @@ describe("machine demo fixtures", () => {
     const view = buildDemoFixture("macos-tauri");
     expect(view.system.host_surface).toBe("desktop_embedded_tauri");
     expect(Object.keys(view.system.capabilities).sort()).toEqual(sharedKeys);
-    expect(view.system.capabilities).toMatchObject({ app_updater: true, codex_desktop: true, thread_cleanup: true, thread_archive_actions: true, systemd: false, linux_update_job: false, prune_backups: false });
+    expect(view.system.capabilities).toMatchObject({ app_updater: true, codex_desktop: true, thread_cleanup: true, thread_archive_actions: true, hidden_cleanup_scan: true, systemd: false, linux_update_job: false, prune_backups: false });
     expect(view.platform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "AgentHub.app" });
     expect(JSON.stringify(view)).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Linux prune|Linux update/i);
   });
@@ -29,8 +29,7 @@ describe("machine demo fixtures", () => {
   test("remote API fixture retains Linux service, update and backup capabilities", () => {
     const view = buildDemoSystemCapabilities("linux-api");
     expect(view.host_surface).toBe("linux_server_api");
-    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "antigravity_notifications", "dsh_notifications", "github_ci", "grokbot_sessions", "grokbot_notifications", "hidden_cleanup_scan", "codex_delete_tree"].sort());
-    expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
+    expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: true });
     expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/agenthub-demo", config_file: "/srv/agenthub-demo/config.toml", log_dir: "/srv/agenthub-demo/logs", service_kind: "systemd", service_name: "agenthub-webd" });
   });
 

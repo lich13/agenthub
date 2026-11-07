@@ -7,7 +7,6 @@ import {
   isPlatformNotificationEnabled,
   PROBE_NAV_LABEL,
   probeEventCard,
-  probeEventDisplay,
   probeNumberInputDraftValue,
   probeSections,
   probeSettingsValidation,
@@ -90,12 +89,12 @@ describe("Probe UI helpers", () => {
       created_at: "2026-06-15T00:00:00Z"
     };
 
-    const display = probeEventDisplay(event);
+    const display = probeEventCard(event);
 
     expect(display.title).toBe("需回复");
     expect(display.summary).toContain("Need operator input");
-    expect(display.bark).toBe("Bark 已跳过");
-    expect(display.dedupe).toBe("重复事件");
+    expect(display.bark.label).toBe("Bark 已跳过");
+    expect(display.dedupe.label).toBe("重复事件");
     expect(display.source).toBe("agenthub-webd probe passive-scan");
     expect(display.time).toContain("2026-06-15");
     expect(JSON.stringify(display)).not.toContain("secret-device-key");
@@ -117,7 +116,7 @@ describe("Probe UI helpers", () => {
       created_at: "2026-06-15T00:00:00Z"
     };
 
-    expect(probeEventDisplay(event).summary).toBe("Plan Mode 等待用户确认");
+    expect(probeEventCard(event).summary).toBe("Plan Mode 等待用户确认");
   });
 
   test("builds rich structured event cards from payload fields before raw message or title", () => {
@@ -280,7 +279,6 @@ describe("Probe UI helpers", () => {
     };
 
     expect(probeEventCard(event).bark).toEqual({ label, tone });
-    expect(probeEventDisplay(event).bark).toBe(label);
   });
 
   test.each([

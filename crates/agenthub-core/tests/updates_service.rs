@@ -201,17 +201,11 @@ fn linux_update_job_specs_are_planned_in_core_service() {
     );
 
     let mac = PlatformPaths::for_kind(PlatformKind::Macos);
-    assert!(linux_update_job_spec(
-        &config,
-        update_job_plan_for_surface(
-            &mac,
-            HostSurface::default_for_platform(&mac),
-            UpdateAction::Check
-        ),
-    )
-    .unwrap_err()
-    .to_string()
-    .contains("only Linux WebUI"));
+    let plan =
+        agenthub_core::services::updates::plan_update_action(&config, &mac, UpdateAction::Check)
+            .unwrap();
+    assert!(plan.linux_job.is_none());
+    assert!(plan.macos_job.is_some());
 }
 
 #[test]

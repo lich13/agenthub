@@ -75,20 +75,6 @@ export function demoSystemVersion(): SystemVersion {
   };
 }
 
-export function demoCodexConfig(fixture: DemoFixtureKey = "linux-api"): CodexConfig {
-  return {
-    model: "gpt-5.5",
-    service_tier: null,
-    reasoning_effort: "xhigh",
-    cwd: fixture === "macos-tauri" ? null : "/home/ubuntu/codex-workspace",
-    permission_profile: "danger-full-access",
-    approval_policy: "never",
-    sandbox_mode: "danger-full-access",
-    network_access: true,
-    collaboration_mode: null
-  };
-}
-
 export function demoProviders(): AgentProviderInfo[] {
   return [
     {
@@ -386,10 +372,6 @@ export function demoThreadBlockPage(id: string): ThreadBlockPage {
   };
 }
 
-export function demoOk(): { ok: boolean } {
-  return { ok: true };
-}
-
 export function demoHiddenThreadDeletePlan(request: import("../../types").HiddenScanRequest): HiddenThreadDeletePlan {
   const ids = ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"];
   const cursor = request.mode === "start" ? 0 : request.cursor ?? 0;
@@ -421,7 +403,7 @@ export function demoHiddenThreadDeletePlan(request: import("../../types").Hidden
 
 export function demoUnifiedCleanupPlan(
   fixture: DemoFixtureKey = "macos-tauri",
-  request?: UnifiedCleanupDryRunRequest
+  _request?: UnifiedCleanupDryRunRequest
 ): UnifiedCleanupPlan {
   const macos = fixture === "macos-tauri";
   const allScopes = [
@@ -509,9 +491,7 @@ export function demoUnifiedCleanupPlan(
       issues: []
     }
   ];
-  const scopes = request?.scopes?.length
-    ? allScopes.filter((item) => request.scopes!.includes(item.scope))
-    : allScopes;
+  const scopes = allScopes;
   return {
     totalCandidates: scopes.reduce((sum, item) => sum + item.candidateCount, 0),
     totalDeletable: scopes.reduce((sum, item) => sum + item.deletableCount, 0),

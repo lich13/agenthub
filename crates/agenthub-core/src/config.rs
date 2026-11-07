@@ -463,7 +463,9 @@ impl Config {
         let text = fs::read_to_string(path)?;
         let updated = patch_probe_config_toml(&text, patch)?;
         let config = Self::from_text(&updated, path)?;
-        write_config_atomic(path, &updated)?;
+        if updated != text {
+            write_config_atomic(path, &updated)?;
+        }
         Ok(config)
     }
 
@@ -923,9 +925,8 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 
 /// Replace the actual configuration file without exposing a truncated TOML document.
 pub fn write_config_atomic(path: &Path, updated: &str) -> Result<()> {
-    let target = fs::canonicalize(path)?;
-    let permissions = fs::metadata(&target)?.permissions();
-    write_atomic(&target, updated, Some(permissions))
+    let permissions = fs::metadata(path)?.permissions();
+    write_atomic(path, updated, Some(permissions))
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1408,23 +1409,21 @@ workspace = "/home/ubuntu/codex-workspace"
 #[cfg(all(test, unix))]
 mod atomic_write_tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     #[test]
-    fn saved_patch_loads_env_and_normalizes_before_replacing_symlink_target() {
+    fn saved_patch_loads_env_and_normalizes_before_replacing_config() {
         let root =
             std::env::temp_dir().join(format!("agenthub-config-save-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         let target = root.join("config.toml");
-        let link = root.join("config-link.toml");
         let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &root);
         fs::write(&target, toml::to_string(&config).unwrap()).unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
-        symlink(&target, &link).unwrap();
         let key = SecretBox::random_key_material();
         write_runtime_env(&root.join("env"), &format!("AGENTHUB_SECRET_KEY={key}\n")).unwrap();
         let saved = Config::save_probe_patch(
-            &link,
+            &target,
             &ProbeConfigFilePatch {
                 probe: Some(ProbeSettingsPatch {
                     enabled: Some(true),
@@ -1438,10 +1437,6 @@ mod atomic_write_tests {
         assert!(saved.probe.enabled);
         assert_eq!(saved.probe.poll_seconds, 5);
         assert_eq!(saved.security.secret_key, key);
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o640
@@ -1450,32 +1445,46 @@ mod atomic_write_tests {
             fs::metadata(root.join("env")).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert_eq!(Config::load(&link).unwrap().probe, saved.probe);
+        let before = fs::metadata(&target).unwrap();
+        Config::save_probe_patch(
+            &target,
+            &ProbeConfigFilePatch {
+                probe: Some(ProbeSettingsPatch {
+                    enabled: Some(true),
+                    poll_seconds: Some(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = fs::metadata(&target).unwrap();
+        assert_eq!(
+            before.ino(),
+            after.ino(),
+            "identical patch does not replace the file"
+        );
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(Config::load(&target).unwrap().probe, saved.probe);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn replaces_complete_content_preserving_permissions_and_symlink() {
+    fn replaces_complete_content_preserving_permissions() {
         let root = std::env::temp_dir().join(format!("agenthub-config-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         let target = root.join("config.toml");
-        let link = root.join("config-link.toml");
         fs::write(&target, "enabled = false\n").unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
-        symlink(&target, &link).unwrap();
-        write_config_atomic(&link, "enabled = true\n").unwrap();
+        write_config_atomic(&target, "enabled = true\n").unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "enabled = true\n");
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o640
         );
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         assert!(write_config_atomic(&root.join("missing.toml"), "unused").is_err());
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 }

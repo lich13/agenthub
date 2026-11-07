@@ -74,7 +74,7 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
     capabilities,
     onUnifiedDryRun: nextPlan => {
       setPlan(previous => {
-        if (previous && !nextPlan.scopes.some(s => s.scope === "codex_hidden" && s.scanned)) {
+        if (previous) {
           const prevHidden = previous.scopes.find(s => s.scope === "codex_hidden" && s.scanned);
           if (prevHidden) {
             const scopes = nextPlan.scopes.map(s => (s.scope === "codex_hidden" ? prevHidden : s));
@@ -408,7 +408,7 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
           <Database size={17} />
           全平台扫描预览
         </button>
-        <button className="secondary-button" disabled={busy} onClick={runHiddenPreview}>
+        <button className="secondary-button" disabled={busy || !capabilities.hiddenCleanupScan} onClick={runHiddenPreview}>
           <Search size={16} />
           深度扫描隐藏线程
         </button>

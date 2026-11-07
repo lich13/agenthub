@@ -29,8 +29,8 @@ pub(crate) fn thread_summaries_with_query(
     let plan = use_cases.list_read(query)?;
     let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
-    let view = thread_service::thread_list_read_model(state.platform(), inputs, plan.query)?;
-    Ok(view.threads)
+    let view = thread_service::thread_list_read_model(inputs, plan.query);
+    Ok(view)
 }
 
 pub(crate) fn threads_with_state(
@@ -71,9 +71,11 @@ pub(crate) fn thread_blocks_with_state(
     state: &DesktopState,
     request: ThreadBlocksRequest,
 ) -> Result<Option<ThreadBlocksPage>> {
-    let plan = AgentHubUseCases::new(state.platform())
-        .threads()
-        .blocks_read(&request.id, request.limit, request.before)?;
+    let plan = AgentHubUseCases::new(state.platform()).threads().blocks(
+        &request.id,
+        request.limit,
+        request.before,
+    )?;
     let Some(detail) = load_thread_detail_read_model(state, &plan)? else {
         return Ok(None);
     };
@@ -135,7 +137,7 @@ fn load_thread_detail_read_model(
         return Ok(None);
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
-    let view = thread_service::thread_detail_read_model(state.platform(), detail, active_job)?;
+    let view = thread_service::thread_detail_read_model(detail, active_job);
     let mut detail = view;
     agenthub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
     Ok(Some(detail))

@@ -25,15 +25,13 @@ const capabilityFields = {
   linux_update_job: { "linux-api": true, "macos-tauri": false },
   prune_backups: { "linux-api": true, "macos-tauri": false },
   thread_cleanup: { "linux-api": true, "macos-tauri": true },
-  dsh_archive_cleanup: { "linux-api": true, "macos-tauri": true },
   antigravity_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_notifications: { "linux-api": false, "macos-tauri": true },
   antigravity_sessions: { "linux-api": true, "macos-tauri": true },
   grokbot_sessions: { "linux-api": false, "macos-tauri": true },
   grokbot_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_sessions: { "linux-api": true, "macos-tauri": true },
-  hidden_cleanup_scan: { "linux-api": false, "macos-tauri": false },
-  codex_delete_tree: { "linux-api": false, "macos-tauri": false },
+  hidden_cleanup_scan: { "linux-api": true, "macos-tauri": true },
   thread_archive_actions: { "linux-api": true, "macos-tauri": true },
 } satisfies Record<keyof SystemCapabilities, CapabilityFieldValues>;
 

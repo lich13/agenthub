@@ -39,14 +39,6 @@ export function threadResumeCommand(threadId?: string | null): string | null {
   return id ? `codex resume ${id}` : null;
 }
 
-export function threadCopyId(threadId?: string | null): string | null {
-  return threadId?.trim() || null;
-}
-
-export function threadRolloutPath(rolloutPath?: string | null): string | null {
-  return rolloutPath?.trim() || null;
-}
-
 export function isPlanBlock(block: MessageBlock): boolean {
   if (block.role === "user") return false;
   const kind = normalizedBlockKind(block);
@@ -123,10 +115,6 @@ export function isActionableQuestionBlock(block: MessageBlock, current: PendingE
   const currentItemId = "id" in current ? current.item_id ?? current.call_id ?? current.id : current.item_id ?? null;
   if (!currentItemId) return Boolean(currentTurnId);
   return [block.item_id, block.call_id, block.id].some((value) => value === currentItemId);
-}
-
-export function questionAnswerLabels(block: MessageBlock, questionId: string): string[] {
-  return block.answers?.find((answer) => answer.question_id === questionId)?.answers ?? [];
 }
 
 function sameActionBlock(left: MessageBlock, right: MessageBlock): boolean {

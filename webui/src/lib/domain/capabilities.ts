@@ -4,7 +4,6 @@ export type RuntimeCapabilityMatrix = {
   runtimeKind: "desktop"; hostSurface: HostSurface; codexStatePaths: boolean;
   threadSubagents?: boolean;
   hiddenCleanupScan?: boolean;
-  dshArchiveCleanup?: boolean;
   antigravityNotifications?: boolean;
   dshNotifications?: boolean;
   antigravitySessions?: boolean;
@@ -30,7 +29,6 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     // Subagent collection arrived in 1.2.11; absent capability still means unsupported.
     threadSubagents: core.thread_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
-    dshArchiveCleanup: core.dsh_archive_cleanup === true,
     antigravityNotifications: !remote && core.antigravity_notifications === true,
     dshNotifications: !remote && core.dsh_notifications === true,
     antigravitySessions: core.antigravity_sessions === true,

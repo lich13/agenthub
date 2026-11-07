@@ -61,10 +61,6 @@ export function normalizeProbeRuntimePayload(value: unknown): Record<string, unk
   };
 }
 
-export function isMissingEndpoint(error: unknown): boolean {
-  return error instanceof RuntimeUnavailableError || error instanceof ApiError && [404, 405, 501].includes(error.status);
-}
-
 export function normalizeOptionalResult<T>(payload: unknown): OptionalResult<T> {
   if (payload && typeof payload === "object" && "available" in payload && ("data" in payload || "error" in payload || "reason" in payload)) {
     const wrapped = payload as { available?: unknown; data?: T; reason?: unknown; error?: unknown };

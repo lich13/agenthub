@@ -6,10 +6,10 @@ use agenthub_core::{
     db::JobRecord,
     platform::PlatformPaths,
     services::{
-        jobs as job_service, probe as probe_service, settings as settings_service,
+        commands, jobs as job_service, probe as probe_service, settings as settings_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
         updates::{self as update_service, UpdateAction},
-        use_cases::{AgentHubUseCases, JobDetailPlan, JobListPlan},
+        use_cases::AgentHubUseCases,
     },
 };
 use anyhow::{anyhow, Result};
@@ -48,9 +48,7 @@ pub fn start_probe_action_plan(
     config_path: &Path,
 ) -> Result<String> {
     let action = plan.action;
-    let spec = plan
-        .job
-        .ok_or_else(|| anyhow!("Probe job is unavailable"))?;
+    let spec = plan.job;
 
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -78,8 +76,8 @@ pub fn list_threads_read_model(
     let paths = state.codex_paths();
     let running_jobs = state.db.running_thread_jobs()?;
     let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
-    let view = thread_service::thread_list_read_model(&platform, inputs, plan.query)?;
-    Ok(view.threads)
+    let view = thread_service::thread_list_read_model(inputs, plan.query);
+    Ok(view)
 }
 
 pub fn probe_threads_read_model(
@@ -106,11 +104,7 @@ pub fn load_thread_detail_read_model(
     if let Some(detail) = detail.take() {
         let detail_thread_id = detail.summary.id.clone();
         let active_job = active_job_for_thread(state, &detail_thread_id)?;
-        let view = thread_service::thread_detail_read_model(
-            &PlatformPaths::for_kind(agenthub_core::platform::PlatformKind::Linux),
-            detail,
-            active_job,
-        )?;
+        let view = thread_service::thread_detail_read_model(detail, active_job);
         let mut detail = view;
         codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
         return Ok(Some(detail));
@@ -146,10 +140,10 @@ pub fn thread_blocks_read_model(
     )))
 }
 
-pub fn list_jobs_plan(state: &AppState, plan: JobListPlan) -> Result<Vec<Value>> {
+pub fn list_jobs_plan(state: &AppState, limit: u32) -> Result<Vec<Value>> {
     state
         .db
-        .list_jobs(plan.limit)?
+        .list_jobs(limit)?
         .into_iter()
         .map(job_response_value)
         .collect()
@@ -157,12 +151,12 @@ pub fn list_jobs_plan(state: &AppState, plan: JobListPlan) -> Result<Vec<Value>>
 
 pub fn job_detail_plan(
     state: &AppState,
-    plan: JobDetailPlan,
+    job_id: String,
     include_output: bool,
 ) -> Result<Option<Value>> {
     state
         .db
-        .job_with_output(&plan.job_id, include_output)?
+        .job_with_output(&job_id, include_output)?
         .map(job_response_value)
         .transpose()
 }
@@ -182,7 +176,11 @@ pub async fn apply_thread_state_action_plan(
     plan: &job_service::ThreadStateActionPlan,
 ) -> Result<job_service::ActionResponse> {
     let paths = state.codex_paths();
-    if let Some(archived) = plan.archived {
+    if matches!(
+        plan.command.as_str(),
+        commands::THREADS_ARCHIVE | commands::THREADS_RESTORE
+    ) {
+        let archived = plan.command == commands::THREADS_ARCHIVE;
         codex::set_thread_archived(&paths, &plan.thread_id, archived)?;
         state.db.record_audit(
             Some(&auth.admin_id),
@@ -250,24 +248,6 @@ pub fn start_update_action_plan(
             .jobs
             .start_process_job(&spec.kind, &spec.title, process)
     }
-}
-
-pub fn linux_probe_action_plan(
-    state: &AppState,
-    platform: &PlatformPaths,
-    action: probe_service::ProbeAction,
-    config_path: &Path,
-) -> Result<probe_service::ProbeActionPlan> {
-    let device_key_configured = state
-        .db
-        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
-        .is_some_and(|value| !value.is_empty());
-    let config = state.config();
-    probe_service::ProbeUseCases::new(&config, platform).action_with_device_key_and_config_path(
-        action,
-        device_key_configured,
-        config_path,
-    )
 }
 
 pub fn linux_update_action_plan(

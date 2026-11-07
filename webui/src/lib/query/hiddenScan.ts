@@ -46,6 +46,7 @@ export class HiddenScanRunner {
         this.plan ??= { ...response, candidates: [], hidden_ids: [] };
         await this.stop();
         if (this.plan.scan) this.plan = { ...this.plan, scan: { ...this.plan.scan, phase: "stopped" } };
+        this.update(this.plan);
         return this.plan;
       }
       this.plan = mergeHiddenScanPage(this.plan, response);
@@ -56,7 +57,9 @@ export class HiddenScanRunner {
       if (!scan.hasMore) await pause(this.controller.signal);
       if (this.controller.signal.aborted) {
         await this.stop();
-        return { ...this.plan, scan: { ...scan, phase: "stopped" } };
+        this.plan = { ...this.plan, scan: { ...scan, phase: "stopped" } };
+        this.update(this.plan);
+        return this.plan;
       }
       response = await this.send({ mode: "poll", scanId: scan.id, cursor: this.plan.candidates.length, limit: 100 });
     }
