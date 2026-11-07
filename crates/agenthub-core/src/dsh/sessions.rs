@@ -697,6 +697,7 @@ pub fn list_sessions(
     Ok(items)
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn probe_sessions(
     paths: &DshPaths,
     request: &ProviderListRequest,
