@@ -319,7 +319,7 @@ Claude reader 一次性升级查询已删除，通知基线仅首次建立或启
 
 ## 构建、CI 与发布
 
-根 Cargo workspace 构建共享核心和 Linux webd；`src-tauri` 独立 workspace 避免服务端构建引入桌面平台依赖，路径依赖共享核心。两份锁文件独立解析，Tauri 自身允许额外主版本；共享依赖约束、实际选择和最低 Rust 要求需一起检查。开发与 CI 统一由 rust-toolchain.toml 固定为 1.99.0，两个 workspace 最低 Rust 声明均为 1.99，不再安装或检查另一套旧工具链。`check-workspaces.py` 要求最低声明与固定工具链的主次版本一致，并精确比较共同直接依赖的声明与锁定结果；当前允许的 `toml` 0.8 解析差异是根 workspace 0.8.23、桌面 0.8.2。Tauri 额外的 dirs、reqwest、toml 主版本属于独立依赖链，不能据此强行统一。
+根 Cargo workspace 构建共享核心和 Linux webd；`src-tauri` 独立 workspace 避免服务端构建引入桌面平台依赖，路径依赖共享核心。两份锁文件独立解析，Tauri 自身允许额外主版本；共享依赖约束、实际选择和最低 Rust 要求需一起检查。开发与 CI 使用 rust-toolchain.toml 声明的 stable 工具链；两个 workspace 保留一致的最低 Rust 声明，允许工具链独立更新。`check-workspaces.py` 核对两侧最低声明，并精确比较共同直接依赖的声明与锁定结果；当前允许的 `toml` 0.8 解析差异是根 workspace 0.8.23、桌面 0.8.2。Tauri 额外的 dirs、reqwest、toml 主版本属于独立依赖链，不能据此强行统一。
 
 升级共享依赖时先确认两侧 manifest、feature 和实际依赖链，再定向更新两份锁文件、运行两侧 Rust 检查和三项 CI；不得为消除合法多版本而全量更新。产品版本以根 Cargo workspace 为准，JSON/Tauri manifest 和两份 lock 的自身 package 必须精确一致；契约 schemaVersion 与 API 协议单独校验。
 

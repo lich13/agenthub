@@ -95,7 +95,7 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ## 开发与验证
 
 ```bash
-corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+pnpm --dir webui install --frozen-lockfile
 node scripts/check-wire-types.mjs
 node --test scripts/test-wire-types.mjs
 node --test scripts/test-playwright-browser.mjs
@@ -105,9 +105,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-corepack pnpm@12.11.2 --dir webui typecheck
-corepack pnpm@12.11.2 --dir webui test
-corepack pnpm@12.11.2 --dir webui build:tauri
+pnpm --dir webui typecheck
+pnpm --dir webui test
+pnpm --dir webui build:tauri
 bash scripts/test-install-script.sh
 python3 scripts/check-versions.py
 python3 scripts/check-workspaces.py

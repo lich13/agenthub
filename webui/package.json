@@ -2,7 +2,6 @@
   "name": "agenthub-webui",
   "private": true,
   "version": "2.1.8",
-  "packageManager": "pnpm@12.11.2",
   "type": "module",
   "scripts": {
     "dev": "vite",

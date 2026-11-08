@@ -71,8 +71,8 @@ export function assessReport(kind, report, status) {
 }
 
 export function runAudit(kind, output, lockfile) {
-  const command = kind === 'cargo' ? 'cargo' : 'corepack';
-  const args = kind === 'cargo' ? ['audit', '--json', '--file', lockfile] : ['pnpm@12.11.2', '--dir', 'webui', 'audit', '--json'];
+  const command = kind === 'cargo' ? 'cargo' : 'pnpm';
+  const args = kind === 'cargo' ? ['audit', '--json', '--file', lockfile] : ['--dir', 'webui', 'audit', '--json'];
   const scan = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 300000 });
   try {
     requireReport(!scan.error && !scan.signal);
