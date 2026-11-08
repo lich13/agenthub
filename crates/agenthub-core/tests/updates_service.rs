@@ -131,18 +131,13 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
 
 #[test]
 fn linux_update_job_specs_are_planned_in_core_service() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-    let precheck = linux_update_job_spec(
-        &config,
-        update_job_plan_for_surface(
-            &platform,
-            HostSurface::default_for_platform(&platform),
-            UpdateAction::Check,
-        ),
-    )
-    .unwrap();
+    let precheck = linux_update_job_spec(update_job_plan_for_surface(
+        &platform,
+        HostSurface::default_for_platform(&platform),
+        UpdateAction::Check,
+    ));
     assert_eq!(precheck.kind, "agenthub_update_check");
     assert_eq!(precheck.title, "AgentHub update precheck");
     assert_eq!(
@@ -158,15 +153,11 @@ fn linux_update_job_specs_are_planned_in_core_service() {
         ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"])
     );
 
-    let install = linux_update_job_spec(
-        &config,
-        update_job_plan_for_surface(
-            &platform,
-            HostSurface::default_for_platform(&platform),
-            UpdateAction::Install,
-        ),
-    )
-    .unwrap();
+    let install = linux_update_job_spec(update_job_plan_for_surface(
+        &platform,
+        HostSurface::default_for_platform(&platform),
+        UpdateAction::Install,
+    ));
     assert_eq!(install.kind, "agenthub_update_install");
     assert_eq!(
         install.command,
@@ -180,15 +171,11 @@ fn linux_update_job_specs_are_planned_in_core_service() {
         )
     );
 
-    let prune = linux_update_job_spec(
-        &config,
-        update_job_plan_for_surface(
-            &platform,
-            HostSurface::default_for_platform(&platform),
-            UpdateAction::Prune,
-        ),
-    )
-    .unwrap();
+    let prune = linux_update_job_spec(update_job_plan_for_surface(
+        &platform,
+        HostSurface::default_for_platform(&platform),
+        UpdateAction::Prune,
+    ));
     assert_eq!(prune.kind, "agenthub_update_prune");
     assert!(prune.command.contains("release update backups"));
     let prune_process = prune.process_command().unwrap();
@@ -202,8 +189,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
 
     let mac = PlatformPaths::for_kind(PlatformKind::Macos);
     let plan =
-        agenthub_core::services::updates::plan_update_action(&config, &mac, UpdateAction::Check)
-            .unwrap();
+        agenthub_core::services::updates::plan_update_action(&mac, UpdateAction::Check).unwrap();
     assert!(plan.linux_job.is_none());
     assert!(plan.macos_job.is_some());
 }

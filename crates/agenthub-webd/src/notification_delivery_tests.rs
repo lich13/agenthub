@@ -364,7 +364,7 @@ async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
                 .unwrap();
         }
         let bark = codex(
-            &fixture.config,
+            &|| Ok(fixture.config.clone()),
             &fixture.db,
             &fixture.event(),
             suppression != "legacy-dedupe",
@@ -381,9 +381,10 @@ async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
 async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay() {
     let fixture = Fixture::new().await;
     let event = fixture.event();
+    let load_config = || Ok(fixture.config.clone());
     let (first, second) = tokio::join!(
-        codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
-        codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
+        codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT),
+        codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT),
     );
     let outcomes = [first.unwrap(), second.unwrap()];
     assert!(outcomes.iter().any(|outcome| outcome.sent));
@@ -391,9 +392,15 @@ async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay
         || (!outcome.skipped && outcome.status.as_deref() == Some("retrying"))));
     assert_eq!(fixture.bark.count(), 1);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
-    let duplicate = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let duplicate = codex(
+        &|| Ok(fixture.config.clone()),
+        &reopened,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(duplicate.sent || duplicate.skipped);
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 1);
@@ -449,9 +456,15 @@ async fn an_initial_lease_claimed_elsewhere_stays_retrying_at_repeated_entrances
         )
         .await
         .unwrap(),
-        codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap(),
+        codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap(),
     ];
     for outcome in outcomes {
         assert_eq!(outcome.status.as_deref(), Some("retrying"));
@@ -484,15 +497,26 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
         .unwrap();
     let mut event = fixture.event();
     event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);
-    let bark = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let bark = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(bark.skipped && !bark.sent);
     let mut delivery = fixture.native_delivery(NativeProvider::Grok, "completion");
     delivery.event.timestamp_ms = fixture.event_ms() - 60_000;
-    let bark = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let bark = native(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &delivery,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(bark.skipped && !bark.sent);
     assert_eq!(fixture.bark.count(), 0);
 }
@@ -507,9 +531,14 @@ async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
         let fixture = Fixture::new().await;
         let delivery = fixture.native_delivery(provider, kind);
         // Direct delivery only; do not scan or discover any real native sessions.
-        let bark = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let bark = native(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &delivery,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         if provider == NativeProvider::Claude {
             assert!(!bark.sent && !bark.skipped);
             assert_eq!(bark.status.as_deref(), Some("waiting_retry"));
@@ -532,9 +561,14 @@ async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
             }
         ));
         let reopened = PanelDb::open(fixture.db.path()).unwrap();
-        let duplicate = native(&fixture.config, &reopened, &delivery, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let duplicate = native(
+            &|| Ok(fixture.config.clone()),
+            &reopened,
+            &delivery,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(duplicate.sent || duplicate.skipped);
         assert_eq!(fixture.bark.count(), 1);
     }
@@ -548,9 +582,15 @@ async fn invalid_bark_acknowledgement_is_retried_and_recovers_after_restart() {
     fixture.bark.reply(invalid);
     let event = fixture.event();
     let key = codex_key(&event);
-    let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let outcome = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(!outcome.sent && !outcome.skipped);
     assert_eq!(outcome.reason.as_deref(), Some("response_decode"));
     assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
@@ -577,9 +617,15 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         let event = fixture.event();
         assert!(codex_fingerprint(&fixture.config, &event).is_some());
         let key = codex_key(&event);
-        let first = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let first = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(!first.sent && !first.skipped);
         assert_eq!(first.http_status, Some(status));
         assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
@@ -595,9 +641,15 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
         fixture.due_now(&key);
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
-        let duplicate = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let duplicate = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(!duplicate.sent);
         assert_eq!(duplicate.status.as_deref(), Some("failed"));
         assert_eq!(fixture.bark.count(), 3);
@@ -620,9 +672,15 @@ async fn a_successful_bark_retry_updates_the_existing_business_event() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let bark = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let bark = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(!bark.sent && !bark.skipped);
     fixture
         .db
@@ -678,9 +736,15 @@ async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_s
         ));
         let event = fixture.event();
         let key = codex_key(&event);
-        let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let outcome = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(!outcome.sent);
         fixture.due_now(&key);
         match change {
@@ -727,9 +791,15 @@ async fn retry_batch_reloads_configuration_after_an_earlier_request_has_started(
             let mut event = fixture.event();
             event.dedupe_key = dedupe_key.into();
             let key = codex_key(&event);
-            let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-                .await
-                .unwrap();
+            let outcome = codex(
+                &|| Ok(fixture.config.clone()),
+                &fixture.db,
+                &event,
+                true,
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .unwrap();
             assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
             fixture.due_now(&key);
             keys.push(key);
@@ -768,6 +838,40 @@ async fn retry_batch_reloads_configuration_after_an_earlier_request_has_started(
             .collect();
         statuses.sort();
         assert_eq!(statuses, ["sent", "skipped"], "{change}");
+    }
+}
+
+#[tokio::test]
+async fn first_delivery_reads_live_configuration_after_claiming_before_http() {
+    for change in ["target", "channel", "provider", "event"] {
+        let fixture = Fixture::new().await;
+        let replacement = LoopbackServer::new(Reply::bark()).await;
+        let event = fixture.event();
+        let key = codex_key(&event);
+        let load_config = || {
+            let mut config = fixture.config.clone();
+            let claimed = fixture
+                .db
+                .notification_delivery_outcome(NotificationChannel::Bark, &key)?
+                .is_some_and(|outcome| outcome["status"] == "retrying");
+            if claimed {
+                match change {
+                    "target" => config.probe.notifications.server_url = replacement.url.clone(),
+                    "channel" => config.probe.notifications.enabled = false,
+                    "provider" => config.probe.notifications.notify_codex = false,
+                    "event" => config.probe.notifications.notify_completion = false,
+                    _ => unreachable!(),
+                }
+            }
+            Ok(config)
+        };
+        let outcome = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+            .await
+            .unwrap();
+        assert!(outcome.skipped && !outcome.sent, "{change}");
+        assert_eq!(fixture.bark.count(), 0, "{change}");
+        assert_eq!(replacement.count(), 0, "{change}");
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
     }
 }
 
@@ -846,7 +950,7 @@ async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     let event = fixture.event();
     let key = codex_key(&event);
     let outcome = codex(
-        &fixture.config,
+        &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
         true,
@@ -870,9 +974,15 @@ async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     let requests = fixture.bark.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].body["id"], requests[1].body["id"]);
-    codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &reopened,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert_eq!(fixture.bark.count(), 2);
 }
 
@@ -893,9 +1003,15 @@ async fn permanent_http_and_apns_rejections_never_enter_retry_queue() {
         fixture.bark.reply(reply);
         let event = fixture.event();
         let key = codex_key(&event);
-        let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let outcome = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(!outcome.sent && !outcome.skipped);
         assert_eq!(outcome.status.as_deref(), Some("failed"));
         assert_eq!(fixture.status(NotificationChannel::Bark, &key), "failed");
@@ -982,7 +1098,7 @@ async fn retry_after_headers_reach_the_persistent_schedule() {
     );
     let before = chrono::Utc::now().timestamp_millis();
     let outcome = codex(
-        &fixture.config,
+        &|| Ok(fixture.config.clone()),
         &fixture.db,
         &fixture.event(),
         true,
@@ -1083,9 +1199,15 @@ async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
     fixture.bark.reply(invalid);
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     for attempt in 2..=3 {
         fixture.due_now(&key);
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
@@ -1097,9 +1219,15 @@ async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &reopened,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert_eq!(fixture.bark.count(), 3);
 }
 
@@ -1135,7 +1263,7 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
     candidate.chunks =
         crate::bark_body_chunks(&event.bark_body, crate::PROBE_BARK_BODY_CHUNK_BYTES);
     let first = deliver(
-        &fixture.config,
+        &|| Ok(fixture.config.clone()),
         &fixture.db,
         &key,
         NotificationChannel::Bark,
@@ -1200,9 +1328,15 @@ async fn unrelated_append_only_records_do_not_cancel_a_valid_retry() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     writeln!(
         fs::OpenOptions::new()
             .append(true)
@@ -1228,16 +1362,28 @@ async fn repeated_entrance_keeps_the_original_encrypted_message_and_identifier()
     ));
     let mut event = fixture.event();
     let key = codex_key(&event);
-    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     event.bark_body = "fixture replacement body must not overwrite the queue".into();
     event.bark_title = "fixture replacement title".into();
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         fixture.bark.count(),
         1,
@@ -1260,9 +1406,15 @@ async fn concurrent_retry_workers_claim_one_http_attempt() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
@@ -1285,9 +1437,15 @@ async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_data
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let outcome = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert!(!serde_json::to_string(&outcome).unwrap().contains(TOKEN));
     assert!(!serde_json::to_string(&fixture.config)
         .unwrap()
@@ -1386,13 +1544,13 @@ async fn github_ci_delivery_uses_run_link_and_deduplicates_after_restart() {
     fixture.config.probe.notifications.notify_github_ci = true;
     let event = ci_event(&fixture);
     store_ci(&fixture, &event);
-    github_ci(&fixture.config, &fixture.db, event.clone())
+    github_ci(&|| Ok(fixture.config.clone()), &fixture.db, event.clone())
         .await
         .unwrap();
     assert_eq!(fixture.bark.count(), 1);
     assert_eq!(fixture.bark.requests()[0].body["url"], event.run.html_url);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
-    github_ci(&fixture.config, &reopened, event.clone())
+    github_ci(&|| Ok(fixture.config.clone()), &reopened, event.clone())
         .await
         .unwrap();
     assert_eq!(fixture.bark.count(), 1);
@@ -1410,7 +1568,7 @@ async fn github_ci_retry_stops_after_disable_account_switch_or_new_attempt() {
         let event = ci_event(&fixture);
         store_ci(&fixture, &event);
         let key = event.key();
-        github_ci(&fixture.config, &fixture.db, event.clone())
+        github_ci(&|| Ok(fixture.config.clone()), &fixture.db, event.clone())
             .await
             .unwrap();
         assert_eq!(fixture.bark.count(), 1);
@@ -1469,7 +1627,7 @@ async fn github_ci_batch_acknowledges_success_before_an_enqueue_failure() {
         ))
         .unwrap();
     assert!(
-        crate::github_ci_monitor::deliver_events(&fixture.db, events, || Ok(fixture
+        crate::github_ci_monitor::deliver_events(&fixture.db, events, &|| Ok(fixture
             .config
             .clone()))
         .await
@@ -1485,7 +1643,7 @@ async fn github_ci_batch_acknowledges_success_before_an_enqueue_failure() {
         .connection()
         .execute_batch("DROP TRIGGER fail_ci_enqueue")
         .unwrap();
-    crate::github_ci_monitor::deliver_events(&fixture.db, pending, || Ok(fixture.config.clone()))
+    crate::github_ci_monitor::deliver_events(&fixture.db, pending, &|| Ok(fixture.config.clone()))
         .await
         .unwrap();
     assert_eq!(fixture.bark.count(), 2);

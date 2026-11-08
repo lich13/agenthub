@@ -404,7 +404,7 @@
       "tauriCommand": "commands::settings::dryRunUnifiedCleanup",
       "webuiWrapper": "dryRunUnifiedCleanup",
       "dtoOwner": "cleanup",
-      "requestDto": "UnifiedCleanupDryRunRequest",
+      "requestDto": "NoRequest",
       "responseDto": "UnifiedCleanupPlan"
     },
     {
@@ -1432,10 +1432,6 @@
     "ClaudeOwnershipProcess": {
       "core": "ClaudeOwnershipProcess",
       "webui": "ClaudeOwnershipProcess"
-    },
-    "UnifiedCleanupDryRunRequest": {
-      "core": "UnifiedCleanupDryRunRequest",
-      "webui": "UnifiedCleanupDryRunRequest"
     },
     "UnifiedCleanupCandidate": {
       "core": "UnifiedCleanupCandidate",

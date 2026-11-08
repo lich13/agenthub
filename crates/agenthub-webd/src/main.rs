@@ -249,6 +249,8 @@ async fn run_probe_command(
     db: PanelDb,
     config_path: &Path,
 ) -> Result<()> {
+    let cache = monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
     match command {
         ProbeCommand::Status => {
             println!(
@@ -298,7 +300,7 @@ async fn run_probe_command(
             thread_id,
             turn_id,
             kind,
-        } => match handle_hook_stop_command(config, &db, thread_id, turn_id, kind).await {
+        } => match handle_hook_stop_command(&load_config, &db, thread_id, turn_id, kind).await {
             Ok(result) => {
                 let (stdout, stderr) = hook_stop_cli_output(&result)?;
                 eprint!("{stderr}");
@@ -347,7 +349,7 @@ async fn run_probe_command(
                 turn_id.as_deref(),
             )?;
             let event = probe_runtime(config).build_event(input);
-            let (outcome, bark) = record_probe_event_with_bark(config, &db, event).await?;
+            let (outcome, bark) = record_probe_event_with_bark(&load_config, &db, event).await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -1110,11 +1112,11 @@ impl ProbeBarkOutcome {
 }
 
 async fn handle_built_probe_event(
-    config: &Config,
+    load_config: &notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     event: agenthub_core::probe::ProbeBuiltEvent,
 ) -> Result<HookStopResult> {
-    let (outcome, bark) = record_probe_event_with_bark(config, db, event).await?;
+    let (outcome, bark) = record_probe_event_with_bark(load_config, db, event).await?;
     Ok(HookStopResult {
         stdout: codex_stop_continue_output(),
         outcome,
@@ -1135,19 +1137,21 @@ fn hook_stop_cli_output(result: &HookStopResult) -> Result<(String, String)> {
 }
 
 async fn record_probe_event_with_bark(
-    config: &Config,
+    load_config: &notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     event: agenthub_core::probe::ProbeBuiltEvent,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
-    record_probe_event_with_bark_timeout(config, db, event, std::time::Duration::from_secs(8)).await
+    record_probe_event_with_bark_timeout(load_config, db, event, std::time::Duration::from_secs(8))
+        .await
 }
 
 async fn record_probe_event_with_bark_timeout(
-    config: &Config,
+    load_config: &notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     event: agenthub_core::probe::ProbeBuiltEvent,
     bark_timeout: std::time::Duration,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    let config = &load_config()?;
     if let Some(reason) = event
         .suppression_reason
         .as_deref()
@@ -1194,7 +1198,7 @@ async fn record_probe_event_with_bark_timeout(
         event.ttl_seconds,
     )?;
     let mut bark = notification_delivery::codex(
-        config,
+        load_config,
         db,
         &event,
         claimed && feedback_claimed && !passive_sent,
@@ -1388,7 +1392,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     let state = AppState::new_for_surface(config.clone(), db, host_surface);
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
-    github_ci_monitor::spawn(config_path.clone());
+    github_ci_monitor::spawn(config_path.clone(), Some(state.clone()));
     api::spawn_probe_status_refresh(state.clone());
     ssh_server::serve(state).await?;
     Ok(())
@@ -1424,7 +1428,8 @@ async fn run_probe_error_monitor_once(
             None
         };
     if let Err(error) =
-        async_question_monitor::run_with_threads(config, db, shared_codex_threads.as_deref()).await
+        async_question_monitor::run_with_threads(load_config, db, shared_codex_threads.as_deref())
+            .await
     {
         tracing::warn!(
             "Codex structured question monitor failed: {}",
@@ -1432,14 +1437,14 @@ async fn run_probe_error_monitor_once(
         );
     }
     if let Err(error) =
-        question_monitor::run_with_threads(config, db, shared_codex_threads.as_deref()).await
+        question_monitor::run_with_threads(load_config, db, shared_codex_threads.as_deref()).await
     {
         tracing::warn!(
             "Codex feedback monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())
         );
     }
-    if let Err(error) = provider_monitor::run(config, db).await {
+    if let Err(error) = provider_monitor::run(load_config, db).await {
         tracing::warn!(
             "native provider notification monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())
@@ -1515,7 +1520,7 @@ async fn run_probe_error_monitor_once(
 
     let pending_deliveries = db.list_pending_probe_error_deliveries(100)?;
     let deliveries_completed =
-        deliver_probe_error_incidents(config, db, &pending_deliveries).await?;
+        deliver_probe_error_incidents(load_config, db, &pending_deliveries).await?;
     if previous.as_ref() != Some(&scan.cursor) {
         db.set_setting(
             PROBE_ERROR_MONITOR_CURSOR_SETTING,
@@ -1543,10 +1548,11 @@ async fn run_probe_error_monitor_once(
 }
 
 async fn deliver_probe_error_incidents(
-    config: &Config,
+    load_config: &notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     incidents: &[ProbeErrorIncident],
 ) -> Result<usize> {
+    let config = &load_config()?;
     let mut delivered = 0usize;
     for incident in incidents {
         let title = local_thread_title(config, &incident.thread_id)
@@ -1583,7 +1589,8 @@ async fn deliver_probe_error_incidents(
             .with_error_monitor_source(),
         );
         let (outcome, bark) =
-            record_probe_event_with_bark_timeout(config, db, event, Duration::from_secs(3)).await?;
+            record_probe_event_with_bark_timeout(load_config, db, event, Duration::from_secs(3))
+                .await?;
         let event_id = db.probe_event_id_by_dedupe_key(&outcome.dedupe_key)?;
         let bark_status = if let Some(status) = bark.status.as_ref() {
             status.clone()
@@ -1733,7 +1740,8 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
             if let Some(key) = pre_plan.passive_marker_key {
                 active_markers.push(key);
             }
-            let (outcome, bark) = record_probe_event_with_bark(&config, &state.db, event).await?;
+            let (outcome, bark) =
+                record_probe_event_with_bark(&|| Ok(state.config()), &state.db, event).await?;
             if outcome.recorded || bark.sent {
                 recorded += 1;
             }
@@ -2108,7 +2116,9 @@ last_error = "old agenthub request hook"
             Some("turn-1"),
             "hook-stop",
         ));
-        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+        let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
+            .await
+            .unwrap();
 
         assert_eq!(
             result.stdout,
@@ -2156,7 +2166,7 @@ last_error = "old agenthub request hook"
                     Some(body),
                     "hook-stop",
                 ));
-            let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            let (outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
                 .await
                 .unwrap();
 
@@ -2193,7 +2203,7 @@ last_error = "old agenthub request hook"
                 "hook-stop",
             ));
         let (normal_outcome, normal_bark) =
-            record_probe_event_with_bark(&config, &db, normal_event)
+            record_probe_event_with_bark(&|| Ok(config.clone()), &db, normal_event)
                 .await
                 .unwrap();
         assert!(normal_outcome.recorded);
@@ -2253,7 +2263,9 @@ last_error = "old agenthub request hook"
         assert!(event.payload["last_assistant_message"].is_null());
         assert!(!event.bark_body.contains(memory_body));
 
-        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+        let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
+            .await
+            .unwrap();
         assert_eq!(
             result.stdout,
             json!({"continue": true, "suppressOutput": false})
@@ -2441,7 +2453,7 @@ last_error = "old agenthub request hook"
             event.suppression_reason.as_deref(),
             Some("internal_memory_consolidation")
         );
-        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+        let (outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
         assert!(!outcome.recorded);
@@ -2477,7 +2489,9 @@ last_error = "old agenthub request hook"
             "hook-stop",
         ));
 
-        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+        let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
+            .await
+            .unwrap();
 
         assert_eq!(
             result.stdout,
@@ -2548,7 +2562,9 @@ last_error = "old agenthub request hook"
             .with_body_source(Some(&selection.source)),
         );
 
-        handle_built_probe_event(&config, &db, event).await.unwrap();
+        handle_built_probe_event(&|| Ok(config.clone()), &db, event)
+            .await
+            .unwrap();
 
         let events = db.list_probe_events(10).unwrap();
         assert_eq!(
@@ -2627,7 +2643,9 @@ last_error = "old agenthub request hook"
         );
         let event = probe_runtime(&config).build_event(event_input);
 
-        handle_built_probe_event(&config, &db, event).await.unwrap();
+        handle_built_probe_event(&|| Ok(config.clone()), &db, event)
+            .await
+            .unwrap();
 
         let events = db.list_probe_events(10).unwrap();
         assert_eq!(events[0].title.as_deref(), Some("真实 HookStop 标题"));
@@ -2650,7 +2668,7 @@ last_error = "old agenthub request hook"
             .unwrap();
 
         let first = handle_built_probe_event(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
                 Some("thread-a"),
@@ -2661,7 +2679,7 @@ last_error = "old agenthub request hook"
         .await
         .unwrap();
         let duplicate = handle_built_probe_event(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
                 Some("thread-a"),
@@ -2719,14 +2737,14 @@ last_error = "old agenthub request hook"
         };
 
         let first = record_probe_event_with_bark(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             probe_runtime(&config).build_event(passive_input()),
         )
         .await
         .unwrap();
         let duplicate = record_probe_event_with_bark(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             probe_runtime(&config).build_event(passive_input()),
         )
@@ -2773,7 +2791,7 @@ last_error = "old agenthub request hook"
             Some("turn-a"),
         ));
 
-        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+        let (_outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
 
@@ -2820,9 +2838,10 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
         let event = probe_runtime(&config).build_event(context);
-        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
-            .await
-            .unwrap();
+        let (_outcome, _bark) =
+            record_probe_event_with_bark(&|| Ok(config.clone()), &db, event.clone())
+                .await
+                .unwrap();
 
         assert_eq!(event.kind, "completion");
         assert!(event.bark_body.contains("最终反馈第一行"));
@@ -3000,9 +3019,10 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
         let event = probe_runtime(&config).build_event(context);
-        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
-            .await
-            .unwrap();
+        let (_outcome, _bark) =
+            record_probe_event_with_bark(&|| Ok(config.clone()), &db, event.clone())
+                .await
+                .unwrap();
 
         assert_eq!(event.kind, "completion");
         assert_eq!(event.payload["body_source"], "last_assistant_message");
@@ -3400,15 +3420,16 @@ last_error = "old agenthub request hook"
 
         let first_event = make_event(&body_one);
         let first_key = first_event.dedupe_key.clone();
-        let first = record_probe_event_with_bark(&config, &db, first_event)
+        let first = record_probe_event_with_bark(&|| Ok(config.clone()), &db, first_event)
             .await
             .unwrap();
-        let duplicate = record_probe_event_with_bark(&config, &db, make_event(&body_one))
-            .await
-            .unwrap();
+        let duplicate =
+            record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event(&body_one))
+                .await
+                .unwrap();
         let changed_event = make_event(&body_two);
         let changed_key = changed_event.dedupe_key.clone();
-        let changed = record_probe_event_with_bark(&config, &db, changed_event)
+        let changed = record_probe_event_with_bark(&|| Ok(config.clone()), &db, changed_event)
             .await
             .unwrap();
 
@@ -3459,14 +3480,14 @@ last_error = "old agenthub request hook"
             )
         };
 
-        let first = record_probe_event_with_bark(&config, &db, make_event())
+        let first = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
         Connection::open(db.path())
             .unwrap()
             .execute("DELETE FROM probe_dedupe", [])
             .unwrap();
-        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+        let after_ttl = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
 
@@ -3507,14 +3528,14 @@ last_error = "old agenthub request hook"
             )
         };
 
-        let first = record_probe_event_with_bark(&config, &db, make_event())
+        let first = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
         Connection::open(db.path())
             .unwrap()
             .execute("DELETE FROM probe_dedupe", [])
             .unwrap();
-        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+        let after_ttl = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
 
@@ -3556,14 +3577,14 @@ last_error = "old agenthub request hook"
             )
         };
 
-        let first = record_probe_event_with_bark(&config, &db, make_event())
+        let first = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
         Connection::open(db.path())
             .unwrap()
             .execute("DELETE FROM probe_dedupe", [])
             .unwrap();
-        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+        let after_ttl = record_probe_event_with_bark(&|| Ok(config.clone()), &db, make_event())
             .await
             .unwrap();
 
@@ -3607,14 +3628,14 @@ last_error = "old agenthub request hook"
         };
 
         let first = record_probe_event_with_bark(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             make_event(make_body("2026-06-16 12:00:00 北京时间")),
         )
         .await
         .unwrap();
         let second = record_probe_event_with_bark(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             make_event(make_body("2026-06-16 12:05:00 北京时间")),
         )
@@ -3778,7 +3799,7 @@ last_error = "old agenthub request hook"
             .unwrap()
             .contains("末尾唯一完整反馈"));
 
-        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+        let (_outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
 
@@ -3899,7 +3920,7 @@ last_error = "old agenthub request hook"
             .with_thread_title(Some("安全存储线程")),
         );
 
-        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+        let (_outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
         assert!(bark.sent);
@@ -3960,7 +3981,7 @@ last_error = "old agenthub request hook"
         let mut event = event;
         event.payload["item_id"] = json!("item-plan-stable");
 
-        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+        let (outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
         assert!(bark.sent);
@@ -4370,7 +4391,7 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let result = handle_built_probe_event(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
                 Some("thread-a"),

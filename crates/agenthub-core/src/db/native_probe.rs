@@ -214,11 +214,18 @@ impl PanelDb {
         }))
     }
 
-    pub fn pending_native_deliveries(&self, limit: usize) -> Result<Vec<NativeDelivery>> {
+    pub fn pending_native_deliveries(
+        &self,
+        limit: usize,
+        provider: Option<NativeProvider>,
+    ) -> Result<Vec<NativeDelivery>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' ORDER BY created_at,event_key LIMIT ?1")?;
+        let mut stmt = conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
         let rows = stmt
-            .query_map([limit.min(100)], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map(
+                params![limit.min(100), provider.map(NativeProvider::as_str)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(|(ciphertext, nonce)| self.decode_native_payload(ciphertext, nonce))
@@ -281,6 +288,15 @@ impl PanelDb {
     }
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
+        let mut counts = conn.prepare("SELECT provider, SUM(status='failed'), SUM(status IN ('pending','delivering','queued')) FROM native_probe_deliveries WHERE status IN ('failed','pending','delivering','queued') GROUP BY provider")?;
+        let counts = counts
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (row.get::<_, u64>(1)?, row.get::<_, u64>(2)?),
+                ))
+            })?
+            .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
         let mut statuses = Vec::new();
         for provider in [
             NativeProvider::Grok,
@@ -294,8 +310,7 @@ impl PanelDb {
             }
             let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
-            let failed:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status='failed'",[provider.as_str()],|r|r.get(0))?;
-            let pending:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status IN ('pending','delivering','queued')",[provider.as_str()],|r|r.get(0))?;
+            let (failed, pending) = counts.get(provider.as_str()).copied().unwrap_or_default();
             statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":true}));
         }
         Ok(Value::Array(statuses))
@@ -336,6 +351,79 @@ impl PanelDb {
 mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+
+    #[test]
+    fn pending_provider_filter_precedes_limit_and_decryption() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let config = config();
+        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
+            .unwrap();
+        let scan = scan("target", 1, chrono::Utc::now().timestamp_millis() + 1000);
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+                .unwrap(),
+            1
+        );
+        {
+            let conn = db.conn.lock().unwrap();
+            for i in 0..101 {
+                // Unrelated payloads must never be loaded or decrypted by this query.
+                conn.execute("INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,'claude_code','{}','pending',0,0)", [format!("unrelated-{i}")]).unwrap();
+            }
+        }
+        let pending = db
+            .pending_native_deliveries(1, Some(NativeProvider::Grok))
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].session_key, "target");
+        assert_eq!(pending[0].event.body, "test reply");
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider='claude_code' AND status='pending'", [], |r| r.get::<_, usize>(0)).unwrap(), 101);
+    }
+
+    #[test]
+    fn notification_counts_preserve_states_provider_order_and_zero_values() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let statuses = [
+            "failed",
+            "pending",
+            "delivering",
+            "queued",
+            "sent",
+            "skipped",
+            "unknown",
+        ];
+        {
+            let conn = db.conn.lock().unwrap();
+            for (i, status) in statuses.iter().enumerate() {
+                conn.execute("INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,'grok','{}',?2,0,0)", params![format!("fixture-{i}"),status]).unwrap();
+            }
+        }
+        let rows = db.native_notification_status().unwrap();
+        let rows = rows.as_array().unwrap();
+        let expected: Vec<_> = [
+            NativeProvider::Grok,
+            NativeProvider::GrokBot,
+            NativeProvider::Claude,
+            NativeProvider::Antigravity,
+            NativeProvider::Dsh,
+        ]
+        .into_iter()
+        .filter(|p| !p.local_only() || cfg!(target_os = "macos"))
+        .map(NativeProvider::as_str)
+        .collect();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["provider"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(rows[0]["failed_deliveries"], 1);
+        assert_eq!(rows[0]["pending_deliveries"], 3);
+        for row in &rows[1..] {
+            assert_eq!(row["failed_deliveries"], 0);
+            assert_eq!(row["pending_deliveries"], 0);
+        }
+    }
 
     #[test]
     fn idle_scan_does_not_rewrite_streams_or_publish_history() {
@@ -406,7 +494,7 @@ mod tests {
                 .unwrap(),
             1
         );
-        let delivery = db.pending_native_deliveries(1).unwrap().remove(0);
+        let delivery = db.pending_native_deliveries(1, None).unwrap().remove(0);
         let raw: String = db
             .conn
             .lock()
@@ -488,7 +576,11 @@ mod tests {
                 .unwrap(),
             1
         );
-        let delivery = db.pending_native_deliveries(10).unwrap().pop().unwrap();
+        let delivery = db
+            .pending_native_deliveries(10, None)
+            .unwrap()
+            .pop()
+            .unwrap();
         assert!(db.claim_native_delivery(&delivery.event_key).unwrap());
         db.finish_native_delivery(
             &delivery,
@@ -496,7 +588,7 @@ mod tests {
         )
         .unwrap();
         assert!(!db.claim_native_delivery(&delivery.event_key).unwrap());
-        assert!(db.pending_native_deliveries(10).unwrap().is_empty());
+        assert!(db.pending_native_deliveries(10, None).unwrap().is_empty());
         let conn = db.conn.lock().unwrap();
         assert_eq!(
             conn.query_row("SELECT status FROM native_probe_deliveries", [], |r| r
@@ -553,7 +645,11 @@ mod tests {
                 .unwrap(),
             1
         );
-        let d = db.pending_native_deliveries(100).unwrap().pop().unwrap();
+        let d = db
+            .pending_native_deliveries(100, None)
+            .unwrap()
+            .pop()
+            .unwrap();
         assert!(db.claim_native_delivery(&d.event_key).unwrap());
         assert!(!db.claim_native_delivery(&d.event_key).unwrap());
         db.finish_native_delivery(&d, json!({"sent":true})).unwrap();
@@ -564,13 +660,17 @@ mod tests {
                 .unwrap(),
             0
         );
-        assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+        assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &scan("b", 1, now), &c)
                 .unwrap(),
             1
         );
-        let other = db.pending_native_deliveries(100).unwrap().pop().unwrap();
+        let other = db
+            .pending_native_deliveries(100, None)
+            .unwrap()
+            .pop()
+            .unwrap();
         assert_ne!(d.event_key, other.event_key);
         db.claim_native_delivery(&other.event_key).unwrap();
         db.finish_native_delivery(
@@ -667,7 +767,7 @@ mod tests {
         c.probe.notifications.notify_grok = true;
         db.stage_native_notifications(NativeProvider::Grok, &scan("a", 3, now), &c)
             .unwrap();
-        assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+        assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &scan("a", 4, now), &c)
                 .unwrap(),

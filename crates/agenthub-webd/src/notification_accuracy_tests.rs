@@ -166,9 +166,10 @@ async fn hook_stop_accuracy_fixture_turns_deliver_only_exact_terminal_answers() 
             .unwrap();
         let event = probe_runtime(&fixture.config).build_event(input);
         assert_eq!(event.payload["body_selected_turn_id"], turn);
-        let (outcome, bark) = record_probe_event_with_bark(&fixture.config, &db, event)
-            .await
-            .unwrap();
+        let (outcome, bark) =
+            record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event)
+                .await
+                .unwrap();
         assert!(outcome.recorded && bark.sent);
         let request = server.request();
         let capture: Value =
@@ -206,16 +207,17 @@ async fn hook_stop_accuracy_fixture_final_body_reaches_bark_with_current_title()
     )
     .unwrap();
     let event = probe_runtime(&fixture.config).build_event(input);
-    let (outcome, bark) = record_probe_event_with_bark(&fixture.config, &db, event.clone())
-        .await
-        .unwrap();
+    let (outcome, bark) =
+        record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event.clone())
+            .await
+            .unwrap();
     assert!(outcome.recorded && bark.sent);
     let raw = server.request();
     let payload: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(payload["body"], final_body);
     assert_eq!(payload["title"], "Codex｜完成｜Current native title");
     assert_eq!(event.payload["body_selected_turn_id"], "root-turn");
-    let (_, duplicate) = record_probe_event_with_bark(&fixture.config, &db, event)
+    let (_, duplicate) = record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event)
         .await
         .unwrap();
     assert_eq!(duplicate.request_count, 0);
@@ -245,9 +247,10 @@ async fn hook_stop_accuracy_internal_unknown_and_unconfirmed_body_have_zero_side
         )
         .unwrap();
         let event = probe_runtime(&fixture.config).build_event(input);
-        let (outcome, bark) = record_probe_event_with_bark(&fixture.config, &db, event)
-            .await
-            .unwrap();
+        let (outcome, bark) =
+            record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event)
+                .await
+                .unwrap();
         assert!(!outcome.recorded && !outcome.duplicate);
         assert_eq!(bark.request_count, 0);
         assert_eq!(bark.reason.as_deref(), Some(reason));

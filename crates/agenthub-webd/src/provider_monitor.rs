@@ -1,14 +1,17 @@
 //! Shared by the Linux service and the desktop's port-free monitor helper.
-use super::{notification_delivery, ProbeBarkOutcome};
+use super::{
+    notification_delivery::{self, ConfigLoader},
+    ProbeBarkOutcome,
+};
 use agenthub_core::{
-    config::Config,
     db::PanelDb,
     native_probe::{self, NativeProvider, NativeScan},
 };
 use anyhow::Result;
 use std::time::Duration;
 
-pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
+pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
+    let config = &load_config()?;
     let idle_ttl = agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
     agenthub_core::evict_idle_detail_caches(idle_ttl);
     super::antigravity::evict_idle_cache(idle_ttl).await;
@@ -45,16 +48,20 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
                 && provider.enabled(config)
                 && super::claude_hook::installed(),
         )?;
-        snapshots.extend(scan.streams);
+        if provider == NativeProvider::Grok {
+            snapshots.extend(scan.streams);
+        }
     }
-    deliver_pending(config, db, &snapshots).await
+    deliver_pending(load_config, db, &snapshots, None).await
 }
 
 pub async fn run_provider_hook(
     config_path: &std::path::Path,
     provider: NativeProvider,
 ) -> Result<()> {
-    let config = Config::load_runtime(config_path)?;
+    let cache = super::monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
+    let config = load_config()?;
     if !provider.enabled(&config) {
         return Ok(());
     }
@@ -65,7 +72,7 @@ pub async fn run_provider_hook(
         errors: 1,
     });
     db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
-    deliver_pending(&config, &db, &scan.streams).await
+    deliver_pending(&load_config, &db, &scan.streams, Some(provider)).await
 }
 
 pub async fn run_antigravity_hook(
@@ -73,7 +80,9 @@ pub async fn run_antigravity_hook(
     conversation_id: Option<&str>,
 ) -> Result<()> {
     let provider = NativeProvider::Antigravity;
-    let config = Config::load_runtime(config_path)?;
+    let cache = super::monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
+    let config = load_config()?;
     if !provider.enabled(&config) {
         return Ok(());
     }
@@ -88,37 +97,40 @@ pub async fn run_antigravity_hook(
         errors: 1,
     });
     db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
-    deliver_pending(&config, &db, &scan.streams).await
+    deliver_pending(&load_config, &db, &scan.streams, Some(provider)).await
 }
 
 async fn deliver_pending(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     snapshots: &[native_probe::NativeStreamSnapshot],
+    provider: Option<NativeProvider>,
 ) -> Result<()> {
-    let deliveries = db.pending_native_deliveries(100)?;
+    let deliveries = db.pending_native_deliveries(100, provider)?;
     let instance = db.notification_instance_id()?;
     for delivery in deliveries {
+        let config = &load_config()?;
         // Identity and branch are resolved by each native parser. Codex's
         // main-task identity filter must never be applied to these providers.
         // Claude terminal events are re-read by the delivery queue immediately
         // before sending. Missing identity/terminal data must retain bounded retries.
-        let still_current = snapshots.iter().any(|stream| {
-            stream.provider == delivery.provider
-                && stream.session_key == delivery.session_key
-                && stream.id == delivery.thread_id
-                && stream.events.iter().any(|event| {
-                    (stream.event_key(&delivery.event) == delivery.event_key
-                        || event.prompt_id.as_deref().is_some_and(|p| {
-                            stream.prompt_event_key(
-                                p,
-                                native_probe::event_category(event),
-                                &instance,
-                            ) == delivery.event_key
-                        }))
-                        && native_probe::same_event(event, &delivery.event)
-                })
-        });
+        let still_current = delivery.provider != NativeProvider::Grok
+            || snapshots.iter().any(|stream| {
+                stream.provider == delivery.provider
+                    && stream.session_key == delivery.session_key
+                    && stream.id == delivery.thread_id
+                    && stream.events.iter().any(|event| {
+                        (stream.event_key(&delivery.event) == delivery.event_key
+                            || event.prompt_id.as_deref().is_some_and(|p| {
+                                stream.prompt_event_key(
+                                    p,
+                                    native_probe::event_category(event),
+                                    &instance,
+                                ) == delivery.event_key
+                            }))
+                            && native_probe::same_event(event, &delivery.event)
+                    })
+            });
         if !db.claim_native_delivery(&delivery.event_key)? {
             continue;
         }
@@ -126,11 +138,7 @@ async fn deliver_pending(
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let outcome = if (!still_current
-            && delivery.provider != NativeProvider::Claude
-            && !delivery.provider.local_only())
-            || !enabled
-        {
+        let outcome = if !still_current || !enabled {
             ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
                 config.probe.notifications.enabled,
@@ -138,7 +146,8 @@ async fn deliver_pending(
                 false,
             )
         } else {
-            notification_delivery::native(config, db, &delivery, Duration::from_secs(8)).await?
+            notification_delivery::native(load_config, db, &delivery, Duration::from_secs(8))
+                .await?
         };
         db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
     }
@@ -225,6 +234,54 @@ mod tests {
     use serde_json::Value;
 
     #[tokio::test]
+    async fn provider_hook_leaves_other_pending_notifications_and_bodies_intact() {
+        let (mut config, sandbox_root) = sandboxed_test_config();
+        config.probe.notifications.enabled = true;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
+            .unwrap();
+        let scan = NativeScan {
+            errors: 0,
+            streams: vec![NativeStreamSnapshot {
+                provider: NativeProvider::Grok,
+                session_key: "fixture-grok".into(),
+                id: "fixture-grok".into(),
+                title: "Fixture".into(),
+                identity: "fixture-file".into(),
+                record_count: 1,
+                settled_count: 1,
+                events: vec![NativeTurnEvent {
+                    prompt_id: None,
+                    position: 1,
+                    turn_id: "fixture-turn".into(),
+                    kind: "completion".into(),
+                    body: "Unrelated completion stays pending".into(),
+                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+                }],
+            }],
+        };
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+                .unwrap(),
+            1
+        );
+        let before =
+            serde_json::to_value(db.pending_native_deliveries(100, None).unwrap()).unwrap();
+        deliver_pending(
+            &|| Ok(config.clone()),
+            &db,
+            &[],
+            Some(NativeProvider::Antigravity),
+        )
+        .await
+        .unwrap();
+        let after = serde_json::to_value(db.pending_native_deliveries(100, None).unwrap()).unwrap();
+        assert_eq!(before, after);
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        std::fs::remove_dir_all(sandbox_root).unwrap();
+    }
+
+    #[tokio::test]
     async fn claude_candidate_without_a_readable_source_stays_in_the_bounded_queue() {
         let _env_guard = crate::api::test_support::AsyncEnvGuard::lock_read_only().await;
         let (mut config, sandbox_root) = sandboxed_test_config();
@@ -265,7 +322,9 @@ mod tests {
                 .unwrap(),
             0
         );
-        deliver_pending(&config, &db, &[]).await.unwrap();
+        deliver_pending(&|| Ok(config.clone()), &db, &[], None)
+            .await
+            .unwrap();
         let events = db.list_probe_events(10).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload["bark_status"], "queued");
@@ -275,7 +334,7 @@ mod tests {
         );
         db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
             .unwrap();
-        assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+        assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(sandbox_root);
     }
 
@@ -321,9 +380,14 @@ mod tests {
                 &config,
             )
             .unwrap();
-            deliver_pending(&config, &db, std::slice::from_ref(&stream))
-                .await
-                .unwrap();
+            deliver_pending(
+                &|| Ok(config.clone()),
+                &db,
+                std::slice::from_ref(&stream),
+                None,
+            )
+            .await
+            .unwrap();
             let request = server.request();
             let capture: Value =
                 serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -352,7 +416,9 @@ mod tests {
                 &config,
             )
             .unwrap();
-            deliver_pending(&config, &db, &[stream]).await.unwrap();
+            deliver_pending(&|| Ok(config.clone()), &db, &[stream], None)
+                .await
+                .unwrap();
             assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
             let _ = std::fs::remove_dir_all(sandbox_root);
         }
@@ -398,9 +464,14 @@ mod tests {
             &config,
         )
         .unwrap();
-        deliver_pending(&config, &db, std::slice::from_ref(&stream))
-            .await
-            .unwrap();
+        deliver_pending(
+            &|| Ok(config.clone()),
+            &db,
+            std::slice::from_ref(&stream),
+            None,
+        )
+        .await
+        .unwrap();
         assert!(server.request().contains("POST"));
         assert_eq!(
             db.list_probe_events(10).unwrap()[0].payload["bark_status"],
@@ -419,7 +490,9 @@ mod tests {
             &config,
         )
         .unwrap();
-        deliver_pending(&config, &db, &[]).await.unwrap();
+        deliver_pending(&|| Ok(config.clone()), &db, &[], None)
+            .await
+            .unwrap();
         let events = db.list_probe_events(10).unwrap();
         assert!(events
             .iter()
@@ -486,7 +559,7 @@ mod tests {
         .unwrap();
         let codex_event = crate::probe_runtime(&codex_config).build_event(codex_input);
         let (codex_outcome, _) =
-            crate::record_probe_event_with_bark(&codex_config, &db, codex_event)
+            crate::record_probe_event_with_bark(&|| Ok(codex_config.clone()), &db, codex_event)
                 .await
                 .unwrap();
         assert!(codex_outcome.recorded);
@@ -556,7 +629,7 @@ mod tests {
         db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
             .unwrap();
         crate::notification_delivery::claude_hook(
-            &config,
+            &|| Ok(config.clone()),
             &db,
             claude_hook_event,
             Duration::from_secs(3),
@@ -688,7 +761,9 @@ mod tests {
                 "provider {} must stage 1 completion notification",
                 provider.as_str()
             );
-            deliver_pending(&config, &db, &scan.streams).await.unwrap();
+            deliver_pending(&|| Ok(config.clone()), &db, &scan.streams, None)
+                .await
+                .unwrap();
         }
 
         let events = db.list_probe_events(20).unwrap();

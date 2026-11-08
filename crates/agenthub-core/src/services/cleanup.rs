@@ -17,14 +17,40 @@ pub const SCOPE_DSH_ARCHIVED: &str = "dsh_archived";
 pub const SCOPE_CLAUDE_EMPTY: &str = "claude_empty";
 pub const SCOPE_GROK_EMPTY: &str = "grok_empty";
 
-pub const ALL_UNIFIED_SCOPES: &[&str] = &[
-    SCOPE_CODEX_ARCHIVED,
-    SCOPE_CODEX_HIDDEN,
-    SCOPE_ANTIGRAVITY_ARCHIVED,
-    SCOPE_DSH_ARCHIVED,
-    SCOPE_CLAUDE_EMPTY,
-    SCOPE_GROK_EMPTY,
+#[derive(Clone, Copy)]
+enum CleanupScope {
+    CodexArchived,
+    CodexHidden,
+    AntigravityArchived,
+    DshArchived,
+    ClaudeEmpty,
+    GrokEmpty,
+}
+
+const ALL_UNIFIED_SCOPES: &[CleanupScope] = &[
+    CleanupScope::CodexArchived,
+    CleanupScope::CodexHidden,
+    CleanupScope::AntigravityArchived,
+    CleanupScope::DshArchived,
+    CleanupScope::ClaudeEmpty,
+    CleanupScope::GrokEmpty,
 ];
+impl CleanupScope {
+    fn meta(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::CodexArchived => (SCOPE_CODEX_ARCHIVED, "codex", "Codex 已归档线程"),
+            Self::CodexHidden => (SCOPE_CODEX_HIDDEN, "codex", "Codex 隐藏线程"),
+            Self::AntigravityArchived => (
+                SCOPE_ANTIGRAVITY_ARCHIVED,
+                "antigravity",
+                "Antigravity 已归档线程",
+            ),
+            Self::DshArchived => (SCOPE_DSH_ARCHIVED, "dsh", "DeepSeek Harness 已归档线程"),
+            Self::ClaudeEmpty => (SCOPE_CLAUDE_EMPTY, "claude", "Claude Code 空残余会话"),
+            Self::GrokEmpty => (SCOPE_GROK_EMPTY, "grok", "Grok Build 空残余会话"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UnifiedCleanupPaths {
@@ -46,10 +72,6 @@ impl UnifiedCleanupPaths {
         }
     }
 }
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnifiedCleanupDryRunRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,15 +153,12 @@ pub struct UnifiedCleanupResult {
     pub scopes: Vec<UnifiedCleanupScopeResult>,
 }
 fn scope_meta(scope: &str) -> Result<(&'static str, &'static str)> {
-    match scope {
-        SCOPE_CODEX_ARCHIVED => Ok(("codex", "Codex 已归档线程")),
-        SCOPE_CODEX_HIDDEN => Ok(("codex", "Codex 隐藏线程")),
-        SCOPE_ANTIGRAVITY_ARCHIVED => Ok(("antigravity", "Antigravity 已归档线程")),
-        SCOPE_DSH_ARCHIVED => Ok(("dsh", "DeepSeek Harness 已归档线程")),
-        SCOPE_CLAUDE_EMPTY => Ok(("claude", "Claude Code 空残余会话")),
-        SCOPE_GROK_EMPTY => Ok(("grok", "Grok Build 空残余会话")),
-        _ => anyhow::bail!("未知的清理范围: {scope}"),
-    }
+    ALL_UNIFIED_SCOPES
+        .iter()
+        .map(|scope| scope.meta())
+        .find(|(id, _, _)| *id == scope)
+        .map(|(_, provider, label)| (provider, label))
+        .ok_or_else(|| anyhow::anyhow!("未知的清理范围: {scope}"))
 }
 
 fn push_candidate(
@@ -171,9 +190,9 @@ fn push_candidate(
 fn dry_run_single_scope(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
-    scope: &str,
-) -> Result<UnifiedCleanupScopePlan> {
-    let (provider, label) = scope_meta(scope)?;
+    kind: CleanupScope,
+) -> UnifiedCleanupScopePlan {
+    let (scope, provider, label) = kind.meta();
     let mut out = UnifiedCleanupScopePlan {
         scope: scope.to_owned(),
         provider: provider.to_owned(),
@@ -187,8 +206,8 @@ fn dry_run_single_scope(
         candidates: Vec::new(),
         issues: Vec::new(),
     };
-    match scope {
-        SCOPE_CODEX_ARCHIVED => match archive::list_archived_threads(&paths.codex) {
+    match kind {
+        CleanupScope::CodexArchived => match archive::list_archived_threads(&paths.codex) {
             Ok(candidates) => {
                 let ids = candidates.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
                 let bytes_map =
@@ -207,15 +226,15 @@ fn dry_run_single_scope(
             }
             Err(err) => out.issues.push(err.to_string()),
         },
-        SCOPE_CODEX_HIDDEN => {
+        CleanupScope::CodexHidden => {
             out.scanned = false;
         }
-        SCOPE_ANTIGRAVITY_ARCHIVED => {
+        CleanupScope::AntigravityArchived => {
             if platform.kind != crate::platform::PlatformKind::Macos {
                 out.supported = false;
                 out.scanned = false;
                 out.unavailable_reason = Some("仅本机 macOS 支持 Antigravity 会话清理".into());
-                return Ok(out);
+                return out;
             }
             match crate::antigravity::sessions::list_sessions(
                 &paths.antigravity,
@@ -267,7 +286,7 @@ fn dry_run_single_scope(
                 Err(err) => out.issues.push(err.to_string()),
             }
         }
-        SCOPE_DSH_ARCHIVED => match crate::dsh::preview_with_bytes(&paths.dsh) {
+        CleanupScope::DshArchived => match crate::dsh::preview_with_bytes(&paths.dsh) {
             Ok((plan, sizes)) => {
                 out.issues = plan.issues;
                 for c in plan.candidates {
@@ -281,22 +300,24 @@ fn dry_run_single_scope(
             }
             Err(err) => out.issues.push(err.to_string()),
         },
-        SCOPE_CLAUDE_EMPTY => match crate::claude::find_empty_inactive_sessions(&paths.claude) {
-            Ok(items) => {
-                for (summary, fp, bytes) in items {
-                    push_candidate(
-                        &mut out,
-                        summary.session_key,
-                        summary.title,
-                        bytes,
-                        Some(fp),
-                        None,
-                    );
+        CleanupScope::ClaudeEmpty => {
+            match crate::claude::find_empty_inactive_sessions(&paths.claude) {
+                Ok(items) => {
+                    for (summary, fp, bytes) in items {
+                        push_candidate(
+                            &mut out,
+                            summary.session_key,
+                            summary.title,
+                            bytes,
+                            Some(fp),
+                            None,
+                        );
+                    }
                 }
+                Err(err) => out.issues.push(err.to_string()),
             }
-            Err(err) => out.issues.push(err.to_string()),
-        },
-        SCOPE_GROK_EMPTY => match crate::grok::find_empty_inactive_sessions(&paths.grok) {
+        }
+        CleanupScope::GrokEmpty => match crate::grok::find_empty_inactive_sessions(&paths.grok) {
             Ok(items) => {
                 for (summary, fp, bytes) in items {
                     push_candidate(&mut out, summary.id, summary.title, bytes, Some(fp), None);
@@ -304,20 +325,18 @@ fn dry_run_single_scope(
             }
             Err(err) => out.issues.push(err.to_string()),
         },
-        _ => anyhow::bail!("未知的清理范围: {scope}"),
     }
-    Ok(out)
+    out
 }
 
 pub fn dry_run_unified_with_capability(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
-    _request: UnifiedCleanupDryRunRequest,
 ) -> Result<UnifiedCleanupPlan> {
     require_capability(platform, Capability::ThreadCleanup)?;
     let mut plan = UnifiedCleanupPlan::default();
     for scope in ALL_UNIFIED_SCOPES {
-        let item = dry_run_single_scope(platform, paths, scope)?;
+        let item = dry_run_single_scope(platform, paths, *scope);
         plan.total_candidates += item.candidate_count;
         plan.total_deletable += item.deletable_count;
         plan.total_estimated_bytes = plan
@@ -475,7 +494,7 @@ fn execute_antigravity_archived_scope(
     stopped_early: &mut bool,
 ) -> Result<()> {
     let allowed_keys: std::collections::HashSet<String> =
-        crate::antigravity::sessions::list_sessions(
+        crate::antigravity::sessions::list_sessions_without_storage(
             antigravity,
             &crate::provider_sessions::ProviderListRequest {
                 archived: Some(true),
@@ -509,7 +528,8 @@ fn execute_antigravity_archived_scope(
                 "会话状态或指纹已变化，已跳过".into(),
             ));
         }
-        if !crate::antigravity::sessions::session_summary(antigravity, id)?.archived {
+        if !crate::antigravity::sessions::session_summary_without_storage(antigravity, id)?.archived
+        {
             return Ok(TargetStepOutcome::Skipped("会话已恢复为非归档状态".into()));
         }
         Ok(
@@ -676,7 +696,7 @@ pub fn execute_unified_with_capability(
 
     let ordered_scopes: Vec<&str> = ALL_UNIFIED_SCOPES
         .iter()
-        .copied()
+        .map(|scope| scope.meta().0)
         .filter(|&known| {
             if request.scopes.is_empty() {
                 targets_by_scope.contains_key(known)
@@ -903,12 +923,7 @@ mod tests {
         let macos = PlatformPaths::for_kind(PlatformKind::Macos);
 
         // Linux marks Antigravity scope unsupported; macOS marks it supported.
-        let linux_plan = super::dry_run_unified_with_capability(
-            &linux,
-            &paths,
-            super::UnifiedCleanupDryRunRequest::default(),
-        )
-        .unwrap();
+        let linux_plan = super::dry_run_unified_with_capability(&linux, &paths).unwrap();
         let ag_linux = linux_plan
             .scopes
             .iter()
@@ -916,12 +931,7 @@ mod tests {
             .unwrap();
         assert!(!ag_linux.supported);
 
-        let mac_plan = super::dry_run_unified_with_capability(
-            &macos,
-            &paths,
-            super::UnifiedCleanupDryRunRequest::default(),
-        )
-        .unwrap();
+        let mac_plan = super::dry_run_unified_with_capability(&macos, &paths).unwrap();
         assert_eq!(mac_plan.total_deletable, 2);
         let preview_targets: Vec<super::UnifiedCleanupTargetSelection> = mac_plan
             .scopes

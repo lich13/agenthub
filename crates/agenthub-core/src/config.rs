@@ -384,10 +384,6 @@ impl Config {
         Self::for_platform_paths_with_home(platform, &home, false)
     }
 
-    pub fn for_desktop_platform_kind(kind: PlatformKind) -> Self {
-        Self::for_desktop_platform_kind_with_home(kind, current_home_dir())
-    }
-
     pub fn for_desktop_platform_kind_with_home(
         kind: PlatformKind,
         home: impl Into<PathBuf>,
@@ -424,10 +420,6 @@ impl Config {
 
     pub fn current_default_config_path() -> PathBuf {
         PlatformPaths::current().config_file
-    }
-
-    pub fn current_desktop_config_path() -> PathBuf {
-        PlatformPaths::desktop_current().config_file
     }
 }
 

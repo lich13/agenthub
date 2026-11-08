@@ -157,10 +157,8 @@ assertContractRegistry(registry);
 export const contractRegistry = registry;
 
 export const contractHostSurfaces = contractRegistry.hostSurfaces;
-export const contractCapabilities = contractRegistry.capabilities;
 export const contractCapabilitiesByHostSurface = contractRegistry.capabilitiesByHostSurface;
 export const contractVisual = contractRegistry.visual;
 export const contractActions = contractRegistry.actions;
 export const contractDtoCatalog = contractRegistry.dtoCatalog;
 export const sharedContractActions = contractActions.filter((action) => action.scope === "shared");
-export const hostOnlyContractActions = contractActions.filter((action) => action.scope === "host_only");

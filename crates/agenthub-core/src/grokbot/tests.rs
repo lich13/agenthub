@@ -141,7 +141,7 @@ fn baseline_and_reloaded_cache_do_not_replay_requests() {
             .unwrap(),
         0
     );
-    assert_eq!(db.pending_native_deliveries(100).unwrap().len(), 1);
+    assert_eq!(db.pending_native_deliveries(100, None).unwrap().len(), 1);
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         .unwrap(),
         0
     );
-    assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+    assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
 }
 
 #[test]

@@ -25,7 +25,7 @@ use crate::{
     },
     services::sessions::{SessionBatchItem, SessionBatchItemResult, SessionOperation},
     session_delete::{self, Outcome},
-    session_storage::{self, SessionStorageSize, StorageScope},
+    session_storage,
 };
 
 const LOG_FILE_LIMIT: u64 = 128 * 1024 * 1024;
@@ -634,16 +634,12 @@ fn attach_storage_size(paths: &DshPaths, summary: &mut ProviderSessionSummary) {
         .path
         .parent()
         .expect("DSH log has a session directory");
-    summary.storage_size = Some(if dir.is_dir() {
-        session_storage::directory_size(
-            &paths.home,
-            dir,
-            Some(&summary.path),
-            &format!("dsh:{}", summary.id),
-        )
-    } else {
-        SessionStorageSize::unavailable(StorageScope::Directory)
-    });
+    summary.storage_size = Some(session_storage::directory_size(
+        &paths.home,
+        dir,
+        Some(&summary.path),
+        &format!("dsh:{}", summary.id),
+    ));
 }
 
 fn summary_with_storage(
@@ -713,9 +709,8 @@ pub(crate) fn probe_sessions(
         .filter(|s| candidate(s))
         .map(|s| s.id.as_str())
         .collect();
-    let scan = if count <= 10_000 {
+    let scan = if count <= 10_000 && !selected.is_empty() {
         super::notifications::scan_directories(&dirs, &archived, |id| selected.contains(id))
-            .unwrap_or_default()
     } else {
         crate::native_probe::NativeScan::default()
     };
@@ -755,10 +750,18 @@ fn find_root_session(paths: &DshPaths, id: &str) -> Result<DiscoveredSession> {
 }
 
 pub fn session_summary(paths: &DshPaths, id: &str) -> Result<ProviderSessionSummary> {
-    let reg = registry(paths)?;
-    let archived_set = reg.map(|r| r.archived).unwrap_or_default();
+    let mut summary = session_summary_without_storage(paths, id)?;
+    attach_storage_size(paths, &mut summary);
+    Ok(summary)
+}
+
+pub(crate) fn session_summary_without_storage(
+    paths: &DshPaths,
+    id: &str,
+) -> Result<ProviderSessionSummary> {
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
     let found = find_root_session(paths, id)?;
-    Ok(summary_with_storage(paths, &found, &archived_set))
+    Ok(build_summary(paths, &found, &archived))
 }
 
 fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
@@ -1106,7 +1109,7 @@ pub fn read_attachment(
 ) -> Result<crate::user_message::SessionAttachmentResponse> {
     let session = find_root_session(paths, &request.session_key)?;
     let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
-    let summary = summary_with_storage(paths, &session, &archived);
+    let summary = build_summary(paths, &session, &archived);
     let events = cached_events(paths, &session)?;
     let mut message = events
         .events

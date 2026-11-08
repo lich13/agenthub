@@ -94,8 +94,8 @@ pub struct LinuxUpdateJobSpec {
 impl LinuxUpdateJobSpec {
     pub fn process_command(&self) -> Result<crate::jobs::ProcessCommand> {
         match self.kind.as_str() {
-            "agenthub_update_check" => update::panel_process(true),
-            "agenthub_update_install" => update::panel_process(false),
+            "agenthub_update_check" => Ok(update::panel_process(true)),
+            "agenthub_update_install" => Ok(update::panel_process(false)),
             "agenthub_update_prune" => Ok(crate::jobs::ProcessCommand::new(
                 "python3",
                 ["-c", update::PANEL_PRUNE_SCRIPT],
@@ -193,12 +193,10 @@ pub fn update_job_plan_for_surface(
 }
 
 pub fn plan_update_action(
-    config: &Config,
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<UpdateActionPlan> {
     plan_update_action_for_surface(
-        config,
         platform,
         HostSurface::default_for_platform(platform),
         action,
@@ -206,7 +204,6 @@ pub fn plan_update_action(
 }
 
 pub fn plan_update_action_for_surface(
-    config: &Config,
     platform: &PlatformPaths,
     host_surface: HostSurface,
     action: UpdateAction,
@@ -216,9 +213,7 @@ pub fn plan_update_action_for_surface(
         update_action_capability_for_surface(platform.kind, host_surface, action);
     require_capability_for_surface(platform, host_surface, required_capability)?;
     let (linux_job, macos_job) = match job_plan.method {
-        UpdateExecutionMethod::LinuxSystemdJob => {
-            (Some(linux_update_job_spec(config, job_plan)?), None)
-        }
+        UpdateExecutionMethod::LinuxSystemdJob => (Some(linux_update_job_spec(job_plan)), None),
         UpdateExecutionMethod::MacosTauriUpdater => (None, Some(macos_updater_job_spec(action)?)),
         UpdateExecutionMethod::Unsupported => {
             anyhow::bail!("updates are unavailable on this platform")
@@ -252,9 +247,9 @@ pub fn macos_updater_no_update_output() -> &'static str {
     MACOS_UPDATER_NO_UPDATE_OUTPUT
 }
 
-pub fn linux_update_job_spec(_config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
+pub fn linux_update_job_spec(plan: UpdateJobPlan) -> LinuxUpdateJobSpec {
     let exclusive_group = plan.exclusive.then(|| "agenthub-webd-update".to_string());
-    let spec = match plan.action {
+    match plan.action {
         UpdateAction::Check => LinuxUpdateJobSpec {
             kind: "agenthub_update_check".to_string(),
             title: "AgentHub update precheck".to_string(),
@@ -273,8 +268,7 @@ pub fn linux_update_job_spec(_config: &Config, plan: UpdateJobPlan) -> Result<Li
             command: update::panel_prune_command(),
             exclusive_group,
         },
-    };
-    Ok(spec)
+    }
 }
 
 fn derive_macos_recent_check_status(
@@ -457,17 +451,13 @@ impl From<JobFailureCategory> for UpdateFailureCategory {
 #[cfg(test)]
 mod tests {
     use super::{plan_update_action, UpdateAction};
-    use crate::{
-        config::Config,
-        platform::{PlatformKind, PlatformPaths},
-    };
+    use crate::platform::{PlatformKind, PlatformPaths};
 
     #[test]
     fn linux_update_action_plan_includes_capability_and_job_spec() {
-        let config = Config::for_platform_kind(PlatformKind::Linux);
         let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-        let plan = plan_update_action(&config, &platform, UpdateAction::Install)
+        let plan = plan_update_action(&platform, UpdateAction::Install)
             .expect("Linux should allow update shell jobs");
 
         let job = plan
@@ -480,10 +470,9 @@ mod tests {
 
     #[test]
     fn macos_update_action_plan_uses_native_updater_and_rejects_prune() {
-        let config = Config::for_platform_kind(PlatformKind::Macos);
         let platform = PlatformPaths::for_kind(PlatformKind::Macos);
 
-        let plan = plan_update_action(&config, &platform, UpdateAction::Install)
+        let plan = plan_update_action(&platform, UpdateAction::Install)
             .expect("macOS should plan native updater installs");
 
         assert!(plan.linux_job.is_none());
@@ -496,7 +485,7 @@ mod tests {
             super::MACOS_UPDATER_CHECKING_OUTPUT
         );
 
-        let err = plan_update_action(&config, &platform, UpdateAction::Prune)
+        let err = plan_update_action(&platform, UpdateAction::Prune)
             .expect_err("macOS should not plan Linux backup pruning");
         let message = err.to_string();
         assert!(message.contains("prune_backups is unavailable on macos"));
@@ -508,10 +497,9 @@ mod tests {
 
     #[test]
     fn windows_update_actions_fail_before_any_host_specific_plan() {
-        let config = Config::for_platform_kind(PlatformKind::Windows);
         let platform = PlatformPaths::for_kind(PlatformKind::Windows);
 
-        let err = plan_update_action(&config, &platform, UpdateAction::Check)
+        let err = plan_update_action(&platform, UpdateAction::Check)
             .expect_err("Windows update check is not supported in this release");
         let message = err.to_string();
         assert!(message.contains("app_updater is unavailable on windows"));

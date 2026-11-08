@@ -158,14 +158,15 @@ pub fn prepare_event(
 
 #[cfg(test)]
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
-    run_with_threads(config, db, None).await
+    run_with_threads(&|| Ok(config.clone()), db, None).await
 }
 
 pub async fn run_with_threads(
-    config: &Config,
+    load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     preloaded_sorted: Option<&[ThreadSummary]>,
 ) -> Result<()> {
+    let config = &load_config()?;
     let Some(since) = db.notification_baseline("probe_async_question_baseline", enabled(config))?
     else {
         return Ok(());
@@ -211,7 +212,7 @@ pub async fn run_with_threads(
             if call.created_at_ms.is_some_and(|created| {
                 now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
             }) {
-                record_probe_event_with_bark(config, db, event).await?;
+                record_probe_event_with_bark(load_config, db, event).await?;
             }
         }
     }

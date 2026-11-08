@@ -307,6 +307,12 @@ fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
         .as_path()
         .join("sessions/project/fixture-1/session.v4.jsonl");
     fs::write(&unrelated, "broken\n").unwrap();
+    let (_, empty) = crate::dsh::sessions::probe_sessions(&paths, &request, |_| false).unwrap();
+    assert!(empty.streams.is_empty());
+    assert_eq!(empty.errors, 0);
+    let broken = scan_selected(&paths, Some("fixture-1")).unwrap();
+    assert!(broken.streams.is_empty());
+    assert_eq!(broken.errors, 1);
     let targeted = scan_selected(&paths, Some("fixture-0")).unwrap();
     assert_eq!(targeted.errors, 0);
     assert_eq!(targeted.streams.len(), 1);

@@ -4,7 +4,6 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "GithubCiAccount",
     "GithubCiRepository",
     "GithubCiRun",
-    "UnifiedCleanupDryRunRequest",
     "UnifiedCleanupCandidate",
     "UnifiedCleanupTargetSelection",
     "UnifiedCleanupScopePlan",

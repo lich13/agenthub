@@ -158,11 +158,7 @@ fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
     let serialized_save = serde_json::to_string(&settings_save).unwrap();
     assert!(!serialized_save.contains("top-level-bark-key"));
 
-    let bark = linux
-        .probe()
-        .unwrap()
-        .action(ProbeAction::BarkTest)
-        .unwrap();
+    let bark = linux.probe().action(ProbeAction::BarkTest).unwrap();
     assert_eq!(bark.job.kind, "probe_bark_test");
 
     let capabilities = linux.system().unwrap().capabilities();
@@ -175,11 +171,7 @@ fn config_backed_use_cases_report_missing_config_in_core() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let use_cases = AgentHubUseCases::new(&platform);
 
-    assert!(use_cases
-        .probe()
-        .unwrap()
-        .action(ProbeAction::BarkTest)
-        .is_ok());
+    assert!(use_cases.probe().action(ProbeAction::BarkTest).is_ok());
     for result in [
         use_cases.settings().map(|_| ()),
         use_cases.system().map(|_| ()),

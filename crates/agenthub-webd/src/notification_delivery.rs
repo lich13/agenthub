@@ -167,10 +167,11 @@ pub fn codex_key(event: &ProbeBuiltEvent) -> String {
 }
 
 pub async fn github_ci(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     event: agenthub_core::github_ci::Event,
 ) -> Result<()> {
+    let config = &latest_config(load_config)?;
     db.sync_notification_channels(config)?;
     let key = event.key();
     if !agenthub_core::github_ci::event_current(db, config, &event)? {
@@ -196,7 +197,7 @@ pub async fn github_ci(
         Utc::now().timestamp_millis(),
     )?;
     deliver(
-        config,
+        load_config,
         db,
         &key,
         NotificationChannel::Bark,
@@ -209,12 +210,13 @@ pub async fn github_ci(
 }
 
 pub async fn codex(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     event: &ProbeBuiltEvent,
     bark_allowed: bool,
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
+    let config = &latest_config(load_config)?;
     db.sync_notification_channels(config)?;
     let key = codex_key(event);
     let title = event
@@ -266,7 +268,7 @@ pub async fn codex(
         origin_ms,
     )?;
     let bark = deliver(
-        config,
+        load_config,
         db,
         &key,
         NotificationChannel::Bark,
@@ -279,11 +281,12 @@ pub async fn codex(
 }
 
 pub async fn native(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     delivery: &NativeDelivery,
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
+    let config = &latest_config(load_config)?;
     db.sync_notification_channels(config)?;
     let candidate = queued_candidate(
         config,
@@ -309,7 +312,7 @@ pub async fn native(
     )?;
     let key = format!("native:{}", delivery.event_key);
     let bark = deliver(
-        config,
+        load_config,
         db,
         &key,
         NotificationChannel::Bark,
@@ -404,11 +407,12 @@ fn claude_aliases(db: &PanelDb, candidate: &Candidate) -> Result<Vec<String>> {
 }
 
 pub(super) async fn claude_hook(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     hook: super::claude_hook::HookEvent,
     timeout: Duration,
 ) -> Result<()> {
+    let config = &latest_config(load_config)?;
     db.sync_notification_channels(config)?;
     if !native_probe::NativeProvider::Claude.enabled(config)
         || !native_probe::NativeProvider::Claude.event_enabled(config, &hook.kind)
@@ -456,18 +460,19 @@ pub(super) async fn claude_hook(
         event_ms,
         &serde_json::to_value(&candidate)?,
     )? {
-        process_claude_hook(config, db, &key, &candidate, timeout).await?;
+        process_claude_hook(load_config, db, &key, &candidate, timeout).await?;
     }
     Ok(())
 }
 
 async fn process_claude_hook(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     key: &str,
     candidate: &Candidate,
     timeout: Duration,
 ) -> Result<()> {
+    let config = &latest_config(load_config)?;
     let Source::ClaudeHook { hook, proof, .. } = &candidate.source else {
         return Ok(());
     };
@@ -556,17 +561,18 @@ async fn process_claude_hook(
         &canonical,
     );
     let kind = hook.kind.clone();
-    let candidate = queued_candidate(
-        config,
-        db,
-        Source::ClaudeHook {
+    let candidate = Candidate {
+        source: Source::ClaudeHook {
             hook,
             proof: Some(proof),
             verified: true,
         },
+        chunks: vec![request.body.clone()],
         request,
         event_ms,
-    )?;
+        instance_id: candidate.instance_id.clone(),
+        target_fingerprint: candidate.target_fingerprint.clone(),
+    };
     let aliases = claude_aliases(db, &candidate)?;
     let staged = if event_enabled(config, &candidate) {
         db.stage_notification_delivery_with_aliases(
@@ -594,7 +600,7 @@ async fn process_claude_hook(
             payload: json!({"provider":"claude_code","notification_event_key":canonical,"body_source":"claude_hook","body_summary":candidate.request.body,"bark_status":"queued"}),
         })?;
         process(
-            &|| Ok(config.clone()),
+            load_config,
             db,
             &canonical,
             NotificationChannel::Bark,
@@ -610,7 +616,7 @@ async fn process_claude_hook(
 }
 
 async fn deliver(
-    config: &Config,
+    load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     key: &str,
     channel: NotificationChannel,
@@ -618,6 +624,7 @@ async fn deliver(
     legacy_allowed: bool,
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
+    let config = &latest_config(load_config)?;
     let enabled = channel.enabled(config);
     if !enabled || !event_enabled(config, candidate) {
         return Ok(ProbeBarkOutcome::skipped(
@@ -649,19 +656,10 @@ async fn deliver(
             .filter(|v: &ProbeBarkOutcome| !v.sent && !v.skipped)
             .unwrap_or_else(|| ProbeBarkOutcome::skipped("dedupe", enabled, true, true)));
     }
-    process(
-        &|| Ok(config.clone()),
-        db,
-        key,
-        channel,
-        candidate,
-        timeout,
-        false,
-    )
-    .await
+    process(load_config, db, key, channel, candidate, timeout, false).await
 }
 
-type ConfigLoader<'a> = dyn Fn() -> Result<Config> + Sync + 'a;
+pub(super) type ConfigLoader<'a> = dyn Fn() -> Result<Config> + Sync + 'a;
 
 fn latest_config(load_config: &ConfigLoader<'_>) -> Result<Config> {
     // Do not expose configuration paths or values in monitor/job errors.
@@ -823,7 +821,9 @@ async fn process(
 
 /// Explicit user tests get a fresh identity and use the same durable queue.
 pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> {
-    let config = Config::load_runtime(config_path)?;
+    let cache = super::monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
+    let config = load_config()?;
     db.sync_notification_channels(&config)?;
     let key = format!("test:{}", uuid::Uuid::new_v4());
     let candidate = queued_candidate(
@@ -840,7 +840,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
         Utc::now().timestamp_millis(),
     )?;
     let mut outcome = deliver(
-        &config,
+        &load_config,
         db,
         &key,
         NotificationChannel::Bark,
@@ -859,7 +859,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
             println!("等待重试，已尝试 {} 次。", shown_attempt);
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        retry_pending_with_config(db, &|| Config::load_runtime(config_path)).await?;
+        retry_pending_with_config(db, &load_config).await?;
         if let Some(value) = db.notification_delivery_outcome(NotificationChannel::Bark, &key)? {
             outcome = serde_json::from_value(value)?;
         }
@@ -1162,7 +1162,7 @@ pub async fn retry_pending_with_config(db: &PanelDb, load_config: &ConfigLoader<
             }
         ) {
             process_claude_hook(
-                &latest_config(load_config)?,
+                load_config,
                 db,
                 &job.event_key,
                 &candidate,

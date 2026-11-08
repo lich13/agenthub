@@ -1,8 +1,6 @@
 import type { ProbeEvent, ProbeSettings } from "../types";
 
 export const PROBE_NAV_LABEL = "Probe";
-export const probeSections = [{ id: "settings", label: "通知配置" }] as const;
-export type ProbeSectionId = (typeof probeSections)[number]["id"];
 export type ProbeNumericDraftValue = number | "";
 
 export type ProbeSettingsDraft = {

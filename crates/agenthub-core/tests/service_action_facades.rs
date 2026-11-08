@@ -134,9 +134,8 @@ fn probe_action_capability_gate_rejects_unsupported_platforms() {
 
 #[test]
 fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune() {
-    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let check = plan_update_action(&linux_config, &linux, UpdateAction::Check).unwrap();
+    let check = plan_update_action(&linux, UpdateAction::Check).unwrap();
     assert_eq!(
         check.linux_job.as_ref().unwrap().kind,
         "agenthub_update_check"
@@ -145,23 +144,22 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
 
     let mac_home = temp_dir("agenthub-update-action-macos");
     std::fs::create_dir_all(&mac_home).unwrap();
-    let mac_config = Config::for_platform_kind_with_home(PlatformKind::Macos, &mac_home);
     let mac = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
 
-    let mac_check = plan_update_action(&mac_config, &mac, UpdateAction::Check).unwrap();
+    let mac_check = plan_update_action(&mac, UpdateAction::Check).unwrap();
     assert!(mac_check.linux_job.is_none());
     assert_eq!(
         mac_check.macos_job.as_ref().unwrap().kind,
         "agenthub_update_check"
     );
 
-    let mac_install = plan_update_action(&mac_config, &mac, UpdateAction::Install).unwrap();
+    let mac_install = plan_update_action(&mac, UpdateAction::Install).unwrap();
     assert_eq!(
         mac_install.macos_job.as_ref().unwrap().kind,
         "agenthub_update_install"
     );
 
-    let err = plan_update_action(&mac_config, &mac, UpdateAction::Prune)
+    let err = plan_update_action(&mac, UpdateAction::Prune)
         .expect_err("backup prune is a Linux-only update action");
     assert!(err
         .to_string()

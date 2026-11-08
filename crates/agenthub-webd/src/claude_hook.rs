@@ -1,8 +1,5 @@
 //! Local Claude hook ingestion. Persist first; the existing monitor owns retries.
-use agenthub_core::{
-    claude::{self, hooks, ClaudePaths},
-    config::Config,
-};
+use agenthub_core::claude::{self, hooks, ClaudePaths};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -122,7 +119,9 @@ pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationCont
 }
 
 pub(super) async fn run(config_path: &Path) -> Result<()> {
-    let config = Config::load_runtime(config_path)?;
+    let cache = super::monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
+    let config = load_config()?;
     let paths = ClaudePaths::default_for_user();
     ensure!(
         hooks::installed(&paths, &std::env::current_exe()?, config_path),
@@ -141,7 +140,7 @@ pub(super) async fn run(config_path: &Path) -> Result<()> {
     let Some(hook) = parse(&serde_json::from_slice(&bytes)?)? else {
         return Ok(());
     };
-    super::notification_delivery::claude_hook(&config, &db, hook, Duration::from_secs(3)).await
+    super::notification_delivery::claude_hook(&load_config, &db, hook, Duration::from_secs(3)).await
 }
 
 #[cfg(test)]

@@ -108,7 +108,7 @@ pub(crate) async fn start_update_action(
             UpdateAction::Check | UpdateAction::Install => Capability::LinuxUpdateJob,
         },
     )?;
-    let plan = linux_adapter::linux_update_action_plan(&state, &platform, action)?;
+    let plan = linux_adapter::linux_update_action_plan(&platform, action)?;
     let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
     ok(json!({"job_id": id}))
 }

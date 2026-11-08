@@ -205,14 +205,7 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         rpc_commands::PROBE_REMOVE_HOOKS => {
             start_probe_action(state, probe_service::ProbeAction::RemoveHooks).await
         }
-        rpc_commands::CLEANUP_UNIFIED_DRY_RUN => {
-            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
-                Default::default()
-            } else {
-                rpc_wrapped_payload(&args, &["request"])?
-            };
-            unified_cleanup_dry_run(state, request).await
-        }
+        rpc_commands::CLEANUP_UNIFIED_DRY_RUN => unified_cleanup_dry_run(state).await,
         rpc_commands::CLEANUP_UNIFIED_EXECUTE => {
             unified_cleanup_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
         }

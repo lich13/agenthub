@@ -14,7 +14,6 @@ import type {
   ThreadBlockPage,
   ThreadDetail,
   ThreadSummary,
-  UnifiedCleanupDryRunRequest,
   UnifiedCleanupExecuteRequest,
   UnifiedCleanupPlan,
   UnifiedCleanupResult,
@@ -402,8 +401,7 @@ export function demoHiddenThreadDeletePlan(request: import("../../types").Hidden
 }
 
 export function demoUnifiedCleanupPlan(
-  fixture: DemoFixtureKey = "macos-tauri",
-  _request?: UnifiedCleanupDryRunRequest
+  fixture: DemoFixtureKey = "macos-tauri"
 ): UnifiedCleanupPlan {
   const macos = fixture === "macos-tauri";
   const allScopes = [

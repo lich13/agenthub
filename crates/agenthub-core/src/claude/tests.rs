@@ -748,7 +748,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
             .unwrap(),
         1
     );
-    let pending = db.pending_native_deliveries(10).unwrap();
+    let pending = db.pending_native_deliveries(10, None).unwrap();
     assert_eq!(pending.len(), 1);
     assert!(db.claim_native_delivery(&pending[0].event_key).unwrap());
     db.finish_native_delivery(&pending[0], json!({"sent":true}))
@@ -760,7 +760,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
             .unwrap(),
         0
     );
-    assert!(db.pending_native_deliveries(10).unwrap().is_empty());
+    assert!(db.pending_native_deliveries(10, None).unwrap().is_empty());
     let mut failure = json!({"type":"result","sessionId":"native-fixture","subtype":"error_max_turns","is_error":true,"errors":["Terminal fixture failure"],"timestamp":user["timestamp"]});
     user["uuid"] = json!("failure-turn");
     user["parentUuid"] = json!("done");

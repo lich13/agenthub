@@ -22,10 +22,6 @@ pub struct JobFailureAnalysis {
     pub suggestions: Vec<String>,
 }
 
-pub fn default_panel_update_command() -> String {
-    PANEL_UPDATE_DEFAULT.to_string()
-}
-
 pub const PANEL_PRUNE_SCRIPT: &str = r#"from pathlib import Path
 import shutil
 
@@ -51,15 +47,15 @@ pub const PANEL_UPDATE_DEFAULT: &str =
 pub const PANEL_PRECHECK_DEFAULT: &str = "/usr/local/bin/agenthub-webd-update --precheck";
 
 /// Only the managed update command is executable.
-pub fn panel_process(precheck: bool) -> anyhow::Result<crate::jobs::ProcessCommand> {
-    Ok(crate::jobs::ProcessCommand::new(
+pub fn panel_process(precheck: bool) -> crate::jobs::ProcessCommand {
+    crate::jobs::ProcessCommand::new(
         "/usr/local/bin/agenthub-webd-update",
         if precheck {
             vec!["--precheck"]
         } else {
             vec!["--repo", "lich13/agenthub", "--version", "latest"]
         },
-    ))
+    )
 }
 
 pub fn analyze_job_failure(

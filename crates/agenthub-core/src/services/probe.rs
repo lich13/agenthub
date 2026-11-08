@@ -560,20 +560,6 @@ pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
     }
 }
 
-pub fn probe_threads_for_status(
-    config: &Config,
-    status: &str,
-    limit: usize,
-) -> Result<Vec<ThreadSummary>> {
-    let resolved = codex::resolve_codex_paths(&config.codex.home);
-    probe_threads_for_status_with_paths(
-        &resolved.codex_paths(),
-        &config.paths.db_path,
-        status,
-        limit,
-    )
-}
-
 pub fn probe_threads_for_status_with_paths(
     paths: &CodexPaths,
     panel_db_path: &Path,

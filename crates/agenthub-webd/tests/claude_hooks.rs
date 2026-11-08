@@ -402,7 +402,7 @@ fn installing_hooks_preserves_an_existing_successful_native_delivery() {
         &f.config,
     )
     .unwrap();
-    let delivery = f.db.pending_native_deliveries(10).unwrap().remove(0);
+    let delivery = f.db.pending_native_deliveries(10, None).unwrap().remove(0);
     assert!(f.db.claim_native_delivery(&delivery.event_key).unwrap());
     f.db.finish_native_delivery(
         &delivery,

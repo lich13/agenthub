@@ -12,7 +12,6 @@ import {
 } from "../api";
 import type {
   HiddenThreadDeletePlan,
-  UnifiedCleanupDryRunRequest,
   UnifiedCleanupPlan,
   UnifiedCleanupResult,
   UnifiedCleanupTargetSelection
@@ -110,11 +109,9 @@ export function useUnifiedCleanupActions(input: {
   return {
     stopHiddenScan: () => scan.current?.stop(),
     unifiedDryRun: useMutation({
-      mutationFn: (request?: UnifiedCleanupDryRunRequest) => {
+      mutationFn: () => {
         requireThreadCleanup();
-        return dryRunUnifiedCleanup(
-          request ?? {}
-        );
+        return dryRunUnifiedCleanup();
       },
       onSuccess: input.onUnifiedDryRun
     }),

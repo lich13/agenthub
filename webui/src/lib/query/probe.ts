@@ -13,8 +13,6 @@ import {
 } from "../api";
 import { useConnection } from "./connection";
 import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
-import type { RuntimeCapabilityMatrix } from "../api";
-import type { ProbeSectionId } from "../probeUi";
 import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
@@ -27,8 +25,7 @@ export const probeQueryKeys = {
   jobs: ["jobs"] as const
 };
 
-export function useProbeQueries({ section, historyOpen }: { section: ProbeSectionId; historyOpen: boolean }) {
-  const needsSettings = section === "settings";
+export function useProbeQueries({ historyOpen }: { historyOpen: boolean }) {
   return {
     status: useQuery({
       queryKey: probeQueryKeys.status,
@@ -40,14 +37,12 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
     settings: useQuery({
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
-      enabled: true,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
     }),
     events: useQuery({
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
-      enabled: section === "settings",
       refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
@@ -55,7 +50,7 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
     jobs: useQuery({
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
-      enabled: needsSettings && historyOpen,
+      enabled: historyOpen,
       refetchInterval: visiblePollInterval(5000),
       placeholderData: preservePreviousQueryData
     })
@@ -63,7 +58,6 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
 }
 
 export function useProbeActions(input: {
-  capabilities: RuntimeCapabilityMatrix;
   savePayload: (submittedDeviceKey?: string) => Partial<ProbeSettings>;
   onJobSuccess: (action: ProbeJobAction) => void;
   onJobError: (error: Error, action: ProbeJobAction) => void;

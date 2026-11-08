@@ -2,12 +2,13 @@
 use super::*;
 
 pub(super) async fn handle_hook_stop_command(
-    config: &Config,
+    load_config: &notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     thread_id: Option<String>,
     turn_id: Option<String>,
     kind: String,
 ) -> Result<HookStopResult> {
+    let config = &load_config()?;
     let stdin_payload = read_optional_stdin_json()?;
     let event_input = hook_stop_event_input(
         config,
@@ -17,7 +18,7 @@ pub(super) async fn handle_hook_stop_command(
         &kind,
     )?;
     let event = probe_runtime(config).build_event(event_input);
-    handle_built_probe_event(config, db, event).await
+    handle_built_probe_event(load_config, db, event).await
 }
 
 pub(super) async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
@@ -36,7 +37,9 @@ pub(super) async fn handle_hook_request_user_input_confirm_command(
     config_path: &Path,
 ) -> Result<()> {
     let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
-    let config = Config::load_runtime(config_path)?;
+    let cache = monitor_start::DaemonMonitorCache::default();
+    let load_config = || cache.load_config(config_path);
+    let config = load_config()?;
     validate_hook_request_user_input_envelope(&stdin_payload)?;
     if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
         return Ok(());
@@ -64,8 +67,13 @@ pub(super) async fn handle_hook_request_user_input_confirm_command(
         .with_body_selection_diagnostics(diagnostics);
     let db = open_panel_db(&config)?;
     let event = probe_runtime(&config).build_event(event_input);
-    record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
-        .await?;
+    record_probe_event_with_bark_timeout(
+        &load_config,
+        &db,
+        event,
+        std::time::Duration::from_secs(3),
+    )
+    .await?;
     Ok(())
 }
 

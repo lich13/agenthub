@@ -125,14 +125,15 @@ pub fn prepare_event(
 /// Store fingerprints, not reply bodies, in the existing settings store.
 #[cfg(test)]
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
-    run_with_threads(config, db, None).await
+    run_with_threads(&|| Ok(config.clone()), db, None).await
 }
 
 pub async fn run_with_threads(
-    config: &Config,
+    load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     preloaded_sorted: Option<&[codex::ThreadSummary]>,
 ) -> Result<()> {
+    let config = &load_config()?;
     let Some(since) = db.feedback_notification_baseline(enabled(config))? else {
         return Ok(());
     };
@@ -198,7 +199,7 @@ pub async fn run_with_threads(
         if feedback.completed_at_ms <= since || !is_fresh(feedback.completed_at_ms) {
             continue;
         }
-        record_probe_event_with_bark(config, db, event).await?;
+        record_probe_event_with_bark(load_config, db, event).await?;
     }
     if next != previous {
         db.set_setting("probe_feedback_files", &serde_json::to_string(&next)?)?;

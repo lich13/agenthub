@@ -182,7 +182,7 @@ pub fn plan_threads_list_request(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let fetch_limit = thread_list_fetch_limit(query.limit);
+    let fetch_limit = requested_thread_limit(query.limit);
     Ok(ThreadListPlan { query, fetch_limit })
 }
 
@@ -243,7 +243,7 @@ pub fn apply_thread_list_runtime_state(
     threads: Vec<ThreadSummary>,
     runtime: ThreadListRuntimeState<'_>,
 ) -> Vec<ThreadSummary> {
-    let mut threads = prune_hidden_thread_summaries(threads, runtime.hidden_thread_ids);
+    let mut threads = threads;
     merge_running_jobs(
         &mut threads,
         runtime.running_jobs,
@@ -281,13 +281,19 @@ pub fn merge_running_jobs(
     }
 
     for thread in threads.iter_mut() {
-        if let Some(job) = by_thread.get(thread.id.as_str()) {
+        if let Some(job) = by_thread.remove(thread.id.as_str()) {
             apply_running_job_to_summary(thread, job);
         }
     }
 
     for job in by_thread.values() {
-        apply_running_job_to_thread_list(threads, job, archived_thread_ids);
+        if job
+            .thread_id
+            .as_ref()
+            .is_some_and(|id| !archived_thread_ids.contains(id))
+        {
+            threads.push(thread_summary_from_running_job(job));
+        }
     }
 }
 
@@ -303,10 +309,6 @@ pub fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord
     if summary.latest_message.is_none() {
         summary.latest_message = Some(job.title.clone());
     }
-}
-
-pub fn thread_list_fetch_limit(limit: Option<usize>) -> usize {
-    requested_thread_limit(limit)
 }
 
 pub fn filter_thread_summaries(
@@ -365,24 +367,6 @@ pub fn normalize_thread_block_limit(limit: Option<usize>) -> usize {
     limit
         .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
         .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
-}
-
-fn apply_running_job_to_thread_list(
-    threads: &mut Vec<ThreadSummary>,
-    job: &JobRecord,
-    archived_thread_ids: &HashSet<String>,
-) {
-    let Some(thread_id) = job.thread_id.as_deref() else {
-        return;
-    };
-    if archived_thread_ids.contains(thread_id) {
-        return;
-    }
-    if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
-        apply_running_job_to_summary(thread, job);
-        return;
-    }
-    threads.push(thread_summary_from_running_job(job));
 }
 
 fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
@@ -444,7 +428,7 @@ mod tests {
         services::threads::{
             apply_thread_detail_runtime_state, build_threads_overview, filter_thread_summaries,
             merge_running_jobs, plan_thread_blocks_request, plan_thread_detail_request,
-            plan_threads_list_request, thread_list_fetch_limit, ThreadsQuery,
+            plan_threads_list_request, requested_thread_limit, ThreadsQuery,
         },
     };
 
@@ -587,8 +571,8 @@ mod tests {
 
     #[test]
     fn fetch_limit_clamps_to_requested_page_size() {
-        assert_eq!(thread_list_fetch_limit(Some(25)), 25);
-        assert_eq!(thread_list_fetch_limit(None), 80);
+        assert_eq!(requested_thread_limit(Some(25)), 25);
+        assert_eq!(requested_thread_limit(None), 80);
     }
 
     #[test]

@@ -2,7 +2,6 @@ import type {
   HiddenThreadDeletePlan,
   JobRecord,
   OptionalResult,
-  UnifiedCleanupDryRunRequest,
   UnifiedCleanupExecuteRequest,
   UnifiedCleanupPlan,
   UnifiedCleanupResult
@@ -33,9 +32,9 @@ export async function getJob(id: string, includeOutput = true): Promise<JobRecor
   return callCommand<JobRecord>("jobs.detail", { id, includeOutput });
 }
 
-export async function dryRunUnifiedCleanup(request: UnifiedCleanupDryRunRequest): Promise<UnifiedCleanupPlan> {
-  if (USE_DEMO) return (await import("./demo")).demoUnifiedCleanupPlan(undefined, request);
-  return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun", { request });
+export async function dryRunUnifiedCleanup(): Promise<UnifiedCleanupPlan> {
+  if (USE_DEMO) return (await import("./demo")).demoUnifiedCleanupPlan();
+  return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun");
 }
 
 export async function startUnifiedCleanup(request: UnifiedCleanupExecuteRequest): Promise<UnifiedCleanupResult> {

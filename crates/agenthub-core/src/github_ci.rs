@@ -277,13 +277,11 @@ impl Monitor {
         let baseline_before = state.baseline_ms;
         let enabled_before = state.snapshot.enabled;
         let before = serde_json::to_string(&state)?;
+        self.active = Some(active);
         if !active {
             state.snapshot.enabled = false;
             state.baseline_ms = 0;
             state.pending.clear();
-        }
-        self.active = Some(active);
-        if !active {
             state.request_ms = request;
             self.request_ms = request;
             if serde_json::to_string(&state)? != before {

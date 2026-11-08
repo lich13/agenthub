@@ -1,5 +1,4 @@
 use crate::overview::DesktopState;
-use agenthub_core::config::Config;
 use agenthub_core::platform::PlatformPaths;
 use agenthub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
 use anyhow::Result;
@@ -51,9 +50,8 @@ pub(crate) async fn check_update_status(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
-    let job =
-        native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Check)
-            .map_err(|err| err.to_string())?;
+    let job = native_update_job_plan_for_action(state.platform(), UpdateAction::Check)
+        .map_err(|err| err.to_string())?;
     let job_id = start_update_job(&state, &job).map_err(|err| err.to_string())?;
 
     match check_update(&app, &state, &job_id).await {
@@ -69,9 +67,8 @@ pub(crate) async fn install_update_and_restart(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {
-    let job =
-        native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Install)
-            .map_err(|err| err.to_string())?;
+    let job = native_update_job_plan_for_action(state.platform(), UpdateAction::Install)
+        .map_err(|err| err.to_string())?;
     let job_id = start_update_job(&state, &job).map_err(|err| err.to_string())?;
 
     match install_update(&app, &state, &job_id).await {
@@ -115,12 +112,10 @@ fn finish_update_error(state: &DesktopState, job_id: &str, err: anyhow::Error) -
 }
 
 fn native_update_job_plan_for_action(
-    config: &Config,
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<updates::MacosUpdaterJobSpec> {
     let plan = updates::plan_update_action_for_surface(
-        config,
         platform,
         agenthub_core::services::system::HostSurface::DesktopEmbeddedTauri,
         action,
@@ -213,23 +208,20 @@ mod tests {
 
     #[test]
     fn native_update_commands_are_validated_against_core_plan() {
-        let config = Config::for_platform_kind(PlatformKind::Macos);
         let platform = PlatformPaths::for_kind(PlatformKind::Macos);
 
-        let check =
-            native_update_job_plan_for_action(&config, &platform, UpdateAction::Check).unwrap();
+        let check = native_update_job_plan_for_action(&platform, UpdateAction::Check).unwrap();
         assert_eq!(check.kind, "agenthub_update_check");
         assert!(update_job_id(&check).starts_with("desktop-update-check-"));
 
-        let install =
-            native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
+        let install = native_update_job_plan_for_action(&platform, UpdateAction::Install).unwrap();
         assert_eq!(install.kind, "agenthub_update_install");
         assert!(update_job_id(&install).starts_with("desktop-update-install-"));
     }
 
     #[test]
     fn recent_check_job_output_keeps_no_update_status_explicit() {
-        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let config = agenthub_core::config::Config::for_platform_kind(PlatformKind::Macos);
         let platform = PlatformPaths::for_kind(PlatformKind::Macos);
         let job = job_record(
             "succeeded",

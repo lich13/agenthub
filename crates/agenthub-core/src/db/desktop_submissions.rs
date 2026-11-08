@@ -76,11 +76,6 @@ impl DesktopLedger {
     }
 
     #[cfg(unix)]
-    pub fn acquire_worker(&self) -> Result<DesktopWorkerLease> {
-        Self::lock_database(&self.db)
-    }
-
-    #[cfg(unix)]
     pub fn lock_database(db: &PanelDb) -> Result<DesktopWorkerLease> {
         use std::os::{
             fd::AsRawFd,

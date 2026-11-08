@@ -633,7 +633,6 @@ export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
 export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean; configPath?: string };
 
-export type UnifiedCleanupDryRunRequest = Record<string, never>;
 export type UnifiedCleanupCandidate = {
   id: string;
   title: string;

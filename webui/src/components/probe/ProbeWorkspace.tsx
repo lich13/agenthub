@@ -38,7 +38,7 @@ import {
 
 export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { status, settings, events, jobs } = useProbeQueries({ section: "settings", historyOpen });
+  const { status, settings, events, jobs } = useProbeQueries({ historyOpen });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const submittedDraft = useRef<ProbeSettingsDraft | null>(null);
   const saveInFlight = useRef(false);
@@ -62,7 +62,6 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
     draftDeviceKeyConfigured: draft?.notifications.device_key_configured,
   });
   const probeActions = useProbeActions({
-    capabilities,
     savePayload: submittedDeviceKey => {
       if (!draft) throw new Error("探针设置尚未载入");
       const errors = probeSettingsValidation(draft);

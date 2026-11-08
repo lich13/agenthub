@@ -83,9 +83,8 @@ pub async fn claudeHooks(
     let state = state.inner().clone();
     let provider = provider.unwrap_or_default();
     agenthub_core::read_tasks::spawn_blocking(move || {
-        let config = state.config();
-        agenthub_core::services::use_cases::AgentHubUseCases::with_config(&config, state.platform())
-            .probe()?
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+            .probe()
             .provider_hooks(provider, request)
     })
     .await
@@ -96,7 +95,6 @@ pub async fn claudeHooks(
 #[tauri::command(rename = "cleanup.unifiedDryRun")]
 pub async fn dryRunUnifiedCleanup(
     state: tauri::State<'_, DesktopState>,
-    request: Option<agenthub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
 ) -> Result<agenthub_core::services::cleanup::UnifiedCleanupPlan, String> {
     let state = state.inner().clone();
     agenthub_core::read_tasks::spawn_blocking(move || {
@@ -105,7 +103,7 @@ pub async fn dryRunUnifiedCleanup(
         );
         agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
             .cleanup()
-            .unified_dry_run(&paths, request.unwrap_or_default())
+            .unified_dry_run(&paths)
             .map_err(|err| err.to_string())
     })
     .await

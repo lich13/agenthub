@@ -576,16 +576,16 @@ pub fn scan_selected(paths: &DshPaths, selected: Option<&str>) -> Result<NativeS
     let (dirs, count) = session_directories(paths)?;
     ensure!(count <= 10_000, "DSH source inventory exceeds limit");
     let archived = index.map(|r| r.archived).unwrap_or_default();
-    scan_directories(&dirs, &archived, |id| {
+    Ok(scan_directories(&dirs, &archived, |id| {
         selected.is_none_or(|selected| selected == id)
-    })
+    }))
 }
 
 pub(super) fn scan_directories(
     dirs: &[SessionDirectory],
     archived: &BTreeSet<String>,
     selected: impl Fn(&str) -> bool,
-) -> Result<NativeScan> {
+) -> NativeScan {
     let mut scan = NativeScan::default();
     let mut ids = BTreeSet::new();
     let mut duplicates = BTreeSet::new();
@@ -616,7 +616,7 @@ pub(super) fn scan_directories(
         }
     }
     scan.streams.retain(|s| !duplicates.contains(&s.id));
-    Ok(scan)
+    scan
 }
 
 #[cfg(test)]

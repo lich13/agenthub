@@ -256,9 +256,11 @@ impl SessionUseCases {
         };
         let summary = match provider {
             SessionProvider::Grokbot => None,
-            SessionProvider::Claude => crate::claude::claude_session_summary(&self.claude, key)
-                .ok()
-                .map(|s| (s.id, s.title, vec![s.path])),
+            SessionProvider::Claude => {
+                crate::claude::claude_session_summary_without_storage(&self.claude, key)
+                    .ok()
+                    .map(|s| (s.id, s.title, vec![s.path]))
+            }
             SessionProvider::Codex => codex::local_thread_summary(&self.codex, key)
                 .ok()
                 .flatten()
@@ -277,13 +279,18 @@ impl SessionUseCases {
                 .ok()
                 .map(|s| (s.id, s.title, vec![s.path])),
             SessionProvider::Antigravity => {
-                crate::antigravity::sessions::session_summary(&self.antigravity, key)
+                crate::antigravity::sessions::session_summary_without_storage(
+                    &self.antigravity,
+                    key,
+                )
+                .ok()
+                .map(|s| (s.id, s.title, vec![s.path]))
+            }
+            SessionProvider::Dsh => {
+                crate::dsh::sessions::session_summary_without_storage(&self.dsh, key)
                     .ok()
                     .map(|s| (s.id, s.title, vec![s.path]))
             }
-            SessionProvider::Dsh => crate::dsh::sessions::session_summary(&self.dsh, key)
-                .ok()
-                .map(|s| (s.id, s.title, vec![s.path])),
         };
         if let Some((id, title, paths)) = summary {
             item.id = id;

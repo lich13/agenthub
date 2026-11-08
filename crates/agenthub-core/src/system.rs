@@ -22,10 +22,6 @@ pub struct VersionInfoInputs {
     pub codex_latest: Option<String>,
 }
 
-pub async fn version_info() -> Result<VersionInfo> {
-    version_info_with_inputs(VersionInfoInputs::default()).await
-}
-
 pub async fn version_info_with_inputs(inputs: VersionInfoInputs) -> Result<VersionInfo> {
     let latest = inputs.panel_latest.and_then(non_empty_string);
     let current = env!("CARGO_PKG_VERSION").to_string();

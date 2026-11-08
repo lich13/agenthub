@@ -135,8 +135,9 @@ async fn ongoing_question_is_delivered_once_across_hook_monitor_restart_and_ttl(
     fixture.append(json!({"type":"response_item","payload":{"type":"function_call","name":"exec","call_id":"work","arguments":"{}"}}));
     let event = fixture.event("call-a");
     let key = delivery_key(&event).unwrap();
+    let load_config = || Ok(fixture.config.clone());
     let (hook, monitor) = tokio::join!(
-        record_probe_event_with_bark(&fixture.config, &fixture.db, event.clone()),
+        record_probe_event_with_bark(&load_config, &fixture.db, event.clone()),
         run(&fixture.config, &fixture.db)
     );
     hook.unwrap();
@@ -206,9 +207,10 @@ async fn first_enable_baselines_old_calls_and_rechecks_answers_before_sending() 
     let stale = fixture.event("new-call");
     fixture.answer("new-call", 0);
     fixture.answer("new-call", 1);
-    let (_, outcome) = record_probe_event_with_bark(&fixture.config, &fixture.db, stale)
-        .await
-        .unwrap();
+    let (_, outcome) =
+        record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &fixture.db, stale)
+            .await
+            .unwrap();
     assert_eq!(outcome.reason.as_deref(), Some("question_already_resolved"));
     run(&fixture.config, &fixture.db).await.unwrap();
     assert!(fixture.requests.lock().unwrap().is_empty());
@@ -226,9 +228,10 @@ async fn incomplete_tail_and_changed_native_identity_never_deliver() {
         .unwrap()
         .write_all(b"{\"type\":")
         .unwrap();
-    let (_, outcome) = record_probe_event_with_bark(&fixture.config, &fixture.db, stale.clone())
-        .await
-        .unwrap();
+    let (_, outcome) =
+        record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &fixture.db, stale.clone())
+            .await
+            .unwrap();
     assert_eq!(
         outcome.reason.as_deref(),
         Some("unconfirmed_question_transcript")
@@ -242,9 +245,10 @@ async fn incomplete_tail_and_changed_native_identity_never_deliver() {
             .replace("\"id\":\"main\"", "\"id\":\"other\""),
     )
     .unwrap();
-    let (_, outcome) = record_probe_event_with_bark(&fixture.config, &fixture.db, stale)
-        .await
-        .unwrap();
+    let (_, outcome) =
+        record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &fixture.db, stale)
+            .await
+            .unwrap();
     assert_eq!(
         outcome.reason.as_deref(),
         Some("question_transcript_identity_mismatch")

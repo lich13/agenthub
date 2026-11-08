@@ -513,15 +513,22 @@ fn attach_storage_size(paths: &ClaudePaths, summary: &mut ClaudeSessionSummary) 
     summary.storage_size = Some(size);
 }
 pub fn claude_session_summary(paths: &ClaudePaths, key: &str) -> Result<ClaudeSessionSummary> {
+    let mut summary = claude_session_summary_without_storage(paths, key)?;
+    attach_storage_size(paths, &mut summary);
+    Ok(summary)
+}
+
+pub(crate) fn claude_session_summary_without_storage(
+    paths: &ClaudePaths,
+    key: &str,
+) -> Result<ClaudeSessionSummary> {
     let (path, parsed) = resolve(paths, key)?;
-    let mut summary = summary(
+    summary(
         paths,
         &path,
         &parsed,
         &activity::Snapshot::capture_readonly(paths),
-    )?;
-    attach_storage_size(paths, &mut summary);
-    Ok(summary)
+    )
 }
 pub fn claude_session_detail(
     paths: &ClaudePaths,

@@ -242,7 +242,7 @@ fn built_cli_delivers_four_categories_once_and_preserves_claims_after_restart() 
         .iter()
         .all(|r| r["title"].as_str().unwrap().contains("DSH")));
     drop(bodies);
-    assert!(f.db.pending_native_deliveries(20).unwrap().is_empty());
+    assert!(f.db.pending_native_deliveries(20, None).unwrap().is_empty());
     Connection::open(f.db.path()).unwrap().execute(
         "UPDATE native_probe_providers SET scanned_at='fixture-before-restart' WHERE provider='dsh'", [],
     ).unwrap();

@@ -192,6 +192,18 @@ async fn request_rpc_status(
 }
 
 #[tokio::test]
+async fn unified_cleanup_preview_accepts_no_arguments_and_legacy_empty_request() {
+    let state = rpc_test_state();
+    let without_args = request_rpc_json(state.clone(), "cleanup.unifiedDryRun", "{}").await;
+    let legacy =
+        request_rpc_json(state.clone(), "cleanup.unifiedDryRun", r#"{"request":{}}"#).await;
+    let omitted = request_rpc_json(state, "cleanup.unifiedDryRun", "null").await;
+    assert_eq!(without_args, legacy);
+    assert_eq!(without_args, omitted);
+    assert_eq!(without_args["scopes"].as_array().unwrap().len(), 6);
+}
+
+#[tokio::test]
 async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     let (mut state, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
@@ -449,18 +461,14 @@ async fn panel_update_starts_fixed_panel_jobs() {
 
 #[test]
 fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-    let precheck = update_service::linux_update_job_spec(
-        &config,
-        update_service::update_job_plan_for_surface(
+    let precheck =
+        update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
             &platform,
             agenthub_core::services::system::HostSurface::LinuxServerApi,
             UpdateAction::Check,
-        ),
-    )
-    .unwrap();
+        ));
     assert_eq!(precheck.kind, "agenthub_update_check");
     assert_eq!(
         precheck.command,
@@ -471,15 +479,12 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
         ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"])
     );
 
-    let install = update_service::linux_update_job_spec(
-        &config,
-        update_service::update_job_plan_for_surface(
+    let install =
+        update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
             &platform,
             agenthub_core::services::system::HostSurface::LinuxServerApi,
             UpdateAction::Install,
-        ),
-    )
-    .unwrap();
+        ));
     assert_eq!(install.kind, "agenthub_update_install");
     assert_eq!(
         install.command,
@@ -493,15 +498,11 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
         )
     );
 
-    let prune = update_service::linux_update_job_spec(
-        &config,
-        update_service::update_job_plan_for_surface(
-            &platform,
-            agenthub_core::services::system::HostSurface::LinuxServerApi,
-            UpdateAction::Prune,
-        ),
-    )
-    .unwrap();
+    let prune = update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
+        &platform,
+        agenthub_core::services::system::HostSurface::LinuxServerApi,
+        UpdateAction::Prune,
+    ));
     assert_eq!(prune.kind, "agenthub_update_prune");
     assert!(prune.command.contains("release update backups"));
 }
@@ -1106,9 +1107,22 @@ fn filter_thread_summaries_separates_active_and_archived_lists() {
 }
 
 #[test]
-fn thread_list_fetch_limit_clamps_requested_page_size() {
-    assert_eq!(thread_service::thread_list_fetch_limit(Some(120)), 120);
-    assert_eq!(thread_service::thread_list_fetch_limit(None), 80);
+fn thread_list_plan_clamps_requested_page_size() {
+    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    for (limit, expected) in [(Some(120), 120), (None, 80), (Some(0), 1), (Some(900), 500)] {
+        assert_eq!(
+            thread_service::plan_threads_list_request(
+                &platform,
+                thread_service::ThreadsQuery {
+                    limit,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .fetch_limit,
+            expected
+        );
+    }
 }
 
 #[test]

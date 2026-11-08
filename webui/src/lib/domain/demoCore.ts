@@ -96,11 +96,3 @@ export function buildDemoPlatformOverview(fixture: DemoFixtureKey): PlatformOver
 export function buildDemoSystemCapabilities(fixture: DemoFixtureKey): SystemCapabilitiesResponse {
   return buildDemoFixture(fixture).system;
 }
-
-const demoRemoteFixture = buildDemoFixture("linux-api");
-const demoDesktopFixture = buildDemoFixture("macos-tauri");
-
-export const demoRemotePlatformOverview: PlatformOverview = demoRemoteFixture.platform;
-export const demoDesktopPlatformOverview: PlatformOverview = demoDesktopFixture.platform;
-export const demoRemoteSystemCapabilities: SystemCapabilitiesResponse = demoRemoteFixture.system;
-export const demoDesktopSystemCapabilities: SystemCapabilitiesResponse = demoDesktopFixture.system;

@@ -1189,13 +1189,20 @@ pub(crate) fn list_sessions_without_storage(
 }
 
 pub fn session_summary(paths: &AntigravityPaths, key: &str) -> Result<ProviderSessionSummary> {
-    valid_cascade_id(key)?;
-    let mut summary = list_summaries_filtered(paths, Some(key))?
-        .into_iter()
-        .next()
-        .with_context(|| format!("未找到 Antigravity 会话：{key}"))?;
+    let mut summary = session_summary_without_storage(paths, key)?;
     attach_storage_size(paths, &mut summary);
     Ok(summary)
+}
+
+pub(crate) fn session_summary_without_storage(
+    paths: &AntigravityPaths,
+    key: &str,
+) -> Result<ProviderSessionSummary> {
+    valid_cascade_id(key)?;
+    list_summaries_filtered(paths, Some(key))?
+        .into_iter()
+        .next()
+        .with_context(|| format!("未找到 Antigravity 会话：{key}"))
 }
 
 fn map_cortex_status(status: &str) -> &'static str {
@@ -2444,7 +2451,7 @@ pub fn preview_batch_item(
     operation: SessionOperation,
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
-    let summary = session_summary(paths, key)?;
+    let summary = session_summary_without_storage(paths, key)?;
     let (live_rpc, all_live) = match connect_endpoint(paths)? {
         Some((rpc, live)) => (
             Some(rpc),

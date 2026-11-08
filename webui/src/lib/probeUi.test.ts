@@ -8,7 +8,6 @@ import {
   PROBE_NAV_LABEL,
   probeEventCard,
   probeNumberInputDraftValue,
-  probeSections,
   probeSettingsValidation,
 } from "./probeUi";
 
@@ -59,10 +58,8 @@ const settings: ProbeSettings = {
 };
 
 describe("Probe UI helpers", () => {
-  test("uses Chinese probe labels and a single unified settings section without redundant sub-tabs", () => {
+  test("keeps the Probe navigation label", () => {
     expect(PROBE_NAV_LABEL).toBe("Probe");
-    expect(probeSections.map((section) => section.id)).toEqual(["settings"]);
-    expect(probeSections.map((section) => section.label)).toEqual(["通知配置"]);
   });
 
   test("builds readable event display details without exposing secret payload values", () => {

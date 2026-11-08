@@ -8,8 +8,8 @@ use crate::{
     services::{
         cleanup,
         jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
-        probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
-        settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
+        probe::ProbeUseCases,
+        settings::SettingsUseCases,
         system::{self, Capability, HostSurface, SystemCapabilities},
         threads::{self, ThreadDetailPlan, ThreadDetailRequest, ThreadListPlan, ThreadsQuery},
     },
@@ -150,14 +150,14 @@ impl<'a> AgentHubUseCases<'a> {
     }
 
     pub fn settings(self) -> Result<SettingsUseCases<'a>> {
-        Ok(CoreSettingsUseCases::new(
+        Ok(SettingsUseCases::new(
             self.config_required()?,
             self.platform,
         ))
     }
 
-    pub fn probe(self) -> Result<ProbeUseCases<'a>> {
-        Ok(CoreProbeUseCases::new(self.platform))
+    pub fn probe(self) -> ProbeUseCases<'a> {
+        ProbeUseCases::new(self.platform)
     }
 
     pub fn system(self) -> Result<SystemUseCases<'a>> {
@@ -286,9 +286,8 @@ impl<'a> CleanupUseCases<'a> {
     pub fn unified_dry_run(
         self,
         paths: &cleanup::UnifiedCleanupPaths,
-        request: cleanup::UnifiedCleanupDryRunRequest,
     ) -> Result<cleanup::UnifiedCleanupPlan> {
-        cleanup::dry_run_unified_with_capability(self.platform, paths, request)
+        cleanup::dry_run_unified_with_capability(self.platform, paths)
     }
 
     pub fn unified_execute(

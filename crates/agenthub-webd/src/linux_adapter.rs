@@ -251,10 +251,8 @@ pub fn start_update_action_plan(
 }
 
 pub fn linux_update_action_plan(
-    state: &AppState,
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<update_service::UpdateActionPlan> {
-    let config = state.config();
-    update_service::plan_update_action(&config, platform, action)
+    update_service::plan_update_action(platform, action)
 }

@@ -21,27 +21,33 @@ pub(super) fn spawn_probe_error_monitor(state: AppState) {
     });
 }
 
+type ConfigFileStamp = (Option<std::time::SystemTime>, u64);
+
 #[derive(Default)]
 pub(super) struct DaemonMonitorCache {
-    config: Option<((Option<std::time::SystemTime>, u64), Config)>,
+    config: std::sync::Mutex<Option<(ConfigFileStamp, Config)>>,
     db: Option<(PathBuf, PanelDb)>,
 }
 
 impl DaemonMonitorCache {
-    pub(super) fn load_config(&mut self, config_path: &Path) -> Result<Config> {
+    pub(super) fn load_config(&self, config_path: &Path) -> Result<Config> {
+        let mut cached = self
+            .config
+            .lock()
+            .map_err(|_| anyhow::anyhow!("configuration cache unavailable"))?;
         let stamp = std::fs::metadata(config_path)
             .ok()
             .map(|meta| (meta.modified().ok(), meta.len()));
-        if let (Some(current_stamp), Some((cached_stamp, cached_cfg))) = (&stamp, &self.config) {
+        if let (Some(current_stamp), Some((cached_stamp, cached_cfg))) = (&stamp, &*cached) {
             if current_stamp == cached_stamp {
                 return Ok(cached_cfg.clone());
             }
         }
         let loaded = Config::load_runtime(config_path)?;
         if let Some(current_stamp) = stamp {
-            self.config = Some((current_stamp, loaded.clone()));
+            *cached = Some((current_stamp, loaded.clone()));
         } else {
-            self.config = None;
+            *cached = None;
         }
         Ok(loaded)
     }
@@ -59,7 +65,7 @@ impl DaemonMonitorCache {
 }
 
 pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
-    super::github_ci_monitor::spawn(config_path.clone());
+    super::github_ci_monitor::spawn(config_path.clone(), None);
     let mut upgraded_hooks = false;
     let mut cache = DaemonMonitorCache::default();
     loop {
@@ -71,9 +77,8 @@ pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Resu
                 }
                 match cache.panel_db(&config) {
                     Ok(db) => {
-                        let current_cfg = config.clone();
                         if let Err(err) =
-                            run_probe_error_monitor_once(&db, &move || Ok(current_cfg.clone()))
+                            run_probe_error_monitor_once(&db, &|| cache.load_config(&config_path))
                                 .await
                         {
                             tracing::warn!("Probe error monitor scan failed: {err}");
