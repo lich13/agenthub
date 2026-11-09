@@ -793,7 +793,7 @@ async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_o
     assert_eq!(state.pending.len(), 1);
     assert_eq!(state.pending[0].run.id, 2);
 
-    // Selecting another repository prunes pending events via settings_changed without resetting baseline.
+    // Selecting another repository prunes pending events and cached runs via settings_changed without resetting baseline.
     save(&fixture.db, &state).unwrap();
     let mut filtered_config = config.clone();
     filtered_config.probe.notifications.github_ci_repositories = vec!["fixture/other".into()];
@@ -802,4 +802,96 @@ async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_o
     let updated = load(&fixture.db).unwrap();
     assert_eq!(updated.baseline_ms, time);
     assert!(updated.pending.is_empty());
+    assert!(updated.snapshot.runs.is_empty());
+    assert!(request_ms(&fixture.db).unwrap() > 0);
+}
+
+#[tokio::test]
+async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_added_repos() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let time = 1_800_000_000_000;
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([
+            {"id": 10, "full_name": "fixture/repo", "archived": false},
+            {"id": 11, "full_name": "fixture/other", "archived": false}
+        ]),
+    );
+    let repo_runs_path = "/repos/fixture/repo/actions/runs?per_page=10";
+    let other_runs_path = "/repos/fixture/other/actions/runs?per_page=10";
+    server.set(
+        repo_runs_path,
+        json!({"workflow_runs": [run(1, "completed", Some("success"), 1, time - 1000)]}),
+    );
+    let mut other_completed = run(20, "completed", Some("failure"), 1, time + 500);
+    other_completed.repository_id = 11;
+    other_completed.repository_name = "fixture/other".into();
+    let mut other_running = run(21, "in_progress", None, 1, time + 500);
+    other_running.repository_id = 11;
+    other_running.repository_name = "fixture/other".into();
+    server.set(
+        other_runs_path,
+        json!({"workflow_runs": [other_completed, other_running]}),
+    );
+
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    config.probe.notifications.github_ci_repositories = vec!["FIXTURE/REPO".into()];
+
+    let mut monitor = server.monitor();
+    let mut state = Stored::default();
+    monitor
+        .scan_with_config(&mut state, &config, true, time)
+        .await
+        .unwrap();
+
+    // Full catalog of repositories is retained for UI selection, but only fixture/repo was polled for runs.
+    assert_eq!(state.snapshot.repositories.len(), 2);
+    assert_eq!(state.snapshot.runs.len(), 1);
+    assert_eq!(state.snapshot.runs[0].repository_name, "fixture/repo");
+    assert!(state.pending.is_empty());
+    assert!(!server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.contains(other_runs_path)));
+
+    // Expand monitored repositories to include fixture/other.
+    save(&fixture.db, &state).unwrap();
+    let mut expanded_config = config.clone();
+    expanded_config.probe.notifications.github_ci_repositories =
+        vec!["fixture/repo".into(), "fixture/other".into()];
+    settings_changed(&fixture.db, &config, &expanded_config).unwrap();
+    assert!(request_ms(&fixture.db).unwrap() > 0);
+
+    // First scan of newly added fixture/other must baseline its already-completed run (id 20) without firing a notification.
+    state = load(&fixture.db).unwrap();
+    monitor
+        .scan_with_config(&mut state, &expanded_config, true, time + 2000)
+        .await
+        .unwrap();
+    assert!(server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.contains(other_runs_path)));
+    assert_eq!(state.snapshot.runs.len(), 3);
+    assert!(state.pending.is_empty());
+
+    // When the in-progress run (id 21) on fixture/other finishes on the next poll, it notifies normally.
+    let mut other_finished = run(21, "completed", Some("success"), 1, time + 3000);
+    other_finished.repository_id = 11;
+    other_finished.repository_name = "fixture/other".into();
+    server.set(other_runs_path, json!({"workflow_runs": [other_finished]}));
+    monitor
+        .scan_with_config(&mut state, &expanded_config, true, time + 4000)
+        .await
+        .unwrap();
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending[0].run.id, 21);
+    assert_eq!(state.pending[0].run.repository_id, 11);
 }

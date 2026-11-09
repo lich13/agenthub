@@ -61,6 +61,16 @@ pub struct Run {
 fn one() -> u64 {
     1
 }
+pub fn matches_repository_filter(repo: &Repository, repositories: &[String]) -> bool {
+    if repositories.is_empty() {
+        return true;
+    }
+    let repo_id = repo.id.to_string();
+    repositories.iter().any(|item| {
+        let trimmed = item.trim();
+        !trimmed.is_empty() && (trimmed.eq_ignore_ascii_case(&repo.full_name) || trimmed == repo_id)
+    })
+}
 pub fn matches_run_filter(run: &Run, repositories: &[String], filter_bots: bool) -> bool {
     if filter_bots && run.is_bot {
         return false;
@@ -192,6 +202,8 @@ struct Stored {
     baseline_ms: i64,
     repositories_at_ms: i64,
     request_ms: i64,
+    #[serde(default)]
+    monitored_repo_ids: HashSet<u64>,
     pending: Vec<Event>,
 }
 fn load(db: &PanelDb) -> Result<Stored> {
@@ -253,26 +265,37 @@ pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<boo
 }
 pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result<()> {
     if enabled(before) == enabled(after) {
-        if before.probe.notifications.github_ci_repositories
-            != after.probe.notifications.github_ci_repositories
-            || before.probe.notifications.github_ci_filter_bots
-                != after.probe.notifications.github_ci_filter_bots
-        {
+        let repos_changed = before.probe.notifications.github_ci_repositories
+            != after.probe.notifications.github_ci_repositories;
+        let bots_changed = before.probe.notifications.github_ci_filter_bots
+            != after.probe.notifications.github_ci_filter_bots;
+        if repos_changed || bots_changed {
             let mut state = load(db)?;
+            let after_repos = &after.probe.notifications.github_ci_repositories;
             state.pending.retain(|event| {
                 matches_run_filter(
                     &event.run,
-                    &after.probe.notifications.github_ci_repositories,
+                    after_repos,
                     after.probe.notifications.github_ci_filter_bots,
                 )
             });
+            if repos_changed {
+                state
+                    .snapshot
+                    .runs
+                    .retain(|run| matches_run_filter(run, after_repos, false));
+            }
             save(db, &state)?;
+            if repos_changed && enabled(after) {
+                db.set_setting(REFRESH, &now().to_string())?;
+            }
         }
         return Ok(());
     }
     let mut state = load(db)?;
     state.snapshot.enabled = false;
     state.baseline_ms = 0;
+    state.monitored_repo_ids.clear();
     state.pending.clear();
     save(db, &state)?;
     if enabled(after) {
@@ -354,10 +377,12 @@ impl Monitor {
         if !active {
             let changed = enabled_before
                 || baseline_before != 0
+                || !state.monitored_repo_ids.is_empty()
                 || !state.pending.is_empty()
                 || state.request_ms != request;
             state.snapshot.enabled = false;
             state.baseline_ms = 0;
+            state.monitored_repo_ids.clear();
             state.pending.clear();
             state.request_ms = request;
             self.request_ms = request;
@@ -541,9 +566,10 @@ impl Monitor {
         let baseline = active && (!state.snapshot.enabled || state.baseline_ms == 0);
         let mut runs = Vec::new();
         let mut errors = Vec::new();
+        let configured_repos = &config.probe.notifications.github_ci_repositories;
         let repositories = state.snapshot.repositories.clone();
         for (index, repo) in repositories.iter().enumerate() {
-            if repo.archived {
+            if repo.archived || !matches_repository_filter(repo, configured_repos) {
                 continue;
             }
             let result = self.repository_runs(repo).await;
@@ -566,9 +592,11 @@ impl Monitor {
                                 .runs
                                 .iter()
                                 .filter(|r| {
-                                    repositories[index + 1..]
-                                        .iter()
-                                        .any(|repo| repo.id == r.repository_id)
+                                    repositories[index + 1..].iter().any(|repo| {
+                                        !repo.archived
+                                            && matches_repository_filter(repo, configured_repos)
+                                            && repo.id == r.repository_id
+                                    })
                                 })
                                 .cloned(),
                         );
@@ -639,6 +667,7 @@ fn reconcile_with_config(
     if !active {
         state.pending.clear();
         state.baseline_ms = 0;
+        state.monitored_repo_ids.clear();
     }
     if active {
         let mut previous = HashMap::with_capacity(state.snapshot.runs.len());
@@ -651,7 +680,10 @@ fn reconcile_with_config(
             .map(|event| (event.run.repository_id, event.run.id, event.run.run_attempt))
             .collect();
         for run in &runs {
+            let repo_newly_monitored = !state.monitored_repo_ids.is_empty()
+                && !state.monitored_repo_ids.contains(&run.repository_id);
             if baseline
+                || repo_newly_monitored
                 || run.notification_kind().is_none()
                 || !matches_run_filter(run, repositories, filter_bots)
             {
@@ -668,6 +700,17 @@ fn reconcile_with_config(
                     run: run.clone(),
                 });
             }
+        }
+        let next_monitored: HashSet<u64> = state
+            .snapshot
+            .repositories
+            .iter()
+            .filter(|repo| !repo.archived && matches_repository_filter(repo, repositories))
+            .map(|repo| repo.id)
+            .chain(runs.iter().map(|run| run.repository_id))
+            .collect();
+        if !next_monitored.is_empty() {
+            state.monitored_repo_ids = next_monitored;
         }
     }
     retain_summaries(&mut runs);
