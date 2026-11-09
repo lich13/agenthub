@@ -543,13 +543,14 @@ fn completion_from_entry(entry: &Value, fallback_ts: Option<i64>) -> Option<Nati
                 let name = msg["file_name"]
                     .as_str()
                     .filter(|s| !s.trim().is_empty())
+                    .or_else(|| msg["alt"].as_str().filter(|s| !s.trim().is_empty()))
                     .unwrap_or("附件")
                     .replace('[', "\\[")
                     .replace(']', "\\]");
                 let path = msg["source_path"]
                     .as_str()
                     .filter(|s| s.starts_with('/'))
-                    .or(msg["url"].as_str());
+                    .or_else(|| msg["url"].as_str().filter(|s| !s.trim().is_empty()));
                 path.map_or(name.clone(), |p| {
                     format!("[{name}](<{}>)", p.replace('>', "%3E"))
                 })
@@ -581,17 +582,38 @@ fn completion_from_entry(entry: &Value, fallback_ts: Option<i64>) -> Option<Nati
     })
 }
 
+fn is_interaction_entry(entry: &Value) -> bool {
+    entry["kind"].as_str() == Some("send-message")
+        && matches!(
+            entry["message"]["type"].as_str(),
+            Some(
+                "local-tool-permission"
+                    | "auto-review-approval"
+                    | "meeting-join-consent"
+                    | "cookie-origin-approval"
+                    | "virtual-card-approval"
+                    | "user-form"
+            )
+        )
+}
+
 fn latest_completion_event(
     row: &Value,
     replica: Option<&Value>,
     pending: &[NativeTurnEvent],
-) -> Option<NativeTurnEvent> {
+) -> (u64, Option<NativeTurnEvent>) {
     let mut latest: Option<NativeTurnEvent> = None;
+    let mut latest_interaction_ms: Option<i64> = None;
     for entry in replica
         .and_then(|v| v["entries"].as_array())
         .into_iter()
         .flatten()
     {
+        if is_interaction_entry(entry) {
+            if let Some(ts) = entry["timestampMs"].as_i64().filter(|&t| t > 0) {
+                latest_interaction_ms = Some(latest_interaction_ms.map_or(ts, |prev| prev.max(ts)));
+            }
+        }
         if let Some(candidate) = completion_from_entry(entry, None) {
             if latest
                 .as_ref()
@@ -611,14 +633,18 @@ fn latest_completion_event(
             latest = Some(roster_last);
         }
     }
-    let candidate = latest?;
+    let Some(candidate) = latest else {
+        return (0, None);
+    };
+    let settled_count = candidate.position;
     if pending
         .iter()
         .any(|p| p.timestamp_ms >= candidate.timestamp_ms)
+        || latest_interaction_ms.is_some_and(|ts| ts >= candidate.timestamp_ms)
     {
-        return None;
+        return (settled_count, None);
     }
-    Some(candidate)
+    (settled_count, Some(candidate))
 }
 
 pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
@@ -653,8 +679,7 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             continue;
         }
         let mut events = pending_events(row, replica.as_deref());
-        let completion = latest_completion_event(row, replica.as_deref(), &events);
-        let settled_count = completion.as_ref().map_or(0, |e| e.position);
+        let (settled_count, completion) = latest_completion_event(row, replica.as_deref(), &events);
         if let Some(comp) = completion {
             events.push(comp);
         }
@@ -663,7 +688,8 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             .iter()
             .map(|e| e.position)
             .max()
-            .unwrap_or(settled_count);
+            .unwrap_or(settled_count)
+            .max(settled_count);
         let session_key = session_key(&scope, id);
         scan.streams.push(NativeStreamSnapshot {
             provider: NativeProvider::GrokBot,

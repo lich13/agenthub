@@ -457,10 +457,12 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     .unwrap();
     assert_eq!(d.summary.status, "unknown");
 
-    // 3. Pending interaction newer than completion suppresses completion event
+    // 3. Pending interaction newer than completion suppresses completion event while preserving settled_count,
+    // and resolving that interaction does not resurrect the pre-interaction message as a new completion
+    let pre_perm_ts = new_ts + 500;
     let perm_ts = new_ts + 1_000;
     f.replica(json!([
-        msg("reply-1", new_ts, "Bot finished task"),
+        msg("pre-perm", pre_perm_ts, "Running tool now"),
         {
             "kind": "send-message",
             "id": "perm-1",
@@ -472,10 +474,40 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
         }
     ]));
     let s_perm = scan(&f.paths).unwrap();
+    assert_eq!(s_perm.streams[0].settled_count, pre_perm_ts as u64);
     assert_eq!(s_perm.streams[0].events.len(), 1);
     assert_eq!(s_perm.streams[0].events[0].kind, "authorization");
+    assert_eq!(
+        db.stage_native_notifications(NativeProvider::GrokBot, &s_perm, &config)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.native_probe_stream_cursor(NativeProvider::GrokBot, &f.session())
+            .unwrap(),
+        Some(pre_perm_ts as u64)
+    );
 
-    // 4. Roster lastEntry fallback and attachment completion
+    // User approves permission while tool is still running: pre-perm message must not resurrect as completion
+    f.replica(json!([
+        msg("pre-perm", pre_perm_ts, "Running tool now"),
+        {
+            "kind": "send-message",
+            "id": "perm-1",
+            "timestampMs": perm_ts,
+            "message": {
+                "type": "local-tool-permission",
+                "ask": { "status": "allowed", "requestId": "req-1", "title": "Need tool access" }
+            }
+        }
+    ]));
+    let s_allowed = scan(&f.paths).unwrap();
+    assert!(
+        s_allowed.streams[0].events.is_empty(),
+        "resolved interaction must not resurrect earlier send-message as a completion"
+    );
+
+    // 4. Roster lastEntry fallback and attachment completion (including empty file_name/url with alt fallback)
     let attach_ts = perm_ts + 2_000;
     f.rows(json!([{
         "id": "bot-a",
@@ -501,4 +533,21 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
         s_attach.streams[0].events[0].body,
         "[report.pdf](<https://example.invalid/report.pdf>)"
     );
+
+    let alt_attach_ts = attach_ts + 1_000;
+    f.replica(json!([{
+        "id": "alt-attach",
+        "kind": "send-message",
+        "timestampMs": alt_attach_ts,
+        "message": {
+            "type": "attachment",
+            "file_name": "",
+            "alt": "Architecture diagram",
+            "url": ""
+        }
+    }]));
+    let s_alt = scan(&f.paths).unwrap();
+    assert_eq!(s_alt.streams[0].events.len(), 1);
+    assert_eq!(s_alt.streams[0].events[0].turn_id, "alt-attach");
+    assert_eq!(s_alt.streams[0].events[0].body, "Architecture diagram");
 }

@@ -780,6 +780,7 @@ async fn load_trajectory_with_context(
                 steps: Vec<Value>,
                 tasks: BTreeMap<String, antigravity::TaskLiveness>,
                 active_children: bool,
+                children: BTreeSet<String>,
             }
             let mut inspected_subagents: Vec<InspectedSubagent> = Vec::new();
 
@@ -787,12 +788,7 @@ async fn load_trajectory_with_context(
                 if inspected_subagents.len() >= 8 {
                     break;
                 }
-                if subagents.get(&sub_id).is_some_and(|s| {
-                    s.active
-                        || s.last_modified_ms.is_some_and(|ms| {
-                            now_ms.saturating_sub(ms) > antigravity::ACTIVE_BACKGROUND_TASK_CAP_MS
-                        })
-                }) {
+                if subagents.get(&sub_id).is_some_and(|s| s.active) {
                     continue;
                 }
                 let sub_summary = summaries.get(&sub_id);
@@ -811,10 +807,31 @@ async fn load_trajectory_with_context(
                 let (sub_tasks, sub_active_children) =
                     inspect_steps_background_tasks(pid, &sub_id, &sub_traj_id, &sub_steps, now_ms)
                         .await;
-                for child_id in
-                    antigravity::collect_pending_subagent_ids(&sub_id, &sub_traj_id, &sub_steps)
-                {
-                    if let Some(child_summary) = summaries.get(&child_id) {
+                let mut children =
+                    antigravity::collect_pending_subagent_ids(&sub_id, &sub_traj_id, &sub_steps);
+                let settled_senders: BTreeSet<&str> = sub_steps
+                    .iter()
+                    .filter(|s| s["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE")
+                    .filter_map(|s| {
+                        s["systemMessage"]["agentMessage"]["sender"]
+                            .as_str()
+                            .or_else(|| s["systemMessage"]["sender"].as_str())
+                            .filter(|v| !v.is_empty())
+                    })
+                    .collect();
+                for (cand_id, cand_summary) in summaries {
+                    let parent_id = cand_summary["parentConversationId"]
+                        .as_str()
+                        .or_else(|| {
+                            cand_summary["trajectoryMetadata"]["parentConversationId"].as_str()
+                        })
+                        .unwrap_or("");
+                    if parent_id == sub_id && !settled_senders.contains(cand_id.as_str()) {
+                        children.insert(cand_id.clone());
+                    }
+                }
+                for child_id in &children {
+                    if let Some(child_summary) = summaries.get(child_id) {
                         subagents.entry(child_id.clone()).or_insert_with(|| {
                             antigravity::SubagentLiveness {
                                 active: summary_is_active(child_summary),
@@ -831,7 +848,7 @@ async fn load_trajectory_with_context(
                         });
                     }
                     if visited.insert(child_id.clone()) {
-                        queue.push_back(child_id);
+                        queue.push_back(child_id.clone());
                     }
                 }
                 inspected_subagents.push(InspectedSubagent {
@@ -840,6 +857,7 @@ async fn load_trajectory_with_context(
                     steps: sub_steps,
                     tasks: sub_tasks,
                     active_children: sub_active_children,
+                    children,
                 });
             }
 
@@ -851,12 +869,19 @@ async fn load_trajectory_with_context(
                     subagents: subagents.clone(),
                     tasks: item.tasks,
                 };
-                if antigravity::has_unsettled_background_work(
-                    &item.id,
-                    &item.traj_id,
-                    &item.steps,
-                    &sub_ctx,
-                ) {
+                let child_unsettled = item.children.iter().any(|cid| {
+                    subagents
+                        .get(cid)
+                        .is_some_and(|s| s.active || s.unsettled_background)
+                });
+                if child_unsettled
+                    || antigravity::has_unsettled_background_work(
+                        &item.id,
+                        &item.traj_id,
+                        &item.steps,
+                        &sub_ctx,
+                    )
+                {
                     subagents.entry(item.id).or_default().unsettled_background = true;
                 }
             }

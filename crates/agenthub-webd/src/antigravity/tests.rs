@@ -535,6 +535,7 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
     let root_id = "88888888-8888-4888-8888-888888888881";
     let d1_id = "88888888-8888-4888-8888-888888888882";
     let d2_id = "88888888-8888-4888-8888-888888888883";
+    let d3_id = "88888888-8888-4888-8888-888888888884";
     let base = chrono::Utc::now() - chrono::Duration::seconds(10);
     let t0 = base.to_rfc3339();
     let t1 = (base + chrono::Duration::seconds(1)).to_rfc3339();
@@ -566,6 +567,7 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                 );
                 async move {
                     let cid = body["cascadeId"].as_str().unwrap_or("");
+                    let offset = body["stepOffset"].as_u64().unwrap_or(0) as usize;
                     if cid == root_id {
                         axum::Json(json!({
                             "steps": [
@@ -596,41 +598,57 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                             ]
                         }))
                     } else if cid == d1_id {
+                        // D1 has 300 steps (> 256 tail window): when stepOffset >= 44, the early invoke_subagent(D2)
+                        // step at index 1 is outside the tail window, verifying parentConversationId discovery.
+                        let steps: Vec<Value> = (offset..300)
+                            .map(|_| {
+                                json!({
+                                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "d1-exec", "createdAt": t2 },
+                                    "plannerResponse": { "response": "Intermediate step" }
+                                })
+                            })
+                            .collect();
+                        axum::Json(json!({ "steps": steps }))
+                    } else if cid == d2_id {
                         axum::Json(json!({
                             "steps": [
                                 {
-                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
                                     "status": "CORTEX_STEP_STATUS_DONE",
-                                    "metadata": { "executionId": "d1-exec", "createdAt": t1 }
+                                    "systemMessage": { "agentMessage": { "sender": d1_id } },
+                                    "metadata": { "executionId": "d2-exec", "createdAt": t2 }
                                 },
                                 {
                                     "type": "CORTEX_STEP_TYPE_GENERIC",
                                     "status": "CORTEX_STEP_STATUS_DONE",
                                     "generic": {
                                         "name": "invoke_subagent",
-                                        "result": format!("Created the following subagent:\n{{\"conversationId\":\"{d2_id}\"}}")
+                                        "result": format!("Created the following subagent:\n{{\"conversationId\":\"{d3_id}\"}}")
                                     },
-                                    "metadata": { "executionId": "d1-exec", "createdAt": t2 }
+                                    "metadata": { "executionId": "d2-exec", "createdAt": t3 }
                                 }
                             ]
                         }))
-                    } else if cid == d2_id {
+                    } else if cid == d3_id {
                         axum::Json(json!({
                             "steps": [
                                 {
-                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
                                     "status": "CORTEX_STEP_STATUS_DONE",
-                                    "metadata": { "executionId": "d2-exec", "createdAt": t2 }
+                                    "systemMessage": { "agentMessage": { "sender": d2_id } },
+                                    "metadata": { "executionId": "d3-exec", "createdAt": t3 }
                                 },
                                 {
                                     "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
                                     "status": "CORTEX_STEP_STATUS_RUNNING",
                                     "taskDetails": {
-                                        "id": format!("{d2_id}/task-96"),
+                                        "id": format!("{d3_id}/task-96"),
                                         "movedToBackgroundAt": t5
                                     },
                                     "metadata": {
-                                        "executionId": "d2-exec",
+                                        "executionId": "d3-exec",
                                         "createdAt": t4,
                                         "toolCall": {
                                             "name": "run_command",
@@ -685,9 +703,9 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                 "trajectoryId": "traj-d1",
                 "createdTime": t1,
                 "lastModifiedTime": t2,
-                "summary": "DeepCoder subagent",
+                "summary": "DeepCoder subagent (>256 steps)",
                 "status": "CASCADE_RUN_STATUS_IDLE",
-                "stepCount": 2,
+                "stepCount": 300,
                 "trajectoryMetadata": {
                     "rootConversationId": root_id,
                     "parentConversationId": root_id,
@@ -697,14 +715,27 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
             d2_id: {
                 "trajectoryId": "traj-d2",
                 "createdTime": t2,
-                "lastModifiedTime": t5,
-                "summary": "Worker subagent",
+                "lastModifiedTime": t3,
+                "summary": "Coordinator subagent",
                 "status": "CASCADE_RUN_STATUS_IDLE",
                 "stepCount": 2,
                 "trajectoryMetadata": {
                     "rootConversationId": root_id,
                     "parentConversationId": d1_id,
                     "nestingDepth": 2
+                }
+            },
+            d3_id: {
+                "trajectoryId": "traj-d3",
+                "createdTime": t3,
+                "lastModifiedTime": t5,
+                "summary": "Worker subagent",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 2,
+                "trajectoryMetadata": {
+                    "rootConversationId": root_id,
+                    "parentConversationId": d2_id,
+                    "nestingDepth": 3
                 }
             }
         }
@@ -723,7 +754,7 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
     assert_eq!(scan.streams.len(), 1);
     assert!(
         scan.streams[0].events.is_empty(),
-        "root must not emit completion while D1 -> D2 has a RUNNING background command step"
+        "root must not emit completion while D1 (300 steps) -> D2 -> D3 has a RUNNING background command step"
     );
     assert_eq!(scan.streams[0].settled_count, 0);
     task.abort();

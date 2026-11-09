@@ -302,12 +302,19 @@ struct TurnPendingWork {
     pending_subagents: BTreeMap<String, Option<i64>>,
 }
 
+fn system_message_sender(step: &Value) -> Option<&str> {
+    step["systemMessage"]["agentMessage"]["sender"]
+        .as_str()
+        .or_else(|| step["systemMessage"]["sender"].as_str())
+        .filter(|s| !s.is_empty())
+}
+
 fn collect_turn_pending_work(
     id: &str,
     summary_trajectory_id: &str,
     steps: &[Value],
 ) -> TurnPendingWork {
-    let turn_start = steps
+    let last_user_input_idx = steps
         .iter()
         .enumerate()
         .rev()
@@ -315,7 +322,42 @@ fn collect_turn_pending_work(
             !step_is_foreign(id, summary_trajectory_id, step)
                 && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
         })
-        .map_or(0, |(idx, _)| idx + 1);
+        .map(|(idx, _)| idx);
+
+    let parent_sender = if last_user_input_idx.is_none() {
+        steps
+            .iter()
+            .filter(|step| !step_is_foreign(id, summary_trajectory_id, step))
+            .take_while(|step| {
+                step["taskDetails"]["id"].as_str().is_none_or(str::is_empty)
+                    && step_tool_name(step) != "invoke_subagent"
+                    && step["invokeSubagent"].is_null()
+            })
+            .find_map(|step| {
+                (step["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE")
+                    .then(|| system_message_sender(step))
+                    .flatten()
+            })
+    } else {
+        None
+    };
+
+    let turn_start = if let Some(idx) = last_user_input_idx {
+        idx + 1
+    } else if let Some(parent) = parent_sender {
+        steps
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, step)| {
+                !step_is_foreign(id, summary_trajectory_id, step)
+                    && step["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
+                    && system_message_sender(step) == Some(parent)
+            })
+            .map_or(0, |(idx, _)| idx + 1)
+    } else {
+        0
+    };
 
     let mut last_root_step_ms: Option<i64> = None;
     let mut pending_tasks: BTreeMap<String, PendingTaskRecord> = BTreeMap::new();
@@ -330,11 +372,7 @@ fn collect_turn_pending_work(
             last_root_step_ms = Some(last_root_step_ms.map_or(ms, |prev| prev.max(ms)));
         }
         if step["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE" {
-            if let Some(sender) = step["systemMessage"]["agentMessage"]["sender"]
-                .as_str()
-                .or_else(|| step["systemMessage"]["sender"].as_str())
-                .filter(|s| !s.is_empty())
-            {
+            if let Some(sender) = system_message_sender(step) {
                 pending_tasks.remove(sender);
                 pending_subagents.remove(sender);
             }
@@ -406,7 +444,9 @@ fn collect_turn_pending_work(
             if let Some(recipient) = args["Recipient"]
                 .as_str()
                 .or_else(|| args["recipient"].as_str())
-                .filter(|cid| uuid::Uuid::parse_str(cid).is_ok())
+                .filter(|cid| {
+                    uuid::Uuid::parse_str(cid).is_ok() && *cid != id && Some(*cid) != parent_sender
+                })
             {
                 pending_subagents.insert(recipient.to_owned(), step_ms);
             }
@@ -528,8 +568,9 @@ pub fn has_unsettled_background_work(
 
     let max_subagent_modified_ms = ctx
         .subagents
-        .values()
-        .filter_map(|s| s.last_modified_ms)
+        .iter()
+        .filter(|(k, _)| k.as_str() != id)
+        .filter_map(|(_, s)| s.last_modified_ms)
         .max();
 
     for (cid, spawn_ms) in &pending_subagents {
@@ -566,8 +607,8 @@ pub fn has_unsettled_background_work(
         .unwrap_or(now_ms);
         let grace = if rec.step_running || task.is_some_and(|t| t.active) {
             ACTIVE_BACKGROUND_TASK_CAP_MS
-        } else if task.is_some()
-            || (rec.expected_deadline_ms.is_some() && !ctx.has_active_child_processes)
+        } else if (task.is_some() || rec.expected_deadline_ms.is_some())
+            && !ctx.has_active_child_processes
         {
             BACKGROUND_HANDOFF_GRACE_MS
         } else {

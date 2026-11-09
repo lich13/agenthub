@@ -1224,4 +1224,49 @@ fn nested_subagent_unsettled_background_and_running_task_steps_suppress_false_po
         .unsettled_background = false;
     let released = snapshot_with_context(ID, &summary, &root_response, &root_ctx).unwrap();
     assert_eq!(released.events.len(), 1);
+
+    // Settled step with inactive log file but active child process in ps holds for 60s (not 15s)
+    let mut done_task_steps = d2_steps.clone();
+    done_task_steps[1]["status"] = json!("CORTEX_STEP_STATUS_DONE");
+    let task_start_ms = native_probe::timestamp(&json!("2026-01-01T06:34:12Z")).unwrap();
+    let ps_active_ctx = TrajectoryLivenessContext {
+        has_active_child_processes: true,
+        now_ms: Some(task_start_ms + 30_000),
+        tasks: BTreeMap::from([(
+            task_id,
+            TaskLiveness {
+                active: false,
+                last_activity_ms: Some(task_start_ms),
+            },
+        )]),
+        ..Default::default()
+    };
+    assert!(
+        has_unsettled_background_work(d2_id, "traj-d2", &done_task_steps, &ps_active_ctx),
+        "active child process in ps must keep settled task unsettled up to 60s even when log fd is closed"
+    );
+
+    // Subagent starting with SYSTEM_MESSAGE from parent and calling send_message(Recipient = parent)
+    // must not treat parent as a pending child subagent
+    let sub_reply_steps = vec![
+        json!({
+            "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "systemMessage": { "agentMessage": { "sender": d1_id } },
+            "metadata": { "executionId": "d2-exec-2", "createdAt": "2026-01-01T06:18:38Z" }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "generic": {
+                "name": "send_message",
+                "argumentsJson": format!("{{\"Recipient\":\"{d1_id}\",\"Message\":\"Report complete\"}}")
+            },
+            "metadata": { "executionId": "d2-exec-2", "createdAt": "2026-01-01T06:35:00Z" }
+        }),
+    ];
+    assert!(
+        collect_pending_subagent_ids(d2_id, "traj-d2", &sub_reply_steps).is_empty(),
+        "subagent send_message back to its parent must not register parent as a pending child subagent"
+    );
 }
