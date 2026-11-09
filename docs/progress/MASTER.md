@@ -2,7 +2,9 @@
 
 ## 当前版本
 
-当前正式版本为 [**v2.1.8**](https://github.com/lich13/agenthub/releases/tag/v2.1.8)，发布提交 [`dd96c8d`](https://github.com/lich13/agenthub/commit/dd96c8d8de3f85c3593c7940318412aa26f1059d) 的[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/42428997784) 全部通过，八项正式资产已发布。对应 CI 产物已部署服务端并原地升级 Mac：服务端 `agenthub-webd 2.1.8`、service `active`、health `ok`；Mac App 从 2.1.7 原地升级到 2.1.8 并启动，未保留旧版副本。服务端保留安装器回退材料，未执行回退。API 协议保持 2、数据库 schema 保持 3。
+当前正式版本为 [**v2.1.9**](https://github.com/lich13/agenthub/releases/tag/v2.1.9)：GitHub CI 支持按仓库持久化筛选（`github_ci_repositories`）并默认过滤 Bot 提交的工作流运行（`github_ci_filter_bots = true`），切换筛选条件裁剪待发通知且不补发历史结果；精简通知投递重复写事务、Claude Hook 配置读取与搜索／清理无用体积统计；补充 Dependabot 分组自动合并工作流、恢复 `cargo-audit` 缓存，并更新中英双语 `README.md`／`README.en.md`。API 协议保持 2、数据库 schema 保持 3。
+
+上一正式版本 [**v2.1.8**](https://github.com/lich13/agenthub/releases/tag/v2.1.8)，发布提交 [`dd96c8d`](https://github.com/lich13/agenthub/commit/dd96c8d8de3f85c3593c7940318412aa26f1059d) 的[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/42428997784) 全部通过，八项正式资产已发布。
 
 ## v2.1.8 源码与资源比较
 

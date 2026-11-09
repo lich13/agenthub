@@ -1,8 +1,21 @@
 # AgentHub
 
-AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并支持通过系统 SSH 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
+**中文** | [English](README.en.md)
 
-v2.1.8 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。
+AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
+
+v2.1.9 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
+
+## 特色亮点
+
+| 核心维度 | 架构设计与特色能力 |
+| --- | --- |
+| **六大平台统一会话中枢** | 原生纳管 Codex、Claude Code、Grok Build、Grok Bot（本机 `.blob`／`.kblob` 近期缓存只读）、Antigravity 与 DeepSeek Harness；支持 `⌘F` 跨会话／单线程检索（上限 200 条）、一键复制线程 ID 与最优交接路径、本机 `在 Finder 中显示`（`⌘⇧R`）及 Codex／Grok Plan Markdown 导出。 |
+| **本机 Codex 桌面直连协作** | 未归档本机 Codex 主线程可一键唤起原生 Codex 桌面或新建工作目录线程；支持 `⌘+Enter` 发送、运行中排队／补充注入／停止、本机加密持久化待发队列、文件与截图粘贴、`$` 技能／`@` 应用插件检索、模型／思考强度／Plan 模式切换与命令／diff 审批同步。 |
+| **无框流式排版与有界内存读取** | 保持文本与工具调用原始时序，同一回合连续思考与命令执行自动收敛为单行 `<details>` 披露块；距顶部 `200px` 无感反向分页并严格锁定可见消息像素偏移；共享 32 MiB／64 项历史缓存、300 秒空闲释放与 K／M／G 三级体积徽章（`< 100 MiB` 绿、`100–300 MiB` 琥珀、`>= 300 MiB` 红）。 |
+| **控制台优先 Probe 与五平台实时 Hooks** | 首屏汇聚全局主控、Bark 加密队列推送、六大平台通知一键开关与五平台 Hooks／Host 矩阵（Codex、Claude Code、Grok Build、Antigravity 一键安装／修复／移除 Hook，DSH 原生 `session.lock` + `.zstd` 流直连），实时回调（`<1 秒`）与 15 秒轮询共享 SQLite 原子幂等去重。 |
+| **GitHub CI 双通道监控与 Bot 过滤** | 自动发现所选机器活跃 `gh` 账号名下公开、私有与 fork 仓库的最新运行；支持**按仓库持久化筛选**与**默认过滤 Bot 提交的工作流运行**（自动识别 `dependabot[bot]`、`renovate[bot]`、`github-actions[bot]` 及对应分支），将成功、失败和超时精准推送至 Bark 与 macOS 系统通知。 |
+| **纵深防御清理与零端口 SSH 远端** | 覆盖五大平台六大清理作用域，执行端独立重算目标集、核验预览指纹交集、检查运行锁与子代理闭包并隔离符号链接；远端 Linux 通过常驻 SSH `rpc-stdio` 直连私有 Unix 套接字，无需开放 HTTP 端口、API Key 或反向代理。 |
 
 ## 核心能力
 
@@ -12,7 +25,7 @@ v2.1.8 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 - **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
 - **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、六个 Provider 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
-- **GitHub CI 通知**：Probe 顶部展示所选机器当前 `github.com` 活跃 `gh` 账号的 CI；每 60 秒读取每仓库首页 10 条，每 10 分钟刷新公开、私有及 fork 仓库目录，筛选后最多展示 20 条。监控默认关闭，开启后成功、失败和超时发往已启用的 Bark 与获准的 Mac 系统通知，点击可打开对应 GitHub 运行。Mac 在 App 运行及最小化时每 60 秒观察当前机器缓存，退出后 Bark 继续工作；首次观察、重新启用和切号不补发历史结果。关闭 CI 时仅显示缓存，手动刷新不会查询新结果；窗口外的旧运行及旧重跑不保证发现。
+- **GitHub CI 监控、仓库筛选与 Bot 过滤**：Probe 顶部展示所选机器当前 `github.com` 活跃 `gh` 账号的 CI；每 60 秒读取每仓库首页 10 条，每 10 分钟刷新公开、私有及 fork 仓库目录，筛选后最多展示 20 条。支持持久化筛选指定仓库（`github_ci_repositories`）并默认开启「过滤 Bot」（`github_ci_filter_bots = true`，自动排除 `dependabot[bot]`、`renovate[bot]`、`github-actions[bot]` 等自动化运行，避免刷屏）。监控默认关闭，开启后成功、失败和超时发往已启用的 Bark 与获准的 Mac 系统通知，点击可打开对应 GitHub 运行。首次观察、重新启用、切号及切换过滤条件不补发历史结果；关闭 CI 时仅显示缓存，手动刷新不会查询新结果。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
 - **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；直接选择本机 OpenSSH 配置及 Include 中保存的 Host，复用密钥、ssh-agent 与跳板配置，并支持「安装并连接」同版本服务。切换机器隔离缓存、分页及迟到响应；已受理后台任务继续执行，不阻止切换。
 
@@ -34,7 +47,7 @@ v2.1.8 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 
 ## 阅读、分页与体积统计
 
-- **双向无感分页與锚点保持**：各 Provider 主会话与 Codex 子智能体详情均支持上滚至距顶部 `200px` 时自动加载较早历史分页，轮询、追加消息与展开工具组时严格保持当前可见消息像素偏移，不跳回底部。
+- **双向无感分页与锚点保持**：各 Provider 主会话与 Codex 子智能体详情均支持上滚至距顶部 `200px` 时自动加载较早历史分页，轮询、追加消息与展开工具组时严格保持当前可见消息像素偏移，不跳回底部。
 - **有界内存与读取复用**：服务端按文件身份及修改信息复用未变化的列表和历史。Grok Bot、Antigravity 与 DSH 共享最多 **32 MiB／64 项**历史缓存，DSH 摘要按 **8 MiB／2000 项**淘汰旧项；超过预算仍正常读取。Antigravity 运行中会话继续读取原生状态，文件替换、截断或修改会使缓存失效。详情、Claude 摘要与 Codex 问答缓存共用 **300 秒（5 分钟）**空闲释放入口，再次访问按原生数据重建；窗口隐藏时前端暂停常规轮询，恢复可见时立即刷新。
 - **线程体积分级（K／M／G）**：五大平台会话卡片右侧以等宽数字展示实际字节大小，按统一阈值着色：**`< 100 MiB` 绿色**、**`100 MiB – 300 MiB` 琥珀色**、**`>= 300 MiB` 红色**；未知或后台统计中显示灰色 `—`，部分下限结果标 `≥`。统计仅涵盖已确认归属的 rollout、会话 JSONL、专属子目录与压缩日志，不计入项目代码工作目录，也不跟随符号链接。
 
@@ -67,7 +80,7 @@ Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖
 
 ### 本机 macOS App
 
-下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.agenthub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app`（若存在旧版 `/Applications/AgentHub.app` 会一并无损迁移清理）并校验签名与版本号。
+下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.agenthub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app` 并校验签名与版本号。
 
 ### 远程 Linux SSH 服务
 
@@ -85,14 +98,14 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 
 ## 发布资产
 
-当前源码版本为 **2.1.6**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.9**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
 - 仅包含 `darwin-aarch64` 平台映射的 `latest.json`；
 - `agenthub-webd-linux-x86_64.tar.gz`、`.tar.gz.sha256` 与 `.tar.gz.sig`。
 
-## 开发与验证
+## 开发
 
 ```bash
 pnpm --dir webui install --frozen-lockfile
@@ -126,6 +139,7 @@ git diff --check
 
 ## 当前文档
 
+- [README.en.md](README.en.md)：英文版项目说明（English Documentation）。
 - [AGENTS.md](AGENTS.md)：协作、安全与交付规范。
 - [DESIGN.md](DESIGN.md)：三层表面、组件与交互设计规范。
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、缓存预算与线协议契约。
