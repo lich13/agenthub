@@ -44,11 +44,7 @@ pub(crate) fn spawn_edges_with_connection(
         .map(quoted)
         .collect::<Vec<_>>();
     let mut statement = conn.prepare(&format!("SELECT {} FROM threads", selected.join(",")))?;
-    let names: Vec<_> = statement
-        .column_names()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+    let names: Vec<_> = statement.column_names().map(str::to_owned).collect();
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
         let value = read_row_value(row, &names)?;

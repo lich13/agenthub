@@ -92,10 +92,10 @@ pub(crate) fn scan_hidden(
     mut emit: impl FnMut(&HiddenThreadDeletePlan, Option<HiddenThreadCandidate>) -> Result<()>,
 ) -> Result<HiddenThreadDeletePlan> {
     work.check()?;
-    let conn = crate::selected_codex::open(paths, false)?;
+    let mut conn = crate::selected_codex::open(paths, false)?;
     conn.busy_timeout(std::time::Duration::from_secs(2))?;
     let cancellation = work.clone();
-    conn.progress_handler(1000, Some(move || cancellation.check().is_err()));
+    conn.progress_handler(1000, Some(move || cancellation.check().is_err()))?;
     conn.execute_batch("BEGIN DEFERRED")?;
     let integrity = "not_checked".to_string();
 

@@ -478,7 +478,8 @@ mod tests {
                     } => Authorization::Deny,
                     _ => Authorization::Allow,
                 },
-            ));
+            ))
+            .unwrap();
         db.sync_notification_channels(&config).unwrap();
         assert!(db.due_notification_deliveries(10).unwrap().is_empty());
     }

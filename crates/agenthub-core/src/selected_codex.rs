@@ -376,7 +376,6 @@ fn row_value(conn: &Connection, table: &str, key: &str, id: &str) -> Result<Opti
     let mut stmt = conn.prepare(&format!("SELECT * FROM {table} WHERE {key}=?1"))?;
     let names = stmt
         .column_names()
-        .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
     Ok(stmt

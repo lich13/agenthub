@@ -17,6 +17,7 @@ VERSION_NOTES: dict[str, dict[str, list[str]]] = {
         ],
         "fixes": [
             "Antigravity 探针在解析子代理与后台命令时兼容 argumentsJson 字符串参数与带文本前缀的 invoke_subagent 输出，并在后台命令步骤仍处于 RUNNING 或任务活跃时保持未结算状态；自底向上遍历未完结嵌套子代理（如主会话 → 子代理 → 孙代理），将深层后台任务等待状态向上传播，彻底消除主会话在等待子代理完成通知时的提前完成误报。",
+            "升级 rusqlite 至 0.41（内置 SQLite 3.54.1 / libsqlite3-sys 0.39.1），修复 RUSTSEC-2026-0459 披露的 WAL 页大小不一致导致的未初始化缓存内存读取风险。",
         ],
         "migration": [
             "API 协议保持 2，数据库 schema 保持 3；保留会话、凭据、通知基线、去重与重试，不新增迁移。",
