@@ -634,6 +634,7 @@ async fn process_claude_hook(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn deliver(
     load_config: &ConfigLoader<'_>,
     config: &Config,

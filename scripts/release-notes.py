@@ -8,6 +8,25 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.9": {
+        "summary": [
+            "GitHub CI 增加仓库持久化筛选与 Bot 工作流过滤，精简通知投递与会话读取开销，并补充中英双语文档"
+        ],
+        "features": [
+            "GitHub CI 支持按仓库持久化筛选，并默认过滤 Bot 提交的工作流运行（自动识别 dependabot[bot]、renovate[bot]、github-actions[bot] 及对应分支），避免自动化任务刷屏。",
+            "重写润色中文 README 并新增英文版 README.en.md，突出六大平台统一会话、本机 Codex 桌面协作、五平台实时 Hooks、GitHub CI 过滤与纵深防御清理；仓库补充 Dependabot 分组自动合并与 cargo-audit 缓存。",
+        ],
+        "fixes": [
+            "通知投递仅在队列入库时同步通道，移除每次 Bark／本机投递前的重复写事务；Claude Hook 复用已解析上下文并按需读取最新配置，单次完成 proof 哈希计算。",
+            "会话搜索、统一清理与无须统计体积的详情／列表入口改用免体积统计读取，移除重复的归档过滤与冗余来源判断。",
+            "GitHub CI 在禁用与限流提前返回前跳过冗余状态序列化；切换仓库筛选或 Bot 过滤时裁剪待发队列且不补发历史已完成运行。",
+        ],
+        "migration": [
+            "API 协议保持 2，数据库 schema 保持 3；保留会话、凭据、通知基线、去重与重试，不新增迁移。",
+            "GitHub CI 默认开启过滤 Bot（github_ci_filter_bots = true），可在 Probe 的 GitHub CI 卡片随时切换并保存。",
+            "支持新安装及已由 v2.1.0 完成迁移的配置；更早版本先升级至 v2.1.0，早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.8": {
         "summary": ["精简清理与会话读取，修复跨来源通知队列和配置更新后的投递"],
         "fixes": [
