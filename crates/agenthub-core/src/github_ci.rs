@@ -62,7 +62,7 @@ fn one() -> u64 {
     1
 }
 pub fn matches_repository_filter(repo: &Repository, repositories: &[String]) -> bool {
-    if repositories.is_empty() {
+    if !repositories.iter().any(|item| !item.trim().is_empty()) {
         return true;
     }
     let repo_id = repo.id.to_string();
@@ -75,7 +75,7 @@ pub fn matches_run_filter(run: &Run, repositories: &[String], filter_bots: bool)
     if filter_bots && run.is_bot {
         return false;
     }
-    if repositories.is_empty() {
+    if !repositories.iter().any(|item| !item.trim().is_empty()) {
         return true;
     }
     let repo_id = run.repository_id.to_string();
@@ -284,6 +284,27 @@ pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result
                     .snapshot
                     .runs
                     .retain(|run| matches_run_filter(run, after_repos, false));
+                let retained_repo_ids: HashSet<u64> = state
+                    .snapshot
+                    .repositories
+                    .iter()
+                    .filter(|repo| !repo.archived && matches_repository_filter(repo, after_repos))
+                    .map(|repo| repo.id)
+                    .chain(state.snapshot.runs.iter().map(|run| run.repository_id))
+                    .collect();
+                state
+                    .monitored_repo_ids
+                    .retain(|id| retained_repo_ids.contains(id));
+                if after_repos.iter().any(|entry| {
+                    let trimmed = entry.trim();
+                    !trimmed.is_empty()
+                        && !state.snapshot.repositories.iter().any(|repo| {
+                            trimmed.eq_ignore_ascii_case(&repo.full_name)
+                                || trimmed == repo.id.to_string()
+                        })
+                }) {
+                    state.repositories_at_ms = 0;
+                }
             }
             save(db, &state)?;
             if repos_changed && enabled(after) {
@@ -566,6 +587,7 @@ impl Monitor {
         let baseline = active && (!state.snapshot.enabled || state.baseline_ms == 0);
         let mut runs = Vec::new();
         let mut errors = Vec::new();
+        let mut scanned_repo_ids = HashSet::new();
         let configured_repos = &config.probe.notifications.github_ci_repositories;
         let repositories = state.snapshot.repositories.clone();
         for (index, repo) in repositories.iter().enumerate() {
@@ -574,7 +596,10 @@ impl Monitor {
             }
             let result = self.repository_runs(repo).await;
             match result {
-                Ok(mut incoming) => runs.append(&mut incoming),
+                Ok(mut incoming) => {
+                    scanned_repo_ids.insert(repo.id);
+                    runs.append(&mut incoming);
+                }
                 Err(e) => {
                     errors.push(format!("{}：{e}", repo.full_name));
                     runs.extend(
@@ -606,6 +631,9 @@ impl Monitor {
             }
         }
         reconcile_with_config(state, account, runs, config, active, baseline, time);
+        if active {
+            state.monitored_repo_ids.extend(scanned_repo_ids);
+        }
         if !errors.is_empty() {
             anyhow::bail!("{}", errors.join("；"));
         }
@@ -679,9 +707,16 @@ fn reconcile_with_config(
             .iter()
             .map(|event| (event.run.repository_id, event.run.id, event.run.run_attempt))
             .collect();
+        let has_monitored_baseline =
+            !state.monitored_repo_ids.is_empty() || !state.snapshot.repositories.is_empty();
         for run in &runs {
-            let repo_newly_monitored = !state.monitored_repo_ids.is_empty()
-                && !state.monitored_repo_ids.contains(&run.repository_id);
+            let repo_newly_monitored = has_monitored_baseline
+                && !state.monitored_repo_ids.contains(&run.repository_id)
+                && !state
+                    .snapshot
+                    .runs
+                    .iter()
+                    .any(|existing| existing.repository_id == run.repository_id);
             if baseline
                 || repo_newly_monitored
                 || run.notification_kind().is_none()
@@ -701,17 +736,14 @@ fn reconcile_with_config(
                 });
             }
         }
-        let next_monitored: HashSet<u64> = state
-            .snapshot
-            .repositories
-            .iter()
-            .filter(|repo| !repo.archived && matches_repository_filter(repo, repositories))
-            .map(|repo| repo.id)
-            .chain(runs.iter().map(|run| run.repository_id))
-            .collect();
-        if !next_monitored.is_empty() {
-            state.monitored_repo_ids = next_monitored;
-        }
+        state.monitored_repo_ids.retain(|id| {
+            state.snapshot.repositories.iter().any(|repo| {
+                repo.id == *id && !repo.archived && matches_repository_filter(repo, repositories)
+            })
+        });
+        state
+            .monitored_repo_ids
+            .extend(runs.iter().map(|run| run.repository_id));
     }
     retain_summaries(&mut runs);
     let current: HashSet<_> = runs

@@ -867,7 +867,25 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
     settings_changed(&fixture.db, &config, &expanded_config).unwrap();
     assert!(request_ms(&fixture.db).unwrap() > 0);
 
-    // First scan of newly added fixture/other must baseline its already-completed run (id 20) without firing a notification.
+    // If the first poll of newly added fixture/other fails, it must NOT be marked as baselined yet.
+    state = load(&fixture.db).unwrap();
+    server.reply(
+        other_runs_path,
+        500,
+        json!({"message": "temporary error"}),
+        "",
+    );
+    assert!(monitor
+        .scan_with_config(&mut state, &expanded_config, true, time + 1000)
+        .await
+        .is_err());
+    save(&fixture.db, &state).unwrap();
+
+    // First successful scan of newly added fixture/other must baseline its already-completed run (id 20) without firing a notification.
+    server.set(
+        other_runs_path,
+        json!({"workflow_runs": [other_completed, other_running]}),
+    );
     state = load(&fixture.db).unwrap();
     monitor
         .scan_with_config(&mut state, &expanded_config, true, time + 2000)
@@ -894,4 +912,18 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
     assert_eq!(state.pending.len(), 1);
     assert_eq!(state.pending[0].run.id, 21);
     assert_eq!(state.pending[0].run.repository_id, 11);
+
+    // Acknowledge the notification, then deselect and re-select fixture/other via settings_changed;
+    // re-adding fixture/other must not re-fire a duplicate notification for historical run 21.
+    save(&fixture.db, &state).unwrap();
+    let ack_key = state.pending[0].key();
+    acknowledge(&fixture.db, &[ack_key]).unwrap();
+    settings_changed(&fixture.db, &expanded_config, &config).unwrap();
+    settings_changed(&fixture.db, &config, &expanded_config).unwrap();
+    state = load(&fixture.db).unwrap();
+    monitor
+        .scan_with_config(&mut state, &expanded_config, true, time + 5000)
+        .await
+        .unwrap();
+    assert!(state.pending.is_empty());
 }

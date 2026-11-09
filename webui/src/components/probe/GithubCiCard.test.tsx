@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 import {
   GithubCiCard,
+  addRepositorySelection,
   buildRepositoryCatalog,
   ciRunStatus,
   toggleRepositorySelection,
@@ -58,6 +59,21 @@ test("CI card reflects subset repository selection and bot badge when filterBots
   expect(markup).toContain("只监控 1 个仓库");
   expect(markup).toContain("4 次运行");
   expect(markup).toContain("Bot");
+
+  const blankDraft = buildProbeSettingsDraft({
+    notifications: {
+      notify_github_ci: true,
+      github_ci_filter_bots: true,
+      github_ci_repositories: ["   "],
+    } as any,
+  });
+  const blankMarkup = renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <GithubCiCard draft={blankDraft} setDraft={vi.fn()} saving={false} saveStatus={null} onSave={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  expect(blankMarkup).toContain("监控全部仓库");
+  expect(blankMarkup).not.toContain("只监控 1 个仓库");
 });
 test("CI error and empty states remain visible", () => {
   const client = new QueryClient();
@@ -111,4 +127,9 @@ test("CI shows at most twenty runs after single or multi-repository filtering", 
   expect(toggleRepositorySelection(catalog[0], [])).toEqual(["octocat/AgentHub"]);
   expect(toggleRepositorySelection(catalog[1], ["octocat/AgentHub"])).toEqual(["octocat/AgentHub", "octocat/other"]);
   expect(toggleRepositorySelection(catalog[0], ["OCTOCAT/agenthub", "octocat/other"])).toEqual(["octocat/other"]);
+  expect(addRepositorySelection("agenthub", catalog, ["  "])).toEqual(["octocat/AgentHub"]);
+  expect(addRepositorySelection("new-org/new-repo", catalog, ["octocat/AgentHub"])).toEqual([
+    "octocat/AgentHub",
+    "new-org/new-repo",
+  ]);
 });

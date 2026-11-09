@@ -124,6 +124,33 @@ export function toggleRepositorySelection(
   return [...configured.map(item => item.trim()).filter(Boolean), option.fullName];
 }
 
+export function addRepositorySelection(
+  query: string,
+  catalog: readonly GithubCiRepoOption[],
+  configured: readonly string[],
+): string[] {
+  const normalizedConfigured = configured.map(item => item.trim()).filter(Boolean);
+  const trimmed = query.trim();
+  if (!trimmed) return normalizedConfigured;
+  const lower = trimmed.toLowerCase();
+  const exact = catalog.find(
+    opt => opt.fullName.toLowerCase() === lower || opt.id.toLowerCase() === lower,
+  );
+  const partialMatches = exact
+    ? [exact]
+    : catalog.filter(opt => opt.fullName.toLowerCase().includes(lower));
+  const matched = exact ?? (partialMatches.length === 1 ? partialMatches[0] : undefined);
+  const targetName = matched ? matched.fullName : trimmed;
+  const alreadySelected = normalizedConfigured.some(item => {
+    const itemLower = item.toLowerCase();
+    return (
+      itemLower === targetName.toLowerCase() ||
+      Boolean(matched && itemLower === matched.id.toLowerCase())
+    );
+  });
+  return alreadySelected ? normalizedConfigured : [...normalizedConfigured, targetName];
+}
+
 export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
   draft: ProbeSettingsDraft | null;
   setDraft: (update: (current: ProbeSettingsDraft | null) => ProbeSettingsDraft | null) => void;
@@ -147,19 +174,18 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
   const data = query.data;
   const notifyEnabled = draft?.notifications.notify_github_ci ?? false;
   const filterBots = draft ? draft.notifications.github_ci_filter_bots : localFilterBots;
-  const configuredRepositories = draft
+  const rawRepositories = draft
     ? draft.notifications.github_ci_repositories
     : localRepositories;
+  const configuredRepositories = rawRepositories.map(item => item.trim()).filter(Boolean);
   const catalog = buildRepositoryCatalog(data?.repositories, data?.runs, configuredRepositories);
   const activeFilterTokens = configuredRepositories.flatMap(entry => {
-    const trimmed = entry.trim();
-    if (!trimmed) return [];
     const matched = catalog.find(
       opt =>
-        opt.fullName.toLowerCase() === trimmed.toLowerCase() ||
-        opt.id.toLowerCase() === trimmed.toLowerCase(),
+        opt.fullName.toLowerCase() === entry.toLowerCase() ||
+        opt.id.toLowerCase() === entry.toLowerCase(),
     );
-    return matched ? [matched.fullName, matched.id] : [trimmed];
+    return matched ? [matched.fullName, matched.id] : [entry];
   });
   const runs = visibleCiRuns(data?.runs ?? [], activeFilterTokens, filterBots);
   const busy = refresh.isPending || data?.refreshing || query.isLoading;
@@ -188,24 +214,8 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
   };
 
   const handleAddRepository = () => {
-    const trimmed = repoQuery.trim();
-    if (!trimmed) return;
-    const matched = catalog.find(
-      opt =>
-        opt.fullName.toLowerCase() === trimmed.toLowerCase() ||
-        opt.id.toLowerCase() === trimmed.toLowerCase(),
-    );
-    const targetName = matched ? matched.fullName : trimmed;
-    const alreadySelected = configuredRepositories.some(item => {
-      const lower = item.trim().toLowerCase();
-      return (
-        lower === targetName.toLowerCase() ||
-        Boolean(matched && lower === matched.id.toLowerCase())
-      );
-    });
-    if (!alreadySelected) {
-      updateRepositories([...configuredRepositories, targetName]);
-    }
+    if (!repoQuery.trim()) return;
+    updateRepositories(addRepositorySelection(repoQuery, catalog, configuredRepositories));
     setRepoQuery("");
   };
 
