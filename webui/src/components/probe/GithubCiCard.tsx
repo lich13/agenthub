@@ -24,11 +24,14 @@ export function ciRunStatus(run: GithubCiRun) {
 }
 
 export function visibleCiRuns(runs: GithubCiRun[], repository: string, filterBots = false) {
+  const normalizedRepo = repository.trim().toLowerCase();
   return runs
     .filter(
       run =>
         (!filterBots || !run.is_bot) &&
-        (!repository || String(run.repository_id) === repository || run.repository_name === repository),
+        (!normalizedRepo ||
+          String(run.repository_id) === normalizedRepo ||
+          run.repository_name.toLowerCase() === normalizedRepo),
     )
     .slice(0, 20);
 }
@@ -53,13 +56,16 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
     onSuccess: data => qc.setQueryData(queryKey, data),
   });
   const data = query.data;
-  const configuredRepository = draft?.notifications.github_ci_repositories[0] ?? repository;
+  const configuredRepository = (draft ? draft.notifications.github_ci_repositories[0] ?? "" : repository).trim();
   const matchedRepository = data?.repositories.find(
-    repo => String(repo.id) === configuredRepository || repo.full_name === configuredRepository,
+    repo =>
+      String(repo.id) === configuredRepository ||
+      repo.full_name.toLowerCase() === configuredRepository.toLowerCase(),
   );
   const selectedRepository = matchedRepository ? String(matchedRepository.id) : "";
+  const activeRepositoryFilter = draft ? selectedRepository || configuredRepository : selectedRepository;
   const filterBots = draft ? draft.notifications.github_ci_filter_bots : localFilterBots;
-  const runs = visibleCiRuns(data?.runs ?? [], selectedRepository, filterBots);
+  const runs = visibleCiRuns(data?.runs ?? [], activeRepositoryFilter, filterBots);
   const busy = refresh.isPending || data?.refreshing || query.isLoading;
   const error = refresh.error?.message ?? query.error?.message ?? data?.error;
 

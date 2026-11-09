@@ -58,6 +58,22 @@ Direct deletion from session lists and "Updates & Maintenance → Cross-Platform
 3. **Per-Item Reporting & Stop-on-Failure**: Direct batch operations report per-item successes, failures, and residuals; Antigravity/DSH subtree failures halt further deletion in that subtree, and unified cleanup stops on the first failure without rolling back already deleted items.
 4. **Dedicated Scope & Symlink Isolation**: Only verified session files and dedicated sidecars are removed while updating shared indices; symlinks remove only the link itself and never traverse into external targets.
 
+## Probe Notification Engine & 5-Platform Hooks
+
+Probe exposes controls, status indicators, error diagnostics, event records, and confirmation objects; "Live Cross-Platform Posture" displays the aggregated overview capped at 12 recent items in the frontend.
+
+Bark notifications follow a unified `Provider｜Status｜Thread Title` format (`Completed`, `Reply Needed`, `Authorization Needed`, `Failed`), with bodies distilled to at most 4 non-empty lines and 300 Unicode characters stripped of Markdown, code blocks, tool outputs, and internal metadata.
+
+- **Per-Provider Notification Switches**: Toggle each provider independently on the Probe home view. Grok Bot is disabled by default and notifies only for local pending reply/authorization prompts without inferring completions or failures; cache eviction, replacement, re-enabling, and restarts never replay stale alerts. Antigravity and DSH notifications also operate locally.
+- **4-Platform Real-Time Hooks + DSH Native Stream**:
+  - **Codex**: Manages the Stop Hook in `~/.codex/hooks.json` with per-question identification and deduplication;
+  - **Claude Code**: Manages `Stop`, `Notification`, and `StopFailure` hooks in `~/.claude/settings.json`;
+  - **Grok Build**: Manages `~/.grok/hooks/agenthub.json`, reducing completion, failure, and reply-needed latency from 15s polling to `<1s` callbacks while retaining 15s polling as a fallback;
+  - **Antigravity**: Manages the `"agenthub"` namespaced `Stop` hook in `~/.gemini/config/hooks.json` (returning `{"decision":"allow"}` immediately without blocking the IDE) for sub-second turn-end delivery deduplicated with 15s Language Server polling;
+  - **DeepSeek Harness**: Monitors native `session.lock` and `.zstd`/v4 JSONL incremental streams plus `turn/end` settlement directly without external hook files.
+- **Transport Safety & Bounded Retries**: Bark accepts only HTTPS endpoints or HTTP loopback addresses; transient network failures retry with bounded backoff, preserving queued items and unconfirmed chunks across upgrades and restarts. Initial enablement or re-enablement establishes a fresh baseline without replaying historical events.
+- **Encrypted Payloads & Deduplication Retention**: Pending notification bodies are encrypted at rest and scrubbed upon terminal delivery, while retention pruning preserves deduplication identities needed by active cursors.
+
 ## Running & Deployment
 
 ### Local macOS App

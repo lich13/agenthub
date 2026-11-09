@@ -13,7 +13,11 @@ updates:
     versioning-strategy: lockfile-only
     allow:
       - dependency-type: all
-        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'tauri*'
+        update-types: ['version-update:semver-minor']
     groups:
       rust-compatible:
         applies-to: version-updates
@@ -35,7 +39,9 @@ updates:
     open-pull-requests-limit: 1
     allow:
       - dependency-type: all
-        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
       frontend-compatible:
         applies-to: version-updates
@@ -57,7 +63,9 @@ updates:
     open-pull-requests-limit: 1
     allow:
       - dependency-type: all
-        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
       actions-compatible:
         applies-to: version-updates

@@ -65,9 +65,12 @@ def problems(data, private_values, scan_endpoint_literals=True):
         except ValueError:
             pass
     for match in (() if native_binary else RULES["email"].finditer(text)):
-        if re.fullmatch(r"\d+x\d+@\d+x\.png", match.group()):
+        address = match.group(0).lower()
+        if re.fullmatch(r"\d+x\d+@\d+x\.png", address) or address in {"noreply@github.com", "support@github.com"}:
             continue
         host = match.group(2).lower()
+        if ".." in host:
+            continue
         if host != "users.noreply.github.com" and not any(host == h or host.endswith("." + h) for h in EXAMPLE_HOSTS):
             found.add("private_email")
     for match in (() if native_binary or not scan_endpoint_literals else RULES["url"].finditer(text)):
@@ -154,7 +157,7 @@ def scan():
                 elif kind in ("commit", "tag"):
                     check("git:" + oid, data)
                     for email in re.findall(rb"^(?:author|committer|tagger) .* <([^>]+)>", data, re.M):
-                        if not email.endswith(b"@users.noreply.github.com"):
+                        if not email.endswith(b"@users.noreply.github.com") and email != b"noreply@github.com":
                             failures.append({"source": "git:" + oid, "rule": "commit_identity"})
     for directory in args.payload:
         if not directory.is_dir():

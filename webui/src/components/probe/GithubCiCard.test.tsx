@@ -54,7 +54,8 @@ test("CI shows at most twenty runs after repository filtering", () => {
   const withBots = [
     { ...sample, id: 101, repository_id: 1, repository_name: "octocat/AgentHub", is_bot: true },
     { ...sample, id: 102, repository_id: 1, repository_name: "octocat/AgentHub", is_bot: false },
+    { ...sample, id: 103, repository_id: 2, repository_name: "octocat/other", is_bot: false },
   ];
-  expect(visibleCiRuns(withBots, "octocat/AgentHub", true).map(run => run.id)).toEqual([102]);
+  expect(visibleCiRuns(withBots, "OCTOCAT/agenthub", true).map(run => run.id)).toEqual([102]);
   expect(visibleCiRuns(withBots, "octocat/AgentHub", false).map(run => run.id)).toEqual([101, 102]);
 });

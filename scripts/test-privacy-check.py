@@ -235,7 +235,11 @@ class PrivacyCommandChecks(unittest.TestCase):
     def test_git_objects_accept_clean_noreply_history(self):
         self.write(self.root / "content.txt", "https://service.example.invalid/\n")
         self.git("add", "content.txt")
-        self.git("commit", "--quiet", "-m", "Clean synthetic history")
+        self.git("commit", "--quiet", "-m", "Clean synthetic history\n\nmicromark@2.0.3...micromark@2.0.4\nSigned-off-by: dependabot[bot] <support@github.com>", env={
+            "GIT_AUTHOR_EMAIL": "49699333+dependabot[bot]@users.noreply.github.com",
+            "GIT_COMMITTER_NAME": "GitHub",
+            "GIT_COMMITTER_EMAIL": "noreply@github.com",
+        })
         self.git("tag", "--annotate", "fixture-clean", "--message", "Clean synthetic tag")
 
         report = self.report(self.run_check("--git-objects"), 0)
