@@ -55,9 +55,68 @@ pub struct Run {
     pub repository_id: u64,
     #[serde(default)]
     pub repository_name: String,
+    #[serde(default)]
+    pub is_bot: bool,
 }
 fn one() -> u64 {
     1
+}
+pub fn matches_run_filter(run: &Run, repositories: &[String], filter_bots: bool) -> bool {
+    if filter_bots && run.is_bot {
+        return false;
+    }
+    if repositories.is_empty() {
+        return true;
+    }
+    let repo_id = run.repository_id.to_string();
+    repositories.iter().any(|item| {
+        let trimmed = item.trim();
+        !trimmed.is_empty()
+            && (trimmed.eq_ignore_ascii_case(&run.repository_name) || trimmed == repo_id)
+    })
+}
+fn is_bot_identity(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    lower.ends_with("[bot]")
+        || matches!(lower.as_str(), "dependabot" | "renovate" | "github-actions")
+}
+pub(crate) fn detect_bot_run(raw: &serde_json::Value) -> bool {
+    for actor_key in ["actor", "triggering_actor"] {
+        if let Some(actor) = raw.get(actor_key) {
+            if actor
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("bot"))
+            {
+                return true;
+            }
+            if actor
+                .get("login")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_bot_identity)
+            {
+                return true;
+            }
+        }
+    }
+    if let Some(commit) = raw.get("head_commit") {
+        for role in ["author", "committer"] {
+            if commit
+                .get(role)
+                .and_then(|person| person.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_bot_identity)
+            {
+                return true;
+            }
+        }
+    }
+    raw.get("head_branch")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|branch| {
+            let lower = branch.trim().to_ascii_lowercase();
+            lower.starts_with("dependabot/") || lower.starts_with("renovate/")
+        })
 }
 impl Run {
     pub fn notification_kind(&self) -> Option<&'static str> {
@@ -176,7 +235,10 @@ pub fn status(db: &PanelDb, config: &Config, options: Request) -> Result<Snapsho
 }
 pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<bool> {
     let state = load(db)?;
+    let repositories = &config.probe.notifications.github_ci_repositories;
+    let filter_bots = config.probe.notifications.github_ci_filter_bots;
     Ok(enabled(config)
+        && matches_run_filter(&event.run, repositories, filter_bots)
         && event.observed_ms >= state.baseline_ms
         && state.snapshot.enabled
         && state.snapshot.account.as_ref() == Some(&event.account)
@@ -186,10 +248,26 @@ pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<boo
                 && r.run_attempt == event.run.run_attempt
                 && r.status == "completed"
                 && r.conclusion == event.run.conclusion
+                && matches_run_filter(r, repositories, filter_bots)
         }))
 }
 pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result<()> {
     if enabled(before) == enabled(after) {
+        if before.probe.notifications.github_ci_repositories
+            != after.probe.notifications.github_ci_repositories
+            || before.probe.notifications.github_ci_filter_bots
+                != after.probe.notifications.github_ci_filter_bots
+        {
+            let mut state = load(db)?;
+            state.pending.retain(|event| {
+                matches_run_filter(
+                    &event.run,
+                    &after.probe.notifications.github_ci_repositories,
+                    after.probe.notifications.github_ci_filter_bots,
+                )
+            });
+            save(db, &state)?;
+        }
         return Ok(());
     }
     let mut state = load(db)?;
@@ -217,10 +295,6 @@ pub fn acknowledge(db: &PanelDb, keys: &[String]) -> Result<()> {
     save(db, &state)
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct RunPage {
-    workflow_runs: Vec<Run>,
-}
 struct Cached {
     etag: Option<String>,
     value: serde_json::Value,
@@ -306,7 +380,8 @@ impl Monitor {
                 self.cache.clear();
                 self.token = token;
             }
-            self.scan(&mut state, active, time).await
+            self.scan_with_config(&mut state, config, active, time)
+                .await
         }
         .await;
         // Settings may reset the baseline while GitHub is responding. A refresh,
@@ -417,7 +492,18 @@ impl Monitor {
         );
         Ok((value, next))
     }
+    #[cfg(test)]
     async fn scan(&mut self, state: &mut Stored, active: bool, time: i64) -> Result<()> {
+        self.scan_with_config(state, &Config::default(), active, time)
+            .await
+    }
+    async fn scan_with_config(
+        &mut self,
+        state: &mut Stored,
+        config: &Config,
+        active: bool,
+        time: i64,
+    ) -> Result<()> {
         let (account, _) = self.get::<Account>("/user").await?;
         let changed = state
             .snapshot
@@ -491,7 +577,7 @@ impl Monitor {
                 }
             }
         }
-        reconcile(state, account, runs, active, baseline, time);
+        reconcile_with_config(state, account, runs, config, active, baseline, time);
         if !errors.is_empty() {
             anyhow::bail!("{}", errors.join("；"));
         }
@@ -499,30 +585,57 @@ impl Monitor {
     }
     async fn repository_runs(&mut self, repo: &Repository) -> Result<Vec<Run>> {
         let (page, _) = self
-            .get::<RunPage>(&format!(
+            .get::<serde_json::Value>(&format!(
                 "/repos/{}/actions/runs?per_page=10",
                 repo.full_name
             ))
             .await?;
-        Ok(page
-            .workflow_runs
-            .into_iter()
-            .map(|mut run| {
-                run.repository_id = repo.id;
-                run.repository_name = repo.full_name.clone();
-                run
-            })
-            .collect())
+        let raw_runs = page
+            .get("workflow_runs")
+            .and_then(serde_json::Value::as_array)
+            .context("GitHub 响应格式错误")?;
+        let mut runs = Vec::with_capacity(raw_runs.len());
+        for raw_run in raw_runs {
+            let mut run: Run = serde_json::from_value(raw_run.clone())
+                .map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
+            run.repository_id = repo.id;
+            run.repository_name = repo.full_name.clone();
+            run.is_bot = run.is_bot || detect_bot_run(raw_run);
+            runs.push(run);
+        }
+        Ok(runs)
     }
 }
+#[cfg(test)]
 fn reconcile(
     state: &mut Stored,
     account: Account,
-    mut runs: Vec<Run>,
+    runs: Vec<Run>,
     active: bool,
     baseline: bool,
     time: i64,
 ) {
+    reconcile_with_config(
+        state,
+        account,
+        runs,
+        &Config::default(),
+        active,
+        baseline,
+        time,
+    );
+}
+fn reconcile_with_config(
+    state: &mut Stored,
+    account: Account,
+    mut runs: Vec<Run>,
+    config: &Config,
+    active: bool,
+    baseline: bool,
+    time: i64,
+) {
+    let repositories = &config.probe.notifications.github_ci_repositories;
+    let filter_bots = config.probe.notifications.github_ci_filter_bots;
     if !active {
         state.pending.clear();
         state.baseline_ms = 0;
@@ -538,7 +651,10 @@ fn reconcile(
             .map(|event| (event.run.repository_id, event.run.id, event.run.run_attempt))
             .collect();
         for run in &runs {
-            if baseline || run.notification_kind().is_none() {
+            if baseline
+                || run.notification_kind().is_none()
+                || !matches_run_filter(run, repositories, filter_bots)
+            {
                 continue;
             }
             let newly_finished = previous.get(&(run.repository_id, run.id)).map_or_else(
@@ -567,12 +683,13 @@ fn reconcile(
         })
         .collect();
     state.pending.retain(|e| {
-        current.contains(&(
-            e.run.repository_id,
-            e.run.id,
-            e.run.run_attempt,
-            e.run.conclusion.as_deref(),
-        ))
+        matches_run_filter(&e.run, repositories, filter_bots)
+            && current.contains(&(
+                e.run.repository_id,
+                e.run.id,
+                e.run.run_attempt,
+                e.run.conclusion.as_deref(),
+            ))
     });
     state.snapshot.runs = runs;
     state.snapshot.account = Some(account);

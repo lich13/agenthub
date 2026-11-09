@@ -90,3 +90,34 @@ fn presentation_includes_source_workflow_branch_and_distinct_result() {
         assert_eq!(body, "fixture-host\nBuild\nmain · 0123456");
     }
 }
+
+#[test]
+fn filtered_observation_skips_bots_and_unselected_repos_without_retrigger_on_unfilter() {
+    let mut observer = Observer::default();
+    let mut state = snapshot();
+    assert!(observer
+        .observe_filtered(0, &state, &["fixture/repo".into()], true)
+        .is_empty());
+
+    state.last_scan_ms += 1;
+    let mut bot_run = run(2, "completed", Some("failure"), 1);
+    bot_run.is_bot = true;
+    state.runs[1] = bot_run;
+    assert!(observer
+        .observe_filtered(0, &state, &["fixture/repo".into()], true)
+        .is_empty());
+
+    // Disabling bot filter on the next tick must not re-fire the already-completed bot run.
+    state.last_scan_ms += 1;
+    assert!(observer
+        .observe_filtered(0, &state, &["fixture/repo".into()], false)
+        .is_empty());
+
+    // A new attempt on an unselected repository is tracked without emitting an event.
+    state.last_scan_ms += 1;
+    state.runs[1].is_bot = false;
+    state.runs[1].run_attempt = 2;
+    assert!(observer
+        .observe_filtered(0, &state, &["fixture/other".into()], true)
+        .is_empty());
+}

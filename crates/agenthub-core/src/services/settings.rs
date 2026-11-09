@@ -93,6 +93,10 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_grokbot: bool,
     #[serde(default)]
     pub notify_github_ci: bool,
+    #[serde(default)]
+    pub github_ci_repositories: Vec<String>,
+    #[serde(default = "default_true")]
+    pub github_ci_filter_bots: bool,
     pub notify_grok_completion: bool,
     pub notify_grok_failure: bool,
     pub notify_grok_reply_needed: bool,
@@ -110,6 +114,10 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_dsh_failure: bool,
     pub notify_dsh_reply_needed: bool,
     pub notify_dsh_authorization: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -> SettingsView {
@@ -161,6 +169,8 @@ pub fn probe_notifications_settings_view(
         notify_grok: notifications.notify_grok,
         notify_grokbot: notifications.notify_grokbot,
         notify_github_ci: notifications.notify_github_ci,
+        github_ci_repositories: notifications.github_ci_repositories.clone(),
+        github_ci_filter_bots: notifications.github_ci_filter_bots,
         notify_grok_completion: notifications.notify_grok_completion,
         notify_grok_failure: notifications.notify_grok_failure,
         notify_grok_reply_needed: notifications.notify_grok_reply_needed,
@@ -218,6 +228,12 @@ pub fn merge_probe_notification_patch(
     }
     if source.notify_github_ci.is_some() {
         target.notify_github_ci = source.notify_github_ci;
+    }
+    if source.github_ci_repositories.is_some() {
+        target.github_ci_repositories = source.github_ci_repositories;
+    }
+    if source.github_ci_filter_bots.is_some() {
+        target.github_ci_filter_bots = source.github_ci_filter_bots;
     }
     if source.notify_grokbot.is_some() {
         target.notify_grokbot = source.notify_grokbot;
@@ -319,6 +335,8 @@ pub struct ProbeNotificationsSavePatch {
     pub notify_grok: Option<bool>,
     pub notify_grokbot: Option<bool>,
     pub notify_github_ci: Option<bool>,
+    pub github_ci_repositories: Option<Vec<String>>,
+    pub github_ci_filter_bots: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -481,6 +499,8 @@ impl ProbeNotificationsSavePatch {
                 notify_grok: self.notify_grok,
                 notify_grokbot: self.notify_grokbot,
                 notify_github_ci: self.notify_github_ci,
+                github_ci_repositories: self.github_ci_repositories,
+                github_ci_filter_bots: self.github_ci_filter_bots,
                 notify_grok_completion: self.notify_grok_completion,
                 notify_grok_failure: self.notify_grok_failure,
                 notify_grok_reply_needed: self.notify_grok_reply_needed,
@@ -536,6 +556,8 @@ fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> 
         && patch.notify_recoverable.is_none()
         && patch.notify_codex.is_none()
         && patch.notify_github_ci.is_none()
+        && patch.github_ci_repositories.is_none()
+        && patch.github_ci_filter_bots.is_none()
         && patch.notify_grokbot.is_none()
         && patch.notify_grok.is_none()
         && patch.notify_grok_completion.is_none()
@@ -615,6 +637,11 @@ fn normalize_probe_notifications_patch(
         } else {
             group.to_string()
         });
+    }
+    if let Some(repositories) = patch.github_ci_repositories.take() {
+        patch.github_ci_repositories = Some(crate::config::normalize_github_ci_repositories(
+            repositories,
+        ));
     }
     patch.sound = normalize_optional_nullable_string(patch.sound);
     patch.url = normalize_optional_nullable_string(patch.url);

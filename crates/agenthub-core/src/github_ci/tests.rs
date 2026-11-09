@@ -50,6 +50,7 @@ fn run(id: u64, status: &str, conclusion: Option<&str>, attempt: u64, time: i64)
             .to_rfc3339(),
         repository_id: 10,
         repository_name: "fixture/repo".into(),
+        is_bot: false,
     }
 }
 #[test]
@@ -690,4 +691,115 @@ fn cached_status_never_requests_scan_and_exposes_monitor_baseline() {
         123
     );
     assert!(fixture.db.get_setting(REFRESH).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_on_toggle() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let time = 1_800_000_000_000;
+    let repo = Repository {
+        id: 10,
+        full_name: "fixture/repo".into(),
+        archived: false,
+    };
+    let path = "/repos/fixture/repo/actions/runs?per_page=10";
+    server.reply(
+        path,
+        200,
+        json!({
+            "workflow_runs": [
+                {
+                    "id": 1,
+                    "run_attempt": 1,
+                    "name": "CI",
+                    "head_branch": "dependabot/cargo/serde-1.0",
+                    "head_sha": "0123456789",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "https://github.com/fixture/repo/actions/runs/1",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": chrono::DateTime::from_timestamp_millis(time + 1000).unwrap().to_rfc3339(),
+                    "actor": { "login": "dependabot[bot]", "type": "Bot" }
+                },
+                {
+                    "id": 2,
+                    "run_attempt": 1,
+                    "name": "CI",
+                    "head_branch": "main",
+                    "head_sha": "abcdef0123",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "html_url": "https://github.com/fixture/repo/actions/runs/2",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": chrono::DateTime::from_timestamp_millis(time + 1000).unwrap().to_rfc3339(),
+                    "actor": { "login": "alice", "type": "User" }
+                }
+            ]
+        }),
+        "ETag: \"bot-runs\"\r\n",
+    );
+    let mut monitor = server.monitor();
+    let first = monitor.repository_runs(&repo).await.unwrap();
+    assert_eq!(first.len(), 2);
+    assert!(first[0].is_bot);
+    assert!(!first[1].is_bot);
+
+    // 304 Not Modified preserves raw JSON and re-derives is_bot accurately.
+    server.reply(path, 304, json!(null), "");
+    let cached = monitor.repository_runs(&repo).await.unwrap();
+    assert!(cached[0].is_bot);
+    assert!(!cached[1].is_bot);
+
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    assert!(config.probe.notifications.github_ci_filter_bots);
+
+    let mut state = Stored {
+        baseline_ms: time,
+        snapshot: Snapshot {
+            enabled: true,
+            account: Some(account()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    reconcile_with_config(
+        &mut state,
+        account(),
+        cached.clone(),
+        &config,
+        true,
+        false,
+        time + 2000,
+    );
+    // Only the non-bot run is queued in pending, while both remain in snapshot.runs.
+    assert_eq!(state.snapshot.runs.len(), 2);
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending[0].run.id, 2);
+
+    // Turning off filter_bots on subsequent poll must not trigger a historical storm for run 1
+    // because run 1 was already recorded as completed in state.snapshot.runs.
+    config.probe.notifications.github_ci_filter_bots = false;
+    reconcile_with_config(
+        &mut state,
+        account(),
+        cached,
+        &config,
+        true,
+        false,
+        time + 3000,
+    );
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending[0].run.id, 2);
+
+    // Selecting another repository prunes pending events via settings_changed without resetting baseline.
+    save(&fixture.db, &state).unwrap();
+    let mut filtered_config = config.clone();
+    filtered_config.probe.notifications.github_ci_repositories = vec!["fixture/other".into()];
+    settings_changed(&fixture.db, &config, &filtered_config).unwrap();
+    assert!(!event_current(&fixture.db, &filtered_config, &state.pending[0]).unwrap());
+    let updated = load(&fixture.db).unwrap();
+    assert_eq!(updated.baseline_ms, time);
+    assert!(updated.pending.is_empty());
 }

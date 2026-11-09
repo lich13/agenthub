@@ -51,4 +51,10 @@ test("CI shows at most twenty runs after repository filtering", () => {
   expect(visibleCiRuns(runs, "").map(run => run.id)).toEqual(Array.from({ length: 20 }, (_, i) => i));
   expect(visibleCiRuns(runs, "4").map(run => run.id)).toEqual(Array.from({ length: 10 }, (_, i) => i + 30));
   expect(visibleCiRuns([], "")).toEqual([]);
+  const withBots = [
+    { ...sample, id: 101, repository_id: 1, repository_name: "octocat/AgentHub", is_bot: true },
+    { ...sample, id: 102, repository_id: 1, repository_name: "octocat/AgentHub", is_bot: false },
+  ];
+  expect(visibleCiRuns(withBots, "octocat/AgentHub", true).map(run => run.id)).toEqual([102]);
+  expect(visibleCiRuns(withBots, "octocat/AgentHub", false).map(run => run.id)).toEqual([101, 102]);
 });

@@ -552,6 +552,8 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grokbot?: boolean;
       notify_github_ci?: boolean;
+      github_ci_repositories?: string[];
+      github_ci_filter_bots?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -594,6 +596,8 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grokbot?: boolean;
       notify_github_ci?: boolean;
+      github_ci_repositories?: string[];
+      github_ci_filter_bots?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
       notify_grok_reply_needed?: boolean;
@@ -704,6 +708,7 @@ export type GithubCiRun = {
   updated_at: string;
   repository_id: number;
   repository_name: string;
+  is_bot?: boolean;
 };
 export type GithubCiRequest = { refresh?: boolean; cached_only?: boolean };
 export type GithubCiStatus = {

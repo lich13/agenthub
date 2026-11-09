@@ -86,6 +86,10 @@ pub struct ProbeNotificationsConfig {
     pub notify_grokbot: bool,
     #[serde(default)]
     pub notify_github_ci: bool,
+    #[serde(default)]
+    pub github_ci_repositories: Vec<String>,
+    #[serde(default = "default_true")]
+    pub github_ci_filter_bots: bool,
     #[serde(default = "default_true")]
     pub notify_grok_completion: bool,
     #[serde(default = "default_true")]
@@ -183,6 +187,8 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_grok: Option<bool>,
     pub notify_grokbot: Option<bool>,
     pub notify_github_ci: Option<bool>,
+    pub github_ci_repositories: Option<Vec<String>>,
+    pub github_ci_filter_bots: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
     pub notify_grok_reply_needed: Option<bool>,
@@ -287,6 +293,8 @@ impl Default for ProbeNotificationsConfig {
             notify_grok: true,
             notify_grokbot: false,
             notify_github_ci: false,
+            github_ci_repositories: Vec::new(),
+            github_ci_filter_bots: true,
             notify_grok_completion: true,
             notify_grok_failure: true,
             notify_grok_reply_needed: true,
@@ -599,6 +607,9 @@ impl ProbeConfig {
         if group.is_empty() {
             self.notifications.group = default_probe_notification_group();
         }
+        self.notifications.github_ci_repositories = normalize_github_ci_repositories(
+            std::mem::take(&mut self.notifications.github_ci_repositories),
+        );
         self.observability.event_retention_days =
             self.observability.event_retention_days.clamp(1, 3_650);
         self.observability.hook_event_max_lines =
@@ -607,6 +618,21 @@ impl ProbeConfig {
             self.observability.hook_cooldown_max_lines.clamp(10, 10_000);
         self.observability.log_max_bytes = self.observability.log_max_bytes.clamp(4_096, 8_388_608);
     }
+}
+
+pub(crate) fn normalize_github_ci_repositories(items: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for item in items {
+        let trimmed = item.trim();
+        if !trimmed.is_empty()
+            && !normalized
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(trimmed))
+        {
+            normalized.push(trimmed.to_string());
+        }
+    }
+    normalized
 }
 
 fn env_file_value(text: &str, key: &str) -> Option<String> {
@@ -769,6 +795,16 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 "probe.notifications",
                 "notify_github_ci",
                 notifications.notify_github_ci,
+            );
+            editor.set_string_array(
+                "probe.notifications",
+                "github_ci_repositories",
+                notifications.github_ci_repositories.as_deref(),
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "github_ci_filter_bots",
+                notifications.github_ci_filter_bots,
             );
             editor.set_bool(
                 "probe.notifications",
@@ -971,6 +1007,23 @@ impl TomlPatchEditor {
 
     fn set_string(&mut self, section: &str, key: &str, value: Option<&str>) {
         self.set_value(section, key, value.map(toml_string));
+    }
+
+    fn set_string_array(&mut self, section: &str, key: &str, value: Option<&[String]>) {
+        self.set_value(
+            section,
+            key,
+            value.map(|items| {
+                format!(
+                    "[{}]",
+                    items
+                        .iter()
+                        .map(|item| toml_string(item))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }),
+        );
     }
 
     fn set_bool(&mut self, section: &str, key: &str, value: Option<bool>) {

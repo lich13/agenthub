@@ -27,6 +27,8 @@ export type ProbeSettingsDraft = {
     notify_grok: boolean;
     notify_grokbot: boolean;
     notify_github_ci: boolean;
+    github_ci_repositories: string[];
+    github_ci_filter_bots: boolean;
     notify_grok_completion: boolean;
     notify_grok_failure: boolean;
     notify_grok_reply_needed: boolean;
@@ -96,6 +98,10 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_grok: n.notify_grok !== false,
       notify_grokbot: n.notify_grokbot === true,
       notify_github_ci: n.notify_github_ci === true,
+      github_ci_repositories: Array.isArray(n.github_ci_repositories)
+        ? n.github_ci_repositories.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+        : [],
+      github_ci_filter_bots: n.github_ci_filter_bots !== false,
       notify_grok_completion: n.notify_grok_completion !== false,
       notify_grok_failure: n.notify_grok_failure !== false,
       notify_grok_reply_needed: n.notify_grok_reply_needed !== false,
@@ -155,6 +161,8 @@ export function buildProbeSettingsPayload(
     notify_grok: n.notify_grok,
     notify_grokbot: n.notify_grokbot,
     notify_github_ci: n.notify_github_ci,
+    github_ci_repositories: n.github_ci_repositories.map(v => v.trim()).filter(Boolean),
+    github_ci_filter_bots: n.github_ci_filter_bots,
     notify_grok_completion: n.notify_grok_completion,
     notify_grok_failure: n.notify_grok_failure,
     notify_grok_reply_needed: n.notify_grok_reply_needed,

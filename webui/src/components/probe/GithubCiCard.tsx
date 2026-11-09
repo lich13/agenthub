@@ -23,8 +23,14 @@ export function ciRunStatus(run: GithubCiRun) {
   return { label: labels[state] ?? state, tone };
 }
 
-export function visibleCiRuns(runs: GithubCiRun[], repository: string) {
-  return runs.filter(run => !repository || String(run.repository_id) === repository).slice(0, 20);
+export function visibleCiRuns(runs: GithubCiRun[], repository: string, filterBots = false) {
+  return runs
+    .filter(
+      run =>
+        (!filterBots || !run.is_bot) &&
+        (!repository || String(run.repository_id) === repository || run.repository_name === repository),
+    )
+    .slice(0, 20);
 }
 
 export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
@@ -35,6 +41,7 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
   onSave: () => void;
 }) {
   const [repository, setRepository] = useState("");
+  const [localFilterBots, setLocalFilterBots] = useState(true);
   const qc = useQueryClient();
   const query = useQuery({
     queryKey,
@@ -46,8 +53,13 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
     onSuccess: data => qc.setQueryData(queryKey, data),
   });
   const data = query.data;
-  const selectedRepository = data?.repositories.some(repo => String(repo.id) === repository) ? repository : "";
-  const runs = visibleCiRuns(data?.runs ?? [], selectedRepository);
+  const configuredRepository = draft?.notifications.github_ci_repositories[0] ?? repository;
+  const matchedRepository = data?.repositories.find(
+    repo => String(repo.id) === configuredRepository || repo.full_name === configuredRepository,
+  );
+  const selectedRepository = matchedRepository ? String(matchedRepository.id) : "";
+  const filterBots = draft ? draft.notifications.github_ci_filter_bots : localFilterBots;
+  const runs = visibleCiRuns(data?.runs ?? [], selectedRepository, filterBots);
   const busy = refresh.isPending || data?.refreshing || query.isLoading;
   const error = refresh.error?.message ?? query.error?.message ?? data?.error;
 
@@ -69,6 +81,22 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
               } : current);
             }} />
         </label>
+        <button
+          type="button"
+          className="secondary-button"
+          aria-pressed={filterBots}
+          disabled={saving}
+          onClick={() => {
+            const next = !filterBots;
+            setLocalFilterBots(next);
+            setDraft(current => current ? {
+              ...current,
+              notifications: { ...current.notifications, github_ci_filter_bots: next },
+            } : current);
+          }}
+        >
+          过滤 Bot
+        </button>
         <button className="primary-button" disabled={!draft || saving} onClick={onSave}>
           <CheckCircle2 size={16} />{saving ? "保存中" : "保存"}
         </button>
@@ -78,7 +106,20 @@ export function GithubCiCard({ draft, setDraft, saving, saveStatus, onSave }: {
         </button>
       </div>
       <div className="github-ci-filter field-label">
-        <select aria-label="筛选 CI 仓库" value={selectedRepository} onChange={event => setRepository(event.target.value)}>
+        <select
+          aria-label="筛选 CI 仓库"
+          value={selectedRepository}
+          onChange={event => {
+            const value = event.target.value;
+            setRepository(value);
+            const repo = data?.repositories.find(item => String(item.id) === value);
+            const nextRepositories = value ? [repo?.full_name ?? value] : [];
+            setDraft(current => current ? {
+              ...current,
+              notifications: { ...current.notifications, github_ci_repositories: nextRepositories },
+            } : current);
+          }}
+        >
           <option value="">全部仓库</option>
           {data?.repositories.map(repo => <option key={repo.id} value={String(repo.id)}>{repo.full_name}</option>)}
         </select>
