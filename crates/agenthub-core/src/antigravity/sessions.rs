@@ -787,6 +787,7 @@ pub fn collect_subagents_by_root(
         }
         let liveness = super::SubagentLiveness {
             active: live_item_is_running(item),
+            unsettled_background: false,
             last_modified_ms: crate::native_probe::timestamp(&item["lastModifiedTime"])
                 .or_else(|| crate::native_probe::timestamp(&item["createdTime"])),
         };

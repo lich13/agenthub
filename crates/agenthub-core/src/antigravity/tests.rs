@@ -355,6 +355,7 @@ fn silent_subagents_and_background_tasks_without_system_message_eventually_deliv
             sub_id.into(),
             SubagentLiveness {
                 active: true,
+                unsettled_background: false,
                 last_modified_ms: Some(base_ms + 5_000),
             },
         )]),
@@ -1051,4 +1052,176 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
             .unwrap(),
         Some(138)
     );
+}
+
+#[test]
+fn nested_subagent_unsettled_background_and_running_task_steps_suppress_false_positive_completion()
+{
+    let d1_id = "22222222-2222-4222-8222-222222222222";
+    let d2_id = "33333333-3333-4333-8333-333333333333";
+    let task_id = format!("{d2_id}/task-96");
+    let base_ms = native_probe::timestamp(&json!("2026-01-01T06:18:00Z")).unwrap();
+
+    // D2 steps: spawned background command with status CORTEX_STEP_STATUS_RUNNING and argumentsJson
+    let d2_steps = vec![
+        json!({
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": { "executionId": "d2-exec-1", "createdAt": "2026-01-01T06:18:38Z" }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+            "status": "CORTEX_STEP_STATUS_RUNNING",
+            "taskDetails": {
+                "id": task_id,
+                "movedToBackgroundAt": "2026-01-01T06:34:12Z",
+                "logUri": "file:///tmp/task-96.log"
+            },
+            "metadata": {
+                "executionId": "d2-exec-1",
+                "createdAt": "2026-01-01T06:34:07Z",
+                "toolCall": {
+                    "name": "run_command",
+                    "argumentsJson": "{\"CommandLine\":\"~/.codex/bin/gh-ci-wait --ref v2.1.10\",\"IsDaemon\":false}"
+                }
+            }
+        }),
+    ];
+    // Verify argumentsJson is parsed and untracked command is collected when tracked task is not active
+    let untracked = collect_untracked_task_commands(
+        d2_id,
+        "traj-d2",
+        &d2_steps,
+        &BTreeMap::from([(
+            task_id.clone(),
+            TaskLiveness {
+                active: false,
+                last_activity_ms: Some(base_ms),
+            },
+        )]),
+    );
+    assert_eq!(untracked.len(), 1);
+    assert_eq!(
+        untracked[0].command_line,
+        "~/.codex/bin/gh-ci-wait --ref v2.1.10"
+    );
+
+    // Even 30 minutes later (well past 60s), CORTEX_STEP_STATUS_RUNNING holds D2 unsettled
+    let d2_ctx = TrajectoryLivenessContext {
+        now_ms: Some(base_ms + 30 * 60 * 1_000),
+        ..Default::default()
+    };
+    assert!(has_unsettled_background_work(
+        d2_id, "traj-d2", &d2_steps, &d2_ctx
+    ));
+
+    // D1 steps: invoked D2 with prefixed text result ("Created the following subagent:\n{...}")
+    let d1_steps = vec![
+        json!({
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": { "executionId": "d1-exec-1", "createdAt": "2026-01-01T06:18:16Z" }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "generic": {
+                "name": "invoke_subagent",
+                "result": format!("Created the following subagent:\n{{\"conversationId\":\"{d2_id}\"}}")
+            },
+            "metadata": {
+                "executionId": "d1-exec-1",
+                "createdAt": "2026-01-01T06:18:38Z",
+                "completedAt": "2026-01-01T06:18:38Z"
+            }
+        }),
+    ];
+    assert_eq!(
+        collect_pending_subagent_ids(d1_id, "traj-d1", &d1_steps),
+        BTreeSet::from([d2_id.to_owned()])
+    );
+
+    // Root conversation waiting on D1 while D1 -> D2 has unsettled_background = true
+    let summary = json!({
+        "trajectoryId": "traj-root",
+        "createdTime": "2026-01-01T06:00:00Z",
+        "summary": "Root release workflow",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+    let root_response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "numTotalSteps": 3,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "traj-root",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "root-exec-1", "createdAt": "2026-01-01T06:18:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": {
+                        "name": "invoke_subagent",
+                        "output": format!("Created the following subagent:\n{{\"conversationId\":\"{d1_id}\"}}")
+                    },
+                    "metadata": {
+                        "executionId": "root-exec-1",
+                        "createdAt": "2026-01-01T06:18:16Z",
+                        "completedAt": "2026-01-01T06:18:16Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "root-exec-1",
+                        "createdAt": "2026-01-01T06:18:18Z",
+                        "completedAt": "2026-01-01T06:18:19Z"
+                    },
+                    "plannerResponse": {
+                        "response": "已启动 DeepCoder 子代理，正在等待其完成通知。"
+                    }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "root-exec-1",
+                    "lastStepIdx": 2,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+
+    let mut root_ctx = TrajectoryLivenessContext {
+        now_ms: Some(base_ms + 20 * 60 * 1_000),
+        subagents: BTreeMap::from([(
+            d1_id.to_owned(),
+            SubagentLiveness {
+                active: false,
+                unsettled_background: true,
+                last_modified_ms: Some(base_ms + 44_000),
+            },
+        )]),
+        ..Default::default()
+    };
+    let held = snapshot_with_context(ID, &summary, &root_response, &root_ctx).unwrap();
+    assert!(
+        held.events.is_empty(),
+        "nested subagent unsettled_background must block premature root completion"
+    );
+    assert_eq!(held.settled_count, 0);
+
+    // Once D1's unsettled_background clears and grace window passes, root completion can fire
+    root_ctx
+        .subagents
+        .get_mut(d1_id)
+        .unwrap()
+        .unsettled_background = false;
+    let released = snapshot_with_context(ID, &summary, &root_response, &root_ctx).unwrap();
+    assert_eq!(released.events.len(), 1);
 }

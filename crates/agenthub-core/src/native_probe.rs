@@ -62,7 +62,7 @@ impl NativeProvider {
     }
     pub fn event_enabled(self, config: &Config, kind: &str) -> bool {
         match (self, kind) {
-            (Self::GrokBot, "reply_needed" | "authorization") => {
+            (Self::GrokBot, "completion" | "reply_needed" | "authorization") => {
                 config.probe.notifications.notify_grokbot
             }
             (Self::Claude, "completion") => config.probe.notifications.notify_claude_completion,

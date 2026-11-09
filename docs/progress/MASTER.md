@@ -2,9 +2,9 @@
 
 ## 当前版本
 
-当前正式版本为 [**v2.1.10**](https://github.com/lich13/agenthub/releases/tag/v2.1.10)：重写 GitHub CI 监控卡片界面（双开关控制卡清晰显示「CI 监控通知」与「过滤 Bot」的「已开启／已关闭」状态徽章及滑块、多选仓库胶囊网格与手动输入 `owner/repo`、工作流运行卡片与 `Bot` 徽章），后端在配置部分监控仓库时仅轮询所选仓库的 `/actions/runs` 并为新加入仓库建立首次扫描基线、变更范围时立即裁剪缓存运行并触发刷新。API 协议保持 2、数据库 schema 保持 3。
+当前正式版本为 [**v2.1.11**](https://github.com/lich13/agenthub/releases/tag/v2.1.11)：修复 Antigravity 在嵌套子代理等待后台任务完成通知期间主会话提前触发完成推送的问题（兼容 `argumentsJson` 与带文本前缀的 `invoke_subagent` 输出，自底向上传播嵌套子代理与运行中后台命令的未结算状态），并为 Grok Bot 补齐 `send-message` 消息完成通知监控、游标幂等去重与升级历史基线保护。API 协议保持 2、数据库 schema 保持 3。
 
-上一正式版本 [**v2.1.9**](https://github.com/lich13/agenthub/releases/tag/v2.1.9)，八项正式资产已发布。
+上一正式版本 [**v2.1.10**](https://github.com/lich13/agenthub/releases/tag/v2.1.10)，八项正式资产已发布。
 
 ## v2.1.8 源码与资源比较
 

@@ -62,16 +62,27 @@ impl PanelDb {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let prior = tx
             .query_row(
-                "SELECT enabled,activated_ms FROM native_probe_providers WHERE provider=?1",
+                "SELECT enabled,activated_ms,scanned_at FROM native_probe_providers WHERE provider=?1",
                 [provider.as_str()],
-                |r| Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, bool>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2).unwrap_or(0),
+                    ))
+                },
             )
             .optional()?;
-        let baseline = enabled && prior.is_none_or(|(was_enabled, _)| !was_enabled);
+        let baseline = enabled && prior.is_none_or(|(was_enabled, _, _)| !was_enabled);
         let activated_ms = if baseline {
             chrono::Utc::now().timestamp_millis()
         } else {
-            prior.map_or(0, |(_, ts)| ts)
+            prior.map_or(0, |(_, ts, _)| ts)
+        };
+        let prior_scanned_at = if baseline {
+            0
+        } else {
+            prior.map_or(0, |(_, _, scanned)| scanned)
         };
         tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms OR stream_count!=excluded.stream_count OR error_count!=excluded.error_count OR (excluded.enabled AND scanned_at!=excluded.scanned_at)",
             params![provider.as_str(), enabled, activated_ms, Self::now(), scan.streams.len(), scan.errors])?;
@@ -98,24 +109,29 @@ impl PanelDb {
                     stream.record_count
                 }
             } else {
-                old.map_or(0, |(_, cursor)| cursor)
+                old.as_ref().map_or(0, |(_, cursor)| *cursor)
             };
             if !reset || provider.local_only() {
                 let now = Self::now();
                 for event in &stream.events {
+                    let cursor_exempt =
+                        provider == NativeProvider::GrokBot && event.kind != "completion";
                     let unrecorded_at_cursor = known_mutable_source
                         && event.position == cursor
                         && event.timestamp_ms >= activated_ms;
                     if !reset
-                        && ((provider != NativeProvider::GrokBot
-                            && !unrecorded_at_cursor
-                            && event.position <= cursor)
+                        && ((!cursor_exempt && !unrecorded_at_cursor && event.position <= cursor)
                             || (!known_mutable_source && event.timestamp_ms < activated_ms)
                             || (!provider.local_only()
                                 && !provider.event_enabled(config, &event.kind)))
                     {
                         continue;
                     }
+                    let upgrade_historical_grokbot_completion = provider == NativeProvider::GrokBot
+                        && event.kind == "completion"
+                        && old.as_ref().is_some_and(|(_, old_cursor)| *old_cursor == 0)
+                        && prior_scanned_at > 0
+                        && event.timestamp_ms < prior_scanned_at.saturating_mul(1000);
                     let delivery = NativeDelivery {
                         event_key: if let (NativeProvider::Claude, Some(instance), Some(prompt)) =
                             (provider, instance.as_deref(), event.prompt_id.as_deref())
@@ -130,7 +146,10 @@ impl PanelDb {
                         title: redact_output(&stream.title),
                         event: event.clone(),
                     };
-                    let status = if reset || !provider.event_enabled(config, &event.kind) {
+                    let status = if reset
+                        || upgrade_historical_grokbot_completion
+                        || !provider.event_enabled(config, &event.kind)
+                    {
                         "skipped"
                     } else {
                         "pending"

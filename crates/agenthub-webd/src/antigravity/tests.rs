@@ -529,3 +529,202 @@ async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_increm
 
     task.abort();
 }
+
+#[tokio::test]
+async fn scan_propagates_nested_subagent_background_task_up_to_root() {
+    let root_id = "88888888-8888-4888-8888-888888888881";
+    let d1_id = "88888888-8888-4888-8888-888888888882";
+    let d2_id = "88888888-8888-4888-8888-888888888883";
+    let base = chrono::Utc::now() - chrono::Duration::seconds(10);
+    let t0 = base.to_rfc3339();
+    let t1 = (base + chrono::Duration::seconds(1)).to_rfc3339();
+    let t2 = (base + chrono::Duration::seconds(2)).to_rfc3339();
+    let t3 = (base + chrono::Duration::seconds(3)).to_rfc3339();
+    let t4 = (base + chrono::Duration::seconds(4)).to_rfc3339();
+    let t5 = (base + chrono::Duration::seconds(5)).to_rfc3339();
+    let (t0_r, t1_r, t2_r, t3_r, t4_r, t5_r) = (
+        t0.clone(),
+        t1.clone(),
+        t2.clone(),
+        t3.clone(),
+        t4.clone(),
+        t5.clone(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new()
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectorySteps"),
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let (t0, t1, t2, t3, t4, t5) = (
+                    t0_r.clone(),
+                    t1_r.clone(),
+                    t2_r.clone(),
+                    t3_r.clone(),
+                    t4_r.clone(),
+                    t5_r.clone(),
+                );
+                async move {
+                    let cid = body["cascadeId"].as_str().unwrap_or("");
+                    if cid == root_id {
+                        axum::Json(json!({
+                            "steps": [
+                                {
+                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "root-exec", "createdAt": t0 }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "generic": {
+                                        "name": "invoke_subagent",
+                                        "output": format!("Created the following subagent:\n{{\"conversationId\":\"{d1_id}\"}}")
+                                    },
+                                    "metadata": { "executionId": "root-exec", "createdAt": t1 }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": {
+                                        "executionId": "root-exec",
+                                        "createdAt": t2,
+                                        "completedAt": t3
+                                    },
+                                    "plannerResponse": { "response": "Waiting for DeepCoder..." }
+                                }
+                            ]
+                        }))
+                    } else if cid == d1_id {
+                        axum::Json(json!({
+                            "steps": [
+                                {
+                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "d1-exec", "createdAt": t1 }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "generic": {
+                                        "name": "invoke_subagent",
+                                        "result": format!("Created the following subagent:\n{{\"conversationId\":\"{d2_id}\"}}")
+                                    },
+                                    "metadata": { "executionId": "d1-exec", "createdAt": t2 }
+                                }
+                            ]
+                        }))
+                    } else if cid == d2_id {
+                        axum::Json(json!({
+                            "steps": [
+                                {
+                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "d2-exec", "createdAt": t2 }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+                                    "status": "CORTEX_STEP_STATUS_RUNNING",
+                                    "taskDetails": {
+                                        "id": format!("{d2_id}/task-96"),
+                                        "movedToBackgroundAt": t5
+                                    },
+                                    "metadata": {
+                                        "executionId": "d2-exec",
+                                        "createdAt": t4,
+                                        "toolCall": {
+                                            "name": "run_command",
+                                            "argumentsJson": "{\"CommandLine\":\"~/.codex/bin/gh-ci-wait\",\"IsDaemon\":false}"
+                                        }
+                                    }
+                                }
+                            ]
+                        }))
+                    } else {
+                        axum::Json(json!({}))
+                    }
+                }
+            }),
+        )
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            post(move |axum::Json(body): axum::Json<Value>| async move {
+                if body["cascadeId"] == json!(root_id)
+                    && body["executorMetadataOffset"].as_u64().unwrap_or(0) == 0
+                {
+                    axum::Json(json!({
+                        "executorMetadata": [
+                            {
+                                "executionId": "root-exec",
+                                "lastStepIdx": 2,
+                                "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                            }
+                        ]
+                    }))
+                } else {
+                    axum::Json(json!({}))
+                }
+            }),
+        );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let summaries = json!({
+        "trajectorySummaries": {
+            root_id: {
+                "trajectoryId": "traj-root",
+                "createdTime": t0,
+                "lastModifiedTime": t3,
+                "summary": "Root conversation",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 3,
+                "lastUserInputStepIndex": 0,
+                "trajectoryMetadata": { "rootConversationId": root_id }
+            },
+            d1_id: {
+                "trajectoryId": "traj-d1",
+                "createdTime": t1,
+                "lastModifiedTime": t2,
+                "summary": "DeepCoder subagent",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 2,
+                "trajectoryMetadata": {
+                    "rootConversationId": root_id,
+                    "parentConversationId": root_id,
+                    "nestingDepth": 1
+                }
+            },
+            d2_id: {
+                "trajectoryId": "traj-d2",
+                "createdTime": t2,
+                "lastModifiedTime": t5,
+                "summary": "Worker subagent",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 2,
+                "trajectoryMetadata": {
+                    "rootConversationId": root_id,
+                    "parentConversationId": d1_id,
+                    "nestingDepth": 2
+                }
+            }
+        }
+    });
+    let scan = scan_at(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        0,
+        &summaries,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams.len(), 1);
+    assert!(
+        scan.streams[0].events.is_empty(),
+        "root must not emit completion while D1 -> D2 has a RUNNING background command step"
+    );
+    assert_eq!(scan.streams[0].settled_count, 0);
+    task.abort();
+}

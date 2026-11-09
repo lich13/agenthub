@@ -659,6 +659,80 @@ pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     Ok(last_scan)
 }
 
+async fn fetch_subagent_tail_trajectory(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    id: &str,
+    summary: Option<&Value>,
+) -> Result<Vec<Value>> {
+    const MAX_SUBAGENT_TAIL_STEPS: u64 = 256;
+    if let Some(total) = summary
+        .and_then(|s| s["stepCount"].as_u64())
+        .filter(|&n| n > 0 && n <= 200_000)
+    {
+        let start_offset = total.saturating_sub(MAX_SUBAGENT_TAIL_STEPS) as usize;
+        let total_usize = total as usize;
+        let mut steps = Vec::new();
+        while start_offset + steps.len() < total_usize
+            && steps.len() < MAX_SUBAGENT_TAIL_STEPS as usize
+        {
+            let more = query(
+                client,
+                port,
+                token,
+                "GetCascadeTrajectorySteps",
+                json!({"cascadeId": id, "stepOffset": start_offset + steps.len()}),
+            )
+            .await?;
+            let Some(batch) = more["steps"].as_array().filter(|b| !b.is_empty()) else {
+                break;
+            };
+            steps.extend(batch.iter().cloned());
+        }
+        if !steps.is_empty() {
+            return Ok(steps);
+        }
+    }
+    let resp = fetch_complete_trajectory(client, port, token, id).await?;
+    Ok(resp["trajectory"]["steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default())
+}
+
+async fn inspect_steps_background_tasks(
+    pid: u32,
+    id: &str,
+    summary_traj_id: &str,
+    steps: &[Value],
+    now_ms: i64,
+) -> (BTreeMap<String, antigravity::TaskLiveness>, bool) {
+    let mut tasks = BTreeMap::new();
+    let mut has_active_child_processes = false;
+    let pending_logs = antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
+    if !pending_logs.is_empty() {
+        tasks = tokio::task::spawn_blocking(move || {
+            pending_logs
+                .into_iter()
+                .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+    }
+    let untracked_specs =
+        antigravity::collect_untracked_task_commands(id, summary_traj_id, steps, &tasks);
+    if !untracked_specs.is_empty() {
+        has_active_child_processes = tokio::task::spawn_blocking(move || {
+            has_matching_active_child_process(pid, &untracked_specs, now_ms)
+        })
+        .await
+        .unwrap_or(false);
+    }
+    (tasks, has_active_child_processes)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn load_trajectory_with_context(
     client: &reqwest::Client,
@@ -667,7 +741,8 @@ async fn load_trajectory_with_context(
     pid: u32,
     id: &str,
     summary: &Value,
-    subagents: BTreeMap<String, antigravity::SubagentLiveness>,
+    summaries: &serde_json::Map<String, Value>,
+    mut subagents: BTreeMap<String, antigravity::SubagentLiveness>,
     now_ms: i64,
     inspect_background: bool,
 ) -> Result<(Value, antigravity::TrajectoryLivenessContext)> {
@@ -675,28 +750,115 @@ async fn load_trajectory_with_context(
     let response = fetch_probe_trajectory(client, port, token, id, summary).await?;
     let mut tasks = BTreeMap::new();
     let mut has_active_child_processes = false;
-    if inspect_background {
+    let root_mod_ms = agenthub_core::native_probe::timestamp(&summary["lastModifiedTime"])
+        .or_else(|| agenthub_core::native_probe::timestamp(&summary["createdTime"]))
+        .unwrap_or(0);
+    let max_sub_mod_ms = subagents
+        .values()
+        .filter_map(|s| s.last_modified_ms)
+        .max()
+        .unwrap_or(0);
+    let recent_activity = root_mod_ms == 0
+        || root_mod_ms
+            .max(max_sub_mod_ms)
+            .ge(&now_ms.saturating_sub(antigravity::ACTIVE_BACKGROUND_TASK_CAP_MS));
+    if inspect_background && recent_activity {
         if let Some(steps) = response["trajectory"]["steps"].as_array() {
             let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
-            let pending_logs = antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
-            if !pending_logs.is_empty() {
-                tasks = tokio::task::spawn_blocking(move || {
-                    pending_logs
-                        .into_iter()
-                        .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
-                        .collect()
-                })
-                .await
-                .unwrap_or_default();
+            (tasks, has_active_child_processes) =
+                inspect_steps_background_tasks(pid, id, summary_traj_id, steps, now_ms).await;
+
+            let mut queue: VecDeque<String> =
+                antigravity::collect_pending_subagent_ids(id, summary_traj_id, steps)
+                    .into_iter()
+                    .collect();
+            let mut visited: BTreeSet<String> = queue.iter().cloned().collect();
+            visited.insert(id.to_owned());
+            struct InspectedSubagent {
+                id: String,
+                traj_id: String,
+                steps: Vec<Value>,
+                tasks: BTreeMap<String, antigravity::TaskLiveness>,
+                active_children: bool,
             }
-            let untracked_specs =
-                antigravity::collect_untracked_task_commands(id, summary_traj_id, steps, &tasks);
-            if !untracked_specs.is_empty() {
-                has_active_child_processes = tokio::task::spawn_blocking(move || {
-                    has_matching_active_child_process(pid, &untracked_specs, now_ms)
-                })
-                .await
-                .unwrap_or(false);
+            let mut inspected_subagents: Vec<InspectedSubagent> = Vec::new();
+
+            while let Some(sub_id) = queue.pop_front() {
+                if inspected_subagents.len() >= 8 {
+                    break;
+                }
+                if subagents.get(&sub_id).is_some_and(|s| {
+                    s.active
+                        || s.last_modified_ms.is_some_and(|ms| {
+                            now_ms.saturating_sub(ms) > antigravity::ACTIVE_BACKGROUND_TASK_CAP_MS
+                        })
+                }) {
+                    continue;
+                }
+                let sub_summary = summaries.get(&sub_id);
+                let Ok(sub_steps) =
+                    fetch_subagent_tail_trajectory(client, port, token, &sub_id, sub_summary).await
+                else {
+                    continue;
+                };
+                if sub_steps.is_empty() {
+                    continue;
+                }
+                let sub_traj_id = sub_summary
+                    .and_then(|s| s["trajectoryId"].as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let (sub_tasks, sub_active_children) =
+                    inspect_steps_background_tasks(pid, &sub_id, &sub_traj_id, &sub_steps, now_ms)
+                        .await;
+                for child_id in
+                    antigravity::collect_pending_subagent_ids(&sub_id, &sub_traj_id, &sub_steps)
+                {
+                    if let Some(child_summary) = summaries.get(&child_id) {
+                        subagents.entry(child_id.clone()).or_insert_with(|| {
+                            antigravity::SubagentLiveness {
+                                active: summary_is_active(child_summary),
+                                unsettled_background: false,
+                                last_modified_ms: agenthub_core::native_probe::timestamp(
+                                    &child_summary["lastModifiedTime"],
+                                )
+                                .or_else(|| {
+                                    agenthub_core::native_probe::timestamp(
+                                        &child_summary["createdTime"],
+                                    )
+                                }),
+                            }
+                        });
+                    }
+                    if visited.insert(child_id.clone()) {
+                        queue.push_back(child_id);
+                    }
+                }
+                inspected_subagents.push(InspectedSubagent {
+                    id: sub_id,
+                    traj_id: sub_traj_id,
+                    steps: sub_steps,
+                    tasks: sub_tasks,
+                    active_children: sub_active_children,
+                });
+            }
+
+            for item in inspected_subagents.into_iter().rev() {
+                let sub_ctx = antigravity::TrajectoryLivenessContext {
+                    has_active_subagents: false,
+                    has_active_child_processes: item.active_children,
+                    now_ms: Some(now_ms),
+                    subagents: subagents.clone(),
+                    tasks: item.tasks,
+                };
+                if antigravity::has_unsettled_background_work(
+                    &item.id,
+                    &item.traj_id,
+                    &item.steps,
+                    &sub_ctx,
+                ) {
+                    subagents.entry(item.id).or_default().unsettled_background = true;
+                }
             }
         }
     }
@@ -730,6 +892,7 @@ pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Resu
         endpoint.pid,
         cascade_id,
         summary,
+        summaries,
         subagents,
         now_ms,
         true,
@@ -816,7 +979,7 @@ async fn scan_at(
             continue;
         }
         let result = load_trajectory_with_context(
-            client, port, token, pid, id, summary, subagents, now_ms, !is_active,
+            client, port, token, pid, id, summary, summaries, subagents, now_ms, !is_active,
         )
         .await
         .and_then(|(response, ctx)| {

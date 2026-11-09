@@ -363,3 +363,142 @@ fn targeted_notification_scan_does_not_read_other_bot_transcripts() {
     assert_eq!(selected.streams[0].events.len(), 1);
     assert_eq!(scan(&f.paths).unwrap().errors, 1);
 }
+
+#[test]
+fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
+    let f = Fixture::new("fixture");
+    let now = chrono::Utc::now().timestamp_millis();
+    let msg = |id: &str, ts: i64, content: &str| {
+        json!({
+            "kind": "send-message",
+            "id": id,
+            "timestampMs": ts,
+            "message": { "type": "text", "content": content }
+        })
+    };
+
+    // 1. Existing stream from pre-v2.1.11 upgrade with cursor = 0 and historical message older than prior_scanned_at
+    let mut config = crate::config::Config::default();
+    config.probe.enabled = true;
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.notify_grokbot = true;
+    let db_path = f.root.join("upgrade.sqlite");
+    let db = crate::db::PanelDb::open(&db_path).unwrap();
+
+    // Baseline with empty replica (simulates v2.1.10 where settled_count was 0 -> cursor = 0)
+    f.replica(json!([]));
+    assert_eq!(
+        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.native_probe_stream_cursor(NativeProvider::GrokBot, &f.session())
+            .unwrap(),
+        Some(0)
+    );
+
+    // Upgrade scan sees a message from 5s before prior_scanned_at (but after activated_ms if activated earlier) -> skipped, cursor advanced
+    let hist_ts = (now / 1000 - 5) * 1000;
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE native_probe_providers SET activated_ms=?1 WHERE provider='grokbot'",
+            [hist_ts - 60_000],
+        )
+        .unwrap();
+    }
+    f.replica(json!([msg("hist-1", hist_ts, "Historical reply")]));
+    assert_eq!(
+        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
+            .unwrap(),
+        0,
+        "pre-upgrade historical message on cursor=0 stream must be baselined as skipped"
+    );
+    assert_eq!(
+        db.native_probe_stream_cursor(NativeProvider::GrokBot, &f.session())
+            .unwrap(),
+        Some(hist_ts as u64)
+    );
+
+    // 2. New send-message completion arrives -> queued exactly once and cursor advances
+    let new_ts = now + 2_000;
+    f.replica(json!([
+        msg("hist-1", hist_ts, "Historical reply"),
+        msg("reply-1", new_ts, "Bot finished task")
+    ]));
+    let s1 = scan(&f.paths).unwrap();
+    assert_eq!(s1.streams[0].settled_count, new_ts as u64);
+    assert_eq!(s1.streams[0].events.len(), 1);
+    assert_eq!(s1.streams[0].events[0].kind, "completion");
+    assert_eq!(s1.streams[0].events[0].turn_id, "reply-1");
+    assert_eq!(s1.streams[0].events[0].body, "Bot finished task");
+    assert_eq!(
+        db.stage_native_notifications(NativeProvider::GrokBot, &s1, &config)
+            .unwrap(),
+        1
+    );
+    // Repeated scan with same completion does not re-queue
+    assert_eq!(
+        db.stage_native_notifications(NativeProvider::GrokBot, &s1, &config)
+            .unwrap(),
+        0
+    );
+
+    // Detail status remains "unknown" when no pending interaction exists
+    let d = detail(
+        &f.paths,
+        &ProviderDetailRequest {
+            session_key: f.session(),
+            limit: None,
+            before: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(d.summary.status, "unknown");
+
+    // 3. Pending interaction newer than completion suppresses completion event
+    let perm_ts = new_ts + 1_000;
+    f.replica(json!([
+        msg("reply-1", new_ts, "Bot finished task"),
+        {
+            "kind": "send-message",
+            "id": "perm-1",
+            "timestampMs": perm_ts,
+            "message": {
+                "type": "local-tool-permission",
+                "ask": { "status": "pending", "requestId": "req-1", "title": "Need tool access" }
+            }
+        }
+    ]));
+    let s_perm = scan(&f.paths).unwrap();
+    assert_eq!(s_perm.streams[0].events.len(), 1);
+    assert_eq!(s_perm.streams[0].events[0].kind, "authorization");
+
+    // 4. Roster lastEntry fallback and attachment completion
+    let attach_ts = perm_ts + 2_000;
+    f.rows(json!([{
+        "id": "bot-a",
+        "name": "Fixture",
+        "lastActivityAt": attach_ts,
+        "lastEntry": {
+            "id": "roster-attach",
+            "kind": "send-message",
+            "timestampMs": attach_ts,
+            "message": {
+                "type": "attachment",
+                "file_name": "report.pdf",
+                "url": "https://example.invalid/report.pdf"
+            }
+        }
+    }]));
+    f.replica(json!([]));
+    let s_attach = scan(&f.paths).unwrap();
+    assert_eq!(s_attach.streams[0].events.len(), 1);
+    assert_eq!(s_attach.streams[0].events[0].kind, "completion");
+    assert_eq!(s_attach.streams[0].events[0].turn_id, "roster-attach");
+    assert_eq!(
+        s_attach.streams[0].events[0].body,
+        "[report.pdf](<https://example.invalid/report.pdf>)"
+    );
+}

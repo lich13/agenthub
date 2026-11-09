@@ -4,7 +4,7 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.10 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.11 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
 ## Highlights
 
@@ -64,7 +64,7 @@ Probe exposes controls, status indicators, error diagnostics, event records, and
 
 Bark notifications follow a unified `Provider｜Status｜Thread Title` format (`Completed`, `Reply Needed`, `Authorization Needed`, `Failed`), with bodies distilled to at most 4 non-empty lines and 300 Unicode characters stripped of Markdown, code blocks, tool outputs, and internal metadata.
 
-- **Per-Provider Notification Switches**: Toggle each provider independently on the Probe home view. Grok Bot is disabled by default and notifies only for local pending reply/authorization prompts without inferring completions or failures; cache eviction, replacement, re-enabling, and restarts never replay stale alerts. Antigravity and DSH notifications also operate locally.
+- **Per-Provider Notification Switches**: Toggle each provider independently on the Probe home view. Grok Bot is disabled by default and notifies locally for `send-message` replies as well as pending reply/authorization prompts with cursor and upgrade-baseline deduplication; cache eviction, replacement, re-enabling, and restarts never replay stale alerts. Antigravity and DSH notifications also operate locally.
 - **4-Platform Real-Time Hooks + DSH Native Stream**:
   - **Codex**: Manages the Stop Hook in `~/.codex/hooks.json` with per-question identification and deduplication;
   - **Claude Code**: Manages `Stop`, `Notification`, and `StopFailure` hooks in `~/.claude/settings.json`;
@@ -94,7 +94,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.10**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.11**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (Tauri updater archive and Minisign signature);

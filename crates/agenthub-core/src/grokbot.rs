@@ -517,6 +517,110 @@ fn pending_events(row: &Value, replica: Option<&Value>) -> Vec<NativeTurnEvent> 
     }
     pending
 }
+fn completion_from_entry(entry: &Value, fallback_ts: Option<i64>) -> Option<NativeTurnEvent> {
+    if entry["kind"].as_str() != Some("send-message")
+        || entry["draftSendState"].as_str() == Some("failed")
+    {
+        return None;
+    }
+    let id = entry["id"].as_str().filter(|s| !s.trim().is_empty())?;
+    let ts = entry["timestampMs"]
+        .as_i64()
+        .or(fallback_ts)
+        .filter(|&t| t > 0)?;
+    let body = if entry["message"].is_object() {
+        let msg = &entry["message"];
+        match msg["type"].as_str() {
+            Some("text") => {
+                let s = text(&msg["content"]);
+                if s.trim().is_empty() {
+                    text(&entry["text"])
+                } else {
+                    s
+                }
+            }
+            Some("attachment") => {
+                let name = msg["file_name"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("附件")
+                    .replace('[', "\\[")
+                    .replace(']', "\\]");
+                let path = msg["source_path"]
+                    .as_str()
+                    .filter(|s| s.starts_with('/'))
+                    .or(msg["url"].as_str());
+                path.map_or(name.clone(), |p| {
+                    format!("[{name}](<{}>)", p.replace('>', "%3E"))
+                })
+            }
+            _ => return None,
+        }
+    } else if entry.get("respondedValue").is_some_and(|v| !v.is_null())
+        || entry["widgetDismissed"] == true
+        || entry.get("formResolution").is_some_and(|v| !v.is_null())
+    {
+        return None;
+    } else {
+        text(&entry["text"])
+    };
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(NativeTurnEvent {
+        prompt_id: None,
+        position: ts as u64,
+        turn_id: id.to_owned(),
+        kind: "completion".into(),
+        body: crate::security::redact_output(trimmed)
+            .chars()
+            .take(1200)
+            .collect(),
+        timestamp_ms: ts,
+    })
+}
+
+fn latest_completion_event(
+    row: &Value,
+    replica: Option<&Value>,
+    pending: &[NativeTurnEvent],
+) -> Option<NativeTurnEvent> {
+    let mut latest: Option<NativeTurnEvent> = None;
+    for entry in replica
+        .and_then(|v| v["entries"].as_array())
+        .into_iter()
+        .flatten()
+    {
+        if let Some(candidate) = completion_from_entry(entry, None) {
+            if latest
+                .as_ref()
+                .is_none_or(|prev| candidate.timestamp_ms >= prev.timestamp_ms)
+            {
+                latest = Some(candidate);
+            }
+        }
+    }
+    if let Some(roster_last) =
+        completion_from_entry(&row["lastEntry"], row["lastActivityAt"].as_i64())
+    {
+        if latest
+            .as_ref()
+            .is_none_or(|prev| roster_last.timestamp_ms > prev.timestamp_ms)
+        {
+            latest = Some(roster_last);
+        }
+    }
+    let candidate = latest?;
+    if pending
+        .iter()
+        .any(|p| p.timestamp_ms >= candidate.timestamp_ms)
+    {
+        return None;
+    }
+    Some(candidate)
+}
+
 pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
     scan_selected(paths, None)
 }
@@ -533,7 +637,7 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
         };
         if selected.is_some_and(|selected| selected != id) {
             continue;
-        }
+        };
         let replica = match read_slice(&paths.persistence, &replica_key(&scope, id), 1) {
             Ok(v) => v,
             Err(_) => {
@@ -548,8 +652,18 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             scan.errors += 1;
             continue;
         }
-        let pending = pending_events(row, replica.as_deref());
-        let count = pending.iter().map(|e| e.position).max().unwrap_or(0);
+        let mut events = pending_events(row, replica.as_deref());
+        let completion = latest_completion_event(row, replica.as_deref(), &events);
+        let settled_count = completion.as_ref().map_or(0, |e| e.position);
+        if let Some(comp) = completion {
+            events.push(comp);
+        }
+        events.sort_by_key(|e| e.position);
+        let count = events
+            .iter()
+            .map(|e| e.position)
+            .max()
+            .unwrap_or(settled_count);
         let session_key = session_key(&scope, id);
         scan.streams.push(NativeStreamSnapshot {
             provider: NativeProvider::GrokBot,
@@ -558,8 +672,8 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             title: row_title(row),
             identity: session_key,
             record_count: count,
-            settled_count: 0,
-            events: pending,
+            settled_count,
+            events,
         });
     }
     Ok(scan)

@@ -164,10 +164,13 @@ fn step_tool_name(step: &Value) -> &str {
 fn step_tool_args(step: &Value) -> Value {
     for candidate in [
         &step["generic"]["arguments"],
+        &step["generic"]["argumentsJson"],
         &step["generic"]["args"],
         &step["toolCall"]["arguments"],
+        &step["toolCall"]["argumentsJson"],
         &step["toolCall"]["args"],
         &step["metadata"]["toolCall"]["arguments"],
+        &step["metadata"]["toolCall"]["argumentsJson"],
     ] {
         if !candidate.is_null() {
             let parsed = parse_json_or_value(candidate);
@@ -208,11 +211,16 @@ fn collect_spawned_subagent_ids(value: &Value, out: &mut BTreeSet<String>) {
                 collect_spawned_subagent_ids(child, out);
             }
         }
-        Value::String(raw)
-            if raw.trim_start().starts_with('{') || raw.trim_start().starts_with('[') =>
-        {
-            if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
-                collect_spawned_subagent_ids(&parsed, out);
+        Value::String(raw) => {
+            let trimmed = raw.trim_start();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+                    collect_spawned_subagent_ids(&parsed, out);
+                }
+            } else if let Some(idx) = trimmed.find('{') {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&trimmed[idx..]) {
+                    collect_spawned_subagent_ids(&parsed, out);
+                }
             }
         }
         _ => {}
@@ -233,10 +241,12 @@ fn cascade_status_is_active(status: Option<&str>) -> bool {
 
 pub const BACKGROUND_HANDOFF_GRACE_MS: i64 = 15_000;
 pub const UNTRACKED_TASK_QUIESCENCE_MS: i64 = 60_000;
+pub const ACTIVE_BACKGROUND_TASK_CAP_MS: i64 = 4 * 3_600 * 1_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct SubagentLiveness {
     pub active: bool,
+    pub unsettled_background: bool,
     pub last_modified_ms: Option<i64>,
 }
 
@@ -267,6 +277,7 @@ struct PendingTaskRecord {
     expected_deadline_ms: Option<i64>,
     log_uri: Option<String>,
     command_line: Option<String>,
+    step_running: bool,
 }
 
 fn step_activity_timestamp_ms(step: &Value) -> Option<i64> {
@@ -365,6 +376,7 @@ fn collect_turn_pending_work(
                         expected_deadline_ms,
                         log_uri,
                         command_line,
+                        step_running: !settled(step),
                     },
                 );
             }
@@ -384,7 +396,9 @@ fn collect_turn_pending_work(
         {
             let mut spawned = BTreeSet::new();
             collect_spawned_subagent_ids(&step["generic"]["result"], &mut spawned);
+            collect_spawned_subagent_ids(&step["generic"]["output"], &mut spawned);
             collect_spawned_subagent_ids(&step["invokeSubagent"], &mut spawned);
+            collect_spawned_subagent_ids(&step["metadata"]["toolCall"], &mut spawned);
             for cid in spawned {
                 pending_subagents.insert(cid, step_ms);
             }
@@ -423,6 +437,17 @@ fn collect_turn_pending_work(
     }
 }
 
+pub fn collect_pending_subagent_ids(
+    id: &str,
+    summary_trajectory_id: &str,
+    steps: &[Value],
+) -> BTreeSet<String> {
+    collect_turn_pending_work(id, summary_trajectory_id, steps)
+        .pending_subagents
+        .into_keys()
+        .collect()
+}
+
 pub fn collect_pending_task_logs(
     id: &str,
     summary_trajectory_id: &str,
@@ -444,8 +469,7 @@ pub fn collect_untracked_task_commands(
     let work = collect_turn_pending_work(id, summary_trajectory_id, steps);
     let mut specs = Vec::new();
     for (task_id, rec) in &work.pending_tasks {
-        if tracked_tasks.contains_key(task_id)
-            || rec.log_uri.is_some()
+        if tracked_tasks.get(task_id).is_some_and(|t| t.active)
             || rec.expected_deadline_ms.is_some()
         {
             continue;
@@ -483,7 +507,7 @@ fn step_artifact_feedback_summary(step: &Value) -> Option<&str> {
         .filter(|s| !s.trim().is_empty())
 }
 
-fn has_unsettled_background_work(
+pub fn has_unsettled_background_work(
     id: &str,
     summary_trajectory_id: &str,
     steps: &[Value],
@@ -502,15 +526,22 @@ fn has_unsettled_background_work(
         return true;
     };
 
+    let max_subagent_modified_ms = ctx
+        .subagents
+        .values()
+        .filter_map(|s| s.last_modified_ms)
+        .max();
+
     for (cid, spawn_ms) in &pending_subagents {
         let sub = ctx.subagents.get(cid);
-        if sub.is_some_and(|s| s.active) {
+        if sub.is_some_and(|s| s.active || s.unsettled_background) {
             return true;
         }
         let anchor_ms = [
             last_root_step_ms,
             *spawn_ms,
             sub.and_then(|s| s.last_modified_ms),
+            max_subagent_modified_ms,
         ]
         .into_iter()
         .flatten()
@@ -522,39 +553,28 @@ fn has_unsettled_background_work(
     }
 
     for (task_id, rec) in &pending_tasks {
-        if let Some(task) = ctx.tasks.get(task_id) {
-            let anchor_ms = [
-                last_root_step_ms,
-                rec.spawn_ms,
-                rec.expected_deadline_ms,
-                task.last_activity_ms,
-            ]
-            .into_iter()
-            .flatten()
-            .max()
-            .unwrap_or(now_ms);
-            let grace = if task.active {
-                UNTRACKED_TASK_QUIESCENCE_MS
-            } else {
-                BACKGROUND_HANDOFF_GRACE_MS
-            };
-            if now_ms.saturating_sub(anchor_ms) < grace {
-                return true;
-            }
+        let task = ctx.tasks.get(task_id);
+        let anchor_ms = [
+            last_root_step_ms,
+            rec.spawn_ms,
+            rec.expected_deadline_ms,
+            task.and_then(|t| t.last_activity_ms),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(now_ms);
+        let grace = if rec.step_running || task.is_some_and(|t| t.active) {
+            ACTIVE_BACKGROUND_TASK_CAP_MS
+        } else if task.is_some()
+            || (rec.expected_deadline_ms.is_some() && !ctx.has_active_child_processes)
+        {
+            BACKGROUND_HANDOFF_GRACE_MS
         } else {
-            let grace = if rec.expected_deadline_ms.is_some() && !ctx.has_active_child_processes {
-                BACKGROUND_HANDOFF_GRACE_MS
-            } else {
-                UNTRACKED_TASK_QUIESCENCE_MS
-            };
-            let anchor_ms = [last_root_step_ms, rec.spawn_ms, rec.expected_deadline_ms]
-                .into_iter()
-                .flatten()
-                .max()
-                .unwrap_or(now_ms);
-            if now_ms.saturating_sub(anchor_ms) < grace {
-                return true;
-            }
+            UNTRACKED_TASK_QUIESCENCE_MS
+        };
+        if now_ms.saturating_sub(anchor_ms) < grace {
+            return true;
         }
     }
 
