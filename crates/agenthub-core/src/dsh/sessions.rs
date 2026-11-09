@@ -685,12 +685,24 @@ pub fn list_sessions(
     paths: &DshPaths,
     request: &ProviderListRequest,
 ) -> Result<Vec<ProviderSessionSummary>> {
-    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
-    let mut items = list_discovered(paths, request, &discover_all_sessions(paths)?, &archived);
+    let mut items = list_sessions_without_storage(paths, request)?;
     for item in &mut items {
         attach_storage_size(paths, item);
     }
     Ok(items)
+}
+
+pub(crate) fn list_sessions_without_storage(
+    paths: &DshPaths,
+    request: &ProviderListRequest,
+) -> Result<Vec<ProviderSessionSummary>> {
+    let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
+    Ok(list_discovered(
+        paths,
+        request,
+        &discover_all_sessions(paths)?,
+        &archived,
+    ))
 }
 
 #[cfg(any(target_os = "macos", test))]

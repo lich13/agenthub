@@ -1264,6 +1264,7 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
         crate::bark_body_chunks(&event.bark_body, crate::PROBE_BARK_BODY_CHUNK_BYTES);
     let first = deliver(
         &|| Ok(fixture.config.clone()),
+        &fixture.config,
         &fixture.db,
         &key,
         NotificationChannel::Bark,

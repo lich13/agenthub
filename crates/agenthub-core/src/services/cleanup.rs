@@ -236,7 +236,7 @@ fn dry_run_single_scope(
                 out.unavailable_reason = Some("仅本机 macOS 支持 Antigravity 会话清理".into());
                 return out;
             }
-            match crate::antigravity::sessions::list_sessions(
+            match crate::antigravity::sessions::list_sessions_without_storage(
                 &paths.antigravity,
                 &crate::provider_sessions::ProviderListRequest {
                     archived: Some(true),
@@ -245,7 +245,7 @@ fn dry_run_single_scope(
                 },
             ) {
                 Ok(sessions) => {
-                    for summary in sessions.into_iter().filter(|s| s.archived) {
+                    for summary in sessions {
                         match crate::antigravity::sessions::preview_batch_item(
                             &paths.antigravity,
                             &summary.session_key,
@@ -503,7 +503,6 @@ fn execute_antigravity_archived_scope(
             },
         )?
         .into_iter()
-        .filter(|s| s.archived)
         .map(|s| s.session_key)
         .collect();
 

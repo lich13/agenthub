@@ -249,7 +249,7 @@ async fn run_probe_command(
     db: PanelDb,
     config_path: &Path,
 ) -> Result<()> {
-    let cache = monitor_start::DaemonMonitorCache::default();
+    let cache = monitor_start::DaemonMonitorCache::with_config(config_path, config);
     let load_config = || cache.load_config(config_path);
     match command {
         ProbeCommand::Status => {

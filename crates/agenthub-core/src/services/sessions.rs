@@ -189,7 +189,7 @@ impl SessionUseCases {
                 .filter_map(|block| block.user_message)
                 .find(|message| message.id == request.message_id),
             SessionProvider::Grok => {
-                grok::grok_session_detail(&self.grok, &request.session_key, None)?
+                grok::grok_session_detail_without_storage(&self.grok, &request.session_key)?
                     .events
                     .iter()
                     .filter_map(|event| event.user_message.as_ref())

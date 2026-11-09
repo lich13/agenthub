@@ -238,7 +238,7 @@ impl SearchUseCases {
                 request.session_key.as_deref().unwrap(),
             )?]
         } else {
-            grok::list_grok_sessions(&self.grok, MAX_SESSIONS, None)?
+            grok::list_grok_sessions_without_storage(&self.grok, MAX_SESSIONS, None)?
         };
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
@@ -261,7 +261,7 @@ impl SearchUseCases {
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let detail = match grok::grok_session_detail(&self.grok, &summary.id, None) {
+            let detail = match grok::grok_session_detail_without_storage(&self.grok, &summary.id) {
                 Ok(detail) => detail,
                 Err(_) => {
                     push_warning(warnings);
@@ -306,12 +306,12 @@ impl SearchUseCases {
         warnings: &mut Vec<String>,
     ) -> Result<()> {
         let summaries = if request.scope == SearchScope::Thread {
-            vec![claude::claude_session_summary(
+            vec![claude::claude_session_summary_without_storage(
                 &self.claude,
                 request.session_key.as_deref().unwrap(),
             )?]
         } else {
-            claude::list_claude_sessions(&self.claude, MAX_SESSIONS, None)?
+            claude::list_claude_sessions_without_storage(&self.claude, MAX_SESSIONS, None)?
         };
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
@@ -336,7 +336,7 @@ impl SearchUseCases {
                 if output.len() >= MAX_RESULTS {
                     break;
                 }
-                let page = match claude::claude_session_detail(
+                let page = match claude::claude_session_detail_without_storage(
                     &self.claude,
                     &ClaudeDetailRequest {
                         session_key: summary.session_key.clone(),
@@ -389,12 +389,14 @@ impl SearchUseCases {
         warnings: &mut Vec<String>,
     ) -> Result<()> {
         let summaries = if request.scope == SearchScope::Thread {
-            vec![crate::antigravity::sessions::session_summary(
-                &self.antigravity,
-                request.session_key.as_deref().unwrap(),
-            )?]
+            vec![
+                crate::antigravity::sessions::session_summary_without_storage(
+                    &self.antigravity,
+                    request.session_key.as_deref().unwrap(),
+                )?,
+            ]
         } else {
-            crate::antigravity::sessions::list_sessions(
+            crate::antigravity::sessions::list_sessions_without_storage(
                 &self.antigravity,
                 &crate::provider_sessions::ProviderListRequest {
                     limit: Some(MAX_SESSIONS),
@@ -420,12 +422,12 @@ impl SearchUseCases {
         warnings: &mut Vec<String>,
     ) -> Result<()> {
         let summaries = if request.scope == SearchScope::Thread {
-            vec![crate::dsh::sessions::session_summary(
+            vec![crate::dsh::sessions::session_summary_without_storage(
                 &self.dsh,
                 request.session_key.as_deref().unwrap(),
             )?]
         } else {
-            crate::dsh::sessions::list_sessions(
+            crate::dsh::sessions::list_sessions_without_storage(
                 &self.dsh,
                 &crate::provider_sessions::ProviderListRequest {
                     limit: Some(MAX_SESSIONS),

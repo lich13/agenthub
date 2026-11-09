@@ -276,15 +276,18 @@ impl Monitor {
         let mut state = load(db)?;
         let baseline_before = state.baseline_ms;
         let enabled_before = state.snapshot.enabled;
-        let before = serde_json::to_string(&state)?;
         self.active = Some(active);
         if !active {
+            let changed = enabled_before
+                || baseline_before != 0
+                || !state.pending.is_empty()
+                || state.request_ms != request;
             state.snapshot.enabled = false;
             state.baseline_ms = 0;
             state.pending.clear();
             state.request_ms = request;
             self.request_ms = request;
-            if serde_json::to_string(&state)? != before {
+            if changed {
                 save(db, &state)?;
             }
             return Ok(Vec::new());
@@ -296,6 +299,7 @@ impl Monitor {
             save(db, &state)?;
             return Ok(Vec::new());
         }
+        let before = serde_json::to_string(&state)?;
         let result = async {
             let token = token.await?;
             if token != self.token {

@@ -203,7 +203,9 @@ pub fn scan_event(
             &crate::grokbot::GrokBotPaths::default_for_user(),
             Some(id),
         ),
-        NativeProvider::Claude | NativeProvider::Antigravity => scan(provider),
+        NativeProvider::Claude | NativeProvider::Antigravity => {
+            anyhow::bail!("native event scan is not supported for {provider:?}")
+        }
     }
 }
 

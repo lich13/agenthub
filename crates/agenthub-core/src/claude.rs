@@ -534,6 +534,15 @@ pub fn claude_session_detail(
     paths: &ClaudePaths,
     request: &ClaudeDetailRequest,
 ) -> Result<ClaudeSessionDetail> {
+    let mut detail = claude_session_detail_without_storage(paths, request)?;
+    attach_storage_size(paths, &mut detail.summary);
+    Ok(detail)
+}
+
+pub(crate) fn claude_session_detail_without_storage(
+    paths: &ClaudePaths,
+    request: &ClaudeDetailRequest,
+) -> Result<ClaudeSessionDetail> {
     let (path, parsed) = resolve(paths, &request.session_key)?;
     let limit = request.limit.unwrap_or(160).clamp(1, 500);
     let (start, end) = match crate::history_navigation::seek_window(
@@ -563,13 +572,12 @@ pub fn claude_session_detail(
             user.refresh_files(Some(&parsed.cwd));
         }
     }
-    let mut summary = summary(
+    let summary = summary(
         paths,
         &path,
         &parsed,
         &activity::Snapshot::capture_readonly(paths),
     )?;
-    attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),
         after_cursor: crate::history_navigation::after_cursor(

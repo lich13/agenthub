@@ -30,6 +30,16 @@ pub(super) struct DaemonMonitorCache {
 }
 
 impl DaemonMonitorCache {
+    pub(super) fn with_config(config_path: &Path, config: &Config) -> Self {
+        let cached = std::fs::metadata(config_path)
+            .ok()
+            .map(|meta| ((meta.modified().ok(), meta.len()), config.clone()));
+        Self {
+            config: std::sync::Mutex::new(cached),
+            db: None,
+        }
+    }
+
     pub(super) fn load_config(&self, config_path: &Path) -> Result<Config> {
         let mut cached = self
             .config

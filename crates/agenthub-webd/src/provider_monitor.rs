@@ -97,7 +97,7 @@ pub async fn run_antigravity_hook(
         errors: 1,
     });
     db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
-    deliver_pending(&load_config, &db, &scan.streams, Some(provider)).await
+    deliver_pending(&load_config, &db, &[], Some(provider)).await
 }
 
 async fn deliver_pending(
@@ -107,7 +107,6 @@ async fn deliver_pending(
     provider: Option<NativeProvider>,
 ) -> Result<()> {
     let deliveries = db.pending_native_deliveries(100, provider)?;
-    let instance = db.notification_instance_id()?;
     for delivery in deliveries {
         let config = &load_config()?;
         // Identity and branch are resolved by each native parser. Codex's
@@ -120,14 +119,7 @@ async fn deliver_pending(
                     && stream.session_key == delivery.session_key
                     && stream.id == delivery.thread_id
                     && stream.events.iter().any(|event| {
-                        (stream.event_key(&delivery.event) == delivery.event_key
-                            || event.prompt_id.as_deref().is_some_and(|p| {
-                                stream.prompt_event_key(
-                                    p,
-                                    native_probe::event_category(event),
-                                    &instance,
-                                ) == delivery.event_key
-                            }))
+                        stream.event_key(&delivery.event) == delivery.event_key
                             && native_probe::same_event(event, &delivery.event)
                     })
             });

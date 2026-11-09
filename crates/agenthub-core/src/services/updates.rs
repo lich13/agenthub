@@ -328,25 +328,14 @@ fn update_action_capability_for_surface(
     host_surface: HostSurface,
     action: UpdateAction,
 ) -> Capability {
-    if host_surface == HostSurface::DesktopEmbeddedTauri {
-        return match action {
-            UpdateAction::Check | UpdateAction::Install => Capability::AppUpdater,
-            UpdateAction::Prune => Capability::PruneBackups,
-        };
-    }
-    match (platform, action) {
-        (PlatformKind::Linux, UpdateAction::Prune) => Capability::PruneBackups,
-        (PlatformKind::Linux, UpdateAction::Check | UpdateAction::Install) => {
-            Capability::LinuxUpdateJob
-        }
-        (PlatformKind::Macos, UpdateAction::Check | UpdateAction::Install) => {
-            Capability::AppUpdater
-        }
-        (PlatformKind::Macos, UpdateAction::Prune) => Capability::PruneBackups,
-        (PlatformKind::Windows, UpdateAction::Check | UpdateAction::Install) => {
-            Capability::AppUpdater
-        }
-        (PlatformKind::Windows, UpdateAction::Prune) => Capability::PruneBackups,
+    match (platform, host_surface, action) {
+        (_, _, UpdateAction::Prune) => Capability::PruneBackups,
+        (
+            PlatformKind::Linux,
+            HostSurface::LinuxServerApi,
+            UpdateAction::Check | UpdateAction::Install,
+        ) => Capability::LinuxUpdateJob,
+        (_, _, UpdateAction::Check | UpdateAction::Install) => Capability::AppUpdater,
     }
 }
 
@@ -415,18 +404,16 @@ fn recommended_action(
         (PlatformKind::Linux, UpdateExecutionMethod::LinuxSystemdJob, _) => {
             "Run the fixed Linux update precheck before installing a new release.".to_string()
         }
-        (PlatformKind::Macos, UpdateExecutionMethod::MacosTauriUpdater, Some(true)) => {
-            "Confirm install in the Tauri updater after signature verification.".to_string()
-        }
-        (PlatformKind::Macos, UpdateExecutionMethod::MacosTauriUpdater, _) => {
-            "Use the Tauri updater to check signed app releases.".to_string()
-        }
-        (PlatformKind::Linux, UpdateExecutionMethod::MacosTauriUpdater, Some(true)) => {
-            "Confirm install in the Tauri updater after signature verification.".to_string()
-        }
-        (PlatformKind::Linux, UpdateExecutionMethod::MacosTauriUpdater, _) => {
-            "Use the Tauri updater to check signed app releases.".to_string()
-        }
+        (
+            PlatformKind::Macos | PlatformKind::Linux,
+            UpdateExecutionMethod::MacosTauriUpdater,
+            Some(true),
+        ) => "Confirm install in the Tauri updater after signature verification.".to_string(),
+        (
+            PlatformKind::Macos | PlatformKind::Linux,
+            UpdateExecutionMethod::MacosTauriUpdater,
+            _,
+        ) => "Use the Tauri updater to check signed app releases.".to_string(),
         _ => "Updates are unavailable on this platform in the current release.".to_string(),
     }
 }

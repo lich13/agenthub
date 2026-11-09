@@ -193,8 +193,7 @@ pub fn list_grok_sessions(
     query: Option<&str>,
 ) -> Result<Vec<GrokSessionSummary>> {
     let root = paths.sessions();
-    let mut items =
-        list_grok_sessions_from_dirs(paths, &session_directories(&root)?, limit, query)?;
+    let mut items = list_grok_sessions_without_storage(paths, limit, query)?;
     for summary in &mut items {
         summary.storage_size = Some(crate::session_storage::directory_size(
             &root,
@@ -204,6 +203,15 @@ pub fn list_grok_sessions(
         ));
     }
     Ok(items)
+}
+
+pub(crate) fn list_grok_sessions_without_storage(
+    paths: &GrokPaths,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<Vec<GrokSessionSummary>> {
+    let root = paths.sessions();
+    list_grok_sessions_from_dirs(paths, &session_directories(&root)?, limit, query)
 }
 
 pub(crate) fn probe_sessions(
@@ -436,6 +444,13 @@ pub fn grok_session_detail(
     grok_session_page(paths, id, cwd, None, None, None)
 }
 
+pub(crate) fn grok_session_detail_without_storage(
+    paths: &GrokPaths,
+    id: &str,
+) -> Result<GrokSessionDetail> {
+    grok_session_page_with_storage(paths, id, None, None, None, None, false)
+}
+
 pub fn grok_session_page(
     paths: &GrokPaths,
     id: &str,
@@ -444,17 +459,31 @@ pub fn grok_session_page(
     before: Option<&str>,
     since: Option<&str>,
 ) -> Result<GrokSessionDetail> {
+    grok_session_page_with_storage(paths, id, cwd, limit, before, since, true)
+}
+
+fn grok_session_page_with_storage(
+    paths: &GrokPaths,
+    id: &str,
+    cwd: Option<&str>,
+    limit: Option<usize>,
+    before: Option<&str>,
+    since: Option<&str>,
+    include_storage: bool,
+) -> Result<GrokSessionDetail> {
     let mut summary = resolve_session(paths, id)?;
     ensure!(
         cwd.is_none_or(|cwd| summary.cwd == cwd),
         "Grok workspace identity changed"
     );
-    summary.storage_size = Some(crate::session_storage::directory_size(
-        &paths.sessions(),
-        &summary.path,
-        None,
-        &summary.id,
-    ));
+    if include_storage {
+        summary.storage_size = Some(crate::session_storage::directory_size(
+            &paths.sessions(),
+            &summary.path,
+            None,
+            &summary.id,
+        ));
+    }
     let path = summary.path.clone();
     with_session_history(&path, |state, exists| {
         summary.updated_at = state.last_message_at.clone();
@@ -1407,7 +1436,7 @@ pub(crate) fn find_empty_inactive_sessions(
             {
                 continue;
             }
-            if grok_session_detail(paths, &summary.id, None)
+            if grok_session_detail_without_storage(paths, &summary.id)
                 .map(|detail| !detail.events.is_empty())
                 .unwrap_or(true)
             {
