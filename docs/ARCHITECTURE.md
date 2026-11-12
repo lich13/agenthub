@@ -161,7 +161,7 @@ Probe 复用原生轮询、启用基线、加密队列与有限重试。只识�
 
 `antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、Tauri 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
 
-Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；自动探测未命中、分页网络不可达、没有可见消息或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
+Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；该服务只报告本次运行已加载的会话，列表因此合并 `conversation_summaries.db` 中尚未加载的根会话（在线条目优先，时间统一为 RFC 3339）；自动探测未命中、分页网络不可达、没有可见消息或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
 
 DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。 改名追加前校验完整记录与压缩帧：合法末行缺换行时补分隔；半条 JSON 或半帧报错并保持原文件，不自动修复历史。
 

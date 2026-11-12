@@ -1051,7 +1051,7 @@ fn list_offline_summaries(
                             title,
                             cwd,
                             archived,
-                            (!modified.trim().is_empty()).then_some(modified),
+                            index_timestamp(&modified),
                             steps.max(0) as usize,
                             (!preview.trim().is_empty()).then_some(preview),
                             false,
@@ -1101,6 +1101,24 @@ fn list_offline_summaries(
     Ok(by_id.into_values().collect())
 }
 
+/// The index stores `2026-01-02 03:04:05.678+00:00`; the live service reports
+/// RFC 3339. One form keeps merged lists ordered and displayable.
+fn index_timestamp(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .or_else(|_| chrono::DateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f%:z"))
+            .map(|time| {
+                time.with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            })
+            .unwrap_or_else(|_| raw.to_owned()),
+    )
+}
+
 struct ValueOrString(bool);
 impl rusqlite::types::FromSql for ValueOrString {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
@@ -1141,13 +1159,32 @@ fn list_summaries_from_source(
         let active_roots = map
             .map(active_subagent_roots_from_summaries)
             .unwrap_or_default();
-        map.into_iter()
+        let mut items = map
+            .into_iter()
             .flatten()
             .filter(|(id, _)| filter_id.is_none_or(|target| target == id.as_str()))
             .filter_map(|(id, item)| {
                 summary_from_live_json(paths, id, item, active_roots.contains(id))
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        // The live service reports only conversations it has loaded this run.
+        // The on-disk index lists every conversation, so add the roots the
+        // service has not loaded yet; a live entry always wins.
+        let loaded = map
+            .map(|map| map.keys().map(String::as_str).collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        items.extend(
+            list_offline_summaries(paths, filter_id)
+                .unwrap_or_default()
+                .into_iter()
+                // An index row whose native store is gone was deleted through
+                // the service and must not reappear from the index.
+                .filter(|item| {
+                    !loaded.contains(item.id.as_str())
+                        && !owned_disk_paths(paths, &item.id).is_empty()
+                }),
+        );
+        items
     } else {
         list_offline_summaries(paths, filter_id)?
     };
@@ -3281,6 +3318,71 @@ mod tests {
             assert!(root.join("brain").join(&sub_b).exists());
         }
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_list_adds_indexed_roots_the_service_has_not_loaded() {
+        let root = env::temp_dir().join(format!("agenthub-ag-merge-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        let loaded = uuid::Uuid::new_v4().to_string();
+        let unloaded = uuid::Uuid::new_v4().to_string();
+        let child = uuid::Uuid::new_v4().to_string();
+        let removed = uuid::Uuid::new_v4().to_string();
+        for id in [&loaded, &unloaded, &child] {
+            fs::write(
+                root.join("conversations").join(format!("{id}.db")),
+                b"sqlite-fixture",
+            )
+            .unwrap();
+        }
+        let paths = AntigravityPaths::offline(root.clone());
+        let conn = Connection::open(paths.summaries_db()).unwrap();
+        conn.execute_batch("CREATE TABLE conversation_summaries(conversation_id TEXT PRIMARY KEY,title TEXT,preview TEXT,step_count INTEGER,last_modified_time TEXT,workspace_uris TEXT,parent_conversation_id TEXT,nesting_depth INTEGER);").unwrap();
+        conn.execute(
+            "INSERT INTO conversation_summaries VALUES \
+             (?1,'Indexed loaded','',2,'2026-01-02 03:04:05.5+00:00','',NULL,0),\
+             (?2,'Indexed only','',7,'2026-01-03 03:04:05.678901+00:00','',NULL,0),\
+             (?3,'Child','',1,'2026-01-04 00:00:00+00:00','',?2,1),\
+             (?4,'Removed','',1,'2026-01-05 00:00:00+00:00','',NULL,0)",
+            params![loaded, unloaded, child, removed],
+        )
+        .unwrap();
+        drop(conn);
+        let mut summaries = serde_json::Map::new();
+        summaries.insert(
+            loaded.clone(),
+            json!({"summary":"Live loaded","stepCount":3,"status":"CASCADE_RUN_STATUS_RUNNING","lastModifiedTime":"2026-01-02T03:04:05Z"}),
+        );
+        let payload = json!({ "trajectorySummaries": summaries });
+
+        let items = list_summaries_from_source(&paths, None, Some(&payload)).unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [unloaded.as_str(), loaded.as_str()]
+        );
+        assert_eq!(items[0].title, "Indexed only");
+        assert_eq!(items[0].status, "idle");
+        assert_eq!(items[0].message_count, 7);
+        assert_eq!(
+            items[0].updated_at.as_deref(),
+            Some("2026-01-03T03:04:05.678901Z")
+        );
+        // The service's own entry wins over the index row for the same ID.
+        assert_eq!(items[1].title, "Live loaded");
+        assert_eq!(items[1].status, "running");
+
+        let only = list_summaries_from_source(&paths, Some(&unloaded), Some(&payload)).unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].id, unloaded);
+        assert!(
+            list_summaries_from_source(&paths, Some(&child), Some(&payload))
+                .unwrap()
+                .is_empty()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
