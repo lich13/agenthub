@@ -501,12 +501,37 @@ async fn process_claude_hook(
     let resolved = tokio::task::spawn_blocking(move || -> Result<_> {
         let mut hook = hook;
         let context = super::claude_hook::context(&hook)?;
+        // An interactive question notifies as a permission prompt; claiming it
+        // under the transcript's own category keeps one claim and the question
+        // text instead of a duplicate generic reminder.
+        if hook.kind == "authorization" {
+            if let Some(question) =
+                context.pending_question(hook.prompt_id.as_deref().unwrap_or(""))
+            {
+                hook.kind = "reply_needed".into();
+                hook.body = question.body.clone();
+            }
+        }
         let state = context.hook_state(
             hook.prompt_id.as_deref().unwrap_or(""),
             &hook.kind,
             hook.received_ms,
             original_proof.as_ref().and_then(|p| p.record_count),
         );
+        // An idle prompt can appear while delegated agents still run; the
+        // thread is not finished until the owner stops reporting them.
+        let state = if hook.idle
+            && state == ClaudeNotificationState::Current
+            && hook
+                .prompt_id
+                .as_ref()
+                .and_then(|id| context.prompts.get(id))
+                .is_some_and(|prompt| context.completion_deferred(&prompt.turn_id))
+        {
+            ClaudeNotificationState::Pending
+        } else {
+            state
+        };
         if hook.idle && state == ClaudeNotificationState::Current {
             hook.body = context
                 .stream
@@ -971,7 +996,7 @@ async fn claude_source_state(
                     {
                         return Obsolete;
                     }
-                    if stream.events.iter().any(|event| {
+                    let current = stream.events.iter().any(|event| {
                         native_probe::same_event(event, &delivery.event)
                             && (stream.event_key(&delivery.event) == delivery.event_key
                                 || event.prompt_id.as_deref().is_some_and(|p| {
@@ -981,11 +1006,16 @@ async fn claude_source_state(
                                         &instance,
                                     ) == delivery.event_key
                                 }))
-                    }) {
-                        Current
-                    } else {
-                        Obsolete
+                    });
+                    if !current {
+                        return Obsolete;
                     }
+                    if delivery.event.kind == "completion"
+                        && context.completion_deferred(&delivery.event.turn_id)
+                    {
+                        return Pending;
+                    }
+                    Current
                 })
                 .await
                 .unwrap_or(Pending),

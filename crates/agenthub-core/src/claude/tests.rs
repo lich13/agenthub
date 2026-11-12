@@ -1304,6 +1304,7 @@ fn auxiliary_api_metadata_is_not_displayed_or_treated_as_terminal() {
         "api-request",
         "agent-setting",
         "continued-in",
+        "tools-used",
     ] {
         f.append(
             &json!({"type":kind,"sessionId":"native-fixture","data":"synthetic-internal-content"}),
@@ -2140,6 +2141,215 @@ fn notification_prompts_are_native_prompt_ids_and_completed_turns_survive_later_
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
     f.append(&json!({"type":"system","subtype":"cancelled"}));
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
+}
+
+fn wake_fixture(f: &Fixture, pending: Option<u64>) -> Vec<Value> {
+    let mut request = f.row("request", None, "user", json!("Delegate the audit"));
+    request["promptId"] = json!("prompt-human");
+    request["origin"] = json!({"kind":"human"});
+    let launched = f.row(
+        "launched",
+        Some("request"),
+        "assistant",
+        json!([{"type":"text","text":"Agents launched"}]),
+    );
+    let mut paused = json!({"type":"system","subtype":"turn_duration","sessionId":"native-fixture","durationMs":10,"timestamp":"2026-09-29T00:00:01Z"});
+    if let Some(count) = pending {
+        paused["pendingBackgroundAgentCount"] = json!(count);
+    }
+    let mut wake = f.row(
+        "wake",
+        Some("launched"),
+        "user",
+        json!("<task-notification><status>completed</status><summary>Agent finished</summary></task-notification>"),
+    );
+    wake["promptId"] = json!("prompt-wake");
+    wake["origin"] = json!({"kind":"task-notification"});
+    let report = f.row(
+        "report",
+        Some("wake"),
+        "assistant",
+        json!([{"type":"text","text":"Final report"}]),
+    );
+    let done = json!({"type":"system","subtype":"turn_duration","sessionId":"native-fixture","durationMs":10,"timestamp":"2026-09-29T00:00:02Z"});
+    vec![request, launched, paused, wake, report, done]
+}
+
+#[test]
+fn background_wake_turns_complete_once_under_their_own_prompt_identity() {
+    let f = Fixture::new();
+    let rows = wake_fixture(&f, Some(2));
+
+    // The main turn ended while delegated agents are still running.
+    f.write(&rows[..3]);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed.native_events.is_empty());
+    assert!(parsed.turn_open);
+
+    // The wake-up continues the thread under its own native prompt.
+    f.write(&rows[..4]);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed.native_events.is_empty() && parsed.turn_open);
+    assert_eq!(parsed.current_turn.as_deref(), Some("wake"));
+    assert_eq!(parsed.prompts["prompt-wake"].turn_id, "wake");
+    assert!(!parsed.prompts["prompt-wake"].ambiguous);
+
+    f.write(&rows);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(!parsed.turn_open);
+    assert_eq!(parsed.native_events.len(), 1);
+    let event = &parsed.native_events[0];
+    assert_eq!(
+        (
+            event.kind.as_str(),
+            event.turn_id.as_str(),
+            event.body.as_str()
+        ),
+        ("completion", "wake", "Final report")
+    );
+    assert_eq!(event.prompt_id.as_deref(), Some("prompt-wake"));
+    // The wake-up is context, never a human message, title or timeline marker.
+    let users: Vec<_> = parsed
+        .events
+        .iter()
+        .filter(|e| e.kind == "user_message")
+        .collect();
+    assert_eq!(users.len(), 1);
+    assert_eq!(parsed.title, "Delegate the audit");
+    assert_eq!(parsed.timeline.len(), 1);
+    assert!(parsed
+        .events
+        .iter()
+        .any(|e| e.role.as_deref() == Some("task_notification")
+            && e.turn_id.as_deref() == Some("wake")));
+
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(
+        context.hook_state("prompt-wake", "completion", i64::MAX, None),
+        ClaudeNotificationState::Current
+    );
+    assert_eq!(
+        context.hook_state("prompt-human", "completion", i64::MAX, None),
+        ClaudeNotificationState::Obsolete
+    );
+}
+
+#[test]
+fn independent_background_wake_keeps_the_earlier_completion_and_plain_notices_open_no_turn() {
+    let f = Fixture::new();
+    // Nothing delegated was pending: the first turn's completion stands and
+    // the later wake-up completes separately.
+    let mut rows = wake_fixture(&f, None);
+    f.write(&rows);
+    let parsed = reader::read(&f.file).unwrap();
+    assert_eq!(
+        parsed
+            .native_events
+            .iter()
+            .map(|e| (e.turn_id.as_str(), e.prompt_id.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("request", Some("prompt-human")),
+            ("wake", Some("prompt-wake"))
+        ]
+    );
+
+    // Workflows count like agents; a zero count is not pending.
+    rows[2]["pendingWorkflowCount"] = json!(1);
+    f.write(&rows[..3]);
+    assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+    rows[2]["pendingWorkflowCount"] = json!(0);
+    f.write(&rows[..3]);
+    assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
+
+    // Without a native origin and prompt identity the record stays context.
+    for strip in ["origin", "promptId"] {
+        let mut rows = wake_fixture(&f, None);
+        rows[3].as_object_mut().unwrap().remove(strip);
+        f.write(&rows[..4]);
+        let parsed = reader::read(&f.file).unwrap();
+        assert_eq!(parsed.current_turn.as_deref(), Some("request"), "{strip}");
+        assert_eq!(parsed.native_events.len(), 1, "{strip}");
+    }
+    let mut rows = wake_fixture(&f, None);
+    rows[3]["isMeta"] = json!(true);
+    f.write(&rows[..4]);
+    assert_eq!(
+        reader::read(&f.file).unwrap().current_turn.as_deref(),
+        Some("request")
+    );
+}
+
+#[test]
+fn native_owner_status_drives_the_list_and_defers_polled_completion() {
+    let f = Fixture::new();
+    f.write(&wake_fixture(&f, None)[..2]);
+    let cwd = f.root.join("workspace");
+    for (native, expected) in [
+        (Some("busy"), "running"),
+        (Some("waiting"), "waiting"),
+        (Some("idle"), "recent"),
+        (None, "recent"),
+    ] {
+        activity::test_owner_with_status(Some("native-fixture"), &cwd, native);
+        assert_eq!(
+            claude_session_summary(&f.paths, &f.key()).unwrap().status,
+            expected,
+            "{native:?}"
+        );
+        let context = notification_context(&f.paths, &f.file).unwrap();
+        assert_eq!(context.native_busy, native == Some("busy"));
+        assert_eq!(
+            context.completion_deferred("request"),
+            native == Some("busy")
+        );
+        assert!(!context.completion_deferred("earlier-turn"));
+    }
+    // An open turn still reads as running from ownership alone.
+    f.write(&wake_fixture(&f, None)[..1]);
+    activity::test_owner_with_status(Some("native-fixture"), &cwd, None);
+    assert_eq!(
+        claude_session_summary(&f.paths, &f.key()).unwrap().status,
+        "running"
+    );
+    activity::test_owner(None, Path::new("/fixture"));
+}
+
+#[test]
+fn pending_question_is_the_claim_category_for_its_permission_notice() {
+    let f = Fixture::new();
+    let mut request = f.row("request", None, "user", json!("Request"));
+    request["promptId"] = json!("prompt");
+    let mut ask = f.row(
+        "ask",
+        Some("request"),
+        "assistant",
+        json!([{"type":"tool_use","id":"ask-call","name":"AskUserQuestion","input":{"questions":[{"question":"Which option?","options":[{"label":"One"},{"label":"Two"}]}]}}]),
+    );
+    ask["message"]["stop_reason"] = json!("tool_use");
+    f.write(&[request.clone(), ask]);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    let question = context.pending_question("prompt").unwrap();
+    assert_eq!(question.kind, "reply_needed");
+    assert!(question.body.contains("Which option?"));
+    assert!(context.pending_question("").is_none());
+    assert!(context.pending_question("other").is_none());
+
+    // A real tool permission keeps the authorization category.
+    let mut call = f.row(
+        "call",
+        Some("request"),
+        "assistant",
+        json!([{"type":"tool_use","id":"bash-call","name":"Bash","input":{}}]),
+    );
+    call["message"]["stop_reason"] = json!("tool_use");
+    f.write(&[
+        request,
+        call,
+        json!({"type":"permission_request","sessionId":"native-fixture","request_id":"req","tool_use_id":"bash-call","tool_name":"Bash","description":"Run fixture","timestamp":"2026-09-29T00:00:01Z"}),
+    ]);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert!(context.pending_question("prompt").is_none());
 }
 
 #[test]

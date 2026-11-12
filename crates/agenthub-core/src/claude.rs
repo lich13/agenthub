@@ -180,6 +180,9 @@ struct Parsed {
     id: String,
     title: String,
     cwd: String,
+    /// Every working directory the session has recorded. A session that moves
+    /// keeps the launch directory its native owner registered.
+    cwds: Vec<String>,
     version: String,
     updated_at: Option<String>,
     events: Vec<Arc<ClaudeHistoryEvent>>,
@@ -388,6 +391,14 @@ fn summary_with_root(
     };
     let status = if !parsed.issues.is_empty() {
         "unknown"
+    } else if let Some(native) = assessment.native_status() {
+        // The verified owner publishes the live state: main loop or delegated
+        // agents/workflows active, a prompt waiting for the user, or idle.
+        match native {
+            "busy" => "running",
+            "waiting" => "waiting",
+            _ => "recent",
+        }
     } else if !parsed.turn_open {
         "recent"
     } else if owner == activity::Ownership::Open {
@@ -667,8 +678,42 @@ pub struct ClaudeNotificationContext {
     pub path: PathBuf,
     pub project: String,
     pub current_turn: Option<String>,
+    /// Verified native owner still reports delegated agents or workflows.
+    pub native_busy: bool,
 }
 impl ClaudeNotificationContext {
+    /// A terminal turn is not the thread's end while the verified native owner
+    /// still reports delegated work that will wake the session. Polling uses
+    /// this; a Stop hook carries its own in-flight background list instead.
+    pub fn completion_deferred(&self, turn_id: &str) -> bool {
+        self.native_busy && self.current_turn.as_deref() == Some(turn_id)
+    }
+    /// The prompt's pending request is a native question, so a permission
+    /// notification for it must claim the same category as the transcript.
+    pub fn pending_question(
+        &self,
+        prompt_id: &str,
+    ) -> Option<&crate::native_probe::NativeTurnEvent> {
+        if prompt_id.is_empty() {
+            return None;
+        }
+        let mut question = None;
+        let mut permission = false;
+        for event in self
+            .stream
+            .events
+            .iter()
+            .filter(|event| event.prompt_id.as_deref() == Some(prompt_id))
+        {
+            match crate::native_probe::event_category(event) {
+                "reply_needed" => question = question.or(Some(event)),
+                "authorization" => permission = true,
+                _ => {}
+            }
+        }
+        question.filter(|_| !permission)
+    }
+
     /// A hook is terminal evidence for its own prompt, not for the whole process.
     /// Successful historical turns remain deliverable; failures must still be current.
     pub fn hook_state(
@@ -769,10 +814,15 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
         before == reader::stamp(path)?,
         "Claude notification source changed during read"
     );
+    let native_busy = activity::Snapshot::capture_readonly(paths)
+        .assess(&parsed, path)
+        .native_status()
+        .is_some_and(|status| status == "busy");
     Ok(ClaudeNotificationContext {
         stream,
         prompts: parsed.prompts.clone(),
         current_turn: parsed.current_turn.clone(),
+        native_busy,
         path: path.into(),
         project: Path::new(&parsed.cwd)
             .file_name()

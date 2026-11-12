@@ -236,6 +236,8 @@ export function ClaudeWorkspace() {
               badges={
                 selected.status === "running" ? (
                   <span className="status-chip tone-info">运行中</span>
+                ) : selected.status === "waiting" ? (
+                  <span className="status-chip tone-warning">等待处理</span>
                 ) : selected.readError ? (
                   <span className="status-chip tone-danger">异常</span>
                 ) : null

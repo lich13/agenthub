@@ -207,6 +207,7 @@ export function latestAssistantReply(
 
 export function providerSessionStatusText(status: string, updatedAt?: string | null, archived = false): string {
   if (status === "running") return "运行中";
+  if (status === "waiting") return "等待处理";
   if (archived) return "已归档";
   if (status === "unknown") return "状态未知";
   return updatedAt ? new Date(updatedAt).toLocaleString() : "最近";

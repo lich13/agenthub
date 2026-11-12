@@ -308,6 +308,7 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
                 id: parsed.id.clone(),
                 title: parsed.title.clone(),
                 cwd: parsed.cwd.clone(),
+                cwds: parsed.cwds.clone(),
                 version: parsed.version.clone(),
                 updated_at: parsed.updated_at.clone(),
                 message_count: parsed.message_count,
@@ -522,8 +523,12 @@ impl Parser {
                 return;
             }
         }
-        if !field(record, "cwd").is_empty() {
-            self.parsed.cwd = field(record, "cwd").into();
+        let cwd = field(record, "cwd");
+        if !cwd.is_empty() && self.parsed.cwd != cwd {
+            self.parsed.cwd = cwd.into();
+            if self.parsed.cwds.len() < 32 && !self.parsed.cwds.iter().any(|seen| seen == cwd) {
+                self.parsed.cwds.push(cwd.into());
+            }
         }
         let version = alias_field(record, &["version", "claude_code_version"]);
         if !version.is_empty() {
@@ -612,7 +617,8 @@ impl Parser {
                 }
                 "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
                 | "saved_hook_context" | "mode" | "permission-mode" | "api-request-shape"
-                | "api-request-blob" | "api-request" | "agent-setting" | "continued-in" => {}
+                | "api-request-blob" | "api-request" | "agent-setting" | "continued-in"
+                | "tools-used" => {}
                 _ => {
                     let mut e = event(
                         key,
@@ -627,6 +633,40 @@ impl Parser {
                 }
             }
         }
+    }
+    /// A human prompt or a native wake-up record starts a new notification
+    /// turn. Both register their own native prompt identity, while only the
+    /// human form becomes a message, title or timeline marker.
+    fn begin_turn(&mut self, key: &str, record: &Value, position: usize, prompt: &str) {
+        if !prompt.is_empty() {
+            let entry = self
+                .parsed
+                .prompts
+                .entry(prompt.into())
+                .or_insert_with(|| ClaudePrompt {
+                    turn_id: key.to_owned(),
+                    timestamp_ms: millis(field(record, "timestamp")).unwrap_or(0),
+                    ambiguous: false,
+                    cancelled: false,
+                    last_activity_position: position as u64 + 1,
+                    last_activity_ms: millis(field(record, "timestamp")),
+                    last_api_error_position: None,
+                });
+            entry.ambiguous |= entry.turn_id != key;
+        }
+        self.turn = Some(key.to_owned());
+        self.parsed
+            .native_events
+            .retain(|event| event.kind != "failure");
+        self.parsed.turn_open = true;
+        self.parsed.last_turn_at = millis(field(record, "timestamp"));
+        self.pending.clear();
+        self.questions.clear();
+        self.permission_calls.clear();
+        self.calls.clear();
+        self.last_assistant_text = None;
+        self.last_stop_reason.clear();
+        self.last_assistant_events.clear();
     }
     fn read_message(
         &mut self,
@@ -671,6 +711,20 @@ impl Parser {
                     || compact
                     || (user.text.trim().is_empty() && user.attachments.is_empty());
                 if automatic {
+                    // A wake-up carries its own native prompt identity, so its
+                    // continuation turn is a fresh completion instead of a
+                    // duplicate of the prompt it continues.
+                    if !compact
+                        && record["isMeta"] != true
+                        && !uuid.is_empty()
+                        && !field(record, "promptId").is_empty()
+                        && record
+                            .pointer("/origin/kind")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| kind != "human")
+                    {
+                        self.begin_turn(&key, record, position, field(record, "promptId"));
+                    }
                     let body = user
                         .context_blocks
                         .iter()
@@ -700,34 +754,7 @@ impl Parser {
                 } else {
                     // Keep earlier terminal events so an incremental polling cursor
                     // can catch up after several turns between scans.
-                    let prompt = field(record, "promptId");
-                    if !prompt.is_empty() {
-                        let entry = self.parsed.prompts.entry(prompt.into()).or_insert_with(|| {
-                            ClaudePrompt {
-                                turn_id: key.clone(),
-                                timestamp_ms: millis(field(record, "timestamp")).unwrap_or(0),
-                                ambiguous: false,
-                                cancelled: false,
-                                last_activity_position: position as u64 + 1,
-                                last_activity_ms: millis(field(record, "timestamp")),
-                                last_api_error_position: None,
-                            }
-                        });
-                        entry.ambiguous |= entry.turn_id != key;
-                    }
-                    self.turn = Some(key.clone());
-                    self.parsed
-                        .native_events
-                        .retain(|event| event.kind != "failure");
-                    self.parsed.turn_open = true;
-                    self.parsed.last_turn_at = millis(field(record, "timestamp"));
-                    self.pending.clear();
-                    self.questions.clear();
-                    self.permission_calls.clear();
-                    self.calls.clear();
-                    self.last_assistant_text = None;
-                    self.last_stop_reason.clear();
-                    self.last_assistant_events.clear();
+                    self.begin_turn(&key, record, position, field(record, "promptId"));
                     if uuid.is_empty() {
                         issue(&mut self.parsed, "原生消息身份缺失，通知和改名已禁用");
                     }
@@ -1073,6 +1100,17 @@ impl Parser {
     fn read_system(&mut self, record: &Value, position: usize, key: String) {
         for key in std::iter::once(key) {
             let subtype = field(record, "subtype");
+            if subtype == "turn_duration" && native_pending_background(record) {
+                // The turn ended while native agents or workflows are still
+                // running and will wake the session again; this terminal turn
+                // is not the thread's end.
+                if let Some(turn) = self.turn.clone() {
+                    self.parsed
+                        .native_events
+                        .retain(|event| !(event.kind == "completion" && event.turn_id == turn));
+                    self.parsed.turn_open = true;
+                }
+            }
             if subtype == "api_error" {
                 self.execution_activity(record, position, true);
             }
@@ -1432,6 +1470,17 @@ impl Parser {
             self.parsed.turn_open = self.turn.is_some();
         }
     }
+}
+
+fn native_pending_background(record: &Value) -> bool {
+    ["pendingBackgroundAgentCount", "pendingWorkflowCount"]
+        .iter()
+        .any(|key| {
+            record
+                .get(*key)
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count > 0)
+        })
 }
 
 fn finish(

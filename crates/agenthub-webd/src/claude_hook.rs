@@ -26,9 +26,25 @@ pub(super) fn installed() -> bool {
         .is_ok_and(|binary| hooks::configured(&ClaudePaths::default_for_user(), &binary))
 }
 
+/// The Stop payload lists in-flight background work so a hook can tell a
+/// finished session from one paused until background work wakes it. Delegated
+/// agents and workflows continue this thread; shells and monitors do not.
+fn stop_awaits_background(value: &Value) -> bool {
+    value["background_tasks"].as_array().is_some_and(|tasks| {
+        tasks
+            .iter()
+            .any(|task| matches!(task["type"].as_str().unwrap_or(""), "subagent" | "workflow"))
+    })
+}
+
 pub(super) fn parse(value: &Value) -> Result<Option<HookEvent>> {
     let get = |key| value[key].as_str().unwrap_or("");
     let notification = get("notification_type");
+    // A hook fired inside a subagent describes that subagent's transcript, not
+    // this session's turn.
+    if !get("agent_id").is_empty() && matches!(get("hook_event_name"), "Stop" | "StopFailure") {
+        return Ok(None);
+    }
     let (kind, body, idle) = match (get("hook_event_name"), notification) {
         ("Stop", _) => (
             "completion",
@@ -64,6 +80,9 @@ pub(super) fn parse(value: &Value) -> Result<Option<HookEvent>> {
         ),
         _ => return Ok(None),
     };
+    if get("hook_event_name") == "Stop" && stop_awaits_background(value) {
+        return Ok(None);
+    }
     ensure!(
         !get("session_id").is_empty() && get("session_id").len() <= 256,
         "invalid hook identity"
@@ -154,5 +173,45 @@ mod tests {
         let event = parse(&value).unwrap().unwrap();
         assert_eq!(event.kind, "failure");
         assert_eq!(event.body, "请求达到速率限制，请打开线程查看详情。");
+    }
+
+    #[test]
+    fn subagent_stops_and_pauses_for_delegated_work_are_not_session_terminals() {
+        let _env_guard = crate::api::test_support::CONFIG_ENV_LOCK.blocking_lock();
+        let root = ClaudePaths::default_for_user().projects;
+        let base = |event: &str| serde_json::json!({"hook_event_name":event, "error":"rate_limit", "last_assistant_message":"Fixture answer", "session_id":"fixture", "prompt_id":"prompt-fixture", "transcript_path":root.join("fixture/session.jsonl")});
+        for event in ["Stop", "StopFailure"] {
+            assert!(parse(&base(event)).unwrap().is_some(), "{event}");
+            let mut subagent = base(event);
+            subagent["agent_id"] = "agent-fixture".into();
+            assert!(parse(&subagent).unwrap().is_none(), "{event}");
+        }
+        for (tasks, terminal) in [
+            (serde_json::json!([]), true),
+            (
+                serde_json::json!([{"id":"b1","type":"shell","status":"running","description":"Fixture wait"}]),
+                true,
+            ),
+            (
+                serde_json::json!([{"id":"m1","type":"monitor","status":"running","description":"Fixture monitor"}]),
+                true,
+            ),
+            (
+                serde_json::json!([{"id":"a1","type":"subagent","status":"running","description":"Fixture agent","agent_type":"general-purpose"}]),
+                false,
+            ),
+            (
+                serde_json::json!([{"id":"b1","type":"shell","status":"running","description":"Fixture wait"},{"id":"w1","type":"workflow","status":"running","description":"Fixture workflow"}]),
+                false,
+            ),
+        ] {
+            let mut stop = base("Stop");
+            stop["background_tasks"] = tasks.clone();
+            assert_eq!(parse(&stop).unwrap().is_some(), terminal, "{tasks}");
+        }
+        // Only Stop carries the in-flight list; a failure stays a failure.
+        let mut failure = base("StopFailure");
+        failure["background_tasks"] = serde_json::json!([{"id":"a1","type":"subagent","status":"running","description":"Fixture agent"}]);
+        assert_eq!(parse(&failure).unwrap().unwrap().kind, "failure");
     }
 }

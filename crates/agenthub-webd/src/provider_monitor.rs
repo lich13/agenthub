@@ -493,6 +493,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_wake_turns_and_question_prompts_keep_one_claim_across_hook_and_polling() {
+        let server = crate::tests::TestHttpServer::start_n(
+            2,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let (mut config, sandbox_root) = sandboxed_test_config();
+        config.probe.enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        let n = &mut config.probe.notifications;
+        n.notify_claude = true;
+        n.notify_claude_completion = true;
+        n.notify_claude_reply_needed = true;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+            .unwrap();
+        let claude_config_dir = sandbox_root.join("claude");
+        let _env_guard = crate::api::test_support::AsyncEnvGuard::set_many(&[(
+            "CLAUDE_CONFIG_DIR",
+            &claude_config_dir,
+        )])
+        .await;
+        db.sync_notification_channels(&config).unwrap();
+        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+            .unwrap();
+
+        let projects = agenthub_core::claude::ClaudePaths::default_for_user().projects;
+        std::fs::create_dir_all(projects.join("fixture")).unwrap();
+        let at = |offset: i64| {
+            chrono::DateTime::from_timestamp_millis(
+                chrono::Utc::now().timestamp_millis() + 1_000 + offset,
+            )
+            .unwrap()
+            .to_rfc3339()
+        };
+        let row = |session: &str,
+                   id: &str,
+                   parent: Option<&str>,
+                   kind: &str,
+                   content: Value,
+                   stop: &str,
+                   offset: i64| {
+            serde_json::json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":session,"version":"2.1.322","cwd":"/fixture/project","timestamp":at(offset),"message":{"role":kind,"content":content,"stop_reason":stop}})
+        };
+
+        // The main turn ends while a delegated agent runs; its wake-up later
+        // finishes the thread under the wake-up's own prompt identity.
+        let wake_session = "00000000-0000-4000-8000-000000000011";
+        let wake_path = projects.join("fixture/wake.jsonl");
+        let mut request = row(
+            wake_session,
+            "request",
+            None,
+            "user",
+            "Delegate fixture".into(),
+            "",
+            0,
+        );
+        request["promptId"] = "prompt-human".into();
+        request["origin"] = serde_json::json!({"kind":"human"});
+        let mut wake = row(
+            wake_session,
+            "wake",
+            Some("launched"),
+            "user",
+            "<task-notification><status>completed</status></task-notification>".into(),
+            "",
+            3,
+        );
+        wake["promptId"] = "prompt-wake".into();
+        wake["origin"] = serde_json::json!({"kind":"task-notification"});
+        let rows = [
+            request,
+            row(
+                wake_session,
+                "launched",
+                Some("request"),
+                "assistant",
+                "Agents launched".into(),
+                "end_turn",
+                1,
+            ),
+            serde_json::json!({"type":"system","subtype":"turn_duration","sessionId":wake_session,"durationMs":1,"pendingBackgroundAgentCount":1,"timestamp":at(2)}),
+            wake,
+            row(
+                wake_session,
+                "report",
+                Some("wake"),
+                "assistant",
+                "Final fixture report".into(),
+                "end_turn",
+                4,
+            ),
+            serde_json::json!({"type":"system","subtype":"turn_duration","sessionId":wake_session,"durationMs":1,"timestamp":at(5)}),
+        ];
+        std::fs::write(
+            &wake_path,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let stop = |prompt: &str, tasks: Value| {
+            crate::claude_hook::parse(&serde_json::json!({
+                "session_id": wake_session, "prompt_id": prompt, "transcript_path": wake_path,
+                "hook_event_name": "Stop", "last_assistant_message": "Final fixture report",
+                "background_tasks": tasks
+            }))
+            .unwrap()
+        };
+        assert!(stop(
+            "prompt-human",
+            serde_json::json!([{"id":"a1","type":"subagent","status":"running","description":"Fixture agent"}])
+        )
+        .is_none());
+        let load = || Ok(config.clone());
+        for prompt in ["prompt-human", "prompt-wake"] {
+            crate::notification_delivery::claude_hook(
+                &load,
+                &db,
+                stop(prompt, serde_json::json!([])).unwrap(),
+                Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+        }
+        let events = db.list_probe_events(20).unwrap();
+        assert_eq!(events.len(), 1, "the paused main turn must not notify");
+        assert_eq!(events[0].kind, "completion");
+        assert!(events[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Final fixture report"));
+
+        // An interactive question arrives as a permission prompt and is
+        // claimed once, as the question itself.
+        let ask_session = "00000000-0000-4000-8000-000000000012";
+        let ask_path = projects.join("fixture/ask.jsonl");
+        let mut prompt = row(
+            ask_session,
+            "request",
+            None,
+            "user",
+            "Ask fixture".into(),
+            "",
+            0,
+        );
+        prompt["promptId"] = "prompt-ask".into();
+        let ask = row(
+            ask_session,
+            "ask",
+            Some("request"),
+            "assistant",
+            serde_json::json!([{"type":"tool_use","id":"ask-call","name":"AskUserQuestion","input":{"questions":[{"question":"Which fixture option?","options":[{"label":"One"},{"label":"Two"}]}]}}]),
+            "tool_use",
+            1,
+        );
+        std::fs::write(&ask_path, format!("{prompt}\n{ask}\n")).unwrap();
+        let hook = crate::claude_hook::parse(&serde_json::json!({
+            "session_id": ask_session, "prompt_id": "prompt-ask", "transcript_path": ask_path,
+            "hook_event_name": "Notification", "notification_type": "permission_prompt",
+            "message": "Permission fixture notice"
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(hook.kind, "authorization");
+        crate::notification_delivery::claude_hook(&load, &db, hook, Duration::from_secs(3))
+            .await
+            .unwrap();
+        let events = db.list_probe_events(20).unwrap();
+        assert_eq!(events.len(), 2);
+        let question = events.iter().find(|e| e.kind == "reply_needed").unwrap();
+        assert!(question
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Which fixture option?"));
+        assert!(events.iter().all(|e| e.kind != "authorization"));
+
+        // Polling finds the same turn and question; both claims already exist,
+        // so nothing is sent again (the Bark fixture accepts two requests only).
+        let scan = scan(NativeProvider::Claude).await.unwrap();
+        assert_eq!(scan.errors, 0);
+        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, true)
+            .unwrap();
+        deliver_pending(&load, &db, &[], None).await.unwrap();
+        let events = db.list_probe_events(20).unwrap();
+        assert!(events.iter().all(|e| e.kind != "authorization"));
+        assert!(
+            events.iter().all(|e| e.payload["bark_status"] == "sent"),
+            "a second claim would reach the closed Bark fixture and fail"
+        );
+        let _ = std::fs::remove_dir_all(sandbox_root);
+    }
+
+    #[tokio::test]
     async fn all_five_platforms_produce_probe_events_through_hook_or_poll_pipeline() {
         let server = crate::tests::TestHttpServer::start_n(
             5,

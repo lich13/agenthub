@@ -41,10 +41,16 @@ pub(super) struct Assessment {
     pub ownership: Ownership,
     reasons: BTreeSet<&'static str>,
     processes: Vec<ClaudeOwnershipProcess>,
+    native_status: Option<String>,
 }
 impl Assessment {
     fn reason(&mut self, code: &'static str) {
         self.reasons.insert(code);
+    }
+    /// Live state published by the verified native owner of this session.
+    /// `busy` also covers delegated agents and workflows after the main turn.
+    pub fn native_status(&self) -> Option<&str> {
+        self.native_status.as_deref()
     }
     pub fn block_reason(&self) -> Option<String> {
         if self.ownership == Ownership::Inactive {
@@ -94,6 +100,10 @@ pub(super) struct Snapshot {
 thread_local! { static TEST_SNAPSHOT: std::cell::RefCell<Option<Snapshot>> = const { std::cell::RefCell::new(None) }; }
 #[cfg(test)]
 pub(super) fn test_owner(id: Option<&str>, cwd: &Path) {
+    test_owner_with_status(id, cwd, None);
+}
+#[cfg(test)]
+pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Option<&str>) {
     let date = "Tue Oct 20 08:00:00 2026";
     invalidate_readonly_snapshot_cache();
     TEST_SNAPSHOT.with(|slot| {
@@ -113,6 +123,7 @@ pub(super) fn test_owner(id: Option<&str>, cwd: &Path) {
                 proc_start: date.into(),
                 started_at: started_ms(date).unwrap() + 500,
                 pid_domain: pid_domain().unwrap(),
+                status: status.map(str::to_owned),
             }],
         })
     });
@@ -127,6 +138,8 @@ struct Registration {
     proc_start: String,
     started_at: i64,
     pid_domain: String,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 fn pid_domain() -> Option<String> {
@@ -259,6 +272,7 @@ impl Snapshot {
             ownership: Ownership::Inactive,
             reasons: BTreeSet::new(),
             processes: Vec::new(),
+            native_status: None,
         };
         let Some(processes) = &self.processes else {
             result.ownership = Ownership::Unknown;
@@ -269,8 +283,7 @@ impl Snapshot {
         let domain = pid_domain();
         for registration in &self.registrations {
             if domain.as_deref() != Some(&registration.pid_domain)
-                && (target_id(&registration.session_id)
-                    || same_path(&registration.cwd, Path::new(&parsed.cwd)))
+                && (target_id(&registration.session_id) || session_cwd(parsed, &registration.cwd))
             {
                 result.reason("foreign_domain");
                 result.processes.push(ClaudeOwnershipProcess {
@@ -283,10 +296,7 @@ impl Snapshot {
         }
         for p in processes {
             let open_file = paths.iter().any(|path| p.files.contains(path));
-            let cwd_matches = p
-                .cwd
-                .as_ref()
-                .is_some_and(|cwd| same_path(cwd, Path::new(&parsed.cwd)));
+            let cwd_matches = p.cwd.as_ref().is_some_and(|cwd| session_cwd(parsed, cwd));
             // Only OS-verified leading startup modes are exempt. Child argv
             // after `--` belongs to a separate process, checked independently.
             if matches!(p.role, ProcessRole::Daemon | ProcessRole::PtyHost) && !open_file {
@@ -318,7 +328,7 @@ impl Snapshot {
             let owns = verified.len() == 1
                 && verified.iter().any(|r| {
                     children.contains(&r.session_id)
-                        || (r.session_id == parsed.id && same_path(&r.cwd, Path::new(&parsed.cwd)))
+                        || (r.session_id == parsed.id && session_cwd(parsed, &r.cwd))
                 });
             let explicit = p.args.windows(2).any(|pair| {
                 matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id")
@@ -354,7 +364,7 @@ impl Snapshot {
             }
             let conflicting_cwd = verified
                 .iter()
-                .any(|r| r.session_id == parsed.id && !same_path(&r.cwd, Path::new(&parsed.cwd)));
+                .any(|r| r.session_id == parsed.id && !session_cwd(parsed, &r.cwd));
             let current_ids: Vec<_> = p
                 .args
                 .windows(2)
@@ -384,6 +394,9 @@ impl Snapshot {
                 registration_verified: verified.len() == 1,
                 mismatched_fields: mismatched.into_iter().map(str::to_owned).collect(),
             });
+            if owns {
+                result.native_status = verified[0].status.clone();
+            }
             if open_file || owns {
                 result.ownership = Ownership::Open;
                 result.reason(if open_file {
@@ -438,6 +451,14 @@ impl Snapshot {
         result
     }
 }
+/// The session's current directory or any directory it recorded earlier.
+fn session_cwd(parsed: &Parsed, path: &Path) -> bool {
+    same_path(path, Path::new(&parsed.cwd))
+        || parsed
+            .cwds
+            .iter()
+            .any(|seen| seen != &parsed.cwd && same_path(path, Path::new(seen)))
+}
 fn same_path(left: &Path, right: &Path) -> bool {
     left == right
         || left
@@ -457,6 +478,14 @@ fn native(command: &str, args: &[String]) -> bool {
                 a.contains("/@anthropic-ai/claude-code/")
                     && (a.ends_with("cli.js") || a.ends_with("claude.exe"))
             }))
+}
+
+fn version_named(name: &str) -> bool {
+    let parts: Vec<_> = name.split('.').collect();
+    (2..=4).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn process_role(executable: &Path, args: &[String]) -> ProcessRole {
@@ -614,7 +643,8 @@ fn collect() -> Option<Vec<Process>> {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        if !native(fields[7], &args) {
+        let named = native(fields[7], &args);
+        if !named && !version_named(fields[7]) {
             continue;
         }
         let pid = fields[0].parse().ok()?;
@@ -625,6 +655,11 @@ fn collect() -> Option<Vec<Process>> {
         } else {
             ProcessRole::Unknown
         };
+        // A native installation runs as its version file, so the process name
+        // is that version. Only the kernel-verified executable admits it.
+        if !named && role == ProcessRole::Unknown {
+            continue;
+        }
         let started =
             chrono::NaiveDateTime::parse_from_str(&fields[2..7].join(" "), "%a %b %e %T %Y")
                 .ok()
@@ -721,6 +756,74 @@ mod tests {
                 ProcessRole::Unknown
             );
         }
+    }
+
+    #[test]
+    fn version_named_processes_are_candidates_and_registry_status_needs_a_verified_owner() {
+        for name in ["2.1.322", "3.0", "10.20.30.40"] {
+            assert!(version_named(name), "{name}");
+        }
+        for name in [
+            "claude",
+            "2",
+            "2.1.x",
+            "2..1",
+            ".2.1",
+            "1.2.3.4.5",
+            "v2.1.3",
+            "",
+        ] {
+            assert!(!version_named(name), "{name}");
+        }
+        // The name only nominates a process; an unverified executable is never a session.
+        assert_eq!(
+            process_role(Path::new("/fixture/2.1.322"), &["claude".to_owned()]),
+            ProcessRole::Unknown
+        );
+
+        let parsed = Parsed {
+            id: "target".into(),
+            cwd: "/fixture/project".into(),
+            ..Default::default()
+        };
+        let file = Path::new("/fixture/target.jsonl");
+        test_owner_with_status(Some("target"), Path::new(&parsed.cwd), Some("busy"));
+        let mut snapshot = TEST_SNAPSHOT.with(|slot| slot.borrow().clone().unwrap());
+        test_owner(None, Path::new("/fixture"));
+        assert_eq!(snapshot.assess(&parsed, file).native_status(), Some("busy"));
+        let other = Parsed {
+            id: "other".into(),
+            ..parsed.clone()
+        };
+        assert_eq!(snapshot.assess(&other, file).native_status(), None);
+        // A session that changed directory still belongs to the owner that
+        // registered its launch directory.
+        let moved = Parsed {
+            cwd: "/fixture/project/nested".into(),
+            cwds: vec!["/fixture/project".into(), "/fixture/project/nested".into()],
+            ..parsed.clone()
+        };
+        let assessment = snapshot.assess(&moved, file);
+        assert_eq!(assessment.ownership, Ownership::Open);
+        assert_eq!(assessment.native_status(), Some("busy"));
+        let elsewhere = Parsed {
+            cwd: "/fixture/elsewhere".into(),
+            cwds: vec!["/fixture/elsewhere".into()],
+            ..parsed.clone()
+        };
+        assert_eq!(
+            snapshot.assess(&elsewhere, file).ownership,
+            Ownership::Unknown
+        );
+        // A registration that fails verification publishes nothing.
+        snapshot.registrations[0].proc_start = "invalid".into();
+        assert_eq!(snapshot.assess(&parsed, file).native_status(), None);
+        let registration: Registration = serde_json::from_value(serde_json::json!({
+            "pid": 42, "sessionId": "target", "cwd": "/fixture/project",
+            "procStart": "Tue Oct 20 08:00:00 2026", "startedAt": 1, "pidDomain": "darwin"
+        }))
+        .unwrap();
+        assert_eq!(registration.status, None);
     }
 
     #[test]
@@ -868,6 +971,7 @@ mod tests {
             proc_start: date.into(),
             started_at: started_ms(date).unwrap() + 500,
             pid_domain: pid_domain().unwrap(),
+            status: None,
         };
         let snapshot = Snapshot {
             processes: Some(vec![process.clone()]),
