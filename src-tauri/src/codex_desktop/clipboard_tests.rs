@@ -85,7 +85,7 @@ fn jpeg_fixture() -> Vec<u8> {
 
 #[test]
 fn finder_file_urls_are_read_from_private_items_and_deduplicated() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let first = root.path().join("中文 名称.txt");
         let second = root.path().join("second.txt");
@@ -110,7 +110,7 @@ fn finder_file_urls_are_read_from_private_items_and_deduplicated() {
 
 #[test]
 fn file_urls_support_encoded_names_and_reject_remote_authority_or_directories() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("中文 空格.txt");
         fs::write(&path, b"fixture").unwrap();
@@ -150,7 +150,7 @@ fn file_urls_support_encoded_names_and_reject_remote_authority_or_directories() 
 
 #[test]
 fn file_urls_take_priority_over_a_tiff_preview() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("document.txt");
         fs::write(&file, b"document").unwrap();
@@ -174,7 +174,7 @@ fn file_urls_take_priority_over_a_tiff_preview() {
 
 #[test]
 fn text_paths_accept_absolute_home_and_quoted_lines() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let absolute = root.path().join("absolute.txt");
         let home_file = root.path().join("中文 空格.txt");
@@ -203,7 +203,7 @@ fn text_paths_accept_absolute_home_and_quoted_lines() {
 
 #[test]
 fn mixed_or_invalid_text_remains_text_without_consuming_the_valid_prefix() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let valid = root.path().join("valid.txt");
         fs::write(&valid, b"valid").unwrap();
@@ -237,7 +237,7 @@ fn mixed_or_invalid_text_remains_text_without_consuming_the_valid_prefix() {
 
 #[test]
 fn html_is_ignored_and_never_turns_a_remote_value_into_a_request() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let board = private_board();
         assert!(board.setString_forType(
             &NSString::from_str("https://remote.example.invalid/private"),
@@ -267,7 +267,7 @@ fn html_is_ignored_and_never_turns_a_remote_value_into_a_request() {
 
 #[test]
 fn pasteboard_item_and_text_limits_are_bounded() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let root = tempfile::tempdir().unwrap();
         let mut files = Vec::new();
         let mut urls = Vec::new();
@@ -300,7 +300,7 @@ fn pasteboard_item_and_text_limits_are_bounded() {
 
 #[test]
 fn png_tiff_and_jpeg_are_normalized_to_bounded_png_data() {
-    autoreleasepool(|_| {
+    appkit_test_pool(|| {
         let board = private_board();
         assert!(unsafe {
             board.setData_forType(

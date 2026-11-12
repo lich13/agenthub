@@ -23,6 +23,18 @@ const TEXT_BYTES: usize = 32 * 8192;
 #[path = "clipboard_tests.rs"]
 mod ingress_tests;
 
+/// AppKit pasteboard and image conversion are not safe to drive from several
+/// test threads at once: concurrent use intermittently returned another
+/// test's items or raised a foreign exception that aborted the test process.
+#[cfg(test)]
+fn appkit_test_pool<R>(test: impl FnOnce() -> R) -> R {
+    static APPKIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = APPKIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    autoreleasepool(|_| test())
+}
+
 pub(super) enum PasteContent {
     Files(Vec<NativeReference>),
     Image(Vec<u8>),
@@ -368,7 +380,7 @@ mod tests {
 
     #[test]
     fn png_is_preserved_and_tiff_is_converted_without_resizing() {
-        autoreleasepool(|_| {
+        appkit_test_pool(|| {
             assert_eq!(normalize(PNG, true).unwrap(), PNG);
             let bitmap = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(PNG)).unwrap();
             // SAFETY: documented property types and an empty property dictionary.
@@ -390,7 +402,7 @@ mod tests {
 
     #[test]
     fn private_pasteboard_changed_during_conversion_is_rejected() {
-        autoreleasepool(|_| {
+        appkit_test_pool(|| {
             // A unique test pasteboard never reads or changes the user's clipboard.
             let board = NSPasteboard::pasteboardWithUniqueName();
             board.clearContents();
@@ -426,7 +438,7 @@ mod tests {
 
     #[test]
     fn diagnostic_copy_writes_safe_json_to_a_private_pasteboard() {
-        autoreleasepool(|_| {
+        appkit_test_pool(|| {
             let board = NSPasteboard::pasteboardWithUniqueName();
             let diagnostics = diagnostics_with_hint("fixture diagnostic".into());
             let expected = serde_json::to_string_pretty(&diagnostics).unwrap();
@@ -445,7 +457,7 @@ mod tests {
 
     #[test]
     fn oversized_diagnostic_copy_keeps_private_pasteboard_contents() {
-        autoreleasepool(|_| {
+        appkit_test_pool(|| {
             let board = NSPasteboard::pasteboardWithUniqueName();
             let existing = NSString::from_str("fixture-existing-content");
             // SAFETY: AppKit exports this immutable pasteboard type constant.
