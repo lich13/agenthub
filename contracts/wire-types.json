@@ -1234,6 +1234,13 @@
             "name": "pid_domain",
             "serde": [],
             "type": "String"
+          },
+          {
+            "name": "status",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
