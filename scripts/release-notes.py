@@ -8,6 +8,25 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.12": {
+        "summary": [
+            "修复 Claude Code 线程运行与结束识别，并让 Antigravity 列表显示尚未在 App 中打开的线程"
+        ],
+        "features": [
+            "Claude Code 会话列表按已核验的原生会话登记显示「运行中」与「等待处理」，后台 agent／workflow 在途期间保持运行中。",
+        ],
+        "fixes": [
+            "Claude Code 原生安装以版本号命名进程，此前无法匹配到任何 Claude 进程；现经可执行文件核验后纳入归属判定，并在会话切换工作目录后保持归属。",
+            "Claude Code 主回合结束但原生 agent／workflow 仍在途时不再提前推送完成；后台任务唤醒的续跑回合以自身提示身份独立通知，线程最终结束时推送一次。后台 shell 与 monitor 不延后完成通知。",
+            "Claude Code 忽略子代理触发的 Stop／StopFailure，不再把子代理的 API 错误记为主线程失败；交互提问的权限提示与轮询事件共用一次认领，不再重复推送。",
+            "Claude Code 阅读区不再把 tools-used 记录显示为未识别活动。",
+            "Antigravity 在线列表合并磁盘索引中原生服务尚未加载的根会话，无须先在 App 中点击线程。",
+        ],
+        "migration": [
+            "API 协议保持 2，数据库 schema 保持 3；保留会话、凭据、通知基线、去重与重试，不新增迁移。",
+            "支持新安装及已由 v2.1.0 完成迁移的配置；更早版本先升级至 v2.1.0，早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.11": {
         "summary": [
             "修复 Antigravity 嵌套子代理等待后台任务期间的主会话误推送，并支持 Grok Bot 消息完成监控推送"

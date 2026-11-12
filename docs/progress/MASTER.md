@@ -2,9 +2,9 @@
 
 ## 当前版本
 
-当前正式版本为 [**v2.1.11**](https://github.com/lich13/agenthub/releases/tag/v2.1.11)：修复 Antigravity 在嵌套子代理等待后台任务完成通知期间主会话提前触发完成推送的问题（兼容 `argumentsJson` 与带文本前缀的 `invoke_subagent` 输出，自底向上传播嵌套子代理与运行中后台命令的未结算状态），并为 Grok Bot 补齐 `send-message` 消息完成通知监控、游标幂等去重与升级历史基线保护。API 协议保持 2、数据库 schema 保持 3。
+当前正式版本为 [**v2.1.12**](https://github.com/lich13/agenthub/releases/tag/v2.1.12)：修复 Claude Code 线程运行与结束识别（原生安装以版本号命名的进程经可执行文件核验后纳入归属判定，运行状态取自已核验会话登记的 `busy`／`waiting`／`idle`；主回合结束但原生 agent／workflow 仍在途时不视为线程完成，后台任务唤醒的续跑回合以自身 `promptId` 独立通知；忽略子代理触发的 `Stop`／`StopFailure`，交互提问的权限提示与轮询事件共用一次认领），并让 Antigravity 在线列表合并磁盘索引中原生服务尚未加载的根会话。API 协议保持 2、数据库 schema 保持 3。
 
-上一正式版本 [**v2.1.10**](https://github.com/lich13/agenthub/releases/tag/v2.1.10)，八项正式资产已发布。
+上一正式版本 [**v2.1.11**](https://github.com/lich13/agenthub/releases/tag/v2.1.11)，八项正式资产已发布。
 
 ## v2.1.8 源码与资源比较
 
