@@ -1047,8 +1047,8 @@ impl TomlPatchEditor {
             return;
         };
         let (start, end) = self.ensure_section(section);
-        for index in start + 1..end {
-            let stripped = self.lines[index].trim();
+        for line in self.lines.iter_mut().take(end).skip(start + 1) {
+            let stripped = line.trim();
             if stripped.starts_with('#') || !stripped.contains('=') {
                 continue;
             }
@@ -1056,7 +1056,7 @@ impl TomlPatchEditor {
                 continue;
             };
             if line_key.trim() == key {
-                self.lines[index] = format!("{key} = {value}");
+                *line = format!("{key} = {value}");
                 return;
             }
         }

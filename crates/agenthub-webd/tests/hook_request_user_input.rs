@@ -537,15 +537,14 @@ fn cargo_webd_binary() -> PathBuf {
         .expect("current integration test executable must be available")
         .canonicalize()
         .expect("current integration test executable must exist");
-    let profile_dir = test_binary
-        .parent()
-        .filter(|dir| dir.file_name().is_some_and(|name| name == "deps"))
-        .and_then(Path::parent)
-        .expect("integration test executable must be in a Cargo profile's deps directory");
-    let expected_binary =
-        profile_dir.join(format!("agenthub-webd{}", std::env::consts::EXE_SUFFIX));
+    // Cargo places test executables in the profile's `deps` directory or, with
+    // the per-package layout, deeper below the same profile directory.
     assert!(
-        binary == expected_binary,
+        binary.file_name().is_some_and(
+            |name| name == format!("agenthub-webd{}", std::env::consts::EXE_SUFFIX).as_str()
+        ) && binary
+            .parent()
+            .is_some_and(|profile| test_binary.starts_with(profile)),
         "Cargo binary must belong to the same build directory and profile as this integration test"
     );
     binary

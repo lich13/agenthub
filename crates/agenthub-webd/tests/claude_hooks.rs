@@ -131,16 +131,13 @@ impl Fixture {
         let binary = PathBuf::from(env!("CARGO_BIN_EXE_agenthub-webd"))
             .canonicalize()
             .unwrap();
-        let profile = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        assert_eq!(
-            binary.parent(),
-            Some(profile.as_path()),
+        // Cargo places test executables in the profile's `deps` directory or,
+        // with the per-package layout, deeper below the same profile directory.
+        let test_binary = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert!(
+            binary
+                .parent()
+                .is_some_and(|profile| test_binary.starts_with(profile)),
             "must launch this build's CLI"
         );
         hooks::manage(

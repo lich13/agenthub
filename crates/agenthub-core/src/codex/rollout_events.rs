@@ -1233,18 +1233,14 @@ pub(crate) fn is_usable_thread_title(text: &str) -> bool {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    if matches!(
+    !(matches!(
         lower.as_str(),
         "untitled" | "untitled thread" | "未命名线程" | "读取中" | "loading"
     ) || lower.starts_with("读取中")
         || lower.starts_with("loading")
         || lower.contains("<proposed_plan>")
         || looks_like_assistant_preview_title(trimmed)
-        || is_internal_context_message_text(trimmed)
-    {
-        return false;
-    }
-    true
+        || is_internal_context_message_text(trimmed))
 }
 
 fn looks_like_assistant_preview_title(text: &str) -> bool {
