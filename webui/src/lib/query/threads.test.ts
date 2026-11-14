@@ -1,11 +1,12 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { QueryClient, useQuery, useQueryClient, type QueryObserverOptions } from "@tanstack/react-query";
+import { QueryClient, QueryObserver, useQuery, useQueryClient, type QueryObserverOptions } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { getThread } from "../api";
 import { threadDetailRefetchInterval, threadSelectionView } from "../domain/codexViewModel";
-import { mergeThreadSummaryIntoListCache, threadQueryKeys, useThreadCacheActions, useThreadDetailQuery } from "./threads";
+import { bindThreadMessageCache, mergeThreadSummaryIntoListCache, threadQueryKeys, useThreadCacheActions, useThreadDetailQuery } from "./threads";
+import { applyThreadDetailToSlot, clearThreadSlot, createThreadMessageStoreState, getThreadSlot, setActiveThreadSlot } from "../threadMessageStore";
 
 vi.mock("@tanstack/react-query", async original => ({
   ...await original<typeof import("@tanstack/react-query")>(),
@@ -50,6 +51,63 @@ function cacheActions() {
   renderToString(createElement(Probe));
   return actions;
 }
+
+test("query GC releases inactive paginated history while preserving the active thread", async () => {
+  client.setDefaultOptions({ queries: { gcTime: 100, retry: false } });
+  const store = createThreadMessageStoreState();
+  const unbind = bindThreadMessageCache(client, {
+    isActive: id => store.activeThreadId === id,
+    clear: id => clearThreadSlot(store, id)
+  });
+  for (const id of ["old", "active"]) {
+    applyThreadDetailToSlot(store, id, detail(id));
+    getThreadSlot(store, id).showAllHistory = true;
+    client.setQueryData(threadQueryKeys.thread(id), detail(id));
+  }
+  setActiveThreadSlot(store, "active");
+  const observer = new QueryObserver(client, { queryKey: threadQueryKeys.thread("active"), enabled: false });
+  const unsubscribe = observer.subscribe(() => {});
+  await vi.advanceTimersByTimeAsync(101);
+  expect(store.slots.has("old")).toBe(false);
+  expect(store.slots.get("active")?.showAllHistory).toBe(true);
+  expect(client.getQueryData(threadQueryKeys.thread("active"))).toBeDefined();
+  setActiveThreadSlot(store, "old");
+  expect(getThreadSlot(store, "old").blocks).toEqual([]);
+  const reopened = await client.fetchQuery(queryOptions("old"));
+  applyThreadDetailToSlot(store, "old", reopened);
+  expect(getThreadSlot(store, "old").blocks).toEqual(reopened.blocks);
+  expect(getThreadSlot(store, "old").showAllHistory).toBe(false);
+  unsubscribe();
+  await vi.advanceTimersByTimeAsync(101);
+  expect(store.slots.has("active")).toBe(false);
+  unbind();
+});
+
+test("cancelling a query before removal prevents its late response recreating a message slot", async () => {
+  const store = createThreadMessageStoreState();
+  const unbind = bindThreadMessageCache(client, { isActive: () => false, clear: id => clearThreadSlot(store, id) });
+  let resolve!: (value: ThreadDetail) => void;
+  vi.mocked(getThread).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  function Probe() {
+    useThreadDetailQuery({ threadId: "old", snapshot: () => {
+      getThreadSlot(store, "old");
+      return undefined;
+    }, refetchInterval: threadDetailRefetchInterval });
+    return null;
+  }
+  renderToString(createElement(Probe));
+  const options = vi.mocked(useQuery).mock.calls.at(-1)![0] as QueryObserverOptions<ThreadDetail>;
+  getThreadSlot(store, "old");
+  const pending = client.fetchQuery(options).catch(() => undefined);
+  await client.cancelQueries({ queryKey: threadQueryKeys.thread("old") });
+  client.removeQueries({ queryKey: threadQueryKeys.thread("old") });
+  resolve(detail("old"));
+  await pending;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(store.slots.has("old")).toBe(false);
+  expect(client.getQueryData(threadQueryKeys.thread("old"))).toBeUndefined();
+  unbind();
+});
 
 test.each<[ThreadStatus, number]>([["Recent", 5000], ["Running", 2000]])(
   "%s thread switches reuse the current polling window and refresh after it expires", async (status, interval) => {

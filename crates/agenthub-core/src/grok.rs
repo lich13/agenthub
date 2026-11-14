@@ -294,7 +294,11 @@ pub(crate) fn notification_for_event(
     id: &str,
     event: &crate::native_probe::NativeTurnEvent,
 ) -> Result<crate::native_probe::NativeScan> {
-    let root = paths.sessions().canonicalize()?;
+    let root = match paths.sessions().canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(error.into()),
+    };
     let by_id = SessionDirectories::from([(id.to_owned(), locate_sessions(paths, id)?)]);
     notification_snapshots_from_dirs(&root, by_id, Some(event.position))
 }
@@ -309,7 +313,10 @@ fn notification_snapshots_from_dirs(
     };
     let mut scan = NativeScan::default();
     for (id, dirs) in by_id {
-        let read = (|| -> Result<NativeStreamSnapshot> {
+        let read = (|| -> Result<Option<NativeStreamSnapshot>> {
+            if dirs.is_empty() {
+                return Ok(None);
+            }
             uuid::Uuid::parse_str(&id).context("invalid Grok session ID")?;
             ensure!(dirs.len() == 1, "ambiguous Grok session ID");
             let raw_dir = &dirs[0];
@@ -329,10 +336,9 @@ fn notification_snapshots_from_dirs(
             let (identity, stamp) = grok_probe_cache_stamp(&event_path, &updates_path)?;
             let current_events = if let Some(position) = current_position {
                 let events = read_jsonl(&event_path)?;
-                ensure!(
-                    event_position_current(&events, position),
-                    "Grok turn changed"
-                );
+                if !event_position_current(&events, position) {
+                    return Ok(None);
+                }
                 Some(events)
             } else {
                 None
@@ -350,7 +356,7 @@ fn notification_snapshots_from_dirs(
                     hit.last_accessed = std::time::Instant::now();
                     let out = hit.snapshot.clone();
                     cache.entries.push_back(hit);
-                    return Ok(out);
+                    return Ok(Some(out));
                 }
             }
             #[cfg(test)]
@@ -415,10 +421,11 @@ fn notification_snapshots_from_dirs(
                     }
                 }
             }
-            Ok(snapshot)
+            Ok(Some(snapshot))
         })();
         match read {
-            Ok(stream) => scan.streams.push(stream),
+            Ok(Some(stream)) => scan.streams.push(stream),
+            Ok(None) => {}
             Err(_) => scan.errors += 1,
         }
     }
@@ -1270,28 +1277,40 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
     }
 }
 
-fn locate_sessions(paths: &GrokPaths, id: &str) -> Result<Vec<PathBuf>> {
-    crate::session_delete::valid_id(id)?;
-    let mut result = Vec::new();
-    let root = paths.sessions();
-    let entries = match fs::read_dir(&root) {
+fn session_workspaces(paths: &GrokPaths) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(paths.sessions()) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(result),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(e.into()),
     };
+    let mut workspaces = Vec::new();
     for workspace in entries {
         let workspace = workspace?;
         if workspace.file_type()?.is_dir() {
-            let path = workspace.path().join(id);
-            match fs::symlink_metadata(&path) {
-                Ok(_) => result.push(path),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
+            workspaces.push(workspace.path());
         }
     }
-    result.sort();
+    workspaces.sort();
+    Ok(workspaces)
+}
+
+fn locate_in_workspaces(workspaces: &[PathBuf], id: &str) -> Result<Vec<PathBuf>> {
+    crate::session_delete::valid_id(id)?;
+    let mut result = Vec::new();
+    for workspace in workspaces {
+        let path = workspace.join(id);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => result.push(path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
     Ok(result)
+}
+
+fn locate_sessions(paths: &GrokPaths, id: &str) -> Result<Vec<PathBuf>> {
+    crate::session_delete::valid_id(id)?;
+    locate_in_workspaces(&session_workspaces(paths)?, id)
 }
 
 pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePreview> {
@@ -1456,64 +1475,100 @@ pub fn execute_grok_delete(
     paths: &GrokPaths,
     request: GrokDeleteRequest,
 ) -> Result<GrokDeleteResult> {
-    ensure!(request.confirmed, "Grok deletion requires confirmation");
-    crate::session_delete::valid_id(&request.id)?;
+    execute_grok_delete_batch(paths, vec![request]).remove(0)
+}
+
+pub(crate) fn execute_grok_delete_batch(
+    paths: &GrokPaths,
+    requests: Vec<GrokDeleteRequest>,
+) -> Vec<Result<GrokDeleteResult>> {
+    let workspaces = session_workspaces(paths);
     let sessions_root = paths.sessions();
-    let located = locate_sessions(paths, &request.id)?;
-    let snapshot = activity::Snapshot::capture(paths);
-    for path in &located {
-        ensure!(
-            crate::session_delete::within(&sessions_root, path),
-            "Grok 会话路径越界，拒绝删除"
-        );
-        let summary = read_summary(path)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| fallback_summary(path));
-        ensure!(
-            snapshot.ownership(&summary) != activity::Ownership::Open,
-            "Grok 会话正在运行，请先退出后再删除"
-        );
-    }
-    let expected_fp = request.fingerprint.trim();
-    if !expected_fp.is_empty() {
-        ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");
-        ensure!(
-            grok_fingerprint(&located)? == expected_fp,
-            "Grok 会话已变化，请重新预览"
-        );
-    }
-    let mut outcome = crate::session_delete::Outcome::default();
-    for (idx, path) in located.iter().enumerate() {
-        if !outcome.remove_strict(path) {
-            for rem in &located[idx + 1..] {
-                if fs::symlink_metadata(rem).is_ok() {
-                    outcome.residuals.push(rem.display().to_string());
+    let mut pending: Vec<_> = requests
+        .into_iter()
+        .map(|request| -> Result<_> {
+            ensure!(request.confirmed, "Grok deletion requires confirmation");
+            crate::session_delete::valid_id(&request.id)?;
+            let workspaces = workspaces.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+            let located = locate_in_workspaces(workspaces, &request.id)?;
+            for path in &located {
+                ensure!(
+                    crate::session_delete::within(&sessions_root, path),
+                    "Grok 会话路径越界，拒绝删除"
+                );
+            }
+            let expected_fp = request.fingerprint.trim();
+            if !expected_fp.is_empty() {
+                let snapshot = activity::Snapshot::capture(paths);
+                for path in &located {
+                    let summary = read_summary(path)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| fallback_summary(path));
+                    ensure!(
+                        snapshot.ownership(&summary) != activity::Ownership::Open,
+                        "Grok 会话正在运行，请先退出后再删除"
+                    );
+                }
+                ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");
+                ensure!(
+                    grok_fingerprint(&located)? == expected_fp,
+                    "Grok 会话已变化，请重新预览"
+                );
+            }
+            let mut outcome = crate::session_delete::Outcome::default();
+            for (idx, path) in located.iter().enumerate() {
+                if !outcome.remove_strict(path) {
+                    outcome.residuals.extend(
+                        located[idx + 1..]
+                            .iter()
+                            .filter(|p| fs::symlink_metadata(p).is_ok())
+                            .map(|p| p.display().to_string()),
+                    );
+                    break;
                 }
             }
-            break;
+            Ok((request.id, outcome))
+        })
+        .collect();
+    let ids: std::collections::BTreeSet<_> = pending
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .filter(|(_, outcome)| outcome.residuals.is_empty())
+        .map(|(id, _)| id.clone())
+        .collect();
+    if !ids.is_empty() {
+        let index = paths.home.join("active_sessions.json");
+        let result = crate::session_delete::edit_json(&index, |value| match value {
+            Value::Array(rows) => rows.retain(|row| !crate::session_delete::has_id(row, &ids)),
+            Value::Object(rows) => rows
+                .retain(|key, row| !ids.contains(key) && !crate::session_delete::has_id(row, &ids)),
+            _ => {}
+        });
+        if let Err(error) = result {
+            for (id, outcome) in pending.iter_mut().filter_map(|item| item.as_mut().ok()) {
+                if ids.contains(id) {
+                    outcome
+                        .residuals
+                        .push(format!("{}: {error}", index.display()));
+                }
+            }
         }
     }
-    if outcome.residuals.is_empty() {
-        let index = paths.home.join("active_sessions.json");
-        let ids = std::collections::BTreeSet::from([request.id.clone()]);
-        outcome.attempt(&index, || {
-            crate::session_delete::edit_json(&index, |value| match value {
-                Value::Array(rows) => rows.retain(|row| !crate::session_delete::has_id(row, &ids)),
-                Value::Object(rows) => rows.retain(|key, row| {
-                    !ids.contains(key) && !crate::session_delete::has_id(row, &ids)
-                }),
-                _ => {}
+    pending
+        .into_iter()
+        .map(|item| {
+            item.map(|(id, mut outcome)| {
+                outcome.finish();
+                GrokDeleteResult {
+                    id,
+                    deleted: outcome.residuals.is_empty(),
+                    bytes: outcome.bytes,
+                    residuals: outcome.residuals,
+                }
             })
-        });
-    }
-    outcome.finish();
-    Ok(GrokDeleteResult {
-        id: request.id,
-        deleted: outcome.residuals.is_empty(),
-        bytes: outcome.bytes,
-        residuals: outcome.residuals,
-    })
+        })
+        .collect()
 }
 
 pub async fn rename_grok_session(

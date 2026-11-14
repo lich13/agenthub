@@ -395,6 +395,14 @@ impl SessionUseCases {
             request.operation != SessionOperation::Delete || request.confirmed,
             "删除需要明确确认"
         );
+        if request.operation == SessionOperation::Delete
+            && matches!(
+                request.provider,
+                SessionProvider::Codex | SessionProvider::Claude | SessionProvider::Grok
+            )
+        {
+            return Ok(self.bulk_delete_native(&request));
+        }
         let mut results = Vec::new();
         for item in &request.items {
             let mut result = SessionBatchItemResult {
@@ -442,66 +450,7 @@ impl SessionUseCases {
                         &item.fingerprint,
                     );
                 }
-                match request.provider {
-                    SessionProvider::Codex => {
-                        let verified: std::collections::BTreeSet<String> =
-                            if request.include_descendants {
-                                selected_codex::tree::descendants(
-                                    &self.codex,
-                                    std::slice::from_ref(&item.session_key),
-                                )?
-                                .into_iter()
-                                .filter(|id| id != &item.session_key)
-                                .collect()
-                            } else {
-                                std::collections::BTreeSet::new()
-                            };
-                        for child in &item.descendants {
-                            ensure!(
-                                request.include_descendants && verified.contains(child),
-                                "子线程 {child} 不在当前主线程名下，请重新预览"
-                            );
-                        }
-                        let mut ids = vec![item.session_key.clone()];
-                        ids.extend(item.descendants.iter().cloned());
-                        let outcome = selected_codex::tree::execute_ids(&self.codex, &ids)?;
-                        result.deleted_ids = outcome.deleted_ids;
-                        result.residuals = outcome.residuals;
-                        result.message = outcome.error;
-                    }
-                    SessionProvider::Claude => {
-                        let outcome = crate::claude::execute_claude_delete(
-                            &self.claude,
-                            crate::claude::ClaudeDeleteRequest {
-                                session_key: item.session_key.clone(),
-                                confirmed: true,
-                                fingerprint: item.fingerprint.clone(),
-                            },
-                        )?;
-                        result.residuals = outcome.residuals;
-                        if outcome.deleted {
-                            result.deleted_ids.push(item.session_key.clone());
-                        }
-                    }
-                    SessionProvider::Grok => {
-                        let outcome = grok::execute_grok_delete(
-                            &self.grok,
-                            grok::GrokDeleteRequest {
-                                id: item.session_key.clone(),
-                                confirmed: true,
-                                fingerprint: item.fingerprint.clone(),
-                            },
-                        )?;
-                        result.residuals = outcome.residuals;
-                        if outcome.deleted {
-                            result.deleted_ids.push(item.session_key.clone());
-                        }
-                    }
-                    SessionProvider::Antigravity
-                    | SessionProvider::Dsh
-                    | SessionProvider::Grokbot => unreachable!(),
-                }
-                Ok(())
+                unreachable!("native deletion was handled as a batch")
             })();
             if let Err(error) = action {
                 result.status = if request.operation == SessionOperation::Delete {
@@ -520,6 +469,144 @@ impl SessionUseCases {
             results.push(result);
         }
         Ok(SessionBatchResult { items: results })
+    }
+    fn bulk_delete_native(&self, request: &SessionBatchExecuteRequest) -> SessionBatchResult {
+        use selected_codex::tree::DeleteOutcome;
+        let outcomes: Vec<Result<DeleteOutcome>> = match request.provider {
+            SessionProvider::Claude => crate::claude::execute_claude_delete_batch(
+                &self.claude,
+                request
+                    .items
+                    .iter()
+                    .map(|item| crate::claude::ClaudeDeleteRequest {
+                        session_key: item.session_key.clone(),
+                        confirmed: true,
+                        fingerprint: item.fingerprint.clone(),
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|result| {
+                result.map(|result| DeleteOutcome {
+                    deleted_ids: if result.deleted {
+                        vec![result.session_key]
+                    } else {
+                        vec![]
+                    },
+                    residuals: result.residuals,
+                    deleted_bytes: result.bytes,
+                    error: None,
+                })
+            })
+            .collect(),
+            SessionProvider::Grok => grok::execute_grok_delete_batch(
+                &self.grok,
+                request
+                    .items
+                    .iter()
+                    .map(|item| grok::GrokDeleteRequest {
+                        id: item.session_key.clone(),
+                        confirmed: true,
+                        fingerprint: item.fingerprint.clone(),
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|result| {
+                result.map(|result| DeleteOutcome {
+                    deleted_ids: if result.deleted {
+                        vec![result.id]
+                    } else {
+                        vec![]
+                    },
+                    residuals: result.residuals,
+                    deleted_bytes: result.bytes,
+                    error: None,
+                })
+            })
+            .collect(),
+            SessionProvider::Codex => {
+                let edges = if request.include_descendants {
+                    selected_codex::tree::spawn_edges(&self.codex)
+                } else {
+                    Ok(Default::default())
+                };
+                let selections: Vec<Result<Vec<String>>> = request
+                    .items
+                    .iter()
+                    .map(|item| {
+                        let edges = edges.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+                        let verified: HashSet<_> = selected_codex::tree::descendants_from_edges(
+                            edges,
+                            std::slice::from_ref(&item.session_key),
+                        )?
+                        .into_iter()
+                        .collect();
+                        for child in &item.descendants {
+                            ensure!(
+                                request.include_descendants
+                                    && child != &item.session_key
+                                    && verified.contains(child),
+                                "子线程 {child} 不在当前主线程名下，请重新预览"
+                            );
+                        }
+                        let mut ids = vec![item.session_key.clone()];
+                        ids.extend(item.descendants.iter().cloned());
+                        Ok(ids)
+                    })
+                    .collect();
+                let valid: Vec<_> = selections
+                    .iter()
+                    .filter_map(|item| item.as_ref().ok())
+                    .cloned()
+                    .collect();
+                let mut results =
+                    selected_codex::tree::execute_batch(&self.codex, &valid).into_iter();
+                selections
+                    .into_iter()
+                    .map(|selection| {
+                        selection.and_then(|_| {
+                            results.next().expect("one result per validated selection")
+                        })
+                    })
+                    .collect()
+            }
+            _ => unreachable!(),
+        };
+        SessionBatchResult {
+            items: request
+                .items
+                .iter()
+                .zip(outcomes)
+                .map(|(item, outcome)| {
+                    let mut result = SessionBatchItemResult {
+                        session_key: item.session_key.clone(),
+                        status: "succeeded".into(),
+                        message: None,
+                        deleted_ids: vec![],
+                        residuals: vec![],
+                    };
+                    match outcome {
+                        Ok(outcome) => {
+                            result.deleted_ids = outcome.deleted_ids;
+                            result.residuals = outcome.residuals;
+                            result.message = outcome.error;
+                            if !result.residuals.is_empty() {
+                                result.status = "failed".into();
+                                result
+                                    .message
+                                    .get_or_insert_with(|| "部分内容未删除，请查看逐项结果".into());
+                            }
+                        }
+                        Err(error) => {
+                            result.status = "failed".into();
+                            result.message = Some(format!("{error:#}"));
+                        }
+                    }
+                    result
+                })
+                .collect(),
+        }
     }
 }
 

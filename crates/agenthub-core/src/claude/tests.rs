@@ -2567,8 +2567,7 @@ fn execute_claude_delete_rejects_out_of_bounds_allows_running_and_stops_on_parti
 }
 
 #[test]
-fn notification_snapshots_reuse_lightweight_probe_cache_without_rereading_or_touching_detail_cache()
-{
+fn notification_snapshots_reuse_incremental_reader_and_lightweight_probe_cache() {
     let f = Fixture::new();
     f.complete();
 
@@ -2595,8 +2594,28 @@ fn notification_snapshots_reuse_lightweight_probe_cache_without_rereading_or_tou
         json!([{"type":"text","text":"Second reply"}]),
     ));
     let third = notification_snapshots(&f.paths).unwrap();
-    assert!(reader::BODY_RECORDS.with(|c| c.get()) >= 4);
+    assert_eq!(reader::BODY_RECORDS.with(|c| c.get()), 2);
     assert_eq!(third.streams[0].events.len(), 2);
+}
+
+#[test]
+fn notification_cache_keeps_idle_sessions_when_body_cache_evicts_and_rejects_partial_tail() {
+    let f = Fixture::new();
+    f.complete();
+    for n in 0..70 {
+        fs::copy(&f.file, f.file.with_file_name(format!("idle-{n}.jsonl"))).unwrap();
+    }
+    let scan = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams.len(), 71);
+    reader::BODY_RECORDS.with(|count| count.set(0));
+    assert_eq!(notification_snapshots(&f.paths).unwrap().streams.len(), 71);
+    assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 0);
+    let mut file = fs::OpenOptions::new().append(true).open(&f.file).unwrap();
+    write!(file, "{{\"type\":").unwrap();
+    assert_eq!(notification_snapshots(&f.paths).unwrap().errors, 1);
+    writeln!(file, "\"metadata\"}}").unwrap();
+    assert_eq!(notification_snapshots(&f.paths).unwrap().errors, 0);
 }
 
 #[test]
@@ -2632,4 +2651,86 @@ fn ordinary_delete_skips_transcript_parsing_and_unknown_registrations() {
     assert!(registrations.join("broken.json").exists());
     assert!(registrations.join("other.json").exists());
     reader::BODY_RECORDS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn batch_delete_filters_shared_history_only_for_successful_projects() {
+    use crate::services::sessions::*;
+    let f = Fixture::new();
+    f.complete();
+    let good = f.file.with_file_name("good.jsonl");
+    fs::write(&good, "corrupt history is still deletable").unwrap();
+    let bad = f.paths.projects.join("other/bad.jsonl");
+    fs::create_dir_all(bad.parent().unwrap()).unwrap();
+    fs::write(&bad, "fixture").unwrap();
+    fs::create_dir(bad.with_file_name("sessions-index.json")).unwrap();
+    let index = f.file.with_file_name("sessions-index.json");
+    fs::write(&index, json!({"entries":[{"sessionId":"native-fixture"},{"sessionId":"good"},{"sessionId":"keep"}]}).to_string()).unwrap();
+    let history = f.paths.config.join("history.jsonl");
+    fs::write(
+        &history,
+        ["native-fixture", "good", "bad", "keep"]
+            .map(|id| format!("{}\n", json!({"sessionId":id})))
+            .concat(),
+    )
+    .unwrap();
+    let registrations = f.paths.config.join("sessions");
+    fs::create_dir(&registrations).unwrap();
+    for id in ["native-fixture", "good", "bad", "keep"] {
+        fs::write(
+            registrations.join(format!("{id}.json")),
+            json!({"sessionId":id}).to_string(),
+        )
+        .unwrap();
+    }
+    let cases = SessionUseCases {
+        platform: crate::platform::PlatformPaths::desktop_current(),
+        codex: crate::codex::CodexPaths::new(f.root.join("codex")),
+        grok: crate::grok::GrokPaths {
+            home: f.root.join("grok"),
+        },
+        claude: f.paths.clone(),
+        antigravity: crate::antigravity::sessions::AntigravityPaths::offline(f.root.join("ag")),
+        dsh: crate::dsh::DshPaths {
+            home: f.root.join("dsh"),
+        },
+    };
+    let root = f.paths.projects.canonicalize().unwrap();
+    let keys = [&f.file, &good, &bad].map(|path| key_for(&root, &path.canonicalize().unwrap(), ""));
+    let result = cases
+        .bulk_execute(SessionBatchExecuteRequest {
+            provider: SessionProvider::Claude,
+            operation: SessionOperation::Delete,
+            confirmed: true,
+            include_descendants: false,
+            items: keys
+                .into_iter()
+                .map(|session_key| SessionBatchSelection {
+                    session_key,
+                    fingerprint: String::new(),
+                    descendants: vec![],
+                })
+                .collect(),
+        })
+        .unwrap();
+    assert_eq!(
+        result
+            .items
+            .iter()
+            .map(|i| i.status.as_str())
+            .collect::<Vec<_>>(),
+        ["succeeded", "succeeded", "failed"]
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(index).unwrap()).unwrap(),
+        json!({"entries":[{"sessionId":"keep"}]})
+    );
+    let remaining = fs::read_to_string(history).unwrap();
+    assert_eq!(
+        remaining,
+        "{\"sessionId\":\"bad\"}\n{\"sessionId\":\"keep\"}\n"
+    );
+    assert!(!registrations.join("good.json").exists());
+    assert!(registrations.join("bad.json").exists());
+    assert!(registrations.join("keep.json").exists());
 }

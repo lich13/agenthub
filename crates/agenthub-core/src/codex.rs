@@ -27,7 +27,7 @@ mod user_input;
 pub use app_server_client::CodexAppServerClient;
 pub use assistant_question::assistant_feedback_request;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
-pub use mutations::{db_integrity, set_thread_archived};
+pub use mutations::set_thread_archived;
 pub use name_client::set_thread_title;
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
@@ -55,9 +55,7 @@ pub use rollout_events::{
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};
 use session_index::{read_session_index, SessionIndexEntry};
 use thread_rows::read_thread_rows;
-pub use thread_rows::{
-    archived_thread_ids, hidden_and_archived_thread_ids, hidden_thread_ids, thread_source_counts,
-};
+pub use thread_rows::{archived_thread_ids, hidden_and_archived_thread_ids, hidden_thread_ids};
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
     ThreadStatus, ThreadSummary, UserInputAnswer, UserInputOption, UserInputQuestion,

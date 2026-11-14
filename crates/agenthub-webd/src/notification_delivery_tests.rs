@@ -535,14 +535,29 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
 
 #[tokio::test]
 async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
-    let _env_guard = crate::api::test_support::AsyncEnvGuard::lock_read_only().await;
     for (provider, kind) in [
         (NativeProvider::Grok, "completion"),
         (NativeProvider::Claude, "reply_needed"),
     ] {
         let fixture = Fixture::new().await;
-        let delivery = fixture.native_delivery(provider, kind);
-        // Direct delivery only; do not scan or discover any real native sessions.
+        let grok_root = fixture.root.join("grok");
+        let _env_guard =
+            crate::api::test_support::AsyncEnvGuard::set_many(&[("GROK_HOME", &grok_root)]).await;
+        let mut delivery = fixture.native_delivery(provider, kind);
+        if provider == NativeProvider::Grok {
+            let stream = crate::api::test_support::write_grok_notification_fixture(
+                &grok_root,
+                kind,
+                BODY,
+                fixture.event_ms(),
+            )
+            .streams
+            .remove(0);
+            delivery.event = stream.events[0].clone();
+            delivery.event_key = stream.event_key(&delivery.event);
+            delivery.thread_id = stream.id;
+            delivery.session_key = stream.session_key;
+        }
         let bark = native(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
@@ -587,6 +602,80 @@ async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
         .unwrap();
         assert!(duplicate.sent || duplicate.skipped);
         assert_eq!(fixture.bark.count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn grok_retry_rechecks_read_errors_recovery_and_obsolete_turns_with_existing_budget() {
+    for resolution in ["recover", "changed", "unreadable"] {
+        let fixture = Fixture::new().await;
+        let grok_root = fixture.root.join("grok");
+        let _env =
+            crate::api::test_support::AsyncEnvGuard::set_many(&[("GROK_HOME", &grok_root)]).await;
+        let stream = crate::api::test_support::write_grok_notification_fixture(
+            &grok_root,
+            "completion",
+            BODY,
+            fixture.event_ms(),
+        )
+        .streams
+        .remove(0);
+        let mut delivery = fixture.native_delivery(NativeProvider::Grok, "completion");
+        delivery.event = stream.events[0].clone();
+        delivery.event_key = stream.event_key(&delivery.event);
+        delivery.thread_id = stream.id;
+        delivery.session_key = stream.session_key;
+        let key = format!("native:{}", delivery.event_key);
+        fixture.bark.reply(Reply::json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"fixture transient failure"}),
+        ));
+        let first = native(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &delivery,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.http_status, Some(503));
+        let path = grok_root
+            .join("sessions/workspace")
+            .join(&delivery.thread_id)
+            .join("events.jsonl");
+        let saved = path.with_extension("saved");
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+        fixture.due_now(&key);
+        retry_pending(&fixture.config, &fixture.db).await.unwrap();
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
+        assert_eq!(fixture.bark.count(), 1);
+        if resolution != "unreadable" {
+            fs::remove_dir(&path).unwrap();
+            fs::rename(&saved, &path).unwrap();
+            if resolution == "changed" {
+                writeln!(fs::OpenOptions::new().append(true).open(&path).unwrap(), "{}", json!({"type":"turn_started","session_id":delivery.thread_id,"session_relationship":"primary","ts":fixture.event_ms()+1000})).unwrap();
+            }
+        }
+        fixture.bark.reply(Reply::bark());
+        fixture.due_now(&key);
+        retry_pending(&fixture.config, &fixture.db).await.unwrap();
+        let expected = match resolution {
+            "recover" => "sent",
+            "changed" => "skipped",
+            _ => "failed",
+        };
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), expected);
+        assert_eq!(
+            fixture.bark.count(),
+            if resolution == "recover" { 2 } else { 1 }
+        );
+        fixture.due_now(&key);
+        retry_pending(&fixture.config, &fixture.db).await.unwrap();
+        assert_eq!(
+            fixture.bark.count(),
+            if resolution == "recover" { 2 } else { 1 }
+        );
     }
 }
 

@@ -878,7 +878,7 @@ fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_tur
 }
 
 #[test]
-fn execute_grok_delete_rejects_out_of_bounds_running_and_stops_on_partial_failure() {
+fn execute_grok_delete_keeps_cleanup_activity_check_and_stops_on_partial_failure() {
     let (paths, id, path) = fixture();
     // 1. Out-of-bounds traversal ID is rejected before any filesystem operation.
     assert!(execute_grok_delete(
@@ -891,7 +891,7 @@ fn execute_grok_delete_rejects_out_of_bounds_running_and_stops_on_partial_failur
     )
     .is_err());
 
-    // 2. Running / open session is rejected and preserved on disk.
+    // Unified cleanup still rejects a running session with a fingerprint.
     let summary = resolve_session(&paths, &id).unwrap();
     activity::test_owner(Some(&id), &summary.cwd);
     let running_err = execute_grok_delete(
@@ -899,7 +899,7 @@ fn execute_grok_delete_rejects_out_of_bounds_running_and_stops_on_partial_failur
         GrokDeleteRequest {
             id: id.clone(),
             confirmed: true,
-            fingerprint: String::new(),
+            fingerprint: grok_fingerprint(std::slice::from_ref(&path)).unwrap(),
         },
     )
     .expect_err("running Grok session must not be deleted");
@@ -1026,5 +1026,25 @@ fn notification_snapshots_and_list_sessions_avoid_detail_cache_thrashing_and_rer
     assert_eq!(s3.streams[0].record_count, 3);
     assert_eq!(s3.streams[0].settled_count, 3);
 
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn ordinary_grok_delete_allows_running_session_and_corrupt_history() {
+    let (paths, id, path) = fixture();
+    let summary = resolve_session(&paths, &id).unwrap();
+    activity::test_owner(Some(&id), &summary.cwd);
+    fs::write(path.join("updates.jsonl"), "broken transcript").unwrap();
+    let result = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id,
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    );
+    activity::test_owner(None, "");
+    assert!(result.unwrap().deleted);
+    assert!(!path.exists());
     fs::remove_dir_all(paths.home).unwrap();
 }

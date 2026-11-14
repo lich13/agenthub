@@ -117,20 +117,17 @@ pub(crate) fn descendants(paths: &CodexPaths, roots: &[String]) -> Result<Vec<St
 
 struct Inventory {
     files: BTreeSet<PathBuf>,
-    rollouts: BTreeSet<String>,
     errors: Vec<String>,
 }
 
 struct BatchInventory {
     files_by_id: BTreeMap<String, BTreeSet<PathBuf>>,
-    rollouts: BTreeSet<String>,
     errors: Vec<String>,
 }
 
 fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchInventory {
     let mut result = BatchInventory {
         files_by_id: BTreeMap::new(),
-        rollouts: ids.clone(),
         errors: Vec::new(),
     };
     if ids.is_empty() {
@@ -142,9 +139,6 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
             || rollout_file::is_compressed(&path))
             && roots.iter().any(|root| session_delete::within(root, &path))
         {
-            if let Some(name) = RolloutName::parse(&path) {
-                result.rollouts.insert(name.rollout_id);
-            }
             let entry = result.files_by_id.entry(id.to_owned()).or_default();
             for sibling in [
                 rollout_file::plain_path(&path),
@@ -211,7 +205,6 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
                 Ok(entry) => {
                     if let Some(name) = RolloutName::parse(entry.path()) {
                         if ids.contains(&name.thread_id) {
-                            result.rollouts.insert(name.rollout_id);
                             result
                                 .files_by_id
                                 .entry(name.thread_id)
@@ -294,7 +287,6 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
     let batch = collect_inventory_by_id(paths, ids);
     Inventory {
         files: batch.files_by_id.into_values().flatten().collect(),
-        rollouts: batch.rollouts,
         errors: batch.errors,
     }
 }
@@ -617,121 +609,220 @@ fn delete_database(
 }
 
 pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutcome> {
-    let _guard = MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
-    for id in selected {
-        session_delete::valid_id(id)?;
+    execute_batch(paths, &[selected.to_vec()]).remove(0)
+}
+
+struct PendingDelete {
+    ids: BTreeSet<String>,
+    files: BTreeSet<PathBuf>,
+    rollouts: BTreeSet<String>,
+    outcome: session_delete::Outcome,
+}
+
+fn mutate_shared(
+    pending: &mut [Result<PendingDelete>],
+    path: &Path,
+    action: impl FnOnce(&BTreeSet<String>, &BTreeSet<String>, &BTreeSet<PathBuf>) -> Result<()>,
+) {
+    let eligible: Vec<_> = pending
+        .iter_mut()
+        .filter_map(|item| item.as_mut().ok())
+        .filter(|item| item.outcome.residuals.is_empty())
+        .collect();
+    if eligible.is_empty() {
+        return;
     }
-    let ids: BTreeSet<_> = selected.iter().cloned().collect();
-    let inventory = inventory(paths, &ids);
-    let mut outcome = session_delete::Outcome {
-        residuals: inventory.errors,
-        ..Default::default()
+    let ids = eligible
+        .iter()
+        .flat_map(|item| item.ids.iter().cloned())
+        .collect();
+    let rollouts = eligible
+        .iter()
+        .flat_map(|item| item.rollouts.iter().cloned())
+        .collect();
+    let files = eligible
+        .iter()
+        .flat_map(|item| item.files.iter().cloned())
+        .collect();
+    if let Err(error) = action(&ids, &rollouts, &files) {
+        for item in eligible {
+            item.outcome
+                .residuals
+                .push(format!("{}: {error}", path.display()));
+        }
+    }
+}
+
+pub(crate) fn execute_batch(
+    paths: &CodexPaths,
+    selections: &[Vec<String>],
+) -> Vec<Result<DeleteOutcome>> {
+    if selections.is_empty() {
+        return vec![];
+    }
+    let _guard = match MUTATION_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return selections
+                .iter()
+                .map(|_| Err(anyhow::anyhow!("线程管理锁不可用")))
+                .collect()
+        }
     };
-    let files: Vec<_> = inventory.files.iter().cloned().collect();
-    for (idx, path) in files.iter().enumerate() {
-        if session_delete::within(&paths.home, path) {
-            if !outcome.remove_strict(path) {
-                for rem in &files[idx + 1..] {
-                    if fs::symlink_metadata(rem).is_ok() {
-                        outcome.residuals.push(rem.display().to_string());
-                    }
+    let mut pending: Vec<_> = selections
+        .iter()
+        .map(|selected| -> Result<_> {
+            for id in selected {
+                session_delete::valid_id(id)?;
+            }
+            Ok(PendingDelete {
+                ids: selected.iter().cloned().collect(),
+                files: BTreeSet::new(),
+                rollouts: BTreeSet::new(),
+                outcome: session_delete::Outcome::default(),
+            })
+        })
+        .collect();
+    let ids = pending
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .flat_map(|item| item.ids.iter().cloned())
+        .collect();
+    let inventory = collect_inventory_by_id(paths, &ids);
+    let mut file_results = BTreeMap::<PathBuf, Vec<String>>::new();
+    for item in pending.iter_mut().filter_map(|item| item.as_mut().ok()) {
+        item.files = item
+            .ids
+            .iter()
+            .filter_map(|id| inventory.files_by_id.get(id))
+            .flatten()
+            .cloned()
+            .collect();
+        item.rollouts = item.ids.clone();
+        item.rollouts.extend(
+            item.files
+                .iter()
+                .filter_map(|path| RolloutName::parse(path).map(|name| name.rollout_id)),
+        );
+        item.outcome.residuals.clone_from(&inventory.errors);
+        let files: Vec<_> = item.files.iter().collect();
+        for (idx, path) in files.iter().enumerate() {
+            let residuals = file_results.entry((*path).clone()).or_insert_with(|| {
+                let mut outcome = session_delete::Outcome::default();
+                if session_delete::within(&paths.home, path) {
+                    outcome.remove_strict(path);
+                } else {
+                    outcome
+                        .residuals
+                        .push(format!("无法定位线程文件: {}", path.display()));
                 }
+                item.outcome.bytes += outcome.bytes;
+                outcome.residuals
+            });
+            if !residuals.is_empty() {
+                item.outcome.residuals.extend(residuals.iter().cloned());
+                item.outcome.residuals.extend(
+                    files[idx + 1..]
+                        .iter()
+                        .filter(|path| fs::symlink_metadata(path).is_ok())
+                        .map(|path| path.display().to_string()),
+                );
                 break;
             }
-        } else {
-            outcome
-                .residuals
-                .push(format!("无法定位线程文件: {}", path.display()));
-            for rem in &files[idx + 1..] {
-                if fs::symlink_metadata(rem).is_ok() {
-                    outcome.residuals.push(rem.display().to_string());
-                }
-            }
-            break;
         }
     }
-    if outcome.residuals.is_empty() {
-        let index = paths.session_index();
-        outcome.attempt(&index, || {
-            session_delete::filter_jsonl(&index, |row| {
-                row["id"].as_str().is_some_and(|id| ids.contains(id))
-            })
-        });
-    }
-    if outcome.residuals.is_empty() {
-        let history = paths.home.join("history.jsonl");
-        outcome.attempt(&history, || {
-            session_delete::filter_jsonl(&history, |row| session_delete::has_id(row, &ids))
-        });
-    }
-    if outcome.residuals.is_empty() {
-        let database = paths.state_db();
-        outcome.attempt(&database, || {
-            delete_database(&database, &ids, &inventory.rollouts, &inventory.files)
-        });
-    }
+    let index = paths.session_index();
+    mutate_shared(&mut pending, &index, |ids, _, _| {
+        session_delete::filter_jsonl(&index, |row| {
+            row["id"].as_str().is_some_and(|id| ids.contains(id))
+        })
+    });
+    let history = paths.home.join("history.jsonl");
+    mutate_shared(&mut pending, &history, |ids, _, _| {
+        session_delete::filter_jsonl(&history, |row| session_delete::has_id(row, ids))
+    });
     let database = paths.state_db();
-    if outcome.residuals.is_empty() {
-        match fs::read_dir(&paths.home) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(error) => {
-                            outcome.residuals.push(error.to_string());
-                            break;
-                        }
-                    };
-                    if entry.file_name().to_str().is_some_and(|name| {
-                        name.starts_with("thread_history_") && name.ends_with(".sqlite")
-                    }) {
-                        outcome.attempt(&entry.path(), || {
-                            delete_database(
-                                &entry.path(),
-                                &ids,
-                                &inventory.rollouts,
-                                &inventory.files,
-                            )
-                        });
-                        if !outcome.residuals.is_empty() {
-                            break;
-                        }
-                    }
+    mutate_shared(&mut pending, &database, |ids, rollouts, files| {
+        delete_database(&database, ids, rollouts, files)
+    });
+    if pending
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .any(|item| item.outcome.residuals.is_empty())
+    {
+        let history_databases = (|| -> Result<Vec<PathBuf>> {
+            let entries = match fs::read_dir(&paths.home) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+                Err(error) => return Err(error.into()),
+            };
+            let mut databases = Vec::new();
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_name().to_str().is_some_and(|name| {
+                    name.starts_with("thread_history_") && name.ends_with(".sqlite")
+                }) {
+                    databases.push(entry.path());
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => outcome.residuals.push(e.to_string()),
+            Ok(databases)
+        })();
+        match history_databases {
+            Ok(databases) => {
+                for database in databases {
+                    mutate_shared(&mut pending, &database, |ids, rollouts, files| {
+                        delete_database(&database, ids, rollouts, files)
+                    });
+                }
+            }
+            Err(error) => mutate_shared(&mut pending, &paths.home, |_, _, _| Err(error)),
         }
     }
-    outcome.finish();
-    let deleted_ids: Vec<String> = if database.exists() {
-        Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()
-            .map(|conn| {
-                ids.iter()
-                    .filter(|id| {
-                        row_value(&conn, "threads", "id", id).is_ok_and(|row| row.is_none())
-                    })
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+    let conn = if database.exists() {
+        Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
     } else {
-        ids.into_iter().collect()
+        None
     };
-    if outcome.residuals.is_empty() {
-        update_delete_residuals(paths, &[], &deleted_ids);
-    } else if !deleted_ids.is_empty() {
-        update_delete_residuals(paths, &deleted_ids, &[]);
-    }
-    Ok(DeleteOutcome {
-        deleted_ids,
-        error: (!outcome.residuals.is_empty()).then(|| "部分内容未删除，请查看逐项结果".into()),
-        residuals: outcome.residuals,
-        deleted_bytes: outcome.bytes,
-    })
+    let mut record = BTreeSet::new();
+    let mut clear = BTreeSet::new();
+    let result = pending
+        .into_iter()
+        .map(|item| {
+            item.map(|mut item| {
+                item.outcome.finish();
+                let deleted_ids: Vec<_> = item
+                    .ids
+                    .into_iter()
+                    .filter(|id| {
+                        !database.exists()
+                            || conn.as_ref().is_some_and(|conn| {
+                                row_value(conn, "threads", "id", id).is_ok_and(|row| row.is_none())
+                            })
+                    })
+                    .collect();
+                if item.outcome.residuals.is_empty() {
+                    clear.extend(deleted_ids.iter().cloned());
+                } else {
+                    record.extend(deleted_ids.iter().cloned());
+                }
+                DeleteOutcome {
+                    deleted_ids,
+                    error: (!item.outcome.residuals.is_empty())
+                        .then(|| "部分内容未删除，请查看逐项结果".into()),
+                    residuals: item.outcome.residuals,
+                    deleted_bytes: item.outcome.bytes,
+                }
+            })
+        })
+        .collect();
+    // A shared target can belong to several selected trees. Keep any outstanding residual.
+    clear.retain(|id| !record.contains(id));
+    update_delete_residuals(
+        paths,
+        &record.into_iter().collect::<Vec<_>>(),
+        &clear.into_iter().collect::<Vec<_>>(),
+    );
+    result
 }
 
 #[cfg(test)]

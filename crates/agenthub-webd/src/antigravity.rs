@@ -940,7 +940,7 @@ pub async fn source_current(delivery: &agenthub_core::db::NativeDelivery) -> Res
         Some(&delivery.thread_id),
     )
     .await?;
-    super::provider_monitor::local_event_current(&scan, delivery)
+    super::provider_monitor::native_event_current(&scan, delivery)
 }
 async fn scan_at(
     client: &reqwest::Client,

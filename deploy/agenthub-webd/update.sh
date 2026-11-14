@@ -4,8 +4,6 @@ set -Eeuo pipefail
 REPO="${AGENTHUB_WEBD_REPO:-lich13/agenthub}"
 VERSION="latest"
 ASSET="agenthub-webd-linux-x86_64.tar.gz"
-TMP_DIR="$(mktemp -d)"
-trap '[[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -r -- "${TMP_DIR}"' EXIT
 
 usage() {
   cat <<'USAGE'
@@ -90,6 +88,8 @@ if ! command -v minisign >/dev/null 2>&1 || [[ ! -f "${PUBLIC_KEY}" || ! -f "${S
   echo "installed signature verifier and public key are required" >&2
   exit 1
 fi
+TMP_DIR="$(mktemp -d)"
+trap '[[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -r -- "${TMP_DIR}"' EXIT
 curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"
 curl -fL "${BASE_URL}/${ASSET}.sha256" -o "${TMP_DIR}/${ASSET}.sha256"
 curl -fL "${BASE_URL}/${ASSET}.sig" -o "${TMP_DIR}/${ASSET}.sig"

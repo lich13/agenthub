@@ -17,6 +17,7 @@ mod presentation;
 mod reader;
 #[cfg(test)]
 mod tests;
+pub(crate) use mutations::execute_claude_delete_batch;
 pub(crate) use mutations::find_empty_inactive_sessions;
 pub use mutations::{execute_claude_delete, preview_claude_delete, rename_claude_session};
 pub(crate) use reader::evict_idle_detail_cache;

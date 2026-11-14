@@ -152,41 +152,7 @@ pub(super) fn probe_snapshot(
                     .sum::<usize>()) as u64
         },
         || {
-            let meta = fs::symlink_metadata(path)?;
-            ensure!(
-                meta.is_file() && !meta.file_type().is_symlink(),
-                "Claude 会话必须是普通文件"
-            );
-            ensure!(meta.len() <= MAX_BYTES, "Claude 会话超出 512 MiB 读取上限");
-            let mut options = fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW);
-            }
-            let mut reader = BufReader::new(options.open(path)?);
-            let mut state = ReaderState::default();
-            let mut line = Vec::new();
-            let mut offset = 0u64;
-            loop {
-                line.clear();
-                let read_bytes = reader.read_until(b'\n', &mut line)?;
-                if read_bytes == 0 {
-                    break;
-                }
-                if !line.ends_with(b"\n") {
-                    anyhow::bail!("Claude 会话尾行尚未写完");
-                }
-                offset += read_bytes as u64;
-                state.push(&line)?;
-            }
-            if state.rebuild {
-                state.rebuild(path, offset)?;
-            }
-            let parsed = state
-                .parser
-                .snapshot(path, state.issues, state.records as u64);
+            let parsed = read(path)?;
             ensure!(
                 parsed.issues.is_empty(),
                 "Claude notification transcript contains corrupt records"
@@ -203,7 +169,7 @@ pub(super) fn probe_snapshot(
                 identity: crate::native_probe::file_identity(path)?,
                 record_count: parsed.record_count,
                 settled_count: parsed.settled_count,
-                events: parsed.native_events,
+                events: parsed.native_events.clone(),
             })
         },
     )

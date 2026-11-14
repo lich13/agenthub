@@ -1392,25 +1392,6 @@ pub(crate) fn source_text_contains_subagent(value: &str) -> bool {
             .is_some_and(value_contains_subagent)
 }
 
-pub(crate) fn thread_source_label(value: Option<&str>) -> String {
-    let Some(value) = non_empty(value) else {
-        return "unknown".to_string();
-    };
-    if source_text_contains_subagent(value) {
-        return "subagent".to_string();
-    }
-    serde_json::from_str::<Value>(value)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("kind")
-                .or_else(|| value.get("type"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| value.to_ascii_lowercase())
-}
-
 fn value_contains_subagent(value: &Value) -> bool {
     match value {
         Value::String(text) => text.to_ascii_lowercase().contains("subagent"),

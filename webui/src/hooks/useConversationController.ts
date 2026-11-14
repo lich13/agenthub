@@ -15,6 +15,7 @@ import {
   useThreadDetailHydration,
   useThreadDetailQuery,
   useThreadMessageStoreController,
+  useThreadMessageCacheLifetime,
   useThreadsQuery
 } from "../lib/query/threads";
 
@@ -25,6 +26,7 @@ export function useConversationController(input: {
 }) {
   const threadCache = useThreadCacheActions();
   const messageStore = useThreadMessageStoreController();
+  useThreadMessageCacheLifetime(messageStore);
   const threads = useThreadsQuery({
     archived: false,
     q: input.q,

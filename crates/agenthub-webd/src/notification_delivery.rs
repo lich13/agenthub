@@ -739,14 +739,14 @@ async fn process(
                 }));
         };
         let claude_state = claude_source_state(db, candidate).await;
-        let local_state = if claude_state.is_some() {
+        let native_state = if claude_state.is_some() {
             None
         } else {
-            local_native_source_state(candidate).await
+            native_source_state(candidate).await
         };
         let valid_source = match claude_state {
             Some(state) => state != ClaudeNotificationState::Obsolete,
-            None if local_state.is_some() => !matches!(local_state, Some(Ok(false))),
+            None if native_state.is_some() => !matches!(native_state, Some(Ok(false))),
             None => {
                 !(revalidate || lease.chunk_attempts > 1)
                     || current(&checked_config, db, candidate).await
@@ -780,10 +780,10 @@ async fn process(
         } else if secret.is_empty() {
             ProbeBarkOutcome::skipped("device_key_missing", channel.enabled(config), true, false)
         } else if claude_state == Some(ClaudeNotificationState::Pending)
-            || matches!(local_state, Some(Err(_)))
+            || matches!(native_state, Some(Err(_)))
         {
             let mut outcome = claude_source_outcome(ClaudeNotificationState::Pending, true, true);
-            if local_state.is_some() {
+            if native_state.is_some() {
                 outcome.reason = Some("native_source_pending".into());
             }
             outcome
@@ -1025,14 +1025,14 @@ async fn claude_source_state(
     }
 }
 
-async fn local_native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
+async fn native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
     let Source::Native { delivery } = &candidate.source else {
         return None;
     };
-    if !delivery.provider.local_only() {
+    if delivery.provider == native_probe::NativeProvider::Claude {
         return None;
     }
-    if !cfg!(target_os = "macos") {
+    if delivery.provider.local_only() && !cfg!(target_os = "macos") {
         return Some(Ok(false));
     }
     Some(
@@ -1046,7 +1046,7 @@ async fn local_native_source_state(candidate: &Candidate) -> Option<Result<bool>
             .await
             .map_err(anyhow::Error::from)
             .and_then(|result| result)
-            .and_then(|scan| super::provider_monitor::local_event_current(&scan, delivery))
+            .and_then(|scan| super::provider_monitor::native_event_current(&scan, delivery))
         },
     )
 }
@@ -1057,26 +1057,7 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
         Source::GithubCi { event } => {
             agenthub_core::github_ci::event_current(db, config, event).unwrap_or(false)
         }
-        Source::Native { delivery } => {
-            let provider = delivery.provider;
-            let target = delivery.clone();
-            tokio::task::spawn_blocking(move || {
-                native_probe::scan_event(provider, &target.thread_id, &target.event)
-            })
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .is_some_and(|scan| {
-                scan.streams.iter().any(|stream| {
-                    stream.session_key == delivery.session_key
-                        && stream.id == delivery.thread_id
-                        && stream.events.iter().any(|event| {
-                            stream.event_key(&delivery.event) == delivery.event_key
-                                && native_probe::same_event(event, &delivery.event)
-                        })
-                })
-            })
-        }
+        Source::Native { .. } => unreachable!("native source checked above"),
         Source::ClaudeHook { .. } => unreachable!("Claude source checked above"),
         Source::Codex {
             event,

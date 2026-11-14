@@ -1,16 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use rusqlite::Connection;
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 
 use super::{
     rollout_events::{
-        choose_initial_thread_title, is_hidden_thread_metadata, is_internal_thread_metadata,
-        is_subagent_metadata, source_text_contains_subagent, thread_source_label,
-        ThreadVisibilityMetadata,
+        choose_initial_thread_title, is_hidden_thread_metadata, ThreadVisibilityMetadata,
     },
     CodexPaths, ThreadStatus, ThreadSummary,
 };
@@ -127,143 +122,6 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
 
 pub fn archived_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
     Ok(hidden_and_archived_thread_ids(paths)?.1)
-}
-
-pub fn thread_source_counts(paths: &CodexPaths) -> Result<HashMap<String, usize>> {
-    let db = paths.state_db();
-    if !db.exists() {
-        return Ok(HashMap::new());
-    }
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
-    let has_threads = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='threads'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-    if !has_threads {
-        return Ok(HashMap::new());
-    }
-
-    let columns = table_columns(&conn, "threads")?;
-    let thread_source_expr = first_existing(&columns, &["thread_source", "source_kind"])
-        .unwrap_or("NULL")
-        .to_string();
-    let source_expr = first_existing(&columns, &["source"])
-        .unwrap_or("NULL")
-        .to_string();
-    let parent_thread_expr = first_existing(&columns, &["parent_thread_id", "parentThreadId"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_path_expr = first_existing(&columns, &["agent_path", "agentPath"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_nickname_expr = first_existing(&columns, &["agent_nickname", "agentNickname"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_role_expr = first_existing(&columns, &["agent_role", "agentRole"])
-        .unwrap_or("NULL")
-        .to_string();
-    let has_user_event_expr = first_existing(&columns, &["has_user_event"])
-        .unwrap_or("NULL")
-        .to_string();
-    let title_expr = first_existing(&columns, &["title", "name"])
-        .unwrap_or("NULL")
-        .to_string();
-    let first_user_message_expr = first_existing(&columns, &["first_user_message"])
-        .unwrap_or("NULL")
-        .to_string();
-    let preview_expr = first_existing(&columns, &["preview"])
-        .unwrap_or("NULL")
-        .to_string();
-    let archived_expr = first_existing(&columns, &["archived"])
-        .unwrap_or("0")
-        .to_string();
-    let archived_at_expr = first_existing(&columns, &["archived_at"])
-        .unwrap_or("NULL")
-        .to_string();
-    let sql = format!(
-        "SELECT {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, {first_user_message_expr}, {preview_expr}, {archived_expr}, {archived_at_expr} FROM threads"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
-        let thread_source: Option<String> = row.get(0).ok();
-        let source: Option<String> = row.get(1).ok();
-        let parent_thread_id: Option<String> = row.get(2).ok();
-        let agent_path: Option<String> = row.get(3).ok();
-        let agent_nickname: Option<String> = row.get(4).ok();
-        let agent_role: Option<String> = row.get(5).ok();
-        let has_user_event: Option<i64> = row.get(6).ok();
-        let title: Option<String> = row.get(7).ok();
-        let first_user_message: Option<String> = row.get(8).ok();
-        let preview: Option<String> = row.get(9).ok();
-        let archived_flag: i64 = row.get(10).unwrap_or(0);
-        let archived_at: Option<ValueCell> = row.get(11).ok();
-        Ok((
-            thread_source,
-            source,
-            parent_thread_id,
-            agent_path,
-            agent_nickname,
-            agent_role,
-            has_user_event,
-            title,
-            first_user_message,
-            preview,
-            archived_flag,
-            archived_at,
-        ))
-    })?;
-    let mut counts = HashMap::new();
-    for row in rows {
-        let (
-            thread_source,
-            source,
-            parent_thread_id,
-            agent_path,
-            agent_nickname,
-            agent_role,
-            has_user_event,
-            title,
-            first_user_message,
-            preview,
-            archived_flag,
-            archived_at,
-        ) = row?;
-        let metadata = ThreadVisibilityMetadata {
-            thread_source: thread_source.as_deref(),
-            source: source.as_deref(),
-            parent_thread_id: parent_thread_id.as_deref(),
-            agent_path: agent_path.as_deref(),
-            agent_nickname: agent_nickname.as_deref(),
-            agent_role: agent_role.as_deref(),
-            has_user_event,
-            title: title.as_deref(),
-            first_user_message: first_user_message.as_deref(),
-            preview: preview.as_deref(),
-        };
-        let key = if is_internal_thread_metadata(metadata) {
-            "internal".to_string()
-        } else if is_subagent_metadata(
-            thread_source.as_deref(),
-            parent_thread_id.as_deref(),
-            agent_path.as_deref(),
-            agent_nickname.as_deref(),
-            agent_role.as_deref(),
-        ) || source.as_deref().is_some_and(source_text_contains_subagent)
-        {
-            "subagent".to_string()
-        } else {
-            thread_source_label(thread_source.as_deref().or(source.as_deref()))
-        };
-        *counts.entry(key).or_insert(0) += 1;
-        if archived_flag != 0 || archived_at.as_ref().and_then(format_cell_time).is_some() {
-            *counts.entry("archived".to_string()).or_insert(0) += 1;
-        }
-    }
-    Ok(counts)
 }
 
 pub(super) struct LocalThreadRow {

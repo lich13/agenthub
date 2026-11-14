@@ -297,14 +297,14 @@ pub(crate) fn find_empty_inactive_sessions(
     Ok(out)
 }
 
-fn background_jobs(paths: &ClaudePaths, id: &str) -> Result<Vec<String>> {
+fn background_jobs(paths: &ClaudePaths) -> Result<HashMap<String, BTreeSet<String>>> {
     let jobs = paths.config.join("jobs");
     let entries = match fs::read_dir(&jobs) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(error) => return Err(error).context("无法读取 Claude 后台会话登记"),
     };
-    let mut matching = BTreeSet::new();
+    let mut matching = HashMap::<String, BTreeSet<String>>::new();
     for entry in entries {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -313,19 +313,25 @@ fn background_jobs(paths: &ClaudePaths, id: &str) -> Result<Vec<String>> {
         let Some(native_id) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let row = open_regular(&entry.path().join("state.json"))
-            .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?));
-        if native_id == id
-            || row.as_ref().is_ok_and(|row| {
-                ["id", "sessionId", "resumeSessionId"]
-                    .iter()
-                    .any(|field| row.get(field).and_then(Value::as_str) == Some(id))
-            })
+        matching
+            .entry(native_id.clone())
+            .or_default()
+            .insert(native_id.clone());
+        if let Ok(row) = open_regular(&entry.path().join("state.json"))
+            .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
         {
-            matching.insert(native_id);
+            for id in ["id", "sessionId", "resumeSessionId"]
+                .iter()
+                .filter_map(|field| row.get(field).and_then(Value::as_str))
+            {
+                matching
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(native_id.clone());
+            }
         }
     }
-    Ok(matching.into_iter().collect())
+    Ok(matching)
 }
 
 fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
@@ -365,8 +371,11 @@ fn remove_background_job(executable: &Path, paths: &ClaudePaths, native_id: &str
     Ok(())
 }
 
-fn remove_background_jobs(paths: &ClaudePaths, id: &str) -> Result<()> {
-    let jobs = background_jobs(paths, id)?;
+fn remove_background_jobs(
+    paths: &ClaudePaths,
+    jobs: &[&String],
+    removed: &mut BTreeSet<String>,
+) -> Result<()> {
     if jobs.is_empty() {
         return Ok(());
     }
@@ -379,7 +388,8 @@ fn remove_background_jobs(paths: &ClaudePaths, id: &str) -> Result<()> {
         .context("此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI；历史文件尚未删除")?;
     check_native_rm(&executable, paths)?;
     for native_id in jobs {
-        remove_background_job(&executable, paths, &native_id)?;
+        remove_background_job(&executable, paths, native_id)?;
+        removed.insert((*native_id).clone());
     }
     Ok(())
 }
@@ -388,9 +398,22 @@ pub fn execute_claude_delete(
     paths: &ClaudePaths,
     request: ClaudeDeleteRequest,
 ) -> Result<ClaudeDeleteResult> {
-    let _lock = MUTATIONS
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Claude 管理锁不可用"))?;
+    execute_claude_delete_batch(paths, vec![request]).remove(0)
+}
+
+struct PendingDelete {
+    request: ClaudeDeleteRequest,
+    main: PathBuf,
+    id: String,
+    outcome: crate::session_delete::Outcome,
+}
+
+fn delete_exclusive(
+    paths: &ClaudePaths,
+    request: ClaudeDeleteRequest,
+    jobs: &Result<HashMap<String, BTreeSet<String>>>,
+    removed: &mut BTreeSet<String>,
+) -> Result<PendingDelete> {
     ensure!(request.confirmed, "删除需要明确确认");
     let main = locate(paths, &request.session_key)?;
     let id = main
@@ -423,19 +446,24 @@ pub fn execute_claude_delete(
                 .unwrap_or_else(|| "Claude 会话正在运行，无法清理".into()));
         }
     }
-    remove_background_jobs(paths, &id)?;
+    let jobs = jobs.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    let matching: Vec<_> = jobs
+        .get(&id)
+        .into_iter()
+        .flatten()
+        .filter(|native_id| !removed.contains(*native_id))
+        .collect();
+    remove_background_jobs(paths, &matching, removed)?;
 
-    let ids = BTreeSet::from([id.clone()]);
     let mut outcome = crate::session_delete::Outcome::default();
     let (targets, errors) = delete_paths(paths, &main, &id);
     if !errors.is_empty() {
         outcome.residuals.extend(errors);
-        outcome.finish();
-        return Ok(ClaudeDeleteResult {
-            session_key: request.session_key,
-            deleted: false,
-            bytes: 0,
-            residuals: outcome.residuals,
+        return Ok(PendingDelete {
+            request,
+            main,
+            id,
+            outcome,
         });
     }
     for (idx, path) in targets.iter().enumerate() {
@@ -462,79 +490,147 @@ pub fn execute_claude_delete(
             break;
         }
     }
-    if outcome.residuals.is_empty() {
-        let index = main
-            .parent()
-            .context("会话项目目录缺失")?
-            .join("sessions-index.json");
-        outcome.attempt(&index, || {
-            crate::session_delete::edit_json(&index, |value| {
-                if let Some(entries) = value.get_mut("entries").and_then(Value::as_array_mut) {
-                    entries.retain(|row| !crate::session_delete::has_id(row, &ids));
-                }
-            })
-        });
+    Ok(PendingDelete {
+        request,
+        main,
+        id,
+        outcome,
+    })
+}
+
+pub(crate) fn execute_claude_delete_batch(
+    paths: &ClaudePaths,
+    requests: Vec<ClaudeDeleteRequest>,
+) -> Vec<Result<ClaudeDeleteResult>> {
+    let _lock = match MUTATIONS.lock() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return requests
+                .into_iter()
+                .map(|_| Err(anyhow::anyhow!("Claude 管理锁不可用")))
+                .collect()
+        }
+    };
+    let jobs = background_jobs(paths);
+    let mut removed = BTreeSet::new();
+    let mut pending: Vec<_> = requests
+        .into_iter()
+        .map(|request| delete_exclusive(paths, request, &jobs, &mut removed))
+        .collect();
+    let mut indexes = std::collections::BTreeMap::<PathBuf, BTreeSet<String>>::new();
+    for item in pending
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .filter(|item| item.outcome.residuals.is_empty())
+    {
+        indexes
+            .entry(item.main.with_file_name("sessions-index.json"))
+            .or_default()
+            .insert(item.id.clone());
     }
-    if outcome.residuals.is_empty() {
-        let history = paths.config.join("history.jsonl");
-        outcome.attempt(&history, || {
-            crate::session_delete::filter_jsonl(&history, |row| {
-                crate::session_delete::has_id(row, &ids)
-            })
-        });
-    }
-    if outcome.residuals.is_empty() {
-        let registrations = paths.config.join("sessions");
-        match fs::read_dir(&registrations).and_then(|entries| {
-            if fs::symlink_metadata(&registrations)?
-                .file_type()
-                .is_symlink()
-            {
-                Err(std::io::Error::other("会话登记目录是链接"))
-            } else {
-                Ok(entries)
+    for (index, ids) in indexes {
+        if let Err(error) = crate::session_delete::edit_json(&index, |value| {
+            if let Some(entries) = value.get_mut("entries").and_then(Value::as_array_mut) {
+                entries.retain(|row| !crate::session_delete::has_id(row, &ids));
             }
         }) {
-            Ok(entries) => {
-                for entry in entries {
-                    match entry {
-                        Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "json") => {
-                            let path = entry.path();
-                            match open_regular(&path)
-                                .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
-                            {
-                                Ok(row) if crate::session_delete::has_id(&row, &ids) => {
-                                    if !outcome.remove_strict(&path) {
-                                        break;
-                                    }
-                                }
-                                // Unknown or unrelated registrations are not deletion targets.
-                                Ok(_) | Err(_) => {}
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            outcome
-                                .residuals
-                                .push(format!("{}: {error}", registrations.display()));
-                            break;
-                        }
+            for item in pending.iter_mut().filter_map(|item| item.as_mut().ok()) {
+                if item.outcome.residuals.is_empty()
+                    && item.main.with_file_name("sessions-index.json") == index
+                {
+                    item.outcome
+                        .residuals
+                        .push(format!("{}: {error}", index.display()));
+                }
+            }
+        }
+    }
+    let ids: BTreeSet<_> = pending
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .filter(|item| item.outcome.residuals.is_empty())
+        .map(|item| item.id.clone())
+        .collect();
+    if !ids.is_empty() {
+        let history = paths.config.join("history.jsonl");
+        if let Err(error) = crate::session_delete::filter_jsonl(&history, |row| {
+            crate::session_delete::has_id(row, &ids)
+        }) {
+            for item in pending
+                .iter_mut()
+                .filter_map(|item| item.as_mut().ok())
+                .filter(|item| item.outcome.residuals.is_empty())
+            {
+                item.outcome
+                    .residuals
+                    .push(format!("{}: {error}", history.display()));
+            }
+        }
+    }
+    let mut eligible: Vec<_> = pending
+        .iter_mut()
+        .filter_map(|item| item.as_mut().ok())
+        .filter(|item| item.outcome.residuals.is_empty())
+        .collect();
+    if !eligible.is_empty() {
+        let registrations = paths.config.join("sessions");
+        let scan = (|| -> Result<()> {
+            let entries = match fs::read_dir(&registrations) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            ensure!(
+                !fs::symlink_metadata(&registrations)?
+                    .file_type()
+                    .is_symlink(),
+                "会话登记目录是链接"
+            );
+            for entry in entries {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.extension().is_some_and(|ext| ext == "json") {
+                    continue;
+                }
+                let Ok(row) = open_regular(&path)
+                    .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
+                else {
+                    continue;
+                };
+                for item in &mut eligible {
+                    if item.outcome.residuals.is_empty()
+                        && crate::session_delete::has_id(&row, &BTreeSet::from([item.id.clone()]))
+                    {
+                        item.outcome.remove_strict(&path);
                     }
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => outcome
-                .residuals
-                .push(format!("{}: {error}", registrations.display())),
+            Ok(())
+        })();
+        if let Err(error) = scan {
+            for item in eligible {
+                if item.outcome.residuals.is_empty() {
+                    item.outcome
+                        .residuals
+                        .push(format!("{}: {error}", registrations.display()));
+                }
+            }
         }
     }
-    outcome.finish();
-    Ok(ClaudeDeleteResult {
-        session_key: request.session_key,
-        deleted: outcome.residuals.is_empty(),
-        bytes: outcome.bytes,
-        residuals: outcome.residuals,
-    })
+    pending
+        .into_iter()
+        .map(|item| {
+            item.map(|mut item| {
+                item.outcome.finish();
+                ClaudeDeleteResult {
+                    session_key: item.request.session_key,
+                    deleted: item.outcome.residuals.is_empty(),
+                    bytes: item.outcome.bytes,
+                    residuals: item.outcome.residuals,
+                }
+            })
+        })
+        .collect()
 }
 
 #[cfg(all(test, unix))]
@@ -562,10 +658,11 @@ mod native_delete_tests {
             )
             .unwrap();
         }
-        assert_eq!(background_jobs(&paths, "selected").unwrap(), ["original"]);
-        assert_eq!(background_jobs(&paths, "resumed").unwrap(), ["original"]);
-        assert_eq!(background_jobs(&paths, "original").unwrap(), ["original"]);
-        assert!(background_jobs(&paths, "absent").unwrap().is_empty());
+        let jobs = background_jobs(&paths).unwrap();
+        for id in ["selected", "resumed", "original"] {
+            assert_eq!(jobs[id], BTreeSet::from(["original".to_owned()]));
+        }
+        assert!(!jobs.contains_key("absent"));
         let cli = root.join("claude");
         crate::write_executable_fixture(&cli, "#!/bin/sh\n[ \"$#\" = 2 ] && [ \"$1\" = rm ] && [ \"$2\" = original ] || exit 4\n[ -f \"$CLAUDE_CONFIG_DIR/jobs/original/state.json\" ] || exit 5\n[ ! -f \"$CLAUDE_CONFIG_DIR/reject\" ] || exit 6\nprintf '%s\\n' \"$2\" > \"$CLAUDE_CONFIG_DIR/removed\"\n");
         // Unsupported rm must be rejected before any deletion is attempted.

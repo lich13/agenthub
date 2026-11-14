@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use super::{thread_rows::table_columns, CodexPaths};
 
@@ -28,12 +28,4 @@ pub fn set_thread_archived(paths: &CodexPaths, id: &str, archived: bool) -> Resu
         )?;
     }
     Ok(())
-}
-
-pub fn db_integrity(paths: &CodexPaths) -> Result<String> {
-    let db = paths.state_db();
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
-    conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))
-        .optional()?
-        .context("integrity_check returned no rows")
 }

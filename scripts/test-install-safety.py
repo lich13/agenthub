@@ -559,6 +559,31 @@ curl() {
                     if failure in ('dependencies','download','signature'):
                         self.assertNotIn('installed',content)
 
+    def test_update_handoff_and_readonly_paths_create_no_temporary_directory(self) -> None:
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        private_tmp = self.root / "tmp"
+        private_tmp.mkdir()
+        calls = self.root / "calls"
+        for name, body in {
+            "mktemp": 'printf "mktemp\\n" >> "$FIXTURE_CALLS"; exit 98',
+            "systemd-run": 'printf "handoff\\n" >> "$FIXTURE_CALLS"; exit 0',
+            "systemctl": "exit 0",
+            "health": "exit 0",
+        }.items():
+            script = fake_bin / name
+            script.write_text(f"#!/bin/sh\n{body}\n")
+            script.chmod(0o755)
+        source = UPDATE_PATH.read_text().replace("/usr/local/bin/agenthub-webd", str(fake_bin / "health"))
+        updater = self.root / "update.sh"
+        updater.write_text(source)
+        environment = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}", "TMPDIR": str(private_tmp), "FIXTURE_CALLS": str(calls), "AGENTHUB_WEBD_UPDATE_TRANSIENT": "0"}
+        for args in (["--help"], ["--precheck"], ["v1.2.3"]):
+            result = subprocess.run(["bash", str(updater), *args], env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls.read_text(), "handoff\n")
+        self.assertEqual(list(private_tmp.iterdir()), [])
+
     def test_update_download_failures_stop_before_systemd_or_installer(self) -> None:
         real_id = shutil.which("id")
         self.assertIsNotNone(real_id)
@@ -567,6 +592,8 @@ curl() {
                 fixture = self.root / f"update-{fail_at}"
                 fake_bin = fixture / "bin"
                 fake_bin.mkdir(parents=True)
+                private_tmp = fixture / "tmp"
+                private_tmp.mkdir()
                 helper = fixture / "install-safety.py"
                 helper.write_text("# fixture helper; download is expected to fail first\n", encoding="utf-8")
                 public_key = fixture / "updater.pub"
@@ -627,6 +654,7 @@ curl() {
                         "AGENTHUB_WEBD_REPO": "example.invalid/fixture",
                         "TEST_FAKE_CALL_LOG": str(call_log),
                         "TEST_FAIL_CURL_AT": str(fail_at),
+                        "TMPDIR": str(private_tmp),
                     }
                 )
                 result = subprocess.run(
@@ -641,6 +669,7 @@ curl() {
                 )
 
                 self.assertEqual(result.returncode, 22, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
+                self.assertEqual(list(private_tmp.iterdir()), [], "failed downloads must clean their staging directory")
                 calls = [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(len(calls), fail_at)
                 self.assertTrue(all(call and call[0] == "-fL" for call in calls))

@@ -7,6 +7,43 @@ use std::{
 };
 
 static SANDBOX_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn write_grok_notification_fixture(
+    root: &Path,
+    kind: &str,
+    body: &str,
+    timestamp_ms: i64,
+) -> agenthub_core::native_probe::NativeScan {
+    use serde_json::json;
+    let id = "00000000-0000-4000-8000-000000000003";
+    let dir = root.join("sessions/workspace").join(id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("summary.json"), json!({"info":{"id":id,"cwd":"/workspace/fixture"},"generated_title":"Fixture","num_messages":2}).to_string()).unwrap();
+    let events = [
+        json!({"type":"turn_started","session_id":id,"session_relationship":"primary","ts":timestamp_ms-500}),
+        json!({"type":"turn_ended","outcome":if kind=="failure" {"error"} else {"completed"},"ts":timestamp_ms}),
+    ];
+    let updates = [
+        json!({"timestamp":timestamp_ms-250,"params":{"sessionId":id,"_meta":{"promptId":"fixture-prompt"},"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":body}}}}),
+        json!({"timestamp":timestamp_ms,"params":{"sessionId":id,"update":{"sessionUpdate":"turn_completed","prompt_id":"fixture-prompt","stop_reason":if kind=="failure" {"error"} else {"end_turn"}}}}),
+    ];
+    for (name, rows) in [("events.jsonl", events), ("updates.jsonl", updates)] {
+        fs::write(
+            dir.join(name),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+    let scan = agenthub_core::native_probe::scan(agenthub_core::native_probe::NativeProvider::Grok)
+        .unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams.len(), 1);
+    assert_eq!(scan.streams[0].events.len(), 1);
+    assert_eq!(scan.streams[0].events[0].kind, kind);
+    scan
+}
 pub(crate) static CONFIG_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub(crate) struct AsyncEnvGuard {

@@ -4,7 +4,7 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.13 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.14 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
 ## Highlights
 
@@ -94,7 +94,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.13**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.14**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (Tauri updater archive and Minisign signature);

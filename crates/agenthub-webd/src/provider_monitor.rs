@@ -18,7 +18,6 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     db.recover_interrupted_native_deliveries()?;
 
-    let mut snapshots = Vec::new();
     for provider in [
         NativeProvider::Grok,
         NativeProvider::GrokBot,
@@ -48,11 +47,8 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
                 && provider.enabled(config)
                 && super::claude_hook::installed(),
         )?;
-        if provider == NativeProvider::Grok {
-            snapshots.extend(scan.streams);
-        }
     }
-    deliver_pending(load_config, db, &snapshots, None).await
+    deliver_pending(load_config, db, None).await
 }
 
 pub async fn run_provider_hook(
@@ -72,7 +68,7 @@ pub async fn run_provider_hook(
         errors: 1,
     });
     db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
-    deliver_pending(&load_config, &db, &scan.streams, Some(provider)).await
+    deliver_pending(&load_config, &db, Some(provider)).await
 }
 
 pub async fn run_antigravity_hook(
@@ -97,32 +93,19 @@ pub async fn run_antigravity_hook(
         errors: 1,
     });
     db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
-    deliver_pending(&load_config, &db, &[], Some(provider)).await
+    deliver_pending(&load_config, &db, Some(provider)).await
 }
 
 async fn deliver_pending(
     load_config: &ConfigLoader<'_>,
     db: &PanelDb,
-    snapshots: &[native_probe::NativeStreamSnapshot],
     provider: Option<NativeProvider>,
 ) -> Result<()> {
     let deliveries = db.pending_native_deliveries(100, provider)?;
     for delivery in deliveries {
         let config = &load_config()?;
-        // Identity and branch are resolved by each native parser. Codex's
-        // main-task identity filter must never be applied to these providers.
-        // Claude terminal events are re-read by the delivery queue immediately
-        // before sending. Missing identity/terminal data must retain bounded retries.
-        let still_current = delivery.provider != NativeProvider::Grok
-            || snapshots.iter().any(|stream| {
-                stream.provider == delivery.provider
-                    && stream.session_key == delivery.session_key
-                    && stream.id == delivery.thread_id
-                    && stream.events.iter().any(|event| {
-                        stream.event_key(&delivery.event) == delivery.event_key
-                            && native_probe::same_event(event, &delivery.event)
-                    })
-            });
+        // The delivery queue rechecks each source immediately before sending;
+        // temporary read errors retain the existing bounded retries.
         if !db.claim_native_delivery(&delivery.event_key)? {
             continue;
         }
@@ -130,7 +113,7 @@ async fn deliver_pending(
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let outcome = if !still_current || !enabled {
+        let outcome = if !enabled {
             ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
                 config.probe.notifications.enabled,
@@ -154,7 +137,7 @@ pub(super) async fn scan(provider: NativeProvider) -> Result<NativeScan> {
     }
 }
 
-pub(super) fn local_event_current(
+pub(super) fn native_event_current(
     scan: &NativeScan,
     delivery: &agenthub_core::db::NativeDelivery,
 ) -> Result<bool> {
@@ -212,17 +195,79 @@ mod tests {
             streams: vec![stream],
             errors: 0,
         };
-        assert!(local_event_current(&scan, &delivery).unwrap());
+        assert!(native_event_current(&scan, &delivery).unwrap());
         scan.streams[0].events.clear();
-        assert!(!local_event_current(&scan, &delivery).unwrap());
+        assert!(!native_event_current(&scan, &delivery).unwrap());
         scan.streams[0].events.push(delivery.event.clone());
         scan.streams[0].session_key = "another:thread".into();
-        assert!(!local_event_current(&scan, &delivery).unwrap());
+        assert!(!native_event_current(&scan, &delivery).unwrap());
     }
 
     use super::*;
     use crate::api::test_support::sandboxed_test_config;
     use native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+
+    #[tokio::test]
+    async fn grok_read_failure_stays_queued_and_recovers_without_a_second_native_claim() {
+        let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
+        let (mut config, root) = sandboxed_test_config();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        let grok_root = root.join("grok");
+        let _env =
+            crate::api::test_support::AsyncEnvGuard::set_many(&[("GROK_HOME", &grok_root)]).await;
+        let db = PanelDb::open_with_secret_box(
+            root.join("pending.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+            .unwrap();
+        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
+            .unwrap();
+        let scan = crate::api::test_support::write_grok_notification_fixture(
+            &grok_root,
+            "completion",
+            "Recovered fixture",
+            chrono::Utc::now().timestamp_millis() + 1000,
+        );
+        db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+            .unwrap();
+        let path = grok_root
+            .join("sessions/workspace")
+            .join(&scan.streams[0].id)
+            .join("events.jsonl");
+        let saved = path.with_extension("saved");
+        std::fs::rename(&path, &saved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        deliver_pending(&|| Ok(config.clone()), &db, None)
+            .await
+            .unwrap();
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events[0].payload["bark"]["reason"], "native_source_pending");
+        assert_eq!(events[0].payload["bark_status"], "queued");
+        assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&saved, &path).unwrap();
+        rusqlite::Connection::open(db.path())
+            .unwrap()
+            .execute("UPDATE probe_notification_deliveries SET next_ms=0", [])
+            .unwrap();
+        notification_delivery::retry_pending_with_config(&db, &|| Ok(config.clone()))
+            .await
+            .unwrap();
+        assert!(server.request().contains("Recovered fixture"));
+        assert_eq!(
+            db.list_probe_events(10).unwrap()[0].payload["bark_status"],
+            "sent"
+        );
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+                .unwrap(),
+            0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use serde_json::Value;
 
     #[tokio::test]
@@ -266,7 +311,6 @@ mod tests {
         deliver_pending(
             &|| Ok(config.clone()),
             &db,
-            &[],
             Some(NativeProvider::Antigravity),
         )
         .await
@@ -322,7 +366,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        deliver_pending(&|| Ok(config.clone()), &db, &[], None)
+        deliver_pending(&|| Ok(config.clone()), &db, None)
             .await
             .unwrap();
         let events = db.list_probe_events(10).unwrap();
@@ -349,6 +393,10 @@ mod tests {
             let (mut config, sandbox_root) = sandboxed_test_config();
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.url();
+            let grok_root = sandbox_root.join("grok");
+            let _env =
+                crate::api::test_support::AsyncEnvGuard::set_many(&[("GROK_HOME", &grok_root)])
+                    .await;
             let db = PanelDb::open_with_secret_box(
                 ":memory:",
                 agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
@@ -358,23 +406,14 @@ mod tests {
                 .unwrap();
             db.stage_native_notifications(provider, &NativeScan::default(), &config)
                 .unwrap();
-            let stream = NativeStreamSnapshot {
-                provider,
-                session_key: "opaque-native-key".into(),
-                id: "custom-native-id".into(),
-                title: "Isolated fixture".into(),
-                identity: "fixture-file-identity".into(),
-                record_count: 2,
-                settled_count: 2,
-                events: vec![NativeTurnEvent {
-                    prompt_id: None,
-                    position: 2,
-                    turn_id: "native-turn".into(),
-                    kind: kind.into(),
-                    body: "Final fixture answer".into(),
-                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-                }],
-            };
+            let stream = crate::api::test_support::write_grok_notification_fixture(
+                &grok_root,
+                kind,
+                "Final fixture answer",
+                chrono::Utc::now().timestamp_millis() + 1000,
+            )
+            .streams
+            .remove(0);
             db.stage_native_notifications(
                 provider,
                 &NativeScan {
@@ -384,21 +423,16 @@ mod tests {
                 &config,
             )
             .unwrap();
-            deliver_pending(
-                &|| Ok(config.clone()),
-                &db,
-                std::slice::from_ref(&stream),
-                None,
-            )
-            .await
-            .unwrap();
+            deliver_pending(&|| Ok(config.clone()), &db, None)
+                .await
+                .unwrap();
             let request = server.request();
             let capture: Value =
                 serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
             assert!(capture["body"]
                 .as_str()
                 .unwrap()
-                .contains("Final fixture answer"));
+                .contains(&stream.events[0].body));
             assert!(capture["title"].as_str().unwrap().contains(
                 if provider == NativeProvider::Claude {
                     "Claude Code"
@@ -409,7 +443,7 @@ mod tests {
             let events = db.list_probe_events(10).unwrap();
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].payload["provider"], provider.as_str());
-            assert_eq!(events[0].payload["session_key"], "opaque-native-key");
+            assert_eq!(events[0].payload["session_key"], stream.session_key);
             assert_eq!(events[0].payload["bark_status"], "sent");
             db.stage_native_notifications(
                 provider,
@@ -420,7 +454,7 @@ mod tests {
                 &config,
             )
             .unwrap();
-            deliver_pending(&|| Ok(config.clone()), &db, &[stream], None)
+            deliver_pending(&|| Ok(config.clone()), &db, None)
                 .await
                 .unwrap();
             assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
@@ -437,6 +471,9 @@ mod tests {
         let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
+        let grok_root = sandbox_root.join("grok");
+        let _env =
+            crate::api::test_support::AsyncEnvGuard::set_many(&[("GROK_HOME", &grok_root)]).await;
         let db = PanelDb::open_with_secret_box(
             ":memory:",
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
@@ -446,23 +483,14 @@ mod tests {
             .unwrap();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
-        let mut stream = NativeStreamSnapshot {
-            provider: NativeProvider::Grok,
-            session_key: "p/a.jsonl".into(),
-            id: "custom".into(),
-            title: "Fixture".into(),
-            identity: "file".into(),
-            record_count: 2,
-            settled_count: 2,
-            events: vec![NativeTurnEvent {
-                prompt_id: None,
-                position: 2,
-                turn_id: "u:a".into(),
-                kind: "completion".into(),
-                body: "Fixture reply".into(),
-                timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-            }],
-        };
+        let mut stream = crate::api::test_support::write_grok_notification_fixture(
+            &grok_root,
+            "completion",
+            "Fixture reply",
+            chrono::Utc::now().timestamp_millis() + 1000,
+        )
+        .streams
+        .remove(0);
         db.stage_native_notifications(
             NativeProvider::Grok,
             &NativeScan {
@@ -472,19 +500,22 @@ mod tests {
             &config,
         )
         .unwrap();
-        deliver_pending(
-            &|| Ok(config.clone()),
-            &db,
-            std::slice::from_ref(&stream),
-            None,
-        )
-        .await
-        .unwrap();
+        deliver_pending(&|| Ok(config.clone()), &db, None)
+            .await
+            .unwrap();
         assert!(server.request().contains("POST"));
         assert_eq!(
             db.list_probe_events(10).unwrap()[0].payload["bark_status"],
             "queued"
         );
+        std::fs::write(
+            grok_root
+                .join("sessions/workspace")
+                .join(&stream.id)
+                .join("updates.jsonl"),
+            "",
+        )
+        .unwrap();
         stream.record_count = 3;
         stream.settled_count = 3;
         stream.events[0].position = 3;
@@ -498,13 +529,13 @@ mod tests {
             &config,
         )
         .unwrap();
-        deliver_pending(&|| Ok(config.clone()), &db, &[], None)
+        deliver_pending(&|| Ok(config.clone()), &db, None)
             .await
             .unwrap();
         let events = db.list_probe_events(10).unwrap();
         assert!(events
             .iter()
-            .any(|event| event.payload["bark"]["reason"] == "native_identity_or_branch_changed"));
+            .any(|event| event.payload["bark"]["reason"] == "source_changed_or_disabled"));
         let _ = std::fs::remove_dir_all(sandbox_root);
     }
 
@@ -699,7 +730,7 @@ mod tests {
         assert_eq!(scan.errors, 0);
         db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, true)
             .unwrap();
-        deliver_pending(&load, &db, &[], None).await.unwrap();
+        deliver_pending(&load, &db, None).await.unwrap();
         let events = db.list_probe_events(20).unwrap();
         assert!(events.iter().all(|e| e.kind != "authorization"));
         assert!(
@@ -974,7 +1005,7 @@ mod tests {
                 "provider {} must stage 1 completion notification",
                 provider.as_str()
             );
-            deliver_pending(&|| Ok(config.clone()), &db, &scan.streams, None)
+            deliver_pending(&|| Ok(config.clone()), &db, None)
                 .await
                 .unwrap();
         }

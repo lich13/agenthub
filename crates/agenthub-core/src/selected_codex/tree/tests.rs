@@ -66,6 +66,62 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn batch_delete_handles_overlapping_trees_and_keeps_unselected_rows() {
+    let f = Fixture::new();
+    let results = execute_batch(
+        &f.paths,
+        &[
+            vec![ROOT.into(), CHILD.into()],
+            vec![CHILD.into()],
+            vec!["../outside".into()],
+        ],
+    );
+    assert_eq!(results.len(), 3);
+    assert!(results[0].as_ref().unwrap().residuals.is_empty());
+    assert_eq!(results[1].as_ref().unwrap().deleted_ids, [CHILD]);
+    assert!(results[2].is_err());
+    assert!(!f.file(ROOT).exists());
+    assert!(!f.file(CHILD).exists());
+    assert!(f.file(OTHER).exists());
+    assert_eq!(
+        f.conn()
+            .query_row("SELECT count(*) FROM threads", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(fs::read_to_string(f.paths.session_index())
+        .unwrap()
+        .contains(OTHER));
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_delete_continues_unrelated_targets_after_file_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let blocked = f.paths.sessions_dir().join("blocked");
+    fs::create_dir(&blocked).unwrap();
+    let moved = blocked.join(f.file(ROOT).file_name().unwrap());
+    fs::rename(f.file(ROOT), &moved).unwrap();
+    f.conn()
+        .execute(
+            "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+            rusqlite::params![moved.to_string_lossy(), ROOT],
+        )
+        .unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+    let results = execute_batch(&f.paths, &[vec![ROOT.into()], vec![OTHER.into()]]);
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!results[0].as_ref().unwrap().residuals.is_empty());
+    assert!(results[1].as_ref().unwrap().residuals.is_empty());
+    assert!(moved.exists());
+    assert!(!f.file(OTHER).exists());
+    let index = fs::read_to_string(f.paths.session_index()).unwrap();
+    assert!(index.contains(ROOT) && index.contains(CHILD));
+    assert!(!index.contains(OTHER));
+}
+
+#[test]
 fn direct_delete_removes_corrupt_active_tree_compressed_files_indexes_and_sidecars() {
     let f = Fixture::new();
     let history = Connection::open(f.paths.home.join("thread_history_2.sqlite")).unwrap();

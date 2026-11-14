@@ -1,8 +1,8 @@
 use super::{
     archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
     parse_message_event, resolve_codex_paths_with_options, rollout_request_user_input_state,
-    scan_rollout, set_thread_title, thread_detail, thread_source_counts, window_thread_detail,
-    CodexPathDiscoveryOptions, CodexPaths, RolloutRequestUserInputState, ThreadStatus,
+    scan_rollout, set_thread_title, thread_detail, window_thread_detail, CodexPathDiscoveryOptions,
+    CodexPaths, RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -2489,13 +2489,12 @@ fn exec_readonly_verification_threads_are_hidden_from_main_list() {
 
     let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let hidden = hidden_thread_ids(&CodexPaths::new(&root)).unwrap();
-    let counts = thread_source_counts(&CodexPaths::new(&root)).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "main-thread");
     assert!(hidden.contains("internal-exec"));
     assert!(hidden.contains("internal-subagent-prompt"));
-    assert_eq!(counts.get("internal").copied(), Some(2));
+    assert_eq!(hidden.len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -44,6 +44,21 @@ export const threadQueryKeys = {
   jobs: ["jobs"] as const
 };
 
+export function bindThreadMessageCache(client: QueryClient, messageStore: Pick<ThreadMessageStoreController, "isActive" | "clear">) {
+  return client.getQueryCache().subscribe(event => {
+    if (event.type !== "removed") return;
+    const [kind, threadId] = event.query.queryKey;
+    if (kind === "thread" && typeof threadId === "string" && !messageStore.isActive(threadId)) {
+      messageStore.clear(threadId);
+    }
+  });
+}
+
+export function useThreadMessageCacheLifetime(messageStore: ThreadMessageStoreController) {
+  const client = useQueryClient();
+  useEffect(() => bindThreadMessageCache(client, messageStore), [client, messageStore]);
+}
+
 type ThreadMessageStoreClear = {
   clear: (threadId: string) => void;
 };
