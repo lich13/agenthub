@@ -517,49 +517,134 @@ fn pending_events(row: &Value, replica: Option<&Value>) -> Vec<NativeTurnEvent> 
     }
     pending
 }
-// Message positions still advance the enablement/retention baseline. A sent
-// message provides no evidence that its parent work has finished.
-fn message_position(entry: &Value, fallback_ts: Option<i64>) -> Option<u64> {
+fn completion_from_entry(entry: &Value, fallback_ts: Option<i64>) -> Option<NativeTurnEvent> {
     if entry["kind"].as_str() != Some("send-message")
         || entry["draftSendState"].as_str() == Some("failed")
     {
         return None;
     }
-    entry["id"].as_str().filter(|s| !s.trim().is_empty())?;
-    let visible = if entry["message"].is_object() {
-        match entry["message"]["type"].as_str() {
+    let id = entry["id"].as_str().filter(|s| !s.trim().is_empty())?;
+    let ts = entry["timestampMs"]
+        .as_i64()
+        .or(fallback_ts)
+        .filter(|&t| t > 0)?;
+    let body = if entry["message"].is_object() {
+        let msg = &entry["message"];
+        match msg["type"].as_str() {
             Some("text") => {
-                !text(&entry["message"]["content"]).trim().is_empty()
-                    || !text(&entry["text"]).trim().is_empty()
+                let s = text(&msg["content"]);
+                if s.trim().is_empty() {
+                    text(&entry["text"])
+                } else {
+                    s
+                }
             }
-            Some("attachment") => true,
-            _ => false,
+            Some("attachment") => {
+                let name = msg["file_name"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| msg["alt"].as_str().filter(|s| !s.trim().is_empty()))
+                    .unwrap_or("附件")
+                    .replace('[', "\\[")
+                    .replace(']', "\\]");
+                let path = msg["source_path"]
+                    .as_str()
+                    .filter(|s| s.starts_with('/'))
+                    .or_else(|| msg["url"].as_str().filter(|s| !s.trim().is_empty()));
+                path.map_or(name.clone(), |p| {
+                    format!("[{name}](<{}>)", p.replace('>', "%3E"))
+                })
+            }
+            _ => return None,
         }
+    } else if entry.get("respondedValue").is_some_and(|v| !v.is_null())
+        || entry["widgetDismissed"] == true
+        || entry.get("formResolution").is_some_and(|v| !v.is_null())
+    {
+        return None;
     } else {
-        !entry.get("respondedValue").is_some_and(|v| !v.is_null())
-            && entry["widgetDismissed"] != true
-            && !entry.get("formResolution").is_some_and(|v| !v.is_null())
-            && !text(&entry["text"]).trim().is_empty()
+        text(&entry["text"])
     };
-    visible
-        .then(|| entry["timestampMs"].as_i64().or(fallback_ts))
-        .flatten()
-        .filter(|&ts| ts > 0)
-        .map(|ts| ts as u64)
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(NativeTurnEvent {
+        prompt_id: None,
+        position: ts as u64,
+        turn_id: id.to_owned(),
+        kind: "completion".into(),
+        body: crate::security::redact_output(trimmed)
+            .chars()
+            .take(1200)
+            .collect(),
+        timestamp_ms: ts,
+    })
 }
 
-fn message_cursor(row: &Value, replica: Option<&Value>) -> u64 {
-    replica
+fn is_interaction_entry(entry: &Value) -> bool {
+    entry["kind"].as_str() == Some("send-message")
+        && matches!(
+            entry["message"]["type"].as_str(),
+            Some(
+                "local-tool-permission"
+                    | "auto-review-approval"
+                    | "meeting-join-consent"
+                    | "cookie-origin-approval"
+                    | "virtual-card-approval"
+                    | "user-form"
+            )
+        )
+}
+
+fn latest_completion_event(
+    row: &Value,
+    replica: Option<&Value>,
+    pending: &[NativeTurnEvent],
+) -> (u64, Option<NativeTurnEvent>) {
+    let mut latest: Option<NativeTurnEvent> = None;
+    let mut latest_interaction_ms: Option<i64> = None;
+    for entry in replica
         .and_then(|v| v["entries"].as_array())
         .into_iter()
         .flatten()
-        .filter_map(|entry| message_position(entry, None))
-        .chain(message_position(
-            &row["lastEntry"],
-            row["lastActivityAt"].as_i64(),
-        ))
-        .max()
-        .unwrap_or(0)
+    {
+        if is_interaction_entry(entry) {
+            if let Some(ts) = entry["timestampMs"].as_i64().filter(|&t| t > 0) {
+                latest_interaction_ms = Some(latest_interaction_ms.map_or(ts, |prev| prev.max(ts)));
+            }
+        }
+        if let Some(candidate) = completion_from_entry(entry, None) {
+            if latest
+                .as_ref()
+                .is_none_or(|prev| candidate.timestamp_ms >= prev.timestamp_ms)
+            {
+                latest = Some(candidate);
+            }
+        }
+    }
+    if let Some(roster_last) =
+        completion_from_entry(&row["lastEntry"], row["lastActivityAt"].as_i64())
+    {
+        if latest
+            .as_ref()
+            .is_none_or(|prev| roster_last.timestamp_ms > prev.timestamp_ms)
+        {
+            latest = Some(roster_last);
+        }
+    }
+    let Some(candidate) = latest else {
+        return (0, None);
+    };
+    let settled_count = candidate.position;
+    if pending
+        .iter()
+        .any(|p| p.timestamp_ms >= candidate.timestamp_ms)
+        || latest_interaction_ms.is_some_and(|ts| ts >= candidate.timestamp_ms)
+    {
+        return (settled_count, None);
+    }
+    (settled_count, Some(candidate))
 }
 
 pub fn scan(paths: &GrokBotPaths) -> Result<NativeScan> {
@@ -594,7 +679,10 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             continue;
         }
         let mut events = pending_events(row, replica.as_deref());
-        let settled_count = message_cursor(row, replica.as_deref());
+        let (settled_count, completion) = latest_completion_event(row, replica.as_deref(), &events);
+        if let Some(comp) = completion {
+            events.push(comp);
+        }
         events.sort_by_key(|e| e.position);
         let count = events
             .iter()

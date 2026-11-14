@@ -4,7 +4,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
 
-v2.1.17 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
+v2.1.18 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
 
 ## 特色亮点
 
@@ -68,7 +68,7 @@ Probe 仅保留控件、状态、错误、事件数据和确认对象；「全�
 
 Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖：`完成`、`需要回复`、`需要授权`、`失败`），正文提炼最多 4 个非空行、300 个 Unicode 字符的纯净摘要，剥离 Markdown、代码块、工具输出与内部元数据。
 
-- **平台通知开关**：Probe 首屏独立控制各 Provider；Grok Bot 保留开关和消息基线，但在取得可靠整轮终结证据前暂停 Bark 提醒，普通文字、附件及待回复／待授权均不推送。会话阅读与原生交互展示保持；Antigravity 与 DSH 通知仅本机生效。
+- **平台通知开关**：Probe 首屏独立控制各 Provider；Grok Bot 默认关闭，开启后在本机按 send-message 文字／附件消息及待回复／待授权请求提醒，沿用消息游标、启用基线和去重。提醒按消息识别，不保证整轮任务彻底结束；会话阅读与原生交互展示保持。Antigravity 与 DSH 通知仅本机生效。
 - **四平台实时 Hooks + DSH 原生流**：
   - **Codex**：管理 `~/.codex/hooks.json` 的 Stop Hook，并保留逐问题识别与去重；
   - **Claude Code**：管理 `~/.claude/settings.json` 的 `Stop`、`Notification`、`StopFailure` Hooks；
