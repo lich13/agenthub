@@ -5,7 +5,6 @@ use aes_gcm::{
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct SecretBox {
@@ -29,13 +28,6 @@ impl SecretBox {
         let mut key = [0_u8; 32];
         key.copy_from_slice(&raw);
         Ok(Self { key })
-    }
-
-    pub fn deterministic_dev() -> Self {
-        let digest = Sha256::digest(b"agenthub-development-key");
-        let mut key = [0_u8; 32];
-        key.copy_from_slice(&digest);
-        Self { key }
     }
 
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {

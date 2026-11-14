@@ -211,6 +211,7 @@ impl NativeState {
         identity(turn.get("turnId").unwrap_or(&turn["id"]))
     }
 
+    #[cfg(test)]
     pub fn contains_submission(&self, message_id: &str) -> bool {
         self.submission_turn_id(message_id).is_some()
     }

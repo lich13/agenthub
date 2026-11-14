@@ -23,7 +23,7 @@ Grok 原生 leader 使用 `/var/lib/agenthub-webd/grok-leader.sock`。凭据和 
 
 发布页提供八项资产：macOS ARM64 DMG、校验文件、updater 压缩包及签名、`latest.json`，以及 Linux x86_64 `webd` 服务包、校验文件和分离签名。`latest.json` 的平台键为 `darwin-aarch64`，文件名中的 `darwin-arm64` 表示同一架构；Linux 服务包不能用于桌面 updater。
 
-在 App「设置 → 远程连接」选择本机 OpenSSH 配置及 Include 中保存的 Host，按权限选择 useSudo，然后「安装并连接」。引导脚本随 App 提供，下载同版本正式服务包并以内置可信公钥验签。Ubuntu/Debian x86_64 自动安装缺失的 curl、Python 3、Minisign 等依赖；其他 Linux x86_64 需要已有 systemd 和依赖。服务包沿用正式 Linux 构建环境的运行库要求，安装器的 TOML 读取需要 Python 3.11 或更新版本。
+在 App「设置 → 远程连接」选择本机 OpenSSH 配置及 Include 中保存的 Host，按权限选择 useSudo，然后「安装并连接」。引导脚本随 App 提供，下载同版本正式服务包并以内置可信公钥验签。Ubuntu/Debian x86_64 自动安装缺失的 curl、Python 3.11+、Minisign 等依赖；其他 Linux x86_64 需要已有 systemd 和依赖。服务包沿用正式 Linux 构建环境的运行库要求，安装器的 TOML 读取需要 Python 3.11 或更新版本。
 
 SSH 复用现有密钥、agent 与跳板配置，不复制私钥或保存密码。需要主机确认或交互认证时先在终端完成；useSudo 使用 `sudo -n`，不改 sudoers。已有服务可直接「保存并连接」，断线后由下一次刷新或请求自动恢复，也可使用「重新连接」；未确认写操作不能自动重放。
 
@@ -57,7 +57,7 @@ sudo /usr/local/bin/agenthub-webd health
 
 ## 原生数据边界
 
-Claude Code 从 CLAUDE_CONFIG_DIR/projects 或用户配置目录读取已有 JSONL。改名保留身份、版本和占用判断，删除按项目相对路径及文件名定位，覆盖专属目录、file-history 等旁路和共享索引对应记录。读取失败、活动登记或未知版本不阻止删除。Grok 和 Codex 同样只操作当前机器的原生数据根。
+Claude Code 从 CLAUDE_CONFIG_DIR/projects 或用户配置目录读取已有 JSONL。改名保留身份、版本和占用判断，删除按项目相对路径及文件名定位，覆盖专属目录、file-history 等旁路和共享索引对应记录。普通历史的读取失败、活动登记或未知版本不阻止删除。若匹配原生后台记录，则先由来源机器已有的 `claude rm` 完成后台清理；CLI 缺失、不支持或原生拒绝时保留历史。没有后台记录时不要求 CLI，不终止运行中的会话；原生进程仍可能重建历史。Grok 和 Codex 同样只操作当前机器的原生数据根。
 
 Codex 删除直接处理确认的目标和原生后代，不依赖本机原生 helper。覆盖普通／归档 rollout、压缩副本、旁路、状态和分页历史数据库及名称索引；外部引用不阻止执行，也不扩大目标。文件系统或数据库失败逐项报告，其他目标继续。API 协议保持 2，先升级服务 再安装 App。
 

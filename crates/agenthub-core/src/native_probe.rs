@@ -4,12 +4,7 @@ use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashSet,
-    fs,
-    io::{BufRead, BufReader},
-    path::Path,
-};
+use std::{collections::HashSet, fs, path::Path};
 
 pub(crate) fn notification_title(title: &str, id: &str, cwd: &str) -> String {
     if !title.trim().is_empty()
@@ -229,8 +224,15 @@ pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     }
 }
 
-static NATIVE_PROBE_CACHE: crate::read_cache::ReadCache<std::sync::Arc<Vec<Value>>> =
-    crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
+#[derive(Default)]
+struct NotificationRecords {
+    rows: std::sync::Arc<Vec<Value>>,
+    bytes: u64,
+}
+
+static NATIVE_PROBE_CACHE: crate::jsonl_cache::JsonlCache<NotificationRecords> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES)
+        .with_line_limit(8 * 1024 * 1024);
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
     NATIVE_PROBE_CACHE.evict_idle(max_idle);
@@ -239,38 +241,31 @@ pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
 pub(crate) fn read_jsonl(path: &Path) -> Result<std::sync::Arc<Vec<Value>>> {
     NATIVE_PROBE_CACHE.read(
         path,
-        |_, size| size.saturating_mul(5),
-        || {
-            file_identity(path)?;
+        |size| {
             ensure!(
-                fs::metadata(path)?.len() <= 128 * 1024 * 1024,
+                size <= 128 * 1024 * 1024,
                 "notification source exceeds size limit"
             );
-            let mut reader = BufReader::new(fs::File::open(path)?);
-            let mut records = Vec::new();
-            let mut line = Vec::new();
-            loop {
-                line.clear();
-                if reader.read_until(b'\n', &mut line)? == 0 {
-                    break;
-                }
-                // Native writers append JSONL. Never consume a partial record.
-                if !line.ends_with(b"\n") {
-                    break;
-                }
-                if line.iter().all(u8::is_ascii_whitespace) {
-                    continue;
-                }
+            Ok(0)
+        },
+        false,
+        |state, line, _, _| {
+            if !line.iter().all(u8::is_ascii_whitespace) {
                 ensure!(
-                    line.len() <= 8 * 1024 * 1024 && records.len() < 200_000,
+                    state.rows.len() < 200_000,
                     "notification source exceeds record limit"
                 );
-                records.push(
-                    serde_json::from_slice(&line).context("invalid native notification record")?,
-                );
+                let row =
+                    serde_json::from_slice(line).context("invalid native notification record")?;
+                std::sync::Arc::make_mut(&mut state.rows).push(row);
             }
-            Ok(std::sync::Arc::new(records))
+            Ok(())
         },
+        |state, info| {
+            state.bytes = info.offset;
+            Ok(state.rows.clone())
+        },
+        |state| state.bytes.saturating_mul(5),
     )
 }
 
@@ -299,6 +294,23 @@ pub(crate) fn grok_events(
     events: &[Value],
     updates: &[Value],
 ) -> (Vec<NativeTurnEvent>, u64) {
+    // Parse each update timestamp once. Range lookup uses time, while reduction
+    // still follows native file order (timestamps may arrive out of order).
+    let mut timed_updates = updates
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, row)| {
+            if row.pointer("/params/sessionId").and_then(Value::as_str) != Some(id) {
+                return None;
+            }
+            let ts = row
+                .pointer("/params/_meta/agentTimestampMs")
+                .or_else(|| row.get("timestamp"))
+                .and_then(timestamp)?;
+            Some((ts, ordinal, row))
+        })
+        .collect::<Vec<_>>();
+    timed_updates.sort_unstable_by_key(|(ts, ordinal, _)| (*ts, *ordinal));
     let mut start: Option<&Value> = None;
     let mut result = Vec::new();
     let mut settled = events.len() as u64;
@@ -342,23 +354,15 @@ pub(crate) fn grok_events(
                     .find(|row| row.get("type").and_then(Value::as_str) == Some("turn_started"))
                     .and_then(|row| row.get("ts"))
                     .and_then(timestamp);
-                let rows = updates
-                    .iter()
-                    .filter(|row| {
-                        row.pointer("/params/sessionId").and_then(Value::as_str) == Some(id)
-                            && row
-                                .pointer("/params/_meta/agentTimestampMs")
-                                .or_else(|| row.get("timestamp"))
-                                .and_then(timestamp)
-                                .is_some_and(|ts| {
-                                    ts >= start_ms
-                                        && ts <= end_ms.saturating_add(2_000)
-                                        && next_start.is_none_or(|next| ts < next)
-                                })
-                    })
-                    .collect::<Vec<_>>();
+                let first = timed_updates.partition_point(|(ts, _, _)| *ts < start_ms);
+                let last = timed_updates.partition_point(|(ts, _, _)| {
+                    *ts <= end_ms.saturating_add(2_000) && next_start.is_none_or(|next| *ts < next)
+                });
+                let mut rows = timed_updates[first..last.max(first)].to_vec();
+                rows.sort_unstable_by_key(|(_, ordinal, _)| *ordinal);
                 let endings = rows
                     .iter()
+                    .map(|(_, _, row)| *row)
                     .filter(|row| {
                         row.pointer("/params/update/sessionUpdate")
                             .and_then(Value::as_str)
@@ -400,7 +404,7 @@ pub(crate) fn grok_events(
                 };
                 let mut body = String::new();
                 let mut seen_chunks = HashSet::new();
-                for row in &rows {
+                for (_, _, row) in &rows {
                     if row
                         .pointer("/params/update/sessionUpdate")
                         .and_then(Value::as_str)
@@ -522,6 +526,44 @@ mod tests {
         assert!(turns.is_empty());
         assert_eq!(cursor, 1, "unsettled cross-file record must be retried");
     }
+    #[test]
+    fn native_jsonl_append_preserves_old_snapshot_and_pending_tail() {
+        use std::{io::Write, sync::Arc};
+        let p = std::env::temp_dir().join(format!("native-probe-{}.jsonl", uuid::Uuid::new_v4()));
+        fs::write(&p, b"{\"n\":1}\n{\"n\":").unwrap();
+        let first = read_jsonl(&p).unwrap();
+        assert!(Arc::ptr_eq(&first, &read_jsonl(&p).unwrap()));
+        let mut file = fs::OpenOptions::new().append(true).open(&p).unwrap();
+        file.write_all(b"2}\n").unwrap();
+        let second = read_jsonl(&p).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.as_ref(), &[json!({"n":1}), json!({"n":2})]);
+        fs::write(&p, b"{\"replacement\":true}\n").unwrap();
+        assert_eq!(
+            read_jsonl(&p).unwrap().as_ref(),
+            &[json!({"replacement":true})]
+        );
+        fs::remove_file(p).unwrap();
+    }
+
+    #[test]
+    fn grok_time_index_keeps_native_order_and_prompt_ambiguity() {
+        let (events, mut updates) = grok_fixture("completed", "end_turn", "primary");
+        let mut earlier = updates[1].clone();
+        earlier["params"]["_meta"]["chunkId"] = json!("earlier");
+        earlier["timestamp"] = json!(updates[1]["timestamp"].as_i64().unwrap() - 1);
+        earlier["params"]["update"]["content"]["text"] = json!(" appended");
+        updates.insert(2, earlier);
+        assert_eq!(
+            grok_events("session", &events, &updates).0[0].body,
+            "final answer appended"
+        );
+        let mut ambiguous = updates.last().unwrap().clone();
+        ambiguous["params"]["update"]["prompt_id"] = json!("other");
+        updates.push(ambiguous);
+        assert!(grok_events("session", &events, &updates).0.is_empty());
+    }
+
     #[test]
     fn native_jsonl_keeps_half_line_pending_and_rejects_complete_corruption() {
         let p = std::env::temp_dir().join(format!("native-probe-{}.jsonl", uuid::Uuid::new_v4()));

@@ -44,7 +44,6 @@ export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateS
       state: "idle",
       failure_category: null,
       recommended_action: "Confirm install in the Tauri updater after signature verification.",
-      capabilities: ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
     };
   }
   return {
@@ -56,7 +55,6 @@ export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateS
     state: "idle",
     failure_category: null,
     recommended_action: "/usr/local/bin/agenthub-webd-update --repo lich13/agenthub --version latest",
-    capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
   };
 }
 
@@ -81,7 +79,6 @@ export function demoProviders(): AgentProviderInfo[] {
       label: "Codex",
       status: "ready",
       description: "完整 Codex 控制面，使用官方 state DB、session_index、rollout 与受控 job。",
-      capabilities: ["threads", "chat", "plan_questions", "uploads", "updates", "doctor"],
       safety: "保留官方数据结构，不修改 Codex DB schema"
     },
     {
@@ -89,7 +86,6 @@ export function demoProviders(): AgentProviderInfo[] {
       label: "Grok Build",
       status: "ready",
       description: "只读浏览 Grok Build 会话、消息和工具活动。",
-      capabilities: ["sessions", "messages", "tools", "rename", "delete_local_session"],
       safety: "改名走原生协议，删除仅限本地 session 目录"
     },
     { id: "cursor", label: "Cursor CLI", status: "planned", capabilities: [], safety: "未开放命令执行" },

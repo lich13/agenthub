@@ -41,7 +41,11 @@ impl Fixture {
     }
 
     fn open(&self) -> PanelDb {
-        PanelDb::open(&self.path).unwrap()
+        PanelDb::open_with_secret_box(
+            &self.path,
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap()
     }
 
     fn connection(&self) -> Connection {
@@ -249,7 +253,11 @@ fn concurrent_database_connections_claim_one_bark_delivery() {
         let path = fixture.path.clone();
         let barrier = barrier.clone();
         workers.push(std::thread::spawn(move || {
-            let db = PanelDb::open(path).unwrap();
+            let db = PanelDb::open_with_secret_box(
+                path,
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             let channel = NotificationChannel::Bark;
             barrier.wait();
             (

@@ -311,7 +311,7 @@ fn small_files_and_boundary_images_carry_a_content_proof_but_large_files_do_not(
         MAX_IMAGE_BYTES + 1,
         b"synthetic large regular file",
     );
-    let large = NativeReference::selected_file(large_path.clone())
+    let mut large = NativeReference::selected_file(large_path.clone())
         .expect("large synthetic regular file remains selectable");
     assert!(serialized_identity(&large).get("content_proof").is_none());
     large
@@ -327,6 +327,9 @@ fn small_files_and_boundary_images_carry_a_content_proof_but_large_files_do_not(
     file.flush().expect("large synthetic rewrite is flushed");
     drop(file);
     restore_mtime(&large_path, before.3, before.4);
+    if let NativeReference::File { identity, .. } = &mut large {
+        identity.changed = fs::metadata(&large_path).unwrap().ctime() - 1;
+    }
     assert_eq!(
         large.validate().unwrap_err(),
         DesktopError::RequestExpired,
@@ -372,7 +375,7 @@ fn xattr_only_change_keeps_a_small_file_reference_valid_with_content_proof() {
 fn same_size_rewrite_with_restored_mtime_is_rejected_by_the_content_proof() {
     let fixture = Fixture::new();
     let path = fixture.private_file("rewritten-proofed.bin", b"AAAA synthetic bytes");
-    let reference = NativeReference::selected_file(path.clone())
+    let mut reference = NativeReference::selected_file(path.clone())
         .expect("small synthetic file is selected before rewrite");
     let before = metadata_tuple(&path);
 
@@ -386,6 +389,11 @@ fn same_size_rewrite_with_restored_mtime_is_rejected_by_the_content_proof() {
     drop(file);
     restore_mtime(&path, before.3, before.4);
 
+    // Filesystems may keep ctime during rapid writes; explicitly exercise a
+    // stale ctime while retaining every other identity field and the old proof.
+    if let NativeReference::File { identity, .. } = &mut reference {
+        identity.changed = fs::metadata(&path).unwrap().ctime() - 1;
+    }
     let after = metadata_tuple(&path);
     assert_eq!(before.0, after.0, "rewrite keeps the device");
     assert_eq!(before.1, after.1, "rewrite keeps the inode");
@@ -485,7 +493,7 @@ fn legacy_encrypted_reference_round_trip_keeps_identity_compatibility() {
     );
     let plaintext = serde_json::to_vec(&json!({"references":[legacy]}))
         .expect("legacy reference body serializes");
-    let crypto = crate::crypto::SecretBox::deterministic_dev();
+    let crypto = crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap();
     let (ciphertext, nonce) = crypto
         .encrypt(&plaintext)
         .expect("legacy reference body encrypts");

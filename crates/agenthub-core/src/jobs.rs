@@ -238,7 +238,11 @@ mod tests {
     #[tokio::test]
     async fn split_utf8_sensitive_lines_and_unterminated_tail_are_preserved() {
         use tokio::io::AsyncWriteExt;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.create_job("fixture", "fixture", "fixture").unwrap();
         let (mut writer, reader) = tokio::io::duplex(3);
         let reader = super::stream_reader(db.clone(), "fixture".into(), reader);
@@ -255,7 +259,11 @@ mod tests {
     #[tokio::test]
     async fn progress_records_flush_during_running_jobs_and_redact_before_storage() {
         use tokio::io::AsyncWriteExt;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.create_job("fixture", "fixture", "fixture").unwrap();
         let (mut writer, reader) = tokio::io::duplex(1024);
         let reader = super::stream_reader(db.clone(), "fixture".into(), reader);
@@ -291,7 +299,11 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_event_releases_group_after_all_output_is_drained() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let runner = JobRunner::new(db.clone());
         let id = runner
             .start_exclusive_process_job(
@@ -311,7 +323,11 @@ mod tests {
 
     #[tokio::test]
     async fn exclusive_shell_jobs_reject_same_group_until_finished() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let runner = JobRunner::new(db.clone());
 
         let first = runner
@@ -367,7 +383,11 @@ mod tests {
     fn shell_jobs_start_without_current_tokio_runtime() {
         let db_path =
             std::env::temp_dir().join(format!("agenthub-job-runner-{}.sqlite", Uuid::new_v4()));
-        let db = PanelDb::open(&db_path).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &db_path,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let runner = JobRunner::new(db.clone());
 
         let job_id = runner

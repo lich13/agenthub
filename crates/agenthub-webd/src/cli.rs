@@ -28,10 +28,7 @@ pub(super) enum Command {
         #[arg(long, hide = true)]
         cascade_id: Option<String>,
     },
-    Serve {
-        #[arg(long, default_value_t = HostSurface::LinuxServerApi)]
-        surface: HostSurface,
-    },
+    Serve,
     Doctor,
     InitConfig,
     RpcStdio,
@@ -89,10 +86,6 @@ pub(super) enum ProbeCommand {
         turn_id: Option<String>,
     },
     BarkTest,
-    LifecycleRepair,
-    ServiceRestart,
-    #[command(hide = true)]
-    LegacyImport,
     #[command(hide = true)]
     MonitorErrors,
     #[command(name = "diagnose-antigravity", hide = true)]

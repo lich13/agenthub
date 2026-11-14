@@ -392,6 +392,7 @@ impl Config {
         Self::for_platform_paths_with_home(platform, &home, false)
     }
 
+    #[cfg(test)]
     pub fn for_desktop_platform_kind_with_home(
         kind: PlatformKind,
         home: impl Into<PathBuf>,

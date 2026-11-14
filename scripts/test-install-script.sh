@@ -7,10 +7,8 @@ cd "${ROOT}"
 required=(
   deploy/agenthub-webd/install.sh
   deploy/agenthub-webd/update.sh
-  deploy/agenthub-webd/rollback.sh
   scripts/package-darwin-arm64.sh
   scripts/package-webd-linux-x86_64.sh
-  scripts/package-linux.sh
   scripts/deploy-cloud.sh
   contracts/agenthub-contract.json
   contracts/agenthub-contract.schema.json
@@ -63,7 +61,7 @@ if config["bundle"]["targets"] != ["dmg", "app"]:
     raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 
 update = (root / "deploy/agenthub-webd/update.sh").read_text()
-for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart agenthub-webd"]:
+for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "--no-enable", "systemctl restart agenthub-webd"]:
     if marker not in update:
         raise SystemExit(f"server updater missing isolated restart marker: {marker}")
 
@@ -84,7 +82,7 @@ if unregistered.returncode == 0:
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
 
-shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh deploy/agenthub-webd/rollback.sh scripts/deploy-cloud.sh
+shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh scripts/deploy-cloud.sh
 python3 scripts/test-install-safety.py
 python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py

@@ -2,12 +2,10 @@ use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     codex::{self, CodexPaths, ThreadStatus, ThreadSummary},
     config::Config,
-    db::JobRecord,
     platform::PlatformPaths,
     probe as probe_core,
     services::commands,
     services::system::{require_capability, Capability},
-    services::threads,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -77,15 +75,6 @@ pub struct ProbeFixedJobSpec {
     pub args: Vec<String>,
     pub command: String,
     pub exclusive_group: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProbeBarkDeliveryDecision {
-    pub notifications_enabled: bool,
-    pub relevant_switch_enabled: bool,
-    pub device_key_configured: bool,
-    pub should_send: bool,
-    pub skip_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -496,21 +485,12 @@ fn aggregate_active_sessions(
     sessions
 }
 
-fn load_probe_codex_threads(
-    paths: &CodexPaths,
-    panel_db_path: &Path,
-) -> Result<Vec<ThreadSummary>> {
-    let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
-    threads::load_threads_with_runtime_state(paths, false, None, usize::MAX, &running_jobs)
-}
-
 fn probe_codex_buckets_with_paths(
     paths: &CodexPaths,
-    panel_db_path: &Path,
     limit: usize,
 ) -> Result<(Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>)> {
     let limit = limit.clamp(1, 200);
-    let mut threads = load_probe_codex_threads(paths, panel_db_path)?;
+    let mut threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
     ThreadSummary::sort_by_message_time(&mut threads);
     let mut running = Vec::new();
     let mut reply_needed = Vec::new();
@@ -535,8 +515,7 @@ fn probe_codex_buckets(
     limit: usize,
 ) -> (Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>) {
     let resolved = codex::resolve_codex_paths(&config.codex.home);
-    probe_codex_buckets_with_paths(&resolved.codex_paths(), &config.paths.db_path, limit)
-        .unwrap_or_default()
+    probe_codex_buckets_with_paths(&resolved.codex_paths(), limit).unwrap_or_default()
 }
 
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
@@ -562,12 +541,11 @@ pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
 
 pub fn probe_threads_for_status_with_paths(
     paths: &CodexPaths,
-    panel_db_path: &Path,
     status: &str,
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let mut threads = load_probe_codex_threads(paths, panel_db_path)?;
+    let mut threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
     if status == "reply-needed" {
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
@@ -587,11 +565,9 @@ pub fn probe_threads_for_status_with_paths(
 
 pub fn probe_passive_scan_threads_with_paths(
     paths: &CodexPaths,
-    panel_db_path: &Path,
     limit: usize,
 ) -> Result<Vec<(&'static str, Vec<ThreadSummary>)>> {
-    let (_running, reply_needed, recoverable) =
-        probe_codex_buckets_with_paths(paths, panel_db_path, limit)?;
+    let (_running, reply_needed, recoverable) = probe_codex_buckets_with_paths(paths, limit)?;
     Ok(vec![
         ("reply-needed", reply_needed),
         ("recoverable", recoverable),
@@ -629,34 +605,6 @@ pub fn probe_event_bark_switch_enabled(config: &Config, kind: &str) -> bool {
         "reply-needed" => config.probe.notifications.notify_reply_needed,
         "recoverable" => config.probe.notifications.notify_recoverable,
         _ => config.probe.notifications.notify_completion,
-    }
-}
-
-pub fn probe_bark_delivery_decision(
-    config: &Config,
-    kind: &str,
-    device_key_configured: bool,
-    dedupe_claimed: bool,
-) -> ProbeBarkDeliveryDecision {
-    let relevant_switch_enabled = probe_event_bark_switch_enabled(config, kind);
-    let notifications_enabled = config.probe.notifications.enabled;
-    let skip_reason = if !notifications_enabled {
-        Some("notifications_disabled")
-    } else if !relevant_switch_enabled {
-        Some("event_switch_disabled")
-    } else if !device_key_configured {
-        Some("device_key_missing")
-    } else if !dedupe_claimed {
-        Some("dedupe")
-    } else {
-        None
-    };
-    ProbeBarkDeliveryDecision {
-        notifications_enabled,
-        relevant_switch_enabled,
-        device_key_configured,
-        should_send: skip_reason.is_none(),
-        skip_reason: skip_reason.map(str::to_string),
     }
 }
 
@@ -1218,24 +1166,6 @@ fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> 
     .map(|count| count.max(0) as usize)
 }
 
-fn running_thread_jobs(path: &Path) -> rusqlite::Result<Vec<JobRecord>> {
-    let conn = open_readonly_panel_db(path)?;
-    if !table_exists(&conn, "jobs")? {
-        return Ok(Vec::new());
-    }
-    let mut stmt = conn.prepare(
-        r#"
-        SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code,
-               substr(output, 1, 24000), error
-        FROM jobs
-        WHERE status='running' AND thread_id IS NOT NULL
-        ORDER BY started_at DESC
-        "#,
-    )?;
-    let rows = stmt.query_map([], job_from_row)?;
-    rows.collect()
-}
-
 fn open_readonly_panel_db(path: &Path) -> rusqlite::Result<Connection> {
     Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
 }
@@ -1281,26 +1211,10 @@ fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
     (0..=max_age_seconds).contains(&age_seconds)
 }
 
-fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
-    Ok(JobRecord {
-        id: row.get(0)?,
-        kind: row.get(1)?,
-        status: row.get(2)?,
-        title: row.get(3)?,
-        thread_id: row.get(4)?,
-        turn_id: row.get(5)?,
-        started_at: row.get(6)?,
-        finished_at: row.get(7)?,
-        exit_code: row.get(8)?,
-        output: row.get(9)?,
-        error: row.get(10)?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_probe_action, probe_bark_delivery_decision, probe_bark_status_label,
+        plan_probe_action, probe_bark_status_label, probe_event_bark_switch_enabled,
         probe_passive_thread_notification_plan, ProbeAction,
     };
     use crate::{
@@ -1331,12 +1245,7 @@ mod tests {
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = false;
 
-        let disabled = probe_bark_delivery_decision(&config, "reply-needed", true, true);
-        assert!(!disabled.should_send);
-        assert_eq!(
-            disabled.skip_reason.as_deref(),
-            Some("event_switch_disabled")
-        );
+        assert!(!probe_event_bark_switch_enabled(&config, "reply-needed"));
         assert_eq!(
             probe_bark_status_label(false, true, Some("dedupe")),
             "dedupe_hit"
@@ -1351,13 +1260,7 @@ mod tests {
         );
 
         config.probe.notifications.notify_reply_needed = true;
-        assert!(probe_bark_delivery_decision(&config, "reply-needed", true, true).should_send);
-        assert_eq!(
-            probe_bark_delivery_decision(&config, "reply-needed", false, true)
-                .skip_reason
-                .as_deref(),
-            Some("device_key_missing")
-        );
+        assert!(probe_event_bark_switch_enabled(&config, "reply-needed"));
     }
 
     #[test]

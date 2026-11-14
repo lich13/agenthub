@@ -213,9 +213,11 @@ mod tests {
         platform.kind = kind;
         std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
         std::fs::write(&platform.config_file, toml::to_string(&config).unwrap()).unwrap();
-        let db =
-            PanelDb::open_with_secret_box(&config.paths.db_path, SecretBox::deterministic_dev())
-                .unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &config.paths.db_path,
+            SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let state = DesktopState::new(config, db, platform.clone());
         (temp, state, platform)
     }

@@ -61,39 +61,39 @@ mod tests {
     fn must<T>(result: Result<T, ApiError>) -> T {
         match result {
             Ok(value) => value,
-            Err(_) => panic!("expected rpc compatibility conversion to succeed"),
+            Err(_) => panic!("expected RPC payload parsing to succeed"),
         }
     }
 
     #[test]
-    fn rpc_payload_compat_accepts_rename_request_wrapper_and_aliases() {
+    fn rpc_payload_accepts_current_rename_request_wrapper() {
         let payload: ThreadRenameRequest = must(rpc_wrapped_payload(
             &json!({
                 "request": { "thread_id": "thread-a", "name": "Task name" }
             }),
-            &["request", "payload"],
+            &["request"],
         ));
         assert_eq!(payload.thread_id, "thread-a");
         assert_eq!(payload.name, "Task name");
     }
 
     #[test]
-    fn rpc_payload_compat_accepts_probe_settings_wrapper() {
+    fn rpc_payload_accepts_current_probe_settings_wrapper() {
         let payload: settings_service::ProbeSettingsSaveRequest = must(rpc_wrapped_payload(
             &json!({
             "settings": {
                 "probe": {
-                    "pollSeconds": 20,
-                    "recentLimit": 50
+                    "poll_seconds": 20,
+                    "recent_limit": 50
                     },
                     "notifications": {
-                        "serverUrl": "https://example.invalid",
-                        "deviceKey": "bark",
-                        "notifyReplyNeeded": true
+                        "server_url": "https://example.invalid",
+                        "device_key": "bark",
+                        "notify_reply_needed": true
                     }
                 }
             }),
-            &["settings", "payload"],
+            &["settings"],
         ));
 
         assert_eq!(payload.probe.unwrap().poll_seconds, Some(20));
@@ -107,24 +107,21 @@ mod tests {
     }
 
     #[test]
-    fn rpc_payload_compat_extracts_thread_id_from_payload_or_top_level() {
+    fn rpc_strings_use_the_current_top_level_field() {
         assert_eq!(
             must(rpc_required_string(
-                &json!({"payload": {"threadId": "nested-thread"}}),
+                &json!({"threadId":"thread-a"}),
                 "threadId"
             )),
-            "nested-thread"
+            "thread-a"
         );
-        assert_eq!(
-            must(rpc_required_string(
-                &json!({"thread_id": "snake-thread"}),
-                "threadId"
-            )),
-            "snake-thread"
+        assert!(
+            rpc_required_string(&json!({"payload":{"threadId":"thread-a"}}), "threadId").is_err()
         );
+        assert!(rpc_required_string(&json!({"thread_id":"thread-a"}), "threadId").is_err());
         let empty: serde_json::Value = must(rpc_wrapped_payload_or_empty(
             &serde_json::Value::Null,
-            &["payload"],
+            &["request"],
         ));
         assert_eq!(empty, json!({}));
     }

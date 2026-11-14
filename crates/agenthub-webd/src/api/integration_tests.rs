@@ -7,7 +7,7 @@ use super::{rpc_dispatch::rpc_dispatch, ApiErrorKind};
 use agenthub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
 use agenthub_core::{
     config::Config,
-    db::{JobRecord, PanelDb},
+    db::PanelDb,
     jobs::ProcessCommand,
     platform::{PlatformKind, PlatformPaths},
     services::{
@@ -18,7 +18,6 @@ use agenthub_core::{
 use axum::http::StatusCode;
 use rusqlite::{params, Connection};
 use serde_json::json;
-use std::collections::HashSet;
 use std::{
     env,
     ffi::OsString,
@@ -80,7 +79,11 @@ fn rpc_test_state() -> crate::state::AppState {
     config.paths.db_path = sandbox_root.join("data/panel.sqlite");
     config.paths.log_dir = sandbox_root.join("logs");
 
-    let db = PanelDb::open(":memory:").unwrap();
+    let db = PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root)
 }
 
@@ -516,11 +519,7 @@ async fn unified_update_status_uses_shared_shape() {
     assert_eq!(payload["method"], "linux_systemd_job");
     assert_eq!(payload["state"], "idle");
     assert_eq!(payload["channel"], "stable");
-    assert!(payload["capabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "job_history"));
+    assert!(payload.get("capabilities").is_none());
 }
 
 #[tokio::test]
@@ -1123,57 +1122,6 @@ fn thread_list_plan_clamps_requested_page_size() {
             expected
         );
     }
-}
-
-#[test]
-fn running_job_marks_summary_running_with_active_job_id() {
-    let mut summary = fallback_summary("thread-a", "example-user");
-    let job = JobRecord {
-        id: "job-live".to_string(),
-        kind: "codex_chat".to_string(),
-        status: "running".to_string(),
-        title: "Codex resume thread".to_string(),
-        thread_id: Some("thread-a".to_string()),
-        turn_id: None,
-        started_at: 1,
-        finished_at: None,
-        exit_code: None,
-        output: String::new(),
-        error: None,
-    };
-
-    thread_service::apply_running_job_to_summary(&mut summary, &job);
-
-    assert_eq!(summary.status, ThreadStatus::Running);
-    assert_eq!(summary.active_job_id.as_deref(), Some("job-live"));
-    assert_eq!(summary.last_event_kind, None);
-}
-
-#[test]
-fn running_job_does_not_inject_archived_thread_missing_from_limited_local_list() {
-    let mut archived = fallback_summary("thread-archived", "old");
-    archived.status = ThreadStatus::Archived;
-    archived.archived_at = Some("2026-06-16T00:00:00Z".to_string());
-    let job = JobRecord {
-        id: "job-live".to_string(),
-        kind: "codex_chat".to_string(),
-        status: "running".to_string(),
-        title: "Codex resume archived".to_string(),
-        thread_id: Some("thread-archived".to_string()),
-        turn_id: Some("turn-live".to_string()),
-        started_at: 1,
-        finished_at: None,
-        exit_code: None,
-        output: String::new(),
-        error: None,
-    };
-    let mut rows = vec![fallback_summary("thread-visible", "visible")];
-
-    let archived_ids = HashSet::from([archived.id.clone()]);
-    thread_service::merge_running_jobs(&mut rows, &[job], &archived_ids);
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].id, "thread-visible");
 }
 
 #[tokio::test]

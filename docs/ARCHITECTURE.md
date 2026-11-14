@@ -193,11 +193,11 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 五种 Provider 共用 useSessionSelection。⌘ 切换单项、Shift 按可见顺序追加区间，切换机器／Provider／筛选或退出多选清空选择。轮询不选择新行。删除没有批量数量上限；归档、恢复保留原有规则，客户端按 100 项分批提交。
 
-直接删除预览展示目标，一次确认后仅执行提交的根 ID 和 descendants，重新计算的父子关系只用于归属校验，不扩大集合。Codex、Claude 与 Grok 的直接删除不依据正文、活动进程、writer 锁、终态或旧 fingerprint 阻止执行；Antigravity 与 DSH 保留所选目标的运行、占用和原生写入校验。统一清理另复核预览指纹及最新允许集，API 协议保持 2。目录流式遍历，没有文件大小、深度或文件数量业务上限；符号链接只删除链接本身，共享文件只移除目标记录。
+直接删除预览展示目标，一次确认后仅执行提交的根 ID 和 descendants，重新计算的父子关系只用于归属校验，不扩大集合。Codex、Claude 与 Grok 的直接删除不依据正文、活动进程、writer 锁、终态或旧 fingerprint 阻止执行；Antigravity 与 DSH 保留所选目标的运行、占用和原生写入校验。统一清理另复核预览指纹及最新允许集，API 协议保持 2。目录流式遍历，没有文件大小、深度或文件数量业务上限；符号链接只删除链接本身，共享文件只移除目标记录，原子替换保留 uid／gid／mode，并与读取前的文件身份比较；发现并发变化时明确报错，由用户重试。
 
 Codex 依据原生父子关系生成后代集合，循环去重；includeDescendants 和 SessionBatchSelection.descendants 明确传递确认范围。执行不再发现新后代，也不扩大到引用目标历史的其他线程。直接清理普通／归档 rollout、压缩副本、writer 锁、shell snapshots、visualizations、原生数据库、分页历史和名称索引，不调用 helper。归档、恢复仍使用原有指纹和状态规则。
 
-Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
+Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。精确匹配 `jobs/*/state.json` 的原生 ID、`sessionId` 或 `resumeSessionId` 后，先使用来源机器已有的 `claude rm` 清理后台记录及工作树；原生命令未支持或未成功时保留历史，不强制移除或停止原生进程。没有匹配后台记录时不需要 CLI。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
 
 单条、批量和统一清理共用删除实现。仅保留 cleanup.unifiedDryRun／cleanup.unifiedExecute 与渐进 cleanup.hiddenDryRun，旧独立 archive／hiddenExecute／dshArchive 入口及适配器已删除。缺失文件视为完成；权限、文件系统和数据库失败返回逐项 failed/residuals，继续处理其他目标，不回滚整批。数据库修改按目标事务执行。原生程序之后新写入的数据在刷新后显示，不启动重复删除任务。
 

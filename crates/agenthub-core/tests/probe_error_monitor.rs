@@ -303,7 +303,11 @@ fn probe_error_monitor_first_scan_and_replaced_database_only_establish_baseline(
 fn probe_error_monitor_incident_claim_is_permanent_and_deduplicated() {
     let root = temp_dir("turn-error-dedupe");
     let panel = root.join("agenthub.sqlite");
-    let db = PanelDb::open_with_secret_box(&panel, SecretBox::deterministic_dev()).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &panel,
+        SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let incident = NewProbeErrorIncident {
         incident_key: "incident-key".to_string(),
         source_ts: 100,
@@ -340,14 +344,24 @@ fn probe_error_monitor_incident_claim_is_permanent_and_deduplicated() {
 fn probe_error_monitor_concurrent_database_claim_records_one_incident() {
     let root = temp_dir("turn-error-concurrent-claim");
     let panel = root.join("agenthub.sqlite");
-    drop(PanelDb::open_with_secret_box(&panel, SecretBox::deterministic_dev()).unwrap());
+    drop(
+        PanelDb::open_with_secret_box(
+            &panel,
+            SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap(),
+    );
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let mut workers = Vec::new();
     for _ in 0..2 {
         let panel = panel.clone();
         let barrier = barrier.clone();
         workers.push(thread::spawn(move || {
-            let db = PanelDb::open_with_secret_box(&panel, SecretBox::deterministic_dev()).unwrap();
+            let db = PanelDb::open_with_secret_box(
+                &panel,
+                SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             let incident = NewProbeErrorIncident {
                 incident_key: "concurrent-key".to_string(),
                 source_ts: 100,
@@ -370,7 +384,11 @@ fn probe_error_monitor_concurrent_database_claim_records_one_incident() {
         .filter(|claimed| *claimed)
         .count();
     assert_eq!(claimed, 1);
-    let db = PanelDb::open_with_secret_box(&panel, SecretBox::deterministic_dev()).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &panel,
+        SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(db.probe_error_incident_count().unwrap(), 1);
     fs::remove_dir_all(root).unwrap();
 }

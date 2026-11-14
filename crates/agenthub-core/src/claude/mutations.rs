@@ -297,6 +297,93 @@ pub(crate) fn find_empty_inactive_sessions(
     Ok(out)
 }
 
+fn background_jobs(paths: &ClaudePaths, id: &str) -> Result<Vec<String>> {
+    let jobs = paths.config.join("jobs");
+    let entries = match fs::read_dir(&jobs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("无法读取 Claude 后台会话登记"),
+    };
+    let mut matching = BTreeSet::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let Some(native_id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let row = open_regular(&entry.path().join("state.json"))
+            .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?));
+        if native_id == id
+            || row.as_ref().is_ok_and(|row| {
+                ["id", "sessionId", "resumeSessionId"]
+                    .iter()
+                    .any(|field| row.get(field).and_then(Value::as_str) == Some(id))
+            })
+        {
+            matching.insert(native_id);
+        }
+    }
+    Ok(matching.into_iter().collect())
+}
+
+fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
+    use std::process::{Command, Stdio};
+    let help = Command::new(executable)
+        .args(["rm", "--help"])
+        .env("CLAUDE_CONFIG_DIR", &paths.config)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .context("无法检查 Claude 原生清理命令，历史文件尚未删除")?;
+    ensure!(
+        help.status.success()
+            && String::from_utf8_lossy(&help.stdout)
+                .lines()
+                .any(|line| line.starts_with("Usage: claude rm <id>")),
+        "当前 Claude CLI 不支持原生 rm 命令，历史文件尚未删除"
+    );
+    Ok(())
+}
+
+fn remove_background_job(executable: &Path, paths: &ClaudePaths, native_id: &str) -> Result<()> {
+    use std::process::{Command, Stdio};
+    ensure!(
+        !native_id.starts_with('-'),
+        "Claude 后台会话标识不能作为命令选项"
+    );
+    let status = Command::new(executable)
+        .args(["rm", native_id])
+        .env("CLAUDE_CONFIG_DIR", &paths.config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("无法执行 Claude 原生后台清理，历史文件尚未删除")?;
+    ensure!(status.success(), "Claude 原生清理未完成（{status}），请先使用 claude rm {native_id} 检查后台会话；历史文件尚未删除");
+    Ok(())
+}
+
+fn remove_background_jobs(paths: &ClaudePaths, id: &str) -> Result<()> {
+    let jobs = background_jobs(paths, id)?;
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let executable = env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| env::split_paths(&path).collect::<Vec<_>>())
+        .map(|path| path.join("claude"))
+        .chain(dirs::home_dir().map(|home| home.join(".local/bin/claude")))
+        .find(|path| path.is_file())
+        .context("此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI；历史文件尚未删除")?;
+    check_native_rm(&executable, paths)?;
+    for native_id in jobs {
+        remove_background_job(&executable, paths, &native_id)?;
+    }
+    Ok(())
+}
+
 pub fn execute_claude_delete(
     paths: &ClaudePaths,
     request: ClaudeDeleteRequest,
@@ -319,48 +406,24 @@ pub fn execute_claude_delete(
         crate::session_delete::within(&projects, &main),
         "Claude 会话路径越界"
     );
-    let snapshot = activity::Snapshot::capture(paths);
-    match fs::symlink_metadata(&main) {
-        Ok(_) => {
-            checked_path(paths, &main)?;
-            if !request.fingerprint.is_empty() {
-                ensure!(
-                    fingerprint(&main)? == request.fingerprint,
-                    "Claude 会话已变化，请重新预览"
-                );
-            }
-            let parsed = read_or_warning(&main, false);
-            let assessment = deletion_assessment(&parsed, &main, &snapshot)?;
-            if assessment.ownership == activity::Ownership::Open {
-                anyhow::bail!(
-                    "{}",
-                    assessment
-                        .block_reason()
-                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
-                );
-            }
+    // Unified cleanup supplies a fingerprint; ordinary deletion does not read
+    // transcript contents or inspect/stop the native session's process.
+    if !request.fingerprint.is_empty() {
+        checked_path(paths, &main)?;
+        ensure!(
+            fingerprint(&main)? == request.fingerprint,
+            "Claude 会话已变化，请重新预览"
+        );
+        let snapshot = activity::Snapshot::capture(paths);
+        let parsed = read_or_warning(&main, false);
+        let assessment = deletion_assessment(&parsed, &main, &snapshot)?;
+        if assessment.ownership == activity::Ownership::Open {
+            anyhow::bail!(assessment
+                .block_reason()
+                .unwrap_or_else(|| "Claude 会话正在运行，无法清理".into()));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            ensure!(
-                request.fingerprint.is_empty(),
-                "Claude 会话文件已不存在，请重新预览"
-            );
-            let fallback = Parsed {
-                id: id.clone(),
-                ..Default::default()
-            };
-            let assessment = deletion_assessment(&fallback, &main, &snapshot)?;
-            if assessment.ownership == activity::Ownership::Open {
-                anyhow::bail!(
-                    "{}",
-                    assessment
-                        .block_reason()
-                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
-                );
-            }
-        }
-        Err(error) => return Err(error.into()),
     }
+    remove_background_jobs(paths, &id)?;
 
     let ids = BTreeSet::from([id.clone()]);
     let mut outcome = crate::session_delete::Outcome::default();
@@ -445,13 +508,8 @@ pub fn execute_claude_delete(
                                         break;
                                     }
                                 }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    outcome
-                                        .residuals
-                                        .push(format!("{}: {error}", path.display()));
-                                    break;
-                                }
+                                // Unknown or unrelated registrations are not deletion targets.
+                                Ok(_) | Err(_) => {}
                             }
                         }
                         Ok(_) => {}
@@ -477,4 +535,55 @@ pub fn execute_claude_delete(
         bytes: outcome.bytes,
         residuals: outcome.residuals,
     })
+}
+
+#[cfg(all(test, unix))]
+mod native_delete_tests {
+    use super::*;
+
+    #[test]
+    fn background_mapping_uses_native_and_resumed_identity_and_native_rm_owns_its_files() {
+        let root = env::temp_dir().join(format!("agenthub-native-rm-{}", uuid::Uuid::new_v4()));
+        let paths = ClaudePaths {
+            config: root.clone(),
+            projects: root.join("projects"),
+        };
+        for (name, row) in [
+            (
+                "original",
+                serde_json::json!({"sessionId":"selected","resumeSessionId":"resumed"}),
+            ),
+            ("other", serde_json::json!({"sessionId":"unrelated"})),
+        ] {
+            fs::create_dir_all(root.join("jobs").join(name)).unwrap();
+            fs::write(
+                root.join("jobs").join(name).join("state.json"),
+                row.to_string(),
+            )
+            .unwrap();
+        }
+        assert_eq!(background_jobs(&paths, "selected").unwrap(), ["original"]);
+        assert_eq!(background_jobs(&paths, "resumed").unwrap(), ["original"]);
+        assert_eq!(background_jobs(&paths, "original").unwrap(), ["original"]);
+        assert!(background_jobs(&paths, "absent").unwrap().is_empty());
+        let cli = root.join("claude");
+        crate::write_executable_fixture(&cli, "#!/bin/sh\n[ \"$#\" = 2 ] && [ \"$1\" = rm ] && [ \"$2\" = original ] || exit 4\n[ -f \"$CLAUDE_CONFIG_DIR/jobs/original/state.json\" ] || exit 5\n[ ! -f \"$CLAUDE_CONFIG_DIR/reject\" ] || exit 6\nprintf '%s\\n' \"$2\" > \"$CLAUDE_CONFIG_DIR/removed\"\n");
+        // Unsupported rm must be rejected before any deletion is attempted.
+        assert!(check_native_rm(&cli, &paths).is_err());
+        let supported = root.join("supported-claude");
+        crate::write_executable_fixture(&supported, "#!/bin/sh\n[ \"$1\" = rm ] && [ \"$2\" = --help ] || exit 4\nprintf 'Usage: claude rm <id>\\n'\n");
+        check_native_rm(&supported, &paths).unwrap();
+        fs::write(root.join("reject"), b"").unwrap();
+        assert!(remove_background_job(&cli, &paths, "original").is_err());
+        assert!(!root.join("removed").exists());
+        fs::remove_file(root.join("reject")).unwrap();
+        remove_background_job(&cli, &paths, "original").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("removed")).unwrap(),
+            "original\n"
+        );
+        // AgentHub leaves job storage to Claude; it never removes it itself.
+        assert!(root.join("jobs/original/state.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

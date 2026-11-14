@@ -9,7 +9,7 @@ function process(entries: ClaudeRenderItem[]) {
   return found.process;
 }
 
-test("one native turn preserves process order, paired tool aliases, and a separate final answer", () => {
+test("one native turn keeps intermediate replies visible between paired tool segments", () => {
   const result = groupClaudeProcesses([
     event("user", "user_message"), event("think", "thinking"),
     event("explain", "assistant_message", { assistantPhase: "intermediate" }),
@@ -18,16 +18,19 @@ test("one native turn preserves process order, paired tool aliases, and a separa
     event("final", "assistant_message", { assistantPhase: "final", text: "Final answer" }),
     event("duration", "system", { role: "turn_duration" })
   ]);
-  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "metadata"]);
-  const group = process(result);
-  expect(group.sourceIds).toEqual(["think", "explain", "call", "result"]);
-  expect(group.entries.map(entry => entry.kind)).toEqual(["item", "item", "group"]);
-  const tools = group.entries[2];
+  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "process", "item", "metadata"]);
+  const segments = result.filter(entry => entry.kind === "process");
+  expect(segments[0].process.sourceIds).toEqual(["think"]);
+  const group = segments[1].process;
+  expect(group.sourceIds).toEqual(["call", "result"]);
+  expect(group.stateKey).not.toBe(segments[0].process.stateKey);
+  expect(result[2]).toMatchObject({ kind: "item", item: { id: "explain" } });
+  const tools = group.entries[0];
   if (tools.kind !== "group") throw new Error("Tool group missing");
   expect(tools.group.commands).toHaveLength(1);
   expect(tools.group.commands[0].sourceIds).toEqual(["call", "result"]);
   expect(tools.group.commands[0].status).toBe("completed");
-  expect(group).toMatchObject({ segmentCount: 2, toolCount: 1, completed: true, running: false });
+  expect(group).toMatchObject({ segmentCount: 0, toolCount: 1, completed: true, running: false });
 });
 
 test("unknown-phase prose and legacy events remain visible at their original positions", () => {
@@ -35,7 +38,7 @@ test("unknown-phase prose and legacy events remain visible at their original pos
     event("think", "thinking"), event("unknown", "assistant_message", { text: "Unclassified text" }),
     event("tool", "tool_call", { callId: "call", role: "Read" })
   ]);
-  expect(unknown.map(entry => entry.kind)).toEqual(["item", "item", "group"]);
+  expect(unknown.map(entry => entry.kind)).toEqual(["process", "item", "process"]);
   expect(unknown[1]).toMatchObject({ kind: "item", item: { id: "unknown" } });
   const legacy = groupClaudeProcesses([event("old-think", "thinking", { turnId: null }), event("old-reply", "assistant_message", { turnId: null })]);
   expect(legacy.map(entry => entry.kind)).toEqual(["item", "item"]);
@@ -67,17 +70,17 @@ test("tool result refresh updates process status without changing the native tur
   expect(updated.running).toBe(false);
   expect(updated.stateKey).toBe(initial.stateKey);
   const prepended = process(groupClaudeProcesses([event("earlier", "thinking"), call]));
-  expect(prepended.stateKey).toBe(initial.stateKey);
+  expect(prepended.sourceIds).toContain(initial.sourceIds[0]);
   expect(prepended.sourceIds).toEqual(["earlier", "call"]);
   const context = process(groupClaudeProcesses([event("context", "compaction"), call]));
   expect(context.stateKey).toBe(initial.stateKey);
-  expect(context.id).not.toBe(initial.id);
+  expect(context.id).toBe(initial.id);
 });
 
-test("headers retain failure, plan, reply and authorization evidence while content is folded", () => {
+test("plans stay visible and process headers retain failure, reply and authorization evidence", () => {
   const base = [event("plan", "plan", { callId: "plan-call" }), event("failure", "system", { role: "api_error", status: "failed" })];
   const question = process(groupClaudeProcesses([...base, event("ask", "tool_call", { role: "AskUserQuestion", callId: "q", status: "in_progress" })]));
-  expect(question).toMatchObject({ hasPlan: true, failedCount: 1, needsReply: true, toolCount: 2, running: false });
+  expect(question).toMatchObject({ failedCount: 1, needsReply: true, toolCount: 1, running: false });
   const permission = event("permission", "permission_request", { status: "in_progress" });
   expect(process(groupClaudeProcesses([permission]))).toMatchObject({ needsPermission: true, hasPermission: true, running: false });
   expect(process(groupClaudeProcesses([{ ...permission, status: "completed" }]))).toMatchObject({ needsPermission: false, hasPermission: true });
@@ -100,8 +103,8 @@ test("API error reply followed by trailing turn_duration and cost-state still fo
     event("duration", "system", { role: "turn_duration" }),
     event("cost", "cost-state", { text: "用量状态", detail: "{}" }),
   ]);
-  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "metadata"]);
-  const group = process(result);
+  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "process", "item", "metadata"]);
+  const group = result.filter(entry => entry.kind === "process")[1].process;
   expect(group.toolCount).toBe(2);
   expect(group.completed).toBe(false);
   const execGroups = group.entries.filter(entry => entry.kind === "group");
@@ -114,4 +117,17 @@ test("API error reply followed by trailing turn_duration and cost-state still fo
       ["bash-2", "bash-2-out"],
     ]);
   }
+});
+
+ test("tool results separated by visible prose still update their original call", () => {
+  const result = groupClaudeProcesses([
+    event("call", "tool_call", { callId: "c", status: "in_progress" }),
+    event("reply", "assistant_message", { assistantPhase: "intermediate", text: "Visible reply" }),
+    event("result", "tool_result", { callId: "c", status: "completed", result: "Done" }),
+    event("plan", "plan", { text: "Visible plan" }),
+    event("next-call", "tool_call", { callId: "next", status: "in_progress" }),
+  ]);
+  expect(result.map(entry => entry.kind)).toEqual(["process", "item", "item", "process"]);
+  expect(process(result).sourceIds).toEqual(["call", "result"]);
+  expect(process(result).running).toBe(false);
 });

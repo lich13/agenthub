@@ -11,7 +11,7 @@ User=root
 Group=root
 Environment=GROK_LEADER_SOCKET=/var/lib/agenthub-webd/grok-leader.sock
 EnvironmentFile=-/etc/agenthub-webd/env
-ExecStart=/usr/local/bin/agenthub-webd --config /etc/agenthub-webd/config.toml serve --surface linux-server-api
+ExecStart=/usr/local/bin/agenthub-webd --config /etc/agenthub-webd/config.toml serve
 Restart=always
 RestartSec=5
 WorkingDirectory=/var/lib/agenthub-webd

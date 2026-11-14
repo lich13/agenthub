@@ -96,7 +96,11 @@ async fn process_job_preserves_program_path_and_literal_argument_boundaries() {
             hostile_argument.as_str(),
         ],
     );
-    let db = PanelDb::open(":memory:").expect("open in-memory job database");
+    let db = PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .expect("open in-memory job database");
     let runner = JobRunner::new(db.clone());
 
     let job_id = runner
@@ -121,7 +125,11 @@ async fn process_job_preserves_program_path_and_literal_argument_boundaries() {
 #[tokio::test]
 async fn failed_process_start_releases_its_exclusive_group() {
     let fixture = TempFixture::new();
-    let db = PanelDb::open(":memory:").expect("open in-memory job database");
+    let db = PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .expect("open in-memory job database");
     let runner = JobRunner::new(db.clone());
     let group = "runtime-security-fixture";
     let missing_program = fixture.root.join("missing executable");

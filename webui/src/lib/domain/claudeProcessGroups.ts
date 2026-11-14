@@ -15,7 +15,6 @@ export type ClaudeProcessGroup = {
   needsReply: boolean;
   needsPermission: boolean;
   hasPermission: boolean;
-  hasPlan: boolean;
 };
 export type ClaudeMetadataGroup = { id: string; sourceIds: string[]; label: string; entries: ExecutionRenderItem<ClaudeHistoryEvent>[] };
 export type ClaudeEventRenderItem = ExecutionRenderItem<ClaudeHistoryEvent> | { kind: "metadata"; group: ClaudeMetadataGroup };
@@ -80,76 +79,72 @@ function foldAutomatic(entries: ExecutionRenderItem<ClaudeHistoryEvent>[]): Clau
   return result;
 }
 
-const PROCESS_KINDS = new Set(["thinking", "tool_call", "tool_result", "tool_reference", "plan", "failure", "permission_request", "permission_response", "file-history-snapshot", "file-history-delta", "queue-operation", "cost-state", "atis-latch", "attachment"]);
+const PROCESS_KINDS = new Set(["thinking", "tool_call", "tool_result", "tool_reference", "failure", "permission_request", "permission_response", "file-history-snapshot", "file-history-delta", "queue-operation", "cost-state", "atis-latch", "attachment"]);
 function isProcess(event: ClaudeHistoryEvent) {
-  return PROCESS_KINDS.has(event.kind) || (event.kind === "assistant_message" && event.assistantPhase === "intermediate")
+  return PROCESS_KINDS.has(event.kind)
     || (event.kind === "system" && (AUTOMATIC_ROLES.has(event.role ?? "") || event.role === "api_error"));
 }
 
-function groupTurn(events: ClaudeHistoryEvent[], turnId: string, context: string, ended: boolean): ClaudeRenderItem[] {
-  if (events.every(isAutomatic)) return foldAutomatic(groupClaudeEvents(events));
-  const first = events.findIndex(isProcess);
-  const final = events.findIndex((event, index) => index > first && event.assistantPhase === "final");
-  // A native final answer (or a terminal non-process reply/API error followed
-  // only by automatic turn-duration/cost-state bookkeeping) closes the process.
-  const closing = final >= 0
-    ? final
-    : events.findIndex(
-        (event, index) =>
-          index > first &&
-          !isProcess(event) &&
-          events.slice(index + 1).every(later => !isProcess(later) || isAutomatic(later)),
-      );
-  let last = closing >= 0 ? closing - 1 : events.length - 1;
-  while (last >= 0 && !isProcess(events[last])) last--;
-  // Unknown-phase prose stays at its native position. If it interrupts the
-  // process, retain the existing presentation instead of reordering or hiding it.
-  if (first < 0 || events.slice(first, last + 1).some(event => !isProcess(event))) return foldAutomatic(groupClaudeEvents(events));
-  const processEvents = events.slice(first, last + 1);
-  const entries = groupClaudeEvents(processEvents);
-  const commands = entries.flatMap(entry => entry.kind === "group" ? entry.group.commands : []);
-  const failedCount = commands.filter(command => command.status === "failed").length
-    + processEvents.filter(event => event.kind !== "tool_call" && event.kind !== "tool_result" && executionStatus(event.status) === "failed").length;
-  const completed = events.slice(last + 1).some(event => event.assistantPhase === "final");
-  const closed = ended || completed || processEvents.some(event => event.kind === "failure");
-  const runningToolIds = new Set(commands.filter(command => command.status === "running").flatMap(command => command.sourceIds));
-  const pending = (event: ClaudeHistoryEvent) => !closed && (["tool_call", "tool_result"].includes(event.kind)
-    ? runningToolIds.has(event.id) : executionStatus(event.status) === "running");
-  const needsReply = processEvents.some(event => event.kind === "tool_call" && event.role === "AskUserQuestion" && pending(event));
-  const needsPermission = processEvents.some(event => event.kind === "permission_request" && pending(event));
-  const stateKey = `claude-process:${turnId}`;
-  return [
-    ...foldAutomatic(groupClaudeEvents(events.slice(0, first))),
-    { kind: "process", process: {
-      id: `claude-process[${turnId}][${context}]`, stateKey, turnId,
-      sourceIds: processEvents.map(event => event.id), entries: foldAutomatic(entries),
-      segmentCount: processEvents.filter(event => !["tool_call", "tool_result"].includes(event.kind)).length,
-      toolCount: commands.length + processEvents.filter(event => event.kind === "plan" && event.callId).length,
-      failedCount, completed, needsReply, needsPermission,
-      running: !closed && !needsReply && !needsPermission && (commands.some(command => command.status === "running") || processEvents.some(pending)),
-      hasPermission: processEvents.some(event => event.kind === "permission_request"),
-      hasPlan: processEvents.some(event => event.kind === "plan")
-    } },
-    ...foldAutomatic(groupClaudeEvents(events.slice(last + 1)))
-  ];
+function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean): ClaudeRenderItem[] {
+  // Pair tools over the whole turn before splitting at visible prose or plans.
+  const entries = groupClaudeEvents(events);
+  const questionIds = new Set(events.filter(event => event.role === "AskUserQuestion").map(event => event.id));
+  const output: ClaudeRenderItem[] = [];
+  const finalIndex = entries.reduce((last, entry, index) => entry.kind === "item" && entry.item.assistantPhase === "final" ? index : last, -1);
+  let pending: ExecutionRenderItem<ClaudeHistoryEvent>[] = [];
+  const flush = (completed: boolean) => {
+    if (!pending.length) return;
+    const segment = pending;
+    pending = [];
+    if (segment.every(entry => entry.kind === "item" && isAutomatic(entry.item))) {
+      output.push(...foldAutomatic(segment));
+      return;
+    }
+    const commands = segment.flatMap(entry => entry.kind === "group" ? entry.group.commands : []);
+    const processEvents = segment.flatMap(entry => entry.kind === "item" ? [entry.item] : []);
+    const sourceIds = segment.flatMap(entry => entry.kind === "item" ? entry.sourceIds : entry.group.commands.flatMap(command => command.sourceIds));
+    const closed = ended || completed || processEvents.some(event => event.kind === "failure");
+    const pendingEvent = (event: ClaudeHistoryEvent) => !closed && executionStatus(event.status) === "running";
+    const needsReply = !closed && commands.some(command => command.status === "running" && command.sourceIds.some(id => questionIds.has(id)));
+    const needsPermission = processEvents.some(event => event.kind === "permission_request" && pendingEvent(event));
+    const stateKey = `claude-process:${turnId}:${sourceIds[0]}`;
+    output.push({ kind: "process", process: {
+      id: `claude-process[${turnId}][${sourceIds[0]}]`, stateKey, turnId, sourceIds, entries: foldAutomatic(segment),
+      segmentCount: processEvents.length, toolCount: commands.length,
+      failedCount: commands.filter(command => command.status === "failed").length
+        + processEvents.filter(event => executionStatus(event.status) === "failed").length,
+      completed, needsReply, needsPermission,
+      running: !closed && !needsReply && !needsPermission && (commands.some(command => command.status === "running") || processEvents.some(pendingEvent)),
+      hasPermission: processEvents.some(event => event.kind === "permission_request")
+    } });
+  };
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    if (entry.kind === "group" || isProcess(entry.item)) {
+      pending.push(entry);
+    } else {
+      flush(finalIndex >= index);
+      output.push(...foldAutomatic([entry]));
+    }
+  }
+  flush(false);
+  return output;
 }
 
 /** Display-only grouping. Native event IDs and inner tool/result aliases survive. */
 export function groupClaudeProcesses(events: ClaudeHistoryEvent[]): ClaudeRenderItem[] {
   const output: ClaudeRenderItem[] = [];
   let turn: string | null | undefined;
-  let context = "";
   let pending: ClaudeHistoryEvent[] = [];
   const flush = (ended: boolean) => {
-    if (pending.length) output.push(...(turn ? groupTurn(pending, turn, context, ended) : foldAutomatic(groupClaudeEvents(pending))));
+    if (pending.length) output.push(...(turn ? groupTurn(pending, turn, ended) : foldAutomatic(groupClaudeEvents(pending))));
     pending = [];
   };
   for (const event of events) {
-    if (event.turnId !== turn) { flush(true); turn = event.turnId; context = ""; }
+    if (event.turnId !== turn) { flush(true); turn = event.turnId; }
     if (["user_message", "compaction", "branch_summary"].includes(event.kind)) {
       flush(true);
       output.push(...foldAutomatic(groupClaudeEvents([event])));
-      context = event.kind === "user_message" ? "" : event.id;
     } else pending.push(event);
   }
   flush(false);

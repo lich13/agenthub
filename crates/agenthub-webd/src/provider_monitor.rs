@@ -229,7 +229,11 @@ mod tests {
     async fn provider_hook_leaves_other_pending_notifications_and_bodies_intact() {
         let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
         let scan = NativeScan {
@@ -278,7 +282,11 @@ mod tests {
         let _env_guard = crate::api::test_support::AsyncEnvGuard::lock_read_only().await;
         let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
         db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
@@ -341,7 +349,11 @@ mod tests {
             let (mut config, sandbox_root) = sandboxed_test_config();
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.url();
-            let db = PanelDb::open(":memory:").unwrap();
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
                 .unwrap();
             db.stage_native_notifications(provider, &NativeScan::default(), &config)
@@ -425,7 +437,11 @@ mod tests {
         let (mut config, sandbox_root) = sandboxed_test_config();
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
@@ -506,7 +522,11 @@ mod tests {
         n.notify_claude = true;
         n.notify_claude_completion = true;
         n.notify_claude_reply_needed = true;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
         let claude_config_dir = sandbox_root.join("claude");
@@ -710,7 +730,11 @@ mod tests {
         n.notify_dsh = true;
         n.notify_dsh_completion = true;
 
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
 

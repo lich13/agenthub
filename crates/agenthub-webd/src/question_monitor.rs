@@ -268,7 +268,11 @@ mod tests {
             config.probe.notifications.notify_codex = true;
             config.probe.notifications.notify_reply_needed = true;
             config.probe.notifications.server_url = server_url;
-            let db = PanelDb::open(root.join("panel.sqlite")).unwrap();
+            let db = PanelDb::open_with_secret_box(
+                root.join("panel.sqlite"),
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device-key")
                 .unwrap();
             db.set_setting(

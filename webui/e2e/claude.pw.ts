@@ -150,3 +150,27 @@ test("Claude attachments and disclosure cache stay isolated between machines", a
   await expect(page.locator(".execution-group")).toHaveAttribute("open", "");
   await expect(page.locator(".conversation-title")).toHaveText("local Claude");
 });
+
+
+test("Claude intermediate replies and plans stay visible between independent process disclosures", async ({ page }) => {
+  await mockApi(page);
+  const native: ClaudeHistoryEvent[] = [
+    { id: "request", kind: "user_message", text: "Fixture request", turnId: "turn" },
+    { id: "thinking", kind: "thinking", text: "Hidden reasoning fixture", turnId: "turn" },
+    { id: "reply", kind: "assistant_message", text: "Visible intermediate reply", assistantPhase: "intermediate", turnId: "turn" },
+    { id: "tool", kind: "tool_call", callId: "call", role: "Read", status: "completed", detail: "Fixture tool", turnId: "turn" },
+    { id: "plan-visible", kind: "plan", text: "# Visible plan\n\n- Fixture step", turnId: "turn" },
+    { id: "final-visible", kind: "assistant_message", text: "Visible final reply", assistantPhase: "final", turnId: "turn" },
+  ];
+  await mockCommand(page, "claude.list", () => [summary]);
+  await mockCommand(page, "claude.detail", () => ({ summary, events: native, hasMore: false, totalEvents: native.length }));
+  await openClaude(page);
+  await expect(page.getByText("Visible intermediate reply", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Visible plan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制计划", exact: true })).toBeVisible();
+  const segments = page.locator(".claude-process-group");
+  await expect(segments).toHaveCount(2);
+  await segments.first().locator(":scope > summary").click();
+  await expect(segments.first()).toHaveAttribute("open", "");
+  await expect(segments.last()).not.toHaveAttribute("open", "");
+});

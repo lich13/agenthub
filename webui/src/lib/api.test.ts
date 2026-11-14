@@ -192,7 +192,6 @@ describe("archive delete API compatibility", () => {
       method: "linux_systemd_job",
       state: "idle",
       recommended_action: "/usr/local/bin/agenthub-webd-update",
-      capabilities: ["job_history"]
     }));
     const status = await getUpdateStatus();
     const result = await updates.install();
@@ -477,7 +476,6 @@ describe("archive delete API compatibility", () => {
     const visibleValues = [
       updateStatus.method,
       updateStatus.recommended_action,
-      ...(updateStatus.capabilities ?? []),
       platformOverview.kind,
       platformOverview.data_dir,
       platformOverview.config_file,
@@ -556,7 +554,6 @@ describe("archive delete API compatibility", () => {
             method: "macos_tauri_updater",
             state: "ready",
             recommended_action: "Confirm install in the Tauri updater after signature verification.",
-            capabilities: ["signature_verification", "job_history"]
           }
         };
       }
@@ -570,7 +567,6 @@ describe("archive delete API compatibility", () => {
         method: "macos_tauri_updater",
         state: "idle",
         recommended_action: "Confirm install in the Tauri updater after signature verification.",
-        capabilities: ["signature_verification", "job_history"]
       };
     });
 
@@ -822,7 +818,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("incoming realtime summary keeps an existing title when the update has only a placeholder", async () => {
-    const app = await import("../test/domain");
+    const { mergeThreadSummaryIntoListCache } = await import("./query/threads");
     const current = {
       id: "thread-a",
       title: "example-user",
@@ -841,17 +837,17 @@ describe("archive delete API compatibility", () => {
       last_event_kind: "app-server.thread/list"
     } satisfies Partial<ThreadSummary>;
 
-    expect(app.mergeIncomingThreadSummary(current, incoming)).toMatchObject({
+    expect(mergeThreadSummaryIntoListCache([current], incoming)?.[0]).toMatchObject({
       title: "example-user",
       status: "Running",
       latest_message: "新摘要",
       active_turn_id: "turn-live",
-      last_event_kind: "task_complete"
+      last_event_kind: "app-server.thread/list"
     });
   });
 
   test("thread detail summary merges fresh list status without losing title", async () => {
-    const app = await import("../test/domain");
+    const { mergeThreadSummaryIntoListCache } = await import("./query/threads");
     const detail = {
       summary: {
         id: "thread-a",
@@ -865,7 +861,7 @@ describe("archive delete API compatibility", () => {
       blocks: [],
       raw_event_count: 20
     } satisfies ThreadDetail;
-    const merged = app.mergeIncomingThreadSummary(detail.summary, {
+    const merged = mergeThreadSummaryIntoListCache([detail.summary], {
       id: "thread-a",
       title: "未命名线程",
       status: "Running",
@@ -873,7 +869,7 @@ describe("archive delete API compatibility", () => {
       latest_message: "正在执行",
       active_turn_id: "turn-live",
       last_event_kind: "app-server.thread/list"
-    });
+    })?.[0];
 
     expect(merged).not.toBe(detail);
     expect(merged).toMatchObject({

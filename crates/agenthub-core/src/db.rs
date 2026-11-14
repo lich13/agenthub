@@ -87,10 +87,6 @@ pub struct NewProbeErrorIncident {
 }
 
 impl PanelDb {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with_secret_box(path, SecretBox::deterministic_dev())
-    }
-
     pub fn open_with_secret_box(path: impl AsRef<Path>, crypto: SecretBox) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
@@ -174,23 +170,6 @@ impl PanelDb {
               error TEXT
             );
 
-
-            CREATE TABLE IF NOT EXISTS thread_followups (
-              id TEXT PRIMARY KEY,
-              thread_id TEXT NOT NULL,
-              status TEXT NOT NULL,
-              message TEXT NOT NULL,
-              options_json TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL,
-              submitted_at INTEGER,
-              cancelled_at INTEGER,
-              result_json TEXT,
-              error TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_thread_followups_thread_status_created
-              ON thread_followups(thread_id, status, created_at);
 
             CREATE TABLE IF NOT EXISTS probe_events (
               id TEXT PRIMARY KEY,
@@ -466,20 +445,6 @@ impl PanelDb {
         Ok(())
     }
 
-    pub fn link_job_thread(
-        &self,
-        id: &str,
-        thread_id: Option<&str>,
-        turn_id: Option<&str>,
-    ) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "UPDATE jobs SET thread_id=?2, turn_id=?3 WHERE id=?1",
-            params![id, thread_id, turn_id],
-        )?;
-        Ok(())
-    }
-
     pub fn append_job_output(&self, id: &str, chunk: &str) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
         conn.execute(
@@ -512,40 +477,6 @@ impl PanelDb {
         let rows = stmt.query_map(params![limit], job_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
-    }
-
-    pub fn running_thread_jobs(&self) -> Result<Vec<JobRecord>> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code,
-                   substr(output, 1, 24000), error
-            FROM jobs
-            WHERE status='running' AND thread_id IS NOT NULL
-            ORDER BY started_at DESC
-            "#,
-        )?;
-        let rows = stmt.query_map([], job_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn running_job_for_thread(&self, thread_id: &str) -> Result<Option<JobRecord>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            r#"
-            SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code,
-                   output, error
-            FROM jobs
-            WHERE thread_id=?1 AND status='running'
-            ORDER BY started_at DESC
-            LIMIT 1
-            "#,
-            params![thread_id],
-            job_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
     }
 
     pub fn job(&self, id: &str) -> Result<Option<JobRecord>> {
@@ -614,15 +545,6 @@ impl PanelDb {
         let rows = stmt.query_map(params![limit.clamp(1, 500)], probe_event_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
-    }
-
-    pub fn mark_probe_event_handled(&self, id: &str) -> Result<bool> {
-        let conn = self.conn.lock().expect("db mutex");
-        let changed = conn.execute(
-            "UPDATE probe_events SET handled_at=?2 WHERE id=?1 AND handled_at IS NULL",
-            params![id, Self::now()],
-        )?;
-        Ok(changed > 0)
     }
 
     pub fn claim_probe_dedupe(
@@ -938,7 +860,11 @@ mod tests {
 
     #[test]
     fn notification_baseline_only_writes_on_activation_changes() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_setting("fixture", r#"{"enabled":true,"since_ms":1}"#)
             .unwrap();
         let changes = || {
@@ -967,7 +893,11 @@ mod tests {
 
     #[test]
     fn dedupe_renews_only_expired_identity_and_has_one_concurrent_winner() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let now = PanelDb::now();
         {
             let conn = db.conn.lock().unwrap();
@@ -1006,7 +936,11 @@ mod tests {
 
     #[test]
     fn probe_events_and_dedupe_persist_recent_runtime_state() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
 
         let first_claim = db
             .claim_probe_dedupe("reply_needed", "thread-a:turn-1", 60)
@@ -1036,15 +970,15 @@ mod tests {
         assert_eq!(events[0].thread_id.as_deref(), Some("thread-a"));
         assert_eq!(events[0].payload["turn_id"], "turn-1");
         assert!(events[0].handled_at.is_none());
-
-        assert!(db.mark_probe_event_handled(&event.id).unwrap());
-        let handled = db.list_probe_events(10).unwrap();
-        assert!(handled[0].handled_at.is_some());
     }
 
     #[test]
     fn maintain_probe_events_deletes_old_events_and_expired_dedupe_with_limit() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let now = PanelDb::now();
         {
             let conn = db.conn.lock().expect("db mutex");
@@ -1117,7 +1051,11 @@ mod tests {
     #[test]
     fn maintain_probe_events_prunes_expired_markers_deliveries_and_incidents_without_touching_pending_or_settings(
     ) {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let now = PanelDb::now();
         let old_secs = now - 10 * 86_400;
         let fresh_secs = now - 2 * 86_400;
@@ -1205,7 +1143,11 @@ mod tests {
 
     #[test]
     fn active_unresolved_markers_survive_seven_day_prune_and_touch_throttles_daily() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let now = PanelDb::now();
         let ten_days_ago = now - 10 * 86_400;
         let two_hours_ago = now - 2 * 3_600;
@@ -1267,7 +1209,11 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let db_path = root.join("panel.sqlite");
         let wal_path = root.join("panel.sqlite-wal");
-        let db = PanelDb::open(&db_path).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &db_path,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let expired = PanelDb::now() - 10 * 86_400;
         let big_payload = serde_json::json!({"blob": "x".repeat(64 * 1024)});
         for i in 0..8 {

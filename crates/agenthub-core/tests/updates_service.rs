@@ -34,14 +34,6 @@ fn linux_update_status_uses_fixed_panel_job_executor() {
     assert!(status
         .recommended_action
         .contains("Linux server update job"));
-    assert!(status
-        .capabilities
-        .iter()
-        .any(|capability| capability == "job_history"));
-    assert!(status
-        .capabilities
-        .iter()
-        .any(|capability| capability == "rollback"));
 }
 
 #[test]
@@ -92,10 +84,6 @@ fn macos_update_status_uses_tauri_updater_without_linux_leakage() {
         Some(UpdateFailureCategory::NetworkTlsEof)
     );
     assert!(status.recommended_action.contains("Tauri updater"));
-    assert!(status
-        .capabilities
-        .iter()
-        .any(|capability| capability == "signature_verification"));
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/agenthub"));

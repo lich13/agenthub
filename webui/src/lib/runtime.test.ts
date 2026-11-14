@@ -47,7 +47,7 @@ describe("native machine connection", () => {
     expect(runtime.invoke).toHaveBeenCalledWith("remote.select", { request: { target: "remote", revision: 0 } });
   });
 
-  test.each(["threads.detail", "github.ci.status"])("a %s read finishing after a connection switch is discarded", async (command) => {
+  test.each(["threads.detail", "github.ci.status", "cleanup.unifiedDryRun"])("a %s read finishing after a connection switch is discarded", async (command) => {
     const oldRead = deferred<unknown>();
     const runtime = await loadRuntime(command => command === "remote.select" ? remote : oldRead.promise);
     const pending = runtime.runtimeRpc(command, { id: "same-thread" });

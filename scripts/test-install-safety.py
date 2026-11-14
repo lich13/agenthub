@@ -428,7 +428,7 @@ main --binary {shlex.quote(str(binary))}
         self.assertEqual(database.read_bytes(), b"business database fixture")
         self.assertEqual(stat.S_IMODE(database.stat().st_mode), 0o600)
 
-    def test_install_fails_closed_when_minisign_is_missing(self) -> None:
+    def test_archive_install_requires_minisign(self) -> None:
         fake_bin = self.root / "missing-minisign-bin"
         fake_bin.mkdir()
         python_stub = fake_bin / "python3"
@@ -441,7 +441,7 @@ source {shlex.quote(str(INSTALL_PATH))}
 require_root() {{ :; }}
 install_dirs() {{ printf 'called\\n' > {shlex.quote(str(install_marker))}; }}
 PATH={shlex.quote(str(fake_bin))}
-main --binary {shlex.quote(str(self.root / 'unused-binary'))}
+main --archive {shlex.quote(str(self.root / 'unused-archive'))}
 """
         harness_path = self.root / "missing-minisign-harness.sh"
         harness_path.write_text(harness, encoding="utf-8")
@@ -459,6 +459,21 @@ main --binary {shlex.quote(str(self.root / 'unused-binary'))}
         self.assertIn("required command not found: minisign", result.stderr)
         self.assertFalse(install_marker.exists(), "installer advanced without minisign")
 
+
+    def test_binary_install_does_not_require_minisign(self) -> None:
+        marker = self.root / "binary-install-started"
+        harness = f"""set -Eeuo pipefail
+source {shlex.quote(str(INSTALL_PATH))}
+require_root() {{ :; }}
+require_command() {{ [[ "$1" != minisign ]]; }}
+systemctl() {{ return 1; }}
+install_dirs() {{ printf 'called\\n' > {shlex.quote(str(marker))}; }}
+install_payload() {{ exit 0; }}
+main --binary fixture-binary
+"""
+        result = subprocess.run(["/bin/bash", "-c", harness], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists())
 
     def test_first_install_config_needs_no_http_domain_and_preserves_existing_secret(self) -> None:
         config = self.root / "config.toml"
@@ -516,13 +531,17 @@ command() {
   if [[ "$*" == '-v minisign' ]]; then [[ "$FIXTURE_MISSING" == 0 ]]; else builtin command "$@"; fi
 }
 apt-get() { printf 'dependency\n' >> "$FIXTURE_LOG"; }
+python3() {
+  if [[ "$1" == -c && "$FIXTURE_FAIL" == dependencies && "$FIXTURE_MISSING" == 0 ]]; then return 1; fi
+  command python3 "$@"
+}
 curl() {
   printf '%s\n' "$2" >> "$FIXTURE_LOG"
   [[ "$FIXTURE_FAIL" != download ]] || return 22
   : > "$4"
 }
 """
-        for failure, missing, distro in [('', '0','ubuntu'),('', '1','debian'),('download','0','ubuntu'),('signature','0','ubuntu'),('install','0','ubuntu'),('health','0','ubuntu'),('dependencies','1','other')]:
+        for failure, missing, distro in [('', '0','ubuntu'),('', '1','debian'),('download','0','ubuntu'),('signature','0','ubuntu'),('install','0','ubuntu'),('health','0','ubuntu'),('dependencies','1','other'),('dependencies','0','ubuntu')]:
             with self.subTest(failure=failure, missing=missing, distro=distro):
                 log = self.root / 'bootstrap.log'
                 log.unlink(missing_ok=True)

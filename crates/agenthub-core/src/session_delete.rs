@@ -128,18 +128,73 @@ impl Outcome {
     }
 }
 
-fn replace(path: &Path, write: impl FnOnce(&mut fs::File) -> Result<()>) -> Result<()> {
+fn same_source(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    if !after.is_file()
+        || before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+        || before.permissions() != after.permissions()
+    {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (
+            before.dev(),
+            before.ino(),
+            before.ctime(),
+            before.ctime_nsec(),
+            before.uid(),
+            before.gid(),
+        ) == (
+            after.dev(),
+            after.ino(),
+            after.ctime(),
+            after.ctime_nsec(),
+            after.uid(),
+            after.gid(),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        before.created().ok() == after.created().ok()
+    }
+}
+
+fn replace(
+    path: &Path,
+    source: &fs::Metadata,
+    write: impl FnOnce(&mut fs::File) -> Result<()>,
+) -> Result<()> {
     let temporary = path.with_file_name(format!(".agenthub-index-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        if let Ok(meta) = fs::metadata(path) {
-            file.set_permissions(meta.permissions())?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        let mut file = options.open(&temporary)?;
         write(&mut file)?;
+        #[cfg(unix)]
+        {
+            use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+            let current = file.metadata()?;
+            if (current.uid(), current.gid()) != (source.uid(), source.gid()) {
+                let result = unsafe { libc::fchown(file.as_raw_fd(), source.uid(), source.gid()) };
+                if result != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+        }
+        // chown may clear mode bits, so restore permissions afterwards.
+        file.set_permissions(source.permissions())?;
         file.sync_all()?;
+        ensure!(
+            same_source(source, &fs::symlink_metadata(path)?),
+            "共享索引已变化，请重试"
+        );
         fs::rename(&temporary, path)?;
         Ok(())
     })();
@@ -170,6 +225,7 @@ pub(crate) fn filter_jsonl(path: &Path, remove: impl Fn(&Value) -> bool) -> Resu
     let Some(source) = open_shared(path)? else {
         return Ok(());
     };
+    let metadata = source.metadata()?;
     let mut reader = BufReader::new(source);
     let mut line = Vec::new();
     loop {
@@ -182,7 +238,7 @@ pub(crate) fn filter_jsonl(path: &Path, remove: impl Fn(&Value) -> bool) -> Resu
         }
     }
     reader.rewind()?;
-    replace(path, |output| {
+    replace(path, &metadata, |output| {
         loop {
             line.clear();
             if reader.read_until(b'\n', &mut line)? == 0 {
@@ -201,6 +257,7 @@ pub(crate) fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> Result<()
     let Some(source) = open_shared(path)? else {
         return Ok(());
     };
+    let metadata = source.metadata()?;
     let mut value: Value =
         serde_json::from_reader(BufReader::new(source)).context("无法读取共享索引")?;
     let original = value.clone();
@@ -208,7 +265,7 @@ pub(crate) fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> Result<()
     if value == original {
         return Ok(());
     }
-    replace(path, |output| {
+    replace(path, &metadata, |output| {
         serde_json::to_writer(&mut *output, &value)?;
         output.write_all(b"\n")?;
         Ok(())
@@ -229,6 +286,50 @@ pub(crate) fn has_id(value: &Value, ids: &std::collections::BTreeSet<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_index_concurrent_change_is_retained_and_temporary_is_removed() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-index-race-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("index.json");
+        fs::write(&path, b"[1,2]").unwrap();
+        let error = edit_json(&path, |value| {
+            *value = serde_json::json!([2]);
+            fs::write(&path, b"[1,2,3]").unwrap();
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("已变化"));
+        assert_eq!(fs::read(&path).unwrap(), b"[1,2,3]");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_index_replacement_preserves_owner_group_and_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let root =
+            std::env::temp_dir().join(format!("agenthub-index-owner-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("index.json");
+        fs::write(&path, b"[1,2]").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        if unsafe { libc::geteuid() } == 0 {
+            use std::os::fd::AsRawFd;
+            let file = fs::File::open(&path).unwrap();
+            assert_eq!(unsafe { libc::fchown(file.as_raw_fd(), 65534, 65534) }, 0);
+        }
+        let before = fs::metadata(&path).unwrap();
+        edit_json(&path, |value| *value = serde_json::json!([2])).unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (after.uid(), after.gid(), after.mode()),
+            (before.uid(), before.gid(), before.mode())
+        );
+        assert_ne!(after.ino(), before.ino());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn shared_indexes_only_replace_when_selected_records_exist() {

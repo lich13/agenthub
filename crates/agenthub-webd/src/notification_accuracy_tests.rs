@@ -157,7 +157,11 @@ async fn hook_stop_accuracy_fixture_turns_deliver_only_exact_terminal_answers() 
         let mut fixture = Fixture::new(&events[..=boundary]);
         let server = super::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
         fixture.config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(fixture.root.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            fixture.root.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-key")
             .unwrap();
         let payload =
@@ -195,7 +199,11 @@ async fn hook_stop_accuracy_fixture_final_body_reaches_bark_with_current_title()
     ]);
     let server = super::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
     fixture.config.probe.notifications.server_url = server.url();
-    let db = PanelDb::open(fixture.root.join("panel.sqlite")).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        fixture.root.join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     db.set_secret_setting_bytes("probe_bark_device_key", b"test-only-key")
         .unwrap();
     let input = hook_stop_event_input(
@@ -230,7 +238,11 @@ async fn hook_stop_accuracy_internal_unknown_and_unconfirmed_body_have_zero_side
         json!({"type":"turn_context","payload":{"turn_id":"root-turn"}}),
         json!({"type":"response_item","payload":{"type":"agent_message","author":"/root/audit","recipient":"/root","content":[{"text":"Message Type: FINAL_ANSWER\nInternal report"}]}}),
     ]);
-    let db = PanelDb::open(fixture.root.join("panel.sqlite")).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        fixture.root.join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     db.set_secret_setting_bytes("probe_bark_device_key", b"test-only-key")
         .unwrap();
     for (id, reason) in [

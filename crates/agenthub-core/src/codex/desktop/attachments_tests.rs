@@ -31,8 +31,12 @@ impl Fixture {
     }
 
     fn open(&self, now: u64) -> AttachmentStore {
-        AttachmentStore::open(self.root.clone(), SecretBox::deterministic_dev(), now)
-            .expect("private synthetic attachment store opens")
+        AttachmentStore::open(
+            self.root.clone(),
+            SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            now,
+        )
+        .expect("private synthetic attachment store opens")
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -81,7 +85,7 @@ fn json_keys(value: &serde_json::Value) -> BTreeSet<String> {
 }
 
 fn test_key() -> SecretBox {
-    SecretBox::deterministic_dev()
+    SecretBox::from_key_material(&"11".repeat(32)).unwrap()
 }
 
 fn wrong_test_key() -> SecretBox {

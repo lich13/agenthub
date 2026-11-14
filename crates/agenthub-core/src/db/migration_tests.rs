@@ -32,6 +32,19 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
     let db =
         PanelDb::open_with_secret_box(&fixture.path, SecretBox::from_key_material(&key).unwrap())
             .unwrap();
+    assert_eq!(
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='thread_followups'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    db.conn.lock().unwrap().execute_batch("CREATE TABLE thread_followups(id TEXT PRIMARY KEY, message TEXT); INSERT INTO thread_followups VALUES('historic', 'preserved');").unwrap();
     db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
         .unwrap();
     db.create_job("fixture-job", "probe_bark_test", "fixture")
@@ -52,6 +65,15 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
         );
         assert!(db.job("fixture-job").unwrap().is_some());
         let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT message FROM thread_followups WHERE id='historic'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "preserved"
+        );
         assert_eq!(
             conn.query_row(
                 "SELECT chunk_index,attempts FROM probe_notification_deliveries",
@@ -78,7 +100,12 @@ fn old_schema_requires_intermediate_upgrade_without_changing_rows() {
         conn.execute_batch("CREATE TABLE fixture_queue(payload TEXT); INSERT INTO fixture_queue VALUES('pending');").unwrap();
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
-        let err = PanelDb::open(&fixture.path).err().unwrap();
+        let err = PanelDb::open_with_secret_box(
+            &fixture.path,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .err()
+        .unwrap();
         assert!(err.to_string().contains("v2.0.10"));
         let conn = Connection::open(&fixture.path).unwrap();
         assert_eq!(
@@ -104,7 +131,11 @@ fn simultaneous_new_store_opens_share_current_schema() {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                PanelDb::open(path).unwrap()
+                PanelDb::open_with_secret_box(
+                    path,
+                    crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+                )
+                .unwrap()
             })
         })
         .collect::<Vec<_>>();

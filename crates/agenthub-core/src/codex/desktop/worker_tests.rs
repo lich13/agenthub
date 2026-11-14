@@ -61,7 +61,7 @@ impl Fixture {
     }
 
     fn ledger(&self) -> DesktopLedger {
-        let crypto = SecretBox::deterministic_dev();
+        let crypto = SecretBox::from_key_material(&"11".repeat(32)).unwrap();
         let db = PanelDb::open_with_secret_box(&self.database, crypto.clone())
             .expect("temporary PanelDb is initialized");
         DesktopLedger::new(db, crypto)

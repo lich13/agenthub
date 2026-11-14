@@ -277,7 +277,7 @@ main() {
   fi
   require_root
   require_command python3
-  require_command minisign
+  if [[ -z "${BINARY_PATH}" ]]; then require_command minisign; fi
   TRANSACTION="$(mktemp -d)"
   trap finish_install EXIT
   if systemctl is-active --quiet "${SERVICE_NAME}.service"; then WAS_ACTIVE=1; fi

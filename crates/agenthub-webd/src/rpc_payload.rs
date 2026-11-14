@@ -40,7 +40,7 @@ pub(crate) fn rpc_wrapped_payload<T: DeserializeOwned>(
     keys: &[&str],
 ) -> Result<T, RpcPayloadError> {
     let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
-    rpc_payload(&rpc_compat_value(payload))
+    rpc_payload(payload)
 }
 
 #[cfg(test)]
@@ -49,7 +49,7 @@ pub(crate) fn rpc_wrapped_payload_or_empty<T: DeserializeOwned>(
     keys: &[&str],
 ) -> Result<T, RpcPayloadError> {
     let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
-    rpc_payload_or_empty(&rpc_compat_value(payload))
+    rpc_payload_or_empty(payload)
 }
 
 pub(crate) fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
@@ -65,7 +65,8 @@ pub(crate) fn rpc_required_string(value: &Value, key: &str) -> Result<String, Rp
 }
 
 pub(crate) fn rpc_string(value: &Value, key: &str) -> Option<String> {
-    rpc_value(value, key)
+    value
+        .get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -86,74 +87,3 @@ pub(crate) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String,
         })
         .collect()
 }
-
-fn rpc_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
-    rpc_direct_value(value, key).or_else(|| {
-        ["payload", "request", "settings"]
-            .iter()
-            .filter_map(|wrapper| value.get(*wrapper))
-            .find_map(|nested| rpc_direct_value(nested, key))
-    })
-}
-
-fn rpc_direct_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
-    value.get(key).or_else(|| {
-        key.strip_suffix("Id")
-            .and_then(|prefix| value.get(format!("{prefix}_id")))
-    })
-}
-
-fn rpc_compat_value(value: &Value) -> Value {
-    let mut value = value.clone();
-    rpc_normalize_value(&mut value);
-    value
-}
-
-fn rpc_normalize_value(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                rpc_normalize_value(value);
-            }
-            for (from, to) in RPC_COMPAT_FIELD_ALIASES {
-                if object.contains_key(*to) {
-                    continue;
-                }
-                if let Some(value) = object.remove(*from) {
-                    object.insert((*to).to_string(), value);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                rpc_normalize_value(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-const RPC_COMPAT_FIELD_ALIASES: &[(&str, &str)] = &[
-    ("threadId", "thread_id"),
-    ("followUpId", "followup_id"),
-    ("tokenBudget", "token_budget"),
-    ("serviceTier", "service_tier"),
-    ("reasoningEffort", "reasoning_effort"),
-    ("permissionProfile", "permission_profile"),
-    ("approvalPolicy", "approval_policy"),
-    ("sandboxMode", "sandbox_mode"),
-    ("networkAccess", "network_access"),
-    ("collaborationMode", "collaboration_mode"),
-    ("preparedAttachments", "prepared_attachments"),
-    ("turnId", "turn_id"),
-    ("itemId", "item_id"),
-    ("jobId", "job_id"),
-    ("requestId", "request_id"),
-    ("pollSeconds", "poll_seconds"),
-    ("recentLimit", "recent_limit"),
-    ("serverUrl", "server_url"),
-    ("deviceKey", "device_key"),
-    ("notifyCompletion", "notify_completion"),
-    ("notifyReplyNeeded", "notify_reply_needed"),
-    ("notifyRecoverable", "notify_recoverable"),
-];

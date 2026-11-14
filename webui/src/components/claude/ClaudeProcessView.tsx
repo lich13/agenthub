@@ -37,6 +37,7 @@ export function ClaudeProcessView({ group, children }: { group: ClaudeProcessGro
     <ActivityDetails
       className={`execution-group process-group claude-process-group${group.running ? " is-running" : ""}`}
       stateKey={group.stateKey}
+      stateAliases={group.sourceIds.map(id => `claude-process:${group.turnId}:${id}`)}
       timelineId={group.id}
       initiallyOpen={false}
       reveal={reveal}
@@ -48,7 +49,6 @@ export function ClaudeProcessView({ group, children }: { group: ClaudeProcessGro
           {group.failedCount > 0 && (
             <span className="process-failure-badge form-error">{group.failedCount} 项失败</span>
           )}
-          {group.hasPlan && <small>含计划</small>}
           {group.needsReply && <small>待回复</small>}
           {group.hasPermission && <small>{group.needsPermission ? "待授权" : "授权记录"}</small>}
           {group.running ? (

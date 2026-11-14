@@ -106,6 +106,7 @@ impl DesktopWorker {
         self.project_directory.as_deref()
     }
 
+    #[cfg(test)]
     pub async fn act(&self, action: DesktopAction) -> Result<DesktopView> {
         self.act_with_references(action, Vec::new()).await
     }

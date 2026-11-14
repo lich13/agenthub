@@ -120,7 +120,11 @@ fn baseline_and_reloaded_cache_do_not_replay_requests() {
     let mut config = crate::config::Config::default();
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_grokbot = true;
-    let db = crate::db::PanelDb::open(":memory:").unwrap();
+    let db = crate::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
             .unwrap(),
@@ -278,7 +282,11 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         c.probe.notifications.notify_grokbot = enabled;
         c
     };
-    let db = crate::db::PanelDb::open(&db_path).unwrap();
+    let db = crate::db::PanelDb::open_with_secret_box(
+        &db_path,
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     db.stage_native_notifications(
         NativeProvider::GrokBot,
         &scan(&f.paths).unwrap(),
@@ -313,7 +321,11 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
     );
     drop(db);
     f.replica(json!([]));
-    let db = crate::db::PanelDb::open(&db_path).unwrap();
+    let db = crate::db::PanelDb::open_with_secret_box(
+        &db_path,
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     db.stage_native_notifications(
         NativeProvider::GrokBot,
         &scan(&f.paths).unwrap(),
@@ -383,7 +395,11 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_grokbot = true;
     let db_path = f.root.join("upgrade.sqlite");
-    let db = crate::db::PanelDb::open(&db_path).unwrap();
+    let db = crate::db::PanelDb::open_with_secret_box(
+        &db_path,
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
 
     // Baseline with empty replica (simulates v2.1.10 where settled_count was 0 -> cursor = 0)
     f.replica(json!([]));

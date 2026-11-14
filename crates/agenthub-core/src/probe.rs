@@ -1677,13 +1677,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_aggregates_panel_running_jobs_and_recent_events() {
+    async fn status_keeps_jobs_separate_from_native_threads_and_counts_events() {
         let root = unique_temp_dir("agenthub-probe-status-panel");
         let codex_home = root.join(".codex");
         fs::create_dir_all(&codex_home).unwrap();
         Connection::open(codex_home.join("state_5.sqlite")).unwrap();
         let panel_db_path = root.join("agenthub.sqlite");
-        let db = crate::db::PanelDb::open(&panel_db_path).unwrap();
+        let db = crate::db::PanelDb::open_with_secret_box(
+            &panel_db_path,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.record_probe_event(crate::db::NewProbeEvent {
             kind: "hook-stop",
             thread_id: Some("job-thread"),
@@ -1695,8 +1699,6 @@ mod tests {
         })
         .unwrap();
         db.create_job("job-live", "codex.run", "继续运行").unwrap();
-        db.link_job_thread("job-live", Some("job-thread"), Some("turn-live"))
-            .unwrap();
         drop(db);
         let mut config = Config::default();
         config.codex.home = codex_home;
@@ -1708,17 +1710,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(status.recent_event_count, 1);
-        assert_eq!(status.running_count, 1);
-        assert_eq!(status.running_threads.len(), 1);
-        assert_eq!(status.running_threads[0].id, "job-thread");
-        assert_eq!(
-            status.running_threads[0].active_job_id.as_deref(),
-            Some("job-live")
-        );
-        assert_eq!(
-            status.running_threads[0].active_turn_id.as_deref(),
-            Some("turn-live")
-        );
+        assert_eq!(status.running_count, 0);
+        assert!(status.running_threads.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -18,7 +18,11 @@ impl Database {
         let root = std::env::temp_dir().join(format!("agenthub-ci-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         Self {
-            db: PanelDb::open(root.join("panel.sqlite")).unwrap(),
+            db: PanelDb::open_with_secret_box(
+                root.join("panel.sqlite"),
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap(),
             root,
         }
     }

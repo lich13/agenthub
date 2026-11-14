@@ -41,12 +41,12 @@ function toggle(details: ReactElement<ComponentProps<"details">>) {
 
 test("the process defaults closed with no mounted body while final answer and copy action stay visible", () => {
   const { html, details } = render(fixture(), "default");
-  expect(details).toHaveLength(1);
+  expect(details).toHaveLength(2);
   expect(details[0].props.open).toBe(false);
   expect(html).toContain("已思考");
   expect(html).toContain("1 项工具");
   expect(html).not.toContain("Private process fixture");
-  expect(html).not.toContain("Temporary explanation");
+  expect(html).toContain("Temporary explanation");
   expect(html).not.toContain("Synthetic tool result");
   expect(html).toContain("Visible request");
   expect(html).toContain("Visible final answer");
@@ -54,18 +54,21 @@ test("the process defaults closed with no mounted body while final answer and co
   expect(html.match(/user-message-bubble/g)).toHaveLength(1);
 });
 
-test.each(["think", "explain", "tool", "result"])("search for %s opens the outer process and required inner activity at the native anchor", position => {
+test.each(["think", "explain", "tool", "result"])("search for %s reveals only the matching process segment", position => {
   const { html, details } = render(fixture(), `search-${position}`, position);
-  expect(details[0].props.open).toBe(true);
-  expect(details[0].props["data-timeline-aliases" as keyof typeof details[0]["props"]]).toBeUndefined();
-  expect(html).toContain("Private process fixture");
+  expect(html).toContain("Temporary explanation");
   if (position === "tool" || position === "result") {
+    expect(details[0].props.open).toBe(false);
     expect(details.filter(detail => detail.props.open)).toHaveLength(3);
     expect(html).toContain("Synthetic tool result");
     expect(html).toContain('data-timeline-aliases="tool result"');
-  } else {
-    expect(html).toContain(`data-timeline-aliases="${position}"`);
+  } else if (position === "think") {
+    expect(details[0].props.open).toBe(true);
+    expect(html).toContain("Private process fixture");
     expect(html).not.toContain("Synthetic tool result");
+  } else {
+    expect(details.every(detail => !detail.props.open)).toBe(true);
+    expect(html).not.toContain("Private process fixture");
   }
 });
 
@@ -78,27 +81,27 @@ test("search for a user or final answer does not expand the process", () => {
   }
 });
 
-test("saved expansion survives polling, pagination and remounts and remains isolated by machine and session", () => {
+test("segment choices survive pagination and remain independent within a turn and across machines", () => {
   observed.machineScope = "local";
-  const partial = fixture().slice(2);
-  const initial = render(partial, "stable");
+  const events = fixture().filter(item => item.id !== "explain");
+  const initial = render(events.slice(2), "stable");
   toggle(initial.details[0]);
-  const refreshed = render(fixture(), "stable");
+  const refreshed = render(events, "stable");
   expect(refreshed.details[0].props.open).toBe(true);
   expect(refreshed.html).toContain("Private process fixture");
-  const changed = fixture().map(item => item.id === "think" ? { ...item, text: "Refreshed thinking" } : item);
-  expect(render(changed, "stable").html).toContain("Refreshed thinking");
-  expect(render(changed, "other-session").details[0].props.open).toBe(false);
-  observed.machineScope = "remote:https://example.invalid";
-  expect(render(changed, "stable").details[0].props.open).toBe(false);
+  expect(render(events, "other-session").details[0].props.open).toBe(false);
+  observed.machineScope = "remote:fixture";
+  expect(render(events, "stable").details[0].props.open).toBe(false);
   observed.machineScope = "local";
-  const returned = render(changed, "stable");
-  expect(returned.details[0].props.open).toBe(true);
-  toggle(returned.details[0]);
-  expect(render(changed, "stable").html).not.toContain("Refreshed thinking");
+  const separate = render(fixture(), "segments");
+  toggle(separate.details[0]);
+  const opened = render(fixture(), "segments");
+  expect(opened.html).toContain("Private process fixture");
+  expect(opened.html).not.toContain("Synthetic tool result");
+  expect(opened.details[1].props.open).toBe(false);
 });
 
-test("failure, plan and waiting indicators remain visible while folded; plan actions remain inside", () => {
+test("plan body and actions remain visible while waiting tools are folded", () => {
   const events = [
     event("plan", "plan", { text: "# Fixture plan\nPlan body", callId: "plan" }),
     event("failure", "system", { role: "api_error", status: "failed", text: "Synthetic failure" }),
@@ -106,9 +109,9 @@ test("failure, plan and waiting indicators remain visible while folded; plan act
     event("permission", "permission_request", { status: "in_progress", text: "Approve fixture", detail: "Fixture authorization" })
   ];
   const closed = render(events, "waiting");
-  for (const label of ["含计划", "1 项失败", "待回复", "待授权", "展开查看"]) expect(closed.html).toContain(label);
+  for (const label of ["1 项失败", "待回复", "待授权", "展开查看"]) expect(closed.html).toContain(label);
   expect(closed.html).not.toContain("thread-running-indicator");
-  expect(closed.html).not.toContain("Plan body");
+  expect(closed.html).toContain("Plan body");
   const opened = render(events, "waiting", "plan");
   expect(opened.html).toContain("Plan body");
   expect(opened.html).toContain('aria-label="复制计划"');

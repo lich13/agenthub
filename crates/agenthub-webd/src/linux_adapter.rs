@@ -74,8 +74,7 @@ pub fn list_threads_read_model(
         .threads()
         .list_read(query)?;
     let paths = state.codex_paths();
-    let running_jobs = state.db.running_thread_jobs()?;
-    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
+    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan)?;
     let view = thread_service::thread_list_read_model(inputs, plan.query);
     Ok(view)
 }
@@ -86,7 +85,7 @@ pub fn probe_threads_read_model(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    probe_service::probe_threads_for_status_with_paths(&paths, state.db.path(), status, limit)
+    probe_service::probe_threads_for_status_with_paths(&paths, status, limit)
 }
 
 pub fn load_thread_detail_read_model(
@@ -102,18 +101,11 @@ pub fn load_thread_detail_read_model(
         None,
     )?;
     if let Some(detail) = detail.take() {
-        let detail_thread_id = detail.summary.id.clone();
-        let active_job = active_job_for_thread(state, &detail_thread_id)?;
-        let view = thread_service::thread_detail_read_model(detail, active_job);
-        let mut detail = view;
+        let mut detail = detail;
         codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
         return Ok(Some(detail));
     }
     Ok(None)
-}
-
-fn active_job_for_thread(state: &AppState, thread_id: &str) -> Result<Option<JobRecord>> {
-    state.db.running_job_for_thread(thread_id)
 }
 
 pub fn window_thread_detail_read_model(

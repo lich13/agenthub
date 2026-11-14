@@ -950,7 +950,11 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     // settled_count is clamped to 132 (the start of exec_done, below 137) and diagnose reports
     // skipReason = "prior_turn_has_pending_work". Once that task finishes, the held completion
     // is emitted and staged into the database while the cursor advances to 138.
-    let db = crate::db::PanelDb::open(":memory:").unwrap();
+    let db = crate::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let mut probe_cfg = crate::config::Config::default();
     probe_cfg.probe.enabled = true;
     probe_cfg.probe.notifications.enabled = true;

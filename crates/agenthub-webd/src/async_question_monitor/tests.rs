@@ -60,7 +60,11 @@ impl Fixture {
         config.probe.notifications.notify_codex = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = url;
-        let db = PanelDb::open(root.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            root.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device-key")
             .unwrap();
         db.set_setting(
@@ -164,7 +168,11 @@ async fn ongoing_question_is_delivered_once_across_hook_monitor_restart_and_ttl(
         .unwrap()
         .execute("UPDATE probe_dedupe SET expires_at=0", [])
         .unwrap();
-    let reopened = PanelDb::open(fixture.root.join("panel.sqlite")).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.root.join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     run(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
     fixture.answer("call-a", 1);
@@ -269,7 +277,11 @@ async fn failed_delivery_is_persisted_without_claiming_success_or_retrying_on_re
     assert_eq!(fixture.db.list_probe_events(10).unwrap().len(), 1);
     run(
         &fixture.config,
-        &PanelDb::open(fixture.root.join("panel.sqlite")).unwrap(),
+        &PanelDb::open_with_secret_box(
+            fixture.root.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap(),
     )
     .await
     .unwrap();

@@ -236,7 +236,7 @@ async fn run(cli: Cli) -> Result<()> {
             let db = open_panel_db(&config)?;
             run_probe_command(command, &config, db, &cli.config).await?;
         }
-        Command::Serve { surface } => serve(cli.config, surface).await?,
+        Command::Serve => serve(cli.config).await?,
         Command::RpcStdio => ssh_server::proxy().await?,
         Command::Health => ssh_server::health().await?,
     }
@@ -362,19 +362,6 @@ async fn run_probe_command(
             let bark = notification_delivery::test(config_path, &db).await?;
             println!("{}", serde_json::to_string_pretty(&bark)?);
             anyhow::ensure!(bark.sent, "Bark test was not accepted");
-        }
-        ProbeCommand::LifecycleRepair => {
-            anyhow::bail!(
-                "unsupported_probe_action: lifecycle_repair has no fixed AgentHub implementation"
-            );
-        }
-        ProbeCommand::ServiceRestart => {
-            anyhow::bail!(
-                "unsupported_probe_action: service_restart has no fixed AgentHub implementation"
-            );
-        }
-        ProbeCommand::LegacyImport => {
-            anyhow::bail!("unavailable: legacy configuration import is retired");
         }
         ProbeCommand::DiagnoseAntigravity { cascade_id } => {
             println!(
@@ -1381,15 +1368,15 @@ fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
 }
 
-async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
+async fn serve(config_path: PathBuf) -> Result<()> {
     anyhow::ensure!(
-        host_surface == HostSurface::LinuxServerApi && cfg!(target_os = "linux"),
+        cfg!(target_os = "linux"),
         "Management API is available only on Linux"
     );
     let config = Config::load_runtime(&config_path)?;
     upgrade_managed_question_hooks_on_start(&config);
     let db = open_panel_db(&config)?;
-    let state = AppState::new_for_surface(config.clone(), db, host_surface);
+    let state = AppState::new_for_surface(config.clone(), db, HostSurface::LinuxServerApi);
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
     github_ci_monitor::spawn(config_path.clone(), Some(state.clone()));
@@ -1687,7 +1674,6 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let codex_paths = state.codex_paths();
     let buckets = probe_service::probe_passive_scan_threads_with_paths(
         &codex_paths,
-        state.db.path(),
         config.probe.recent_limit,
     )?;
     for (status, threads) in buckets {
@@ -1762,7 +1748,11 @@ mod tests {
 
     #[test]
     fn disabled_error_monitor_retains_timestamp_until_status_changes() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let mut status = ProbeErrorMonitorRuntimeStatus {
             status: "disabled".into(),
             last_scan_at: 1,
@@ -1803,22 +1793,6 @@ mod tests {
             .unwrap();
             assert_eq!(saved, status);
         }
-    }
-
-    #[tokio::test]
-    async fn unsupported_probe_cli_actions_do_not_report_fake_success() {
-        let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
-
-        for command in [ProbeCommand::LifecycleRepair, ProbeCommand::ServiceRestart] {
-            let db = PanelDb::open(":memory:").unwrap();
-            let err = run_probe_command(command, &config, db, Path::new("fixture-unused.toml"))
-                .await
-                .unwrap_err();
-            let message = format!("{err:#}");
-            assert!(message.contains("unsupported"));
-            assert!(!message.contains("\"ok\": true"));
-        }
-        let _ = fs::remove_dir_all(sandbox_root);
     }
 
     #[test]
@@ -2109,7 +2083,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
 
         let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
             Some("thread-a"),
@@ -2144,7 +2122,11 @@ last_error = "old agenthub request hook"
     async fn probe_control_payload_suppression_skips_dedupe_db_and_bark() {
         let dir = temp_test_dir("agenthub-control-payload-suppression");
         fs::create_dir_all(&dir).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let (mut config, _identity) =
@@ -2229,7 +2211,11 @@ last_error = "old agenthub request hook"
         let normalized_cwd = memory_root.join("nested").join("..");
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::create_dir_all(memory_root.join("nested")).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let mut config = test_config(codex_home);
@@ -2420,7 +2406,11 @@ last_error = "old agenthub request hook"
         let memory_root = codex_home.join("memories");
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::create_dir_all(&memory_root).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let mut config = test_config(codex_home);
@@ -2479,7 +2469,11 @@ last_error = "old agenthub request hook"
         let (mut config, _identity) =
             notification_accuracy_tests::test_notification_config(&["session-stdin"]);
         config.probe.notifications.enabled = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
             None,
             Some("turn-stdin"),
@@ -2529,7 +2523,11 @@ last_error = "old agenthub request hook"
             "session-transcript",
         ]);
         config.probe.notifications.enabled = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let dir = temp_test_dir("agenthub-hook-transcript-summary");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -2581,7 +2579,11 @@ last_error = "old agenthub request hook"
 
     #[tokio::test]
     async fn hook_stop_uses_local_thread_title_for_bark_title_when_payload_omits_title() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let dir = temp_test_dir("agenthub-hook-local-title");
         let codex_home = dir.join(".codex");
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
@@ -2663,7 +2665,11 @@ last_error = "old agenthub request hook"
             notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
@@ -2719,7 +2725,11 @@ last_error = "old agenthub request hook"
         ]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
@@ -2785,7 +2795,11 @@ last_error = "old agenthub request hook"
             notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let event = probe_runtime(&config).build_event(ProbeEventInput::notify_completion(
             Some("thread-a"),
             Some("turn-a"),
@@ -2808,7 +2822,11 @@ last_error = "old agenthub request hook"
         let (mut config, _identity) =
             notification_accuracy_tests::test_notification_config(&["thread-complete"]);
         config.probe.notifications.enabled = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let dir = temp_test_dir("agenthub-notify-completion-rollout");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -2989,7 +3007,11 @@ last_error = "old agenthub request hook"
         let (mut config, _identity) =
             notification_accuracy_tests::test_notification_config(&["thread-complete"]);
         config.probe.notifications.enabled = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let dir = temp_test_dir("agenthub-notify-completion-raw-assistant");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -3390,7 +3412,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let dir = temp_test_dir("agenthub-plan-ttl-marker");
         fs::create_dir_all(&dir).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
@@ -3457,7 +3483,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let dir = temp_test_dir("agenthub-plan-ttl-marker-single");
         fs::create_dir_all(&dir).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let body = agenthub_core::codex::extract_proposed_plan_text(
@@ -3508,7 +3538,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let dir = temp_test_dir("agenthub-input-ttl-marker");
         fs::create_dir_all(&dir).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let body = "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续";
@@ -3556,7 +3590,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let dir = temp_test_dir("agenthub-pre-tool-use-input-marker");
         fs::create_dir_all(&dir).unwrap();
-        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let body = "问题 1：Continue?\n选项 1：继续\n选项 2：停止";
@@ -3603,7 +3641,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let make_body = |time: &str| {
@@ -3777,7 +3819,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
             .unwrap();
         let full_body = format!("开头\n{}\n末尾唯一完整反馈", "完整正文".repeat(900));
@@ -3901,7 +3947,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"secret-device-token")
             .unwrap();
         let full_body = format!(
@@ -3960,7 +4010,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
@@ -4210,7 +4264,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let state = AppState::new(config, db.clone());
 
         let count = run_probe_thread_scan_if_due(state).await.unwrap();
@@ -4281,7 +4339,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
@@ -4364,7 +4426,11 @@ last_error = "old agenthub request hook"
         let mut config = test_config(dir.join(".codex"));
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
             .unwrap();
 
@@ -4389,7 +4455,11 @@ last_error = "old agenthub request hook"
         let (mut config, _identity) =
             notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = false;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let result = handle_built_probe_event(
             &|| Ok(config.clone()),
             &db,
@@ -4573,7 +4643,11 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.notify_recoverable = true;
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let state = AppState::new(config, db.clone());
 
         let count = run_probe_thread_scan_if_due(state).await.unwrap();

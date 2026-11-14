@@ -3,8 +3,7 @@ set -Eeuo pipefail
 
 REPO="${AGENTHUB_WEBD_REPO:-lich13/agenthub}"
 VERSION="latest"
-ARCH="${AGENTHUB_WEBD_ARCH:-x86_64}"
-ASSET="agenthub-webd-linux-${ARCH}.tar.gz"
+ASSET="agenthub-webd-linux-x86_64.tar.gz"
 TMP_DIR="$(mktemp -d)"
 trap '[[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -r -- "${TMP_DIR}"' EXIT
 
@@ -20,7 +19,6 @@ Usage:
 Options:
   --repo REPO       GitHub repo. Default: lich13/agenthub
   --version TAG     Release tag or latest. Default: latest
-  --arch ARCH       Release architecture suffix. Default: x86_64
   --precheck        Verify installed service and SSH service health only.
   -h, --help        Show help.
 USAGE
@@ -32,7 +30,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="${2:-}"; shift 2 ;;
     --version) VERSION="${2:-}"; shift 2 ;;
-    --arch) ARCH="${2:-}"; shift 2 ;;
     --precheck) PRECHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -42,8 +39,6 @@ done
 
 [[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || { echo "invalid repository" >&2; exit 2; }
 [[ "${VERSION}" == latest || "${VERSION}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid version" >&2; exit 2; }
-[[ "${ARCH}" == x86_64 ]] || { echo "unsupported architecture" >&2; exit 2; }
-ASSET="agenthub-webd-linux-${ARCH}.tar.gz"
 
 # The API service is intentionally mounted with ProtectSystem=full. Run the
 # mutating install step in a short-lived root unit with its own writable host
@@ -64,13 +59,6 @@ if [[ "${PRECHECK}" -eq 0 && "${AGENTHUB_WEBD_UPDATE_TRANSIENT:-0}" != "1" ]]; t
     --property=ProtectSystem=off \
     --property=ProtectHome=off \
     --property=PrivateTmp=no \
-    --property=ReadWritePaths=/usr/local/bin \
-    --property=ReadWritePaths=/etc/systemd/system \
-    --property=ReadWritePaths=/etc/agenthub-webd \
-    --property=ReadWritePaths=/var/lib/agenthub-webd \
-    --property=ReadWritePaths=/var/log/agenthub-webd \
-    --property=ReadWritePaths=/root/.codex \
-    --property=ReadWritePaths=/home/ubuntu/.codex \
     /usr/bin/env AGENTHUB_WEBD_UPDATE_TRANSIENT=1 "$0" "${ORIGINAL_ARGS[@]}"
 fi
 
@@ -108,7 +96,7 @@ curl -fL "${BASE_URL}/${ASSET}.sig" -o "${TMP_DIR}/${ASSET}.sig"
 SIGNED_VERSION="$(python3 "${SAFETY}" verify "${TMP_DIR}/${ASSET}" "${TMP_DIR}/${ASSET}.sha256" "${TMP_DIR}/${ASSET}.sig" "${PUBLIC_KEY}" "${VERSION}")"
 mkdir "${TMP_DIR}/payload"
 python3 "${SAFETY}" extract "${TMP_DIR}/${ASSET}" "${TMP_DIR}/payload"
-ROOT="${TMP_DIR}/payload/agenthub-webd-linux-${ARCH}"
+ROOT="${TMP_DIR}/payload/agenthub-webd-linux-x86_64"
 python3 "${SAFETY}" validate-payload "${ROOT}" "${SIGNED_VERSION}"
 
 "${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}" --no-enable

@@ -178,11 +178,7 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         }
         rpc_commands::PROBE_SETTINGS_GET => get_probe_settings(state).await,
         rpc_commands::PROBE_SETTINGS_SAVE => {
-            patch_probe_settings(
-                state,
-                rpc_wrapped_payload(&args, &["settings", "payload", "request"])?,
-            )
-            .await
+            patch_probe_settings(state, rpc_wrapped_payload(&args, &["settings"])?).await
         }
         rpc_commands::PROBE_EVENTS => {
             get_probe_events(
@@ -290,7 +286,11 @@ mod tests {
         let (config, root) = super::super::test_support::sandboxed_test_config();
         AppState::new(
             config,
-            agenthub_core::db::PanelDb::open(":memory:").unwrap(),
+            agenthub_core::db::PanelDb::open_with_secret_box(
+                ":memory:",
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap(),
         )
         .with_test_sandbox(root)
     }

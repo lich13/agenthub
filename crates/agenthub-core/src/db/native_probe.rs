@@ -373,7 +373,11 @@ mod tests {
 
     #[test]
     fn pending_provider_filter_precedes_limit_and_decryption() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let config = config();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
@@ -401,7 +405,11 @@ mod tests {
 
     #[test]
     fn notification_counts_preserve_states_provider_order_and_zero_values() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let statuses = [
             "failed",
             "pending",
@@ -447,7 +455,11 @@ mod tests {
     #[test]
     fn idle_scan_does_not_rewrite_streams_or_publish_history() {
         use rusqlite::hooks::{AuthAction, Authorization};
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let config = config();
         let scan = scan("fixture-idle", 1, chrono::Utc::now().timestamp_millis());
         db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
@@ -486,7 +498,11 @@ mod tests {
 
     #[test]
     fn retention_keeps_mutable_cursor_identity_without_body_then_prunes_unknown_after_progress() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let mut config = config();
         config.probe.notifications.notify_antigravity = true;
         config.probe.notifications.notify_antigravity_completion = true;
@@ -571,7 +587,11 @@ mod tests {
     }
     #[test]
     fn claude_enable_baselines_old_streams_and_keeps_channel_delivery_ownership() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let config = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
         let mut old = scan("fixture", 1, now);
@@ -652,7 +672,11 @@ mod tests {
     #[test]
     fn baseline_restart_partial_failure_and_duplicate_native_ids_use_durable_keys() {
         let p = std::env::temp_dir().join(format!("native-db-{}.sqlite", uuid::Uuid::new_v4()));
-        let db = PanelDb::open(&p).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &p,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let c = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
         assert_eq!(
@@ -674,7 +698,11 @@ mod tests {
         assert!(!db.claim_native_delivery(&d.event_key).unwrap());
         db.finish_native_delivery(&d, json!({"sent":true})).unwrap();
         drop(db);
-        let db = PanelDb::open(&p).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &p,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
                 .unwrap(),
@@ -714,7 +742,11 @@ mod tests {
     }
     #[test]
     fn disabled_poll_preserves_database_until_statistics_change() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let mut c = config();
         c.probe.notifications.notify_grok = false;
         let mut empty = NativeScan {
@@ -776,7 +808,11 @@ mod tests {
 
     #[test]
     fn disabled_provider_and_reenabled_provider_never_replay_history() {
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let mut c = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
         db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
@@ -849,7 +885,11 @@ mod local_provider_tests {
     fn pending_baseline_restart_and_reenable_preserve_dedupe_without_losing_same_step_completion() {
         for provider in [NativeProvider::Antigravity, NativeProvider::Dsh] {
             let mut c = config();
-            let db = PanelDb::open(":memory:").unwrap();
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             let old = scan(provider, "reply_needed", "execution-1");
             assert_eq!(
                 db.stage_native_notifications(provider, &old, &c).unwrap(),
@@ -894,7 +934,11 @@ mod local_provider_tests {
     fn disabled_categories_do_not_replay_existing_waits_when_enabled() {
         for provider in [NativeProvider::Antigravity, NativeProvider::Dsh] {
             let mut c = config();
-            let db = PanelDb::open(":memory:").unwrap();
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             db.stage_native_notifications(provider, &NativeScan::default(), &c)
                 .unwrap();
             c.probe.notifications.notify_antigravity_reply_needed = false;
@@ -919,7 +963,11 @@ mod local_provider_tests {
     fn new_interaction_on_a_baselined_step_keeps_its_original_creation_time() {
         let provider = NativeProvider::Antigravity;
         let c = config();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let mut waiting = scan(provider, "reply_needed", "old-request");
         waiting.streams[0].events[0].timestamp_ms = 1;
         assert_eq!(
@@ -950,7 +998,11 @@ mod local_provider_tests {
     ) {
         let provider = NativeProvider::Antigravity;
         let c = config();
-        let db = PanelDb::open(":memory:").unwrap();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
 
         // Baseline stream at record_count = 5, settled_count = 5 -> cursor = 5
         let baseline_scan = NativeScan {

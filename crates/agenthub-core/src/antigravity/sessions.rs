@@ -42,7 +42,11 @@ pub struct AntigravityPaths {
 pub enum RpcMode {
     AutoDiscover,
     OfflineOnly,
-    Fixed { port: u16, token: String },
+    #[cfg(test)]
+    Fixed {
+        port: u16,
+        token: String,
+    },
 }
 
 impl AntigravityPaths {
@@ -68,6 +72,7 @@ impl AntigravityPaths {
         }
     }
 
+    #[cfg(test)]
     pub fn with_fixed_rpc(home: PathBuf, port: u16, token: impl Into<String>) -> Self {
         Self {
             home,
@@ -462,6 +467,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>
     };
     match &paths.rpc_mode {
         RpcMode::OfflineOnly => Ok(None),
+        #[cfg(test)]
         RpcMode::Fixed { port, token } => {
             if let Some(value) = try_endpoint(*port, token)? {
                 return Ok(Some((

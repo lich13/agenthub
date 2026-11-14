@@ -357,7 +357,6 @@ export type UpdateStatus = {
   state: UpdateState;
   failure_category?: string | null;
   recommended_action: string;
-  capabilities: string[];
 };
 
 export type DesktopJobDetailRequest = { id: string; includeOutput?: boolean };

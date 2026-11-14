@@ -105,19 +105,21 @@ describe("conversation helpers", () => {
   });
 
   test("thread title merges keep real titles instead of assistant plan or body text", async () => {
-    const app = await loadApp();
+    const { createThreadMessageStoreState, applyThreadSummaryToSlot } = await import("./lib/threadMessageStore");
+    const store = createThreadMessageStoreState();
     const current: ThreadSummary = { id: "thread-a", title: "真实标题", status: "Recent", message_count: 1 };
 
+    applyThreadSummaryToSlot(store, current.id, current);
     for (const incomingTitle of [
       "读取中",
       "<proposed_plan>1. 检查缓存\n2. 修复归档选择</proposed_plan>",
       "1. 检查缓存\n2. 清理归档状态\n3. 运行回归测试",
       "我会先检查现有线程缓存和消息存储行为，然后补上归档后的缓存清理逻辑，最后运行测试确认不会再把 assistant 正文当成标题。"
     ]) {
-      expect(app.mergeIncomingThreadSummary?.(current, { ...current, title: incomingTitle }).title).toBe("真实标题");
+      expect(applyThreadSummaryToSlot(store, current.id, { ...current, title: incomingTitle }).summary?.title).toBe("真实标题");
     }
 
-    expect(app.mergeIncomingThreadSummary?.({ ...current, title: "读取中" }, { ...current, title: "真实新标题" }).title).toBe("真实新标题");
+    expect(applyThreadSummaryToSlot(store, current.id, { ...current, title: "真实新标题" }).summary?.title).toBe("真实新标题");
   });
 
   test("local title override prevents stale refetch from flashing back after rename", async () => {
@@ -127,7 +129,7 @@ describe("conversation helpers", () => {
     app.setLocalThreadTitleOverride?.("thread-a", "即时标题");
 
     expect(app.applyThreadTitleOverride?.({ ...current, title: "旧标题" }).title).toBe("即时标题");
-    expect(app.mergeIncomingThreadSummary?.(current, { ...current, title: "旧标题" }).title).toBe("即时标题");
+    expect(app.applyThreadTitleOverrideToDetail?.({ summary: current } as ThreadDetail).summary.title).toBe("即时标题");
 
     app.setLocalThreadTitleOverride?.("thread-a", "短期标题", 1000);
     expect(app.applyThreadTitleOverride?.({ ...current, title: "旧标题" }, 200_000).title).toBe("旧标题");
@@ -345,7 +347,6 @@ describe("conversation helpers", () => {
       state: "idle",
       failure_category: null,
       recommended_action: "No update available.",
-      capabilities: ["check", "confirm_install", "job_history", "signature_verification"]
     };
 
     expect(app.canStartUpdateInstall?.(undefined)).toBe(false);

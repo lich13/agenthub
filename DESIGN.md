@@ -7,7 +7,7 @@ AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined read
 ## Layout and interaction
 
 - Navigation contains Codex, Claude Code, Grok Build, Antigravity, DeepSeek Harness, Probe and settings.
-- Desktop uses a compact navigation rail (collapsible to `48px`), a `288px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a single-row mobile tab bar sized to the available providers, with ellipsis-safe labels.
+- Desktop uses a `196px` navigation rail (collapsible to `48px`), a `296px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a single-row mobile tab bar sized to the available providers, with ellipsis-safe labels.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Claude Code and Grok sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
 - Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
@@ -88,7 +88,7 @@ Grok 的列表菜单、详情和批量操作共用直接删除，不按活动、
 
 ## 紧凑阅读与子智能体
 
-保留 780px 阅读列上限，标题栏约 56px，正文 15px、行高 1.65，普通块间距 12px。用户新指令保留额外分隔。正文、工具摘要和子智能体活动文字共用左侧基线，图标使用固定侧栏位置。工具摘要约 30px 高，按读取、搜索、命令和集成生成中文文案；长名称单行省略，展开内容独立滚动。
+保留 768px 阅读列上限，标题栏约 56px，正文 15px、行高 1.65，普通块间距 12px。用户新指令保留额外分隔。正文、工具摘要和子智能体活动文字共用左侧基线，图标使用固定侧栏位置。工具摘要约 30px 高，按读取、搜索、命令和集成生成中文文案；长名称单行省略，展开内容独立滚动。
 
 助手正文不重复显示 Provider 标签。桌面复制按钮位于正文侧边，悬停或键盘聚焦时出现，触屏保持可见；成功和失败反馈不撑高消息。线程 ID 保留复制菜单入口。
 

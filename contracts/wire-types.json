@@ -7123,37 +7123,6 @@
         "kind": "struct",
         "serde": []
       },
-      "ProbeBarkDeliveryDecision": {
-        "fields": [
-          {
-            "name": "notifications_enabled",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "relevant_switch_enabled",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "device_key_configured",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "should_send",
-            "serde": [],
-            "type": "bool"
-          },
-          {
-            "name": "skip_reason",
-            "serde": [],
-            "type": "Option < String >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "ProbeEventRecordPlan": {
         "fields": [
           {
@@ -9226,11 +9195,6 @@
             "name": "recommended_action",
             "serde": [],
             "type": "String"
-          },
-          {
-            "name": "capabilities",
-            "serde": [],
-            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -10575,7 +10539,7 @@
         "UnifiedCleanupTargetSelection": "exporttypeUnifiedCleanupTargetSelection={scope:string;id:string;fingerprint?:string|null;};",
         "UpdateExecutionMethod": "exporttypeUpdateExecutionMethod=\"linux_systemd_job\"|\"macos_tauri_updater\"|\"unsupported\";",
         "UpdateState": "exporttypeUpdateState=\"idle\"|\"checking\"|\"ready\"|\"installing\"|\"succeeded\"|\"failed\"|\"unsupported\";",
-        "UpdateStatus": "exporttypeUpdateStatus={current_version:string;latest_version?:string|null;update_available?:boolean|null;channel:string;method:UpdateExecutionMethod;state:UpdateState;failure_category?:string|null;recommended_action:string;capabilities:string[];};",
+        "UpdateStatus": "exporttypeUpdateStatus={current_version:string;latest_version?:string|null;update_available?:boolean|null;channel:string;method:UpdateExecutionMethod;state:UpdateState;failure_category?:string|null;recommended_action:string;};",
         "UserAttachment": "exporttypeUserAttachment={id:string;name:string;kind:\"image\"|\"file\";path?:string|null;reason?:string|null};",
         "UserContextBlock": "exporttypeUserContextBlock={kind:\"instructions\"|\"environment\"|\"runtime\"|\"files\";text:string};",
         "UserInputAnswer": "exporttypeUserInputAnswer={question_id:string;answers:string[];note?:string|null;};",

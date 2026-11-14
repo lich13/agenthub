@@ -395,7 +395,6 @@ function isFoldableClaudeCore(entry: ClaudeRenderItem): boolean {
   if (entry.kind === "group") return true;
   if (entry.kind !== "item") return false;
   if (entry.item.kind === "thinking") return true;
-  if (entry.item.kind === "assistant_message" && entry.item.assistantPhase === "intermediate") return true;
   return Boolean(
     entry.item.detail &&
       entry.item.kind !== "user_message" &&
@@ -437,8 +436,7 @@ export function renderClaudeEvents(
       }
       if (
         entry.kind === "item" &&
-        (entry.item.kind === "thinking" ||
-          (entry.item.kind === "assistant_message" && entry.item.assistantPhase === "intermediate"))
+        entry.item.kind === "thinking"
       ) {
         return thinkingStepFromText(entry.key, entry.sourceIds, entry.item.text, false, entry.item.turnId);
       }

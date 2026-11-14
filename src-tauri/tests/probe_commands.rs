@@ -23,8 +23,11 @@ fn desktop_state(temp: &tempfile::TempDir) -> DesktopState {
     std::fs::create_dir_all(&config.codex.home).unwrap();
     std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
     std::fs::create_dir_all(&config.codex.workspace).unwrap();
-    let db = PanelDb::open_with_secret_box(&config.paths.db_path, SecretBox::deterministic_dev())
-        .unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     DesktopState::new(
         config,
         db,
@@ -112,10 +115,6 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
         agenthub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater
     );
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
-    assert!(status
-        .capabilities
-        .iter()
-        .any(|capability| capability == "signature_verification"));
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/agenthub"));

@@ -112,7 +112,15 @@ mod tests {
     use serde_json::json;
     fn state() -> AppState {
         let (config, root) = crate::api::test_support::sandboxed_test_config();
-        AppState::new(config, PanelDb::open(":memory:").unwrap()).with_test_sandbox(root)
+        AppState::new(
+            config,
+            PanelDb::open_with_secret_box(
+                ":memory:",
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap(),
+        )
+        .with_test_sandbox(root)
     }
     #[tokio::test]
     async fn proxy_exits_when_service_closes_with_stdin_still_open() {

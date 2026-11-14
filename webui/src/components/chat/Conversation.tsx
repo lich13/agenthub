@@ -79,7 +79,6 @@ function computeVisibleItems(visibleBlocks: MessageBlock[]) {
 type DerivedBlocksEntry = {
   visibleBlocks: MessageBlock[];
   visibleItems: ReturnType<typeof computeVisibleItems>;
-  hasSpawnAgent: boolean;
 };
 
 const derivedBlocksCache = new WeakMap<
@@ -102,10 +101,7 @@ function getDerivedConversationBlocks(
     if (cached?.[slotKey]) return cached[slotKey]!;
     const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, null);
     const visibleItems = computeVisibleItems(visibleBlocks);
-    const hasSpawnAgent = visibleBlocks.some(
-      block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent",
-    );
-    const entry: DerivedBlocksEntry = { visibleBlocks, visibleItems, hasSpawnAgent };
+    const entry: DerivedBlocksEntry = { visibleBlocks, visibleItems };
     if (!cached) {
       cached = {};
       derivedBlocksCache.set(blocks, cached);
@@ -115,10 +111,7 @@ function getDerivedConversationBlocks(
   }
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId);
   const visibleItems = computeVisibleItems(visibleBlocks);
-  const hasSpawnAgent = visibleBlocks.some(
-    block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent",
-  );
-  return { visibleBlocks, visibleItems, hasSpawnAgent };
+  return { visibleBlocks, visibleItems };
 }
 
 function getDerivedTimelineEntries(blocks: MessageBlock[]) {
@@ -200,13 +193,10 @@ export function Conversation(props: {
     onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
   });
   const blocks = navigation.items ?? (slot.blocks.length ? slot.blocks : detail.blocks);
-  const { visibleBlocks, visibleItems, hasSpawnAgent } = useMemo(
+  const { visibleBlocks, visibleItems } = useMemo(
     () => getDerivedConversationBlocks(blocks, historyExpanded, revealedBlockId),
     [blocks, historyExpanded, revealedBlockId],
   );
-  const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
-    && props.capabilities.threadSubagents !== true
-    && hasSpawnAgent;
   const resolvedTimeline = slot.timeline ?? detail.timeline;
   const timelineEntries = useMemo(() => resolvedTimeline ?? getDerivedTimelineEntries(blocks), [resolvedTimeline, blocks]);
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
@@ -343,7 +333,6 @@ export function Conversation(props: {
           loading={history.loading}
         />
         <div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
-          {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
           <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
           <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}>
             <MarkdownPathScope.Provider value={summary.cwd}>

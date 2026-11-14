@@ -17,7 +17,11 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
     write_config(&config_path, &config);
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
     let payload = pre_tool_use_payload(Some(&transcript));
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
 
     let started = Instant::now();
     let output = run_hook(&config_path, payload.to_string().as_bytes());
@@ -68,7 +72,11 @@ fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
     );
     write_config(&config_path, &config);
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
 
     let output = run_hook(
         &config_path,
@@ -112,7 +120,11 @@ fn hook_request_user_input_prefers_explicit_payload_thread_title() {
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
     let mut payload = pre_tool_use_payload(Some(&transcript));
     payload["thread_title"] = json!("Explicit hook title");
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
 
     let output = run_hook(&config_path, payload.to_string().as_bytes());
 
@@ -144,7 +156,11 @@ fn hook_request_user_input_allows_tool_but_suppresses_unconfirmed_task_identity(
     .unwrap();
     write_config(&config_path, &config);
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
 
     let output = run_hook(
         &config_path,
@@ -238,7 +254,11 @@ fn hook_request_user_input_invalid_stdin_fails_open_without_stdout_or_recording(
         assert!(!stderr.contains("not-json"));
     }
 
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     assert!(db.list_probe_events(10).unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
@@ -291,7 +311,11 @@ fn hook_request_user_input_resolved_screenshot_calls_have_zero_side_effects() {
 fn hook_request_user_input_missing_or_invalid_transcript_has_zero_side_effects() {
     let (root, config_path, config) = test_config("missing-transcript");
     write_config(&config_path, &config);
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let missing = root.join("missing-rollout.jsonl");
 
     for transcript in [None, Some(missing.as_path())] {
@@ -313,7 +337,11 @@ fn hook_request_user_input_missing_or_invalid_transcript_has_zero_side_effects()
 fn hook_request_user_input_answer_during_confirmation_window_is_not_recorded() {
     let (root, config_path, config) = test_config("answered-during-window");
     write_config(&config_path, &config);
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
 
     let output = run_hook(
@@ -341,7 +369,11 @@ fn hook_request_user_input_answer_during_confirmation_window_is_not_recorded() {
 fn hook_request_user_input_duplicate_pending_schedules_record_once() {
     let (root, config_path, config) = test_config("duplicate-pending");
     write_config(&config_path, &config);
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
     let payload = pre_tool_use_payload(Some(&transcript));
 

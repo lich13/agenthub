@@ -167,7 +167,7 @@ export async function remoteSelect(target: MachineTarget, machineId?: string) {
 }
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
-const reads = new Set(["github.ci.status", "cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grokbot.list", "grokbot.detail", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "antigravity.list", "antigravity.detail", "dsh.list", "dsh.detail", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
+const reads = new Set(["cleanup.unifiedDryRun", "github.ci.status", "cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grokbot.list", "grokbot.detail", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "antigravity.list", "antigravity.detail", "dsh.list", "dsh.detail", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
 // Local desktop subscriptions/catalogs are reads, but never routed to remote.invoke.
 reads.add("codex.desktop.attach");
 reads.add("codex.desktop.catalog");

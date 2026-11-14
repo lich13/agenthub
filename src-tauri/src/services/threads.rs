@@ -2,7 +2,6 @@ use agenthub_core::{
     codex::{
         set_thread_archived, set_thread_title, thread_detail_page, ThreadDetail, ThreadSummary,
     },
-    db::JobRecord,
     services::{
         jobs as job_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
@@ -27,8 +26,7 @@ pub(crate) fn thread_summaries_with_query(
     let paths = state.codex_paths();
     let use_cases = AgentHubUseCases::new(state.platform()).threads();
     let plan = use_cases.list_read(query)?;
-    let running_jobs = state.db.running_thread_jobs()?;
-    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan, running_jobs)?;
+    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan)?;
     let view = thread_service::thread_list_read_model(inputs, plan.query);
     Ok(view)
 }
@@ -136,13 +134,7 @@ fn load_thread_detail_read_model(
     else {
         return Ok(None);
     };
-    let active_job = active_job_for_thread(state, &detail.summary.id)?;
-    let view = thread_service::thread_detail_read_model(detail, active_job);
-    let mut detail = view;
+    let mut detail = detail;
     agenthub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
     Ok(Some(detail))
-}
-
-fn active_job_for_thread(state: &DesktopState, thread_id: &str) -> Result<Option<JobRecord>> {
-    state.db.running_job_for_thread(thread_id)
 }

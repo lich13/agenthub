@@ -22,6 +22,7 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   apt-get update >&2
   DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates python3 minisign >&2
 fi
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
 work="$(mktemp -d)"
 cat > "${work}/updater.pub" <<'AGENTHUB_PUBLIC_KEY'
 @PUBLIC_KEY@

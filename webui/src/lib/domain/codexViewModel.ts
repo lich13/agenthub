@@ -2,7 +2,7 @@ import { compareSessionMessageTime } from "./sessionSelection";
 import { machineScope } from "../runtime";
 import { visibleMarkdown } from "./visibleMarkdown";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
-import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
+import { isNoisyThreadTitle } from "../threadMessageStore";
 import { capabilitiesForInput, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
 export type View = "codex" | "grok" | "grokbot" | "claude" | "antigravity" | "dsh" | "probe" | "ops";
@@ -98,15 +98,6 @@ export function applyThreadTitleOverrideToDetail(detail: ThreadDetail): ThreadDe
   return summary === detail.summary ? detail : { ...detail, summary: summary as ThreadSummary };
 }
 
-export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
-  const effectiveIncoming = applyThreadTitleOverride(incoming);
-  const next = { ...current, ...effectiveIncoming };
-  next.title = mergeThreadSummaryTitle(current.title, effectiveIncoming.title);
-  if (!isUserVisibleLastEventKind(effectiveIncoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
-    next.last_event_kind = current.last_event_kind;
-  }
-  return next;
-}
 
 export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
   const visible = filterVisibleThreadSummaries(threads);
@@ -183,7 +174,6 @@ export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSumma
 
 export function isThreadRunning(summary: Partial<ThreadSummary>): boolean {
   if (summary.status === "Running") return true;
-  if (summary.status === "Recent" && Boolean(summary.active_job_id)) return true;
   return false;
 }
 
@@ -205,10 +195,6 @@ export function extractPlanText(value: string): string {
     .trim() || value || "Plan 内容等待 Codex 写入。";
 }
 
-function isUserVisibleLastEventKind(value?: string | null): boolean {
-  const event = value?.trim();
-  return Boolean(event && !event.startsWith("app-server.") && !event.startsWith("panel."));
-}
 
 function nonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;

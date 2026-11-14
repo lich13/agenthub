@@ -220,7 +220,11 @@ impl Fixture {
         config.probe.notifications.notify_claude = true;
         config.probe.notifications.notify_claude_reply_needed = true;
         config.probe.notifications.server_url = bark.url.clone();
-        let db = PanelDb::open(root.join("panel.sqlite")).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            root.join("panel.sqlite"),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, TOKEN.as_bytes())
             .unwrap();
         db.sync_notification_channels(&config).unwrap();
@@ -391,7 +395,11 @@ async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay
     assert!(outcomes.iter().all(|outcome| outcome.sent
         || (!outcome.skipped && outcome.status.as_deref() == Some("retrying"))));
     assert_eq!(fixture.bark.count(), 1);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let duplicate = codex(
         &|| Ok(fixture.config.clone()),
         &reopened,
@@ -432,7 +440,11 @@ async fn an_initial_lease_claimed_elsewhere_stays_retrying_at_repeated_entrances
             &serde_json::to_value(&candidate).unwrap(),
         )
         .unwrap());
-    let other_entrance = PanelDb::open(fixture.db.path()).unwrap();
+    let other_entrance = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let lease = other_entrance
         .claim_notification_delivery(NotificationChannel::Bark, &key)
         .unwrap()
@@ -560,7 +572,11 @@ async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
                 "Grok"
             }
         ));
-        let reopened = PanelDb::open(fixture.db.path()).unwrap();
+        let reopened = PanelDb::open_with_secret_box(
+            fixture.db.path(),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let duplicate = native(
             &|| Ok(fixture.config.clone()),
             &reopened,
@@ -597,7 +613,11 @@ async fn invalid_bark_acknowledgement_is_retried_and_recovers_after_restart() {
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 2);
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
@@ -633,7 +653,11 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         assert_eq!(fixture.bark.count(), 1);
         for attempt in 2..=3 {
             fixture.due_now(&key);
-            let reopened = PanelDb::open(fixture.db.path()).unwrap();
+            let reopened = PanelDb::open_with_secret_box(
+                fixture.db.path(),
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
             retry_pending(&fixture.config, &reopened).await.unwrap();
             assert_eq!(fixture.bark.count(), attempt);
         }
@@ -696,7 +720,11 @@ async fn a_successful_bark_retry_updates_the_existing_business_event() {
         .unwrap();
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 2);
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
@@ -967,7 +995,11 @@ async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
     fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
@@ -1020,7 +1052,11 @@ async fn permanent_http_and_apns_rejections_never_enter_retry_queue() {
         assert!(!rendered.contains(TOKEN));
         assert!(!rendered.contains(&fixture.bark.url));
         fixture.due_now(&key);
-        let reopened = PanelDb::open(fixture.db.path()).unwrap();
+        let reopened = PanelDb::open_with_secret_box(
+            fixture.db.path(),
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         retry_pending(&fixture.config, &reopened).await.unwrap();
         assert_eq!(fixture.bark.count(), 1);
     }
@@ -1217,7 +1253,11 @@ async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
     fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
     codex(
         &|| Ok(fixture.config.clone()),
@@ -1279,7 +1319,11 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
     assert_eq!(first.confirmed_chunks, 1);
     assert_eq!(fixture.bark.count(), 2);
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
     let outcome = reopened
         .notification_delivery_outcome(NotificationChannel::Bark, &key)
@@ -1418,7 +1462,11 @@ async fn concurrent_retry_workers_claim_one_http_attempt() {
     .unwrap();
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let (first, second) = tokio::join!(
         retry_pending(&fixture.config, &fixture.db),
         retry_pending(&fixture.config, &reopened)
@@ -1550,7 +1598,11 @@ async fn github_ci_delivery_uses_run_link_and_deduplicates_after_restart() {
         .unwrap();
     assert_eq!(fixture.bark.count(), 1);
     assert_eq!(fixture.bark.requests()[0].body["url"], event.run.html_url);
-    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     github_ci(&|| Ok(fixture.config.clone()), &reopened, event.clone())
         .await
         .unwrap();

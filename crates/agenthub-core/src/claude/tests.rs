@@ -724,7 +724,11 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     let mut config = Config::default();
     config.probe.notifications.enabled = true;
     let dbpath = f.root.join("panel.sqlite");
-    let db = PanelDb::open(&dbpath).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &dbpath,
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(
         db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
@@ -754,7 +758,11 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     db.finish_native_delivery(&pending[0], json!({"sent":true}))
         .unwrap();
     drop(db);
-    let db = PanelDb::open(&dbpath).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        &dbpath,
+        crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
             .unwrap(),
@@ -2255,11 +2263,24 @@ fn independent_background_wake_keeps_the_earlier_completion_and_plain_notices_op
     );
 
     // Workflows count like agents; a zero count is not pending.
+    let changed_at = fs::metadata(&f.file).unwrap().modified().unwrap();
     rows[2]["pendingWorkflowCount"] = json!(1);
     f.write(&rows[..3]);
+    fs::File::options()
+        .write(true)
+        .open(&f.file)
+        .unwrap()
+        .set_modified(changed_at + std::time::Duration::from_secs(1))
+        .unwrap();
     assert!(reader::read(&f.file).unwrap().native_events.is_empty());
     rows[2]["pendingWorkflowCount"] = json!(0);
     f.write(&rows[..3]);
+    fs::File::options()
+        .write(true)
+        .open(&f.file)
+        .unwrap()
+        .set_modified(changed_at + std::time::Duration::from_secs(2))
+        .unwrap();
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
 
     // Without a native origin and prompt identity the record stays context.
@@ -2478,7 +2499,7 @@ fn failure_evidence_written_after_the_hook_is_not_resumed_execution() {
 }
 
 #[test]
-fn execute_claude_delete_rejects_out_of_bounds_running_and_stops_on_partial_failure() {
+fn execute_claude_delete_rejects_out_of_bounds_allows_running_and_stops_on_partial_failure() {
     let f = Fixture::new();
     f.complete();
 
@@ -2494,7 +2515,7 @@ fn execute_claude_delete_rejects_out_of_bounds_running_and_stops_on_partial_fail
     )
     .is_err());
 
-    // 2. Actively running Claude session is rejected without deleting files.
+    // 2. Ordinary history deletion does not stop or depend on the owner.
     let cwd = f.root.join("workspace");
     activity::test_owner(Some("native-fixture"), &cwd);
     let err = execute_claude_delete(
@@ -2506,8 +2527,9 @@ fn execute_claude_delete_rejects_out_of_bounds_running_and_stops_on_partial_fail
         },
     );
     activity::test_owner(None, Path::new("/fixture"));
-    assert!(err.is_err());
-    assert!(f.file.exists());
+    assert!(err.unwrap().deleted);
+    assert!(!f.file.exists());
+    f.complete();
 
     // 3. Partial failure stops immediately and preserves subsequent sidecar / shared index targets.
     #[cfg(unix)]
@@ -2575,4 +2597,39 @@ fn notification_snapshots_reuse_lightweight_probe_cache_without_rereading_or_tou
     let third = notification_snapshots(&f.paths).unwrap();
     assert!(reader::BODY_RECORDS.with(|c| c.get()) >= 4);
     assert_eq!(third.streams[0].events.len(), 2);
+}
+
+#[test]
+fn ordinary_delete_skips_transcript_parsing_and_unknown_registrations() {
+    let f = Fixture::new();
+    fs::write(&f.file, b"unreadable transcript fixture\n").unwrap();
+    let registrations = f.paths.config.join("sessions");
+    fs::create_dir_all(&registrations).unwrap();
+    fs::write(registrations.join("broken.json"), b"broken").unwrap();
+    fs::write(
+        registrations.join("other.json"),
+        b"{\"sessionId\":\"other\"}",
+    )
+    .unwrap();
+    fs::write(
+        registrations.join("selected.json"),
+        b"{\"sessionId\":\"native-fixture\"}",
+    )
+    .unwrap();
+    reader::BODY_RECORDS.with(|count| count.set(0));
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: f.key(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted, "{:?}", result.residuals);
+    assert!(!f.file.exists());
+    assert!(!registrations.join("selected.json").exists());
+    assert!(registrations.join("broken.json").exists());
+    assert!(registrations.join("other.json").exists());
+    reader::BODY_RECORDS.with(|count| assert_eq!(count.get(), 0));
 }

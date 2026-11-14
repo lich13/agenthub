@@ -73,7 +73,6 @@ pub struct UpdateStatus {
     pub state: UpdateState,
     pub failure_category: Option<UpdateFailureCategory>,
     pub recommended_action: String,
-    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -144,7 +143,6 @@ pub fn update_status_for_surface(
         UpdateState::Idle
     };
     let method = execution_method_for_surface(platform.kind, host_surface);
-    let capabilities = capabilities_for_surface(platform.kind, host_surface);
     let recommended_action = recommended_action(platform.kind, method, update_available);
 
     UpdateStatus {
@@ -156,7 +154,6 @@ pub fn update_status_for_surface(
         state,
         failure_category,
         recommended_action,
-        capabilities,
     }
 }
 
@@ -361,34 +358,6 @@ fn execution_method_for_surface(
             UpdateExecutionMethod::MacosTauriUpdater
         }
         _ => UpdateExecutionMethod::Unsupported,
-    }
-}
-
-fn capabilities_for_surface(platform: PlatformKind, host_surface: HostSurface) -> Vec<String> {
-    match (platform, host_surface) {
-        (PlatformKind::Linux, HostSurface::LinuxServerApi) => [
-            "check",
-            "confirm_install",
-            "job_history",
-            "sha256_verification",
-            "systemd_health_check",
-            "rollback",
-            "prune_backups",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        (PlatformKind::Linux | PlatformKind::Macos, HostSurface::DesktopEmbeddedTauri) => [
-            "check",
-            "confirm_install",
-            "job_history",
-            "signature_verification",
-            "restart_after_install",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        _ => Vec::new(),
     }
 }
 

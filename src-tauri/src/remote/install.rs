@@ -33,7 +33,7 @@ pub async fn run(alias: &str, sudo: bool) -> Result<(), String> {
             .find_map(|line| line.strip_prefix("AGENTHUB_INSTALL_ERROR:"));
         return Err(match reason {
  Some("system")=>"安装需要 Linux x86_64、systemd 和管理员权限",
- Some("dependencies")=>"系统依赖安装失败；Ubuntu/Debian 请检查软件源，其他发行版请先安装 curl、Python 3 和 Minisign",
+ Some("dependencies")=>"系统依赖安装失败；Ubuntu/Debian 请检查软件源，其他发行版请先安装 curl、Python 3.11+ 和 Minisign",
  Some("download")=>"服务包下载失败，请检查远端网络后重试",
  Some("signature")=>"服务包签名或版本校验失败",
  Some("install")=>"服务安装失败，安装器已尝试恢复旧版",
