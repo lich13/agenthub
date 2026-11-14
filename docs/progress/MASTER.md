@@ -4,7 +4,7 @@
 
 当前源码版本为 **2.1.14**：批量删除合并共享索引写回并复用扫描，Claude 通知复用增量读取，Grok 来源暂时不可读时保留有限重试，Codex 闲置历史随查询缓存释放，修正 Grok 普通删除限制与更新临时目录生命周期。API 协议保持 2、数据库 schema 保持 3。
 
-最近正式版本为 [**v2.1.13**](https://github.com/lich13/agenthub/releases/tag/v2.1.13)，服务端与 Mac 已安装该版。安装器失败时回退，成功后清理临时备份；此前“保留安装器回退备份”的表述不准确。
+最近正式版本为 [**v2.1.14**](https://github.com/lich13/agenthub/releases/tag/v2.1.14)，[标签 CI](https://github.com/lich13/agenthub/actions/runs/43564050076) 已通过。服务端已部署该版，服务为 active、健康为 ok；Mac 已原地更新至该版并启动。未执行回退，成功安装已清理临时备份；真实删除、历史切换及通知实收待用户验收。
 
 ## v2.1.13 源码与资源比较
 
