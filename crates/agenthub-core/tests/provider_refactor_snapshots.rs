@@ -145,6 +145,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     let claude_full = claude_session_detail(
         &claude_paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: claude_summary.session_key.clone(),
             limit: None,
             before: None,
@@ -154,6 +155,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     let claude_latest = claude_session_detail(
         &claude_paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: claude_summary.session_key.clone(),
             limit: Some(4),
             before: None,
@@ -167,6 +169,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     let claude_older = claude_session_detail(
         &claude_paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: claude_summary.session_key.clone(),
             limit: Some(4),
             before: Some(claude_before),
@@ -199,6 +202,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     let claude_damaged = claude_session_detail(
         &claude_paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: claude_damaged_summary.session_key.clone(),
             limit: None,
             before: None,

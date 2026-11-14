@@ -907,6 +907,13 @@
       "ClaudeDetailRequest": {
         "fields": [
           {
+            "name": "agent_id",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
             "name": "session_key",
             "serde": [],
             "type": "String"
@@ -1052,6 +1059,20 @@
       },
       "ClaudeSessionDetail": {
         "fields": [
+          {
+            "name": "agent",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < crate :: codex :: subagents :: SubagentActivity >"
+          },
+          {
+            "name": "subagents",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < crate :: codex :: subagents :: SubagentCollection >"
+          },
           {
             "name": "timeline",
             "serde": [
@@ -4186,7 +4207,7 @@
           {
             "name": "events",
             "serde": [],
-            "type": "Vec < NativeTurnEvent >"
+            "type": "std :: sync :: Arc < Vec < NativeTurnEvent > >"
           }
         ],
         "kind": "struct",
@@ -8553,6 +8574,11 @@
           },
           {
             "fields": [],
+            "name": "ClaudeSubagents",
+            "serde": []
+          },
+          {
+            "fields": [],
             "name": "CodexDesktop",
             "serde": []
           },
@@ -8628,6 +8654,13 @@
       },
       "SystemCapabilities": {
         "fields": [
+          {
+            "name": "claude_subagents",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "bool"
+          },
           {
             "name": "threads",
             "serde": [],
@@ -10223,7 +10256,7 @@
     "webui/src/lib/api/claude.ts": {
       "calls": [
         "callCommand(\"claude.list\",query)",
-        "callCommand(\"claude.detail\",{sessionKey,limit:160,before})",
+        "callCommand(\"claude.detail\",{sessionKey,limit:160,before,...(agentId?{agentId}:{})})",
         "callCommand(\"claude.rename\",{sessionKey,title})",
         "callCommand(\"claude.deletePreview\",{sessionKey})",
         "invokeNative<ClaudeOwnershipDiagnostics>(\"claude.ownershipDiagnostics\",{sessionKey})",
@@ -10459,14 +10492,14 @@
         "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
         "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint?:string};",
         "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number;residuals?:string[]};",
-        "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
+        "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;agentId?:string;limit?:number;before?:string};",
         "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null;assistantPhase?:\"intermediate\"|\"final\"|null};",
         "ClaudeHooksAction": "exporttypeClaudeHooksAction=\"status\"|\"install\"|\"remove\";",
         "ClaudeHooksRequest": "exporttypeClaudeHooksRequest={action:ClaudeHooksAction;confirmed?:boolean};",
         "ClaudeHooksStatus": "exporttypeClaudeHooksStatus={installed:boolean;managedCount:number;changed:boolean;configPath?:string};",
         "ClaudeOwnershipDiagnostics": "exporttypeClaudeOwnershipDiagnostics={ownership:string;reasonCodes:string[];processes:ClaudeOwnershipProcess[]};",
         "ClaudeOwnershipProcess": "exporttypeClaudeOwnershipProcess={pid:number;role:string;registrationVerified:boolean;mismatchedFields:string[]};",
-        "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
+        "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={agent?:SubagentActivity;subagents?:SubagentCollection;timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
         "ClaudeSessionSummary": "exporttypeClaudeSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;readWarning?:string|null;canRename:boolean;renameBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;};",
         "CodexConfig": "exporttypeCodexConfig={model?:string|null;service_tier?:string|null;reasoning_effort?:string|null;cwd?:string|null;permission_profile?:string|null;approval_policy?:string|null;sandbox_mode?:string|null;network_access?:boolean|null;collaboration_mode?:string|null;};",
         "CodexMessage": "exporttypeCodexMessage={role:string;kind:string;text:string;created_at?:string|null;};",
@@ -10522,7 +10555,7 @@
         "SubagentCollection": "exporttypeSubagentCollection={agents:SubagentActivity[];counts:Record<SubagentActivity[\"status\"],number>;complete:boolean;warning?:string|null;};",
         "SubagentDetailRequest": "exporttypeSubagentDetailRequest={rootThreadId:string;agentId:string;limit?:number;before?:string|null;};",
         "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
-        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;grokbot_sessions?:boolean;github_ci?:boolean;grokbot_notifications?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
+        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;grokbot_sessions?:boolean;github_ci?:boolean;grokbot_notifications?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;claude_subagents?:boolean;};",
         "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
         "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
         "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",

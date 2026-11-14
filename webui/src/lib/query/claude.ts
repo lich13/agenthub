@@ -4,6 +4,7 @@ import { deleteClaudeSession, getClaudeOwnershipDiagnostics, getClaudeSession, l
 import type { ClaudeDeleteRequest, ClaudeSessionDetail, ClaudeSessionSummary } from "../../types";
 import { claudeHistoryAdapter } from "./historyWindows";
 import { visiblePollInterval } from "./shared";
+import { machineScope } from "./connection";
 import { usePagedHistory } from "./usePagedHistory";
 
 export function useClaudeSessions(q: string) {
@@ -30,4 +31,21 @@ export function useClaudeActions() {
     preview: useMutation({ mutationFn: (sessionKey: string) => previewClaudeSessionDelete(sessionKey) }),
     remove: useMutation({ mutationFn: (request: ClaudeDeleteRequest) => deleteClaudeSession(request), onSuccess: refresh })
   };
+}
+
+export function useClaudeSubagentDetail(parentKey: string, agentId?: string) {
+  return usePagedHistory({
+    ...claudeHistoryAdapter,
+    queryKey: ["claude-subagent", machineScope(), parentKey, agentId],
+    enabled: Boolean(agentId),
+    read: async (before, signal) => {
+      const response = await getClaudeSession(parentKey, before, agentId);
+      if (signal.aborted) throw new DOMException("请求已取消", "AbortError");
+      if (response.summary.sessionKey !== parentKey || response.agent?.agentId !== agentId) {
+        throw new Error("子智能体记录已变化，请重新打开");
+      }
+      return response;
+    },
+    interval: () => 5000,
+  });
 }

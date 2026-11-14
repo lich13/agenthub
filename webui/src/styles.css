@@ -802,6 +802,14 @@ summary::-webkit-details-marker, .timeline-rail-marks::-webkit-scrollbar, .sessi
   > svg:first-child { position: absolute; left: -26px; width: 16px; color: var(--fg2); }
   > .subagent-state { flex: none; }
 }
+.claude-subagent-panel {
+  .subagent-panel-header > div { display: flex; align-items: center; gap: 10px; }
+  .subagent-panel-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subagent-panel-header > div > span, .subagent-state { flex: none; font-size: 13px; color: var(--m); }
+  .claude-subagent-list { padding: 12px 14px; }
+  .subagent-list-item > .subagent-state { flex: none; }
+}
+.claude-reading-layout { display: flex; flex: 1; min-height: 0; position: relative; overflow: hidden; > .timeline-reading-shell { min-width: 0; } }
 .subagent-panel {
   min-height: 0; border-left: var(--b1);
   &.docked { flex: 0 0 420px; width: 420px; }

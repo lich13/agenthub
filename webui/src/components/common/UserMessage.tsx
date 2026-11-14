@@ -10,9 +10,10 @@ import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import { CopyReplyButton } from "./CopyReplyButton";
 import { FilePathLink } from "./FilePathLink";
 
-export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string; rootThreadId?: string } | null>(null);
+export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string; rootThreadId?: string; attachments?: "names" } | null>(null);
 
 export function UserMessage({ message, text = "", activityId = "user-message", timelineId, timelineAliases = [] }: { message?: UserMessageContent | null; text?: string; activityId?: string; timelineId?: string; timelineAliases?: string[] }) {
+  const scope = useContext(UserMessageScope);
   const body = message?.text ?? text;
   const projection = useMemo(() => projectUserMessage(body, message?.contextBlocks), [body, message?.contextBlocks]);
   const segments = useMemo(() => userMessageSegments(projection.text, projection.contextBlocks), [projection]);
@@ -21,7 +22,7 @@ export function UserMessage({ message, text = "", activityId = "user-message", t
   const reveal = matchesTimelinePosition(positionKey, timelineId ?? identity, timelineAliases);
   if (!segments.length && !message?.attachments.length && !projection.contextBlocks.length) return null;
   return <article className="user-message" data-timeline-id={timelineId ?? identity} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined}>
-    {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
+    {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => scope?.attachments === "names" ? <div key={attachment.id} className="user-attachment file-attachment"><File size={18} /><span>{attachment.name}</span></div> : <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
     {!!projection.contextBlocks.length && <ActivityDetails className="user-instructions instruction-file execution-command" stateKey={`${identity}:context`} initiallyOpen={false} reveal={reveal} summary={<span className="tool-title">上下文</span>}>
       {() => <div className="user-instructions-body instruction-file-body">{projection.contextBlocks.map(block => visibleContextText(block.text)).join("\n\n")}</div>}
     </ActivityDetails>}

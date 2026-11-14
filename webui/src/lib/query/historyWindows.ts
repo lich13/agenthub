@@ -48,7 +48,7 @@ function preservedTimeline<T extends { timeline?: ClaudeSessionDetail["timeline"
 
 export function retainClaudeHistory(previous: unknown, incoming: unknown): InfiniteData<ClaudeSessionDetail> {
   return retainHistoryWindows<ClaudeSessionDetail>(previous, incoming, {
-    identity: page => JSON.stringify([page.summary.sessionKey, page.summary.id]),
+    identity: page => JSON.stringify([page.summary.sessionKey, page.summary.id, page.agent?.agentId]),
     total: page => page.totalEvents,
     merge: (oldPage, page) => {
       const boundary = retainedBoundary(

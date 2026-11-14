@@ -3,6 +3,7 @@ export type RuntimeContext = { kind: "desktop" };
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "desktop"; hostSurface: HostSurface; codexStatePaths: boolean;
   threadSubagents?: boolean;
+  claudeSubagents?: boolean;
   hiddenCleanupScan?: boolean;
   antigravityNotifications?: boolean;
   dshNotifications?: boolean;
@@ -28,6 +29,7 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     codexStatePaths: remote && core.systemd, updatePrune: remote && core.prune_backups,
     // Only enable subagent reading after capability bootstrap confirms support.
     threadSubagents: core.thread_subagents === true,
+    claudeSubagents: core.claude_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
     antigravityNotifications: !remote && core.antigravity_notifications === true,
     dshNotifications: !remote && core.dsh_notifications === true,

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { SubagentDetailResponse } from "../../types";
+import type { ClaudeSessionDetail, SubagentDetailResponse } from "../../types";
+import { getClaudeSession } from "../api/claude";
+import { useClaudeSubagentDetail } from "./claude";
 import { getSubagentDetail } from "../api/threads";
 import { machineScope } from "./connection";
 import { useSubagentDetail } from "./subagents";
 import { usePagedHistory } from "./usePagedHistory";
 
 vi.mock("./usePagedHistory", () => ({ usePagedHistory: vi.fn() }));
+vi.mock("../api/claude", () => ({ getClaudeSession: vi.fn() }));
 vi.mock("../api/threads", () => ({ getSubagentDetail: vi.fn() }));
 vi.mock("./connection", () => ({ machineScope: vi.fn(() => "local:0") }));
 
@@ -145,5 +148,48 @@ describe("subagent detail queries", () => {
     legacy.agent.status = "completed";
     expect(legacy.detail.subagents).toBeUndefined();
     expect(query.interval(legacy)).toBe(5000);
+  });
+});
+
+
+describe("Claude child detail queries", () => {
+  function childOptions(parent = "parent-key", agent: string | undefined = "child-fixture") {
+    useClaudeSubagentDetail(parent, agent);
+    return vi.mocked(usePagedHistory).mock.calls.at(-1)![0] as unknown as Omit<QueryOptions, "read" | "interval"> & {
+      read: (before: string | undefined, signal: AbortSignal) => Promise<ClaudeSessionDetail>; interval: () => number;
+    };
+  }
+  const child = (): ClaudeSessionDetail => ({
+    summary: { id: "parent", sessionKey: "parent-key", title: "Parent", cwd: "/fixture", path: "/fixture/parent.jsonl", messageCount: 0, status: "running", canRename: true, canDelete: true },
+    agent: { agentId: "child-fixture", name: "Fixture child", status: "unknown", available: true }, events: [], totalEvents: 0, hasMore: false,
+  });
+  test("all pages pass parent and agent, unknown keeps polling and unloaded selections do not fetch", async () => {
+    vi.mocked(getClaudeSession).mockResolvedValue(child());
+    const query = childOptions();
+    await query.read(undefined, new AbortController().signal);
+    await query.read("oldest-child-event", new AbortController().signal);
+    expect(getClaudeSession).toHaveBeenNthCalledWith(1, "parent-key", undefined, "child-fixture");
+    expect(getClaudeSession).toHaveBeenNthCalledWith(2, "parent-key", "oldest-child-event", "child-fixture");
+    expect(query.interval()).toBe(5000);
+    expect(childOptions("parent-key", "").enabled).toBe(false);
+    expect(childOptions("other-parent").queryKey).not.toEqual(query.queryKey);
+    expect(childOptions("parent-key", "other-child").queryKey).not.toEqual(query.queryKey);
+    vi.mocked(machineScope).mockReturnValue("remote:1");
+    expect(childOptions().queryKey).not.toEqual(query.queryKey);
+  });
+  test.each(["parent", "agent"])("rejects mismatched %s identity", async field => {
+    const response = child();
+    if (field === "parent") response.summary.sessionKey = "other-parent";
+    else response.agent!.agentId = "other-agent";
+    vi.mocked(getClaudeSession).mockResolvedValue(response);
+    await expect(childOptions().read(undefined, new AbortController().signal)).rejects.toThrow("子智能体记录已变化");
+  });
+  test("aborted selections discard late child responses", async () => {
+    let finish!: (data: ClaudeSessionDetail) => void;
+    vi.mocked(getClaudeSession).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const controller = new AbortController();
+    const pending = childOptions().read(undefined, controller.signal);
+    controller.abort(); finish(child());
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });

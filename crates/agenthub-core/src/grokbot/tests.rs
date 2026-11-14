@@ -108,7 +108,7 @@ fn explicit_requests_only_and_no_terminal_inference() {
     f.replica(json!([{"kind":"send-message","id":"permission","timestampMs":2000,"message":{"type":"local-tool-permission","ask":{"status":"allowed","requestId":"request"}}}]));
     assert!(scan_events(&f).is_empty());
 }
-fn scan_events(f: &Fixture) -> Vec<NativeTurnEvent> {
+fn scan_events(f: &Fixture) -> Arc<Vec<NativeTurnEvent>> {
     scan(&f.paths).unwrap().streams.remove(0).events
 }
 #[test]

@@ -20,8 +20,8 @@ fn kinds(s: &State) -> Vec<String> {
         .unwrap()
         .unwrap()
         .events
-        .into_iter()
-        .map(|e| e.kind)
+        .iter()
+        .map(|e| e.kind.clone())
         .collect()
 }
 #[test]

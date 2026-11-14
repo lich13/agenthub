@@ -375,7 +375,7 @@ fn notification_snapshots_from_dirs(
                 identity: identity.clone(),
                 record_count: events.len() as u64,
                 settled_count,
-                events: turns,
+                events: turns.into(),
             };
             let (after_identity, after_stamp) = grok_probe_cache_stamp(&event_path, &updates_path)?;
             if after_identity == identity && after_stamp == stamp {

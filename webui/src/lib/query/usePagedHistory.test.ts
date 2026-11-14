@@ -70,6 +70,10 @@ function subagentPage(rows: number[], options: PageOptions = {}): SubagentDetail
   };
 }
 
+function claudeSubagentPage(rows: number[], options: PageOptions = {}): ClaudeSessionDetail {
+  return { ...claudePage(rows, options), agent: { agentId: "child-fixture", name: "Fixture child", status: "unknown", available: true } };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -202,6 +206,7 @@ function providerTests<Page>(name: string, page: (rows: number[], options?: Page
 
 providerTests("Codex", codexPage, codexHistoryAdapter, index => `b:${index}:row-${index}`, page => Object.fromEntries(page.blocks.map(block => [block.id, block.text])), index => `a:row-${index}`);
 providerTests("Claude", claudePage, claudeHistoryAdapter, rowId, page => Object.fromEntries(page.events.map(event => [event.id, event.result])));
+providerTests("Claude child", claudeSubagentPage, claudeHistoryAdapter, rowId, page => Object.fromEntries(page.events.map(event => [event.id, event.result])));
 providerTests("Grok", grokPage, grokHistoryAdapter, rowId, page => Object.fromEntries(page.events.map(event => [event.id!, event.text])));
 providerTests("Subagent", subagentPage, subagentHistoryAdapter, index => `b:${index}:row-${index}`, page => Object.fromEntries(page.detail.blocks.map(block => [block.id, block.text])), index => `a:row-${index}`);
 

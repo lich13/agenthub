@@ -16,15 +16,15 @@ export function executionSummary(group: ExecutionGroup) {
     return "integration";
   }));
   const words = [kinds.has("read") && "读取文件", kinds.has("search") && "搜索内容", kinds.has("command") && "运行命令", kinds.has("integration") && "调用工具"].filter(Boolean);
-  const prefix = kinds.has("integration") ? `${group.running ? "正在使用" : "已使用"} ${group.provider} 集成` : group.running ? "正在" : "已";
+  const prefix = group.recordedOnly ? "" : kinds.has("integration") ? `${group.running ? "正在使用" : "已使用"} ${group.provider} 集成` : group.running ? "正在" : "已";
   return { label: `${prefix}${words.join("、")}`, Icon: kinds.has("integration") ? Blocks : kinds.has("command") ? Terminal : kinds.has("search") ? Search : BookOpen };
 }
 
 export const ExecutionCommandRow = memo(function CommandView({ command }: { command: ExecutionCommand }) {
-  return <ActivityDetails timelineId={command.id} timelineAliases={command.sourceIds} className="execution-command" stateKey={command.id} initiallyOpen={!command.instructionFile && command.status !== "completed"} summary={<>
+  return <ActivityDetails timelineId={command.id} timelineAliases={command.sourceIds} className="execution-command" stateKey={command.id} initiallyOpen={!command.instructionFile && (command.status === "failed" || command.status === "running")} summary={<>
     <Terminal size={15} aria-hidden="true" /><span className="tool-title" title={command.instructionFile ? "AGENTS.md" : visibleMarkdown(`${command.title} ${command.preview ?? ""}`)}>{command.instructionFile ? "AGENTS.md" : <>{visibleMarkdown(command.title)}{command.preview && <span className="command-preview"> {visibleMarkdown(command.preview)}</span>}</>}</span>
     {command.status === "running" && <RunningIndicator />}
-    <small>{{ completed: "已完成", running: "运行中", failed: "失败" }[command.status]}</small>
+    <small>{{ completed: "已完成", running: "运行中", failed: "失败", unknown: "未见结果" }[command.status]}</small>
   </>}>
     {() => command.sections.length ? command.sections.map(section => <div className="execution-section" key={`${section.label}:${activityFingerprint(section.text)}`}>
       <span>{section.label}</span><ToolOutput text={section.text} />

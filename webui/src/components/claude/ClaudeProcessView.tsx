@@ -20,7 +20,7 @@ export function ClaudeProcessView({ group, children }: { group: ClaudeProcessGro
         )),
   );
   const Icon = group.segmentCount > 0 && group.toolCount > 0 ? Sparkles : Brain;
-  const label = group.running
+  const label = group.recordedOnly ? "工作记录" : group.running
     ? group.segmentCount > 0 && group.toolCount > 0
       ? "正在思考与执行"
       : group.segmentCount > 0

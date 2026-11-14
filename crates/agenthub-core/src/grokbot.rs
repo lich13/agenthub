@@ -699,7 +699,7 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             identity: session_key,
             record_count: count,
             settled_count,
-            events,
+            events: events.into(),
         });
     }
     Ok(scan)

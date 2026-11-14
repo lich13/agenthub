@@ -60,8 +60,8 @@ export type ClaudeSessionSummary = {
   readError?: string | null;
 };
 export type ClaudeHistoryEvent = { id: string; turnId?: string | null; result?: string | null; userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null; assistantPhase?: "intermediate" | "final" | null };
-export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
-export type ClaudeSessionDetail = { timeline?: TimelineEntry[]; afterCursor?: string | null; history?: HistoryMetadata | null; summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
+export type ClaudeDetailRequest = { sessionKey: string; agentId?: string; limit?: number; before?: string };
+export type ClaudeSessionDetail = { agent?: SubagentActivity; subagents?: SubagentCollection; timeline?: TimelineEntry[]; afterCursor?: string | null; history?: HistoryMetadata | null; summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
 export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; paths?: string[]; fingerprint: string; fileCount: number; bytes: number; warnings?: string[] | null };
 export type ClaudeOwnershipProcess = { pid: number; role: string; registrationVerified: boolean; mismatchedFields: string[] };
 export type ClaudeOwnershipDiagnostics = { ownership: string; reasonCodes: string[]; processes: ClaudeOwnershipProcess[] };
@@ -325,6 +325,7 @@ export type SystemCapabilities = {
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;
   thread_subagents?: boolean;
+  claude_subagents?: boolean;
 };
 
 export type SystemCapabilitiesResponse = {

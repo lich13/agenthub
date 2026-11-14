@@ -179,7 +179,7 @@ mod tests {
             identity: "account:thread".into(),
             record_count: 1000,
             settled_count: 0,
-            events: vec![event.clone()],
+            events: vec![event.clone()].into(),
         };
         let delivery = agenthub_core::db::NativeDelivery {
             event_key: stream.event_key(&event),
@@ -189,16 +189,16 @@ mod tests {
             title: stream.title.clone(),
             event,
         };
-        stream.events[0].timestamp_ms = 2000;
-        stream.events[0].body = "updated native prompt".into();
+        std::sync::Arc::make_mut(&mut stream.events)[0].timestamp_ms = 2000;
+        std::sync::Arc::make_mut(&mut stream.events)[0].body = "updated native prompt".into();
         let mut scan = NativeScan {
             streams: vec![stream],
             errors: 0,
         };
         assert!(native_event_current(&scan, &delivery).unwrap());
-        scan.streams[0].events.clear();
+        std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
         assert!(!native_event_current(&scan, &delivery).unwrap());
-        scan.streams[0].events.push(delivery.event.clone());
+        std::sync::Arc::make_mut(&mut scan.streams[0].events).push(delivery.event.clone());
         scan.streams[0].session_key = "another:thread".into();
         assert!(!native_event_current(&scan, &delivery).unwrap());
     }
@@ -298,7 +298,8 @@ mod tests {
                     kind: "completion".into(),
                     body: "Unrelated completion stays pending".into(),
                     timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-                }],
+                }]
+                .into(),
             }],
         };
         assert_eq!(
@@ -350,7 +351,8 @@ mod tests {
                 kind: "completion".into(),
                 body: "Fixture completed".into(),
                 timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-            }],
+            }]
+            .into(),
         };
         let scan = NativeScan {
             streams: vec![stream],
@@ -518,8 +520,8 @@ mod tests {
         .unwrap();
         stream.record_count = 3;
         stream.settled_count = 3;
-        stream.events[0].position = 3;
-        stream.events[0].turn_id = "u:b".into();
+        std::sync::Arc::make_mut(&mut stream.events)[0].position = 3;
+        std::sync::Arc::make_mut(&mut stream.events)[0].turn_id = "u:b".into();
         db.stage_native_notifications(
             NativeProvider::Grok,
             &NativeScan {

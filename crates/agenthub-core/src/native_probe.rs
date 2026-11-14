@@ -109,7 +109,7 @@ pub struct NativeStreamSnapshot {
     pub identity: String,
     pub record_count: u64,
     pub settled_count: u64,
-    pub events: Vec<NativeTurnEvent>,
+    pub events: std::sync::Arc<Vec<NativeTurnEvent>>,
 }
 impl NativeStreamSnapshot {
     pub fn key(&self) -> String {

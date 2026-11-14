@@ -47,6 +47,19 @@
         "reset": false,
         "revision": "runtime-epoch-1:784"
       },
+      "subagents": {
+        "agents": [],
+        "complete": false,
+        "counts": {
+          "completed": 0,
+          "creating": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "unknown": 0
+        },
+        "warning": "子智能体记录暂时无法读取"
+      },
       "summary": {
         "canDelete": true,
         "canRename": false,
@@ -213,6 +226,19 @@
         "reset": false,
         "revision": "runtime-epoch-2:3416"
       },
+      "subagents": {
+        "agents": [],
+        "complete": false,
+        "counts": {
+          "completed": 0,
+          "creating": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "unknown": 0
+        },
+        "warning": "子智能体记录暂时无法读取"
+      },
       "summary": {
         "canDelete": true,
         "canRename": true,
@@ -318,6 +344,19 @@
         "epoch": "runtime-epoch-2",
         "reset": false,
         "revision": "runtime-epoch-2:3416"
+      },
+      "subagents": {
+        "agents": [],
+        "complete": false,
+        "counts": {
+          "completed": 0,
+          "creating": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "unknown": 0
+        },
+        "warning": "子智能体记录暂时无法读取"
       },
       "summary": {
         "canDelete": true,
@@ -434,6 +473,19 @@
         "epoch": "runtime-epoch-2",
         "reset": false,
         "revision": "runtime-epoch-2:3416"
+      },
+      "subagents": {
+        "agents": [],
+        "complete": false,
+        "counts": {
+          "completed": 0,
+          "creating": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "unknown": 0
+        },
+        "warning": "子智能体记录暂时无法读取"
       },
       "summary": {
         "canDelete": true,

@@ -38,6 +38,7 @@ pub async fn listClaudeSessions(
 #[tauri::command(rename = "claude.detail")]
 pub async fn getClaudeSession(
     session_key: String,
+    agent_id: Option<String>,
     limit: Option<usize>,
     before: Option<String>,
 ) -> Result<agenthub_core::claude::ClaudeSessionDetail, String> {
@@ -45,6 +46,7 @@ pub async fn getClaudeSession(
         AgentHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .detail(agenthub_core::claude::ClaudeDetailRequest {
+                agent_id,
                 session_key,
                 limit,
                 before,

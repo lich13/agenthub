@@ -7,6 +7,7 @@
   "capabilities": [
     "threads",
     "thread_subagents",
+    "claude_subagents",
     "codex_desktop",
     "jobs",
     "probe",
@@ -23,6 +24,7 @@
     "linux_server_api": [
       "threads",
       "thread_subagents",
+      "claude_subagents",
       "jobs",
       "probe",
       "settings",
@@ -37,6 +39,7 @@
     "desktop_embedded_tauri": [
       "threads",
       "thread_subagents",
+      "claude_subagents",
       "codex_desktop",
       "jobs",
       "probe",

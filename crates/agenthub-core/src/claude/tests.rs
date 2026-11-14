@@ -110,6 +110,7 @@ fn lists_sort_by_conversation_time_and_ignore_metadata_and_tools() {
         claude_session_detail(
             &f.paths,
             &ClaudeDetailRequest {
+                agent_id: None,
                 session_key: latest[0].session_key.clone(),
                 limit: None,
                 before: None
@@ -342,6 +343,7 @@ fn preserves_tools_text_plan_and_native_metadata_with_bounded_paging() {
         let page = claude_session_detail(
             &f.paths,
             &ClaudeDetailRequest {
+                agent_id: None,
                 session_key: f.key(),
                 limit: Some(20),
                 before,
@@ -625,6 +627,7 @@ fn embedded_images_load_lazily_and_invalid_ids_are_rejected() {
     let detail = claude_session_detail(
         &f.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: f.key(),
             before: None,
             limit: None,
@@ -955,6 +958,7 @@ fn claude_summary_list_caches_many_transcripts_and_refreshes_one_append() {
     let detail = claude_session_detail(
         &f.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: updated_target.session_key.clone(),
             limit: None,
             before: None,
@@ -1004,6 +1008,7 @@ fn claude_summary_cache_revalidates_rewrites_truncation_and_atomic_replacement()
         let detail = claude_session_detail(
             &f.paths,
             &ClaudeDetailRequest {
+                agent_id: None,
                 session_key: key.clone(),
                 limit: None,
                 before: None,
@@ -1284,6 +1289,7 @@ fn compatible_warnings_do_not_block_verified_inactive_management() {
     let detail = claude_session_detail(
         &f.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: f.key(),
             limit: Some(200),
             before: None,
@@ -1624,6 +1630,7 @@ fn empty_metadata_session_deletes_file_history_and_exact_shared_records() {
     let detail = claude_session_detail(
         &f.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: f.key(),
             limit: Some(10),
             before: None,
@@ -1723,6 +1730,7 @@ fn empty_file_is_readable_and_missing_main_file_does_not_prevent_sidecar_deletio
     let detail = claude_session_detail(
         &f.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: f.key(),
             limit: None,
             before: None,
@@ -2120,6 +2128,14 @@ fn notification_prompts_are_native_prompt_ids_and_completed_turns_survive_later_
     f.write(&[user, answer, second]);
     let context = notification_context(&f.paths, &f.file).unwrap();
     assert_eq!(context.stream.events.len(), 1);
+    let first = reader::probe_snapshot(&f.file, &f.paths.projects).unwrap();
+    let second = reader::probe_snapshot(&f.file, &f.paths.projects).unwrap();
+    assert_eq!(first.events.len(), 1);
+    assert!(Arc::ptr_eq(&first.events, &second.events));
+    assert_eq!(
+        serde_json::to_value(&first).unwrap()["events"],
+        serde_json::to_value(first.events.as_ref()).unwrap()
+    );
     assert_eq!(
         context.stream.events[0].prompt_id.as_deref(),
         Some("prompt-one")
@@ -2733,4 +2749,322 @@ fn batch_delete_filters_shared_history_only_for_successful_projects() {
     assert!(!registrations.join("good.json").exists());
     assert!(registrations.join("bad.json").exists());
     assert!(registrations.join("keep.json").exists());
+}
+
+// Sanitized Claude Code 2.1.323 native records; relationship fields are retained.
+fn subagent_fixture(f: &Fixture) -> (PathBuf, Vec<Value>) {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/claude-subagent-2.1.323.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["source"]["claudeCodeVersion"], "2.1.323");
+    f.write(fixture["parent"].as_array().unwrap());
+    let path = f
+        .file
+        .with_extension("")
+        .join("subagents/agent-child-fixture.jsonl");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let rows = fixture["child"].as_array().unwrap().clone();
+    write_subagent(&path, &rows);
+    (path, rows)
+}
+fn write_subagent(path: &Path, rows: &[Value]) {
+    fs::write(
+        path,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+}
+fn child_request(f: &Fixture) -> ClaudeDetailRequest {
+    ClaudeDetailRequest {
+        session_key: f.key(),
+        agent_id: Some("child-fixture".into()),
+        before: None,
+        limit: Some(500),
+    }
+}
+
+#[test]
+fn native_subagent_reads_are_scoped_paged_and_keep_main_sidechains_excluded() {
+    let f = Fixture::new();
+    let (path, _) = subagent_fixture(&f);
+    let request = child_request(&f);
+    let child = claude_session_detail(&f.paths, &request).unwrap();
+    assert_eq!(child.summary.session_key, f.key());
+    let agent = child.agent.as_ref().unwrap();
+    assert_eq!(agent.agent_id.as_deref(), Some("child-fixture"));
+    assert_eq!(agent.name, "Review fixture");
+    assert_eq!(
+        agent.status,
+        crate::codex::subagents::SubagentStatus::Unknown
+    );
+    assert!(child.subagents.is_none());
+    assert_eq!(child.timeline.as_ref().unwrap()[0].id, child.events[0].id);
+    assert!(child.events.iter().any(|e| e.kind == "user_message"));
+    assert!(child.events.iter().any(|e| e.kind == "thinking"));
+    assert!(child
+        .events
+        .iter()
+        .any(|e| e.kind == "tool_call" && e.result.as_deref() == Some("Fixture tool result")));
+    assert!(reader::read(&path).unwrap().events.is_empty());
+    assert_eq!(
+        claude_session_detail(&f.paths, &request).unwrap().events,
+        child.events
+    );
+
+    let mut paged = request.clone();
+    paged.limit = Some(2);
+    let last = claude_session_detail(&f.paths, &paged).unwrap();
+    assert!(last.has_more);
+    paged.before = last.before_cursor.clone();
+    let older = claude_session_detail(&f.paths, &paged).unwrap();
+    assert!(!older
+        .events
+        .iter()
+        .any(|event| last.events.iter().any(|other| event.id == other.id)));
+    paged.before = Some(format!("j:{}", child.events[0].id));
+    assert_eq!(
+        claude_session_detail(&f.paths, &paged).unwrap().events[0],
+        child.events[0]
+    );
+    paged.before = Some("j:unrelated:event".into());
+    assert!(claude_session_detail(&f.paths, &paged).is_err());
+
+    let main = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            agent_id: None,
+            ..request
+        },
+    )
+    .unwrap();
+    assert!(main.agent.is_none());
+    let agents = main.subagents.unwrap();
+    assert!(agents.complete);
+    assert_eq!(agents.counts.unknown, 1);
+    assert_eq!(agents.agents[0], *agent);
+    let listed = list_claude_sessions(&f.paths, 100, None).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(!listed.iter().any(|s| s.path == path));
+}
+
+#[test]
+fn subagent_refresh_observes_append_new_files_and_cleanup_without_parent_changes() {
+    let f = Fixture::new();
+    let (path, mut rows) = subagent_fixture(&f);
+    let request = child_request(&f);
+    let parent_stamp = reader::stamp(&f.file).unwrap();
+    let original = claude_session_detail(&f.paths, &request).unwrap();
+    let mut next = rows.last().unwrap().clone();
+    next["uuid"] = json!("appended-record");
+    next["parentUuid"] = rows.last().unwrap()["uuid"].clone();
+    next["message"]["content"] = json!([{"type":"text","text":"Appended child answer"}]);
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&path).unwrap(),
+        "{next}"
+    )
+    .unwrap();
+    let updated = claude_session_detail(&f.paths, &request).unwrap();
+    assert!(updated.events.len() > original.events.len());
+    assert_eq!(
+        updated.history.as_ref().unwrap().epoch,
+        original.history.as_ref().unwrap().epoch
+    );
+    assert_eq!(updated.events[0], original.events[0]);
+    assert_eq!(
+        updated.timeline.as_ref().unwrap()[0].id,
+        original.timeline.as_ref().unwrap()[0].id
+    );
+    assert!(updated
+        .events
+        .iter()
+        .any(|e| e.text.as_deref() == Some("Appended child answer")));
+    for row in &mut rows {
+        row["agentId"] = json!("second-child");
+    }
+    write_subagent(&path.with_file_name("agent-second-child.jsonl"), &rows);
+    let main = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            agent_id: None,
+            ..request.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(main.subagents.as_ref().unwrap().agents.len(), 2);
+    assert_eq!(main.subagents.unwrap().agents[1].name, "second-child");
+    assert!(parent_stamp == reader::stamp(&f.file).unwrap());
+    fs::remove_file(path).unwrap();
+    assert!(claude_session_detail(&f.paths, &request).is_err());
+    assert_eq!(
+        claude_session_detail(
+            &f.paths,
+            &ClaudeDetailRequest {
+                agent_id: None,
+                ..request
+            }
+        )
+        .unwrap()
+        .subagents
+        .unwrap()
+        .agents
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn subagent_ids_and_cursor_sources_are_bound_to_the_verified_parent() {
+    let a = Fixture::new();
+    let b = Fixture::new();
+    let (path, _) = subagent_fixture(&a);
+    subagent_fixture(&b);
+    let mut request = child_request(&a);
+    request.limit = Some(1);
+    let page = claude_session_detail(&a.paths, &request).unwrap();
+    let mut other = child_request(&b);
+    other.before = page.before_cursor.clone();
+    assert!(claude_session_detail(&b.paths, &other).is_err());
+    assert!(claude_session_detail(&b.paths, &child_request(&b)).is_ok());
+    for id in [
+        "",
+        ".",
+        "..",
+        "../child-fixture",
+        "folder/child-fixture",
+        "folder\\child-fixture",
+        "child\nfixture",
+    ] {
+        request.agent_id = Some(id.into());
+        assert!(claude_session_detail(&a.paths, &request).is_err(), "{id:?}");
+    }
+    let replacement = path.with_extension("replacement");
+    fs::copy(&path, &replacement).unwrap();
+    fs::rename(&replacement, &path).unwrap();
+    request = child_request(&a);
+    request.before = page.before_cursor;
+    assert!(claude_session_detail(&a.paths, &request).is_err());
+}
+
+#[test]
+fn subagent_native_identity_and_branch_must_match_the_selected_file() {
+    for (field, value) in [
+        ("agentId", json!("different")),
+        ("sessionId", json!("different")),
+        ("isSidechain", json!(false)),
+    ] {
+        let f = Fixture::new();
+        let (path, mut rows) = subagent_fixture(&f);
+        rows[0][field] = value;
+        write_subagent(&path, &rows);
+        assert!(
+            claude_session_detail(&f.paths, &child_request(&f)).is_err(),
+            "{field}"
+        );
+    }
+    let f = Fixture::new();
+    subagent_fixture(&f);
+    f.write(&[f.row("wrong", None, "user", json!("wrong session"))]);
+    let mut row = f.row("wrong", None, "user", json!("wrong session"));
+    row["sessionId"] = json!("different");
+    f.write(&[row]);
+    assert!(claude_session_detail(&f.paths, &child_request(&f)).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn subagent_reads_reject_symlinks_in_each_authorized_boundary() {
+    use std::os::unix::fs::symlink;
+    for boundary in ["file", "subagents", "session", "project"] {
+        let f = Fixture::new();
+        let (path, _) = subagent_fixture(&f);
+        assert!(claude_session_detail(&f.paths, &child_request(&f)).is_ok());
+        let target = match boundary {
+            "file" => path.clone(),
+            "subagents" => path.parent().unwrap().to_owned(),
+            "session" => f.file.with_extension(""),
+            _ => f.file.parent().unwrap().to_owned(),
+        };
+        let moved = f.root.join(format!("moved-{boundary}"));
+        fs::rename(&target, &moved).unwrap();
+        symlink(&moved, &target).unwrap();
+        assert!(
+            claude_session_detail(&f.paths, &child_request(&f)).is_err(),
+            "{boundary}"
+        );
+    }
+}
+
+#[test]
+fn sibling_parents_share_agent_ids_without_sharing_history_or_cursors() {
+    let f = Fixture::new();
+    let (child, mut rows) = subagent_fixture(&f);
+    let original = claude_session_detail(&f.paths, &child_request(&f)).unwrap();
+    let second_parent = f.file.with_file_name("second-parent.jsonl");
+    let mut parent_row = f.row("second-user", None, "user", json!("Second parent"));
+    parent_row["sessionId"] = json!("second-parent");
+    write_subagent(&second_parent, &[parent_row]);
+    let second_child = second_parent
+        .with_extension("")
+        .join("subagents/agent-child-fixture.jsonl");
+    fs::create_dir_all(second_child.parent().unwrap()).unwrap();
+    for row in &mut rows {
+        row["sessionId"] = json!("second-parent");
+    }
+    write_subagent(&second_child, &rows);
+    let key = key_for(
+        &f.paths.projects.canonicalize().unwrap(),
+        &second_parent.canonicalize().unwrap(),
+        "second-parent",
+    );
+    let mut request = child_request(&f);
+    request.session_key = key;
+    let second = claude_session_detail(&f.paths, &request).unwrap();
+    assert_eq!(second.summary.id, "second-parent");
+    assert_ne!(second.events[0].id, original.events[0].id);
+    request.before = Some(format!("j:{}", original.events[0].id));
+    assert!(claude_session_detail(&f.paths, &request).is_err());
+    let replacement = f.file.with_extension("replacement");
+    fs::copy(&f.file, &replacement).unwrap();
+    fs::rename(&replacement, &f.file).unwrap();
+    let replaced = claude_session_detail(&f.paths, &child_request(&f)).unwrap();
+    assert_ne!(
+        replaced.history.unwrap().epoch,
+        original.history.unwrap().epoch
+    );
+    assert!(child.exists());
+}
+
+#[test]
+fn child_native_parent_uuid_selects_the_active_record_branch() {
+    let f = Fixture::new();
+    let (path, rows) = subagent_fixture(&f);
+    let original = claude_session_detail(&f.paths, &child_request(&f)).unwrap();
+    let mut next = rows
+        .iter()
+        .find(|row| row["type"] == "assistant")
+        .unwrap()
+        .clone();
+    next["uuid"] = json!("branch-answer");
+    next["parentUuid"] = rows[0]["uuid"].clone();
+    next["message"]["content"] = json!([{"type":"text","text":"Active branch answer"}]);
+    writeln!(
+        fs::OpenOptions::new().append(true).open(&path).unwrap(),
+        "{next}"
+    )
+    .unwrap();
+    let current = claude_session_detail(&f.paths, &child_request(&f)).unwrap();
+    assert!(current.events.len() < original.events.len());
+    assert!(current
+        .events
+        .iter()
+        .any(|event| event.text.as_deref() == Some("Active branch answer")));
+    assert!(current
+        .history
+        .unwrap()
+        .changes
+        .iter()
+        .any(|change| change.reset));
 }

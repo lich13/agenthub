@@ -1,7 +1,7 @@
 import { Children, isValidElement, type ComponentProps, type MouseEvent, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
-import { UserMessage } from "./UserMessage";
+import { UserMessage, UserMessageScope } from "./UserMessage";
 import { CopyReplyButton } from "./CopyReplyButton";
 import { DisclosureScope } from "./ActivityDetails";
 import { MessageBlockView } from "../chat/MessageStream";
@@ -199,4 +199,13 @@ test("native question reply renders a question and answer with an answer-only co
   expect(html).toContain('aria-label="复制回答"');
   expect(html).not.toContain("questionItemId");
   expect(html).not.toContain("send_user_message_question_reply");
+});
+
+
+test("child transcript attachments show names without preview or file actions", () => {
+  const html = renderToStaticMarkup(<UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: "parent-key", attachments: "names" }}>
+    <UserMessage message={{ id: "child-user", text: "", attachments: [{ id: "image", name: "sample.png", kind: "image", path: "/fixture/sample.png" }, { id: "file", name: "notes.txt", kind: "file", path: "/fixture/notes.txt" }] }} />
+  </UserMessageScope.Provider>);
+  expect(html).toContain("sample.png"); expect(html).toContain("notes.txt");
+  expect(html).not.toMatch(/<button|<a |<img|<dialog|attachment-thumbnail|预览|fixture\//);
 });

@@ -2,7 +2,7 @@ import { isInstructionFileActivity, visibleMarkdown } from "./visibleMarkdown";
 import type { MessageBlock, GrokHistoryEvent, ClaudeHistoryEvent, ProviderHistoryEvent } from "../../types";
 import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQuestionResultBlock, toolBlockDetailText } from "./conversationViewModel";
 
-export type ExecutionStatus = "running" | "failed" | "completed";
+export type ExecutionStatus = "running" | "failed" | "completed" | "unknown";
 export type ExecutionCommand = {
   id: string;
   sourceIds: string[];
@@ -19,6 +19,7 @@ export type ExecutionGroup = {
   kind: "command" | "tool";
   provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness" | "Grok Bot";
   running: boolean;
+  recordedOnly?: boolean;
   failedCount: number;
   turnId?: string | null;
 };
@@ -100,7 +101,7 @@ type Activity<T> = {
   sections: ExecutionCommand["sections"];
 };
 
-function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup["provider"]): ExecutionRenderItem<T>[] {
+function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup["provider"], recordedOnly = false): ExecutionRenderItem<T>[] {
   type Entry =
     | { kind: "item"; item: T; key: string; sourceIds: string[] }
     | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean; turnId?: string | null };
@@ -139,6 +140,7 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
       status: activity.status ? executionStatus(activity.status) : activity.phase === "call" ? "running" : "completed",
       sections: [...activity.sections]
     };
+    if (recordedOnly && command.status === "running") command.status = "unknown";
     if (activity.callId) pending.set(activity.callId, command);
     entries.push({ kind: "command", command, isCommand: activity.command, newTurn, turnId: activity.turnId ?? turn });
   }
@@ -154,7 +156,7 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
       group.commands.push(entry.command);
       if (!entry.isCommand) group.kind = "tool";
       if (!group.turnId && entry.turnId) group.turnId = entry.turnId;
-    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", provider, running: false, failedCount: 0, turnId: entry.turnId } });
+    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", provider, recordedOnly, running: false, failedCount: 0, turnId: entry.turnId } });
   }
   for (const entry of output) {
     if (entry.kind !== "group") continue;
@@ -209,7 +211,7 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
   }), "Grok");
 }
 
-export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRenderItem<ClaudeHistoryEvent>[] {
+export function groupClaudeEvents(events: ClaudeHistoryEvent[], recordedOnly = false): ExecutionRenderItem<ClaudeHistoryEvent>[] {
   return groupActivities(events.map(event => ({
     item: event,
     key: `claude:${event.id}`,
@@ -227,7 +229,7 @@ export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRender
       ...(event.detail ? [{ label: "调用参数", text: event.detail }] : []),
       ...(event.result ? [{ label: "结果", text: event.result }] : [])
     ]
-  })), "Claude Code");
+  })), "Claude Code", recordedOnly);
 }
 
 export function groupProviderEvents(

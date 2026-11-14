@@ -590,20 +590,25 @@ pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
             .is_none_or(|id| id == detail.summary.id)
         {
             if let Ok(graph) = &graph {
-                let records: Vec<_> = graph
-                    .values()
-                    .filter(|record| {
-                        record.parents.contains(&detail.summary.id)
-                            && record.parents.len() == 1
-                            && if let Some(id) = &explicit {
-                                record.id == *id
-                            } else {
-                                task_path
-                                    .as_ref()
-                                    .is_some_and(|path| record.path.as_ref() == Some(path))
-                            }
-                    })
-                    .collect();
+                let records: Vec<_> = if let Some(id) = &explicit {
+                    graph
+                        .get(id)
+                        .into_iter()
+                        .filter(|record| {
+                            record.parents.len() == 1 && record.parents.contains(&detail.summary.id)
+                        })
+                        .collect()
+                } else {
+                    current
+                        .keys()
+                        .filter_map(|id| graph.get(id))
+                        .filter(|record| {
+                            task_path
+                                .as_ref()
+                                .is_some_and(|path| record.path.as_ref() == Some(path))
+                        })
+                        .collect()
+                };
                 if records.len() == 1 {
                     let record = records[0];
                     // An explicit ID wins resolution, but contradictory path evidence

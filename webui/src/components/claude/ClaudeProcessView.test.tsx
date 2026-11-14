@@ -169,3 +169,14 @@ test("interleaved commands, atis-latch, native_context and trailing turn_duratio
   expect(closed.html).not.toContain("secret-cmd-2");
   expect(closed.html).not.toContain("ctx-detail");
 });
+
+
+test("recorded child tools without a result stay unknown without running indicators", () => {
+  const events = [event("recorded-tool", "tool_call", { role: "Bash", status: "running", detail: "printf fixture" })];
+  const html = renderToStaticMarkup(<DisclosureScope.Provider value="child-recorded-only"><DisclosureRevealContext.Provider value="recorded-tool">
+    {renderClaudeEvents(groupClaudeProcesses(events, true), "Fixture child")}
+  </DisclosureRevealContext.Provider></DisclosureScope.Provider>);
+  expect(html).toContain("未见结果");
+  expect(html).not.toMatch(/运行中|正在执行|已完成|running-indicator|is-running/);
+  expect(groupClaudeProcesses(events).some(entry => entry.kind === "process" && entry.process.running)).toBe(true);
+});

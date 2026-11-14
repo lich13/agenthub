@@ -3,7 +3,7 @@ import { connectionSnapshot, invokeNative } from "../runtime";
 import { callCommand } from "./transport";
 
 export function listClaudeSessions(query?: { q?: string; limit?: number }): Promise<ClaudeSessionSummary[]> { return callCommand("claude.list", query); }
-export function getClaudeSession(sessionKey: string, before?: string): Promise<ClaudeSessionDetail> { return callCommand("claude.detail", { sessionKey, limit: 160, before }); }
+export function getClaudeSession(sessionKey: string, before?: string, agentId?: string): Promise<ClaudeSessionDetail> { return callCommand("claude.detail", { sessionKey, limit: 160, before, ...(agentId ? { agentId } : {}) }); }
 export function renameClaudeSession(sessionKey: string, title: string): Promise<ClaudeSessionSummary> { return callCommand("claude.rename", { sessionKey, title }); }
 export function previewClaudeSessionDelete(sessionKey: string): Promise<ClaudeDeletePreview> { return callCommand("claude.deletePreview", { sessionKey }); }
 export async function getClaudeOwnershipDiagnostics(sessionKey: string): Promise<ClaudeOwnershipDiagnostics> {

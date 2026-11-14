@@ -94,7 +94,7 @@ export default function App() {
             )}
             {view === "grok" && <GrokWorkspace />}
             {view === "grokbot" && capabilities.grokbotSessions && <GrokBotWorkspace />}
-            {view === "claude" && <ClaudeWorkspace />}
+            {view === "claude" && <ClaudeWorkspace capabilities={capabilities} />}
             {view === "antigravity" && <AntigravityWorkspace capabilities={capabilities} />}
             {view === "dsh" && <DshWorkspace capabilities={capabilities} />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}

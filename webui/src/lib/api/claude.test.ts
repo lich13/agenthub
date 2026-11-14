@@ -28,3 +28,21 @@ test("a pending local diagnostic is discarded after the selected machine changes
   finish({ ownership: "inactive", reasonCodes: [], processes: [] });
   await expect(pending).rejects.toThrow("连接已变化");
 });
+
+
+test("Claude main requests omit agentId and child payloads match on local and SSH transports", async () => {
+  const invoke = vi.fn(async (command: string) => command === "remote.select"
+    ? { target: "remote", revision: 1, configured: true, sshHost: "fixture-host" } : {});
+  vi.stubGlobal("__AGENTHUB_TEST_INVOKE__", invoke);
+  const { getClaudeSession } = await import("./claude");
+  await getClaudeSession("parent-key");
+  expect(invoke.mock.calls[0]).toEqual(["claude.detail", { sessionKey: "parent-key", before: undefined, limit: 160 }]);
+  invoke.mockClear();
+  await getClaudeSession("parent-key", "child-cursor", "child-id");
+  const payload = { sessionKey: "parent-key", before: "child-cursor", limit: 160, agentId: "child-id" };
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("claude.detail", payload);
+  await (await import("../runtime")).remoteSelect("remote");
+  invoke.mockClear();
+  await getClaudeSession("parent-key", "child-cursor", "child-id");
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("remote.invoke", { request: { revision: 1, command: "claude.detail", args: payload } });
+});

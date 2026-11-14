@@ -339,6 +339,7 @@ impl SearchUseCases {
                 let page = match claude::claude_session_detail_without_storage(
                     &self.claude,
                     &ClaudeDetailRequest {
+                        agent_id: None,
                         session_key: summary.session_key.clone(),
                         limit: Some(500),
                         before: before.clone(),

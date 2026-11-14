@@ -419,6 +419,7 @@ fn claude_pages_keep_user_message_markers_and_only_latest_page_has_timeline() {
     let latest = claude_session_detail(
         &fixture.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: key.clone(),
             limit: Some(2),
             before: None,
@@ -448,6 +449,7 @@ fn claude_pages_keep_user_message_markers_and_only_latest_page_has_timeline() {
     let older = claude_session_detail(
         &fixture.paths,
         &ClaudeDetailRequest {
+            agent_id: None,
             session_key: key,
             limit: Some(2),
             before: latest.before_cursor,

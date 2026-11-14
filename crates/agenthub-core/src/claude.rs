@@ -15,6 +15,7 @@ pub mod hooks;
 mod mutations;
 mod presentation;
 mod reader;
+mod subagents;
 #[cfg(test)]
 mod tests;
 pub(crate) use mutations::execute_claude_delete_batch;
@@ -93,6 +94,10 @@ pub enum ClaudeAssistantPhase {
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeSessionDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::codex::subagents::SubagentActivity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<crate::codex::subagents::SubagentCollection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<crate::history_navigation::Timeline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_cursor: Option<String>,
@@ -107,6 +112,8 @@ pub struct ClaudeSessionDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaudeDetailRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub session_key: String,
     pub limit: Option<usize>,
     pub before: Option<String>,
@@ -177,6 +184,7 @@ pub struct ClaudeDeleteResult {
 
 #[derive(Clone, Default)]
 struct Parsed {
+    agent_names: HashMap<String, String>,
     timeline: crate::history_navigation::Timeline,
     id: String,
     title: String,
@@ -555,6 +563,9 @@ pub(crate) fn claude_session_detail_without_storage(
     paths: &ClaudePaths,
     request: &ClaudeDetailRequest,
 ) -> Result<ClaudeSessionDetail> {
+    if let Some(agent_id) = &request.agent_id {
+        return subagents::detail(paths, request, agent_id);
+    }
     let (path, parsed) = resolve(paths, &request.session_key)?;
     let limit = request.limit.unwrap_or(160).clamp(1, 500);
     let (start, end) = match crate::history_navigation::seek_window(
@@ -591,6 +602,8 @@ pub(crate) fn claude_session_detail_without_storage(
         &activity::Snapshot::capture_readonly(paths),
     )?;
     Ok(ClaudeSessionDetail {
+        agent: None,
+        subagents: Some(subagents::collection(paths, &path, &parsed)),
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),
         after_cursor: crate::history_navigation::after_cursor(
             end,
@@ -809,7 +822,7 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
         identity: crate::native_probe::file_identity(path)?,
         record_count: parsed.record_count,
         settled_count: parsed.settled_count,
-        events: parsed.native_events.clone(),
+        events: parsed.native_events.clone().into(),
     };
     ensure!(
         before == reader::stamp(path)?,

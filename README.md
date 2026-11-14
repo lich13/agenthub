@@ -4,7 +4,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
 
-v2.1.15 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
+v2.1.16 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
 
 ## 特色亮点
 
@@ -18,6 +18,8 @@ v2.1.15 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先�
 | **纵深防御清理与零端口 SSH 远端** | 覆盖五大平台六大清理作用域，执行端独立重算目标集、核验预览指纹交集、检查运行锁与子代理闭包并隔离符号链接；远端 Linux 通过常驻 SSH `rpc-stdio` 直连私有 Unix 套接字，无需开放 HTTP 端口、API Key 或反向代理。 |
 
 ## 核心能力
+
+- **Claude 子智能体只读查看**：在主会话内打开“本会话子智能体”，浏览已保存的文本、工具调用和结果；本机与远程共用入口。状态显示未知，未见工具结果时不显示运行状态；附件仅显示名称。旧服务升级后显示入口。
 
 - **统一阅读与检索**：浏览 Codex、Claude Code、Grok Build、Grok Bot、Antigravity 与 DeepSeek Harness；`⌘F` 搜索当前线程或当前 Provider，支持历史分页与原生消息定位。达到 200 条结果后停止后续读取，当前线程不受最近列表数量限制。
 - **Grok Bot 近期缓存**：本机独立入口只读当前账户的 `.blob`／`.kblob`；复制实际存在的线程缓存路径，未缓存线程仍保留列表项并禁用路径动作。不提供改名、归档、删除或发送，也不承诺完整云端历史。

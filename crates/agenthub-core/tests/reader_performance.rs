@@ -313,6 +313,7 @@ fn claude_request(before: Option<&str>) -> ClaudeDetailRequest {
         "workspace/{SESSION_ID}.jsonl\0{SESSION_ID}"
     )));
     ClaudeDetailRequest {
+        agent_id: None,
         session_key: format!("claude:{key}"),
         limit: Some(PAGE_LIMIT),
         before: before.map(str::to_owned),

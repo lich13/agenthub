@@ -991,7 +991,7 @@ fn evaluate_trajectory(
         identity,
         record_count: count,
         settled_count,
-        events,
+        events: events.into(),
     };
     if !want_diag {
         return Ok((snapshot, Value::Null));

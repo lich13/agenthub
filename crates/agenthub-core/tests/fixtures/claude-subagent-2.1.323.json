@@ -1,0 +1,420 @@
+{
+  "source": {
+    "claudeCodeVersion": "2.1.323",
+    "format": "sanitized native main and child transcript records",
+    "sanitized": "Identities, paths, timestamps, prose and tool payload values replaced. Native relationship fields and tool input keys retained."
+  },
+  "parent": [
+    {
+      "type": "assistant",
+      "uuid": "record-1",
+      "parentUuid": "record-2",
+      "sessionId": "native-fixture",
+      "isSidechain": false,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "Agent",
+            "input": {
+              "description": "Fixture value",
+              "subagent_type": "Fixture value",
+              "prompt": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-3",
+      "parentUuid": "record-1",
+      "sessionId": "native-fixture",
+      "isSidechain": false,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-1",
+            "content": "Fixture tool result"
+          }
+        ]
+      },
+      "toolUseResult": {
+        "agentId": "child-fixture",
+        "description": "Review fixture",
+        "isAsync": true
+      }
+    }
+  ],
+  "child": [
+    {
+      "type": "user",
+      "uuid": "record-4",
+      "parentUuid": null,
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": "Fixture request"
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-5",
+      "parentUuid": "record-6",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Fixture reasoning"
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-7",
+      "parentUuid": "record-5",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-2",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-8",
+      "parentUuid": "record-7",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-2",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-9",
+      "parentUuid": "record-8",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-3",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-10",
+      "parentUuid": "record-9",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-3",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-11",
+      "parentUuid": "record-10",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-4",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-12",
+      "parentUuid": "record-11",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-4",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-13",
+      "parentUuid": "record-14",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Fixture reasoning"
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-15",
+      "parentUuid": "record-13",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-5",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-16",
+      "parentUuid": "record-15",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-5",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-17",
+      "parentUuid": "record-16",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-6",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-18",
+      "parentUuid": "record-17",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-6",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-19",
+      "parentUuid": "record-18",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-7",
+            "name": "Bash",
+            "input": {
+              "command": "printf fixture",
+              "description": "Fixture value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "record-20",
+      "parentUuid": "record-19",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-7",
+            "content": "Fixture tool result",
+            "is_error": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "record-21",
+      "parentUuid": "record-20",
+      "sessionId": "native-fixture",
+      "agentId": "child-fixture",
+      "isSidechain": true,
+      "version": "2.1.323",
+      "timestamp": "2026-11-14T00:00:00Z",
+      "cwd": "/fixture/workspace",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Fixture reasoning"
+          }
+        ]
+      }
+    }
+  ]
+}

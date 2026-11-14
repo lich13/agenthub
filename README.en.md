@@ -4,7 +4,7 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.14 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.16 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
 ## Highlights
 
@@ -16,6 +16,8 @@ v2.1.14 supports fresh installations and configurations already migrated by v2.1
 | **Console-First Probe & 5-Platform Real-Time Hooks** | Top-level master switch, encrypted Bark queue delivery, one-click per-provider notification toggles, and a unified 5-platform Hooks/Host matrix (one-click install/repair/remove for Codex, Claude Code, Grok Build, and Antigravity hooks, plus zero-intrusion DSH native `session.lock` + `.zstd` streaming), sharing atomic SQLite idempotent deduplication across `<1s` hook callbacks and 15s polling. |
 | **GitHub CI Dual-Channel Monitor & Bot Filtering** | Automatically discovers public, private, and fork repositories for the active `gh` account on the selected machine; supports **persisted repository filtering** and **default-enabled Bot workflow run filtering** (`dependabot[bot]`, `renovate[bot]`, `github-actions[bot]`, and bot branches), delivering completion, failure, and timeout alerts to Bark and macOS notifications. |
 | **Defense-in-Depth Cleanup & Zero-Port SSH Remote** | Covers 6 cleanup scopes across 5 providers with execution-side target recalculation, preview fingerprint intersection, active/lock verification, verified subagent closure, and symlink isolation; remote Linux hosts communicate exclusively via SSH `rpc-stdio` over a private Unix socket without listening on HTTP ports or requiring API keys. |
+
+Claude sessions now include a read-only subagent list on local and remote machines. Open a child to browse saved text, tools, and results. Status remains unknown; unmatched tools show no recorded result, and attachments show names only. Older services hide the entry until upgraded.
 
 ## Core Capabilities
 

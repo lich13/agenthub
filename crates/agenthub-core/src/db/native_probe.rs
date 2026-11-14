@@ -113,7 +113,7 @@ impl PanelDb {
             };
             if !reset || provider.local_only() {
                 let now = Self::now();
-                for event in &stream.events {
+                for event in stream.events.iter() {
                     let cursor_exempt =
                         provider == NativeProvider::GrokBot && event.kind != "completion";
                     let unrecorded_at_cursor = known_mutable_source
@@ -509,7 +509,7 @@ mod tests {
         let old_ms = (PanelDb::now() - 8 * 86_400) * 1000;
         let mut scan = scan("fixture-ag", 5, old_ms);
         scan.streams[0].provider = NativeProvider::Antigravity;
-        scan.streams[0].events.clear();
+        std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
         db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
             .unwrap();
         db.conn
@@ -517,7 +517,7 @@ mod tests {
             .unwrap()
             .execute("UPDATE native_probe_providers SET activated_ms=1", [])
             .unwrap();
-        scan.streams[0].events.push(NativeTurnEvent {
+        std::sync::Arc::make_mut(&mut scan.streams[0].events).push(NativeTurnEvent {
             prompt_id: None,
             position: 5,
             turn_id: "finished".into(),
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM native_probe_deliveries WHERE status='unknown' AND ciphertext IS NULL AND nonce IS NULL", [], |row| row.get::<_,usize>(0)).unwrap(), 1);
         scan.streams[0].record_count = 6;
         scan.streams[0].settled_count = 6;
-        scan.streams[0].events.clear();
+        std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
         db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
             .unwrap();
         db.conn
@@ -610,7 +610,8 @@ mod tests {
             kind: "completion".into(),
             body: "Fixture complete".into(),
             timestamp_ms: now,
-        }];
+        }]
+        .into();
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Claude, &old, &config)
                 .unwrap(),
@@ -665,7 +666,8 @@ mod tests {
                         body: "test reply".into(),
                         timestamp_ms: now,
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             }],
         }
     }
@@ -877,7 +879,8 @@ mod local_provider_tests {
                     kind: kind.into(),
                     body: "Fixture question".into(),
                     timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-                }],
+                }]
+                .into(),
             }],
         }
     }
@@ -969,7 +972,7 @@ mod local_provider_tests {
         )
         .unwrap();
         let mut waiting = scan(provider, "reply_needed", "old-request");
-        waiting.streams[0].events[0].timestamp_ms = 1;
+        std::sync::Arc::make_mut(&mut waiting.streams[0].events)[0].timestamp_ms = 1;
         assert_eq!(
             db.stage_native_notifications(provider, &waiting, &c)
                 .unwrap(),
@@ -980,7 +983,7 @@ mod local_provider_tests {
                 .unwrap(),
             0
         );
-        waiting.streams[0].events[0].turn_id = "new-request".into();
+        std::sync::Arc::make_mut(&mut waiting.streams[0].events)[0].turn_id = "new-request".into();
         assert_eq!(
             db.stage_native_notifications(provider, &waiting, &c)
                 .unwrap(),
@@ -1015,7 +1018,7 @@ mod local_provider_tests {
                 identity: "source".into(),
                 record_count: 5,
                 settled_count: 5,
-                events: vec![],
+                events: vec![].into(),
             }],
         };
         assert_eq!(
@@ -1040,7 +1043,8 @@ mod local_provider_tests {
             kind: "completion".into(),
             body: "Old completion at cursor".into(),
             timestamp_ms: 1,
-        }];
+        }]
+        .into();
         assert_eq!(
             db.stage_native_notifications(provider, &at_cursor, &c)
                 .unwrap(),
@@ -1048,9 +1052,11 @@ mod local_provider_tests {
         );
 
         // 2. Post-activation event strictly before cursor (position == 4 < 5) -> skipped (0)
-        at_cursor.streams[0].events[0].position = 4;
-        at_cursor.streams[0].events[0].turn_id = "exec-before-cursor".into();
-        at_cursor.streams[0].events[0].timestamp_ms = post_activation_ms;
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].position = 4;
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].turn_id =
+            "exec-before-cursor".into();
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].timestamp_ms =
+            post_activation_ms;
         assert_eq!(
             db.stage_native_notifications(provider, &at_cursor, &c)
                 .unwrap(),
@@ -1059,9 +1065,11 @@ mod local_provider_tests {
 
         // 3. Post-activation event exactly at cursor (position == 5, timestamp_ms >= activated_ms)
         // queues 1 on first scan and 0 on repeat scan.
-        at_cursor.streams[0].events[0].position = 5;
-        at_cursor.streams[0].events[0].turn_id = "exec-at-cursor".into();
-        at_cursor.streams[0].events[0].timestamp_ms = post_activation_ms;
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].position = 5;
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].turn_id =
+            "exec-at-cursor".into();
+        std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].timestamp_ms =
+            post_activation_ms;
         assert_eq!(
             db.stage_native_notifications(provider, &at_cursor, &c)
                 .unwrap(),

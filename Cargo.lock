@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.15"
+version = "2.1.16"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -65,6 +65,7 @@ dependencies = [
  "syn 2.0.117",
  "tokio",
  "toml",
+ "toml_edit",
  "url",
  "uuid",
  "walkdir",
@@ -73,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.15"
+version = "2.1.16"
 dependencies = [
  "agenthub-core",
  "anyhow",

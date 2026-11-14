@@ -32,6 +32,43 @@ pub(super) fn stamp(path: &Path) -> Result<Stamp> {
         identity: (m.dev(), m.ino(), m.ctime(), m.ctime_nsec()),
     })
 }
+#[derive(Clone, Default)]
+pub(super) enum ReadContext {
+    #[default]
+    Main,
+    Subagent {
+        parent_id: String,
+        agent_id: String,
+        prefix: String,
+    },
+}
+impl ReadContext {
+    fn accepts_sidechain(&self) -> bool {
+        matches!(self, Self::Subagent { .. })
+    }
+    fn validate(&self, record: &Value) -> Result<()> {
+        if let Self::Subagent {
+            parent_id,
+            agent_id,
+            ..
+        } = self
+        {
+            let dialogue = matches!(field(record, "type"), "user" | "assistant");
+            ensure!(
+                !dialogue || record.get("isSidechain").and_then(Value::as_bool) == Some(true),
+                "子智能体记录分支不匹配"
+            );
+            for (key, expected) in [("sessionId", parent_id), ("agentId", agent_id)] {
+                ensure!(
+                    (!dialogue && record.get(key).is_none()) || field(record, key) == expected,
+                    "子智能体记录身份不匹配"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct ReaderState {
     parser: Parser,
@@ -45,7 +82,7 @@ struct ReaderState {
     weight: u64,
 }
 impl ReaderState {
-    fn push(&mut self, line: &[u8]) -> Result<()> {
+    fn push(&mut self, line: &[u8], context: &ReadContext) -> Result<()> {
         #[cfg(test)]
         BODY_RECORDS.with(|count| count.set(count.get() + 1));
         ensure!(
@@ -65,8 +102,13 @@ impl ReaderState {
                 return Ok(());
             }
         };
+        context.validate(&value)?;
+        if self.records == 0 {
+            self.parser.context = context.clone();
+        }
         let uuid = field(&value, "uuid");
-        if value.get("isSidechain").and_then(Value::as_bool) != Some(true)
+        if (context.accepts_sidechain()
+            || value.get("isSidechain").and_then(Value::as_bool) != Some(true))
             && matches!(field(&value, "type"), "user" | "assistant")
             && !uuid.is_empty()
             && !self.positions.contains_key(uuid)
@@ -99,10 +141,14 @@ impl ReaderState {
         let mut input = BufReader::new(options.open(path)?.take(offset));
         let mut line = Vec::new();
         let mut position = 0;
-        self.parser = Parser::default();
+        self.parser = Parser {
+            context: self.parser.context.clone(),
+            ..Default::default()
+        };
         while input.read_until(b'\n', &mut line)? != 0 {
             if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                 if value.is_object() {
+                    self.parser.context.validate(&value)?;
                     self.parser.push(&value, position, Some(&allowed));
                     position += 1;
                 }
@@ -169,21 +215,29 @@ pub(super) fn probe_snapshot(
                 identity: crate::native_probe::file_identity(path)?,
                 record_count: parsed.record_count,
                 settled_count: parsed.settled_count,
-                events: parsed.native_events.clone(),
+                events: parsed.native_events.clone().into(),
             })
         },
     )
 }
 
 pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
-    DETAIL_CACHE.read(
-        path,
+    read_context(path, &ReadContext::Main)
+}
+
+pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Parsed>> {
+    let scope = match context {
+        ReadContext::Main => String::new(),
+        ReadContext::Subagent { prefix, .. } => format!("subagent:{prefix}"),
+    };
+    DETAIL_CACHE.read_scoped(
+        (path, &scope),
         |size| {
             ensure!(size <= MAX_BYTES, "Claude 会话超出 512 MiB 读取上限");
             Ok(0)
         },
         false,
-        |state, line, _, _| state.push(line),
+        |state, line, _, _| state.push(line, context),
         |state, info| {
             if info.changed {
                 let reset = state.rebuild;
@@ -213,8 +267,29 @@ pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
                     .collect();
                 state.journal.record_changes(&info, changed, reset);
                 parsed.history = state.journal.clone();
+                let previous_timeline = match context {
+                    ReadContext::Main => {
+                        std::borrow::Cow::Borrowed(state.snapshot.timeline.as_slice())
+                    }
+                    ReadContext::Subagent { prefix, .. } => std::borrow::Cow::Owned(
+                        state
+                            .snapshot
+                            .timeline
+                            .iter()
+                            .cloned()
+                            .map(|mut entry| {
+                                entry.id = entry
+                                    .id
+                                    .strip_prefix(prefix)
+                                    .expect("scoped child timeline")
+                                    .into();
+                                entry
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                };
                 parsed.timeline = crate::history_navigation::update_timeline(
-                    &state.snapshot.timeline,
+                    &previous_timeline,
                     parsed
                         .events
                         .iter()
@@ -230,6 +305,21 @@ pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
                             )
                         }),
                 );
+                if let ReadContext::Subagent { prefix, .. } = context {
+                    // Keep the scoped rail in the same budgeted snapshot; unchanged
+                    // child polls only clone its Arc, never the full timeline.
+                    parsed.timeline = Arc::new(
+                        parsed
+                            .timeline
+                            .iter()
+                            .cloned()
+                            .map(|mut entry| {
+                                entry.id = format!("{prefix}{}", entry.id);
+                                entry
+                            })
+                            .collect(),
+                    );
+                }
                 state.weight = parsed
                     .events
                     .iter()
@@ -244,6 +334,11 @@ pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
                     })
                     .sum::<u64>()
                     + state.records as u64 * 256
+                    + parsed
+                        .agent_names
+                        .iter()
+                        .map(|(id, name)| (id.len() + name.len()) as u64)
+                        .sum::<u64>()
                     + crate::history_navigation::weight(&parsed.timeline);
                 state.snapshot = Arc::new(parsed);
             }
@@ -440,6 +535,7 @@ fn alias_conflict(record: &Value, keys: &[&str]) -> bool {
 
 #[derive(Default)]
 struct Parser {
+    context: ReadContext,
     parsed: Parsed,
     custom_title: Option<String>,
     auto_title: Option<String>,
@@ -457,7 +553,9 @@ struct Parser {
 }
 impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
-        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        if !self.context.accepts_sidechain()
+            && record.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
             return;
         }
         let kind = field(record, "type");
@@ -920,6 +1018,19 @@ impl Parser {
                             "completed"
                         };
                         if let Some(index) = self.calls.get(call) {
+                            if !self.context.accepts_sidechain()
+                                && self.parsed.events[*index].role.as_deref() == Some("Agent")
+                            {
+                                if let Some(result) = record.get("toolUseResult") {
+                                    let agent_id = field(result, "agentId");
+                                    let name = field(result, "description");
+                                    if !agent_id.is_empty() && !name.trim().is_empty() {
+                                        self.parsed
+                                            .agent_names
+                                            .insert(agent_id.into(), bounded(name));
+                                    }
+                                }
+                            }
                             let prior = Arc::make_mut(&mut self.parsed.events[*index]);
                             prior.status = Some(status.into());
                             prior.result = Some(result);

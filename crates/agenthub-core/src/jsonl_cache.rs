@@ -130,6 +130,7 @@ fn monotonic_ms() -> u64 {
 
 struct Entry<S> {
     path: PathBuf,
+    scope: String,
     snapshot: Mutex<Option<Snapshot<S>>>,
     weight: std::sync::atomic::AtomicU64,
     last_accessed_ms: std::sync::atomic::AtomicU64,
@@ -162,11 +163,32 @@ impl<S: Default> JsonlCache<S> {
         path: &Path,
         start: impl FnOnce(u64) -> Result<u64>,
         accept_complete_tail: bool,
+        consume: impl FnMut(&mut S, &[u8], usize, u64) -> Result<()>,
+        finish: impl FnOnce(&mut S, ReadInfo<'_>) -> Result<R>,
+        weight: impl FnOnce(&S) -> u64,
+    ) -> Result<R> {
+        self.read_scoped(
+            (path, ""),
+            start,
+            accept_complete_tail,
+            consume,
+            finish,
+            weight,
+        )
+    }
+
+    /// A verified reader context can share the byte budget without sharing parser state.
+    pub fn read_scoped<R>(
+        &self,
+        source: (&Path, &str),
+        start: impl FnOnce(u64) -> Result<u64>,
+        accept_complete_tail: bool,
         mut consume: impl FnMut(&mut S, &[u8], usize, u64) -> Result<()>,
         finish: impl FnOnce(&mut S, ReadInfo<'_>) -> Result<R>,
         weight: impl FnOnce(&S) -> u64,
     ) -> Result<R> {
         use std::sync::atomic::Ordering;
+        let (path, scope) = source;
         let now_ms = monotonic_ms();
         let entry = {
             let mut entries = self
@@ -175,11 +197,12 @@ impl<S: Default> JsonlCache<S> {
                 .map_err(|_| anyhow::anyhow!("会话缓存不可用"))?;
             let entry = entries
                 .iter()
-                .position(|entry| entry.path == path)
+                .position(|entry| entry.path == path && entry.scope == scope)
                 .and_then(|index| entries.remove(index))
                 .unwrap_or_else(|| {
                     Arc::new(Entry {
                         path: path.into(),
+                        scope: scope.into(),
                         snapshot: Mutex::new(None),
                         weight: 0.into(),
                         last_accessed_ms: now_ms.into(),

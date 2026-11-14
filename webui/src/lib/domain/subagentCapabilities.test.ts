@@ -21,3 +21,12 @@ describe("subagent capability negotiation", () => {
     expect(runtimeCapabilitiesFromResponse(null).threadSubagents).not.toBe(true);
   });
 });
+
+
+test("Claude child browsing requires its own advertised capability", () => {
+  expect(desktopBootstrapCapabilities.claudeSubagents).not.toBe(true);
+  const capabilities = { ...core, thread_subagents: true };
+  delete capabilities.claude_subagents;
+  expect(runtimeCapabilitiesFromResponse({ capabilities }).claudeSubagents).toBe(false);
+  expect(runtimeCapabilitiesFromResponse({ capabilities: { ...capabilities, claude_subagents: true } }).claudeSubagents).toBe(true);
+});

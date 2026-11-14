@@ -12,6 +12,7 @@ export type ClaudeProcessGroup = {
   failedCount: number;
   running: boolean;
   completed: boolean;
+  recordedOnly?: boolean;
   needsReply: boolean;
   needsPermission: boolean;
   hasPermission: boolean;
@@ -85,9 +86,9 @@ function isProcess(event: ClaudeHistoryEvent) {
     || (event.kind === "system" && (AUTOMATIC_ROLES.has(event.role ?? "") || event.role === "api_error"));
 }
 
-function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean): ClaudeRenderItem[] {
+function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean, recordedOnly: boolean): ClaudeRenderItem[] {
   // Pair tools over the whole turn before splitting at visible prose or plans.
-  const entries = groupClaudeEvents(events);
+  const entries = groupClaudeEvents(events, recordedOnly);
   const questionIds = new Set(events.filter(event => event.role === "AskUserQuestion").map(event => event.id));
   const output: ClaudeRenderItem[] = [];
   const finalIndex = entries.reduce((last, entry, index) => entry.kind === "item" && entry.item.assistantPhase === "final" ? index : last, -1);
@@ -104,7 +105,7 @@ function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean)
     const processEvents = segment.flatMap(entry => entry.kind === "item" ? [entry.item] : []);
     const sourceIds = segment.flatMap(entry => entry.kind === "item" ? entry.sourceIds : entry.group.commands.flatMap(command => command.sourceIds));
     const closed = ended || completed || processEvents.some(event => event.kind === "failure");
-    const pendingEvent = (event: ClaudeHistoryEvent) => !closed && executionStatus(event.status) === "running";
+    const pendingEvent = (event: ClaudeHistoryEvent) => !recordedOnly && !closed && executionStatus(event.status) === "running";
     const needsReply = !closed && commands.some(command => command.status === "running" && command.sourceIds.some(id => questionIds.has(id)));
     const needsPermission = processEvents.some(event => event.kind === "permission_request" && pendingEvent(event));
     const stateKey = `claude-process:${turnId}:${sourceIds[0]}`;
@@ -113,7 +114,7 @@ function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean)
       segmentCount: processEvents.length, toolCount: commands.length,
       failedCount: commands.filter(command => command.status === "failed").length
         + processEvents.filter(event => executionStatus(event.status) === "failed").length,
-      completed, needsReply, needsPermission,
+      completed: !recordedOnly && completed, recordedOnly, needsReply, needsPermission,
       running: !closed && !needsReply && !needsPermission && (commands.some(command => command.status === "running") || processEvents.some(pendingEvent)),
       hasPermission: processEvents.some(event => event.kind === "permission_request")
     } });
@@ -132,19 +133,19 @@ function groupTurn(events: ClaudeHistoryEvent[], turnId: string, ended: boolean)
 }
 
 /** Display-only grouping. Native event IDs and inner tool/result aliases survive. */
-export function groupClaudeProcesses(events: ClaudeHistoryEvent[]): ClaudeRenderItem[] {
+export function groupClaudeProcesses(events: ClaudeHistoryEvent[], recordedOnly = false): ClaudeRenderItem[] {
   const output: ClaudeRenderItem[] = [];
   let turn: string | null | undefined;
   let pending: ClaudeHistoryEvent[] = [];
   const flush = (ended: boolean) => {
-    if (pending.length) output.push(...(turn ? groupTurn(pending, turn, ended) : foldAutomatic(groupClaudeEvents(pending))));
+    if (pending.length) output.push(...(turn ? groupTurn(pending, turn, ended, recordedOnly) : foldAutomatic(groupClaudeEvents(pending, recordedOnly))));
     pending = [];
   };
   for (const event of events) {
     if (event.turnId !== turn) { flush(true); turn = event.turnId; }
     if (["user_message", "compaction", "branch_summary"].includes(event.kind)) {
       flush(true);
-      output.push(...foldAutomatic(groupClaudeEvents([event])));
+      output.push(...foldAutomatic(groupClaudeEvents([event], recordedOnly)));
     } else pending.push(event);
   }
   flush(false);

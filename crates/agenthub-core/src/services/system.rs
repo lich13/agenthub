@@ -66,6 +66,7 @@ impl FromStr for HostSurface {
 pub enum Capability {
     Threads,
     ThreadSubagents,
+    ClaudeSubagents,
     CodexDesktop,
     Jobs,
     Probe,
@@ -83,6 +84,7 @@ impl Capability {
     pub const ALL: &'static [Capability] = &[
         Capability::Threads,
         Capability::ThreadSubagents,
+        Capability::ClaudeSubagents,
         Capability::CodexDesktop,
         Capability::Jobs,
         Capability::Probe,
@@ -104,6 +106,7 @@ impl Capability {
         match self {
             Self::Threads => "threads",
             Self::ThreadSubagents => "thread_subagents",
+            Self::ClaudeSubagents => "claude_subagents",
             Self::CodexDesktop => "codex_desktop",
             Self::Jobs => "jobs",
             Self::Probe => "probe",
@@ -129,6 +132,7 @@ impl Capability {
             }
             Self::Threads
             | Self::ThreadSubagents
+            | Self::ClaudeSubagents
             | Self::Jobs
             | Self::Probe
             | Self::Settings
@@ -143,6 +147,8 @@ impl Capability {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemCapabilities {
+    #[serde(default)]
+    pub claude_subagents: bool,
     pub threads: bool,
     #[serde(default)]
     pub thread_subagents: bool,
@@ -208,6 +214,8 @@ pub fn system_capabilities_for_surface(
 ) -> SystemCapabilities {
     let thread_cleanup = Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface);
     SystemCapabilities {
+        claude_subagents: Capability::ClaudeSubagents
+            .is_supported_on_surface(platform, host_surface),
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
         thread_subagents: Capability::ThreadSubagents
             .is_supported_on_surface(platform, host_surface),

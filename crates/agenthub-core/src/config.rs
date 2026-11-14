@@ -755,198 +755,198 @@ fn non_auto_string(value: Option<&str>) -> Option<&str> {
 }
 
 pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Result<String> {
-    let mut editor = TomlPatchEditor::new(text);
+    let mut editor = TomlPatchEditor::new(text)?;
     if let Some(codex) = patch.codex.as_ref() {
         if let Some(home) = codex.home.as_ref() {
             match non_auto_string(home.as_deref()) {
-                Some(value) => editor.set_string("codex", "home", Some(value)),
-                None => editor.remove_key("codex", "home"),
+                Some(value) => editor.set_string("codex", "home", Some(value))?,
+                None => editor.remove_key("codex", "home")?,
             }
         }
-        editor.set_string("codex", "workspace", codex.workspace.as_deref());
-        editor.set_string("codex", "host_label", codex.host_label.as_deref());
+        editor.set_string("codex", "workspace", codex.workspace.as_deref())?;
+        editor.set_string("codex", "host_label", codex.host_label.as_deref())?;
     }
     if let Some(probe) = patch.probe.as_ref() {
-        editor.set_bool("probe", "enabled", probe.enabled);
-        editor.set_u64("probe", "poll_seconds", probe.poll_seconds);
-        editor.set_usize("probe", "recent_limit", probe.recent_limit);
+        editor.set_bool("probe", "enabled", probe.enabled)?;
+        editor.set_u64("probe", "poll_seconds", probe.poll_seconds)?;
+        editor.set_usize("probe", "recent_limit", probe.recent_limit)?;
         if let Some(hooks) = probe.hooks.as_ref() {
-            editor.set_bool("probe.hooks", "manage_stop_hook", hooks.manage_stop_hook);
+            editor.set_bool("probe.hooks", "manage_stop_hook", hooks.manage_stop_hook)?;
         }
         if let Some(error_monitor) = probe.error_monitor.as_ref() {
-            editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled);
+            editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled)?;
         }
         if let Some(notifications) = probe.notifications.as_ref() {
             editor.set_bool(
                 "probe.notifications",
                 "notify_codex",
                 notifications.notify_codex,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_grok",
                 notifications.notify_grok,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_grokbot",
                 notifications.notify_grokbot,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_github_ci",
                 notifications.notify_github_ci,
-            );
+            )?;
             editor.set_string_array(
                 "probe.notifications",
                 "github_ci_repositories",
                 notifications.github_ci_repositories.as_deref(),
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "github_ci_filter_bots",
                 notifications.github_ci_filter_bots,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_grok_completion",
                 notifications.notify_grok_completion,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_grok_failure",
                 notifications.notify_grok_failure,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_grok_reply_needed",
                 notifications.notify_grok_reply_needed,
-            );
+            )?;
 
             editor.set_bool(
                 "probe.notifications",
                 "notify_claude",
                 notifications.notify_claude,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_claude_completion",
                 notifications.notify_claude_completion,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_claude_failure",
                 notifications.notify_claude_failure,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_claude_reply_needed",
                 notifications.notify_claude_reply_needed,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_antigravity",
                 notifications.notify_antigravity,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_antigravity_completion",
                 notifications.notify_antigravity_completion,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_antigravity_failure",
                 notifications.notify_antigravity_failure,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_antigravity_reply_needed",
                 notifications.notify_antigravity_reply_needed,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_antigravity_authorization",
                 notifications.notify_antigravity_authorization,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_dsh",
                 notifications.notify_dsh,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_dsh_completion",
                 notifications.notify_dsh_completion,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_dsh_failure",
                 notifications.notify_dsh_failure,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_dsh_reply_needed",
                 notifications.notify_dsh_reply_needed,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_dsh_authorization",
                 notifications.notify_dsh_authorization,
-            );
-            editor.set_bool("probe.notifications", "enabled", notifications.enabled);
+            )?;
+            editor.set_bool("probe.notifications", "enabled", notifications.enabled)?;
             editor.set_string(
                 "probe.notifications",
                 "server_url",
                 notifications.server_url.as_deref(),
-            );
+            )?;
             if let Some(value) = notifications.sound.as_ref() {
-                editor.set_string("probe.notifications", "sound", value.as_deref());
+                editor.set_string("probe.notifications", "sound", value.as_deref())?;
             }
             editor.set_string(
                 "probe.notifications",
                 "group",
                 notifications.group.as_deref(),
-            );
+            )?;
             if let Some(value) = notifications.url.as_ref() {
-                editor.set_string("probe.notifications", "url", value.as_deref());
+                editor.set_string("probe.notifications", "url", value.as_deref())?;
             }
             editor.set_bool(
                 "probe.notifications",
                 "notify_completion",
                 notifications.notify_completion,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_reply_needed",
                 notifications.notify_reply_needed,
-            );
+            )?;
             editor.set_bool(
                 "probe.notifications",
                 "notify_recoverable",
                 notifications.notify_recoverable,
-            );
+            )?;
         }
         if let Some(observability) = probe.observability.as_ref() {
             editor.set_u32(
                 "probe.observability",
                 "event_retention_days",
                 observability.event_retention_days,
-            );
+            )?;
             editor.set_usize(
                 "probe.observability",
                 "hook_event_max_lines",
                 observability.hook_event_max_lines,
-            );
+            )?;
             editor.set_usize(
                 "probe.observability",
                 "hook_cooldown_max_lines",
                 observability.hook_cooldown_max_lines,
-            );
+            )?;
             editor.set_usize(
                 "probe.observability",
                 "log_max_bytes",
                 observability.log_max_bytes,
-            );
+            )?;
         }
     }
     Ok(editor.finish())
@@ -990,171 +990,137 @@ fn write_atomic(path: &Path, updated: &str, permissions: Option<fs::Permissions>
 }
 
 struct TomlPatchEditor {
-    lines: Vec<String>,
+    document: toml_edit::DocumentMut,
 }
 
 impl TomlPatchEditor {
-    fn new(text: &str) -> Self {
-        Self {
-            lines: text.lines().map(ToString::to_string).collect(),
-        }
+    fn new(text: &str) -> Result<Self> {
+        Ok(Self {
+            document: text.parse()?,
+        })
     }
 
     fn finish(self) -> String {
-        let mut text = self.lines.join("\n");
-        text.push('\n');
-        text
+        self.document.to_string()
     }
 
-    fn set_string(&mut self, section: &str, key: &str, value: Option<&str>) {
-        self.set_value(section, key, value.map(toml_string));
+    fn table(
+        &mut self,
+        section: &str,
+        create: bool,
+    ) -> Result<Option<&mut dyn toml_edit::TableLike>> {
+        let mut item = self.document.as_item_mut();
+        let mut parts = section.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let table = item.as_table_like_mut().context("配置项不是 TOML 表")?;
+            if !table.contains_key(part) {
+                if !create {
+                    return Ok(None);
+                }
+                let mut child = toml_edit::Table::new();
+                child.set_implicit(parts.peek().is_some());
+                table.insert(part, toml_edit::Item::Table(child));
+            }
+            item = table.get_mut(part).expect("existing table entry");
+        }
+        Ok(Some(
+            item.as_table_like_mut().context("配置项不是 TOML 表")?,
+        ))
     }
 
-    fn set_string_array(&mut self, section: &str, key: &str, value: Option<&[String]>) {
+    fn set_value(
+        &mut self,
+        section: &str,
+        key: &str,
+        value: Option<toml_edit::Value>,
+    ) -> Result<()> {
+        let Some(mut value) = value else {
+            return Ok(());
+        };
+        let table = self.table(section, true)?.expect("created table");
+        if let Some(old) = table.get(key).and_then(toml_edit::Item::as_value) {
+            let same = match (old, &value) {
+                (toml_edit::Value::String(a), toml_edit::Value::String(b)) => {
+                    a.value() == b.value()
+                }
+                (toml_edit::Value::Boolean(a), toml_edit::Value::Boolean(b)) => {
+                    a.value() == b.value()
+                }
+                (toml_edit::Value::Integer(a), toml_edit::Value::Integer(b)) => {
+                    a.value() == b.value()
+                }
+                (toml_edit::Value::Array(a), toml_edit::Value::Array(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(a, b)| a.as_str().is_some() && a.as_str() == b.as_str())
+                }
+                _ => false,
+            };
+            if same {
+                return Ok(());
+            }
+            *value.decor_mut() = old.decor().clone();
+        }
+        // Updating the existing Item preserves the original key spelling and decoration.
+        if let Some(item) = table.get_mut(key) {
+            *item = toml_edit::Item::Value(value);
+        } else {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+        Ok(())
+    }
+    fn set_string(&mut self, section: &str, key: &str, value: Option<&str>) -> Result<()> {
+        self.set_value(section, key, value.map(toml_edit::Value::from))
+    }
+    fn set_string_array(
+        &mut self,
+        section: &str,
+        key: &str,
+        value: Option<&[String]>,
+    ) -> Result<()> {
         self.set_value(
             section,
             key,
-            value.map(|items| {
-                format!(
-                    "[{}]",
-                    items
-                        .iter()
-                        .map(|item| toml_string(item))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }),
-        );
+            value.map(|items| toml_edit::Value::Array(items.iter().map(String::as_str).collect())),
+        )
     }
-
-    fn set_bool(&mut self, section: &str, key: &str, value: Option<bool>) {
-        self.set_value(section, key, value.map(|value| value.to_string()));
+    fn set_bool(&mut self, section: &str, key: &str, value: Option<bool>) -> Result<()> {
+        self.set_value(section, key, value.map(toml_edit::Value::from))
     }
-
-    fn set_u32(&mut self, section: &str, key: &str, value: Option<u32>) {
-        self.set_value(section, key, value.map(|value| value.to_string()));
+    fn set_u32(&mut self, section: &str, key: &str, value: Option<u32>) -> Result<()> {
+        self.set_value(
+            section,
+            key,
+            value.map(|value| toml_edit::Value::from(i64::from(value))),
+        )
     }
-
-    fn set_u64(&mut self, section: &str, key: &str, value: Option<u64>) {
-        self.set_value(section, key, value.map(|value| value.to_string()));
+    fn set_u64(&mut self, section: &str, key: &str, value: Option<u64>) -> Result<()> {
+        self.set_value(
+            section,
+            key,
+            value
+                .map(i64::try_from)
+                .transpose()?
+                .map(toml_edit::Value::from),
+        )
     }
-
-    fn set_usize(&mut self, section: &str, key: &str, value: Option<usize>) {
-        self.set_value(section, key, value.map(|value| value.to_string()));
+    fn set_usize(&mut self, section: &str, key: &str, value: Option<usize>) -> Result<()> {
+        self.set_value(
+            section,
+            key,
+            value
+                .map(i64::try_from)
+                .transpose()?
+                .map(toml_edit::Value::from),
+        )
     }
-
-    fn set_value(&mut self, section: &str, key: &str, value: Option<String>) {
-        let Some(value) = value else {
-            return;
-        };
-        let (start, end) = self.ensure_section(section);
-        for line in self.lines.iter_mut().take(end).skip(start + 1) {
-            let stripped = line.trim();
-            if stripped.starts_with('#') || !stripped.contains('=') {
-                continue;
-            }
-            let Some((line_key, _)) = stripped.split_once('=') else {
-                continue;
-            };
-            if line_key.trim() == key {
-                *line = format!("{key} = {value}");
-                return;
-            }
+    fn remove_key(&mut self, section: &str, key: &str) -> Result<()> {
+        if let Some(table) = self.table(section, false)? {
+            table.remove(key);
         }
-        self.lines.insert(end, format!("{key} = {value}"));
+        Ok(())
     }
-
-    fn remove_key(&mut self, section: &str, key: &str) {
-        let Some((start, end)) = self.section_range(section) else {
-            return;
-        };
-        if let Some(index) = (start + 1..end).find(|index| {
-            let stripped = self.lines[*index].trim();
-            if stripped.starts_with('#') || !stripped.contains('=') {
-                return false;
-            }
-            stripped
-                .split_once('=')
-                .is_some_and(|(line_key, _)| line_key.trim() == key)
-        }) {
-            self.lines.remove(index);
-        }
-    }
-
-    fn ensure_section(&mut self, section: &str) -> (usize, usize) {
-        if let Some(range) = self.section_range(section) {
-            return range;
-        }
-        if self
-            .lines
-            .last()
-            .is_some_and(|line| !line.trim().is_empty())
-        {
-            self.lines.push(String::new());
-        }
-        let start = self.lines.len();
-        self.lines.push(format!("[{section}]"));
-        (start, self.lines.len())
-    }
-
-    fn section_range(&self, section: &str) -> Option<(usize, usize)> {
-        let header = format!("[{section}]");
-        let start = self
-            .lines
-            .iter()
-            .position(|line| table_header(line) == Some(header.as_str()))?;
-        let end = self
-            .lines
-            .iter()
-            .enumerate()
-            .skip(start + 1)
-            .find_map(|(index, line)| table_header(line).map(|_| index))
-            .unwrap_or(self.lines.len());
-        Some((start, end))
-    }
-}
-
-fn table_header(line: &str) -> Option<&str> {
-    let mut header = line.trim();
-    if !header.starts_with('[') {
-        return None;
-    }
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, ch) in header.char_indices() {
-        if escaped {
-            escaped = false;
-        } else if quote == Some('"') && ch == '\\' {
-            escaped = true;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() {
-            match ch {
-                '\'' | '"' => quote = Some(ch),
-                '#' => {
-                    header = header[..index].trim_end();
-                    break;
-                }
-                _ => {}
-            }
-        }
-    }
-    header.ends_with(']').then_some(header)
-}
-
-fn toml_string(value: &str) -> String {
-    let escaped = value
-        .chars()
-        .flat_map(|ch| match ch {
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect::<Vec<_>>(),
-            '\t' => "\\t".chars().collect::<Vec<_>>(),
-            _ => vec![ch],
-        })
-        .collect::<String>();
-    format!("\"{escaped}\"")
 }
 
 #[cfg(test)]
@@ -1393,6 +1359,10 @@ group = "old"
     fn probe_patch_recognizes_commented_and_quoted_table_boundaries() {
         for input in [
             "[probe] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[\"probe\"] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[ probe ]\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[probe]\n\"enabled\" = true # keep\n[probe.notifications]\nenabled = true\n",
+            "[custom]\nnote = \"\"\"\n[probe]\nenabled = true\n\"\"\"\n[probe]\nenabled = true\n[probe.notifications]\nenabled = true\n",
             "[probe]\npoll_seconds = 15\n[probe.notifications] # next table\nenabled = true\n",
             "[probe] # target\npoll_seconds = 15\n[\"custom#table\"] # next table\nenabled = true\n",
             "[probe]\npoll_seconds = 15\n['custom#table'] # next table\nenabled = true\n",
@@ -1407,7 +1377,7 @@ group = "old"
             let mut expected: toml::Value = toml::from_str(input).unwrap();
             expected["probe"].as_table_mut().unwrap().insert("enabled".into(), toml::Value::Boolean(false));
             assert_eq!(actual, expected, "{input}");
-            for line in input.lines().filter(|line| line.contains('#')) {
+            for line in input.lines().filter(|line| line.trim_start().starts_with('[') && line.contains('#')) {
                 assert!(output.contains(line), "commented headers are preserved");
             }
         }
@@ -1524,6 +1494,10 @@ mod atomic_write_tests {
         write_runtime_env(&root.join("env"), &format!("AGENTHUB_SECRET_KEY={key}\n")).unwrap();
         for probe in [
             "[probe] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[\"probe\"] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[ probe ]\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[probe]\n\"enabled\" = true # keep\n[probe.notifications]\nenabled = true\n",
+            "[custom]\nnote = \"\"\"\n[probe]\nenabled = true\n\"\"\"\n[probe]\nenabled = true\n[probe.notifications]\nenabled = true\n",
             "[probe]\n[probe.notifications] # next table\nenabled = true\n",
         ] {
             let original = format!(
@@ -1553,6 +1527,8 @@ mod atomic_write_tests {
                 .insert("enabled".into(), toml::Value::Boolean(false));
             assert_eq!(actual, expected);
             assert!(text.contains("[\"custom#table\"] # kept\nenabled = true"));
+            if probe.contains("# keep") { assert!(text.contains("\"enabled\" = false # keep")); }
+            if probe.contains("note =") { assert!(text.contains("note = \"\"\"\n[probe]\nenabled = true\n\"\"\"")); }
         }
         fs::remove_dir_all(root).unwrap();
     }

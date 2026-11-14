@@ -369,7 +369,7 @@ impl State {
             identity: identity.into(),
             record_count: self.next_seq,
             settled_count: self.next_seq,
-            events,
+            events: events.into(),
         }))
     }
 }
