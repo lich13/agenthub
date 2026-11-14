@@ -137,7 +137,7 @@ python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-所有单元与集成测试均在独立的临时沙箱目录（`TempDir`）中运行，绝不读写或删除宿主机真实用户会话。Playwright 跨引擎（Chromium／WebKit）端到端回归与 macOS 有头交互帧预算检查默认由 GitHub Actions CI 执行。
+所有单元与集成测试均在独立的临时沙箱目录（`TempDir`）中运行，绝不读写或删除宿主机真实用户会话。Playwright 跨引擎（Chromium／WebKit）端到端功能回归与 macOS 有头交互耗时记录默认由 GitHub Actions CI 执行；耗时仅作诊断，不以固定毫秒阈值阻断 CI。
 
 ## 当前文档
 

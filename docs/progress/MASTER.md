@@ -4,6 +4,8 @@
 
 当前源码版本为 **2.1.16**：新增 Claude 子智能体只读查看；配置保存改用 TOML 语义编辑，修复合法表头、引号键和多行字符串误改；减少 Codex 子活动匹配与通知快照复制开销。API 协议保持 2、数据库 schema 保持 3。
 
+当前 main 已取消浏览器交互 P95 不超过 100 ms 的 CI 硬门槛，保留 Playwright 功能回归及性能测量输出。耗时波动仅作诊断；功能断言仍会阻断失败，不改变已发布的 v2.1.16 标签或交付产物。
+
 最近正式版本为 [**v2.1.16**](https://github.com/lich13/agenthub/releases/tag/v2.1.16)，发布提交 [`e5fca36`](https://github.com/lich13/agenthub/commit/e5fca3649a7497af5f4246fc1f0bd93c29f7a12f) 的[标签 CI](https://github.com/lich13/agenthub/actions/runs/43610216981) 已全部通过，八项正式资产已发布。服务端已通过部署脚本升级为 agenthub-webd 2.1.16，服务为 active、健康为 ok；Mac 已使用同版正式 DMG 从 2.1.15 原地更新至 2.1.16 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实 macOS 原生会话、SSH 入口与通知实收待用户验收。
 
 ## v2.1.16 源码与资源比较

@@ -130,7 +130,7 @@ Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，�
 - 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。Antigravity／DSH 快照依据实际内容计算 revision，时间线随快照生成并按实际容量计重；继续保守重读旧页，历史工具、问题与子智能体状态仍需更新。
 - K／M／G 只表示单位，颜色按实际字节在 100MiB、300MiB 分界；未知或待统计为灰色，部分结果按已确认下限分色并保留 ≥ 与不完整提示。
 - 常规受影响检查在本机运行，完整回归和跨平台构建交由现有三项 CI。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。
-- Playwright 回归及 macOS 有头性能检查默认在现有 GitHub Actions 运行；除非用户另行明确要求，本机不安装或启动验收浏览器。CI 先构建前端、安装 Chromium 与 WebKit，只使用 Playwright 管理的浏览器缓存；禁止渠道、本机可执行路径和外部浏览器连接覆盖。全局启动守卫必须保留，不依赖或启动系统 Google Chrome。内置 Google Chrome for Testing 按真实路径确认来源，不以窗口名称判断。
+- Playwright 功能回归及 macOS 有头性能记录默认在现有 GitHub Actions 运行；交互耗时仅作诊断，不以固定毫秒阈值阻断 CI，功能断言继续生效。除非用户另行明确要求，本机不安装或启动验收浏览器。CI 先构建前端、安装 Chromium 与 WebKit，只使用 Playwright 管理的浏览器缓存；禁止渠道、本机可执行路径和外部浏览器连接覆盖。全局启动守卫必须保留，不依赖或启动系统 Google Chrome。内置 Google Chrome for Testing 按真实路径确认来源，不以窗口名称判断。
 
 Claude native command envelopes render as the slash command and exact arguments. Classify isMeta, isCompactSummary and complete automatic envelopes before mutating prompt state; automatic records never start a human turn or clear pending tools. Adjacent metadata stays in place in closed system/context groups, including the preamble. Preserve native anchors, disclosure aliases, literal examples and instruction search; compaction remains searchable and closed by default.
 

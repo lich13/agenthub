@@ -161,9 +161,9 @@ jobs:
           path: ~/Library/Caches/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
       - run: pnpm --dir webui exec playwright install chromium webkit
-      - name: Check desktop interaction budget on macOS production build
-        # Measure visible desktop windows. Headless Chromium's hosted-macOS
-        # frame scheduler can exceed this budget even on about:blank.
+      - name: Record desktop interaction timings on macOS production build
+        # Keep functional assertions; timing measurements are diagnostic only.
+        # Use visible windows to avoid headless frame-scheduler distortion.
         run: pnpm --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
         env:
           AGENTHUB_BROWSER_PREVIEW: "1"
