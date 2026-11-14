@@ -385,7 +385,7 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
 }
 
 fn bounded(text: &str) -> String {
-    crate::security::redact_output(&text.chars().take(256 * 1024).collect::<String>())
+    text.chars().take(256 * 1024).collect()
 }
 fn printable(value: &Value) -> String {
     fn clean(v: &Value) -> Value {
@@ -977,7 +977,7 @@ impl Parser {
                                             position: position as u64 + 1,
                                             turn_id: format!("{turn}:{call}"),
                                             kind: "reply_needed".into(),
-                                            body: bounded(&body),
+                                            body: crate::security::redact_output(&bounded(&body)),
                                             timestamp_ms: ts,
                                         },
                                     );
@@ -1301,7 +1301,7 @@ impl Parser {
                                 position: position as u64 + 1,
                                 turn_id: format!("{turn}:permission:{request}"),
                                 kind: "authorization".into(),
-                                body: bounded(&body),
+                                body: crate::security::redact_output(&bounded(&body)),
                                 timestamp_ms: ts,
                             },
                         );
@@ -1590,7 +1590,7 @@ fn finish(
             position: position as u64 + 1,
             turn_id: turn.clone(),
             kind: kind.into(),
-            body,
+            body: crate::security::redact_output(&body),
             timestamp_ms: ts,
         });
 }

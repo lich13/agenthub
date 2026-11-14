@@ -1,5 +1,4 @@
 import type {
-  AgentProviderInfo,
   CodexConfig,
   HiddenThreadDeletePlan,
   JobRecord,
@@ -10,7 +9,6 @@ import type {
   ProbeSettings,
   ProbeStatus,
   SystemCapabilitiesResponse,
-  SystemVersion,
   ThreadBlockPage,
   ThreadDetail,
   ThreadSummary,
@@ -58,40 +56,7 @@ export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateS
   };
 }
 
-export function demoSystemVersion(): SystemVersion {
-  return {
-    panel_current: "0.1.5",
-    panel_latest: "v0.1.5",
-    panel_update_available: false,
-    codex_current: "0.137.0",
-    codex_latest: "0.137.0",
-    codex_update_available: false,
-    codex_user: "codex-cli 0.137.0",
-    codex_root: "codex-cli 0.137.0",
-    codex_raw: "codex-cli 0.137.0"
-  };
-}
 
-export function demoProviders(): AgentProviderInfo[] {
-  return [
-    {
-      id: "codex",
-      label: "Codex",
-      status: "ready",
-      description: "完整 Codex 控制面，使用官方 state DB、session_index、rollout 与受控 job。",
-      safety: "保留官方数据结构，不修改 Codex DB schema"
-    },
-    {
-      id: "grok_build",
-      label: "Grok Build",
-      status: "ready",
-      description: "只读浏览 Grok Build 会话、消息和工具活动。",
-      safety: "改名走原生协议，删除仅限本地 session 目录"
-    },
-    { id: "cursor", label: "Cursor CLI", status: "planned", capabilities: [], safety: "未开放命令执行" },
-    { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
-  ];
-}
 
 export function demoProbeStatus(fixture: DemoFixtureKey = "linux-api"): ProbeStatus {
   const platform = demoPlatformOverview(fixture);
@@ -199,7 +164,6 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
       }
     },
     created_at: new Date(Date.now() - (index + 3) * 300000).toISOString(),
-    handled_at: null
   }));
   return {
     available: true,
@@ -231,7 +195,6 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
           created_at: new Date().toISOString(),
-          handled_at: null
         },
         {
           id: "probe-event-completion-demo",
@@ -257,7 +220,6 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
           created_at: new Date(Date.now() - 300000).toISOString(),
-          handled_at: null
         },
         {
           id: "probe-event-hook-demo",
@@ -283,7 +245,6 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             dedupe: { claimed: false, duplicate: true, status: "duplicate" }
           },
           created_at: new Date(Date.now() - 600000).toISOString(),
-          handled_at: null
         },
         ...retryEvents
       ]
@@ -518,7 +479,6 @@ export function demoUnifiedCleanupResult(request?: UnifiedCleanupExecuteRequest)
     skippedCount: 0,
     failedCount: 0,
     deletedBytes: scopes.reduce((sum, item) => sum + item.deletedBytes, 0),
-    stoppedEarly: false,
     scopes
   };
 }

@@ -9,12 +9,7 @@ use super::{
 use anyhow::{ensure, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashSet,
-    fs::File,
-    io::{BufRead, BufReader},
-    path::Path,
-};
+use std::{collections::HashSet, path::Path};
 
 pub fn is_async_question_tool(name: &str) -> bool {
     matches!(
@@ -310,8 +305,14 @@ fn native_question_answers(text: &str) -> Option<Vec<(String, usize)>> {
         .collect()
 }
 
-static QUESTION_CACHE: crate::read_cache::ReadCache<Vec<AsyncQuestionCall>> =
-    crate::read_cache::ReadCache::new(crate::resource_limits::CODEX_QUESTION_CACHE_BYTES);
+#[derive(Default)]
+struct QuestionState {
+    tracker: AsyncQuestionTracker,
+    turn: Option<String>,
+}
+
+static QUESTION_CACHE: crate::jsonl_cache::JsonlCache<QuestionState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_QUESTION_CACHE_BYTES);
 
 pub(crate) fn evict_idle_question_cache(max_idle: std::time::Duration) {
     QUESTION_CACHE.evict_idle(max_idle);
@@ -320,48 +321,30 @@ pub(crate) fn evict_idle_question_cache(max_idle: std::time::Duration) {
 pub fn rollout_async_questions(path: &Path) -> Result<Vec<AsyncQuestionCall>> {
     QUESTION_CACHE.read(
         path,
-        |calls, _| {
-            calls
+        |_| Ok(0),
+        true,
+        |state, line, index, _| {
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                let mut value: Value = serde_json::from_slice(line)?;
+                normalize_canonical_turn(&mut value, &mut state.turn);
+                state.tracker.push(&value, index);
+            }
+            Ok(())
+        },
+        |state, info| {
+            ensure!(
+                !info.partial,
+                "question transcript has an incomplete record"
+            );
+            Ok(state.tracker.calls.clone())
+        },
+        |state| {
+            state
+                .tracker
+                .calls
                 .iter()
                 .map(|c| 512 + serde_json::to_vec(&c.questions).map_or(0, |v| v.len() as u64))
                 .sum()
-        },
-        || {
-            let file = File::open(path)?;
-            let before = file.metadata()?;
-            let mut reader = BufReader::new(file);
-            let mut tracker = AsyncQuestionTracker::default();
-            let mut turn = None;
-            let mut line = Vec::new();
-            let mut index = 0;
-            loop {
-                line.clear();
-                if reader.read_until(b'\n', &mut line)? == 0 {
-                    break;
-                }
-                index += 1;
-                // Parsing the entire line rejects an unfinished answer instead of using stale state.
-                if line.iter().all(u8::is_ascii_whitespace) {
-                    continue;
-                }
-                let mut value: Value = serde_json::from_slice(&line)?;
-                normalize_canonical_turn(&mut value, &mut turn);
-                tracker.push(&value, index);
-            }
-            let after = std::fs::metadata(path)?;
-            ensure!(
-                before.len() == after.len() && before.modified()? == after.modified()?,
-                "question transcript changed while reading"
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                ensure!(
-                    before.dev() == after.dev() && before.ino() == after.ino(),
-                    "question transcript was replaced"
-                );
-            }
-            Ok(tracker.calls)
         },
     )
 }

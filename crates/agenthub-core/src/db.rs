@@ -42,7 +42,6 @@ pub struct ProbeEvent {
     pub source: String,
     pub payload: Value,
     pub created_at: i64,
-    pub handled_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -472,7 +471,7 @@ impl PanelDb {
     pub fn list_jobs(&self, limit: u32) -> Result<Vec<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
         let mut stmt = conn.prepare(
-            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, '' AS output, error FROM jobs ORDER BY started_at DESC LIMIT ?1",
+            "SELECT id, kind, status, title, started_at, finished_at, exit_code, '' AS output, error FROM jobs ORDER BY started_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], job_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -486,7 +485,7 @@ impl PanelDb {
     pub fn job_with_output(&self, id: &str, include_output: bool) -> Result<Option<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
         conn.query_row(
-            "SELECT id, kind, status, title, thread_id, turn_id, started_at, finished_at, exit_code, CASE WHEN ?2 THEN output ELSE '' END, error FROM jobs WHERE id=?1",
+            "SELECT id, kind, status, title, started_at, finished_at, exit_code, CASE WHEN ?2 THEN output ELSE '' END, error FROM jobs WHERE id=?1",
             params![id, include_output],
             job_from_row,
         )
@@ -528,7 +527,6 @@ impl PanelDb {
             source: event.source.to_string(),
             payload: event.payload,
             created_at: now,
-            handled_at: None,
         })
     }
 
@@ -536,7 +534,7 @@ impl PanelDb {
         let conn = self.conn.lock().expect("db mutex");
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at, handled_at
+            SELECT id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
             FROM probe_events
             ORDER BY created_at DESC, rowid DESC
             LIMIT ?1
@@ -762,8 +760,6 @@ pub struct JobRecord {
     pub kind: String,
     pub status: String,
     pub title: String,
-    pub thread_id: Option<String>,
-    pub turn_id: Option<String>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub exit_code: Option<i32>,
@@ -777,13 +773,11 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
         kind: row.get(1)?,
         status: row.get(2)?,
         title: row.get(3)?,
-        thread_id: row.get(4)?,
-        turn_id: row.get(5)?,
-        started_at: row.get(6)?,
-        finished_at: row.get(7)?,
-        exit_code: row.get(8)?,
-        output: row.get(9)?,
-        error: row.get(10)?,
+        started_at: row.get(4)?,
+        finished_at: row.get(5)?,
+        exit_code: row.get(6)?,
+        output: row.get(7)?,
+        error: row.get(8)?,
     })
 }
 
@@ -800,7 +794,6 @@ fn probe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeEvent>
         source: row.get(6)?,
         payload,
         created_at: row.get(8)?,
-        handled_at: row.get(9)?,
     })
 }
 
@@ -969,7 +962,6 @@ mod tests {
         assert_eq!(events[0].kind, "reply-needed");
         assert_eq!(events[0].thread_id.as_deref(), Some("thread-a"));
         assert_eq!(events[0].payload["turn_id"], "turn-1");
-        assert!(events[0].handled_at.is_none());
     }
 
     #[test]

@@ -25,10 +25,6 @@ pub(crate) async fn system_capabilities(state: AppState) -> ApiResponse {
     )
 }
 
-pub(crate) async fn system_version(_state: AppState) -> ApiResponse {
-    ok(linux_version_info().await?)
-}
-
 pub(crate) async fn system_update_status(state: AppState) -> ApiResponse {
     let latest = github_latest_release("lich13", "agenthub").await.ok();
     let platform = state.platform().clone();
@@ -39,14 +35,6 @@ pub(crate) async fn system_update_status(state: AppState) -> ApiResponse {
         latest.as_deref(),
         None,
     ))
-}
-
-async fn linux_version_info() -> AnyhowResult<agenthub_core::system::VersionInfo> {
-    let inputs = agenthub_core::system::VersionInfoInputs {
-        panel_latest: github_latest_release("lich13", "agenthub").await.ok(),
-        codex_latest: npm_latest_version("@openai/codex").await.ok(),
-    };
-    agenthub_core::system::version_info_with_inputs(inputs).await
 }
 
 async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> {
@@ -66,31 +54,6 @@ async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> 
         .json()
         .await?;
     Ok(release.tag_name)
-}
-
-async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
-    #[derive(Deserialize)]
-    struct DistTags {
-        latest: String,
-    }
-    #[derive(Deserialize)]
-    struct PackageInfo {
-        #[serde(rename = "dist-tags")]
-        dist_tags: DistTags,
-    }
-    let encoded = package.replace('/', "%2F");
-    let url = format!("https://registry.npmjs.org/{encoded}");
-    let package: PackageInfo = agenthub_core::http_client_builder()
-        .timeout(Duration::from_secs(8))
-        .build()?
-        .get(url)
-        .header("user-agent", "agenthub")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(package.dist_tags.latest)
 }
 
 pub(crate) async fn start_update_action(

@@ -85,6 +85,12 @@ pub(crate) fn start(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut observer = Observer::default();
         loop {
+            let _ = agenthub_core::read_tasks::spawn_blocking(|| {
+                agenthub_core::evict_idle_detail_caches(
+                    agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL,
+                );
+            })
+            .await;
             let remote = app.state::<crate::remote::RemoteConnections>();
             let source = remote.view();
             let state = app.state::<crate::DesktopState>().inner().clone();

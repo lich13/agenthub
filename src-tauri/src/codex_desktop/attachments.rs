@@ -366,6 +366,9 @@ async fn deliver(
         .into_iter()
         .filter(|value| !existing.iter().any(|old| old.same_selected_file(value)))
         .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Ok(());
+    }
     if current.handles.len() + values.len() > 32 {
         return Err("引用数量超出限制，本次附件未添加".into());
     }

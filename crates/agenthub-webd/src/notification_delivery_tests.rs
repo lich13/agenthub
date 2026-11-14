@@ -1,5 +1,4 @@
 use super::*;
-use crate::send_bark_notification;
 use agenthub_core::{
     db::NewProbeEvent,
     native_probe::{NativeProvider, NativeTurnEvent},
@@ -335,10 +334,18 @@ impl Drop for Fixture {
 async fn bark_posts_the_complete_chinese_body_without_exposing_the_key_in_outcomes() {
     let fixture = Fixture::new().await;
     let request = fixture.request();
-    let outcome =
-        send_bark_notification(&fixture.config, TOKEN.as_bytes(), &request, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+    let outcome = crate::bark::send_chunk(
+        &fixture.config,
+        TOKEN.as_bytes(),
+        &request,
+        &request.body,
+        0,
+        1,
+        "fixture-request",
+        1,
+        REQUEST_TIMEOUT,
+    )
+    .await;
     assert!(outcome.sent && !outcome.skipped);
     assert_eq!(outcome.http_status, Some(200));
     assert_eq!(outcome.request_count, 1);
@@ -1172,14 +1179,18 @@ async fn bark_requires_both_a_successful_http_status_and_code_200() {
         fixture
             .bark
             .reply(Reply::json(StatusCode::from_u16(status).unwrap(), body));
-        let outcome = send_bark_notification(
+        let outcome = crate::bark::send_chunk(
             &fixture.config,
             TOKEN.as_bytes(),
             &fixture.request(),
+            &fixture.request().body,
+            0,
+            1,
+            "fixture-request",
+            1,
             REQUEST_TIMEOUT,
         )
-        .await
-        .unwrap();
+        .await;
         assert_eq!(
             (outcome.sent, outcome.retryable, outcome.uncertain),
             (sent, retryable, uncertain)
@@ -1197,14 +1208,18 @@ async fn redirects_are_rejected_without_forwarding_the_device_key() {
         Reply::json(StatusCode::TEMPORARY_REDIRECT, json!({"code":200}))
             .header("Location", &format!("{}/push", destination.url)),
     );
-    let outcome = send_bark_notification(
+    let outcome = crate::bark::send_chunk(
         &fixture.config,
         TOKEN.as_bytes(),
         &fixture.request(),
+        &fixture.request().body,
+        0,
+        1,
+        "fixture-request",
+        1,
         REQUEST_TIMEOUT,
     )
-    .await
-    .unwrap();
+    .await;
     assert!(!outcome.sent && !outcome.retryable);
     assert_eq!(outcome.reason.as_deref(), Some("redirect_rejected"));
     assert_eq!(fixture.bark.count(), 1);
@@ -1242,14 +1257,18 @@ async fn retry_after_headers_reach_the_persistent_schedule() {
         Reply::json(StatusCode::SERVICE_UNAVAILABLE, json!({"code":503}))
             .header("Retry-After", &date),
     );
-    let outcome = send_bark_notification(
+    let outcome = crate::bark::send_chunk(
         &fixture.config,
         TOKEN.as_bytes(),
         &fixture.request(),
+        &fixture.request().body,
+        0,
+        1,
+        "fixture-request",
+        1,
         REQUEST_TIMEOUT,
     )
-    .await
-    .unwrap();
+    .await;
     assert!((118_000..=120_000).contains(&outcome.retry_after_ms.unwrap()));
 }
 
@@ -1267,14 +1286,18 @@ async fn incomplete_http_response_is_classified_without_leaking_transport_detail
         socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 512\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}").await.unwrap();
         socket.shutdown().await.unwrap();
     });
-    let outcome = send_bark_notification(
+    let outcome = crate::bark::send_chunk(
         &fixture.config,
         TOKEN.as_bytes(),
         &fixture.request(),
+        &fixture.request().body,
+        0,
+        1,
+        "fixture-request",
+        1,
         REQUEST_TIMEOUT,
     )
-    .await
-    .unwrap();
+    .await;
     task.await.unwrap();
     assert!(!outcome.sent && outcome.retryable && outcome.uncertain);
     assert_eq!(outcome.reason.as_deref(), Some("response_read"));
@@ -1291,14 +1314,18 @@ async fn refused_loopback_connection_is_retryable_and_has_only_a_safe_category()
     drop(listener);
     for path in ["", "certificate", "ssl", "dns", "certificate/ssl/dns"] {
         fixture.config.probe.notifications.server_url = format!("http://{address}/{path}");
-        let outcome = send_bark_notification(
+        let outcome = crate::bark::send_chunk(
             &fixture.config,
             TOKEN.as_bytes(),
             &fixture.request(),
+            &fixture.request().body,
+            0,
+            1,
+            "fixture-request",
+            1,
             REQUEST_TIMEOUT,
         )
-        .await
-        .unwrap();
+        .await;
         assert!(
             !outcome.sent && outcome.retryable && !outcome.uncertain,
             "{path}"
@@ -1368,12 +1395,7 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
         Reply::json(StatusCode::SERVICE_UNAVAILABLE, json!({"code":503})),
     ]);
     let mut event = fixture.event();
-    event.bark_body = format!(
-        "{}\n{}\n{}",
-        "甲".repeat(900),
-        "乙".repeat(900),
-        "丙".repeat(900)
-    );
+    event.bark_body = "甲\n乙\n丙".into();
     let key = codex_key(&event);
     // Simulate an already-encrypted pre-upgrade payload, including its saved chunks.
     let mut candidate = queued_candidate(
@@ -1389,8 +1411,11 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
     )
     .unwrap();
     candidate.request.body = event.bark_body.clone();
-    candidate.chunks =
-        crate::bark_body_chunks(&event.bark_body, crate::PROBE_BARK_BODY_CHUNK_BYTES);
+    candidate.chunks = vec![
+        "第 1/3 段\n\n甲\n".into(),
+        "第 2/3 段\n\n乙\n".into(),
+        "第 3/3 段\n\n丙".into(),
+    ];
     let first = deliver(
         &|| Ok(fixture.config.clone()),
         &fixture.config,
@@ -1794,4 +1819,126 @@ async fn github_ci_batch_acknowledges_success_before_an_enqueue_failure() {
         serde_json::from_str::<Value>(&raw).unwrap()["pending"],
         json!([])
     );
+}
+
+#[tokio::test]
+async fn synchronous_question_retry_survives_parallel_tools_but_stops_when_resolved() {
+    for change in [
+        "parallel",
+        "answered",
+        "cancelled",
+        "new-turn",
+        "context-switch",
+    ] {
+        let fixture = Fixture::new().await;
+        let rows = [
+            json!({"type":"session_meta","payload":{"id":"fixture-main"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn"}}),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"fixture-question","arguments":json!({"questions":[{"id":"mode","question":"Fixture choice?"}]}).to_string()}}),
+        ];
+        fs::write(
+            &fixture.rollout,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut event = fixture.event();
+        event.kind = "reply_needed".into();
+        event.event_type = "reply_needed".into();
+        event.payload["body_source"] = json!("request_user_input");
+        event.payload["call_id"] = json!("fixture-question");
+        fixture.bark.reply(Reply::json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"code":503}),
+        ));
+        let key = codex_key(&event);
+        let first = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            true,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.status.as_deref(), Some("waiting_retry"));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&fixture.rollout)
+            .unwrap();
+        for row in [
+            json!({"type":"turn_context","payload":{"turn_id":"fixture-turn"}}),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"exec","call_id":"parallel-tool"}}),
+            json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"patch","call_id":"parallel-patch"}}),
+        ] {
+            writeln!(file, "{row}").unwrap();
+        }
+        let resolution = match change {
+            "answered" => Some(
+                json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"fixture-question","output":"fixture answer"}}),
+            ),
+            "cancelled" => Some(
+                json!({"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"fixture-turn"}}),
+            ),
+            "new-turn" => Some(
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"next-turn"}}),
+            ),
+            "context-switch" => {
+                Some(json!({"type":"turn_context","payload":{"turn_id":"next-turn"}}))
+            }
+            _ => None,
+        };
+        if let Some(row) = resolution {
+            writeln!(file, "{row}").unwrap();
+        }
+        fixture.due_now(&key);
+        fixture.bark.reply(Reply::bark());
+        retry_pending(&fixture.config, &fixture.db).await.unwrap();
+        assert_eq!(
+            fixture.bark.count(),
+            if change == "parallel" { 2 } else { 1 },
+            "{change}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn large_source_proof_keeps_retry_and_detects_rewrites() {
+    let fixture = Fixture::new().await;
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.rollout)
+        .unwrap();
+    let block = [vec![b' '; 65535], vec![b'\n']].concat();
+    while file.metadata().unwrap().len() <= 128 * 1024 * 1024 {
+        file.write_all(&block).unwrap();
+    }
+    let event = fixture.event();
+    let proof = codex_fingerprint(&fixture.config, &event).unwrap();
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"code":503}),
+    ));
+    let key = codex_key(&event);
+    codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    fixture.due_now(&key);
+    fixture.bark.reply(Reply::bark());
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.bark.count(), 2);
+    let mut rewrite = fs::OpenOptions::new()
+        .write(true)
+        .open(&fixture.rollout)
+        .unwrap();
+    rewrite.seek(SeekFrom::Start(proof.length / 2)).unwrap();
+    rewrite.write_all(b"x").unwrap();
+    assert!(!same_source(&fixture.rollout, &proof));
 }

@@ -30,6 +30,7 @@ use super::{
     PendingElicitation, ThreadDetail, ThreadSummary, UserInputAnswer,
 };
 
+#[cfg(test)]
 pub fn message_blocks_from_events<'a>(
     events: impl IntoIterator<Item = &'a Value>,
 ) -> Vec<MessageBlock> {

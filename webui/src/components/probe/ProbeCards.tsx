@@ -212,6 +212,7 @@ export function ProbeRuntimeSettingsCard(props: {
     label: string;
     min: number;
     max: number;
+    step?: string;
     value: string | number;
     onChange: (raw: string) => void;
   }[] = [
@@ -238,22 +239,23 @@ export function ProbeRuntimeSettingsCard(props: {
     },
     {
       label: "Hook 事件行数",
-      min: 1,
-      max: 5000,
+      min: 10,
+      max: 10000,
       value: draft.observability.hook_event_max_lines,
       onChange: raw => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(raw) }),
     },
     {
       label: "冷却行数",
-      min: 1,
-      max: 5000,
+      min: 10,
+      max: 10000,
       value: draft.observability.hook_cooldown_max_lines,
       onChange: raw => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(raw) }),
     },
     {
-      label: "日志上限 MB",
-      min: 1,
-      max: 10,
+      label: "日志上限 MiB",
+      min: 4096 / (1024 * 1024),
+      max: 8,
+      step: "any",
       value: logBytesDraftToMb(draft.observability.log_max_bytes),
       onChange: raw => setObservability({ log_max_bytes: mbDraftToLogBytes(raw) }),
     },
@@ -375,6 +377,7 @@ export function ProbeRuntimeSettingsCard(props: {
                 type="number"
                 min={field.min}
                 max={field.max}
+                step={field.step ?? 1}
                 value={field.value}
                 onChange={event => field.onChange(event.target.value)}
               />

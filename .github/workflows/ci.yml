@@ -42,7 +42,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('webui/pnpm-lock.yaml') }}
       - run: pnpm --dir webui exec playwright install --with-deps chromium webkit
       - run: pnpm --dir webui exec playwright test --grep-invert @desktop-performance
         env:
@@ -159,7 +159,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Caches/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('webui/pnpm-lock.yaml') }}
       - run: pnpm --dir webui exec playwright install chromium webkit
       - name: Record desktop interaction timings on macOS production build
         # Keep functional assertions; timing measurements are diagnostic only.

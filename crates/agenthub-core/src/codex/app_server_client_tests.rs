@@ -2,7 +2,26 @@
 
 use super::*;
 use crate::shell::{shell_quote, QuoteStyle};
-use std::{fs, os::unix::fs::symlink, path::PathBuf, time::Duration};
+use std::{fs, os::unix::fs::symlink, path::PathBuf};
+
+#[tokio::test]
+async fn protocol_line_limit_stops_before_waiting_for_a_newline() {
+    let (mut writer, reader) = tokio::io::duplex(MAX_PROTOCOL_LINE_BYTES + 1);
+    writer
+        .write_all(&vec![b'x'; MAX_PROTOCOL_LINE_BYTES + 1])
+        .await
+        .unwrap();
+    // The writer stays open: a read_line-based implementation would hang here.
+    let mut reader = tokio::io::BufReader::new(reader);
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        read_response::<Value>(&mut reader, 1),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(error.to_string().contains("size limit"));
+}
 
 struct Fixture {
     root: PathBuf,
@@ -89,10 +108,7 @@ async fn resolution_prefers_newest_version_then_earlier_candidate_on_ties() {
     let tied = fixture.executable_with_version("other/codex", "0.154.0");
     assert!(legacy.is_file() && current.is_file());
 
-    let client = CodexAppServerClient::with_candidates(
-        vec![legacy, current.clone(), tied],
-        Duration::from_secs(2),
-    );
+    let client = CodexAppServerClient::with_candidates(vec![legacy, current.clone(), tied]);
 
     assert_eq!(client.resolve_executable().await.unwrap(), current);
 }
@@ -102,8 +118,7 @@ async fn resolution_errors_when_every_candidate_is_unusable() {
     let fixture = Fixture::new();
     let too_old = fixture.executable_with_version("too-old/codex", "0.144.1");
     let nonzero = fixture.executable_with_script("failed/codex", "#!/bin/sh\nexit 1\n");
-    let client =
-        CodexAppServerClient::with_candidates(vec![too_old, nonzero], Duration::from_secs(2));
+    let client = CodexAppServerClient::with_candidates(vec![too_old, nonzero]);
 
     let error = client.resolve_executable().await.unwrap_err();
     assert!(error
@@ -117,10 +132,7 @@ async fn resolution_deduplicates_symlink_aliases_and_caches_the_selection() {
     let executable = fixture.executable_with_probe_log("codex");
     let alias = fixture.root.join("codex-alias");
     symlink(&executable, &alias).expect("create executable alias");
-    let client = CodexAppServerClient::with_candidates(
-        vec![executable.clone(), alias],
-        Duration::from_secs(2),
-    );
+    let client = CodexAppServerClient::with_candidates(vec![executable.clone(), alias]);
 
     assert_eq!(client.resolve_executable().await.unwrap(), executable);
     assert_eq!(fixture.probe_count(), 1);

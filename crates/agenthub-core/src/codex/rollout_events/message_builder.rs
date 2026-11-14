@@ -272,6 +272,7 @@ impl MessageBlockBuilder {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn finish(self) -> Vec<MessageBlock> {
         compact_chat_history(self.finish_uncompacted(), CHAT_HISTORY_LIMIT)
             .into_iter()

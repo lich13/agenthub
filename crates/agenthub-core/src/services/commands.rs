@@ -24,9 +24,6 @@ pub const DSH_RENAME: &str = "dsh.rename";
 pub const DSH_ARCHIVE: &str = "dsh.archive";
 pub const DSH_RESTORE: &str = "dsh.restore";
 pub const SYSTEM_CAPABILITIES: &str = "system.capabilities";
-pub const SYSTEM_VERSION: &str = "system.version";
-pub const SYSTEM_PLATFORM: &str = "system.platform";
-pub const SYSTEM_PROVIDERS: &str = "system.providers";
 pub const THREADS_LIST: &str = "threads.list";
 pub const THREADS_SUBAGENT_DETAIL: &str = "threads.subagentDetail";
 pub const THREADS_DETAIL: &str = "threads.detail";
@@ -54,9 +51,6 @@ pub const CLEANUP_HIDDEN_DRY_RUN: &str = "cleanup.hiddenDryRun";
 pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     GITHUB_CI_STATUS,
     SYSTEM_CAPABILITIES,
-    SYSTEM_VERSION,
-    SYSTEM_PLATFORM,
-    SYSTEM_PROVIDERS,
     THREADS_LIST,
     THREADS_DETAIL,
     THREADS_SUBAGENT_DETAIL,
@@ -112,9 +106,6 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
         command,
         GITHUB_CI_STATUS
             | SYSTEM_CAPABILITIES
-            | SYSTEM_VERSION
-            | SYSTEM_PLATFORM
-            | SYSTEM_PROVIDERS
             | THREADS_LIST
             | THREADS_DETAIL
             | THREADS_SUBAGENT_DETAIL

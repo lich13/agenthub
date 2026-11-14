@@ -1,5 +1,5 @@
 use agenthub_core::codex::{
-    hidden_thread_ids, list_threads,
+    hidden_and_archived_thread_ids, list_threads,
     subagents::{
         enrich_subagent_blocks, read_subagent_detail, SubagentActivity, SubagentDetailRequest,
         SubagentDetailResponse, SubagentEventKind, SubagentStatus,
@@ -973,7 +973,7 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
     assert!(list_threads(&fixture.paths, true, None, 100)
         .unwrap()
         .is_empty());
-    let hidden = hidden_thread_ids(&fixture.paths).unwrap();
+    let hidden = hidden_and_archived_thread_ids(&fixture.paths).unwrap().0;
     assert!(hidden.contains(CHILD));
     assert!(hidden.contains("grandchild"));
     assert!(thread_detail(&fixture.paths, CHILD).unwrap().is_none());

@@ -75,9 +75,6 @@ fn codex_path(config: &Config, event: &ProbeBuiltEvent) -> Option<PathBuf> {
 }
 
 fn prefix_digest(path: &Path, length: u64) -> Option<String> {
-    if length > 512 * 1024 * 1024 {
-        return None;
-    }
     let mut file = std::fs::File::open(path).ok()?.take(length);
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 32768];
@@ -97,11 +94,6 @@ fn codex_fingerprint(config: &Config, event: &ProbeBuiltEvent) -> Option<SourceP
     let path = codex_path(config, event)?;
     let identity = native_probe::file_identity(&path).ok()?;
     let length = std::fs::metadata(&path).ok()?.len();
-    // Preserve the existing Codex source-validation bound. Claude's hook
-    // verifier shares the digest reader but has its own larger transcript limit.
-    if length > 128 * 1024 * 1024 {
-        return None;
-    }
     let digest = prefix_digest(&path, length)?;
     Some(SourceProof {
         identity,
@@ -252,12 +244,18 @@ pub async fn codex(
         .or_else(|| event.payload["notification_source_ms"].as_i64())
         .or(db.notification_first_seen_ms(&event.dedupe_key)?)
         .unwrap_or_else(|| Utc::now().timestamp_millis());
+    let proof_config = config.clone();
+    let proof_event = event.clone();
+    let fingerprint = agenthub_core::read_tasks::spawn_blocking(move || {
+        codex_fingerprint(&proof_config, &proof_event)
+    })
+    .await?;
     let candidate = queued_candidate(
         config,
         db,
         Source::Codex {
             event: Box::new(event.clone()),
-            fingerprint: codex_fingerprint(config, event),
+            fingerprint,
             original_body: Some(event.bark_body.clone()),
         },
         super::notification_format::request(
@@ -452,7 +450,7 @@ pub(super) async fn claude_hook(
         super::notification_format::request("Claude Code", &hook.kind, "", "", &hook.body, &key);
     let event_ms = hook.received_ms;
     let proof_hook = hook.clone();
-    let proof = tokio::task::spawn_blocking(move || {
+    let proof = agenthub_core::read_tasks::spawn_blocking(move || {
         let context = super::claude_hook::context(&proof_hook).ok()?;
         claude_proof(&proof_hook, &context).ok()
     })
@@ -498,7 +496,7 @@ async fn process_claude_hook(
     let started = Instant::now();
     let hook = hook.clone();
     let original_proof = proof.clone();
-    let resolved = tokio::task::spawn_blocking(move || -> Result<_> {
+    let resolved = agenthub_core::read_tasks::spawn_blocking(move || -> Result<_> {
         let mut hook = hook;
         let context = super::claude_hook::context(&hook)?;
         // An interactive question notifies as a permission prompt; claiming it
@@ -957,7 +955,7 @@ async fn claude_source_state(
         } => {
             let (hook, proof, verified) = (hook.clone(), proof.clone(), *verified);
             Some(
-                tokio::task::spawn_blocking(move || {
+                agenthub_core::read_tasks::spawn_blocking(move || {
                     if !verified || !proof.as_ref().is_some_and(|p| same_source(&hook.path, p)) {
                         return Obsolete;
                     }
@@ -981,7 +979,7 @@ async fn claude_source_state(
             let delivery = delivery.clone();
             let instance = db.notification_instance_id().unwrap_or_default();
             Some(
-                tokio::task::spawn_blocking(move || {
+                agenthub_core::read_tasks::spawn_blocking(move || {
                     let Ok(context) = agenthub_core::claude::notification_context_for_key(
                         &agenthub_core::claude::ClaudePaths::default_for_user(),
                         &delivery.session_key,
@@ -1040,7 +1038,7 @@ async fn native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
             super::antigravity::source_current(delivery).await
         } else {
             let target = delivery.clone();
-            tokio::task::spawn_blocking(move || {
+            agenthub_core::read_tasks::spawn_blocking(move || {
                 native_probe::scan_event(target.provider, &target.thread_id, &target.event)
             })
             .await
@@ -1052,6 +1050,13 @@ async fn native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
 }
 
 async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
+    let (config, db, candidate) = (config.clone(), db.clone(), candidate.clone());
+    agenthub_core::read_tasks::spawn_blocking(move || current_snapshot(&config, &db, &candidate))
+        .await
+        .unwrap_or(false)
+}
+
+fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
     match &candidate.source {
         Source::Test => true,
         Source::GithubCi { event } => {
@@ -1086,9 +1091,22 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
                         e.suppression_reason.is_none() && event_enabled(config, candidate)
                     })
             } else {
-                if event.payload["body_source"] == "request_user_input"
-                    || event.payload["body_source"] == "proposed_plan"
-                {
+                let pending_question = event.payload["body_source"] == "request_user_input";
+                if pending_question {
+                    let Some((turn, call)) = event.turn_id.as_deref().zip(
+                        event.payload["call_id"]
+                            .as_str()
+                            .or(event.payload["item_id"].as_str()),
+                    ) else {
+                        return false;
+                    };
+                    if !matches!(
+                        codex::rollout_request_user_input_state(&path, turn, call),
+                        Ok(codex::RolloutRequestUserInputState::Pending)
+                    ) {
+                        return false;
+                    }
+                } else if event.payload["body_source"] == "proposed_plan" {
                     let Ok(Some(selection)) =
                         codex::rollout_hook_stop_message_selection(&path, None)
                     else {
@@ -1140,10 +1158,12 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
                                 | "turn/started"
                                 | "turn_aborted"
                                 | "turn_cancelled"
+                                | "turn/aborted"
+                                | "turn/cancelled"
                                 | "user_message"
-                                | "function_call"
-                                | "custom_tool_call"
-                        ) && payload["role"] != "user"
+                        ) && (pending_question
+                            || !matches!(kind, "function_call" | "custom_tool_call"))
+                            && payload["role"] != "user"
                             && !(outer == "turn_context"
                                 && turn.is_some_and(|id| Some(id) != event.turn_id.as_deref()))
                     })

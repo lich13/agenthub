@@ -307,14 +307,14 @@ export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   if (!draft.codex.host_label.trim()) errors.push("主机标签不能为空");
   if (!isIntegerInRange(draft.probe.poll_seconds, 5, 3600)) errors.push("轮询间隔必须在 5 到 3600 秒之间");
   if (!isIntegerInRange(draft.probe.recent_limit, 1, 500)) errors.push("最近事件数量必须在 1 到 500 之间");
-  if (!isIntegerInRange(draft.observability.hook_event_max_lines, 1, 5000)) {
-    errors.push("Hook 事件行数必须在 1 到 5000 之间");
+  if (!isIntegerInRange(draft.observability.hook_event_max_lines, 10, 10000)) {
+    errors.push("Hook 事件行数必须在 10 到 10000 之间");
   }
-  if (!isIntegerInRange(draft.observability.hook_cooldown_max_lines, 1, 5000)) {
-    errors.push("Hook 静默期行数必须在 1 到 5000 之间");
+  if (!isIntegerInRange(draft.observability.hook_cooldown_max_lines, 10, 10000)) {
+    errors.push("Hook 静默期行数必须在 10 到 10000 之间");
   }
-  if (!isIntegerInRange(draft.observability.log_max_bytes, 1024, 10485760)) {
-    errors.push("日志读取上限必须在 1024 到 10485760 字节之间");
+  if (!isIntegerInRange(draft.observability.log_max_bytes, 4096, 8388608)) {
+    errors.push("日志读取上限必须在 4096 到 8388608 字节之间");
   }
   if (!isIntegerInRange(draft.observability.event_retention_days, 1, 3650)) {
     errors.push("通知事件保留天数必须在 1 到 3650 天之间");

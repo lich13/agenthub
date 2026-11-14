@@ -17,6 +17,23 @@ spec.loader.exec_module(privacy)
 
 
 class PrivacyChecks(unittest.TestCase):
+    def test_websocket_and_fixed_host_templates_are_checked(self):
+        host = "fixture" + ".invalid-host"
+        for scheme in ("http", "https", "ws", "wss"):
+            for suffix in ("/socket", "${path}", "{path}"):
+                data = (scheme + "://" + host + suffix).encode()
+                self.assertIn("unreviewed_endpoint", privacy.problems(data, []))
+        self.assertEqual(privacy.problems(b"wss://socket.example.invalid/${path} ws://127.0.0.1:8080", []), [])
+
+    def test_ipv6_literals_reject_public_addresses_only(self):
+        public = ":".join(["2606", "4700", "4700", "", "1111"])
+        for data in (public.encode(), ("wss://[" + public + "]/socket").encode(), b"\x7fELF\0" + public.encode()):
+            self.assertIn("public_ip", privacy.problems(data, []))
+        self.assertEqual(privacy.problems(b"[::1]:8080 2001:db8::1 fe80::1 fd00::1 00:11:22:33:44:55", []), [])
+        # Python considers unallocated IPv6 ranges global; Rust paths and binary
+        # fragments in those reserved ranges are not public endpoint literals.
+        self.assertEqual(privacy.problems(b"db::{PanelDb} aead::{Aead} ::f", []), [])
+
     def test_reserved_examples_and_public_repository_are_allowed(self):
         self.assertEqual(privacy.problems(b"https://panel.example.com/agenthub/ 192.0.2.10 /Users/example/project author@users.noreply.github.com https://github.com/lich13/agenthub", []), [])
 

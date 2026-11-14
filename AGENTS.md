@@ -137,7 +137,7 @@ Claude native command envelopes render as the slash command and exact arguments.
 ## Grok Bot
 
 - `grokbot.list`／`grokbot.detail` 仅在桌面注册，复用公共历史 DTO、搜索和缓存。只读取当前账户 roster 与近期 transcript 切片，不扫描远程目录、不写原生会话。账户与线程共同确定身份；路径复制只返回实际存在的本线程缓存文件。
-- 通知默认关闭，只认明确待回复／待授权记录。持久化身份绑定账户、线程和原生请求；缓存淘汰或原子替换不能重放提醒，已回答或批准后停止首发和重试。普通卡片、发送失败及工具错误不表示回合终态。
+- Grok Bot Bark 暂停，保留开关、消息基线、历史和待回复／待授权展示及审批校验。普通 send-message 文字或附件不产生完成事件，待回复／待授权不进入 Bark 队列；首发与重试仍复核来源，旧消息级候选失效。当前账户缓存尚无已证实的整轮终结信号，不能用 requestId、最后一条消息、单工具状态或静默计时推断整轮结束。
 - 只读入口沿用共享菜单、阅读区、字体与间距；待处理交互使用“需要回复／需要授权”，不显示运行 spinner，不增加管理动作、说明小字或 Hook 占位。
 
 ## GitHub CI

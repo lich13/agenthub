@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::{ChildStdin, Command},
     sync::Mutex,
     task::JoinSet,
@@ -43,15 +43,12 @@ impl CodexAppServerClient {
     }
 
     #[doc(hidden)]
-    pub fn with_candidates(candidates: Vec<PathBuf>, _request_timeout: Duration) -> Self {
+    pub fn with_candidates(candidates: Vec<PathBuf>) -> Self {
         Self::with_optional_candidates(Some(candidates))
     }
 
     #[cfg(test)]
-    pub(super) fn with_resolved_executable(
-        executable: PathBuf,
-        _request_timeout: Duration,
-    ) -> Self {
+    pub(super) fn with_resolved_executable(executable: PathBuf) -> Self {
         Self {
             inner: Arc::new(CodexAppServerClientInner {
                 candidates: Some(vec![executable.clone()]),
@@ -126,8 +123,11 @@ pub(crate) async fn read_response<T: DeserializeOwned>(
     expected_id: i64,
 ) -> Result<T> {
     loop {
-        let mut line = String::new();
-        let read = stdout.read_line(&mut line).await?;
+        let mut line = Vec::new();
+        let read = (&mut *stdout)
+            .take(MAX_PROTOCOL_LINE_BYTES as u64 + 1)
+            .read_until(b'\n', &mut line)
+            .await?;
         if read == 0 {
             return Err(anyhow!(
                 "Codex app-server closed before response {expected_id}"
@@ -136,7 +136,7 @@ pub(crate) async fn read_response<T: DeserializeOwned>(
         if line.len() > MAX_PROTOCOL_LINE_BYTES {
             return Err(anyhow!("Codex app-server response exceeded size limit"));
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
             return Err(anyhow!("Codex app-server returned invalid JSON"));
         };
         if value.get("id").and_then(Value::as_i64) != Some(expected_id) {

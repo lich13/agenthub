@@ -553,7 +553,19 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let fail_children = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fail_response = fail_children.clone();
     let router = Router::new()
+        .route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+            let fail = fail_response.clone();
+            async move {
+                if fail.load(std::sync::atomic::Ordering::Relaxed) {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+                let total = if body["cascadeId"] == d1_id { 300 } else { 2 };
+                axum::Json(json!({"numTotalSteps":total,"trajectory":{"cascadeId":body["cascadeId"],"steps":[]}})).into_response()
+            }
+        }))
         .route(
             &format!("{SERVICE}GetCascadeTrajectorySteps"),
             post(move |axum::Json(body): axum::Json<Value>| {
@@ -598,10 +610,12 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                             ]
                         }))
                     } else if cid == d1_id {
-                        // D1 has 300 steps (> 256 tail window): when stepOffset >= 44, the early invoke_subagent(D2)
-                        // step at index 1 is outside the tail window, verifying parentConversationId discovery.
+                        // The parent origin and early running task must survive a later child return.
                         let steps: Vec<Value> = (offset..300)
-                            .map(|_| {
+                            .map(|index| {
+                                if index == 0 { return json!({"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","systemMessage":{"agentMessage":{"sender":root_id}},"metadata":{"executionId":"d1-exec","createdAt":t1}}); }
+                                if index == 1 { return json!({"type":"CORTEX_STEP_TYPE_RUN_COMMAND","status":"CORTEX_STEP_STATUS_RUNNING","taskDetails":{"id":format!("{d1_id}/task-early"),"movedToBackgroundAt":t2},"metadata":{"executionId":"d1-exec","createdAt":t2}}); }
+                                if index == 298 { return json!({"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","systemMessage":{"agentMessage":{"sender":"returned-child"}},"metadata":{"executionId":"d1-exec","createdAt":t2}}); }
                                 json!({
                                     "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                                     "status": "CORTEX_STEP_STATUS_DONE",
@@ -757,5 +771,42 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
         "root must not emit completion while D1 (300 steps) -> D2 -> D3 has a RUNNING background command step"
     );
     assert_eq!(scan.streams[0].settled_count, 0);
+    fail_children.store(true, std::sync::atomic::Ordering::Relaxed);
+    let failed = scan_at(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        0,
+        &summaries,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.errors, 1);
+    assert!(failed.streams.is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn incomplete_subagent_trajectory_is_not_terminal_evidence() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new()
+        .route(&format!("{SERVICE}GetCascadeTrajectory"), post(|| async {
+            axum::Json(json!({"numTotalSteps":2,"trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE"}]}}))
+        }))
+        .route(&format!("{SERVICE}GetCascadeTrajectorySteps"), post(|| async { axum::Json(json!({"steps":[]})) }));
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    assert!(fetch_subagent_trajectory(
+        &client().unwrap(),
+        port,
+        "fixture",
+        "child",
+        Some(&json!({"stepCount":2}))
+    )
+    .await
+    .is_err());
     task.abort();
 }

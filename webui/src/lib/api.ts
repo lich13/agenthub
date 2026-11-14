@@ -13,9 +13,6 @@ export {
 export { ApiError } from "./api/shared";
 export {
   getSystemCapabilities,
-  getSystemVersion,
-  listProviders,
-  getPlatformOverview,
 } from "./api/system";
 export {
   getProbeStatus,

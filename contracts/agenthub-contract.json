@@ -126,42 +126,6 @@
       "responseDto": "SystemCapabilitiesResponse"
     },
     {
-      "id": "system.version",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.version",
-      "linuxRpc": "system.version",
-      "tauriCommand": "commands::system::getSystemVersion",
-      "webuiWrapper": "getSystemVersion",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemVersionResponse"
-    },
-    {
-      "id": "system.platform",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.platform",
-      "linuxRpc": "system.platform",
-      "tauriCommand": "commands::system::getPlatformOverview",
-      "webuiWrapper": "getPlatformOverview",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemPlatformResponse"
-    },
-    {
-      "id": "system.providers",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.providers",
-      "linuxRpc": "system.providers",
-      "tauriCommand": "commands::system::listProviders",
-      "webuiWrapper": "listProviders",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemProvidersResponse"
-    },
-    {
       "id": "threads.list",
       "kind": "rpc",
       "scope": "shared",
@@ -1119,18 +1083,6 @@
     "ProbeStatusResponse": {
       "core": "ProbeStatusResponse",
       "webui": "ProbeStatusResponse"
-    },
-    "SystemPlatformResponse": {
-      "core": "SystemPlatformResponse",
-      "webui": "SystemPlatformResponse"
-    },
-    "SystemProvidersResponse": {
-      "core": "SystemProvidersResponse",
-      "webui": "SystemProvidersResponse"
-    },
-    "SystemVersionResponse": {
-      "core": "SystemVersionResponse",
-      "webui": "SystemVersionResponse"
     },
     "ThreadsArchiveResponse": {
       "core": "ThreadsArchiveResponse",

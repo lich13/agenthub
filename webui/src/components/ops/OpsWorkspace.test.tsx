@@ -120,7 +120,6 @@ function failedUnifiedResult(count: number): UnifiedCleanupResult {
     skippedCount: 0,
     failedCount: count,
     deletedBytes: 1024,
-    stoppedEarly: true,
     scopes: [
       {
         scope: "codex_hidden",
@@ -249,7 +248,7 @@ describe("UnifiedThreadCleanup workbench", () => {
 
   test("keeps failures visible when independent targets completed without stopping", () => {
     renderTree();
-    harness.unifiedInput.onUnifiedExecute({ ...failedUnifiedResult(1), stoppedEarly: false });
+    harness.unifiedInput.onUnifiedExecute(failedUnifiedResult(1));
     const html = markup(renderTree());
     expect(html).toContain("已删除 <strong>1</strong> 项");
     expect(html).toContain("candidate-000：fixture failure");

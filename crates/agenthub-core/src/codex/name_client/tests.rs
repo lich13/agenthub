@@ -14,7 +14,7 @@ fn fixture(script: &str) -> (std::path::PathBuf, CodexAppServerClient) {
     // CLI discovery has separate tests; protocol fixtures start with a resolved executable.
     (
         root,
-        CodexAppServerClient::with_resolved_executable(executable, Duration::from_secs(2)),
+        CodexAppServerClient::with_resolved_executable(executable),
     )
 }
 
@@ -113,7 +113,7 @@ async fn archived_native_rename_is_rejected_without_changing_metadata_or_spawnin
     conn.execute_batch("CREATE TABLE threads (id TEXT, title TEXT, archived INTEGER, archived_at INTEGER); INSERT INTO threads VALUES ('fixture', 'Archived native title', 1, NULL);").unwrap();
     drop(conn);
     let before = fs::read(root.join("state_5.sqlite")).unwrap();
-    let client = CodexAppServerClient::with_candidates(vec![], Duration::from_secs(2));
+    let client = CodexAppServerClient::with_candidates(vec![]);
     let error = client
         .rename_thread(&CodexPaths::new(&root), "fixture", "New title")
         .await

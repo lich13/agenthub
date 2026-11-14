@@ -46,7 +46,6 @@ pub(crate) async fn unified_cleanup_execute(
                     "deleted_count": result.deleted_count,
                     "deleted_bytes": result.deleted_bytes,
                     "failed_count": result.failed_count,
-                    "stopped_early": result.stopped_early,
                 }),
             )?;
             Ok(result)

@@ -221,13 +221,9 @@ describe("archive delete API compatibility", () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
-    const { getPlatformOverview, getProbeStatus } = await import("./api");
+    const { getSystemCapabilities, getProbeStatus } = await import("./api");
 
-    await expect(getPlatformOverview()).resolves.toMatchObject({
-      kind: "macos",
-      service_kind: "tauri",
-      service_name: "AgentHub.app"
-    });
+    await expect(getSystemCapabilities()).resolves.toMatchObject({ host_surface: "desktop_embedded_tauri" });
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
       data: {
@@ -329,7 +325,6 @@ describe("archive delete API compatibility", () => {
             source: "probe",
             payload: {},
             created_at: "2026-06-19T00:00:00Z",
-            handled_at: null
           }]
         }
       }
@@ -468,20 +463,14 @@ describe("archive delete API compatibility", () => {
   });
 
   test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
-    const { getSystemCapabilities, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
+    const { getSystemCapabilities, getUpdateStatus } = await loadDesktopDemoApi();
 
     const systemCapabilities = await getSystemCapabilities();
     const updateStatus = await getUpdateStatus();
-    const platformOverview = await getPlatformOverview();
     const visibleValues = [
       updateStatus.method,
       updateStatus.recommended_action,
-      platformOverview.kind,
-      platformOverview.data_dir,
-      platformOverview.config_file,
-      platformOverview.log_dir,
-      platformOverview.service_name,
-      platformOverview.service_kind
+      systemCapabilities.host_surface
     ].filter((value): value is string => typeof value === "string").join("\n");
 
     expect(visibleValues).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune|prune_backups|linux_systemd_job|panel\.example\.com/i);
@@ -1334,11 +1323,10 @@ describe("archive delete API compatibility", () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     globalThis.__AGENTHUB_DESKTOP_RUNTIME__ = true;
-    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
+    const { getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
 
     const systemCapabilities = await getSystemCapabilities();
     const fixtures = [
-      await getPlatformOverview(),
       (await getProbeStatus()).data,
       (await getProbeSettings()).data,
       { ...systemCapabilities, capabilities: undefined },

@@ -337,3 +337,42 @@ fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
     assert_eq!(ambiguous.errors, 1);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn cumulative_decoded_frames_match_incremental_and_cold_reads() {
+    let f = FileFixture::new("jsonl.zstd");
+    let rows = lines();
+    let padding = "x".repeat(1024 * 1024);
+    let frame = |first: bool| {
+        let mut records = Vec::new();
+        if first {
+            records.extend_from_slice(&rows[0]);
+            records.extend_from_slice(&rows[1]);
+        }
+        for seq in if first { 1..66 } else { 66..131 } {
+            writeln!(records, "{}", json!({"type":"assistant/attempt","seq":seq,"time":1800000000000_i64,"data":{"diagnostic":padding}})).unwrap();
+        }
+        if !first {
+            writeln!(records, "{}", json!({"type":"turn/end","seq":131,"time":1800000001000_i64,"data":{"turn":1,"reason":{"kind":"completed"}}})).unwrap();
+        }
+        zstd::stream::encode_all(records.as_slice(), 1).unwrap()
+    };
+    // Individual frames/records obey their limits; cumulative decoded size is over 128 MiB.
+    fs::write(&f.0, frame(true)).unwrap();
+    assert!(read(&f.0, "fixture", "p/fixture")
+        .unwrap()
+        .unwrap()
+        .events
+        .is_empty());
+    OpenOptions::new()
+        .append(true)
+        .open(&f.0)
+        .unwrap()
+        .write_all(&frame(false))
+        .unwrap();
+    let incremental = read(&f.0, "fixture", "p/fixture").unwrap().unwrap();
+    evict_idle_cache(std::time::Duration::ZERO);
+    let cold = read(&f.0, "fixture", "p/fixture").unwrap().unwrap();
+    assert_eq!(incremental.events, cold.events);
+    assert_eq!(cold.events.len(), 1);
+}

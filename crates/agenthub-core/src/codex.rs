@@ -42,20 +42,20 @@ pub(crate) use rollout_events::{
     rollout_has_running_signal, ThreadVisibilityMetadata,
 };
 pub use rollout_events::{
-    is_macos_network_volume_path, message_blocks_from_events,
-    rollout_completion_last_agent_message, rollout_completion_last_agent_message_selection,
-    rollout_completion_last_agent_message_with_source, rollout_has_completed_turn,
-    rollout_hook_stop_message, rollout_hook_stop_message_selection,
-    rollout_hook_stop_message_with_source, rollout_latest_assistant_message,
+    is_macos_network_volume_path, rollout_completion_last_agent_message,
+    rollout_completion_last_agent_message_selection,
+    rollout_completion_last_agent_message_with_source, rollout_hook_stop_message_selection,
     rollout_pending_feedback, rollout_request_user_input_state, thread_detail_from_summary,
     thread_detail_page_from_summary, window_thread_detail, AssistantFeedback,
     RolloutMessageSelection, RolloutRequestUserInputState,
 };
 #[cfg(test)]
-use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};
+use rollout_events::{
+    is_request_user_input, message_blocks_from_events, parse_message_event, RolloutScan,
+};
 use session_index::{read_session_index, SessionIndexEntry};
+pub use thread_rows::hidden_and_archived_thread_ids;
 use thread_rows::read_thread_rows;
-pub use thread_rows::{archived_thread_ids, hidden_and_archived_thread_ids, hidden_thread_ids};
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
     ThreadStatus, ThreadSummary, UserInputAnswer, UserInputOption, UserInputQuestion,

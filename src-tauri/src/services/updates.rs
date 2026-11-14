@@ -251,8 +251,6 @@ mod tests {
             kind: "agenthub_update_check".to_string(),
             status: status.to_string(),
             title: "AgentHub app update check".to_string(),
-            thread_id: None,
-            turn_id: None,
             started_at: 1,
             finished_at: Some(2),
             exit_code: Some(0),

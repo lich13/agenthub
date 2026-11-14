@@ -334,17 +334,6 @@ export type SystemCapabilitiesResponse = {
   capabilities: SystemCapabilities;
 };
 
-export type SystemVersion = {
-  panel_current: string;
-  panel_latest?: string | null;
-  panel_update_available?: boolean | null;
-  codex_current?: string | null;
-  codex_latest?: string | null;
-  codex_update_available?: boolean | null;
-  codex_user?: string | null;
-  codex_root?: string | null;
-  codex_raw?: string | null;
-};
 
 export type UpdateExecutionMethod = "linux_systemd_job" | "macos_tauri_updater" | "unsupported";
 export type UpdateState = "idle" | "checking" | "ready" | "installing" | "succeeded" | "failed" | "unsupported";
@@ -367,8 +356,6 @@ export type JobRecord = {
   kind: string;
   status: string;
   title: string;
-  thread_id?: string | null;
-  turn_id?: string | null;
   started_at: number;
   finished_at?: number | null;
   exit_code?: number | null;
@@ -414,14 +401,6 @@ export type OptionalResult<T> = {
   reason?: string | null;
 };
 
-export type AgentProviderInfo = {
-  id: "codex" | "grok_build" | "cursor" | "gemini" | string;
-  label: string;
-  status: "ready" | "preview" | "planned" | string;
-  description?: string;
-  capabilities?: string[];
-  safety?: string;
-};
 
 export type PlatformOverview = {
   kind: "linux" | "macos" | "windows" | string;
@@ -508,7 +487,6 @@ export type ProbeEvent = {
   source: string;
   payload: Record<string, unknown>;
   created_at: string | number;
-  handled_at?: string | number | null;
 };
 
 export type ProbeEventsResponse = {
@@ -689,7 +667,6 @@ export type UnifiedCleanupResult = {
   skippedCount: number;
   failedCount: number;
   deletedBytes: number;
-  stoppedEarly: boolean;
   scopes: UnifiedCleanupScopeResult[];
 };
 

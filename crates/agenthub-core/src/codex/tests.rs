@@ -1,8 +1,8 @@
 use super::{
-    archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
-    parse_message_event, resolve_codex_paths_with_options, rollout_request_user_input_state,
-    scan_rollout, set_thread_title, thread_detail, window_thread_detail, CodexPathDiscoveryOptions,
-    CodexPaths, RolloutRequestUserInputState, ThreadStatus,
+    hidden_and_archived_thread_ids, is_request_user_input, list_threads, parse_message_event,
+    resolve_codex_paths_with_options, rollout_request_user_input_state, scan_rollout,
+    set_thread_title, thread_detail, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
+    RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -391,9 +391,10 @@ fn same_turn_proposed_plan_survives_task_complete_last_agent_message() {
     assert_eq!(scan.active_turn_id, None);
 
     let path = rollout_fixture_path("same-turn-proposed-plan", &events);
-    let (message, source) = super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-plan"))
         .unwrap()
         .unwrap();
+    let (message, source) = (selection.message, selection.source);
     assert_eq!(source, "proposed_plan");
     assert!(message.contains("- inspect"));
     assert!(!message.contains("I will run the plan now."));
@@ -454,9 +455,10 @@ fn completed_plan_item_alias_supplies_full_hook_stop_plan_text() {
     ];
 
     let path = rollout_fixture_path("completed-plan-item-alias", &events);
-    let (message, source) = super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-plan"))
         .unwrap()
         .unwrap();
+    let (message, source) = (selection.message, selection.source);
 
     assert_eq!(source, "proposed_plan");
     assert_eq!(message, completed_plan);
@@ -478,10 +480,10 @@ fn request_user_input_survives_task_complete_and_hook_stop_until_answer() {
     );
 
     let path = rollout_fixture_path("request-user-input-pending", &waiting_events);
-    let (message, source) =
-        super::rollout_hook_stop_message_with_source(&path, Some("turn-choice"))
-            .unwrap()
-            .unwrap();
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-choice"))
+        .unwrap()
+        .unwrap();
+    let (message, source) = (selection.message, selection.source);
     assert_eq!(source, "request_user_input");
     assert!(message.contains("Choose a path?"));
     assert!(!message.contains("Waiting for your choice."));
@@ -1301,9 +1303,7 @@ fn rollout_latest_assistant_message_reads_last_visible_assistant_message() {
     .unwrap();
 
     assert_eq!(
-        super::rollout_latest_assistant_message(&path)
-            .unwrap()
-            .as_deref(),
+        scan_rollout(&path, 1).unwrap().latest_message.as_deref(),
         Some("final answer")
     );
     let _ = fs::remove_file(path);
@@ -1332,9 +1332,10 @@ fn rollout_hook_stop_message_prefers_full_plan_over_null_completion_and_short_su
     )
     .unwrap();
 
-    let message = super::rollout_hook_stop_message(&path, Some("turn-plan"))
+    let message = super::rollout_hook_stop_message_selection(&path, Some("turn-plan"))
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .message;
 
     assert!(message.contains("# 完整计划"));
     assert!(message.contains("末尾唯一完整计划"));
@@ -1366,9 +1367,10 @@ fn rollout_hook_stop_message_keeps_final_answer_plan_over_later_progress() {
     )
     .unwrap();
 
-    let (message, source) = super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-plan"))
         .unwrap()
         .unwrap();
+    let (message, source) = (selection.message, selection.source);
 
     assert_eq!(source, "proposed_plan");
     assert!(message.contains(plan));
@@ -1400,9 +1402,10 @@ fn rollout_hook_stop_message_uses_final_response_when_turn_context_has_auto_summ
     )
     .unwrap();
 
-    let (message, source) = super::rollout_hook_stop_message_with_source(&path, Some("turn-live"))
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-live"))
         .unwrap()
         .unwrap();
+    let (message, source) = (selection.message, selection.source);
 
     assert_eq!(source, "task_complete.last_agent_message");
     assert_eq!(message, final_answer);
@@ -1433,9 +1436,10 @@ fn rollout_hook_stop_message_falls_back_to_unscoped_final_response_before_task_c
     )
     .unwrap();
 
-    let (message, source) = super::rollout_hook_stop_message_with_source(&path, Some("turn-live"))
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-live"))
         .unwrap()
         .unwrap();
+    let (message, source) = (selection.message, selection.source);
 
     assert_eq!(source, "last_assistant_message");
     assert_eq!(message, final_answer);
@@ -2358,7 +2362,9 @@ fn hidden_thread_ids_exports_state_db_subagent_metadata_for_app_server_pruning()
     )
     .unwrap();
 
-    let hidden = hidden_thread_ids(&CodexPaths::new(&root)).unwrap();
+    let hidden = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
+        .unwrap()
+        .0;
 
     assert!(hidden.contains("child-thread"));
     assert!(hidden.contains("child-source-json"));
@@ -2398,7 +2404,9 @@ fn archived_thread_ids_exports_state_db_archived_status_for_injection_guards() {
     )
     .unwrap();
 
-    let archived = archived_thread_ids(&CodexPaths::new(&root)).unwrap();
+    let archived = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
+        .unwrap()
+        .1;
 
     assert!(archived.contains("flag-archived"));
     assert!(archived.contains("time-archived"));
@@ -2488,7 +2496,9 @@ fn exec_readonly_verification_threads_are_hidden_from_main_list() {
     .unwrap();
 
     let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
-    let hidden = hidden_thread_ids(&CodexPaths::new(&root)).unwrap();
+    let hidden = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
+        .unwrap()
+        .0;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "main-thread");

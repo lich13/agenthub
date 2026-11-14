@@ -58,8 +58,6 @@ use tokio::time;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
-#[cfg(test)]
-const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
 /// The foreground Stop hook spawns the detached child right before calling `exit(0)`.
 /// Antigravity's hook runner waits for the foreground process to exit and close stdout
@@ -1287,85 +1285,6 @@ fn spawn_detached_antigravity_hook(config_path: &Path, cascade_id: Option<&str>)
         cmd.arg("--cascade-id").arg(cascade_id);
     }
     cmd.spawn().is_ok()
-}
-
-#[cfg(test)]
-async fn send_bark_notification(
-    config: &Config,
-    device_key: &[u8],
-    request: &ProbeBarkRequest,
-    timeout: Duration,
-) -> Result<ProbeBarkOutcome> {
-    let chunks = bark_body_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
-    let identity = uuid::Uuid::new_v4().to_string();
-    let mut outcome = ProbeBarkOutcome::default();
-    for (index, chunk) in chunks.iter().enumerate() {
-        outcome = bark::send_chunk(
-            config,
-            device_key,
-            request,
-            chunk,
-            index,
-            chunks.len(),
-            &format!("{identity}-{index}"),
-            1,
-            timeout,
-        )
-        .await;
-        outcome.request_count = index + 1;
-        if !outcome.sent {
-            break;
-        }
-    }
-    Ok(outcome)
-}
-
-#[cfg(test)]
-fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    if value.is_empty() || max_bytes == 0 {
-        return vec![String::new()];
-    }
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < value.len() {
-        let mut end = (start + max_bytes).min(value.len());
-        while end > start && !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end == start {
-            end = value[start..]
-                .char_indices()
-                .nth(1)
-                .map(|(offset, _)| start + offset)
-                .unwrap_or(value.len());
-        }
-        chunks.push(value[start..end].to_string());
-        start = end;
-    }
-    chunks
-}
-
-#[cfg(test)]
-fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || max_bytes == 0 {
-        return vec![String::new()];
-    }
-    let raw_chunks = utf8_chunks(trimmed, max_bytes);
-    let chunk_count = raw_chunks.len();
-    if chunk_count <= 1 {
-        return raw_chunks;
-    }
-    raw_chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, chunk)| format!("{}{chunk}", bark_chunk_prefix(index + 1, chunk_count)))
-        .collect()
-}
-
-#[cfg(test)]
-fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
-    format!("第 {index}/{chunk_count} 段\n\n")
 }
 
 async fn serve(config_path: PathBuf) -> Result<()> {
@@ -3709,14 +3628,18 @@ last_error = "old agenthub request hook"
             body: "来自本机的测试通知。".to_string(),
             dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
         };
-        let result = send_bark_notification(
+        let result = bark::send_chunk(
             &config,
             b"device key/with spaces",
             &request,
+            &request.body,
+            0,
+            1,
+            "fixture-request",
+            1,
             std::time::Duration::from_secs(2),
         )
-        .await
-        .unwrap();
+        .await;
 
         assert!(!result.sent);
         assert!(!result.skipped);
@@ -3738,73 +3661,6 @@ last_error = "old agenthub request hook"
         assert!(payload.get("group").is_none());
         assert!(payload.get("sound").is_none());
         assert!(payload.get("url").is_none());
-        let _ = fs::remove_dir_all(sandbox_root);
-    }
-
-    #[tokio::test]
-    async fn send_bark_splits_long_body_on_utf8_boundaries_with_segment_prefix() {
-        let server = TestHttpServer::start_n(
-            20,
-            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
-        );
-        let (mut config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
-        config.probe.notifications.server_url = server.url();
-        config.probe.notifications.group = "Probe Group".to_string();
-
-        let request = ProbeBarkRequest {
-            url: None,
-            presentation: None,
-            title: "AgentHub Probe long body".to_string(),
-            body: "完成".repeat(4_000),
-            dedupe_key: "hook-stop:thread-a:turn-long".to_string(),
-        };
-        let result = send_bark_notification(
-            &config,
-            b"device-key",
-            &request,
-            std::time::Duration::from_secs(2),
-        )
-        .await
-        .unwrap();
-
-        assert!(result.sent);
-        assert_eq!(result.http_status, Some(200));
-        let requests = server.requests(result.chunk_count);
-        assert_eq!(requests.len(), result.chunk_count);
-        for (index, raw) in requests.iter().enumerate() {
-            assert!(raw.starts_with("POST /push "));
-            let body = raw.split("\r\n\r\n").nth(1).unwrap();
-            let payload: Value = serde_json::from_str(body).unwrap();
-            assert_eq!(payload["device_key"], "device-key");
-            assert_eq!(
-                payload["title"],
-                format!(
-                    "AgentHub Probe long body ({}/{})",
-                    index + 1,
-                    result.chunk_count
-                )
-            );
-            let chunk = payload["body"].as_str().unwrap();
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
-            assert!(chunk.starts_with(&prefix));
-            let body_part = chunk.strip_prefix(&prefix).unwrap();
-            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
-            assert!(chunk.is_char_boundary(chunk.len()));
-        }
-        let combined = requests
-            .iter()
-            .enumerate()
-            .map(|(index, raw)| {
-                let body = raw.split("\r\n\r\n").nth(1).unwrap();
-                let chunk = serde_json::from_str::<Value>(body).unwrap()["body"]
-                    .as_str()
-                    .unwrap()
-                    .to_string();
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
-                chunk.strip_prefix(&prefix).unwrap().to_string()
-            })
-            .collect::<String>();
-        assert_eq!(combined, request.body);
         let _ = fs::remove_dir_all(sandbox_root);
     }
 
@@ -3868,72 +3724,6 @@ last_error = "old agenthub request hook"
         let stored_json = serde_json::to_string(&stored[0]).unwrap();
         assert!(!stored_json.contains("末尾唯一完整反馈"));
         assert!(stored[0].payload["bark"].get("body").is_none());
-    }
-
-    #[test]
-    fn bark_body_chunks_match_lite_split_and_trim_body() {
-        let body = format!("  {}  \n", "完成".repeat(4_000));
-        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
-
-        assert!(!chunks[0].contains("  完成"));
-        for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-            assert!(chunk.starts_with(&prefix));
-            let body_part = chunk.strip_prefix(&prefix).unwrap();
-            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
-            assert!(chunk.is_char_boundary(chunk.len()));
-        }
-        let joined = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-                chunk.strip_prefix(&prefix).unwrap()
-            })
-            .collect::<String>();
-        assert_eq!(joined, body.trim());
-    }
-
-    #[test]
-    fn bark_body_chunks_keeps_body_budget_when_prefix_digit_count_grows() {
-        let body = "a".repeat((PROBE_BARK_BODY_CHUNK_BYTES * 9) - 100);
-        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
-
-        assert_eq!(chunks.len(), 9);
-        let joined = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-                let body_part = chunk.strip_prefix(&prefix).unwrap();
-                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
-                body_part
-            })
-            .collect::<String>();
-        assert_eq!(joined, body);
-    }
-
-    #[test]
-    fn bark_body_chunks_match_lite_exact_2400_body_bytes_before_prefix() {
-        let body = "a".repeat(PROBE_BARK_BODY_CHUNK_BYTES * 2);
-        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
-
-        assert_eq!(chunks.len(), 2);
-        for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-            let body_part = chunk.strip_prefix(&prefix).unwrap();
-            assert_eq!(body_part.len(), PROBE_BARK_BODY_CHUNK_BYTES);
-            assert!(body_part.is_char_boundary(body_part.len()));
-        }
-        let joined = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-                chunk.strip_prefix(&prefix).unwrap()
-            })
-            .collect::<String>();
-        assert_eq!(joined, body);
     }
 
     #[tokio::test]
@@ -4386,7 +4176,7 @@ last_error = "old agenthub request hook"
         config.probe.notifications.server_url = server.url();
         config.probe.notifications.group = "Probe Group".to_string();
 
-        let result = send_bark_notification(
+        let result = bark::send_chunk(
             &config,
             b"device-key-secret",
             &ProbeBarkRequest {
@@ -4396,10 +4186,14 @@ last_error = "old agenthub request hook"
                 body: "ok".to_string(),
                 dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
             },
+            "ok",
+            0,
+            1,
+            "fixture-request",
+            1,
             std::time::Duration::from_secs(2),
         )
-        .await
-        .unwrap();
+        .await;
 
         assert!(result.sent);
         assert_eq!(result.reason, None);
@@ -4480,19 +4274,6 @@ last_error = "old agenthub request hook"
         assert_eq!(diagnostics["bark"]["reason"], "notifications_disabled");
         assert!(!stdout.contains("bark"));
         assert!(!stdout.contains("probe_event"));
-    }
-
-    #[test]
-    fn utf8_chunks_preserve_multibyte_boundaries_and_content() {
-        let value = "完成a".repeat(10);
-        let chunks = utf8_chunks(&value, 7);
-
-        assert!(chunks.len() > 1);
-        assert!(chunks.iter().all(|chunk| chunk.len() <= 7));
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.is_char_boundary(chunk.len())));
-        assert_eq!(chunks.concat(), value);
     }
 
     #[test]

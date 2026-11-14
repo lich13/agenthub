@@ -196,6 +196,11 @@ mod tests {
             errors: 0,
         };
         assert!(native_event_current(&scan, &delivery).unwrap());
+        let mut old_completion = delivery.clone();
+        old_completion.event.kind = "completion".into();
+        old_completion.event.turn_id = "old-message-id".into();
+        old_completion.event_key = scan.streams[0].event_key(&old_completion.event);
+        assert!(!native_event_current(&scan, &old_completion).unwrap());
         std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
         assert!(!native_event_current(&scan, &delivery).unwrap());
         std::sync::Arc::make_mut(&mut scan.streams[0].events).push(delivery.event.clone());

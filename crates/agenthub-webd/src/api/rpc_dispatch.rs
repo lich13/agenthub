@@ -7,11 +7,10 @@ use super::{
 use super::{
     api_error, archive_thread, get_probe_events, get_probe_settings, get_probe_status,
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
-    hidden_threads_delete_dry_run, job_detail, list_jobs, list_providers, patch_probe_settings,
-    platform_overview, rename_thread, restore_thread, start_probe_action, start_update_action,
-    system_capabilities, system_update_status, system_version, thread_blocks, thread_detail,
-    unified_cleanup_dry_run, unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery,
-    ProbeStatusQuery,
+    hidden_threads_delete_dry_run, job_detail, list_jobs, patch_probe_settings, rename_thread,
+    restore_thread, start_probe_action, start_update_action, system_capabilities,
+    system_update_status, thread_blocks, thread_detail, unified_cleanup_dry_run,
+    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery, ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
@@ -165,8 +164,6 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         rpc_commands::DSH_RESTORE => {
             dsh_restore(state, rpc_wrapped_payload(&args, &["request"])?).await
         }
-        rpc_commands::SYSTEM_PROVIDERS => list_providers(state).await,
-        rpc_commands::SYSTEM_PLATFORM => platform_overview(state).await,
         rpc_commands::PROBE_STATUS => {
             get_probe_status(
                 state,
@@ -258,7 +255,6 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
             .await
         }
         rpc_commands::SYSTEM_CAPABILITIES => system_capabilities(state).await,
-        rpc_commands::SYSTEM_VERSION => system_version(state).await,
         rpc_commands::JOBS_LIST => list_jobs(state, rpc_query_strings(&args, &["limit"])).await,
         rpc_commands::JOBS_DETAIL => {
             job_detail(

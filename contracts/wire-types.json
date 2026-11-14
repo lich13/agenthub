@@ -428,18 +428,6 @@
       "rust": "crates/agenthub-core/src/services/system.rs#SystemCapabilitiesResponse",
       "ts": "webui/src/types.ts#SystemCapabilitiesResponse"
     },
-    "SystemPlatformResponse": {
-      "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
-      "ts": "webui/src/types.ts#PlatformOverview"
-    },
-    "SystemProvidersResponse": {
-      "rust": "crates/agenthub-core/src/providers.rs#AgentProviderInfo",
-      "ts": "webui/src/types.ts#AgentProviderInfo"
-    },
-    "SystemVersionResponse": {
-      "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
-      "ts": "webui/src/types.ts#SystemVersion"
-    },
     "ThreadsArchiveResponse": {
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry.",
       "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
@@ -2817,7 +2805,9 @@
           },
           {
             "name": "sound",
-            "serde": [],
+            "serde": [
+              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
+            ],
             "type": "Option < Option < String > >"
           },
           {
@@ -2827,7 +2817,9 @@
           },
           {
             "name": "url",
-            "serde": [],
+            "serde": [
+              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
+            ],
             "type": "Option < Option < String > >"
           },
           {
@@ -3103,16 +3095,6 @@
             "type": "String"
           },
           {
-            "name": "thread_id",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "turn_id",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
             "name": "started_at",
             "serde": [],
             "type": "i64"
@@ -3258,11 +3240,6 @@
             "name": "created_at",
             "serde": [],
             "type": "i64"
-          },
-          {
-            "name": "handled_at",
-            "serde": [],
-            "type": "Option < i64 >"
           }
         ],
         "kind": "struct",
@@ -5674,11 +5651,6 @@
             "type": "u64"
           },
           {
-            "name": "stopped_early",
-            "serde": [],
-            "type": "bool"
-          },
-          {
             "name": "scopes",
             "serde": [],
             "type": "Vec < UnifiedCleanupScopeResult >"
@@ -8062,7 +8034,9 @@
           },
           {
             "name": "sound",
-            "serde": [],
+            "serde": [
+              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
+            ],
             "type": "Option < Option < String > >"
           },
           {
@@ -8072,7 +8046,9 @@
           },
           {
             "name": "url",
-            "serde": [],
+            "serde": [
+              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
+            ],
             "type": "Option < Option < String > >"
           },
           {
@@ -9337,59 +9313,6 @@
         ]
       }
     },
-    "crates/agenthub-core/src/system.rs": {
-      "VersionInfo": {
-        "fields": [
-          {
-            "name": "panel_current",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "panel_latest",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "panel_update_available",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "codex_current",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_latest",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_update_available",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "codex_user",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_root",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_raw",
-            "serde": [],
-            "type": "Option < String >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      }
-    },
     "crates/agenthub-core/src/update.rs": {
       "JobFailureAnalysis": {
         "fields": [
@@ -10058,44 +9981,6 @@
         ]
       }
     },
-    "src-tauri/src/services/system.rs": {
-      "DesktopSystemVersion": {
-        "fields": [
-          {
-            "name": "panel_current",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "panel_latest",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "panel_update_available",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "codex_current",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_latest",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "codex_update_available",
-            "serde": [],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      }
-    },
     "src-tauri/src/services/threads/types.rs": {
       "DesktopRenameThreadRequest": {
         "fields": [
@@ -10414,10 +10299,7 @@
     },
     "webui/src/lib/api/system.ts": {
       "calls": [
-        "callCommand<SystemCapabilitiesResponse>(\"system.capabilities\")",
-        "callCommand<SystemVersion>(\"system.version\")",
-        "callCommand<AgentProviderInfo[]>(\"system.providers\")",
-        "callCommand<PlatformOverview>(\"system.platform\")"
+        "callCommand<SystemCapabilitiesResponse>(\"system.capabilities\")"
       ],
       "types": {}
     },
@@ -10488,7 +10370,6 @@
     "webui/src/types.ts": {
       "calls": [],
       "types": {
-        "AgentProviderInfo": "exporttypeAgentProviderInfo={id:\"codex\"|\"grok_build\"|\"cursor\"|\"gemini\"|string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;description?:string;capabilities?:string[];safety?:string;};",
         "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
         "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint?:string};",
         "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number;residuals?:string[]};",
@@ -10523,13 +10404,13 @@
         "HiddenThreadSelection": "exporttypeHiddenThreadSelection={id:string;fingerprint?:string|null};",
         "HistoryMetadata": "exporttypeHistoryMetadata={epoch:string;revision:string;changedIds?:string[];reset?:boolean;changes?:{revision:string;changedIds:string[];reset?:boolean}[]};",
         "HostSurface": "exporttypeHostSurface=\"linux_server_api\"|\"desktop_embedded_tauri\";",
-        "JobRecord": "exporttypeJobRecord={id:string;kind:string;status:string;title:string;thread_id?:string|null;turn_id?:string|null;started_at:number;finished_at?:number|null;exit_code?:number|null;output:string;error?:string|null;analysis?:string|null;explanation?:string|null;failure_analysis?:{category:string;explanation:string;suggestions:string[];}|null;};",
+        "JobRecord": "exporttypeJobRecord={id:string;kind:string;status:string;title:string;started_at:number;finished_at?:number|null;exit_code?:number|null;output:string;error?:string|null;analysis?:string|null;explanation?:string|null;failure_analysis?:{category:string;explanation:string;suggestions:string[];}|null;};",
         "MessageBlock": "exporttypeMessageBlock={subagent?:SubagentActivity|null;user_message?:UserMessageContent|null;id:string;role:string;kind:string;display_kind?:string|null;status?:string|null;text?:string|null;summary?:string|null;input?:string|null;truncated?:boolean|null;resolved?:boolean|null;answers?:UserInputAnswer[];plan_status?:string|null;group_id?:string|null;tool_name?:string|null;call_id?:string|null;turn_id?:string|null;item_id?:string|null;created_at?:string|null;questions:UserInputQuestion[];payload?:unknown;};",
         "OptionalResult": "exporttypeOptionalResult<T>={available:boolean;data?:T;error?:string;reason?:string|null;};",
         "PendingElicitation": "exporttypePendingElicitation={turn_id?:string|null;item_id?:string|null;questions:UserInputQuestion[];};",
         "PlatformOverview": "exporttypePlatformOverview={kind:\"linux\"|\"macos\"|\"windows\"|string;data_dir:string;config_file:string;log_dir:string;service_name:string;service_kind:string;};",
         "PluginInfo": "exporttypePluginInfo={id:string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;kind:\"builtin\"|\"external\"|string;description?:string|null;unavailable_reason?:string|null;invocation_template?:string|null;};",
-        "ProbeEvent": "exporttypeProbeEvent={id:string;kind:string;thread_id?:string|null;title?:string|null;message?:string|null;dedupe_key?:string|null;source:string;payload:Record<string,unknown>;created_at:string|number;handled_at?:string|number|null;};",
+        "ProbeEvent": "exporttypeProbeEvent={id:string;kind:string;thread_id?:string|null;title?:string|null;message?:string|null;dedupe_key?:string|null;source:string;payload:Record<string,unknown>;created_at:string|number;};",
         "ProbeEventsResponse": "exporttypeProbeEventsResponse={events:ProbeEvent[];limit?:number|null;};",
         "ProbeJobAction": "exporttypeProbeJobAction=\"bark-test\"|\"hooks-install\"|\"hooks-remove\";",
         "ProbeLiveSession": "exporttypeProbeLiveSession={provider:\"codex\"|\"claude_code\"|\"grok\"|\"grokbot\"|\"antigravity\"|\"dsh\"|string;id:string;session_key:string;title:string;bucket:\"running\"|\"reply_needed\"|\"recoverable\"|string;updated_at?:string|null;cwd?:string|null;};",
@@ -10557,7 +10438,6 @@
         "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
         "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;antigravity_notifications?:boolean;dsh_notifications?:boolean;antigravity_sessions?:boolean;dsh_sessions?:boolean;grokbot_sessions?:boolean;github_ci?:boolean;grokbot_notifications?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;claude_subagents?:boolean;};",
         "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
-        "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
         "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",
         "ThreadDetail": "exporttypeThreadDetail={timeline?:TimelineEntry[];after_cursor?:string|null;history?:HistoryMetadata|null;subagents?:SubagentCollection|null;subagent_updates?:Record<string,SubagentActivity>;summary:ThreadSummary;messages:CodexMessage[];blocks:MessageBlock[];raw_event_count:number;total_blocks?:number;has_more_blocks?:boolean;before_cursor?:string|null;};",
         "ThreadStatus": "exporttypeThreadStatus=\"Recent\"|\"Running\"|\"ReplyNeeded\"|\"Recoverable\"|\"Archived\";",
@@ -10566,7 +10446,7 @@
         "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;fingerprint?:string|null;blockedReason:string|null;};",
         "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[];targets?:UnifiedCleanupTargetSelection[];};",
         "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
-        "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};",
+        "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;scopes:UnifiedCleanupScopeResult[];};",
         "UnifiedCleanupScopePlan": "exporttypeUnifiedCleanupScopePlan={scope:string;provider:string;label:string;supported:boolean;scanned:boolean;unavailableReason:string|null;candidateCount:number;deletableCount:number;estimatedBytes:number;candidates:UnifiedCleanupCandidate[];issues:string[];};",
         "UnifiedCleanupScopeResult": "exporttypeUnifiedCleanupScopeResult={scope:string;provider:string;label:string;deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;residuals:string[];issues:string[];};",
         "UnifiedCleanupTargetSelection": "exporttypeUnifiedCleanupTargetSelection={scope:string;id:string;fingerprint?:string|null;};",

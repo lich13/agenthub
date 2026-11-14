@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+from itertools import chain
 from pathlib import Path
 
 PUBLIC_HOSTS = {
@@ -19,8 +20,9 @@ EXAMPLE_HOSTS = ("example.com", "example.org", "example.net", "example.invalid",
 RULES = {
     "private_home": re.compile(r"/(?:Users|home)/([^/\s\"'<>`]+)"),
     "ipv4": re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"),
+    "ipv6": re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]*(?![\w:])"),
     "email": re.compile(r"(?<![\w@])([\w.+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?![\w.])"),
-    "url": re.compile(r"https?://([a-zA-Z0-9.-]+)(?=[:/\s\"'`<>)]|$)"),
+    "url": re.compile(r"(?:https?|wss?)://([a-zA-Z0-9.-]+)(?=[:/\s\"'`<>){$]|$)"),
     "secret": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\s+[A-Za-z0-9+/=]{32,}|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{32,})\b"),
     "personal_trace": re.compile(
         "|".join(
@@ -55,12 +57,12 @@ def problems(data, private_values, scan_endpoint_literals=True):
             found.add("private_home")
     # Native machine code and non-terminated string tables include dependency
     # license contacts and concatenated protocol strings. Scan their private
-    # values, paths, public IPv4 addresses and credentials; source, Git
+    # values, paths, public IP addresses and credentials; source, Git
     # identities and text payloads also validate endpoints and emails.
-    for match in RULES["ipv4"].finditer(text):
+    for match in chain(RULES["ipv4"].finditer(text), RULES["ipv6"].finditer(text)):
         try:
             address = ipaddress.ip_address(match.group())
-            if address.is_global:
+            if address.is_global and not address.is_reserved:
                 found.add("public_ip")
         except ValueError:
             pass

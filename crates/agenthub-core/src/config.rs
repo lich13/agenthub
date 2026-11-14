@@ -177,8 +177,18 @@ pub struct ProbeHooksConfigPatch {
 pub struct ProbeNotificationsConfigPatch {
     pub enabled: Option<bool>,
     pub server_url: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::config::deserialize_optional_string_field",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sound: Option<Option<String>>,
     pub group: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::config::deserialize_optional_string_field",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub url: Option<Option<String>>,
     pub notify_completion: Option<bool>,
     pub notify_reply_needed: Option<bool>,
@@ -738,7 +748,7 @@ pub fn valid_probe_notification_server_url(value: &str) -> bool {
     !host.is_empty() && host != "localhost" && !host.ends_with(".localhost")
 }
 
-fn deserialize_optional_string_field<'de, D>(
+pub(crate) fn deserialize_optional_string_field<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Option<String>>, D::Error>
 where
@@ -900,7 +910,11 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 notifications.server_url.as_deref(),
             )?;
             if let Some(value) = notifications.sound.as_ref() {
-                editor.set_string("probe.notifications", "sound", value.as_deref())?;
+                if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    editor.set_string("probe.notifications", "sound", Some(value))?;
+                } else {
+                    editor.remove_key("probe.notifications", "sound")?;
+                }
             }
             editor.set_string(
                 "probe.notifications",
@@ -908,7 +922,11 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 notifications.group.as_deref(),
             )?;
             if let Some(value) = notifications.url.as_ref() {
-                editor.set_string("probe.notifications", "url", value.as_deref())?;
+                if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    editor.set_string("probe.notifications", "url", Some(value))?;
+                } else {
+                    editor.remove_key("probe.notifications", "url")?;
+                }
             }
             editor.set_bool(
                 "probe.notifications",

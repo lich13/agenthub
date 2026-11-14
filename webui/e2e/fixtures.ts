@@ -154,8 +154,6 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
           changed: false,
           configPath: `/isolated/${args.provider ?? "claude"}/hooks.json`,
         }),
-        "system.version": demo.demoSystemVersion,
-        "system.platform": () => demo.demoPlatformOverview(fixture()),
         "threads.list": () => {
           const wantArchived = Boolean(args.archived);
           const q = String(args.q ?? "").toLowerCase();

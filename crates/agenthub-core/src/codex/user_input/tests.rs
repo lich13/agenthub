@@ -1,5 +1,48 @@
 use super::*;
 use serde_json::json;
+use std::io::Write;
+
+#[test]
+fn incremental_reader_preserves_turn_context_and_complete_unterminated_records() {
+    let path = std::env::temp_dir().join(format!("agenthub-question-{}", uuid::Uuid::new_v4()));
+    let mut q = question("call-a");
+    q.as_object_mut().unwrap().remove("turn_id");
+    std::fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\"}}\n{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"turn-a\"}}\n").unwrap();
+    assert!(rollout_async_questions(&path).unwrap().is_empty());
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    write!(file, "{q}").unwrap();
+    let first = rollout_async_questions(&path).unwrap();
+    assert_eq!(first[0].session_id.as_deref(), Some("session-fixture"));
+    assert_eq!(first[0].turn_id, "turn-a");
+    assert_eq!(first[0].line, 3);
+    assert_eq!(
+        rollout_async_questions(&path).unwrap()[0].content_hash,
+        first[0].content_hash
+    );
+    write!(file, "\n{}\n", answer("call-a", 0)).unwrap();
+    assert_eq!(
+        rollout_async_questions(&path).unwrap()[0]
+            .pending()
+            .unwrap()
+            .questions
+            .len(),
+        1
+    );
+    let answer = answer("call-a", 1).to_string();
+    write!(file, "{}", &answer[..answer.len() - 1]).unwrap();
+    assert!(rollout_async_questions(&path).is_err());
+    writeln!(file, "}}").unwrap();
+    assert!(rollout_async_questions(&path).unwrap()[0]
+        .pending()
+        .is_none());
+    drop(file);
+    std::fs::write(&path, format!("{q}\n")).unwrap();
+    assert!(rollout_async_questions(&path).unwrap().is_empty());
+    std::fs::remove_file(path).unwrap();
+}
 
 fn question(call: &str) -> Value {
     json!({"type":"response_item","timestamp":"2026-01-01T00:00:00Z","turn_id":"turn-a","payload":{"type":"function_call","name":"request_user_input_async","call_id":call,"arguments":json!({"questions":[{"title":"请确认结果。","options":["通过","失败"]},{"title":"请选择保留项。"}]}).to_string()}})

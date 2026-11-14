@@ -1,97 +1,3 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use tokio::process::Command;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VersionInfo {
-    pub panel_current: String,
-    pub panel_latest: Option<String>,
-    pub panel_update_available: Option<bool>,
-    pub codex_current: Option<String>,
-    pub codex_latest: Option<String>,
-    pub codex_update_available: Option<bool>,
-    pub codex_user: Option<String>,
-    pub codex_root: Option<String>,
-    pub codex_raw: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct VersionInfoInputs {
-    pub panel_latest: Option<String>,
-    pub codex_latest: Option<String>,
-}
-
-pub async fn version_info_with_inputs(inputs: VersionInfoInputs) -> Result<VersionInfo> {
-    let latest = inputs.panel_latest.and_then(non_empty_string);
-    let current = env!("CARGO_PKG_VERSION").to_string();
-    let update_available = latest
-        .as_ref()
-        .map(|latest| latest.trim_start_matches('v') != current);
-    let codex_raw = command_stdout_timeout(
-        "/usr/local/bin/codex-raw",
-        &["--version"],
-        Duration::from_secs(3),
-    )
-    .await
-    .ok();
-    let codex_root = command_stdout_timeout(
-        "sudo",
-        &["-n", "codex", "--version"],
-        Duration::from_secs(3),
-    )
-    .await
-    .ok();
-    let codex_user = command_stdout_timeout("codex", &["--version"], Duration::from_secs(3))
-        .await
-        .ok();
-    let codex_current = current_codex_version(
-        codex_raw.as_deref(),
-        codex_root.as_deref(),
-        codex_user.as_deref(),
-    );
-    let codex_latest = inputs.codex_latest.and_then(non_empty_string);
-    let codex_update_available =
-        codex_update_available(codex_current.as_deref(), codex_latest.as_deref());
-    Ok(VersionInfo {
-        panel_current: current,
-        panel_latest: latest,
-        panel_update_available: update_available,
-        codex_current,
-        codex_latest,
-        codex_update_available,
-        codex_user,
-        codex_root,
-        codex_raw,
-    })
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-fn current_codex_version(
-    raw: Option<&str>,
-    root: Option<&str>,
-    user: Option<&str>,
-) -> Option<String> {
-    [raw, root, user]
-        .into_iter()
-        .flatten()
-        .find_map(extract_semver)
-}
-
-fn codex_update_available(current: Option<&str>, latest: Option<&str>) -> Option<bool> {
-    Some(
-        compare_semver(
-            extract_semver(latest?)?.as_str(),
-            extract_semver(current?)?.as_str(),
-        )?
-        .is_gt(),
-    )
-}
-
 pub(crate) fn extract_semver(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     for start in 0..bytes.len() {
@@ -251,27 +157,9 @@ fn compare_pre(left: &[VersionIdentifier], right: &[VersionIdentifier]) -> std::
     left.len().cmp(&right.len())
 }
 
-async fn command_stdout(program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program).args(args).output().await?;
-    if !output.status.success() {
-        anyhow::bail!("{program} exited with {}", output.status);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-async fn command_stdout_timeout(
-    program: &str,
-    args: &[&str],
-    duration: Duration,
-) -> Result<String> {
-    tokio::time::timeout(duration, command_stdout(program, args))
-        .await
-        .with_context(|| format!("{program} timed out"))?
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{codex_update_available, compare_semver, current_codex_version, extract_semver};
+    use super::{compare_semver, extract_semver};
 
     #[test]
     fn extracts_codex_cli_semver() {
@@ -287,23 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn current_codex_version_prefers_raw_root_user_order() {
-        assert_eq!(
-            current_codex_version(
-                Some("codex-cli 0.137.0"),
-                Some("codex-cli 0.136.0"),
-                Some("codex-cli 0.135.0")
-            )
-            .as_deref(),
-            Some("0.137.0")
-        );
-        assert_eq!(
-            current_codex_version(None, Some("codex-cli 0.136.0"), None).as_deref(),
-            Some("0.136.0")
-        );
-    }
-
-    #[test]
     fn compares_semver_with_prerelease_rules() {
         assert!(compare_semver("0.138.0", "0.137.0").is_some_and(|ordering| ordering.is_gt()));
         assert!(compare_semver("0.137.0", "0.137.0").is_some_and(|ordering| ordering.is_eq()));
@@ -313,26 +184,5 @@ mod tests {
             compare_semver("0.137.0-beta.1", "0.137.0").is_some_and(|ordering| ordering.is_lt())
         );
         assert_eq!(compare_semver("unknown", "0.137.0"), None);
-    }
-
-    #[test]
-    fn codex_update_available_is_three_state() {
-        assert_eq!(
-            codex_update_available(Some("0.137.0"), Some("0.138.0")),
-            Some(true)
-        );
-        assert_eq!(
-            codex_update_available(Some("0.137.0"), Some("0.137.0")),
-            Some(false)
-        );
-        assert_eq!(
-            codex_update_available(Some("0.138.0"), Some("0.137.0")),
-            Some(false)
-        );
-        assert_eq!(
-            codex_update_available(Some("unknown"), Some("0.137.0")),
-            None
-        );
-        assert_eq!(codex_update_available(Some("0.137.0"), None), None);
     }
 }

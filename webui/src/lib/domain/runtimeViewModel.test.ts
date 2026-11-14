@@ -7,6 +7,8 @@ import type {
 import type { RuntimeCapabilityMatrix } from "./capabilities";
 import {
   canStartHiddenThreadDelete,
+  logBytesDraftToMb,
+  mbDraftToLogBytes,
   failureCategoryLabel,
   opsUpdateActionView,
   probeStateLabel,
@@ -141,3 +143,13 @@ describe("runtime view-model helpers", () => {
   });
 
 });
+
+ test("log settings round-trip fractional MiB without rounding up", () => {
+   for (const bytes of [4096, 262144, 262145, 8388608]) {
+     expect(mbDraftToLogBytes(String(logBytesDraftToMb(bytes)))).toBe(bytes);
+   }
+   expect(logBytesDraftToMb(262144)).toBe(0.25);
+   expect(mbDraftToLogBytes("0.5")).toBe(524288);
+   expect(mbDraftToLogBytes("")).toBe("");
+   expect(mbDraftToLogBytes("abc")).toBe("");
+ });

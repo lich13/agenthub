@@ -345,12 +345,13 @@ export function isProbeSettings(value: unknown): value is ProbeSettings {
 
 export function logBytesDraftToMb(value: number | ""): number | "" {
   if (value === "") return "";
-  return Math.max(1, Math.round(value / (1024 * 1024)));
+  return value / (1024 * 1024);
 }
 
 export function mbDraftToLogBytes(value: string): number | "" {
-  const parsed = numberInputDraftValue(value);
-  return parsed === "" ? "" : parsed * 1024 * 1024;
+  if (!value.trim()) return "";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed * 1024 * 1024) : "";
 }
 
 export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age_seconds" | "is_refreshing" | "snapshot_status"> | null, fetching = false): string {
@@ -394,13 +395,6 @@ export function probeAvailabilityView(input: {
     metric: "不可用",
     tone: "danger"
   };
-}
-
-function numberInputDraftValue(value: string): number | "" {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  const numeric = Number(trimmed);
-  return Number.isFinite(numeric) ? Math.trunc(numeric) : "";
 }
 
 export function formatCleanupBytes(bytes: number): string {

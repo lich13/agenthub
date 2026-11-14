@@ -325,8 +325,18 @@ pub struct ProbeSettingsSavePatch {
 pub struct ProbeNotificationsSavePatch {
     pub enabled: Option<bool>,
     pub server_url: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::config::deserialize_optional_string_field",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sound: Option<Option<String>>,
     pub group: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::config::deserialize_optional_string_field",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub url: Option<Option<String>>,
     pub notify_completion: Option<bool>,
     pub notify_reply_needed: Option<bool>,
@@ -764,5 +774,50 @@ mod tests {
         assert_eq!(plan.secret_writes[0].secret_value, "bark-secret");
         let serialized = serde_json::to_string(&plan).unwrap();
         assert!(!serialized.contains("bark-secret"));
+    }
+    #[test]
+    fn nullable_notification_fields_round_trip_and_remove_only_the_requested_keys() {
+        use serde_json::json;
+        let original = "[probe.notifications] # kept\nsound = \"bell\"\nurl = \"https://example.invalid/\"\ngroup = \"Fixture\"\n[custom]\nkeep = true\n";
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        for nested in [false, true] {
+            for input in [
+                json!({}),
+                json!({"sound":null,"url":null}),
+                json!({"sound":" ","url":"\t"}),
+                json!({"sound":"chime","url":"https://example.invalid/new"}),
+            ] {
+                let request = if nested {
+                    json!({"probe":{"notifications":input}})
+                } else {
+                    json!({"notifications":input})
+                };
+                let request: ProbeSettingsSaveRequest = serde_json::from_value(request).unwrap();
+                let request =
+                    serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+                let plan = plan_probe_settings_save(&platform, request).unwrap();
+                let patch: crate::config::ProbeConfigFilePatch =
+                    serde_json::from_value(serde_json::to_value(plan.config_patch).unwrap())
+                        .unwrap();
+                let output = crate::config::patch_probe_config_toml(original, &patch).unwrap();
+                let parsed: toml::Value = toml::from_str(&output).unwrap();
+                let notifications = parsed["probe"]["notifications"].as_table().unwrap();
+                if input.as_object().unwrap().is_empty() {
+                    assert_eq!(output, original);
+                } else if input["sound"] == "chime" {
+                    assert_eq!(notifications["sound"].as_str(), Some("chime"));
+                    assert_eq!(
+                        notifications["url"].as_str(),
+                        Some("https://example.invalid/new")
+                    );
+                } else {
+                    assert!(!notifications.contains_key("sound"));
+                    assert!(!notifications.contains_key("url"));
+                }
+                assert!(output.contains("[probe.notifications] # kept"));
+                assert_eq!(notifications["group"].as_str(), Some("Fixture"));
+                assert_eq!(parsed["custom"]["keep"].as_bool(), Some(true));
+            }
+        }
     }
 }

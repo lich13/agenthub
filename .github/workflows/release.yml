@@ -30,7 +30,6 @@ jobs:
           [[ "${tag}" == "v${version}" ]] || { echo "tag ${tag} does not match ${version}" >&2; exit 1; }
           python3 scripts/check-versions.py --tag "${tag}"
           python3 scripts/privacy-check.py --git-objects
-          node scripts/contract-next-action-checklist.mjs grok.rename >/dev/null
           git diff --check
           python3 scripts/release-notes.py "${version}" > "${RUNNER_TEMP}/release-notes-check.md"
           python3 scripts/release-notes.py "${version}" --updater >/dev/null

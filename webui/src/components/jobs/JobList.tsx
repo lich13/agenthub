@@ -33,7 +33,7 @@ function JobItem({job: summary, capabilities}: {job: JobRecord; capabilities: Ru
   const analysis = job.failure_analysis ? jobFailureAnalysisView(job.failure_analysis, capabilities) : null;
   return <details className="job-item" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary><span>{summary.title}</span><StatusDot status={summary.status}/><ChevronRight size={16}/></summary>
-    {open && <><div className="job-meta"><span>{job.kind}</span>{job.thread_id && <span>{job.thread_id}</span>}{job.turn_id && <span>{job.turn_id}</span>}</div>
+    {open && <><div className="job-meta"><span>{job.kind}</span></div>
     {analysis && <div className="job-analysis"><strong>{analysis.label}</strong><p>{analysis.explanation}</p><ul>{analysis.suggestions.map(value => <li key={value}>{value}</li>)}</ul></div>}
     {detail.error ? <div role="alert">{detail.error.message}</div> : <pre>{detail.isLoading ? "正在读取日志…" : jobOutputView(job.output || job.error || "no output", capabilities)}</pre>}</>}
   </details>;

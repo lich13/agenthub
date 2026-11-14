@@ -605,9 +605,31 @@ describe("Probe UI helpers", () => {
     expect(draft.observability.event_retention_days).toBe(3);
     expect(probeSettingsValidation(draft)).toEqual([
       "轮询间隔必须在 5 到 3600 秒之间",
-      "日志读取上限必须在 1024 到 10485760 字节之间"
+      "日志读取上限必须在 4096 到 8388608 字节之间"
     ]);
     expect(() => buildProbeSettingsPayload(draft, settings)).toThrow("轮询间隔必须在 5 到 3600 秒之间");
+  });
+
+  test("uses backend limits and preserves exact log bytes", () => {
+    const draft = buildProbeSettingsDraft(settings);
+    for (const bytes of [4096, 262145, 8388608]) {
+      draft.observability.log_max_bytes = bytes;
+      draft.observability.hook_event_max_lines = 6000;
+      draft.observability.hook_cooldown_max_lines = 10000;
+      expect(probeSettingsValidation(draft)).toEqual([]);
+      expect(buildProbeSettingsPayload(draft, settings).probe.observability?.log_max_bytes).toBe(bytes);
+    }
+    for (const bytes of [4095, 8388609]) {
+      draft.observability.log_max_bytes = bytes;
+      expect(probeSettingsValidation(draft)).not.toEqual([]);
+    }
+    draft.observability.log_max_bytes = 4096;
+    for (const lines of [1, 9, 10001]) {
+      draft.observability.hook_event_max_lines = lines;
+      expect(probeSettingsValidation(draft)).not.toEqual([]);
+    }
+    draft.observability.hook_event_max_lines = 10;
+    expect(probeSettingsValidation(draft)).toEqual([]);
   });
 
   test("validates numeric settings before save", () => {

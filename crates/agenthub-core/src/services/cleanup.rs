@@ -149,7 +149,6 @@ pub struct UnifiedCleanupResult {
     pub skipped_count: usize,
     pub failed_count: usize,
     pub deleted_bytes: u64,
-    pub stopped_early: bool,
     pub scopes: Vec<UnifiedCleanupScopeResult>,
 }
 fn scope_meta(scope: &str) -> Result<(&'static str, &'static str)> {
@@ -1064,7 +1063,6 @@ mod tests {
             )
             .unwrap();
             fs::set_permissions(&claude_proj, fs::Permissions::from_mode(0o755)).unwrap();
-            assert!(!stopped.stopped_early);
             assert_eq!(stopped.failed_count, 1);
             assert!(
                 !grok_empty_dir.exists(),
@@ -1110,7 +1108,6 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!ok.stopped_early);
         assert_eq!(ok.deleted_count, 2);
         assert!(!claude_empty_file.exists());
         assert!(!grok_empty_dir.exists());
@@ -1199,7 +1196,6 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!running_stop.stopped_early);
         assert_eq!(running_stop.failed_count, 1);
         assert_eq!(running_stop.deleted_count, 1);
         assert!(!paths
@@ -1224,7 +1220,6 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!after_stop.stopped_early);
         assert_eq!(after_stop.skipped_count, 2);
         assert_eq!(after_stop.deleted_count, 0);
         assert!(paths

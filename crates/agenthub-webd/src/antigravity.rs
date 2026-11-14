@@ -608,6 +608,7 @@ async fn fetch_complete_trajectory(
             break;
         }
     }
+    anyhow::ensure!(current_len >= total, "Antigravity trajectory is incomplete");
     Ok(response)
 }
 pub async fn scan() -> Result<NativeScan> {
@@ -659,46 +660,25 @@ pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     Ok(last_scan)
 }
 
-async fn fetch_subagent_tail_trajectory(
+async fn fetch_subagent_trajectory(
     client: &reqwest::Client,
     port: u16,
     token: &str,
     id: &str,
     summary: Option<&Value>,
 ) -> Result<Vec<Value>> {
-    const MAX_SUBAGENT_TAIL_STEPS: u64 = 256;
-    if let Some(total) = summary
-        .and_then(|s| s["stepCount"].as_u64())
-        .filter(|&n| n > 0 && n <= 200_000)
-    {
-        let start_offset = total.saturating_sub(MAX_SUBAGENT_TAIL_STEPS) as usize;
-        let total_usize = total as usize;
-        let mut steps = Vec::new();
-        while start_offset + steps.len() < total_usize
-            && steps.len() < MAX_SUBAGENT_TAIL_STEPS as usize
-        {
-            let more = query(
-                client,
-                port,
-                token,
-                "GetCascadeTrajectorySteps",
-                json!({"cascadeId": id, "stepOffset": start_offset + steps.len()}),
-            )
-            .await?;
-            let Some(batch) = more["steps"].as_array().filter(|b| !b.is_empty()) else {
-                break;
-            };
-            steps.extend(batch.iter().cloned());
-        }
-        if !steps.is_empty() {
-            return Ok(steps);
-        }
-    }
-    let resp = fetch_complete_trajectory(client, port, token, id).await?;
-    Ok(resp["trajectory"]["steps"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default())
+    let mut response = fetch_complete_trajectory(client, port, token, id).await?;
+    let steps = response["trajectory"]["steps"]
+        .as_array_mut()
+        .context("Antigravity subagent trajectory is unavailable")?;
+    anyhow::ensure!(
+        !steps.is_empty()
+            && summary
+                .and_then(|value| value["stepCount"].as_u64())
+                .is_none_or(|total| steps.len() as u64 >= total),
+        "Antigravity subagent trajectory is incomplete"
+    );
+    Ok(std::mem::take(steps))
 }
 
 async fn inspect_steps_background_tasks(
@@ -785,21 +765,16 @@ async fn load_trajectory_with_context(
             let mut inspected_subagents: Vec<InspectedSubagent> = Vec::new();
 
             while let Some(sub_id) = queue.pop_front() {
-                if inspected_subagents.len() >= 8 {
-                    break;
-                }
                 if subagents.get(&sub_id).is_some_and(|s| s.active) {
                     continue;
                 }
+                anyhow::ensure!(
+                    inspected_subagents.len() < 8,
+                    "Antigravity subagent inspection is incomplete"
+                );
                 let sub_summary = summaries.get(&sub_id);
-                let Ok(sub_steps) =
-                    fetch_subagent_tail_trajectory(client, port, token, &sub_id, sub_summary).await
-                else {
-                    continue;
-                };
-                if sub_steps.is_empty() {
-                    continue;
-                }
+                let sub_steps =
+                    fetch_subagent_trajectory(client, port, token, &sub_id, sub_summary).await?;
                 let sub_traj_id = sub_summary
                     .and_then(|s| s["trajectoryId"].as_str())
                     .unwrap_or("")

@@ -440,7 +440,6 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
     file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
     let compressed = path.extension().is_some_and(|x| x == "zstd");
     let mut consumed = 0;
-    let mut decoded_total = 0;
     if compressed {
         while consumed < bytes.len() {
             let tail = &bytes[consumed..];
@@ -469,11 +468,6 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             ensure!(
                 decoded.len() as u64 <= FILE_LIMIT && decoded.ends_with(b"\n"),
                 "invalid DSH compressed records"
-            );
-            decoded_total += decoded.len();
-            ensure!(
-                decoded_total as u64 <= FILE_LIMIT,
-                "DSH decoded source exceeds limit"
             );
             consume_lines(&mut current.state, &decoded)?;
             consumed += size;

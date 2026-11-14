@@ -336,23 +336,6 @@ pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutS
     )
 }
 
-pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
-    let scan = scan_rollout(path, 1)?;
-    Ok(scan.latest_message)
-}
-
-pub fn rollout_hook_stop_message(path: &Path, turn_id: Option<&str>) -> Result<Option<String>> {
-    Ok(rollout_hook_stop_message_with_source(path, turn_id)?.map(|(message, _)| message))
-}
-
-pub fn rollout_hook_stop_message_with_source(
-    path: &Path,
-    turn_id: Option<&str>,
-) -> Result<Option<(String, String)>> {
-    Ok(rollout_hook_stop_message_selection(path, turn_id)?
-        .map(|selection| (selection.message, selection.source)))
-}
-
 pub fn rollout_hook_stop_message_selection(
     path: &Path,
     turn_id: Option<&str>,
@@ -577,36 +560,6 @@ pub fn rollout_completion_last_agent_message_selection(
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     Ok(select_rollout_message_inner(&text, turn_id))
-}
-
-pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<bool> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let event_type = rollout_event_type(&value);
-        if !matches!(
-            event_type,
-            "task_complete" | "turn_completed" | "turn/completed"
-        ) {
-            continue;
-        }
-        if let Some(expected_turn_id) = turn_id {
-            let event_turn = event_turn_id(&value);
-            if event_turn.as_deref() != Some(expected_turn_id) {
-                continue;
-            }
-        }
-        if event_type != "task_complete" || task_complete_has_last_agent_message(&value) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

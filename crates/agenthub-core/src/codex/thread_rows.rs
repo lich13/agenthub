@@ -116,14 +116,6 @@ pub fn hidden_and_archived_thread_ids(
     Ok((hidden_ids, archived_ids))
 }
 
-pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
-    Ok(hidden_and_archived_thread_ids(paths)?.0)
-}
-
-pub fn archived_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
-    Ok(hidden_and_archived_thread_ids(paths)?.1)
-}
-
 pub(super) struct LocalThreadRow {
     pub(super) summary: ThreadSummary,
     pub(super) db_title: Option<String>,

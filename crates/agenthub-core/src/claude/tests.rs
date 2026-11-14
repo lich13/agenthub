@@ -3068,3 +3068,58 @@ fn child_native_parent_uuid_selects_the_active_record_branch() {
         .iter()
         .any(|change| change.reset));
 }
+
+#[test]
+fn history_keeps_original_text_while_notification_bodies_are_redacted() {
+    let f = Fixture::new();
+    let body = "task-1 max_tokens=100\nTOKEN=fixture-value";
+    let rows = vec![
+        f.row("u1", None, "user", json!(body)),
+        f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"text","text":body}]),
+        ),
+        json!({"type":"system","subtype":"turn_duration","uuid":"end","parentUuid":"a1","timestamp":"2026-09-29T00:00:01Z"}),
+    ];
+    f.write(&rows);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed
+        .events
+        .iter()
+        .any(|event| event.text.as_deref() == Some(body)));
+    assert_eq!(parsed.native_events.len(), 1);
+    assert_eq!(
+        parsed.native_events[0].body,
+        "task-1 max_tokens=100\n[redacted sensitive line]"
+    );
+    let child = f.root.join("child.jsonl");
+    let mut child_rows = rows;
+    for row in &mut child_rows {
+        row["sessionId"] = json!("native-fixture");
+        row["agentId"] = json!("child");
+        row["isSidechain"] = json!(true);
+    }
+    fs::write(
+        &child,
+        child_rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let child = reader::read_context(
+        &child,
+        &reader::ReadContext::Subagent {
+            parent_id: "native-fixture".into(),
+            agent_id: "child".into(),
+            prefix: "child".into(),
+        },
+    )
+    .unwrap();
+    assert!(child
+        .events
+        .iter()
+        .any(|event| event.text.as_deref() == Some(body)));
+}

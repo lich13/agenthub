@@ -373,7 +373,6 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
             </span>
             <span>
               已跳过 {result.skippedCount} · 失败 {result.failedCount}
-              {result.stoppedEarly ? "（检测到失败或残留已停止后续删除）" : ""}
             </span>
           </div>
           {visibleUnsuccessful.map(entry => (

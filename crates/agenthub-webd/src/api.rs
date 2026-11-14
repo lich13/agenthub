@@ -1,5 +1,3 @@
-use crate::state::AppState;
-use agenthub_core::providers::ProviderRegistry;
 #[cfg(test)]
 use agenthub_core::services::updates::{self as update_service, UpdateAction};
 use serde::Serialize;
@@ -46,7 +44,6 @@ pub(crate) use provider_sessions::{
 };
 pub(crate) use system::{
     linux_update_platform, start_update_action, system_capabilities, system_update_status,
-    system_version,
 };
 pub(crate) use threads::{
     archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,
@@ -70,12 +67,6 @@ impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         api_error(ApiErrorKind::OperationFailed, &error.to_string())
     }
-}
-async fn list_providers(_state: AppState) -> ApiResponse {
-    ok(ProviderRegistry::default().list())
-}
-async fn platform_overview(state: AppState) -> ApiResponse {
-    ok(state.platform().clone())
 }
 fn ok<T: Serialize>(value: T) -> ApiResponse {
     serde_json::to_value(value)

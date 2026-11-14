@@ -312,8 +312,6 @@ fn job_record(status: &str, output: &str) -> agenthub_core::db::JobRecord {
         kind: "agenthub_update_check".to_string(),
         status: status.to_string(),
         title: "AgentHub app update check".to_string(),
-        thread_id: None,
-        turn_id: None,
         started_at: 10,
         finished_at: None,
         exit_code: None,

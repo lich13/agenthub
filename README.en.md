@@ -4,7 +4,7 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.16 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.17 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
 ## Highlights
 
@@ -48,7 +48,7 @@ See [Architecture](docs/ARCHITECTURE.md#本机-codex-桌面协作) for detailed 
 ## Reading, Pagination & Storage Accounting
 
 - **Seamless Bidirectional Pagination & Scroll Anchoring**: Main threads and Codex subagent views automatically load older pages when scrolling within `200px` of the top, preserving the exact pixel offset of the currently visible message across polling, message appends, and tool group expansions.
-- **Bounded Memory & Read Reuse**: Unchanged session lists and histories are reused by file identity and modification metadata. Grok Bot, Antigravity, and DSH share a bounded **32 MiB / 64-entry** history cache, while DSH summaries evict beyond **8 MiB / 2,000 entries**. Detail views, Claude summaries, and Codex question caches share a **300-second (5-minute)** idle eviction window. Frontend polling pauses when the window is hidden and refreshes immediately upon visibility.
+- **Bounded Memory & Read Reuse**: Unchanged session lists and histories are reused by file identity and modification metadata. Grok Bot, Antigravity, and DSH share a bounded **32 MiB / 64-entry** history cache, while DSH summaries evict beyond **8 MiB / 2,000 entries**. Detail views, Claude summaries, and Codex question caches share a **300-second (5-minute)** idle eviction window, invoked by existing daemon and Mac App background loops. Codex asynchronous questions reuse parsed state for appended records. Frontend polling pauses when the window is hidden and refreshes immediately upon visibility.
 - **Session Size Badges (K / M / G)**: Session cards display byte sizes in monospace type with unified color thresholds: **`< 100 MiB` green**, **`100 MiB – 300 MiB` amber**, **`>= 300 MiB` red** (`—` while pending, `≥` for lower-bound estimates). Accounting covers only verified session rollouts, JSONL logs, dedicated subdirectories, and compressed streams — never project workspaces or symlink targets.
 
 ## Session Deletion & Cleanup Safety Boundaries
@@ -66,7 +66,7 @@ Probe exposes controls, status indicators, error diagnostics, event records, and
 
 Bark notifications follow a unified `Provider｜Status｜Thread Title` format (`Completed`, `Reply Needed`, `Authorization Needed`, `Failed`), with bodies distilled to at most 4 non-empty lines and 300 Unicode characters stripped of Markdown, code blocks, tool outputs, and internal metadata.
 
-- **Per-Provider Notification Switches**: Toggle each provider independently on the Probe home view. Grok Bot is disabled by default and notifies locally for `send-message` replies as well as pending reply/authorization prompts with cursor and upgrade-baseline deduplication; cache eviction, replacement, re-enabling, and restarts never replay stale alerts. Antigravity and DSH notifications also operate locally.
+- **Per-Provider Notification Switches**: Toggle each provider independently on the Probe home view. Grok Bot retains its switch and message baseline, but Bark delivery is suspended until a reliable whole-turn terminal signal is available; ordinary text, attachments, and pending reply/authorization prompts do not trigger notifications. Session reading and native interaction display remain available. Antigravity and DSH notifications operate locally.
 - **4-Platform Real-Time Hooks + DSH Native Stream**:
   - **Codex**: Manages the Stop Hook in `~/.codex/hooks.json` with per-question identification and deduplication;
   - **Claude Code**: Manages `Stop`, `Notification`, and `StopFailure` hooks in `~/.claude/settings.json`;

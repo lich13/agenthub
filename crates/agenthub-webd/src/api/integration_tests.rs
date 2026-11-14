@@ -239,10 +239,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
 ' "$@"
 "#,
     );
-    state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(
-        vec![executable],
-        std::time::Duration::from_secs(5),
-    );
+    state.app_server_client =
+        agenthub_core::codex::CodexAppServerClient::with_candidates(vec![executable]);
     let app = state.clone();
 
     let list = request_rpc_json(app.clone(), "threads.list", r#"{"limit":10}"#).await;
@@ -286,10 +284,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
             "thread/read"
         ]
     );
-    state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(
-        vec![],
-        std::time::Duration::from_secs(2),
-    );
+    state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(vec![]);
     assert_eq!(
         request_rpc_status(
             state,
@@ -1493,15 +1488,19 @@ mod maintenance_security {
                 dedupe_key: "fixture-maintenance-notification".into(),
             };
             let logs = CapturedLogs::default();
-            let outcome = crate::send_bark_notification(
+            let outcome = crate::bark::send_chunk(
                 &config,
                 DEVICE_KEY.as_bytes(),
                 &request,
+                &request.body,
+                0,
+                1,
+                "fixture-request",
+                1,
                 Duration::from_secs(2),
             )
             .with_subscriber(logs.subscriber())
-            .await
-            .unwrap();
+            .await;
             assert!(!outcome.sent && !outcome.skipped);
             assert_eq!(outcome.http_status, Some(status));
             assert_eq!(outcome.reason.as_deref(), Some(reason));

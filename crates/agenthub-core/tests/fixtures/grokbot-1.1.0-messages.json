@@ -1,0 +1,45 @@
+{
+  "source": {
+    "appVersion": "1.1.0",
+    "replicaSchemaVersion": 1,
+    "rosterSchemaVersion": 4,
+    "provenance": "Sanitized shapes from the local desktop cache; identifiers and content are synthetic. No whole-turn terminal signal was established."
+  },
+  "entries": [
+    {
+      "kind": "send-message",
+      "id": "fixture-permission",
+      "requestId": "fixture-work",
+      "timestampMs": 1000,
+      "message": {
+        "type": "local-tool-permission",
+        "ask": {
+          "status": "pending",
+          "requestId": "fixture-permission",
+          "title": "Fixture permission"
+        }
+      }
+    },
+    {
+      "kind": "send-message",
+      "id": "fixture-progress",
+      "requestId": "fixture-work",
+      "timestampMs": 2000,
+      "message": {
+        "type": "text",
+        "content": "Working on the requested report."
+      }
+    },
+    {
+      "kind": "send-message",
+      "id": "fixture-attachment",
+      "requestId": "fixture-work",
+      "timestampMs": 3000,
+      "message": {
+        "type": "attachment",
+        "file_name": "report.pdf",
+        "url": "https://example.invalid/report.pdf"
+      }
+    }
+  ]
+}
