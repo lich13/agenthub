@@ -133,7 +133,7 @@ python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-All unit and integration tests run inside isolated temporary sandboxes (`TempDir`) and never touch real user sessions on the host. Cross-engine Playwright (Chromium/WebKit) end-to-end regression and macOS headed frame-budget checks run in GitHub Actions CI.
+All unit and integration tests run inside isolated temporary sandboxes (`TempDir`) and never touch real user sessions on the host. Cross-engine Playwright (Chromium/WebKit) functional regression and macOS headed interaction timing measurements run in GitHub Actions CI. Timings are diagnostic only; fixed millisecond thresholds do not block CI.
 
 ## Documentation
 
