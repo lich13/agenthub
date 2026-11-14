@@ -95,6 +95,9 @@ const key = (value: string, overrides: Record<string, unknown> = {}) => ({
   key: value, shiftKey: false, preventDefault: vi.fn(), nativeEvent: { isComposing: false },
   currentTarget: host(), ...overrides
 });
+const click = (detail: number, overrides: Record<string, unknown> = {}) => ({
+  detail, currentTarget: host(), ...overrides
+});
 const doubleClick = () => ({ preventDefault: vi.fn() });
 
 beforeEach(() => {
@@ -136,14 +139,18 @@ describe("RenameableSession event boundaries", () => {
 
   test("selects immediately on the first click and opens rename on double-click without selecting twice", () => {
     const view = mount();
-    view.row().props.onClick({ detail: 1 });
+    const firstClick = click(1);
+    const secondClick = click(2);
+    view.row().props.onClick(firstClick);
     expect(view.props.onSelect).toHaveBeenCalledTimes(1);
+    expect(firstClick.currentTarget.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     view.render();
-    view.row().props.onClick({ detail: 2 });
+    view.row().props.onClick(secondClick);
     view.row().props.onDoubleClick(doubleClick());
     view.render();
     vi.runAllTimers();
     expect(view.props.onSelect).toHaveBeenCalledTimes(1);
+    expect(secondClick.currentTarget.focus).not.toHaveBeenCalled();
     expect(view.input().props.value).toBe("Fixture session");
     expect(view.host(view.input()).focus).toHaveBeenCalledTimes(1);
     expect(view.host(view.input()).select).toHaveBeenCalledTimes(1);
@@ -151,17 +158,22 @@ describe("RenameableSession event boundaries", () => {
 
   test("keyboard-generated clicks select immediately", () => {
     const view = mount();
-    view.row().props.onClick({ detail: 0 });
+    const event = click(0);
+    view.row().props.onClick(event);
     expect(view.props.onSelect).toHaveBeenCalledTimes(1);
+    expect(event.currentTarget.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
   });
 
   test("forwards selection modifiers and leaves Ctrl click to the context menu", () => {
     const view = mount();
-    const event = { detail: 1, metaKey: true, shiftKey: true };
+    const event = click(1, { metaKey: true, shiftKey: true });
     view.row().props.onClick(event);
     expect(view.props.onSelect).toHaveBeenCalledExactlyOnceWith(event);
-    view.row().props.onClick({ detail: 1, ctrlKey: true });
+    expect(event.currentTarget.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    const ctrlClick = click(1, { ctrlKey: true });
+    view.row().props.onClick(ctrlClick);
     expect(view.props.onSelect).toHaveBeenCalledOnce();
+    expect(ctrlClick.currentTarget.focus).not.toHaveBeenCalled();
     view.row().props.onDoubleClick({ ...doubleClick(), metaKey: true });
     view.render();
     expect(view.find(element => element.type === "input")).toBeUndefined();
@@ -254,14 +266,18 @@ describe("RenameableSession event boundaries", () => {
 
   test("batch selection handles every click and suppresses rename and menus", () => {
     const view = mount({ selecting: true });
-    view.row().props.onClick({ detail: 1 });
-    view.row().props.onClick({ detail: 2 });
+    const firstClick = click(1);
+    const secondClick = click(2);
+    view.row().props.onClick(firstClick);
+    view.row().props.onClick(secondClick);
     view.row().props.onDoubleClick(doubleClick());
     view.row().props.onKeyDown(key("F2"));
     view.row().props.onKeyDown(key("ContextMenu"));
     view.row().props.onContextMenu({ preventDefault: vi.fn(), clientX: 20, clientY: 20 });
     view.render();
     expect(view.props.onSelect).toHaveBeenCalledTimes(2);
+    expect(firstClick.currentTarget.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(secondClick.currentTarget.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(view.find(element => element.type === "input" || element.type === ContextTaskMenu || element.props["aria-label"] === "线程操作")).toBeUndefined();
   });
 
