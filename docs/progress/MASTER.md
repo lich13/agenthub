@@ -6,13 +6,17 @@
 
 浏览器交互耗时只作诊断，Playwright 功能回归仍为 CI 检查；不新增性能阈值。
 
-最近正式版本为 [**v2.1.17**](https://github.com/lich13/agenthub/releases/tag/v2.1.17)，发布提交 [`9058e0d`](https://github.com/lich13/agenthub/commit/9058e0d229f33a9939db3fc74f3bb49b6c269a36) 的[标签 CI](https://github.com/lich13/agenthub/actions/runs/43640753610) 已全部通过，八项正式资产已发布。服务端已通过部署脚本升级为 agenthub-webd 2.1.17，服务为 active、健康为 ok；Mac 已使用同版正式 DMG 从 2.1.16 原地更新至 2.1.17 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实 macOS 原生会话、SSH 入口与通知实收待用户验收。
+最近正式版本为 [**v2.1.18**](https://github.com/lich13/agenthub/releases/tag/v2.1.18)，发布提交 [`d89a2e2`](https://github.com/lich13/agenthub/commit/d89a2e2a00d44057892476f5e1181d610aedd606) 的[标签 CI](https://github.com/lich13/agenthub/actions/runs/43643129072) 已全部通过，正式资产已发布。服务端已通过部署脚本升级为 agenthub-webd 2.1.18，服务为 active、健康为 ok；Mac 已使用同版正式 DMG 从 2.1.17 原地更新至 2.1.18 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实 Grok Bot 手机通知实收待用户验收。
 
 ## v2.1.18 Grok Bot 通知恢复
 
 Grok Bot 恢复 v2.1.16 的消息识别与通知筛选，文字、附件、待回复和待授权继续按原有开关推送。消息级 completion 仍可能早于整轮结束，不承诺整轮只推送一次；可靠整轮终结信号仍未取得。保留账户隔离、首发与重试复核、消息游标、去重和启用基线，v2.1.17 已扫描的消息不会因恢复而重放。
 
-本次只恢复 Grok Bot 通知路径；v2.1.17 的脱敏、配置、增量读取、缓存回收、重试、DSH／Antigravity 及体积优化保留，不改原生会话或通知配置。新增暂停版本升级后的消息基线回归，原有启用、重启、缓存淘汰、附件及交互通知测试继续保留。真实手机通知实收待用户验收。
+本次只恢复 Grok Bot 通知路径；v2.1.17 的脱敏、配置、增量读取、缓存回收、重试、DSH／Antigravity 及体积优化保留，不改原生会话或通知配置。新增暂停版本升级后的消息基线回归，原有启用、重启、缓存淘汰、附件及交互通知测试继续保留。
+
+本机 Grok Bot、原生通知入队和 provider monitor 测试、工作区 Clippy、格式、版本、双工作区、wire 契约、源码隐私及发布说明生成检查通过；标签 CI 的完整回归、浏览器、跨平台构建与发布通过。已使用对应 CI 产物完成服务端部署和 Mac 原地升级。
+
+待用户验收：在本机原有 Probe、Bark、Grok Bot 开关已开启时，等待新的文字、附件或交互请求，手机应按原有规则收到提醒；不补发暂停期间已扫描的消息。消息级「完成」仍不代表整轮彻底结束。
 
 ## v2.1.17 源码与资源比较
 
