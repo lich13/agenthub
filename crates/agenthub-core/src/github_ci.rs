@@ -2,9 +2,9 @@
 use crate::{config::Config, db::PanelDb};
 use anyhow::{Context, Result};
 use reqwest::{header, Client, StatusCode};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     time::Duration,
 };
 use tokio::process::Command;
@@ -20,6 +20,7 @@ pub struct Request {
 const STATE: &str = "github_ci_state";
 const REFRESH: &str = "github_ci_refresh";
 pub const POLL_SECONDS: i64 = 60;
+pub const ACTIVE_POLL_SECONDS: i64 = 5;
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -194,6 +195,9 @@ pub struct Snapshot {
     pub baseline_ms: i64,
     pub error: Option<String>,
     pub refreshing: bool,
+    pub monitored_repositories: Vec<String>,
+    pub filter_bots: bool,
+    pub scanned_repository_ids: BTreeSet<u64>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -203,7 +207,7 @@ struct Stored {
     repositories_at_ms: i64,
     request_ms: i64,
     #[serde(default)]
-    monitored_repo_ids: HashSet<u64>,
+    monitored_repo_ids: BTreeSet<u64>,
     pending: Vec<Event>,
 }
 fn load(db: &PanelDb) -> Result<Stored> {
@@ -241,6 +245,9 @@ pub fn status(db: &PanelDb, config: &Config, options: Request) -> Result<Snapsho
         db.set_setting(REFRESH, &request.to_string())?;
     }
     snapshot.baseline_ms = stored.baseline_ms;
+    snapshot.monitored_repositories = config.probe.notifications.github_ci_repositories.clone();
+    snapshot.filter_bots = config.probe.notifications.github_ci_filter_bots;
+    snapshot.scanned_repository_ids = stored.monitored_repo_ids;
     snapshot.enabled = enabled(config);
     snapshot.refreshing = enabled(config) && request > stored.request_ms;
     Ok(snapshot)
@@ -307,7 +314,7 @@ pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result
                 }
             }
             save(db, &state)?;
-            if repos_changed && enabled(after) {
+            if enabled(after) {
                 db.set_setting(REFRESH, &now().to_string())?;
             }
         }
@@ -339,9 +346,15 @@ pub fn acknowledge(db: &PanelDb, keys: &[String]) -> Result<()> {
     save(db, &state)
 }
 
+#[derive(Debug, Clone)]
+enum CachedValue {
+    Account(Account),
+    Repositories(Vec<Repository>),
+    Runs(Vec<Run>),
+}
 struct Cached {
     etag: Option<String>,
-    value: serde_json::Value,
+    value: CachedValue,
     next: Option<String>,
 }
 pub struct Monitor {
@@ -350,7 +363,9 @@ pub struct Monitor {
     token: String,
     retry_at: i64,
     api: String,
-    last_poll_ms: i64,
+    credentials_due_ms: i64,
+    repository_due_ms: HashMap<u64, i64>,
+    next_poll_ms: i64,
     request_ms: i64,
     active: Option<bool>,
 }
@@ -367,7 +382,9 @@ impl Monitor {
             token: String::new(),
             retry_at: 0,
             api: "https://api.github.com".into(),
-            last_poll_ms: 0,
+            credentials_due_ms: 0,
+            repository_due_ms: HashMap::new(),
+            next_poll_ms: 0,
             request_ms: 0,
             active: None,
         })
@@ -387,7 +404,7 @@ impl Monitor {
         let time = now();
         if self.active == Some(active)
             && request <= self.request_ms
-            && (time < self.retry_at || !active || time - self.last_poll_ms < POLL_SECONDS * 1000)
+            && (time < self.retry_at || !active || time < self.next_poll_ms)
         {
             return Ok(Vec::new());
         }
@@ -420,13 +437,27 @@ impl Monitor {
             return Ok(Vec::new());
         }
         let before = serde_json::to_string(&state)?;
+        let refresh = request > self.request_ms || !enabled_before;
+        let check_account =
+            refresh || time >= self.credentials_due_ms || state.snapshot.account.is_none();
+        let mut account_ready = false;
         let result = async {
-            let token = token.await?;
-            if token != self.token {
-                self.cache.clear();
-                self.token = token;
+            if check_account {
+                self.credentials_due_ms = time + POLL_SECONDS * 1000;
+                let token = token.await?;
+                if token != self.token {
+                    self.cache.clear();
+                    self.repository_due_ms.clear();
+                    self.token = token;
+                }
             }
-            self.scan_with_config(&mut state, config, active, time)
+            let account = if check_account {
+                self.account().await?
+            } else {
+                state.snapshot.account.clone().expect("known account")
+            };
+            account_ready = true;
+            self.scan_due(&mut state, config, account, active, time, refresh)
                 .await
         }
         .await;
@@ -439,18 +470,40 @@ impl Monitor {
         }
         state.request_ms = request_ms(db)?;
         self.request_ms = state.request_ms;
-        self.last_poll_ms = now();
+        self.next_poll_ms = self
+            .repository_due_ms
+            .values()
+            .copied()
+            .chain(std::iter::once(self.credentials_due_ms))
+            .min()
+            .unwrap_or(time + POLL_SECONDS * 1000);
+        if !account_ready {
+            self.next_poll_ms = self.credentials_due_ms;
+        }
         state.snapshot.error = result.err().map(|error| error.to_string());
         if serde_json::to_string(&state)? != before {
             state.snapshot.last_scan_ms = time;
             save(db, &state)?;
         }
-        Ok(state.pending)
+        Ok(if account_ready {
+            state.pending
+        } else {
+            Vec::new()
+        })
     }
-    async fn get<T: DeserializeOwned + Serialize>(
+    pub fn wait_duration(&self) -> Duration {
+        if self.active != Some(true) {
+            return Duration::from_secs(2);
+        }
+        let due = self.next_poll_ms.max(self.retry_at);
+        Duration::from_millis(due.saturating_sub(now()).clamp(0, 2000) as u64)
+    }
+
+    async fn get(
         &mut self,
         path: &str,
-    ) -> Result<(T, Option<String>)> {
+        parse: impl FnOnce(serde_json::Value) -> Result<CachedValue>,
+    ) -> Result<(CachedValue, Option<String>)> {
         let url = if path.starts_with('/') {
             format!("{}{path}", self.api)
         } else {
@@ -474,7 +527,7 @@ impl Monitor {
             .map_err(|_| anyhow::anyhow!("GitHub 请求失败，请重试"))?;
         if response.status() == StatusCode::NOT_MODIFIED {
             let c = self.cache.get(&url).context("GitHub 缓存不可用")?;
-            return Ok((serde_json::from_value(c.value.clone())?, c.next.clone()));
+            return Ok((c.value.clone(), c.next.clone()));
         }
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS
@@ -524,15 +577,16 @@ impl Monitor {
             .and_then(|v| v.trim().strip_prefix('<'))
             .and_then(|v| v.split_once('>'))
             .map(|(v, _)| v.to_owned());
-        let value: T = response
+        let raw = response
             .json()
             .await
             .map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
+        let value = parse(raw).map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
         self.cache.insert(
             url,
             Cached {
                 etag,
-                value: serde_json::to_value(&value)?,
+                value: value.clone(),
                 next: next.clone(),
             },
         );
@@ -543,6 +597,7 @@ impl Monitor {
         self.scan_with_config(state, &Config::default(), active, time)
             .await
     }
+    #[cfg(test)]
     async fn scan_with_config(
         &mut self,
         state: &mut Stored,
@@ -550,7 +605,30 @@ impl Monitor {
         active: bool,
         time: i64,
     ) -> Result<()> {
-        let (account, _) = self.get::<Account>("/user").await?;
+        let account = self.account().await?;
+        self.scan_due(state, config, account, active, time, true)
+            .await
+    }
+    async fn account(&mut self) -> Result<Account> {
+        let (CachedValue::Account(account), _) = self
+            .get("/user", |raw| {
+                Ok(CachedValue::Account(serde_json::from_value(raw)?))
+            })
+            .await?
+        else {
+            anyhow::bail!("GitHub 响应格式错误")
+        };
+        Ok(account)
+    }
+    async fn scan_due(
+        &mut self,
+        state: &mut Stored,
+        config: &Config,
+        account: Account,
+        active: bool,
+        time: i64,
+        refresh: bool,
+    ) -> Result<()> {
         let changed = state
             .snapshot
             .account
@@ -558,13 +636,21 @@ impl Monitor {
             .is_none_or(|old| old.id != account.id);
         if changed {
             *state = Stored::default();
+            self.repository_due_ms.clear();
             state.snapshot.account = Some(account.clone());
         }
         if changed || time - state.repositories_at_ms >= 600000 {
             let mut next = Some("/user/repos?affiliation=owner&per_page=100".to_owned());
             let mut repositories = Vec::new();
             while let Some(path) = next {
-                let (page, more) = self.get::<Vec<Repository>>(&path).await?;
+                let (CachedValue::Repositories(page), more) = self
+                    .get(&path, |raw| {
+                        Ok(CachedValue::Repositories(serde_json::from_value(raw)?))
+                    })
+                    .await?
+                else {
+                    anyhow::bail!("GitHub 响应格式错误")
+                };
                 repositories.extend(page);
                 next = more;
             }
@@ -590,11 +676,56 @@ impl Monitor {
         let mut scanned_repo_ids = HashSet::new();
         let configured_repos = &config.probe.notifications.github_ci_repositories;
         let repositories = state.snapshot.repositories.clone();
+        self.repository_due_ms.retain(|id, _| {
+            repositories.iter().any(|repo| {
+                repo.id == *id
+                    && !repo.archived
+                    && matches_repository_filter(repo, configured_repos)
+            })
+        });
         for (index, repo) in repositories.iter().enumerate() {
             if repo.archived || !matches_repository_filter(repo, configured_repos) {
                 continue;
             }
+            if !refresh
+                && !baseline
+                && self
+                    .repository_due_ms
+                    .get(&repo.id)
+                    .is_some_and(|due| time < *due)
+            {
+                runs.extend(
+                    state
+                        .snapshot
+                        .runs
+                        .iter()
+                        .filter(|run| run.repository_id == repo.id)
+                        .cloned(),
+                );
+                continue;
+            }
             let result = self.repository_runs(repo).await;
+            let fast = result
+                .as_ref()
+                .unwrap_or(&state.snapshot.runs)
+                .iter()
+                .any(|run| {
+                    run.repository_id == repo.id
+                        && run.status != "completed"
+                        && matches_run_filter(
+                            run,
+                            configured_repos,
+                            config.probe.notifications.github_ci_filter_bots,
+                        )
+                });
+            self.repository_due_ms.insert(
+                repo.id,
+                time + if fast {
+                    ACTIVE_POLL_SECONDS
+                } else {
+                    POLL_SECONDS
+                } * 1000,
+            );
             match result {
                 Ok(mut incoming) => {
                     scanned_repo_ids.insert(repo.id);
@@ -640,25 +771,30 @@ impl Monitor {
         Ok(())
     }
     async fn repository_runs(&mut self, repo: &Repository) -> Result<Vec<Run>> {
-        let (page, _) = self
-            .get::<serde_json::Value>(&format!(
-                "/repos/{}/actions/runs?per_page=10",
-                repo.full_name
-            ))
-            .await?;
-        let raw_runs = page
-            .get("workflow_runs")
-            .and_then(serde_json::Value::as_array)
-            .context("GitHub 响应格式错误")?;
-        let mut runs = Vec::with_capacity(raw_runs.len());
-        for raw_run in raw_runs {
-            let mut run: Run = serde_json::from_value(raw_run.clone())
-                .map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
-            run.repository_id = repo.id;
-            run.repository_name = repo.full_name.clone();
-            run.is_bot = run.is_bot || detect_bot_run(raw_run);
-            runs.push(run);
-        }
+        let (CachedValue::Runs(runs), _) = self
+            .get(
+                &format!("/repos/{}/actions/runs?per_page=10", repo.full_name),
+                |mut page| {
+                    let raw_runs = page
+                        .get_mut("workflow_runs")
+                        .and_then(serde_json::Value::as_array_mut)
+                        .context("GitHub 响应格式错误")?;
+                    let mut runs = Vec::with_capacity(raw_runs.len());
+                    for raw in raw_runs.drain(..) {
+                        let is_bot = detect_bot_run(&raw);
+                        let mut run: Run = serde_json::from_value(raw)?;
+                        run.repository_id = repo.id;
+                        run.repository_name = repo.full_name.clone();
+                        run.is_bot |= is_bot;
+                        runs.push(run);
+                    }
+                    Ok(CachedValue::Runs(runs))
+                },
+            )
+            .await?
+        else {
+            anyhow::bail!("GitHub 响应格式错误")
+        };
         Ok(runs)
     }
 }

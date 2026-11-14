@@ -6,13 +6,13 @@
 
 `github.ci.status` 通过 AgentHubUseCases 及薄 Tauri／SSH RPC 适配返回账号与运行摘要；`github_ci` 为可选能力，旧服务不显示面板。配置沿用 `probe.settings.get/save` 的 `notifications.notify_github_ci`，默认 false，监控还受 Probe 主开关控制。Bark 的启停独立控制实际投递。
 
-现有 serve／monitor 启动独立扫描循环，App 与 Hook 的后台启动判断均包含 CI 开关。关闭 CI 时只读取现有缓存，首次读取与手动刷新均不请求扫描，refreshing 为 false；DesktopState 不再持有独立 Monitor。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接、ETag 及同源校验；账号名下公开／私有／fork 仓库目录每 10 分钟分页刷新，并淘汰已消失仓库的运行缓存。每 60 秒仅查询各仓库首页 `per_page=10`，不翻运行历史或追查窗口外旧运行／旧重跑。前端先筛选仓库，再按现有更新时间最多展示 20 条，展示上限不限制通知判断。运行日志和产物通过 GitHub 查看。
+现有 serve／monitor 启动独立扫描循环，App 与 Hook 的后台启动判断均包含 CI 开关。关闭 CI 时只读取现有缓存，首次读取与手动刷新均不请求扫描，refreshing 为 false；DesktopState 不再持有独立 Monitor。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存，按 60 秒核对账号和凭据，5 秒扫描复用已有 token。ETag 缓存仅保存解析后的账号、仓库和运行摘要，Bot 身份在 200 响应时计算，304 不重复解析完整响应。扫描按到期时间调度，未变快照不新增写入。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接、ETag 及同源校验；账号名下公开／私有／fork 仓库目录每 10 分钟分页刷新，并淘汰已消失仓库的运行缓存。有符合来源筛选条件的未结束运行时每 5 秒、空闲时每 60 秒仅查询该仓库首页 `per_page=10`，不翻运行历史或追查窗口外旧运行／旧重跑。前端先筛选仓库，再按现有更新时间最多展示 20 条，展示上限不限制通知判断。运行日志和产物通过 GitHub 查看。
 
 扫描期间新增刷新请求由本轮结果满足，设置启停或基线变化仍丢弃旧结果。限流时间只留在 Monitor 内存，限流期间的刷新及时结束并返回现有错误；状态保留首次读取需要的 last_scan_ms，旧版含 retry_at_ms 的状态可读取但不再写入或公开该字段。
 
 现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化的基线轮跳过全部已完成记录，在途任务结束仍通知。Monitor::tick 直接返回可投递事件，Stored.pending 继续持久化；成功处理的事件批量确认一次，中途失败保留尚未处理项。过期事件过滤、首发有效性和加密队列重试复核保持。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 直接使用 GitHub 返回的 html_url。通知历史维护直接使用 SQL 删除结果计数，移除无调用的统计及 dry-run 分支；去重按复合主键原子认领或过期续期，过期标记一次批量删除，保留期、保护集合及范围不变。
 
-桌面通过单个 60 秒串行观察任务读取当前机器缓存，与 Probe 页面可见性无关；`github.ci.status` 的 `cached_only` 默认 false，为 true 时不请求扫描，响应带已有 `baseline_ms`。观察状态仅保留机器修订、账号、启用基线及运行尝试身份，不落盘；首次观察跳过已完成记录，换机、切号和重新启用重新建立基线。读取沿用现有 SSH 通道，迟到响应不参与通知。macOS 使用 UserNotifications，请求系统授权、支持前台呈现和点击打开运行页；Bark 的持久化队列、确认与重试独立保留。完成记录不再额外受全局 1000 条限制。
+桌面通过单个 5 秒串行观察任务读取当前机器缓存，与 Probe 页面可见性无关；`github.ci.status` 的 `cached_only` 默认 false，为 true 时不请求扫描，响应带已有 `baseline_ms` 及来源机器的 `monitored_repositories`、`filter_bots`、`scanned_repository_ids`。新加入的仓库首次结果独立建立基线，成功扫描过的空仓库后续新运行照常通知；不读取本机配置替代远程筛选。观察状态仅保留机器修订、账号、启用基线及运行尝试身份，不落盘；首次观察跳过已完成记录，换机、切号和重新启用重新建立基线。读取沿用现有 SSH 通道，迟到响应不参与通知。macOS 使用 UserNotifications，请求系统授权、支持前台呈现和点击打开运行页；Bark 的持久化队列、确认与重试独立保留；桌面详情缓存空闲回收仍为 60 秒。完成记录不再额外受全局 1000 条限制。
 
 CI 比对以本轮临时索引查找新旧运行及待发事件，排序、attempt 与基线语义保持；只对符合通知条件的新增完成结果解析时间。Mac 只在观察到待发事件时申请系统通知授权，由原生授权回调发送该批事件，观察循环不等待；消费前核对来源，已接受事件按原机器名称投递。系统通知标识使用运行事件身份，不包含连接修订。本机 CI 关闭时重置观察状态且不读取数据库。HTTP 客户端与 updater 共用 reqwest 0.13.4 和 ring。
 
@@ -340,3 +340,5 @@ Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。g
 macOS App 在 Tauri 生成 DMG 和 updater 归档前完成代码签名，默认 ad-hoc；原有 `MACOS_CODESIGN_IDENTITY` 覆盖传入打包配置，Tauri 的 `APPLE_SIGNING_IDENTITY` 优先级保持。打包检查完整 App 的 deep/strict 签名，不能仅重签临时归档副本。代码签名与 updater Minisign 独立，ad-hoc 不代表 Developer ID 或 Apple 公证。桌面 updater 只启用 rustls，macOS tar.gz 支持由其平台依赖保留，不引入未发布的 Windows ZIP 更新特性。
 
 正式安装复用同提交成品，先远程服务后 App；部署输入不进入仓库。Linux 归档用现有 Tauri 签名工具生成带版本 trusted comment 的分离签名，私钥仅从 GitHub Secrets 环境提供。在线下载先校验发布 SHA-256，再用预装 Minisign 与固定公钥验签，失败不解包；指定版本需与已签名版本相同，解包后核对布局、ELF x86_64 平台及程序版本。旧 updater 首次升级由可信客户端先验签；显式本地 --archive/--binary 运维方式保留。部署另比对本地与远端文件 SHA-256。解包拒绝路径穿越、链接、特殊文件及重复成员；目录与可执行文件统一 0755，普通文件 0644，不继承特殊位或可写权限。程序与部署文件通过同文件系统临时文件原子替换，普通安装失败恢复本轮替换项，不回滚业务数据库或原生会话；在线更新仍使用既有异步重启，成功调度不等于新进程已启动，也不提供崩溃自动恢复。安装成功/启动检查与用户功能验收分开报告。维护六份当前文档并使用普通增量提交，历史由 Git 和 Release 保留。
+
+Claude 删除按批次建立不读取正文的文件元数据索引，项目文件及索引按实际结果处理；同 ID 的其他副本保留或失败时不删除全局文件、历史、登记和原生后台作业。统一清理执行重验 Inactive，普通删除沿用显式选择规则。Grok Bot 当前交互先按小时续期终态去重标记再维护保留期，来源读取失败时保留其标记；附件通知只显示名称，通用摘要完整移除括号或尖括号包裹的链接目标。Antigravity 检查当前回合相关子代理图，不按数量截断，保留身份去重、循环检测及完整轨迹检查。

@@ -126,9 +126,116 @@ pub(super) fn deletion_assessment(
     Ok(snapshot.assess_owned(parsed, &files, &HashSet::new()))
 }
 
-fn delete_paths(paths: &ClaudePaths, main: &Path, id: &str) -> (Vec<PathBuf>, Vec<String>) {
+pub(crate) struct DeletionContext {
+    by_key: HashMap<String, PathBuf>,
+    remaining: HashMap<String, BTreeSet<PathBuf>>,
+    shared: HashSet<String>,
+    preview_shared: HashSet<PathBuf>,
+}
+impl DeletionContext {
+    pub(crate) fn new(paths: &ClaudePaths) -> Result<Self> {
+        let mut context = Self {
+            by_key: HashMap::new(),
+            remaining: HashMap::new(),
+            shared: HashSet::new(),
+            preview_shared: HashSet::new(),
+        };
+        if !paths.projects.exists() {
+            return Ok(context);
+        }
+        ensure!(
+            !fs::symlink_metadata(&paths.projects)?
+                .file_type()
+                .is_symlink(),
+            "Claude 会话根不能是符号链接"
+        );
+        let root = paths.projects.canonicalize()?;
+        for entry in walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                !matches!(
+                    entry.file_name().to_str(),
+                    Some("subagents" | "tool-results")
+                )
+            })
+        {
+            let entry = entry.context("无法扫描 Claude 会话")?;
+            if (entry.file_type().is_file() || entry.file_type().is_symlink())
+                && entry.path().extension().is_some_and(|ext| ext == "jsonl")
+            {
+                let path = entry.into_path();
+                let id = path.file_stem().unwrap().to_string_lossy().into_owned();
+                context
+                    .by_key
+                    .insert(key_for(&root, &path, &id), path.clone());
+                let copies = context.remaining.entry(id.clone()).or_default();
+                copies.insert(path);
+                if copies.len() > 1 {
+                    context.shared.insert(id);
+                }
+            }
+        }
+        Ok(context)
+    }
+    fn locate(&self, paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
+        self.by_key
+            .get(key)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| locate(paths, key))
+    }
+    pub(crate) fn select_preview(&mut self, keys: &[String]) {
+        let selected: HashSet<_> = keys.iter().filter_map(|key| self.by_key.get(key)).collect();
+        let mut last = HashMap::new();
+        for path in keys.iter().filter_map(|key| self.by_key.get(key)) {
+            last.insert(path.file_stem().unwrap().to_string_lossy(), path);
+        }
+        self.preview_shared = last
+            .into_iter()
+            .filter(|(id, _)| {
+                self.remaining
+                    .get(id.as_ref())
+                    .is_none_or(|copies| copies.iter().all(|path| selected.contains(path)))
+            })
+            .map(|(_, path)| path.clone())
+            .collect();
+    }
+    pub(crate) fn preview(&self, paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
+        let main = self.locate(paths, key)?;
+        let id = main
+            .file_stem()
+            .context("会话文件名缺失")?
+            .to_string_lossy()
+            .into_owned();
+        let shared = self.preview_shared.contains(&main);
+        let (targets, warnings) = delete_paths(paths, &main, &id, shared);
+        let (file_count, bytes) = crate::session_delete::size(&targets);
+        Ok(ClaudeDeletePreview {
+            session_key: key.into(),
+            title: id.clone(),
+            id,
+            path: main,
+            paths: targets,
+            fingerprint: String::new(),
+            file_count,
+            bytes,
+            warnings: (!warnings.is_empty()).then_some(warnings),
+        })
+    }
+}
+
+fn delete_paths(
+    paths: &ClaudePaths,
+    main: &Path,
+    id: &str,
+    shared: bool,
+) -> (Vec<PathBuf>, Vec<String>) {
     let mut errors = Vec::new();
     let mut result = vec![main.into(), main.with_extension("")];
+    if !shared {
+        return (result, errors);
+    }
     for group in ["file-history", "tasks", "session-env"] {
         result.push(paths.config.join(group).join(id));
     }
@@ -156,25 +263,9 @@ fn delete_paths(paths: &ClaudePaths, main: &Path, id: &str) -> (Vec<PathBuf>, Ve
 }
 
 pub fn preview_claude_delete(paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
-    let path = locate(paths, key)?;
-    let id = path
-        .file_stem()
-        .context("会话文件名缺失")?
-        .to_string_lossy()
-        .into_owned();
-    let (targets, warnings) = delete_paths(paths, &path, &id);
-    let (file_count, bytes) = crate::session_delete::size(&targets);
-    Ok(ClaudeDeletePreview {
-        session_key: key.into(),
-        title: id.clone(),
-        id,
-        path,
-        paths: targets,
-        fingerprint: String::new(),
-        file_count,
-        bytes,
-        warnings: (!warnings.is_empty()).then_some(warnings),
-    })
+    let mut context = DeletionContext::new(paths)?;
+    context.select_preview(&[key.to_owned()]);
+    context.preview(paths, key)
 }
 
 pub fn rename_claude_session(
@@ -283,17 +374,23 @@ pub(crate) fn find_empty_inactive_sessions(
         let Ok(sum) = summary(paths, &path, &parsed, &snapshot) else {
             continue;
         };
-        let file_id = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| sum.id.clone());
-        let (targets, warnings) = delete_paths(paths, &path, &file_id);
-        if !warnings.is_empty() {
-            continue;
-        }
-        let (_, bytes) = crate::session_delete::size(&targets);
-        out.push((sum, fp, bytes));
+        out.push((sum, fp, 0));
     }
+    let mut context = DeletionContext::new(paths)?;
+    let keys: Vec<_> = out
+        .iter()
+        .map(|(summary, _, _)| summary.session_key.clone())
+        .collect();
+    context.select_preview(&keys);
+    out.retain_mut(
+        |(summary, _, bytes)| match context.preview(paths, &summary.session_key) {
+            Ok(preview) if preview.warnings.is_none() => {
+                *bytes = preview.bytes;
+                true
+            }
+            _ => false,
+        },
+    );
     Ok(out)
 }
 
@@ -357,7 +454,7 @@ fn run_native_rm(
         .stdout(if help { Stdio::piped() } else { Stdio::null() })
         .stderr(Stdio::null())
         .spawn()
-        .context("无法启动 Claude 原生清理命令，历史文件尚未删除")?;
+        .context("无法启动 Claude 原生清理命令")?;
     let deadline = Instant::now() + timeout;
     let result = (|| -> Result<_> {
         let mut output = child.stdout.take();
@@ -415,11 +512,9 @@ fn run_native_rm(
         // Only the helper spawned above belongs to this operation. Never signal
         // the native session or its process group, and always reap this child.
         let _ = child.kill();
-        child
-            .wait()
-            .context("无法回收 Claude 清理 helper，历史文件尚未删除")?;
+        child.wait().context("无法回收 Claude 清理 helper")?;
     }
-    result.map_err(|error| anyhow::anyhow!("Claude 原生清理失败，历史文件尚未删除：{error}"))
+    result.map_err(|error| anyhow::anyhow!("Claude 原生清理失败：{error}"))
 }
 
 fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
@@ -429,7 +524,7 @@ fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
             && String::from_utf8_lossy(&output)
                 .lines()
                 .any(|line| line.starts_with("Usage: claude rm <id>")),
-        "当前 Claude CLI 不支持原生 rm 命令，历史文件尚未删除"
+        "当前 Claude CLI 不支持原生 rm 命令"
     );
     Ok(())
 }
@@ -440,7 +535,10 @@ fn remove_background_job(executable: &Path, paths: &ClaudePaths, native_id: &str
         "Claude 后台会话标识不能作为命令选项"
     );
     let (status, _) = run_native_rm(executable, paths, native_id, false, NATIVE_RM_WAIT)?;
-    ensure!(status.success(), "Claude 原生清理未完成（{status}），请先使用 claude rm {native_id} 检查后台会话；历史文件尚未删除");
+    ensure!(
+        status.success(),
+        "Claude 原生清理未完成（{status}），请先使用 claude rm {native_id} 检查后台会话"
+    );
     Ok(())
 }
 
@@ -462,9 +560,7 @@ impl NativeCleanup {
                 .map(|path| path.join("claude"))
                 .chain(dirs::home_dir().map(|home| home.join(".local/bin/claude")))
                 .find(|path| path.is_file())
-                .context(
-                    "此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI；历史文件尚未删除",
-                )?;
+                .context("此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI")?;
             check_native_rm(&executable, paths)?;
             self.executable = Some(executable);
         }
@@ -496,9 +592,10 @@ fn delete_exclusive(
     request: ClaudeDeleteRequest,
     jobs: &Result<HashMap<String, BTreeSet<String>>>,
     native: &mut NativeCleanup,
+    context: &mut DeletionContext,
 ) -> Result<PendingDelete> {
     ensure!(request.confirmed, "删除需要明确确认");
-    let main = locate(paths, &request.session_key)?;
+    let main = context.locate(paths, &request.session_key)?;
     let id = main
         .file_stem()
         .context("会话文件名缺失")?
@@ -523,32 +620,19 @@ fn delete_exclusive(
         let snapshot = activity::Snapshot::capture(paths);
         let parsed = read_or_warning(&main, false);
         let assessment = deletion_assessment(&parsed, &main, &snapshot)?;
-        if assessment.ownership == activity::Ownership::Open {
+        if assessment.ownership != activity::Ownership::Inactive {
             anyhow::bail!(assessment
                 .block_reason()
                 .unwrap_or_else(|| "Claude 会话正在运行，无法清理".into()));
         }
     }
-    let jobs = jobs.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
-    let matching: Vec<_> = jobs
-        .get(&id)
-        .into_iter()
-        .flatten()
-        .filter(|native_id| !native.removed.contains(*native_id))
-        .collect();
-    native.remove(paths, &matching)?;
+    // Preserve the final transcript if native background-job removal fails.
+    if !context.shared.contains(&id) {
+        remove_native_jobs(paths, &id, jobs, native)?;
+    }
 
     let mut outcome = crate::session_delete::Outcome::default();
-    let (targets, errors) = delete_paths(paths, &main, &id);
-    if !errors.is_empty() {
-        outcome.residuals.extend(errors);
-        return Ok(PendingDelete {
-            request,
-            main,
-            id,
-            outcome,
-        });
-    }
+    let targets = [main.clone(), main.with_extension("")];
     for (idx, path) in targets.iter().enumerate() {
         if crate::session_delete::within(&paths.config, path)
             || crate::session_delete::within(&projects, path)
@@ -573,12 +657,37 @@ fn delete_exclusive(
             break;
         }
     }
+    if outcome.residuals.is_empty() {
+        context
+            .remaining
+            .entry(id.clone())
+            .or_default()
+            .remove(&main);
+    }
     Ok(PendingDelete {
         request,
         main,
         id,
         outcome,
     })
+}
+
+fn remove_native_jobs(
+    paths: &ClaudePaths,
+    id: &str,
+    jobs: &Result<HashMap<String, BTreeSet<String>>>,
+    native: &mut NativeCleanup,
+) -> Result<()> {
+    let jobs = jobs
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+    let matching: Vec<_> = jobs
+        .get(id)
+        .into_iter()
+        .flatten()
+        .filter(|native_id| !native.removed.contains(*native_id))
+        .collect();
+    native.remove(paths, &matching)
 }
 
 pub(crate) fn execute_claude_delete_batch(
@@ -594,11 +703,20 @@ pub(crate) fn execute_claude_delete_batch(
                 .collect()
         }
     };
+    let mut context = match DeletionContext::new(paths) {
+        Ok(context) => context,
+        Err(error) => {
+            return requests
+                .into_iter()
+                .map(|_| Err(anyhow::anyhow!("{error:#}")))
+                .collect()
+        }
+    };
     let jobs = background_jobs(paths);
     let mut native = NativeCleanup::default();
     let mut pending: Vec<_> = requests
         .into_iter()
-        .map(|request| delete_exclusive(paths, request, &jobs, &mut native))
+        .map(|request| delete_exclusive(paths, request, &jobs, &mut native, &mut context))
         .collect();
     let mut indexes = std::collections::BTreeMap::<PathBuf, BTreeSet<String>>::new();
     for item in pending
@@ -628,10 +746,51 @@ pub(crate) fn execute_claude_delete_batch(
             }
         }
     }
+    // Shared files belong to the ID, so keep them until every project copy and
+    // its index entry has been removed successfully in this batch.
+    let mut shared_ids: BTreeSet<_> = context
+        .remaining
+        .iter()
+        .filter(|(_, copies)| copies.is_empty())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for item in pending.iter().filter_map(|item| item.as_ref().ok()) {
+        if !item.outcome.residuals.is_empty() {
+            shared_ids.remove(&item.id);
+        }
+    }
+    let mut cleaned = BTreeSet::new();
+    for item in pending
+        .iter_mut()
+        .rev()
+        .filter_map(|item| item.as_mut().ok())
+    {
+        if !shared_ids.contains(&item.id) || !cleaned.insert(item.id.clone()) {
+            continue;
+        }
+        if let Err(error) = remove_native_jobs(paths, &item.id, &jobs, &mut native) {
+            item.outcome.residuals.push(format!("{error:#}"));
+        } else {
+            let (targets, errors) = delete_paths(paths, &item.main, &item.id, true);
+            item.outcome.residuals.extend(errors);
+            for path in targets.iter().skip(2) {
+                if !crate::session_delete::within(&paths.config, path) {
+                    item.outcome
+                        .residuals
+                        .push(format!("无法定位会话文件: {}", path.display()));
+                } else if !item.outcome.remove_strict(path) {
+                    break;
+                }
+            }
+        }
+        if !item.outcome.residuals.is_empty() {
+            shared_ids.remove(&item.id);
+        }
+    }
     let ids: BTreeSet<_> = pending
         .iter()
         .filter_map(|item| item.as_ref().ok())
-        .filter(|item| item.outcome.residuals.is_empty())
+        .filter(|item| item.outcome.residuals.is_empty() && shared_ids.contains(&item.id))
         .map(|item| item.id.clone())
         .collect();
     if !ids.is_empty() {
@@ -642,7 +801,7 @@ pub(crate) fn execute_claude_delete_batch(
             for item in pending
                 .iter_mut()
                 .filter_map(|item| item.as_mut().ok())
-                .filter(|item| item.outcome.residuals.is_empty())
+                .filter(|item| item.outcome.residuals.is_empty() && ids.contains(&item.id))
             {
                 item.outcome
                     .residuals
@@ -653,7 +812,7 @@ pub(crate) fn execute_claude_delete_batch(
     let mut eligible: Vec<_> = pending
         .iter_mut()
         .filter_map(|item| item.as_mut().ok())
-        .filter(|item| item.outcome.residuals.is_empty())
+        .filter(|item| item.outcome.residuals.is_empty() && shared_ids.contains(&item.id))
         .collect();
     if !eligible.is_empty() {
         let registrations = paths.config.join("sessions");
@@ -805,6 +964,49 @@ esac
                 )
                 .unwrap();
             }
+        }
+        if case == "normal" {
+            let duplicate = paths
+                .projects
+                .join("other")
+                .join(history[0].file_name().unwrap());
+            fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+            let duplicate_key = key_for(
+                &paths.projects.canonicalize().unwrap(),
+                &duplicate
+                    .parent()
+                    .unwrap()
+                    .canonicalize()
+                    .unwrap()
+                    .join(duplicate.file_name().unwrap()),
+                "",
+            );
+            for fail_index in [false, true] {
+                fs::write(&history[0], "").unwrap();
+                fs::write(&duplicate, "").unwrap();
+                let mut selected = vec![requests[0].clone()];
+                if fail_index {
+                    fs::create_dir(duplicate.with_file_name("sessions-index.json")).unwrap();
+                    selected.push(ClaudeDeleteRequest {
+                        session_key: duplicate_key.clone(),
+                        confirmed: true,
+                        fingerprint: String::new(),
+                    });
+                }
+                let result = execute_claude_delete_batch(&paths, selected);
+                assert!(result[0].as_ref().unwrap().deleted);
+                assert!(
+                    !root.join("calls").exists(),
+                    "remaining or failed duplicate must protect native jobs"
+                );
+                if fail_index {
+                    assert!(!result[1].as_ref().unwrap().deleted);
+                    fs::remove_dir(duplicate.with_file_name("sessions-index.json")).unwrap();
+                } else {
+                    fs::remove_file(&duplicate).unwrap();
+                }
+            }
+            fs::write(&history[0], "").unwrap();
         }
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let batch_paths = paths.clone();

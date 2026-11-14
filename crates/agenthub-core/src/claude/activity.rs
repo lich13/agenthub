@@ -489,6 +489,9 @@ fn version_named(name: &str) -> bool {
 }
 
 fn process_role(executable: &Path, args: &[String]) -> ProcessRole {
+    process_role_at_home(executable, args, dirs::home_dir().as_deref())
+}
+fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>) -> ProcessRole {
     let executable_name = executable
         .file_name()
         .and_then(|s| s.to_str())
@@ -497,8 +500,10 @@ fn process_role(executable: &Path, args: &[String]) -> ProcessRole {
         .then(|| args.get(1))
         .flatten()
         .filter(|arg| arg.contains("/@anthropic-ai/claude-code/") && arg.ends_with("cli.js"));
-    let installed = dirs::home_dir().is_some_and(|home| {
-        executable.parent() == Some(home.join(".local/share/claude/versions").as_path())
+    let installed = home.is_some_and(|home| {
+        executable
+            .parent()
+            .is_some_and(|parent| same_path(parent, &home.join(".local/share/claude/versions")))
             || home
                 .join(".local/bin/claude")
                 .canonicalize()
@@ -633,46 +638,7 @@ fn collect() -> Option<Vec<Process>> {
     if !output.status.success() {
         return None;
     }
-    let mut processes = Vec::new();
-    for line in String::from_utf8(output.stdout).ok()?.lines() {
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() < 9 || fields[1].contains('Z') {
-            continue;
-        }
-        let mut args = fields[8..]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        let named = native(fields[7], &args);
-        if !named && !version_named(fields[7]) {
-            continue;
-        }
-        let pid = fields[0].parse().ok()?;
-        let role = if let Some((executable, native_args)) = process_identity(pid) {
-            let role = process_role(&executable, &native_args);
-            args = native_args;
-            role
-        } else {
-            ProcessRole::Unknown
-        };
-        // A native installation runs as its version file, so the process name
-        // is that version. Only the kernel-verified executable admits it.
-        if !named && role == ProcessRole::Unknown {
-            continue;
-        }
-        let started =
-            chrono::NaiveDateTime::parse_from_str(&fields[2..7].join(" "), "%a %b %e %T %Y")
-                .ok()
-                .map(|d| d.and_utc().timestamp_millis());
-        processes.push(Process {
-            pid,
-            started_ms: started,
-            cwd: None,
-            args,
-            files: HashSet::new(),
-            role,
-        });
-    }
+    let mut processes = parse_process_table(&output.stdout)?;
     if processes.is_empty() {
         return Some(processes);
     }
@@ -718,9 +684,128 @@ fn collect() -> Option<Vec<Process>> {
     Some(processes)
 }
 
+fn parse_process_table(output: &[u8]) -> Option<Vec<Process>> {
+    let mut processes = Vec::new();
+    for line in String::from_utf8_lossy(output).lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 9 || fields[1].contains('Z') {
+            continue;
+        }
+        let mut args = fields[8..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let named = native(fields[7], &args);
+        if !named && !version_named(fields[7]) {
+            continue;
+        }
+        let pid = fields[0].parse().ok()?;
+        let role = if let Some((executable, native_args)) = process_identity(pid) {
+            let role = process_role(&executable, &native_args);
+            args = native_args;
+            role
+        } else {
+            ProcessRole::Unknown
+        };
+        // A native installation runs as its version file, so the process name
+        // is that version. Only the kernel-verified executable admits it.
+        if !named && role == ProcessRole::Unknown {
+            continue;
+        }
+        let started =
+            chrono::NaiveDateTime::parse_from_str(&fields[2..7].join(" "), "%a %b %e %T %Y")
+                .ok()
+                .map(|d| d.and_utc().timestamp_millis());
+        processes.push(Process {
+            pid,
+            started_ms: started,
+            cwd: None,
+            args,
+            files: HashSet::new(),
+            role,
+        });
+    }
+    Some(processes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unrelated_invalid_utf8_does_not_hide_native_process_candidates() {
+        let output = b"99 S Tue Oct 20 08:00:00 2026 unrelated /fixture/\xff\n999999 S Tue Oct 20 08:00:00 2026 claude claude --resume fixture\n";
+        let processes = parse_process_table(output).unwrap();
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].pid, 999999);
+        assert_eq!(processes[0].role, ProcessRole::Unknown);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relocated_version_directory_keeps_verified_native_role() {
+        let root =
+            env::temp_dir().join(format!("agenthub-claude-version-{}", uuid::Uuid::new_v4()));
+        let versions = root.join("moved-versions");
+        let home = root.join("home");
+        fs::create_dir_all(&versions).unwrap();
+        fs::create_dir_all(home.join(".local/share/claude")).unwrap();
+        std::os::unix::fs::symlink(&versions, home.join(".local/share/claude/versions")).unwrap();
+        let executable = versions.join("2.1.322");
+        fs::write(&executable, "fixture").unwrap();
+        assert_eq!(
+            process_role_at_home(&executable, &["claude".into()], Some(&home)),
+            ProcessRole::Session
+        );
+        assert_eq!(
+            process_role_at_home(&root.join("2.1.322"), &["claude".into()], Some(&home)),
+            ProcessRole::Unknown
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_rechecks_unknown_ownership_after_an_inactive_preview() {
+        let root =
+            env::temp_dir().join(format!("agenthub-claude-unknown-{}", uuid::Uuid::new_v4()));
+        let paths = ClaudePaths {
+            projects: root.join("projects"),
+            config: root.clone(),
+        };
+        let file = paths.projects.join("fixture/empty.jsonl");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "").unwrap();
+        TEST_SNAPSHOT.with(|slot| {
+            *slot.borrow_mut() = Some(Snapshot {
+                processes: Some(vec![]),
+                registrations: vec![],
+            })
+        });
+        let candidates = super::super::mutations::find_empty_inactive_sessions(&paths).unwrap();
+        assert_eq!(candidates.len(), 1);
+        TEST_SNAPSHOT.with(|slot| {
+            *slot.borrow_mut() = Some(Snapshot {
+                processes: None,
+                registrations: vec![],
+            })
+        });
+        let (summary, fingerprint, _) = &candidates[0];
+        let result = super::super::mutations::execute_claude_delete(
+            &paths,
+            ClaudeDeleteRequest {
+                session_key: summary.session_key.clone(),
+                confirmed: true,
+                fingerprint: fingerprint.clone(),
+            },
+        );
+        TEST_SNAPSHOT.with(|slot| *slot.borrow_mut() = None);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("process_list_unavailable"));
+        assert!(file.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn startup_roles_use_leading_native_arguments_and_never_exempt_spares() {
         for (args, expected) in [

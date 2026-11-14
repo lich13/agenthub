@@ -539,22 +539,12 @@ fn completion_from_entry(entry: &Value, fallback_ts: Option<i64>) -> Option<Nati
                     s
                 }
             }
-            Some("attachment") => {
-                let name = msg["file_name"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| msg["alt"].as_str().filter(|s| !s.trim().is_empty()))
-                    .unwrap_or("附件")
-                    .replace('[', "\\[")
-                    .replace(']', "\\]");
-                let path = msg["source_path"]
-                    .as_str()
-                    .filter(|s| s.starts_with('/'))
-                    .or_else(|| msg["url"].as_str().filter(|s| !s.trim().is_empty()));
-                path.map_or(name.clone(), |p| {
-                    format!("[{name}](<{}>)", p.replace('>', "%3E"))
-                })
-            }
+            Some("attachment") => msg["file_name"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| msg["alt"].as_str().filter(|s| !s.trim().is_empty()))
+                .unwrap_or("附件")
+                .to_owned(),
             _ => return None,
         }
     } else if entry.get("respondedValue").is_some_and(|v| !v.is_null())

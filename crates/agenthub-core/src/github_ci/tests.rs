@@ -518,7 +518,9 @@ async fn workflow_reads_only_first_page_and_errors_are_safe() {
         "",
     );
     let err = monitor
-        .get::<Account>("/user")
+        .get("/user", |raw| {
+            Ok(CachedValue::Account(serde_json::from_value(raw)?))
+        })
         .await
         .unwrap_err()
         .to_string();
@@ -532,7 +534,12 @@ async fn workflow_reads_only_first_page_and_errors_are_safe() {
             now() / 1000 + 120
         ),
     );
-    assert!(monitor.get::<Account>("/user").await.is_err());
+    assert!(monitor
+        .get("/user", |raw| Ok(CachedValue::Account(
+            serde_json::from_value(raw)?
+        )))
+        .await
+        .is_err());
     assert!(monitor.retry_at > now() + 100000);
 }
 
@@ -930,4 +937,136 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
         .await
         .unwrap();
     assert!(state.pending.is_empty());
+}
+
+#[tokio::test]
+async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_304_summaries() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    config.probe.notifications.github_ci_filter_bots = true;
+    let time = now();
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([
+            {"id":10,"full_name":"fixture/repo"}, {"id":11,"full_name":"fixture/idle"},
+            {"id":12,"full_name":"fixture/bot"}
+        ]),
+    );
+    let path = "/repos/fixture/repo/actions/runs?per_page=10";
+    server.reply(
+        path,
+        200,
+        json!({"workflow_runs":[run(1,"in_progress",None,1,time)]}),
+        "ETag: \"runs\"\r\n",
+    );
+    server.set(
+        "/repos/fixture/idle/actions/runs?per_page=10",
+        json!({"workflow_runs":[]}),
+    );
+    let mut bot = serde_json::to_value(run(3, "in_progress", None, 1, time)).unwrap();
+    bot["actor"] = json!({"type":"Bot"});
+    server.set(
+        "/repos/fixture/bot/actions/runs?per_page=10",
+        json!({"workflow_runs":[bot]}),
+    );
+    monitor
+        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .await
+        .unwrap();
+    let due = monitor.repository_due_ms[&10];
+    assert_eq!(monitor.repository_due_ms[&11] - due, 55_000);
+    assert_eq!(monitor.repository_due_ms[&12] - due, 55_000);
+    let stored = fixture.db.get_setting(STATE).unwrap();
+    let sql = rusqlite::Connection::open(fixture.root.join("panel.sqlite")).unwrap();
+    sql.execute_batch("CREATE TRIGGER no_idle_ci_writes BEFORE UPDATE ON settings WHEN NEW.key='github_ci_state' BEGIN SELECT RAISE(ABORT,'unchanged poll wrote state'); END;").unwrap();
+    server.reply(path, 304, json!(null), "");
+    monitor.repository_due_ms.insert(10, time - 1);
+    monitor.next_poll_ms = time - 1;
+    monitor
+        .tick_with_token(&fixture.db, &config, async {
+            panic!("fast poll must reuse gh credentials")
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored, fixture.db.get_setting(STATE).unwrap());
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 6);
+    assert!(requests
+        .last()
+        .unwrap()
+        .to_lowercase()
+        .contains("if-none-match: \"runs\""));
+    sql.execute_batch("DROP TRIGGER no_idle_ci_writes").unwrap();
+    // In-memory deadlines, including the account check, expire independently.
+    monitor.credentials_due_ms = time - 1;
+    monitor.next_poll_ms = time - 1;
+    monitor
+        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .await
+        .unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(), 7);
+    let snapshot = status(
+        &fixture.db,
+        &config,
+        Request {
+            cached_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(snapshot.filter_bots);
+    assert_eq!(
+        snapshot.scanned_repository_ids,
+        BTreeSet::from([10, 11, 12])
+    );
+}
+
+#[tokio::test]
+async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_identity() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([{"id":10,"full_name":"fixture/repo"}]),
+    );
+    server.set(
+        "/repos/fixture/repo/actions/runs?per_page=10",
+        json!({"workflow_runs":[run(1,"in_progress",None,1,now())]}),
+    );
+    monitor
+        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .await
+        .unwrap();
+    monitor.credentials_due_ms = 0;
+    monitor.next_poll_ms = 0;
+    monitor.repository_due_ms.insert(10, 0);
+    server.reply("/user", 401, json!({}), "");
+    assert!(monitor
+        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(monitor.next_poll_ms, monitor.credentials_due_ms);
+    let count = server.requests.lock().unwrap().len();
+    monitor
+        .tick_with_token(&fixture.db, &config, async {
+            panic!("account retry is not yet due")
+        })
+        .await
+        .unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(), count);
+    assert!(load(&fixture.db)
+        .unwrap()
+        .snapshot
+        .error
+        .unwrap()
+        .contains("登录已失效"));
 }

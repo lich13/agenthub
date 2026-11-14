@@ -8,6 +8,7 @@ fn snapshot() -> Snapshot {
             login: "fixture".into(),
         }),
         enabled: true,
+        scanned_repository_ids: BTreeSet::from([2]),
         baseline_ms: 1,
         last_scan_ms: 10,
         runs: vec![
@@ -95,29 +96,64 @@ fn presentation_includes_source_workflow_branch_and_distinct_result() {
 fn filtered_observation_skips_bots_and_unselected_repos_without_retrigger_on_unfilter() {
     let mut observer = Observer::default();
     let mut state = snapshot();
-    assert!(observer
-        .observe_filtered(0, &state, &["fixture/repo".into()], true)
-        .is_empty());
+    state.monitored_repositories = vec!["fixture/repo".into()];
+    state.filter_bots = true;
+    assert!(observer.observe(0, &state).is_empty());
 
     state.last_scan_ms += 1;
     let mut bot_run = run(2, "completed", Some("failure"), 1);
     bot_run.is_bot = true;
     state.runs[1] = bot_run;
-    assert!(observer
-        .observe_filtered(0, &state, &["fixture/repo".into()], true)
-        .is_empty());
+    state.monitored_repositories = vec!["fixture/repo".into()];
+    state.filter_bots = true;
+    assert!(observer.observe(0, &state).is_empty());
 
     // Disabling bot filter on the next tick must not re-fire the already-completed bot run.
     state.last_scan_ms += 1;
-    assert!(observer
-        .observe_filtered(0, &state, &["fixture/repo".into()], false)
-        .is_empty());
+    state.filter_bots = false;
+    assert!(observer.observe(0, &state).is_empty());
 
     // A new attempt on an unselected repository is tracked without emitting an event.
     state.last_scan_ms += 1;
     state.runs[1].is_bot = false;
     state.runs[1].run_attempt = 2;
-    assert!(observer
-        .observe_filtered(0, &state, &["fixture/other".into()], true)
-        .is_empty());
+    state.monitored_repositories = vec!["fixture/other".into()];
+    state.filter_bots = true;
+    assert!(observer.observe(0, &state).is_empty());
+}
+
+#[test]
+fn new_readded_and_empty_repositories_get_independent_baselines() {
+    let mut observer = Observer::default();
+    let mut state = snapshot();
+    observer.observe(0, &state);
+    let mut added = run(5, "completed", Some("success"), 1);
+    added.repository_id = 3;
+    added.repository_name = "fixture/new".into();
+    state.runs.push(added);
+    state.scanned_repository_ids.extend([3, 4]); // Repo 4 was scanned successfully but is empty.
+    state.last_scan_ms += 1;
+    assert!(observer.observe(0, &state).is_empty());
+    state.runs[2].run_attempt = 2;
+    state.runs[2].status = "in_progress".into();
+    state.runs[2].conclusion = None;
+    state.last_scan_ms += 1;
+    assert!(observer.observe(0, &state).is_empty());
+    state.runs[2].status = "completed".into();
+    state.runs[2].conclusion = Some("success".into());
+    let mut first = run(6, "completed", Some("failure"), 1);
+    first.repository_id = 4;
+    state.runs.push(first);
+    state.last_scan_ms += 1;
+    assert_eq!(observer.observe(0, &state).len(), 2);
+    // Config changes may prune the source set before last_scan_ms advances.
+    state.scanned_repository_ids.remove(&3);
+    state.runs.retain(|run| run.repository_id != 3);
+    observer.observe(0, &state);
+    let mut readded = run(7, "completed", Some("success"), 1);
+    readded.repository_id = 3;
+    state.runs.push(readded);
+    state.scanned_repository_ids.insert(3);
+    state.last_scan_ms += 1;
+    assert!(observer.observe(0, &state).is_empty());
 }

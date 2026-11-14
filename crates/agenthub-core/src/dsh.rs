@@ -513,7 +513,7 @@ fn require_stopped() -> Result<()> {
         .output()
         .context("无法核验 DSH 运行状态")?;
     ensure!(output.status.success(), "无法核验 DSH 运行状态");
-    let output = std::str::from_utf8(&output.stdout).context("无法核验 DSH 运行状态")?;
+    let output = String::from_utf8_lossy(&output.stdout);
     ensure!(
         !output.lines().any(dsh_command),
         "请先退出当前机器的 DSH，再清理归档线程"

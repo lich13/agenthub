@@ -72,7 +72,7 @@ fn check_host_dsh_stopped_for(paths: &DshPaths) -> Result<()> {
         output.status.success(),
         "无法核验 DeepSeek Harness 运行状态"
     );
-    let text = std::str::from_utf8(&output.stdout).context("无法核验 DeepSeek Harness 运行状态")?;
+    let text = String::from_utf8_lossy(&output.stdout);
     ensure!(
         !text.lines().any(dsh_command),
         "DeepSeek Harness 正在运行，请先退出后再执行归档、恢复或删除操作"
@@ -429,19 +429,23 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
         .or_else(|| session.header["createdAt"].as_i64());
     let outline = rows["turnOutline"]["val"].as_array();
     let message_count = outline.map_or(0, |arr| arr.len() * 2);
+    let prompt = |item: &Value, limit: usize| {
+        item["prompt"]
+            .as_str()
+            .or_else(|| item["title"].as_str())
+            .or_else(|| item["summary"].as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().chars().take(limit).collect::<String>())
+    };
+    let first_prompt = outline
+        .and_then(|arr| arr.first())
+        .and_then(|item| prompt(item, 120));
     let last_message = outline
         .and_then(|arr| arr.last())
-        .and_then(|item| {
-            item["prompt"]
-                .as_str()
-                .or_else(|| item["title"].as_str())
-                .or_else(|| item["summary"].as_str())
-        })
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_owned);
+        .and_then(|item| prompt(item, 200));
     Some(FoldedMetadata {
         title,
-        first_prompt: last_message.clone(),
+        first_prompt,
         last_message,
         cwd,
         updated_at_ms,
@@ -1762,6 +1766,49 @@ pub fn execute_batch_item_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projection_title_uses_first_prompt_and_keeps_the_last_preview() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-outline-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        let dir = home.join("sessions/fixture/session-outline");
+        let cache = home.join("storages/session_projcache/sessions/session-outline.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        let header = json!({"type":"session","version":4,"id":"session-outline","createdAt":1,"cwd":"/fixture"});
+        let log_path = dir.join("session.v4.jsonl");
+        let rows = [
+            header.clone(),
+            json!({"type":"user/message","data":{"content":[{"type":"text","text":"First prompt"}]}}),
+            json!({"type":"user/message","data":{"content":[{"type":"text","text":"Last prompt"}]}}),
+        ];
+        fs::write(
+            &log_path,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let session = DiscoveredSession {
+            id: "session-outline".into(),
+            project_key: "fixture".into(),
+            dir,
+            log_path,
+            version: 4,
+            compressed: false,
+            header,
+            parent_subagent_of: None,
+        };
+        fs::write(&cache, json!({"version":7,"record":{"identity":{"createdAt":1},"rows":{"turnOutline":{"val":[{"prompt":"First prompt"},{"prompt":"Last prompt"}]}}}}).to_string()).unwrap();
+        let projected = try_read_projcache(&paths, &session).unwrap();
+        assert_eq!(projected.first_prompt.as_deref(), Some("First prompt"));
+        assert_eq!(projected.last_message.as_deref(), Some("Last prompt"));
+        let raw = fold_log_metadata_uncached(&session).unwrap();
+        assert_eq!(projected.first_prompt, raw.first_prompt);
+        assert_eq!(projected.last_message, raw.last_message);
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn locator_handles_plain_compressed_and_excludes_subagents_and_unsafe_paths() {

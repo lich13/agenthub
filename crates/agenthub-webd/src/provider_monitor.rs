@@ -15,7 +15,6 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
     let idle_ttl = agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
     agenthub_core::evict_idle_detail_caches(idle_ttl);
     super::antigravity::evict_idle_cache(idle_ttl).await;
-    db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     db.recover_interrupted_native_deliveries()?;
 
     for provider in [
@@ -48,6 +47,7 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
                 && super::claude_hook::installed(),
         )?;
     }
+    db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     deliver_pending(load_config, db, None).await
 }
 

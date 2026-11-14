@@ -810,3 +810,57 @@ async fn incomplete_subagent_trajectory_is_not_terminal_evidence() {
     .is_err());
     task.abort();
 }
+
+#[tokio::test]
+async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication() {
+    let root = "11111111-1111-4111-8111-111111111111";
+    let children: Vec<_> = (1..=9)
+        .map(|n| format!("22222222-2222-4222-8222-{n:012}"))
+        .collect();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let observed = calls.clone();
+    let child_ids = children.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+        let observed = observed.clone();
+        let child_ids = child_ids.clone();
+        async move {
+            let id = body["cascadeId"].as_str().unwrap();
+            observed.lock().unwrap().push(id.to_owned());
+            let invoke = |id: &str| json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","generic":{"name":"invoke_subagent","output":format!("Created the following subagent:\n{{\"conversationId\":\"{id}\"}}")},"metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:01Z"}});
+            let mut steps = vec![json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:00Z"}})];
+            if id == root {
+                steps.extend(child_ids.iter().map(|id| invoke(id)));
+            } else {
+                steps.push(invoke(root));
+                steps.push(invoke(&child_ids[0]));
+            }
+            axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
+        }
+    }));
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let summary = json!({"trajectoryId":"fixture","status":"CASCADE_RUN_STATUS_IDLE"});
+    let result = load_trajectory_with_context(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        42,
+        root,
+        &summary,
+        &serde_json::Map::new(),
+        BTreeMap::new(),
+        chrono::Utc::now().timestamp_millis(),
+        true,
+    )
+    .await;
+    task.abort();
+    assert!(result.is_ok(), "{}", result.unwrap_err());
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 10);
+    for id in children {
+        assert_eq!(calls.iter().filter(|call| **call == id).count(), 1);
+    }
+}

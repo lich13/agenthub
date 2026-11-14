@@ -266,8 +266,7 @@ fn read_ps_process_table() -> Option<String> {
             .ok()?;
         out.status
             .success()
-            .then(|| String::from_utf8(out.stdout).ok())
-            .flatten()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     }
     #[cfg(not(unix))]
     {
@@ -768,10 +767,6 @@ async fn load_trajectory_with_context(
                 if subagents.get(&sub_id).is_some_and(|s| s.active) {
                     continue;
                 }
-                anyhow::ensure!(
-                    inspected_subagents.len() < 8,
-                    "Antigravity subagent inspection is incomplete"
-                );
                 let sub_summary = summaries.get(&sub_id);
                 let sub_steps =
                     fetch_subagent_trajectory(client, port, token, &sub_id, sub_summary).await?;

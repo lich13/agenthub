@@ -66,7 +66,7 @@ export function SessionBatchControls({
   return (
     <div className="session-batch-controls">
       {showFloatingBar && (
-        <div className="finder-selection-bar" role="region" aria-label="已选会话操作">
+        <div className="finder-selection-bar" onKeyDown={batch.onListKeyDown} role="region" aria-label="已选会话操作">
           <div className="finder-selection-summary">
             <span className="finder-selection-count" role="status">
               已选 {batch.selection.length}

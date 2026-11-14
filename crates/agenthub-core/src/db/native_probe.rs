@@ -131,7 +131,8 @@ impl PanelDb {
                         && event.kind == "completion"
                         && old.as_ref().is_some_and(|(_, old_cursor)| *old_cursor == 0)
                         && prior_scanned_at > 0
-                        && event.timestamp_ms < prior_scanned_at.saturating_mul(1000);
+                        && event.timestamp_ms
+                            < prior_scanned_at.saturating_add(1).saturating_mul(1000);
                     let delivery = NativeDelivery {
                         event_key: if let (NativeProvider::Claude, Some(instance), Some(prompt)) =
                             (provider, instance.as_deref(), event.prompt_id.as_deref())
@@ -160,9 +161,9 @@ impl PanelDb {
                             self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?;
                         tx.execute("UPDATE native_probe_deliveries SET ciphertext=?2,nonce=?3 WHERE event_key=?1", params![delivery.event_key,ciphertext,nonce])?;
                     }
-                    if inserted == 0 && event.position > stream.settled_count {
+                    if inserted == 0 && (cursor_exempt || event.position > stream.settled_count) {
                         tx.execute(
-                            "UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped') AND updated_at<?3",
+                            "UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped','unknown') AND updated_at<?3",
                             params![delivery.event_key, now, now - 3600],
                         )?;
                     }
@@ -349,6 +350,9 @@ impl PanelDb {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute(
                 "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped','unknown') AND updated_at < ?1
+                 AND NOT (provider='grokbot' AND EXISTS (
+                    SELECT 1 FROM native_probe_providers p
+                    WHERE p.provider=native_probe_deliveries.provider AND p.enabled=1 AND p.error_count>0))
                  AND NOT EXISTS (SELECT 1 FROM native_probe_streams s
                     WHERE s.provider=native_probe_deliveries.provider
                     AND s.session_key=json_extract(event_json,'$.session_key')
@@ -884,6 +888,98 @@ mod local_provider_tests {
             }],
         }
     }
+    #[test]
+    fn grokbot_live_cursor_exempt_markers_survive_retention_and_failed_reads() {
+        for terminal in ["sent", "failed", "skipped", "unknown"] {
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
+            let mut config = config();
+            config.probe.notifications.notify_grokbot = true;
+            let provider = NativeProvider::GrokBot;
+            db.stage_native_notifications(provider, &NativeScan::default(), &config)
+                .unwrap();
+            let mut live = scan(provider, "reply_needed", "long-pending");
+            live.streams[0].settled_count = 2;
+            assert_eq!(
+                db.stage_native_notifications(provider, &live, &config)
+                    .unwrap(),
+                1
+            );
+            let old = PanelDb::now() - 8 * 86_400;
+            db.conn.lock().unwrap().execute("UPDATE native_probe_deliveries SET status=?1,updated_at=?2,ciphertext=NULL,nonce=NULL", params![terminal,old]).unwrap();
+            // Also represents the first scan after being stopped longer than retention.
+            assert_eq!(
+                db.stage_native_notifications(provider, &live, &config)
+                    .unwrap(),
+                0
+            );
+            db.maintain_notification_history_if_due(7).unwrap();
+            assert_eq!(
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT count(*) FROM native_probe_deliveries", [], |r| {
+                        r.get::<_, usize>(0)
+                    })
+                    .unwrap(),
+                1
+            );
+            db.conn.lock().unwrap().execute_batch("CREATE TRIGGER no_frequent_marker_touch BEFORE UPDATE ON native_probe_deliveries BEGIN SELECT RAISE(ABORT,'marker touched within hour'); END;").unwrap();
+            db.stage_native_notifications(provider, &live, &config)
+                .unwrap();
+            db.conn.lock().unwrap().execute_batch("DROP TRIGGER no_frequent_marker_touch; DELETE FROM settings WHERE key='probe_event_retention_last_run';").unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE native_probe_deliveries SET updated_at=?1", [old])
+                .unwrap();
+            db.stage_native_notifications(
+                provider,
+                &NativeScan {
+                    streams: vec![],
+                    errors: 1,
+                },
+                &config,
+            )
+            .unwrap();
+            db.maintain_notification_history_if_due(7).unwrap();
+            assert_eq!(
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT count(*) FROM native_probe_deliveries", [], |r| {
+                        r.get::<_, usize>(0)
+                    })
+                    .unwrap(),
+                1
+            );
+            db.stage_native_notifications(provider, &NativeScan::default(), &config)
+                .unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "DELETE FROM settings WHERE key='probe_event_retention_last_run'",
+                    [],
+                )
+                .unwrap();
+            db.maintain_notification_history_if_due(7).unwrap();
+            assert_eq!(
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT count(*) FROM native_probe_deliveries", [], |r| {
+                        r.get::<_, usize>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
     #[test]
     fn pending_baseline_restart_and_reenable_preserve_dedupe_without_losing_same_step_completion() {
         for provider in [NativeProvider::Antigravity, NativeProvider::Dsh] {

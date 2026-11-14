@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 
@@ -29,6 +30,8 @@ test("Finder Command-click batch archive confirms explicit keys, retains failed 
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
+  await page.keyboard.press("Meta+a");
+  await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
   expect(executed).toHaveLength(0);
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await expect(page.getByRole("button", { name: "归档所选线程", exact: true })).toBeFocused();
@@ -164,4 +167,34 @@ test("Antigravity 20-step alternating thinking and command wall collapses into o
   await railItems.first().click();
   await expect(railItems.first()).toHaveClass(/\bactive\b/);
   await assertNoOverflow(page);
+});
+
+test("Command+A and native Select All use row and selection-bar focus and preserve text fields", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  // Use the currently loaded normal list; archived scopes have their own handler.
+  const normal = page.locator(".thread-item").filter({ visible: true });
+  await normal.first().click({ modifiers: ["Meta"] });
+  await expect(normal.first()).toBeFocused();
+  await page.keyboard.press("Meta+a");
+  const count = await normal.count();
+  await expect(page.getByText(`已选 ${count}`, { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await normal.first().click({ modifiers: ["Meta"] });
+  await page.getByRole("button", { name: "全选", exact: true }).focus();
+  await page.evaluate(readFileSync(new URL("../../src-tauri/src/select_all.js", import.meta.url), "utf8"));
+  await expect(page.getByText(`已选 ${count}`, { exact: true })).toBeVisible();
+  const search = page.locator(".search-box input").first();
+  await search.fill("fixture text");
+  await page.evaluate(readFileSync(new URL("../../src-tauri/src/select_all.js", import.meta.url), "utf8"));
+  await expect(search).toHaveJSProperty("selectionStart", 0);
+  await expect(search).toHaveJSProperty("selectionEnd", 12);
+  await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
+  await search.fill("");
+  await page.getByRole("button", { name: "已归档", exact: true }).click();
+  const archived = page.locator(".archived-list .thread-item");
+  await archived.first().click({ modifiers: ["Meta"] });
+  await page.evaluate(readFileSync(new URL("../../src-tauri/src/select_all.js", import.meta.url), "utf8"));
+  await expect(page.locator(".thread-item.multi-selected")).toHaveCount(await archived.count());
+  await expect(page.getByRole("button", { name: "恢复所选线程", exact: true })).toBeVisible();
 });

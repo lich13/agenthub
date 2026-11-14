@@ -3621,6 +3621,21 @@
             "name": "refreshing",
             "serde": [],
             "type": "bool"
+          },
+          {
+            "name": "monitored_repositories",
+            "serde": [],
+            "type": "Vec < String >"
+          },
+          {
+            "name": "filter_bots",
+            "serde": [],
+            "type": "bool"
+          },
+          {
+            "name": "scanned_repository_ids",
+            "serde": [],
+            "type": "BTreeSet < u64 >"
           }
         ],
         "kind": "struct",
@@ -3655,7 +3670,7 @@
             "serde": [
               "serde (default)"
             ],
-            "type": "HashSet < u64 >"
+            "type": "BTreeSet < u64 >"
           },
           {
             "name": "pending",
@@ -4061,51 +4076,6 @@
         "serde": [
           "serde (rename_all = \"camelCase\")"
         ]
-      }
-    },
-    "crates/agenthub-core/src/local.rs": {
-      "LocalPluginInfo": {
-        "fields": [
-          {
-            "name": "id",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "label",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "kind",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "description",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "unavailable_reason",
-            "serde": [
-              "serde (skip_serializing_if = \"Option::is_none\")"
-            ],
-            "type": "Option < String >"
-          },
-          {
-            "name": "invocation_template",
-            "serde": [],
-            "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
       }
     },
     "crates/agenthub-core/src/native_probe.rs": {
@@ -5414,92 +5384,6 @@
         "serde": [
           "serde (rename_all = \"camelCase\")"
         ]
-      }
-    },
-    "crates/agenthub-core/src/providers.rs": {
-      "AgentProviderId": {
-        "kind": "enum",
-        "serde": [
-          "serde (rename_all = \"snake_case\")"
-        ],
-        "variants": [
-          {
-            "fields": [],
-            "name": "Codex",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "ClaudeCode",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "GrokBuild",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "GrokBot",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Antigravity",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "DeepseekHarness",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Cursor",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Gemini",
-            "serde": []
-          }
-        ]
-      },
-      "AgentProviderInfo": {
-        "fields": [
-          {
-            "name": "id",
-            "serde": [],
-            "type": "AgentProviderId"
-          },
-          {
-            "name": "label",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "status",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "description",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "capabilities",
-            "serde": [],
-            "type": "Vec < String >"
-          },
-          {
-            "name": "safety",
-            "serde": [],
-            "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
       }
     },
     "crates/agenthub-core/src/selected_codex.rs": {
@@ -10389,7 +10273,7 @@
         "GithubCiRepository": "exporttypeGithubCiRepository={id:number;full_name:string;archived:boolean};",
         "GithubCiRequest": "exporttypeGithubCiRequest={refresh?:boolean;cached_only?:boolean};",
         "GithubCiRun": "exporttypeGithubCiRun={id:number;run_attempt:number;name:string|null;head_branch:string|null;head_sha:string;status:string;conclusion:string|null;html_url:string;created_at:string;updated_at:string;repository_id:number;repository_name:string;is_bot?:boolean;};",
-        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;baseline_ms?:number;error:string|null;refreshing:boolean;};",
+        "GithubCiStatus": "exporttypeGithubCiStatus={account:GithubCiAccount|null;repositories:GithubCiRepository[];runs:GithubCiRun[];enabled:boolean;last_scan_ms:number;baseline_ms?:number;monitored_repositories?:string[];filter_bots?:boolean;scanned_repository_ids?:number[];error:string|null;refreshing:boolean;};",
         "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
         "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
         "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",

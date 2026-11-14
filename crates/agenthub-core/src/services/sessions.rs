@@ -212,6 +212,11 @@ impl SessionUseCases {
         validate(request.provider, request.operation, &request.session_keys)?;
         let grok = (request.provider == SessionProvider::Grok)
             .then(|| grok::DeletionContext::new(&self.grok));
+        let claude = (request.provider == SessionProvider::Claude).then(|| {
+            let mut context = crate::claude::DeletionContext::new(&self.claude)?;
+            context.select_preview(&request.session_keys);
+            Ok(context)
+        });
         let items = request
             .session_keys
             .iter()
@@ -222,6 +227,7 @@ impl SessionUseCases {
                     key,
                     request.include_descendants,
                     grok.as_ref(),
+                    claude.as_ref(),
                 )
                 .unwrap_or_else(|error| {
                     self.blocked_item(request.provider, key, format!("{error:#}"), grok.as_ref())
@@ -308,13 +314,18 @@ impl SessionUseCases {
         key: &str,
         include_descendants: bool,
         grok: Option<&grok::DeletionContext<'_>>,
+        claude: Option<&Result<crate::claude::DeletionContext>>,
     ) -> Result<SessionBatchItem> {
         let mut descendants = Vec::new();
         let mut warnings = Vec::new();
         let (id, title, paths, bytes, fingerprint) = match provider {
             SessionProvider::Grokbot => anyhow::bail!("Grok Bot 仅支持阅读"),
             SessionProvider::Claude => {
-                let p = crate::claude::preview_claude_delete(&self.claude, key)?;
+                let p = claude
+                    .expect("Claude deletion context")
+                    .as_ref()
+                    .map_err(|error| anyhow::anyhow!("{error:#}"))?
+                    .preview(&self.claude, key)?;
                 warnings = p.warnings.unwrap_or_default();
                 (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }

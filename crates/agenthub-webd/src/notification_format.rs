@@ -122,13 +122,7 @@ pub(super) fn redacted_summary(input: &str) -> String {
                         break;
                     }
                 }
-                if chars.peek() == Some(&'(') {
-                    for ch in chars.by_ref() {
-                        if ch == ')' {
-                            break;
-                        }
-                    }
-                }
+                skip_link_target(&mut chars);
             } else if c == '[' {
                 for ch in chars.by_ref() {
                     if ch == ']' {
@@ -136,13 +130,7 @@ pub(super) fn redacted_summary(input: &str) -> String {
                     }
                     text.push(ch);
                 }
-                if chars.peek() == Some(&'(') {
-                    for ch in chars.by_ref() {
-                        if ch == ')' {
-                            break;
-                        }
-                    }
-                }
+                skip_link_target(&mut chars);
             } else if !matches!(c, '*' | '`' | '~') && (!c.is_control() || c == '\t') {
                 text.push(c);
             }
@@ -158,6 +146,32 @@ pub(super) fn redacted_summary(input: &str) -> String {
         format!("{}…", text.chars().take(299).collect::<String>().trim_end())
     } else {
         text
+    }
+}
+
+fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    if chars.peek() != Some(&'(') {
+        return;
+    }
+    chars.next();
+    let mut depth = 1;
+    let mut angle = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next();
+            }
+            '<' => angle = true,
+            '>' => angle = false,
+            '(' if !angle => depth += 1,
+            ')' if !angle => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -211,4 +225,21 @@ mod tests {
             "Grok｜完成｜Fixture project"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn summary_strips_balanced_and_angle_wrapped_link_targets() {
+    assert_eq!(
+        summary("[报告](</fixture/报告(终版).pdf>) 已完成"),
+        "报告 已完成"
+    );
+    assert_eq!(
+        summary("[报告](https://example.invalid/a(b(c)).pdf) 已完成"),
+        "报告 已完成"
+    );
+    assert_eq!(
+        summary("![图](</fixture/image(1).png>) [保留](https://example.invalid/a\\)b)"),
+        "保留"
+    );
 }

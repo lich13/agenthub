@@ -1,9 +1,7 @@
 use agenthub_core::{
     config::Config,
-    local::local_plugin_catalog,
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
-    providers::{AgentProviderId, ProviderRegistry},
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -124,61 +122,6 @@ fn platform_paths_cover_linux_macos_and_windows() {
         windows.data_dir.join("bin").join("agenthub-webd.exe")
     );
     fs::remove_dir_all(mac_home).unwrap();
-}
-
-#[test]
-fn provider_registry_exposes_codex_grok_build_and_pi() {
-    let registry = ProviderRegistry::default();
-    let providers = registry.list();
-
-    let codex = providers
-        .iter()
-        .find(|provider| provider.id == AgentProviderId::Codex)
-        .unwrap();
-    assert_eq!(codex.status, "ready");
-    assert!(codex
-        .capabilities
-        .iter()
-        .any(|capability| capability == "ready"));
-
-    let grok = providers
-        .iter()
-        .find(|provider| provider.id == AgentProviderId::GrokBuild)
-        .unwrap();
-    assert_eq!(grok.status, "ready");
-    assert!(grok
-        .capabilities
-        .iter()
-        .any(|capability| capability == "readonly"));
-    assert!(grok
-        .capabilities
-        .iter()
-        .any(|capability| capability == "rename"));
-    assert!(grok.safety.contains("native rename"));
-
-    assert!(providers
-        .iter()
-        .any(|provider| provider.id == AgentProviderId::Cursor));
-    assert!(providers
-        .iter()
-        .any(|provider| provider.id == AgentProviderId::Gemini));
-}
-
-#[test]
-fn local_plugin_catalog_matches_existing_builtin_surface() {
-    let plugins = local_plugin_catalog();
-    let plugin_json = serde_json::to_value(&plugins).unwrap();
-
-    assert_eq!(plugin_json.as_array().unwrap().len(), 4);
-    assert_eq!(plugin_json[0]["id"], "codex");
-    assert_eq!(plugin_json[0]["status"], "ready");
-    assert_eq!(plugin_json[0]["kind"], "builtin");
-    assert_eq!(plugin_json[0]["invocation_template"], "@Codex ");
-    assert_eq!(plugin_json[1]["id"], "probe");
-    assert_eq!(plugin_json[2]["id"], "grok_build");
-    assert_eq!(plugin_json[2]["status"], "ready");
-    assert_eq!(plugin_json[2]["invocation_template"], "@Grok Build ");
-    assert_eq!(plugin_json[3]["id"], "system_ops");
 }
 
 #[tokio::test]

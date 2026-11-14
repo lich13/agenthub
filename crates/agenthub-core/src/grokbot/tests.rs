@@ -414,8 +414,8 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
         Some(0)
     );
 
-    // Upgrade scan sees a message from 5s before prior_scanned_at (but after activated_ms if activated earlier) -> skipped, cursor advanced
-    let hist_ts = (now / 1000 - 5) * 1000;
+    // The prior scan stores seconds; all milliseconds in that same second belong to its baseline.
+    let hist_ts = (now / 1000) * 1000 + 999;
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
@@ -545,10 +545,7 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     assert_eq!(s_attach.streams[0].events.len(), 1);
     assert_eq!(s_attach.streams[0].events[0].kind, "completion");
     assert_eq!(s_attach.streams[0].events[0].turn_id, "roster-attach");
-    assert_eq!(
-        s_attach.streams[0].events[0].body,
-        "[report.pdf](<https://example.invalid/report.pdf>)"
-    );
+    assert_eq!(s_attach.streams[0].events[0].body, "report.pdf");
 
     let alt_attach_ts = attach_ts + 1_000;
     f.replica(json!([{
@@ -630,4 +627,28 @@ fn restored_notifications_keep_the_suspended_message_baseline() {
     for kind in ["completion", "reply_needed", "authorization"] {
         assert!(NativeProvider::GrokBot.event_enabled(&config, kind));
     }
+}
+
+#[test]
+fn later_message_still_notifies_while_an_earlier_interaction_is_pending() {
+    let f = Fixture::new("fixture");
+    f.replica(json!([
+        {"id":"request","kind":"send-message","timestampMs":1000,"message":{"type":"local-tool-permission","ask":{"status":"pending","requestId":"approval"}}},
+        {"id":"later","kind":"send-message","timestampMs":2000,"message":{"type":"attachment","file_name":"report(final).pdf","source_path":"/fixture/private/report(final).pdf","url":"https://example.invalid/report(final).pdf"}}
+    ]));
+    let events = scan_events(&f);
+    assert!(events.iter().any(|event| event.kind == "authorization"));
+    let message = events
+        .iter()
+        .find(|event| event.kind == "completion")
+        .unwrap();
+    assert_eq!(message.turn_id, "later");
+    assert_eq!(message.body, "report(final).pdf");
+    assert!(load_all_events(&f.paths, &f.session())
+        .unwrap()
+        .iter()
+        .any(|event| event
+            .text
+            .as_deref()
+            .is_some_and(|text| text.contains("/fixture/private/report(final).pdf"))));
 }

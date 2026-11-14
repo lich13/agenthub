@@ -125,6 +125,7 @@ export function RenameableSession({
     const ignoreMacCtrlClick = isMacLikePlatform() && event.ctrlKey && event.detail !== 0;
     const hasModifier = event.metaKey || event.shiftKey || (!isMacLikePlatform() && event.ctrlKey);
     if (!ignoreMacCtrlClick && (selecting || hasModifier || event.detail < 2)) {
+      event.currentTarget.focus({ preventScroll: true });
       onSelect(event);
     }
   };

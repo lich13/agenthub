@@ -3123,3 +3123,64 @@ fn history_keeps_original_text_while_notification_bodies_are_redacted() {
         .iter()
         .any(|event| event.text.as_deref() == Some(body)));
 }
+
+#[test]
+fn duplicate_ids_keep_shared_data_until_every_project_copy_and_index_succeeds() {
+    for mode in ["single", "batch", "index-failure", "request-failure"] {
+        let f = Fixture::new();
+        f.complete();
+        let other = f.paths.projects.join("other/native-fixture.jsonl");
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::write(&other, "unreadable transcript remains directly deletable").unwrap();
+        let sidecar = f.paths.config.join("file-history/native-fixture");
+        fs::create_dir_all(&sidecar).unwrap();
+        fs::write(sidecar.join("fixture"), "shared").unwrap();
+        let history = f.paths.config.join("history.jsonl");
+        fs::write(&history, "{\"sessionId\":\"native-fixture\"}\n").unwrap();
+        let registration = f.paths.config.join("sessions/fixture.json");
+        fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        fs::write(&registration, "{\"sessionId\":\"native-fixture\"}").unwrap();
+        let root = f.paths.projects.canonicalize().unwrap();
+        let other_key = key_for(&root, &other.canonicalize().unwrap(), "native-fixture");
+        let mut context = DeletionContext::new(&f.paths).unwrap();
+        let selected = if mode == "single" {
+            vec![f.key()]
+        } else {
+            vec![f.key(), other_key.clone()]
+        };
+        context.select_preview(&selected);
+        let first = context.preview(&f.paths, &f.key()).unwrap();
+        assert!(!first.paths.contains(&sidecar));
+        if mode != "single" {
+            assert!(context
+                .preview(&f.paths, &other_key)
+                .unwrap()
+                .paths
+                .contains(&sidecar));
+        }
+        if mode == "index-failure" {
+            fs::create_dir(other.with_file_name("sessions-index.json")).unwrap();
+        }
+        reader::BODY_RECORDS.with(|count| count.set(0));
+        let requests = selected
+            .into_iter()
+            .enumerate()
+            .map(|(index, session_key)| ClaudeDeleteRequest {
+                session_key,
+                confirmed: mode != "request-failure" || index == 0,
+                fingerprint: String::new(),
+            })
+            .collect();
+        let results = mutations::execute_claude_delete_batch(&f.paths, requests);
+        assert!(results[0].as_ref().unwrap().deleted, "{mode}");
+        let removed = mode == "batch";
+        assert_eq!(!sidecar.exists(), removed, "{mode}");
+        assert_eq!(!registration.exists(), removed, "{mode}");
+        assert_eq!(
+            fs::read_to_string(&history).unwrap().is_empty(),
+            removed,
+            "{mode}"
+        );
+        assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 0);
+    }
+}

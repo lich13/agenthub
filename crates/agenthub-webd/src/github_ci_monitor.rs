@@ -26,7 +26,14 @@ pub(super) fn spawn(config_path: PathBuf, state: Option<AppState>) {
             if result.is_err() {
                 tracing::warn!("GitHub CI monitor state unavailable");
             }
-            time::sleep(Duration::from_secs(2)).await;
+            // Wake for the next due repository, while still observing settings promptly.
+            let delay = monitor.wait_duration();
+            time::sleep(if result.is_err() {
+                Duration::from_secs(2)
+            } else {
+                delay
+            })
+            .await;
         }
     });
 }

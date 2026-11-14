@@ -2,6 +2,8 @@ mod ci_notifications;
 mod codex_desktop;
 mod commands;
 mod desktop_boot;
+#[cfg(target_os = "macos")]
+mod edit_menu;
 // Domain commands live in commands/*; overview owns desktop state and startup paths.
 mod overview;
 mod remote;
@@ -114,6 +116,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            edit_menu::install(app.handle())?;
             if let Ok(resource_dir) = app.path().resource_dir() {
                 resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
             }

@@ -695,6 +695,9 @@ export type GithubCiStatus = {
   enabled: boolean;
   last_scan_ms: number;
   baseline_ms?: number;
+  monitored_repositories?: string[];
+  filter_bots?: boolean;
+  scanned_repository_ids?: number[];
   error: string | null;
   refreshing: boolean;
 };
