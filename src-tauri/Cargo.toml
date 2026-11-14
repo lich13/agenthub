@@ -1,6 +1,6 @@
 [package]
 name = "agenthub-desktop"
-version = "2.1.14"
+version = "2.1.15"
 description = "AgentHub macOS desktop console"
 authors = ["AgentHub contributors"]
 license = "MIT"

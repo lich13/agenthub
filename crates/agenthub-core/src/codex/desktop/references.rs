@@ -477,17 +477,13 @@ fn verify_file_detailed(path: &Path, expected: &FileIdentity) -> ReferenceResult
         if proof.uid != before.uid() || proof.gid != before.gid() || proof.mode != before.mode() {
             return Err((DesktopError::RequestExpired, CHANGED));
         }
-    }
-    if !current.same_metadata(expected) {
-        let proof = expected
-            .content_proof
-            .as_ref()
-            .ok_or((DesktopError::RequestExpired, CHANGED))?;
         if current.size > super::attachments::MAX_IMAGE_BYTES as u64
             || content_digest(&mut file, current.size)? != proof.sha256
         {
             return Err((DesktopError::RequestExpired, CHANGED));
         }
+    } else if !current.same_metadata(expected) {
+        return Err((DesktopError::RequestExpired, CHANGED));
     }
     let after = file
         .metadata()

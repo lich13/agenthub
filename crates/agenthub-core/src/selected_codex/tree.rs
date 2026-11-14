@@ -608,10 +608,6 @@ fn delete_database(
     Ok(())
 }
 
-pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutcome> {
-    execute_batch(paths, &[selected.to_vec()]).remove(0)
-}
-
 struct PendingDelete {
     ids: BTreeSet<String>,
     files: BTreeSet<PathBuf>,

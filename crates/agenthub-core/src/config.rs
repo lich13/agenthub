@@ -1099,19 +1099,47 @@ impl TomlPatchEditor {
 
     fn section_range(&self, section: &str) -> Option<(usize, usize)> {
         let header = format!("[{section}]");
-        let start = self.lines.iter().position(|line| line.trim() == header)?;
+        let start = self
+            .lines
+            .iter()
+            .position(|line| table_header(line) == Some(header.as_str()))?;
         let end = self
             .lines
             .iter()
             .enumerate()
             .skip(start + 1)
-            .find_map(|(index, line)| {
-                let trimmed = line.trim();
-                (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(index)
-            })
+            .find_map(|(index, line)| table_header(line).map(|_| index))
             .unwrap_or(self.lines.len());
         Some((start, end))
     }
+}
+
+fn table_header(line: &str) -> Option<&str> {
+    let mut header = line.trim();
+    if !header.starts_with('[') {
+        return None;
+    }
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in header.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if quote == Some('"') && ch == '\\' {
+            escaped = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() {
+            match ch {
+                '\'' | '"' => quote = Some(ch),
+                '#' => {
+                    header = header[..index].trim_end();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    header.ends_with(']').then_some(header)
 }
 
 fn toml_string(value: &str) -> String {
@@ -1362,6 +1390,30 @@ group = "old"
     }
 
     #[test]
+    fn probe_patch_recognizes_commented_and_quoted_table_boundaries() {
+        for input in [
+            "[probe] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[probe]\npoll_seconds = 15\n[probe.notifications] # next table\nenabled = true\n",
+            "[probe] # target\npoll_seconds = 15\n[\"custom#table\"] # next table\nenabled = true\n",
+            "[probe]\npoll_seconds = 15\n['custom#table'] # next table\nenabled = true\n",
+            "[probe] # target\n[\"custom\\\"#table\"] # next table\nenabled = true\n",
+            "[probe]\n[[\"custom#array\"]] # next table\nenabled = true\n",
+        ] {
+            let output = super::patch_probe_config_toml(input, &ProbeConfigFilePatch {
+                probe: Some(ProbeSettingsPatch { enabled: Some(false), ..Default::default() }),
+                ..Default::default()
+            }).unwrap();
+            let actual: toml::Value = toml::from_str(&output).unwrap();
+            let mut expected: toml::Value = toml::from_str(input).unwrap();
+            expected["probe"].as_table_mut().unwrap().insert("enabled".into(), toml::Value::Boolean(false));
+            assert_eq!(actual, expected, "{input}");
+            for line in input.lines().filter(|line| line.contains('#')) {
+                assert!(output.contains(line), "commented headers are preserved");
+            }
+        }
+    }
+
+    #[test]
     fn config_accepts_missing_codex_home_as_auto() {
         let input = r#"
 [server]
@@ -1456,6 +1508,54 @@ workspace = "/home/ubuntu/codex-workspace"
 mod atomic_write_tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[test]
+    fn saved_patch_changes_only_the_requested_commented_table() {
+        let root = std::env::temp_dir().join(format!(
+            "agenthub-commented-config-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("config.toml");
+        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &root);
+        let mut base = toml::Value::try_from(&config).unwrap();
+        base.as_table_mut().unwrap().remove("probe");
+        let key = SecretBox::random_key_material();
+        write_runtime_env(&root.join("env"), &format!("AGENTHUB_SECRET_KEY={key}\n")).unwrap();
+        for probe in [
+            "[probe] # target\nenabled = true\n[probe.notifications]\nenabled = true\n",
+            "[probe]\n[probe.notifications] # next table\nenabled = true\n",
+        ] {
+            let original = format!(
+                "{}\n{probe}\n[\"custom#table\"] # kept\nenabled = true\n",
+                toml::to_string(&base).unwrap()
+            );
+            fs::write(&target, &original).unwrap();
+            let saved = Config::save_probe_patch(
+                &target,
+                &ProbeConfigFilePatch {
+                    probe: Some(ProbeSettingsPatch {
+                        enabled: Some(false),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(!saved.probe.enabled);
+            assert!(saved.probe.notifications.enabled);
+            let text = fs::read_to_string(&target).unwrap();
+            let actual: toml::Value = toml::from_str(&text).unwrap();
+            let mut expected: toml::Value = toml::from_str(&original).unwrap();
+            expected["probe"]
+                .as_table_mut()
+                .unwrap()
+                .insert("enabled".into(), toml::Value::Boolean(false));
+            assert_eq!(actual, expected);
+            assert!(text.contains("[\"custom#table\"] # kept\nenabled = true"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn saved_patch_loads_env_and_normalizes_before_replacing_config() {

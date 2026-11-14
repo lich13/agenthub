@@ -334,18 +334,99 @@ fn background_jobs(paths: &ClaudePaths) -> Result<HashMap<String, BTreeSet<Strin
     Ok(matching)
 }
 
-fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
-    use std::process::{Command, Stdio};
-    let help = Command::new(executable)
-        .args(["rm", "--help"])
+const NATIVE_HELP_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const NATIVE_RM_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+const NATIVE_HELP_BYTES: usize = 64 * 1024;
+
+fn run_native_rm(
+    executable: &Path,
+    paths: &ClaudePaths,
+    argument: &str,
+    help: bool,
+    timeout: std::time::Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    use std::{
+        os::fd::AsRawFd,
+        process::{Command, Stdio},
+        time::Instant,
+    };
+    let mut child = Command::new(executable)
+        .args(["rm", argument])
         .env("CLAUDE_CONFIG_DIR", &paths.config)
         .stdin(Stdio::null())
+        .stdout(if help { Stdio::piped() } else { Stdio::null() })
         .stderr(Stdio::null())
-        .output()
-        .context("无法检查 Claude 原生清理命令，历史文件尚未删除")?;
+        .spawn()
+        .context("无法启动 Claude 原生清理命令，历史文件尚未删除")?;
+    let deadline = Instant::now() + timeout;
+    let result = (|| -> Result<_> {
+        let mut output = child.stdout.take();
+        if let Some(stdout) = &output {
+            let fd = stdout.as_raw_fd();
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        let mut bytes = Vec::new();
+        let mut eof = output.is_none();
+        loop {
+            ensure!(
+                Instant::now() < deadline,
+                "原生命令超时（{} 秒），请检查后台会话后重试",
+                timeout.as_secs()
+            );
+            let status = child.try_wait()?;
+            if let Some(stdout) = output.as_mut().filter(|_| !eof) {
+                let mut buffer = [0; 4096];
+                loop {
+                    ensure!(
+                        Instant::now() < deadline,
+                        "原生命令超时（{} 秒），请检查后台会话后重试",
+                        timeout.as_secs()
+                    );
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => {
+                            eof = true;
+                            break;
+                        }
+                        Ok(count) => {
+                            ensure!(bytes.len() + count <= NATIVE_HELP_BYTES, "原生帮助输出过大");
+                            bytes.extend_from_slice(&buffer[..count]);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+            if let Some(status) = status.filter(|_| eof) {
+                return Ok((status, bytes));
+            }
+            std::thread::sleep(
+                std::time::Duration::from_millis(10)
+                    .min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    })();
+    if result.is_err() {
+        // Only the helper spawned above belongs to this operation. Never signal
+        // the native session or its process group, and always reap this child.
+        let _ = child.kill();
+        child
+            .wait()
+            .context("无法回收 Claude 清理 helper，历史文件尚未删除")?;
+    }
+    result.map_err(|error| anyhow::anyhow!("Claude 原生清理失败，历史文件尚未删除：{error}"))
+}
+
+fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
+    let (status, output) = run_native_rm(executable, paths, "--help", true, NATIVE_HELP_WAIT)?;
     ensure!(
-        help.status.success()
-            && String::from_utf8_lossy(&help.stdout)
+        status.success()
+            && String::from_utf8_lossy(&output)
                 .lines()
                 .any(|line| line.starts_with("Usage: claude rm <id>")),
         "当前 Claude CLI 不支持原生 rm 命令，历史文件尚未删除"
@@ -354,44 +435,46 @@ fn check_native_rm(executable: &Path, paths: &ClaudePaths) -> Result<()> {
 }
 
 fn remove_background_job(executable: &Path, paths: &ClaudePaths, native_id: &str) -> Result<()> {
-    use std::process::{Command, Stdio};
     ensure!(
         !native_id.starts_with('-'),
         "Claude 后台会话标识不能作为命令选项"
     );
-    let status = Command::new(executable)
-        .args(["rm", native_id])
-        .env("CLAUDE_CONFIG_DIR", &paths.config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("无法执行 Claude 原生后台清理，历史文件尚未删除")?;
+    let (status, _) = run_native_rm(executable, paths, native_id, false, NATIVE_RM_WAIT)?;
     ensure!(status.success(), "Claude 原生清理未完成（{status}），请先使用 claude rm {native_id} 检查后台会话；历史文件尚未删除");
     Ok(())
 }
 
-fn remove_background_jobs(
-    paths: &ClaudePaths,
-    jobs: &[&String],
-    removed: &mut BTreeSet<String>,
-) -> Result<()> {
-    if jobs.is_empty() {
-        return Ok(());
+#[derive(Default)]
+struct NativeCleanup {
+    executable: Option<PathBuf>,
+    removed: BTreeSet<String>,
+}
+
+impl NativeCleanup {
+    fn remove(&mut self, paths: &ClaudePaths, jobs: &[&String]) -> Result<()> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        if self.executable.is_none() {
+            let executable = env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| env::split_paths(&path).collect::<Vec<_>>())
+                .map(|path| path.join("claude"))
+                .chain(dirs::home_dir().map(|home| home.join(".local/bin/claude")))
+                .find(|path| path.is_file())
+                .context(
+                    "此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI；历史文件尚未删除",
+                )?;
+            check_native_rm(&executable, paths)?;
+            self.executable = Some(executable);
+        }
+        let executable = self.executable.as_ref().expect("verified native rm");
+        for native_id in jobs {
+            remove_background_job(executable, paths, native_id)?;
+            self.removed.insert((*native_id).clone());
+        }
+        Ok(())
     }
-    let executable = env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| env::split_paths(&path).collect::<Vec<_>>())
-        .map(|path| path.join("claude"))
-        .chain(dirs::home_dir().map(|home| home.join(".local/bin/claude")))
-        .find(|path| path.is_file())
-        .context("此会话有关联的 Claude 后台记录，但当前机器找不到 Claude CLI；历史文件尚未删除")?;
-    check_native_rm(&executable, paths)?;
-    for native_id in jobs {
-        remove_background_job(&executable, paths, native_id)?;
-        removed.insert((*native_id).clone());
-    }
-    Ok(())
 }
 
 pub fn execute_claude_delete(
@@ -412,7 +495,7 @@ fn delete_exclusive(
     paths: &ClaudePaths,
     request: ClaudeDeleteRequest,
     jobs: &Result<HashMap<String, BTreeSet<String>>>,
-    removed: &mut BTreeSet<String>,
+    native: &mut NativeCleanup,
 ) -> Result<PendingDelete> {
     ensure!(request.confirmed, "删除需要明确确认");
     let main = locate(paths, &request.session_key)?;
@@ -451,9 +534,9 @@ fn delete_exclusive(
         .get(&id)
         .into_iter()
         .flatten()
-        .filter(|native_id| !removed.contains(*native_id))
+        .filter(|native_id| !native.removed.contains(*native_id))
         .collect();
-    remove_background_jobs(paths, &matching, removed)?;
+    native.remove(paths, &matching)?;
 
     let mut outcome = crate::session_delete::Outcome::default();
     let (targets, errors) = delete_paths(paths, &main, &id);
@@ -512,10 +595,10 @@ pub(crate) fn execute_claude_delete_batch(
         }
     };
     let jobs = background_jobs(paths);
-    let mut removed = BTreeSet::new();
+    let mut native = NativeCleanup::default();
     let mut pending: Vec<_> = requests
         .into_iter()
-        .map(|request| delete_exclusive(paths, request, &jobs, &mut removed))
+        .map(|request| delete_exclusive(paths, request, &jobs, &mut native))
         .collect();
     let mut indexes = std::collections::BTreeMap::<PathBuf, BTreeSet<String>>::new();
     for item in pending
@@ -638,6 +721,184 @@ mod native_delete_tests {
     use super::*;
 
     #[test]
+    fn native_delete_entrypoints_reap_helpers_keep_history_and_release_management() {
+        use std::os::unix::fs::PermissionsExt;
+        const CASE: &str = "AGENTHUB_NATIVE_DELETE_CASE";
+        let Ok(case) = env::var(CASE) else {
+            for case in ["help-hang", "rm-hang", "overflow", "reject", "normal"] {
+                let output = std::process::Command::new(env::current_exe().unwrap())
+                    .args(["--exact", "claude::mutations::native_delete_tests::native_delete_entrypoints_reap_helpers_keep_history_and_release_management", "--nocapture"])
+                    .env(CASE, case).output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{case}: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+        let root = env::temp_dir().join(format!("agenthub-native-entry-{}", uuid::Uuid::new_v4()));
+        let paths = ClaudePaths {
+            config: root.clone(),
+            projects: root.join("projects"),
+        };
+        fs::create_dir_all(paths.projects.join("fixture")).unwrap();
+        let bin = root.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let script = r#"#!/bin/sh
+printf '%s\n' "$$" >> "$CLAUDE_CONFIG_DIR/pids"
+case "$2" in
+  --help)
+    printf 'help\n' >> "$CLAUDE_CONFIG_DIR/calls"
+    case "$AGENTHUB_NATIVE_DELETE_CASE" in
+      help-hang) exec /bin/sleep 120 ;;
+      overflow) while :; do printf '%04096d' 0; done ;;
+    esac
+    printf 'Usage: claude rm <id>\n'
+    ;;
+  *)
+    printf 'rm:%s\n' "$2" >> "$CLAUDE_CONFIG_DIR/calls"
+    if [ "$2" = job-1 ]; then
+      case "$AGENTHUB_NATIVE_DELETE_CASE" in
+        rm-hang) exec /bin/sleep 120 ;;
+        reject) exit 6 ;;
+      esac
+    fi
+    ;;
+esac
+"#;
+        let cli = bin.join("claude");
+        fs::write(&cli, script).unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        // This test process is isolated, so PATH changes cannot affect other tests.
+        env::set_var(
+            "PATH",
+            env::join_paths(
+                std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+            )
+            .unwrap(),
+        );
+        let mut requests = Vec::new();
+        let mut history = Vec::new();
+        for i in 1..=3 {
+            let id = format!("00000000-0000-4000-8000-{i:012}");
+            let path = paths.projects.join("fixture").join(format!("{id}.jsonl"));
+            fs::write(&path, "").unwrap();
+            let key = super::super::key_for(
+                &paths.projects.canonicalize().unwrap(),
+                &path.canonicalize().unwrap(),
+                &id,
+            );
+            requests.push(ClaudeDeleteRequest {
+                session_key: key,
+                confirmed: true,
+                fingerprint: String::new(),
+            });
+            history.push(path);
+            if i <= 2 {
+                let job = root.join("jobs").join(format!("job-{i}"));
+                fs::create_dir_all(&job).unwrap();
+                fs::write(
+                    job.join("state.json"),
+                    serde_json::json!({"sessionId":id}).to_string(),
+                )
+                .unwrap();
+            }
+        }
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let batch_paths = paths.clone();
+        let ordinary = requests.pop().unwrap();
+        let next_batch = requests[0].clone();
+        if case == "normal" || case == "reject" {
+            let results = runtime
+                .block_on(crate::read_tasks::spawn_blocking(move || {
+                    execute_claude_delete_batch(&batch_paths, requests)
+                }))
+                .unwrap();
+            assert_eq!(results[0].is_ok(), case == "normal");
+            assert!(results[1].as_ref().unwrap().deleted);
+            assert_eq!(history[0].exists(), case != "normal");
+            assert!(!history[1].exists());
+            assert_eq!(
+                fs::read_to_string(root.join("calls")).unwrap(),
+                "help\nrm:job-1\nrm:job-2\n"
+            );
+        } else {
+            // The right-click single-delete entry uses the same helper and lock.
+            let request = requests.remove(0);
+            let result = runtime
+                .block_on(crate::read_tasks::spawn_blocking(move || {
+                    execute_claude_delete(&batch_paths, request)
+                }))
+                .unwrap();
+            let message = result.unwrap_err().to_string();
+            assert!(message.contains(if case == "overflow" {
+                "输出过大"
+            } else {
+                "超时"
+            }));
+            assert!(history[0].exists());
+            assert!(history[1].exists());
+        }
+        let calls_before_ordinary = fs::read_to_string(root.join("calls")).unwrap();
+        // A later real management request gets both the read permit and mutation lock.
+        let later_paths = paths.clone();
+        let result = runtime.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::read_tasks::spawn_blocking(move || {
+                    execute_claude_delete(&later_paths, ordinary)
+                }),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        });
+        assert!(result.deleted);
+        assert!(!history[2].exists());
+        assert_eq!(
+            fs::read_to_string(root.join("calls")).unwrap(),
+            calls_before_ordinary
+        );
+        if case == "normal" {
+            fs::write(&history[0], "").unwrap();
+            assert!(execute_claude_delete(&paths, next_batch).unwrap().deleted);
+            assert_eq!(
+                fs::read_to_string(root.join("calls")).unwrap(),
+                "help\nrm:job-1\nrm:job-2\nhelp\nrm:job-1\n"
+            );
+        }
+        for pid in fs::read_to_string(root.join("pids")).unwrap().lines() {
+            let pid: i32 = pid.parse().unwrap();
+            assert_eq!(
+                unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+                -1,
+                "helper already reaped"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "helper no longer running"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+        assert!(
+            root.join("jobs/job-1/state.json").exists(),
+            "AgentHub never deletes native job storage itself"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn background_mapping_uses_native_and_resumed_identity_and_native_rm_owns_its_files() {
         let root = env::temp_dir().join(format!("agenthub-native-rm-{}", uuid::Uuid::new_v4()));
         let paths = ClaudePaths {
@@ -667,6 +928,7 @@ mod native_delete_tests {
         crate::write_executable_fixture(&cli, "#!/bin/sh\n[ \"$#\" = 2 ] && [ \"$1\" = rm ] && [ \"$2\" = original ] || exit 4\n[ -f \"$CLAUDE_CONFIG_DIR/jobs/original/state.json\" ] || exit 5\n[ ! -f \"$CLAUDE_CONFIG_DIR/reject\" ] || exit 6\nprintf '%s\\n' \"$2\" > \"$CLAUDE_CONFIG_DIR/removed\"\n");
         // Unsupported rm must be rejected before any deletion is attempted.
         assert!(check_native_rm(&cli, &paths).is_err());
+        assert!(remove_background_job(&cli, &paths, "--force").is_err());
         let supported = root.join("supported-claude");
         crate::write_executable_fixture(&supported, "#!/bin/sh\n[ \"$1\" = rm ] && [ \"$2\" = --help ] || exit 4\nprintf 'Usage: claude rm <id>\\n'\n");
         check_native_rm(&supported, &paths).unwrap();

@@ -389,10 +389,11 @@ fn same_size_rewrite_with_restored_mtime_is_rejected_by_the_content_proof() {
     drop(file);
     restore_mtime(&path, before.3, before.4);
 
-    // Filesystems may keep ctime during rapid writes; explicitly exercise a
-    // stale ctime while retaining every other identity field and the old proof.
+    // Simulate a ctime collision while retaining the original content proof.
     if let NativeReference::File { identity, .. } = &mut reference {
-        identity.changed = fs::metadata(&path).unwrap().ctime() - 1;
+        let current = fs::metadata(&path).unwrap();
+        identity.changed = current.ctime();
+        identity.changed_ns = current.ctime_nsec();
     }
     let after = metadata_tuple(&path);
     assert_eq!(before.0, after.0, "rewrite keeps the device");

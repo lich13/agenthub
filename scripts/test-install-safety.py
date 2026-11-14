@@ -541,7 +541,7 @@ curl() {
   : > "$4"
 }
 """
-        for failure, missing, distro in [('', '0','ubuntu'),('', '1','debian'),('download','0','ubuntu'),('signature','0','ubuntu'),('install','0','ubuntu'),('health','0','ubuntu'),('dependencies','1','other'),('dependencies','0','ubuntu')]:
+        for failure, missing, distro in [('', '0','ubuntu'),('', '1','debian'),('download','0','ubuntu'),('signature','0','ubuntu'),('install','0','ubuntu'),('health','0','ubuntu'),('dependencies','1','other'),('dependencies','0','ubuntu'),('dependencies','0','debian'),('dependencies','0','other')]:
             with self.subTest(failure=failure, missing=missing, distro=distro):
                 log = self.root / 'bootstrap.log'
                 log.unlink(missing_ok=True)
@@ -558,6 +558,8 @@ curl() {
                     self.assertIn(f'AGENTHUB_INSTALL_ERROR:{failure}',result.stdout)
                     if failure in ('dependencies','download','signature'):
                         self.assertNotIn('installed',content)
+                    if failure == 'dependencies':
+                        self.assertNotIn('/releases/download/', content)
 
     def test_update_handoff_and_readonly_paths_create_no_temporary_directory(self) -> None:
         fake_bin = self.root / "bin"

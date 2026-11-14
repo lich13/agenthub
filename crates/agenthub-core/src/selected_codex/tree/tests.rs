@@ -1,5 +1,10 @@
 use super::*;
 use serde_json::json;
+
+fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutcome> {
+    execute_batch(paths, &[selected.to_vec()]).remove(0)
+}
+
 const ROOT: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD: &str = "22222222-2222-4222-8222-222222222222";
 const OTHER: &str = "33333333-3333-4333-8333-333333333333";

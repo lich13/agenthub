@@ -319,11 +319,12 @@ fn restored_parent_and_newly_archived_child_do_not_reuse_old_confirmation() {
 }
 
 #[test]
-fn concurrent_session_activity_stops_before_any_removal() {
+fn concurrent_session_activity_skips_only_the_changed_target() {
     use std::cell::Cell;
-    let f = Fixture::new(&["root"]);
+    let f = Fixture::new(&["root", "z-last"]);
     let root = f.session("root", None, false, false);
-    let request = f.request(&["root"]);
+    let later = f.session("z-last", None, false, false);
+    let request = f.request(&["root", "z-last"]);
     let checks = Cell::new(0);
     let result = execute_checked(&f.paths, request, || {
         checks.set(checks.get() + 1);
@@ -341,9 +342,11 @@ fn concurrent_session_activity_stops_before_any_removal() {
         Ok(())
     })
     .unwrap();
-    assert_eq!(result.deleted_threads, 0);
+    assert_eq!(result.deleted_threads, 1);
     assert_eq!(result.items[0].status, "skipped");
+    assert_eq!(result.items[1].status, "deleted");
     assert!(root.join("session.lock").exists());
+    assert!(!later.exists());
     assert_eq!(
         f.read_index()["global"]["archivedSessionIds"],
         json!(["root"])

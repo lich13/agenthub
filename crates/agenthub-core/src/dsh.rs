@@ -731,8 +731,7 @@ fn execute_checked(
                     })
                 });
                 if changed {
-                    stopped = Some("DSH 会话已被修改，请退出 DSH 后重新预览".into());
-                    item.reason = stopped.clone();
+                    item.reason = Some("DSH 会话已被修改，请退出 DSH 后重新预览".into());
                     result.items.push(item);
                     continue;
                 }
@@ -757,7 +756,6 @@ fn execute_checked(
                     item.status = "failed".into();
                     item.reason = Some("部分 DSH 线程数据未清理，请重试".into());
                     item.residuals = outcome.residuals;
-                    stopped = item.reason.clone();
                 }
             }
         } else {

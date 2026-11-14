@@ -247,6 +247,16 @@ describe("UnifiedThreadCleanup workbench", () => {
     expect(html).toContain("candidate-204：fixture failure");
   });
 
+  test("keeps failures visible when independent targets completed without stopping", () => {
+    renderTree();
+    harness.unifiedInput.onUnifiedExecute({ ...failedUnifiedResult(1), stoppedEarly: false });
+    const html = markup(renderTree());
+    expect(html).toContain("已删除 <strong>1</strong> 项");
+    expect(html).toContain("candidate-000：fixture failure");
+    expect(html).toContain("/isolated/residual-rollout.jsonl");
+    expect(html).not.toContain("已停止后续删除");
+  });
+
   test("auto-selects cleanable scopes, supports scope deselection, and requires two-step confirmation", () => {
     const plan = unifiedPlan(3);
     renderTree();
