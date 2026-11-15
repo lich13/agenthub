@@ -1297,7 +1297,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let db = open_panel_db(&config)?;
     let state = AppState::new_for_surface(config.clone(), db, HostSurface::LinuxServerApi);
     spawn_probe_thread_scan(state.clone());
-    spawn_probe_error_monitor(state.clone());
+    spawn_probe_error_monitor(state.clone(), config_path.clone());
     github_ci_monitor::spawn(config_path.clone(), Some(state.clone()));
     api::spawn_probe_status_refresh(state.clone());
     ssh_server::serve(state).await?;

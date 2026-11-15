@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -41,13 +41,101 @@ pub(crate) fn open(paths: &CodexPaths, writable: bool) -> Result<Connection> {
     Ok(conn)
 }
 
+struct ArchiveInventory {
+    columns: HashSet<String>,
+    job_tables: Vec<(&'static str, &'static str)>,
+    index_rows: Vec<Value>,
+    files: Vec<PathBuf>,
+    database_owners: HashMap<PathBuf, HashSet<String>>,
+    index_owners: HashMap<PathBuf, HashSet<Option<String>>>,
+}
+
+impl ArchiveInventory {
+    fn read(paths: &CodexPaths, conn: &Connection) -> Result<Self> {
+        let columns = crate::archive::table_columns(conn, "threads")?;
+        let mut job_tables = Vec::new();
+        for (table, key) in [
+            ("jobs", "thread_id"),
+            ("agent_job_items", "assigned_thread_id"),
+        ] {
+            let fields = crate::archive::table_columns(conn, table)?;
+            if fields.contains(key) && fields.contains("status") {
+                job_tables.push((table, key));
+            }
+        }
+        let index_rows: Vec<Value> = read_index(paths)?
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let mut index_owners: HashMap<PathBuf, HashSet<Option<String>>> = HashMap::new();
+        for row in &index_rows {
+            if let Some(path) = row
+                .get("path")
+                .or_else(|| row.get("rollout_path"))
+                .and_then(Value::as_str)
+            {
+                if let Ok(actual) = fs::canonicalize(path) {
+                    index_owners
+                        .entry(actual)
+                        .or_default()
+                        .insert(row.get("id").and_then(Value::as_str).map(str::to_owned));
+                }
+            }
+        }
+        let mut database_owners: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+        if columns.contains("rollout_path") {
+            let mut statement =
+                conn.prepare("SELECT id,rollout_path FROM threads WHERE rollout_path IS NOT NULL")?;
+            for row in
+                statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            {
+                let (id, path) = row?;
+                if let Ok(actual) = fs::canonicalize(path) {
+                    database_owners.entry(actual).or_default().insert(id);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
+            if !root.exists() {
+                continue;
+            }
+            ensure_safe_path(&paths.home, &root)?;
+            for entry in walkdir::WalkDir::new(root).follow_links(false) {
+                let entry = entry?;
+                if entry.file_name().to_string_lossy().starts_with("rollout-") {
+                    files.push(entry.into_path());
+                }
+            }
+        }
+        Ok(Self {
+            columns,
+            job_tables,
+            index_rows,
+            files,
+            database_owners,
+            index_owners,
+        })
+    }
+}
+
 fn snapshot(
     paths: &CodexPaths,
     conn: &Connection,
     id: &str,
     expected_archived: Option<bool>,
 ) -> Result<SelectedCodexPreview> {
-    let columns = crate::archive::table_columns(conn, "threads")?;
+    let inventory = ArchiveInventory::read(paths, conn)?;
+    snapshot_from_inventory(paths, conn, id, expected_archived, &inventory)
+}
+
+fn snapshot_from_inventory(
+    paths: &CodexPaths,
+    conn: &Connection,
+    id: &str,
+    expected_archived: Option<bool>,
+    inventory: &ArchiveInventory,
+) -> Result<SelectedCodexPreview> {
     let row = row_value(conn, "threads", "id", id)?.context("线程不存在")?;
     let archived = row.get("archived").and_then(Value::as_i64).unwrap_or(0) != 0
         || row.get("archived_at").and_then(Value::as_i64).unwrap_or(0) > 0;
@@ -107,20 +195,11 @@ fn snapshot(
             "线程仍在运行，暂不能归档或恢复"
         );
     }
-    for (table, key) in [
-        ("jobs", "thread_id"),
-        ("agent_job_items", "assigned_thread_id"),
-    ] {
-        let cols = crate::archive::table_columns(conn, table)?;
-        if cols.contains(key) && cols.contains("status") {
-            let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
-            ensure!(!active, "线程仍有关联的运行任务，暂不能归档或恢复");
-        }
+    for (table, key) in &inventory.job_tables {
+        let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
+        ensure!(!active, "线程仍有关联的运行任务，暂不能归档或恢复");
     }
-    let index_rows = &read_index(paths)?
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect::<Vec<_>>();
+    let index_rows = &inventory.index_rows;
     let mut files = BTreeSet::new();
     if let Some(path) = row
         .get("rollout_path")
@@ -140,20 +219,17 @@ fn snapshot(
             }
         }
     }
-    // Only known native stores and exact filename suffixes may supply additional files.
-    for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
-        if !root.exists() {
-            continue;
-        }
-        ensure_safe_path(&paths.home, &root)?;
-        for entry in walkdir::WalkDir::new(&root).follow_links(false) {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy();
-            if name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl")) {
-                files.insert(entry.path().to_path_buf());
-            }
-        }
-    }
+    let suffix = format!("-{id}.jsonl");
+    files.extend(
+        inventory
+            .files
+            .iter()
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+            })
+            .cloned(),
+    );
     ensure!(!files.is_empty(), "缺少可验证的线程文件，暂不能归档或恢复");
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(&row)?);
@@ -184,32 +260,20 @@ fn snapshot(
             rollout_has_confirmed_inactive_state(file)?,
             "线程终态无法确认，暂不能归档或恢复"
         );
-        if columns.contains("rollout_path") {
-            let mut stmt = conn.prepare(
-                "SELECT rollout_path FROM threads WHERE id != ?1 AND rollout_path IS NOT NULL",
-            )?;
-            for path in stmt.query_map([id], |r| r.get::<_, String>(0))? {
-                ensure!(
-                    !fs::canonicalize(path?).is_ok_and(|p| p == actual),
-                    "文件仍被其他线程引用"
-                );
-            }
-        }
-        for entry in index_rows {
-            if entry.get("id").and_then(Value::as_str) == Some(id) {
-                continue;
-            }
-            if let Some(path) = entry
-                .get("path")
-                .or_else(|| entry.get("rollout_path"))
-                .and_then(Value::as_str)
-            {
-                ensure!(
-                    !fs::canonicalize(path).is_ok_and(|p| p == actual),
-                    "文件仍被其他线程索引引用"
-                );
-            }
-        }
+        ensure!(
+            inventory
+                .database_owners
+                .get(&actual)
+                .is_none_or(|owners| owners.iter().all(|owner| owner == id)),
+            "文件仍被其他线程引用"
+        );
+        ensure!(
+            inventory
+                .index_owners
+                .get(&actual)
+                .is_none_or(|owners| owners.iter().all(|owner| owner.as_deref() == Some(id))),
+            "文件仍被其他线程索引引用"
+        );
         let metadata = fs::metadata(file)?;
         ensure!(metadata.is_file(), "线程目标不是普通文件");
         #[cfg(unix)]
@@ -262,12 +326,29 @@ fn snapshot(
     })
 }
 
-pub fn preview_archive(
+pub fn preview_archives(
     paths: &CodexPaths,
-    id: &str,
+    ids: &[String],
     archive: bool,
-) -> Result<SelectedCodexPreview> {
-    snapshot(paths, &open(paths, false)?, id, Some(!archive))
+) -> Vec<Result<SelectedCodexPreview>> {
+    let context = (|| -> Result<_> {
+        let conn = open(paths, false)?;
+        let inventory = ArchiveInventory::read(paths, &conn)?;
+        Ok((conn, inventory))
+    })();
+    ids.iter()
+        .map(|id| {
+            let (conn, inventory) = context
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+            ensure!(
+                crate::codex::codex_task_identity_from_connection(conn, &inventory.columns, id)?
+                    == crate::codex::CodexTaskIdentity::Main,
+                "线程身份无法确认为主任务"
+            );
+            snapshot_from_inventory(paths, conn, id, Some(!archive), inventory)
+        })
+        .collect()
 }
 
 pub fn execute_archive(
@@ -396,4 +477,88 @@ fn read_row_value(row: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result
         values.insert(name.clone(), value);
     }
     Ok(Value::Object(values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn archive_batch_matches_single_preview_and_rechecks_changes_before_execution() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-archive-batch-{}", uuid::Uuid::new_v4()));
+        let paths = CodexPaths::new(&home);
+        fs::create_dir_all(paths.sessions_dir()).unwrap();
+        let conn = Connection::open(paths.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,source TEXT,status TEXT,archived INTEGER,archived_at INTEGER); CREATE TABLE jobs(thread_id TEXT,status TEXT);").unwrap();
+        let ids: Vec<_> = (0..2).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let mut index = String::new();
+        let mut files = Vec::new();
+        for id in &ids {
+            let path = paths
+                .sessions_dir()
+                .join(format!("rollout-fixture-{id}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{}\n{}\n",
+                    json!({"type":"session_meta","payload":{"id":id}}),
+                    json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}})
+                ),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO threads VALUES(?1,'Fixture',?2,'cli','completed',0,NULL)",
+                rusqlite::params![id, path.to_str().unwrap()],
+            )
+            .unwrap();
+            index.push_str(&format!("{}\n", json!({"id":id,"path":path})));
+            files.push(path);
+        }
+        fs::write(paths.session_index(), index).unwrap();
+        for archive in [true, false] {
+            conn.execute(
+                "UPDATE threads SET archived=?1,archived_at=CASE WHEN ?1 THEN 1 ELSE NULL END",
+                [!archive],
+            )
+            .unwrap();
+            let results = preview_archives(&paths, &ids, archive);
+            for (id, result) in ids.iter().zip(results) {
+                assert_eq!(
+                    serde_json::to_value(result.unwrap()).unwrap(),
+                    serde_json::to_value(snapshot(&paths, &conn, id, Some(!archive)).unwrap())
+                        .unwrap()
+                );
+            }
+        }
+        conn.execute("UPDATE threads SET archived=0,archived_at=NULL", [])
+            .unwrap();
+        let preview = preview_archives(&paths, &ids, true).remove(0).unwrap();
+        let mut text = fs::read_to_string(&files[0]).unwrap();
+        text.push_str("{}\n");
+        fs::write(&files[0], text).unwrap();
+        assert!(execute_archive(&paths, &ids[0], true, &preview.fingerprint).is_err());
+        conn.execute("INSERT INTO jobs VALUES(?1,'running')", [&ids[0]])
+            .unwrap();
+        let result = preview_archives(
+            &paths,
+            &[ids[0].clone(), ids[1].clone(), "missing".into()],
+            true,
+        );
+        assert!(result[0].is_err());
+        assert!(result[1].is_ok());
+        assert!(result[2].is_err());
+        conn.execute("DELETE FROM jobs", []).unwrap();
+        conn.execute(
+            "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+            rusqlite::params![files[0].to_str().unwrap(), ids[1]],
+        )
+        .unwrap();
+        assert!(preview_archives(&paths, &ids, true)
+            .iter()
+            .all(Result::is_err));
+        drop(conn);
+        fs::remove_dir_all(home).unwrap();
+    }
 }

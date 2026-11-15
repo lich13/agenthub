@@ -52,7 +52,7 @@ printf '%s\n' "$*" >> '{}'
 case "$1" in
   print) test -f '{}' ;;
   bootstrap) touch '{}' ;;
-  kickstart) test "$2" != '-k' ;;
+  kickstart) exit 0 ;;
   bootout) rm -f '{}' ;;
   *) exit 2 ;;
 esac
@@ -126,6 +126,45 @@ esac
             .lines()
             .filter(|s| s.starts_with("bootstrap "))
             .count(),
+        1
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("bootout "))
+            .count(),
+        0
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("kickstart "))
+            .count(),
+        2
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("kickstart -k "))
+            .count(),
+        1
+    );
+    std::fs::write(upgraded.plist_path.as_ref().unwrap(), "stale plist").unwrap();
+    let reloaded = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        true,
+        true,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap();
+    assert!(reloaded.changed && reloaded.loaded);
+    let recorded = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("bootstrap "))
+            .count(),
         2
     );
     assert_eq!(
@@ -140,7 +179,7 @@ esac
             .lines()
             .filter(|s| s.starts_with("kickstart "))
             .count(),
-        1
+        2
     );
 
     let disabled = ensure_probe_error_monitor_launch_agent_at(

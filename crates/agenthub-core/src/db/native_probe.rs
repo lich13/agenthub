@@ -52,14 +52,33 @@ impl PanelDb {
         config: &Config,
         local_claude_hooks: bool,
     ) -> Result<usize> {
+        self.stage_native_notifications_from_config(
+            provider,
+            scan,
+            &|| Ok(config.clone()),
+            local_claude_hooks,
+            true,
+        )
+    }
+
+    /// Read configuration under the same transaction used by settings saves.
+    pub fn stage_native_notifications_from_config(
+        &self,
+        provider: NativeProvider,
+        scan: &NativeScan,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
+        local_claude_hooks: bool,
+        full_scan: bool,
+    ) -> Result<usize> {
         let instance = if local_claude_hooks {
             Some(self.notification_instance_id()?)
         } else {
             None
         };
-        let enabled = provider.enabled(config);
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let config = &load_config()?;
+        let enabled = provider.enabled(config);
         let prior = tx
             .query_row(
                 "SELECT enabled,activated_ms,scanned_at FROM native_probe_providers WHERE provider=?1",
@@ -79,8 +98,14 @@ impl PanelDb {
         } else {
             prior.map_or(0, |(_, ts, _)| ts)
         };
-        tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms OR stream_count!=excluded.stream_count OR error_count!=excluded.error_count OR (excluded.enabled AND scanned_at!=excluded.scanned_at)",
+        if full_scan {
+            tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms OR stream_count!=excluded.stream_count OR error_count!=excluded.error_count OR (excluded.enabled AND scanned_at!=excluded.scanned_at)",
             params![provider.as_str(), enabled, activated_ms, Self::now(), scan.streams.len(), scan.errors])?;
+        } else {
+            tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,0,0,0)
+                ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms
+                WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms", params![provider.as_str(),enabled,activated_ms])?;
+        }
         if !enabled {
             tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'", params![provider.as_str(),Self::now()])?;
             tx.commit()?;
@@ -155,11 +180,12 @@ impl PanelDb {
                         let unrecorded_at_cursor = known_mutable_source
                             && event.position == cursor
                             && event.timestamp_ms >= activated_ms;
+                        let historical = !known_mutable_source && event.timestamp_ms < activated_ms;
                         if !reset
                             && ((!cursor_exempt
                                 && !unrecorded_at_cursor
                                 && event.position <= cursor)
-                                || (!known_mutable_source && event.timestamp_ms < activated_ms)
+                                || (historical && !provider.local_only())
                                 || (!provider.local_only()
                                     && !provider.event_enabled(config, &event.kind)))
                         {
@@ -189,6 +215,7 @@ impl PanelDb {
                             event: event.clone(),
                         };
                         let status = if reset
+                            || historical
                             || upgrade_historical_grokbot_completion
                             || !provider.event_enabled(config, &event.kind)
                         {
@@ -233,6 +260,55 @@ impl PanelDb {
         }
         tx.commit()?;
         Ok(queued)
+    }
+
+    pub(crate) fn native_notification_settings_changed(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        before: &Config,
+        after: &Config,
+        now_ms: i64,
+    ) -> Result<()> {
+        for provider in [
+            NativeProvider::Grok,
+            NativeProvider::GrokBot,
+            NativeProvider::Claude,
+            NativeProvider::Antigravity,
+            NativeProvider::Dsh,
+        ] {
+            if provider.enabled(before) == provider.enabled(after) {
+                continue;
+            }
+            let enabled = provider.enabled(after);
+            tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count)
+                VALUES(?1,?2,?3,0,0,0) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,
+                activated_ms=CASE WHEN excluded.enabled THEN excluded.activated_ms ELSE activated_ms END,scanned_at=0",
+                params![provider.as_str(),enabled,now_ms])?;
+            if enabled {
+                // Rebuild stream baselines after activation. A stream subsequently
+                // seen by a single hook is already known to later full scans.
+                tx.execute(
+                    "DELETE FROM native_probe_streams WHERE provider=?1",
+                    [provider.as_str()],
+                )?;
+            } else {
+                tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'",params![provider.as_str(),now_ms/1000])?;
+            }
+        }
+        if before.probe.notifications.enabled != after.probe.notifications.enabled {
+            self.sync_notification_channels_in_transaction(tx, before, now_ms)?;
+            self.sync_notification_channels_in_transaction(tx, after, now_ms)?;
+        }
+        Ok(())
+    }
+
+    /// A revoked native candidate must not create a completion in visible history.
+    pub fn skip_unclaimed_native_delivery(&self, key: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(conn.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2
+            WHERE event_key=?1 AND status='pending' AND NOT EXISTS
+            (SELECT 1 FROM probe_notification_deliveries WHERE event_key='native:' || ?1 AND channel='bark')",
+            params![key,Self::now()])? == 1)
     }
 
     pub fn native_probe_stream_cursor(
@@ -429,6 +505,243 @@ impl PanelDb {
 mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+
+    #[test]
+    fn settings_activation_precedes_hooks_and_partial_scans_preserve_full_baseline() {
+        use crate::services::settings::{apply_probe_settings_save_plan, ProbeSettingsSavePlan};
+        for provider in [
+            NativeProvider::Grok,
+            NativeProvider::Claude,
+            NativeProvider::Antigravity,
+            NativeProvider::Dsh,
+            NativeProvider::GrokBot,
+        ] {
+            let root = std::env::temp_dir()
+                .join(format!("agenthub-native-enable-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("config.toml");
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
+            let mut config = config();
+            config.security.secret_key = "11".repeat(32);
+            config.probe.notifications.enabled = false;
+            config.probe.notifications.notify_antigravity = true;
+            config.probe.notifications.notify_dsh = true;
+            config.probe.notifications.notify_dsh_completion = true;
+            config.probe.notifications.notify_antigravity_completion = true;
+            config.probe.notifications.notify_grokbot = true;
+            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+            let save = |enabled| {
+                apply_probe_settings_save_plan(
+                    &path,
+                    &db,
+                    ProbeSettingsSavePlan {
+                        config_patch: serde_json::from_value(
+                            json!({"probe":{"notifications":{"enabled":enabled}}}),
+                        )
+                        .unwrap(),
+                        secret_writes: vec![],
+                    },
+                )
+                .unwrap()
+            };
+            let enabled = save(true);
+            let activated: i64 = db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT activated_ms FROM native_probe_providers WHERE provider=?1",
+                    [provider.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let mut old = scan("old", 1, activated - 1);
+            let mut fresh = scan("fresh", 1, activated + 1);
+            for scan in [&mut old, &mut fresh] {
+                scan.streams[0].provider = provider;
+            }
+            if provider == NativeProvider::Claude {
+                assert!(db
+                    .claude_idle_after_baseline(&fresh.streams[0], &fresh.streams[0].events[0])
+                    .unwrap());
+                assert!(!db
+                    .claude_idle_after_baseline(&old.streams[0], &old.streams[0].events[0])
+                    .unwrap());
+            }
+            let partial = NativeScan {
+                streams: vec![old.streams[0].clone(), fresh.streams[0].clone()],
+                errors: 0,
+            };
+            assert_eq!(
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &partial,
+                    &|| Config::load(&path),
+                    false,
+                    false
+                )
+                .unwrap(),
+                1
+            );
+            let state: (i64, i64) = db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT activated_ms,scanned_at FROM native_probe_providers WHERE provider=?1",
+                    [provider.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(state, (activated, 0));
+            let pending = db.pending_native_deliveries(100, Some(provider)).unwrap();
+            assert_eq!(pending.len(), 1);
+            // The Bark channel uses the same save-time activation, even before its first scan.
+            assert!(db
+                .stage_notification_delivery(
+                    super::super::NotificationChannel::Bark,
+                    "fixture",
+                    activated + 1,
+                    &json!({"fixture":true})
+                )
+                .unwrap());
+            let mut other = scan("other", 1, activated + 1);
+            other.streams[0].provider = provider;
+            other.streams.extend(partial.streams);
+            assert_eq!(
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &other,
+                    &|| Config::load(&path),
+                    false,
+                    true
+                )
+                .unwrap(),
+                1
+            );
+            assert_eq!(
+                db.stage_native_notifications(provider, &other, &enabled)
+                    .unwrap(),
+                0
+            );
+            let disabled = save(false);
+            assert!(!provider.enabled(&disabled));
+            assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
+            assert_eq!(
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &other,
+                    &|| Config::load(&path),
+                    false,
+                    true
+                )
+                .unwrap(),
+                0
+            );
+            assert!(!db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT enabled FROM native_probe_providers WHERE provider=?1",
+                    [provider.as_str()],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap());
+            assert_eq!(
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT count(*) FROM native_probe_deliveries WHERE ciphertext IS NOT NULL",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            save(true);
+            assert!(db
+                .native_probe_stream_cursor(provider, &old.streams[0].session_key)
+                .unwrap()
+                .is_none());
+            if provider == NativeProvider::Antigravity {
+                // Re-enabling must forget pre-disable stream cursors, then let a
+                // single hook establish an in-place step before the full scan.
+                let mut waiting = scan("old", 2, activated - 1000);
+                waiting.streams[0].provider = provider;
+                waiting.streams[0].settled_count = 1;
+                assert_eq!(
+                    db.stage_native_notifications_from_config(
+                        provider,
+                        &waiting,
+                        &|| Config::load(&path),
+                        false,
+                        false
+                    )
+                    .unwrap(),
+                    0
+                );
+                let events = std::sync::Arc::make_mut(&mut waiting.streams[0].events);
+                events.last_mut().unwrap().turn_id = "new-request-on-existing-step".into();
+                assert_eq!(
+                    db.stage_native_notifications_from_config(
+                        provider,
+                        &waiting,
+                        &|| Config::load(&path),
+                        false,
+                        true
+                    )
+                    .unwrap(),
+                    1
+                );
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn revoked_candidate_closes_only_before_native_or_channel_claim() {
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let config = config();
+        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
+            .unwrap();
+        let current = scan("fixture", 3, chrono::Utc::now().timestamp_millis() + 1000);
+        db.stage_native_notifications(NativeProvider::Grok, &current, &config)
+            .unwrap();
+        let pending = db.pending_native_deliveries(100, None).unwrap();
+        assert!(db
+            .skip_unclaimed_native_delivery(&pending[0].event_key)
+            .unwrap());
+        assert!(!db
+            .skip_unclaimed_native_delivery(&pending[0].event_key)
+            .unwrap());
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        assert!(db.claim_native_delivery(&pending[1].event_key).unwrap());
+        assert!(!db
+            .skip_unclaimed_native_delivery(&pending[1].event_key)
+            .unwrap());
+        db.sync_notification_channels(&config).unwrap();
+        db.stage_notification_delivery(
+            super::super::NotificationChannel::Bark,
+            &format!("native:{}", pending[2].event_key),
+            chrono::Utc::now().timestamp_millis(),
+            &json!({}),
+        )
+        .unwrap();
+        assert!(!db
+            .skip_unclaimed_native_delivery(&pending[2].event_key)
+            .unwrap());
+        assert!(db.conn.lock().unwrap().query_row("SELECT ciphertext IS NULL AND nonce IS NULL FROM native_probe_deliveries WHERE event_key=?1",[&pending[0].event_key],|r|r.get::<_,bool>(0)).unwrap());
+    }
 
     #[test]
     fn pending_provider_filter_precedes_limit_and_decryption() {

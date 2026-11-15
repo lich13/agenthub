@@ -185,11 +185,6 @@ export function SessionBatchControls({
               </li>
             ))}
           </ul>
-          {batch.execute.error && (
-            <p role="alert" className="form-error">
-              {batch.execute.error.message}
-            </p>
-          )}
           <div className="button-row">
             <button
               type="button"

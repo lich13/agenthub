@@ -1124,3 +1124,63 @@ fn secret_and_pending_body_are_encrypted_and_status_never_returns_the_token() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn outcome_updates_related_events_incidents_and_native_rows_only() {
+    let fixture = Fixture::new();
+    let db = fixture.open();
+    db.sync_notification_channels(&fixture.config).unwrap();
+    for key in ["native:first", "native:other"] {
+        stage(&db, &fixture, NotificationChannel::Bark, key);
+    }
+    let conn = fixture.connection();
+    for (i, key) in ["first", "other"].into_iter().enumerate() {
+        conn.execute("INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at) VALUES(?1,'grok','{}',X'01',X'02','pending',1,1)",[key]).unwrap();
+        conn.execute("INSERT INTO probe_events(id,kind,source,payload_json,created_at) VALUES(?1,'completion','fixture',?2,1)",params![key,json!({"notification_event_key":format!("native:{key}"),"bark_status":"queued"}).to_string()]).unwrap();
+        conn.execute("INSERT INTO probe_error_incidents VALUES(?1,1,0,?2,'fixture','turn','fixture','hash','summary',?1,'pending',1,1)",params![key,i]).unwrap();
+    }
+    conn.execute("INSERT INTO probe_events(id,kind,source,payload_json,created_at) VALUES('legacy','completion','fixture','malformed legacy payload',1)",[]).unwrap();
+    let lease = claim(&db, "native:first");
+    finish(&db, &lease, &accepted());
+    assert_eq!(
+        conn.query_row(
+            "SELECT json_extract(payload_json,'$.bark_status') FROM probe_events WHERE id='first'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "sent"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT bark_status FROM probe_error_incidents WHERE incident_key='first'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "sent"
+    );
+    assert!(conn.query_row("SELECT status='sent' AND ciphertext IS NULL FROM native_probe_deliveries WHERE event_key='first'",[],|r|r.get::<_,bool>(0)).unwrap());
+    assert_eq!(
+        conn.query_row(
+            "SELECT json_extract(payload_json,'$.bark_status') FROM probe_events WHERE id='other'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "queued"
+    );
+    assert!(conn.query_row("SELECT status='pending' AND ciphertext IS NOT NULL AND updated_at=1 FROM native_probe_deliveries WHERE event_key='other'",[],|r|r.get::<_,bool>(0)).unwrap());
+    let mut disabled = fixture.config.clone();
+    disabled.probe.notifications.enabled = false;
+    db.sync_notification_channels(&disabled).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT bark_status FROM probe_error_incidents WHERE incident_key='other'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "skipped"
+    );
+}

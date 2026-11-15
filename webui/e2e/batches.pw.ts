@@ -287,3 +287,36 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await expect(page.getByRole("alert").filter({ hasText: "Fixture preview failure" })).toHaveCount(0);
   });
 }
+
+for (const provider of ["claude", "grok"] as const) {
+  test(`${provider} detail writes stay disabled during a batch preview`, async ({ page }) => {
+    await mockApi(page);
+    const summary = {
+      id: `${provider}-batch-fixture`, sessionKey: `${provider}:batch-fixture`, title: "Batch fixture",
+      cwd: "/isolated/workspace", path: "/isolated/session.jsonl", handoffPath: "/isolated/session.jsonl",
+      status: "recent", messageCount: 1, canRename: true, canDelete: true,
+    };
+    await mockCommand(page, `${provider}.list`, () => [summary]);
+    await mockCommand(page, `${provider}.detail`, () => ({ summary, events: [], totalEvents: 0, hasMore: false }));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let started = false;
+    await mockCommand(page, "sessions.bulkPreview", async args => {
+      started = true; await gate;
+      return { ...args.request, items: [] };
+    });
+    await page.goto("/");
+    await page.locator(".side-nav").getByRole("button", { name: provider === "claude" ? "Claude Code" : "Grok Build", exact: true }).click();
+    const row = page.locator(".provider-session").first();
+    await row.click();
+    const menuButton = page.getByRole("button", { name: provider === "claude" ? "Claude Code 任务操作" : "Grok 任务操作", exact: true });
+    await expect(menuButton).toBeVisible();
+    await row.click({ modifiers: ["Meta"] });
+    await page.getByRole("button", { name: "删除所选线程", exact: true }).click();
+    await expect.poll(() => started).toBe(true);
+    await menuButton.click();
+    await expect(page.getByRole("button", { name: "改名", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "删除任务文件", exact: true })).toBeDisabled();
+    release();
+  });
+}

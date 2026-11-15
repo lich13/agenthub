@@ -50,6 +50,7 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
     db.create_job("fixture-job", "probe_bark_test", "fixture")
         .unwrap();
     db.conn.lock().unwrap().execute_batch("INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at) VALUES('fixture','grok','',X'01',X'02','pending',1,2); INSERT INTO probe_notification_deliveries(event_key,channel,status,created_ms,updated_ms,queue_version,chunk_index,attempts) VALUES('native:fixture','bark','pending',1,2,1,3,4);").unwrap();
+    db.conn.lock().unwrap().execute_batch("DROP INDEX idx_native_probe_unfinished; DROP INDEX idx_probe_events_notification_key; DROP INDEX idx_probe_error_incidents_event;").unwrap();
     drop(db);
     for _ in 0..2 {
         let db = PanelDb::open_with_secret_box(
@@ -65,6 +66,12 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
         );
         assert!(db.job("fixture-job").unwrap().is_some());
         let conn = db.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('idx_native_probe_unfinished','idx_probe_events_notification_key','idx_probe_error_incidents_event')",[],|r|r.get::<_,usize>(0)).unwrap(),3);
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
         assert_eq!(
             conn.query_row(
                 "SELECT message FROM thread_followups WHERE id='historic'",

@@ -425,6 +425,12 @@ pub fn apply_probe_settings_save_plan(
                 write.secret_value.as_bytes(),
             )?;
         }
+        db.native_notification_settings_changed(
+            tx,
+            &before,
+            &config,
+            chrono::Utc::now().timestamp_millis(),
+        )?;
         crate::github_ci::settings_changed(tx, &before, &config)?;
         Ok(config)
     })

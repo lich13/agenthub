@@ -507,7 +507,7 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
         fs::write(&plist_path, desired)?;
     }
     let reload = changed || helper_changed;
-    if reload && loaded_before {
+    if changed && loaded_before {
         let status = Command::new(launchctl)
             .arg("bootout")
             .arg(&service)
@@ -518,7 +518,7 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
             "launchctl bootout stale Probe error monitor failed"
         );
     }
-    if reload || !loaded_before {
+    if changed || !loaded_before {
         let status = Command::new(launchctl)
             .arg("bootstrap")
             .arg(&domain)
@@ -530,15 +530,13 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
             "launchctl bootstrap Probe error monitor failed"
         );
     }
-    let loaded = Command::new(launchctl)
-        .arg("print")
-        .arg(&service)
-        .output()
-        .is_ok_and(|output| output.status.success());
-    anyhow::ensure!(loaded, "Probe error monitor LaunchAgent is not loaded");
-    if !reload && loaded_before {
-        let status = Command::new(launchctl)
-            .arg("kickstart")
+    if !changed && loaded_before {
+        let mut command = Command::new(launchctl);
+        command.arg("kickstart");
+        if helper_changed {
+            command.arg("-k");
+        }
+        let status = command
             .arg(&service)
             .status()
             .context("start Probe error monitor LaunchAgent")?;
@@ -547,6 +545,12 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
             "launchctl kickstart Probe error monitor failed"
         );
     }
+    let loaded = Command::new(launchctl)
+        .arg("print")
+        .arg(&service)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    anyhow::ensure!(loaded, "Probe error monitor LaunchAgent is not loaded");
     Ok(ProbeErrorMonitorLaunchAgentStatus {
         supported: true,
         enabled: true,

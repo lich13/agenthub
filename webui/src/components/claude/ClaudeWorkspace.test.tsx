@@ -13,7 +13,7 @@ const harness = vi.hoisted(() => ({
   sessions: [] as ClaudeSessionSummary[],
   target: "local",
   preview: vi.fn(),
-  remove: vi.fn(),
+  remove: vi.fn(), busy: false, rename: vi.fn(),
 }));
 
 vi.mock("react", async original => ({
@@ -38,13 +38,13 @@ vi.mock("../../lib/query/claude", () => ({
   useClaudeSessions: () => ({ data: harness.sessions }),
   useClaudeDetail: () => ({}),
   useClaudeActions: () => ({
-    rename: {}, diagnostics: {},
+    rename: { mutate: harness.rename, reset: vi.fn() }, diagnostics: {},
     preview: { mutate: harness.preview },
     remove: { reset: vi.fn(), mutate: harness.remove },
   }),
 }));
 vi.mock("../../lib/query/sessions", () => ({
-  useSessionSelection: () => ({ selection: [], busy: false, selecting: false }),
+  useSessionSelection: () => ({ selection: [], busy: harness.busy, selecting: false }),
 }));
 vi.mock("../../lib/useProviderWorkspace", () => ({
   useNarrowViewport: () => false,
@@ -56,7 +56,7 @@ type Element = ReactElement<Record<string, any>>;
 function elements(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement<Record<string, any>>(node)) return [];
-  return [node, ...elements(node.props.children), ...elements(node.props.sidebar)];
+  return [node, ...elements(node.props.children), ...elements(node.props.sidebar), ...elements(node.props.actions)];
 }
 function render(supported = false) {
   harness.index = 0;
@@ -117,4 +117,22 @@ test("the flat Claude list opens child history and returns without management ac
   opened.find(node => node.props["aria-label"] === "返回子智能体列表")!.props.onClick();
   expect(panel().find(node => node.type === ClaudeSubagentHistory)).toBeUndefined();
   expect(panel().find(node => node.props["data-agent-id"] === "fixture-child")).toBeDefined();
+});
+
+test("detail actions and an open rename form respect batch work", () => {
+  harness.cells.clear(); harness.busy = false; harness.preview.mockReset(); harness.rename.mockReset();
+  harness.sessions = [{ id: "fixture", sessionKey: "fixture-key", title: "Fixture", path: "/fixture/session.jsonl", cwd: "/fixture", messageCount: 1, status: "recent", canRename: true, canDelete: true }];
+  const renameButton = (tree: Element[]) => tree.find(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("改名"))!;
+  renameButton(render()).props.onClick();
+  harness.busy = true;
+  const tree = render();
+  expect(renameButton(tree).props.disabled).toBe(true);
+  const form = tree.find(node => node.props.ariaLabel === "Claude Code 任务名称")!;
+  expect(form.props.busy).toBe(true); form.props.onSubmit();
+  expect(harness.rename).not.toHaveBeenCalled();
+  const menus = tree.filter(node => Array.isArray(node.props.actions));
+  const deletion = menus.flatMap(node => node.props.actions).find(action => action.id === "delete");
+  expect(deletion.disabled).toBe(true); deletion.run();
+  expect(harness.preview).not.toHaveBeenCalled();
+  harness.busy = false;
 });

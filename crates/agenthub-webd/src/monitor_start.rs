@@ -1,11 +1,13 @@
 //! Existing monitor start implementation, split without changing dispatch order.
 use super::*;
 
-pub(super) fn spawn_probe_error_monitor(state: AppState) {
+pub(super) fn spawn_probe_error_monitor(state: AppState, config_path: PathBuf) {
     tokio::spawn(async move {
+        let cache = DaemonMonitorCache::default();
         loop {
             let config = state.config();
-            match run_probe_error_monitor_once(&state.db, &|| Ok(state.config())).await {
+            match run_probe_error_monitor_once(&state.db, &|| cache.load_config(&config_path)).await
+            {
                 Ok(outcome) if outcome.new_incidents > 0 => tracing::info!(
                     new_incidents = outcome.new_incidents,
                     "Probe error monitor processed Codex turn errors"
@@ -13,12 +15,19 @@ pub(super) fn spawn_probe_error_monitor(state: AppState) {
                 Ok(_) => tracing::debug!("Probe error monitor scan completed"),
                 Err(err) => tracing::warn!("Probe error monitor scan failed: {err}"),
             }
-            time::sleep(Duration::from_secs(
-                config.probe.poll_seconds.clamp(5, 3_600),
-            ))
+            wait_for_config_change(config.probe.poll_seconds.clamp(5, 3_600), || {
+                state.probe_settings_changed(&config.probe)
+            })
             .await;
         }
     });
+}
+
+async fn wait_for_config_change(seconds: u64, changed: impl Fn() -> bool) {
+    let deadline = time::Instant::now() + Duration::from_secs(seconds);
+    while !changed() && time::Instant::now() < deadline {
+        time::sleep_until(deadline.min(time::Instant::now() + Duration::from_secs(2))).await;
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -95,6 +104,7 @@ pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Resu
     let mut upgraded_hooks = false;
     let mut cache = DaemonMonitorCache::default();
     loop {
+        let stamp = config_stamp(&config_path);
         let poll_seconds = match cache.load_config(&config_path) {
             Ok(config) => {
                 if !upgraded_hooks {
@@ -119,13 +129,40 @@ pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Resu
                 15
             }
         };
-        time::sleep(Duration::from_secs(poll_seconds)).await;
+        wait_for_config_change(poll_seconds, || config_stamp(&config_path) != stamp).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn config_changes_wake_long_sleeps_without_increasing_scan_frequency() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let changed = Arc::new(AtomicBool::new(false));
+        let signal = changed.clone();
+        let start = time::Instant::now();
+        let wait = tokio::spawn(async move {
+            wait_for_config_change(3600, || signal.load(Ordering::SeqCst)).await;
+        });
+        tokio::task::yield_now().await;
+        time::advance(Duration::from_secs(1)).await;
+        assert!(!wait.is_finished());
+        changed.store(true, Ordering::SeqCst);
+        time::advance(Duration::from_secs(1)).await;
+        wait.await.unwrap();
+        assert_eq!(start.elapsed(), Duration::from_secs(2));
+        let start = time::Instant::now();
+        wait_for_config_change(5, || false).await;
+        assert_eq!(start.elapsed(), Duration::from_secs(5));
+        let start = time::Instant::now();
+        wait_for_config_change(3600, || true).await;
+        assert!(start.elapsed().is_zero());
+    }
 
     #[test]
     fn daemon_monitor_cache_reuses_unchanged_config_and_db_until_modified() {

@@ -27,6 +27,14 @@ pub fn codex_task_identity(paths: &CodexPaths, id: &str) -> Result<CodexTaskIden
     }
     let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let columns = table_columns(&conn, "threads")?;
+    codex_task_identity_from_connection(&conn, &columns, id)
+}
+
+pub(crate) fn codex_task_identity_from_connection(
+    conn: &Connection,
+    columns: &std::collections::HashSet<String>,
+    id: &str,
+) -> Result<CodexTaskIdentity> {
     if !columns.iter().any(|column| column == "id") {
         return Ok(CodexTaskIdentity::Unknown);
     }

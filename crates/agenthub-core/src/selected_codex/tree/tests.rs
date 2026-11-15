@@ -374,12 +374,20 @@ fn archive_and_restore_still_require_a_matching_preview() {
     )
     .unwrap();
     // Archive validation still rejects a partial/unreadable shared index.
-    assert!(super::super::preview_archive(&f.paths, ROOT, true).is_err());
+    assert!(
+        super::super::preview_archives(&f.paths, &[ROOT.into()], true)
+            .remove(0)
+            .is_err()
+    );
     fs::write(f.paths.session_index(), format!("{}\n", json!({"id":ROOT}))).unwrap();
-    let p = super::super::preview_archive(&f.paths, ROOT, true).unwrap();
+    let p = super::super::preview_archives(&f.paths, &[ROOT.into()], true)
+        .remove(0)
+        .unwrap();
     assert!(super::super::execute_archive(&f.paths, ROOT, true, "stale").is_err());
     super::super::execute_archive(&f.paths, ROOT, true, &p.fingerprint).unwrap();
-    let p = super::super::preview_archive(&f.paths, ROOT, false).unwrap();
+    let p = super::super::preview_archives(&f.paths, &[ROOT.into()], false)
+        .remove(0)
+        .unwrap();
     super::super::execute_archive(&f.paths, ROOT, false, &p.fingerprint).unwrap();
 }
 

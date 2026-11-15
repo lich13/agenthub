@@ -4,9 +4,9 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.23 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.24 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
-v2.1.23 fixes delayed Claude completion notifications, batch deletion ownership registration, and preview/execution state handling. CI notifications use successful observations from each repository, including bot baseline changes from configuration files. Codex batch previews share one inventory scan, Claude search reuses a parsed snapshot, and ordinary Mac launches or settings saves no longer force a monitor restart.
+v2.1.24 fixes lost first-hook notifications after enabling, revoked Claude completion events, and Mac helper reloads. Batch actions clear stale errors and coordinate detail writes. Codex search and attachments cover full history, Codex/Antigravity/DSH previews share batch scans, and notification outcomes update indexed event records.
 
 ## Highlights
 
@@ -98,7 +98,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.14**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.24**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (Tauri updater archive and Minisign signature);

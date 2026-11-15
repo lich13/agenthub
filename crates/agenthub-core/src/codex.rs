@@ -26,6 +26,7 @@ mod user_input;
 
 pub use app_server_client::CodexAppServerClient;
 pub use assistant_question::assistant_feedback_request;
+pub(crate) use identity::codex_task_identity_from_connection;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
 pub use mutations::set_thread_archived;
 pub use name_client::set_thread_title;

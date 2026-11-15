@@ -974,10 +974,14 @@ async fn first_delivery_reads_live_configuration_after_claiming_before_http() {
         let key = codex_key(&event);
         let load_config = || {
             let mut config = fixture.config.clone();
-            let claimed = fixture
-                .db
-                .notification_delivery_outcome(NotificationChannel::Bark, &key)?
-                .is_some_and(|outcome| outcome["status"] == "retrying");
+            // Observe the committed claim from an independent reader: production
+            // configuration loaders do not re-enter the PanelDb transaction.
+            let claimed = fixture.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries
+                 WHERE channel='bark' AND event_key=?1 AND status='delivering')",
+                [&key],
+                |row| row.get::<_, bool>(0),
+            )?;
             if claimed {
                 match change {
                     "target" => config.probe.notifications.server_url = replacement.url.clone(),

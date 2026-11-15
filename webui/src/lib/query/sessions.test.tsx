@@ -12,7 +12,7 @@ const observed = vi.hoisted(() => ({
   invalidate: vi.fn(),
   lifecycle: false, refs: [] as any[], refIndex: 0, effects: [] as (() => void)[],
   deps: [] as any[], effectIndex: 0, filter: "filtered", revision: 1,
-  pending: [false, false],
+  pending: [false, false], errors: [null, null] as (Error | null)[],
 }));
 vi.mock("react", async original => {
   const actual = await original<typeof import("react")>();
@@ -47,7 +47,7 @@ vi.mock("@tanstack/react-query", () => ({
     const index = observed.mutations.length;
     observed.mutations.push(options);
     const reset = vi.fn(); observed.resets.push(reset);
-    return { isPending: observed.lifecycle ? observed.pending[index] : observed.busy, reset, mutate: vi.fn() };
+    return { error: observed.errors[index], isPending: observed.lifecycle ? observed.pending[index] : observed.busy, reset, mutate: vi.fn() };
   },
 }));
 vi.mock("./connection", () => ({ useConnection: () => ({ revision: observed.revision, target: "local" }) }));
@@ -85,7 +85,7 @@ beforeEach(() => {
   observed.updates = []; observed.busy = false; observed.states = [];
   observed.mutations = []; observed.resets = []; observed.invalidate.mockReset();
   observed.lifecycle = false; observed.refs = []; observed.effects = []; observed.deps = [];
-  observed.filter = "filtered"; observed.revision = 1; observed.pending = [false, false];
+  observed.filter = "filtered"; observed.revision = 1; observed.pending = [false, false]; observed.errors = [null, null];
   vi.mocked(executeSessionBatch).mockReset(); vi.mocked(previewSessionBatch).mockReset();
 });
 test("native Edit Select All reaches the same selection action for only loaded filtered keys", () => {
@@ -236,4 +236,17 @@ test("single preview resets previous execution errors and cannot start while bus
   observed.busy = true; const busy = selection(["key"]);
   busy.prepareSingle("key", "delete", {} as HTMLElement);
   expect(observed.resets.at(-1)).not.toHaveBeenCalled();
+});
+
+test.each([0, 1])("selection clears old mutation %s errors even after selection has closed", mutation => {
+  for (const action of ["click", "cmd", "shift", "all"]) {
+    observed.mutations = []; observed.resets = []; observed.errors[mutation] = new Error("Old failure");
+    const batch = selection(["a", "b"]);
+    const open = vi.fn();
+    if (action === "all") batch.selectAll();
+    else batch.select("b", { detail: 1, metaKey: action === "cmd", shiftKey: action === "shift", ctrlKey: false }, open);
+    expect(observed.resets[0]).toHaveBeenCalledOnce();
+    expect(observed.resets[1]).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledTimes(action === "click" ? 1 : 0);
+  }
 });

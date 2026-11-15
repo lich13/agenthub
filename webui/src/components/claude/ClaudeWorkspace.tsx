@@ -180,8 +180,9 @@ export function ClaudeWorkspace({ capabilities }: { capabilities?: RuntimeCapabi
       label: "删除任务文件",
       icon: <Trash2 size={15} />,
       danger: true,
-      disabled: actions.preview.isPending,
+      disabled: actions.preview.isPending || batch.busy,
       run: () => {
+        if (batch.busy) return;
         actions.remove.reset();
         actions.preview.mutate(item.sessionKey, { onSuccess: setPreview });
       },
@@ -278,7 +279,7 @@ export function ClaudeWorkspace({ capabilities }: { capabilities?: RuntimeCapabi
               actions={
                 <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
                   <button
-                    disabled={!selected.canRename}
+                    disabled={!selected.canRename || batch.busy}
                     title={selected.renameBlockReason ?? undefined}
                     onClick={() => {
                       setTitle(selected.title);
@@ -307,8 +308,8 @@ export function ClaudeWorkspace({ capabilities }: { capabilities?: RuntimeCapabi
                 ariaLabel="Claude Code 任务名称"
                 value={title}
                 onChange={setTitle}
-                busy={actions.rename.isPending}
-                onSubmit={() =>
+                busy={actions.rename.isPending || batch.busy}
+                onSubmit={() => !batch.busy &&
                   actions.rename.mutate(
                     { sessionKey: selected.sessionKey, title },
                     { onSuccess: () => setRenaming(false) },
@@ -407,13 +408,13 @@ export function ClaudeWorkspace({ capabilities }: { capabilities?: RuntimeCapabi
           title={preview.title}
           paths={preview.paths ?? [preview.path]}
           summaryText={`${preview.fileCount} 个会话及专属文件，${preview.bytes.toLocaleString()} 字节。`}
-          busy={actions.remove.isPending}
+          busy={actions.remove.isPending || batch.busy}
           error={actions.remove.error}
           warnings={preview.warnings ?? undefined}
           residuals={actions.remove.data?.residuals ?? undefined}
           returnFocus={menuTrigger}
           onCancel={() => setPreview(null)}
-          onConfirm={() =>
+          onConfirm={() => !batch.busy &&
             actions.remove.mutate(
               { sessionKey: preview.sessionKey, confirmed: true },
               {

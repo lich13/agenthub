@@ -38,13 +38,14 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
         } else {
             NativeScan::default()
         };
-        db.stage_native_notifications_with_hooks(
+        db.stage_native_notifications_from_config(
             provider,
             &scan,
-            config,
+            load_config,
             provider == NativeProvider::Claude
                 && provider.enabled(config)
                 && super::claude_hook::installed(),
+            provider.enabled(config),
         )?;
     }
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
@@ -67,7 +68,7 @@ pub async fn run_provider_hook(
         streams: vec![],
         errors: 1,
     });
-    db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
+    db.stage_native_notifications_from_config(provider, &scan, &load_config, false, true)?;
     deliver_pending(&load_config, &db, Some(provider)).await
 }
 
@@ -84,7 +85,8 @@ pub async fn run_antigravity_hook(
     }
     let db = super::open_panel_db(&config)?;
     db.recover_interrupted_native_deliveries()?;
-    let scan = match conversation_id.filter(|id| !id.trim().is_empty()) {
+    let conversation_id = conversation_id.filter(|id| !id.trim().is_empty());
+    let scan = match conversation_id {
         Some(id) => super::antigravity::scan_one(id).await,
         None => super::antigravity::scan().await,
     }
@@ -92,7 +94,13 @@ pub async fn run_antigravity_hook(
         streams: vec![],
         errors: 1,
     });
-    db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
+    db.stage_native_notifications_from_config(
+        provider,
+        &scan,
+        &load_config,
+        false,
+        conversation_id.is_none(),
+    )?;
     deliver_pending(&load_config, &db, Some(provider)).await
 }
 
@@ -108,10 +116,21 @@ async fn deliver_pending(
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        if enabled && claude_completion_deferred(&delivery).await {
-            // Normal native work is not a failed Bark attempt. Keep the encrypted
-            // native event pending so a verified Stop hook can still claim it.
-            continue;
+        if enabled
+            && delivery.provider == NativeProvider::Claude
+            && delivery.event.kind == "completion"
+        {
+            use agenthub_core::claude::ClaudeNotificationState;
+            match notification_delivery::claude_native_state(db, &delivery).await {
+                Ok(ClaudeNotificationState::Pending) => continue,
+                Ok(ClaudeNotificationState::Obsolete)
+                    if db.skip_unclaimed_native_delivery(&delivery.event_key)? =>
+                {
+                    continue
+                }
+                // Read errors still enter the existing bounded delivery retry path.
+                _ => {}
+            }
         }
         // The delivery queue rechecks each source immediately before sending;
         // temporary read errors retain the existing bounded retries.
@@ -132,26 +151,6 @@ async fn deliver_pending(
         db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
     }
     Ok(())
-}
-
-async fn claude_completion_deferred(delivery: &agenthub_core::db::NativeDelivery) -> bool {
-    if delivery.provider != NativeProvider::Claude || delivery.event.kind != "completion" {
-        return false;
-    }
-    let delivery = delivery.clone();
-    agenthub_core::read_tasks::spawn_blocking(move || {
-        agenthub_core::claude::notification_context_for_key(
-            &agenthub_core::claude::ClaudePaths::default_for_user(),
-            &delivery.session_key,
-        )
-        .is_ok_and(|context| {
-            context.stream.id == delivery.thread_id
-                && context.stream.session_key == delivery.session_key
-                && context.completion_deferred(&delivery.event.turn_id)
-        })
-    })
-    .await
-    .unwrap_or(false)
 }
 
 pub(super) async fn scan(provider: NativeProvider) -> Result<NativeScan> {
@@ -312,7 +311,7 @@ mod tests {
                 let _ = self.0.wait();
             }
         }
-        for hook_first in [false, true] {
+        for (hook_first, revoked) in [(false, false), (true, false), (false, true), (true, true)] {
             let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
             let (mut config, root) = sandboxed_test_config();
             config.probe.notifications.enabled = true;
@@ -410,8 +409,45 @@ mod tests {
                     0
                 );
             }
+            let prompt_id = if revoked {
+                use std::io::Write;
+                let mut file = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .unwrap();
+                writeln!(file,"{}",json!({"type":"system","subtype":"turn_duration","sessionId":"fixture","timestamp":timestamp,"pendingBackgroundAgentCount":1})).unwrap();
+                drop(file);
+                agenthub_core::evict_idle_detail_caches(Duration::ZERO);
+                deliver_pending(&|| Ok(config.clone()), &db, None)
+                    .await
+                    .unwrap();
+                assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
+                assert!(db.list_probe_events(10).unwrap().is_empty());
+                let mut file = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .unwrap();
+                writeln!(file,"{}",json!({"type":"user","uuid":"wake","parentUuid":"answer","promptId":"prompt-wake","origin":{"kind":"task-notification"},"sessionId":"fixture","cwd":cwd,"version":"2.1.322","timestamp":timestamp,"message":{"role":"user","content":"Background finished"}})).unwrap();
+                writeln!(file,"{}",json!({"type":"assistant","uuid":"final","parentUuid":"wake","sessionId":"fixture","cwd":cwd,"version":"2.1.322","timestamp":timestamp,"message":{"role":"assistant","content":"Fixture ready","stop_reason":"end_turn"}})).unwrap();
+                drop(file);
+                agenthub_core::evict_idle_detail_caches(Duration::ZERO);
+                let final_scan = native_probe::scan(NativeProvider::Claude).unwrap();
+                assert_eq!(
+                    db.stage_native_notifications_with_hooks(
+                        NativeProvider::Claude,
+                        &final_scan,
+                        &config,
+                        true
+                    )
+                    .unwrap(),
+                    1
+                );
+                "prompt-wake"
+            } else {
+                "prompt-fixture"
+            };
             if hook_first {
-                let hook = crate::claude_hook::parse(&json!({"session_id":"fixture","prompt_id":"prompt-fixture","transcript_path":transcript,"hook_event_name":"Stop","last_assistant_message":"Fixture ready","background_tasks":[]})).unwrap().unwrap();
+                let hook = crate::claude_hook::parse(&json!({"session_id":"fixture","prompt_id":prompt_id,"transcript_path":transcript,"hook_event_name":"Stop","last_assistant_message":"Fixture ready","background_tasks":[]})).unwrap().unwrap();
                 notification_delivery::claude_hook(
                     &|| Ok(config.clone()),
                     &db,
@@ -433,6 +469,7 @@ mod tests {
             assert!(server.request().contains("Fixture ready"));
             let requests: u64 = rusqlite::Connection::open(db.path()).unwrap().query_row("SELECT SUM(attempts) FROM probe_notification_deliveries WHERE event_key LIKE 'native:%'", [], |r| r.get(0)).unwrap();
             assert_eq!(requests, 1);
+            assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
             assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
             drop(owner);
             fs::remove_dir_all(root).unwrap();
@@ -940,6 +977,25 @@ mod tests {
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
 
+        // Saving activation precedes every first hook/poll; no baseline scan has run.
+        let config_path = sandbox_root.join("config.toml");
+        let mut before = config.clone();
+        before.probe.notifications.enabled = false;
+        before.security.secret_key = "11".repeat(32);
+        std::fs::write(&config_path, toml::to_string(&before).unwrap()).unwrap();
+        config = agenthub_core::services::settings::apply_probe_settings_save_plan(
+            &config_path,
+            &db,
+            agenthub_core::services::settings::ProbeSettingsSavePlan {
+                config_patch: serde_json::from_value(
+                    serde_json::json!({"probe":{"notifications":{"enabled":true}}}),
+                )
+                .unwrap(),
+                secret_writes: vec![],
+            },
+        )
+        .unwrap();
+
         // 1. Codex via notify_completion_context + record_probe_event_with_bark
         let (codex_config, _codex_identity) =
             crate::notification_accuracy_tests::test_notification_config(&[
@@ -1035,14 +1091,13 @@ mod tests {
             "session_id": "00000000-0000-4000-8000-000000000002",
             "prompt_id": "prompt-self-test-1",
             "transcript_path": claude_transcript,
-            "hook_event_name": "Stop",
-            "last_assistant_message": "Claude self-test completed."
+            "hook_event_name": "Notification",
+            "notification_type": "idle_prompt",
+            "message": "Claude is waiting"
         }))
         .unwrap()
-        .expect("real claude hook parser must accept Stop payload");
+        .expect("real claude hook parser must accept idle_prompt payload");
         assert_eq!(claude_hook_event.kind, "completion");
-        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
-            .unwrap();
         crate::notification_delivery::claude_hook(
             &|| Ok(config.clone()),
             &db,
@@ -1167,11 +1222,15 @@ mod tests {
         ];
 
         for (provider, scan) in native_scans {
-            db.stage_native_notifications(provider, &NativeScan::default(), &config)
-                .unwrap();
             assert_eq!(
-                db.stage_native_notifications(provider, &scan, &config)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &scan,
+                    &|| Ok(config.clone()),
+                    false,
+                    provider != NativeProvider::Antigravity
+                )
+                .unwrap(),
                 1,
                 "provider {} must stage 1 completion notification",
                 provider.as_str()

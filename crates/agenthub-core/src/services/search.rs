@@ -189,7 +189,13 @@ impl SearchUseCases {
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let detail = match codex::thread_detail_from_summary(summary.clone()) {
+            let detail = match codex::thread_detail_page_from_summary(
+                summary.clone(),
+                false,
+                None,
+                None,
+                None,
+            ) {
                 Ok(detail) => detail,
                 Err(_) => {
                     push_warning(warnings);
@@ -865,6 +871,105 @@ mod tests {
             },
             local_grokbot: true,
         }
+    }
+
+    #[test]
+    fn codex_search_and_attachments_read_history_older_than_visual_compaction() {
+        use crate::user_message::SessionAttachmentRequest;
+        let root =
+            std::env::temp_dir().join(format!("agenthub-search-history-{}", uuid::Uuid::new_v4()));
+        let service = isolated_service(&root);
+        std::fs::create_dir_all(service.codex.sessions_dir()).unwrap();
+        let id = "11111111-1111-4111-8111-111111111111";
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=";
+        let mut rows = vec![json!({"type":"session_meta","payload":{"id":id,"source":"cli"}})];
+        for n in 0..100 {
+            let mut content = vec![
+                json!({"type":"input_text","text":if n==0 {"older-needle"} else {"recent fixture"}}),
+            ];
+            if n == 0 {
+                content.push(json!({"type":"input_image","image_url":format!("data:image/png;base64,{png}")}));
+            }
+            rows.push(json!({"type":"response_item","payload":{"id":format!("user-{n}"),"type":"message","role":"user","content":content}}));
+        }
+        let text = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+        let conn = rusqlite::Connection::open(service.codex.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,source TEXT,archived INTEGER,created_at INTEGER,updated_at INTEGER);").unwrap();
+        for compressed in [false, true] {
+            let path = service.codex.sessions_dir().join(if compressed {
+                "history.jsonl.zst"
+            } else {
+                "history.jsonl"
+            });
+            std::fs::write(
+                &path,
+                if compressed {
+                    zstd::encode_all(text.as_bytes(), 1).unwrap()
+                } else {
+                    text.as_bytes().to_vec()
+                },
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO threads VALUES(?1,'Fixture',?2,'cli',0,1,1)",
+                rusqlite::params![id, path.to_str().unwrap()],
+            )
+            .unwrap();
+            let summary = codex::local_thread_summary(&service.codex, id)
+                .unwrap()
+                .unwrap();
+            let full =
+                codex::thread_detail_page_from_summary(summary.clone(), false, None, None, None)
+                    .unwrap();
+            let old = full
+                .blocks
+                .iter()
+                .filter_map(|b| b.user_message.as_ref())
+                .find(|m| !m.attachments.is_empty())
+                .unwrap();
+            let compact = codex::thread_detail_from_summary(summary).unwrap();
+            assert!(!compact
+                .blocks
+                .iter()
+                .any(|b| b.user_message.as_ref().is_some_and(|m| m.id == old.id)));
+            for scope in [SearchScope::Thread, SearchScope::Provider] {
+                let found = service
+                    .search(SessionSearchRequest {
+                        provider: SessionProvider::Codex,
+                        scope,
+                        session_key: Some(id.into()),
+                        query: "older-needle".into(),
+                        cursor: None,
+                        limit: None,
+                    })
+                    .unwrap();
+                assert_eq!(found.results.len(), 1, "compressed={compressed}");
+                assert_eq!(
+                    found.results[0].position_key,
+                    full.blocks
+                        .iter()
+                        .find(|b| b.user_message.as_ref().is_some_and(|m| m.id == old.id))
+                        .unwrap()
+                        .id
+                );
+            }
+            let platform = crate::platform::PlatformPaths::desktop_current();
+            let sessions = crate::services::use_cases::AgentHubUseCases::new(&platform)
+                .sessions(service.codex.clone());
+            let response = sessions
+                .attachment_read(SessionAttachmentRequest {
+                    root_thread_id: None,
+                    provider: SessionProvider::Codex,
+                    session_key: id.into(),
+                    message_id: old.id.clone(),
+                    attachment_id: old.attachments[0].id.clone(),
+                })
+                .unwrap();
+            assert_eq!(response.mime_type, "image/png");
+            assert_eq!(response.base64, png);
+        }
+        drop(conn);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

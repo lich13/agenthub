@@ -165,8 +165,7 @@ pub async fn github_ci(
     db: &PanelDb,
     event: agenthub_core::github_ci::Event,
 ) -> Result<()> {
-    let config = &latest_config(load_config)?;
-    db.sync_notification_channels(config)?;
+    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     let key = event.key();
     if !agenthub_core::github_ci::event_current(db, config, &event)? {
         return Ok(());
@@ -211,8 +210,7 @@ pub async fn codex(
     bark_allowed: bool,
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
-    let config = &latest_config(load_config)?;
-    db.sync_notification_channels(config)?;
+    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     let key = codex_key(event);
     let title = event
         .payload
@@ -288,8 +286,7 @@ pub async fn native(
     delivery: &NativeDelivery,
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
-    let config = &latest_config(load_config)?;
-    db.sync_notification_channels(config)?;
+    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     let candidate = queued_candidate(
         config,
         db,
@@ -427,8 +424,7 @@ pub(super) async fn claude_hook(
     hook: super::claude_hook::HookEvent,
     timeout: Duration,
 ) -> Result<()> {
-    let config = &latest_config(load_config)?;
-    db.sync_notification_channels(config)?;
+    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     if !native_probe::NativeProvider::Claude.enabled(config)
         || !native_probe::NativeProvider::Claude.event_enabled(config, &hook.kind)
     {
@@ -752,9 +748,9 @@ async fn process(
         };
         // Source checks can yield while a scan runs. Refresh again before any HTTP
         // request, including another segment of the same queued notification.
-        let config = latest_config(load_config)?;
+        let mut config = latest_config(load_config)?;
         if channel.enabled(&config) != channel.enabled(&checked_config) {
-            db.sync_notification_channels(&config)?;
+            config = db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
         }
         let valid_source = valid_source
             && (!matches!(&candidate.source, Source::Codex { .. })
@@ -785,8 +781,8 @@ async fn process(
                 outcome.reason = Some("native_source_pending".into());
             }
             outcome
-        } else if super::claude_hook::installed()
-            && matches!(&candidate.source, Source::Native { delivery } if delivery.provider == native_probe::NativeProvider::Claude && delivery.event.prompt_id.is_none())
+        } else if matches!(&candidate.source, Source::Native { delivery } if delivery.provider == native_probe::NativeProvider::Claude && delivery.event.prompt_id.is_none())
+            && super::claude_hook::installed()
         {
             // Missing native promptId is not a license to use message uuid as
             // hook identity. Keep it in the existing bounded retry queue.
@@ -870,8 +866,7 @@ async fn process(
 pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> {
     let cache = super::monitor_start::DaemonMonitorCache::default();
     let load_config = || cache.load_config(config_path);
-    let config = load_config()?;
-    db.sync_notification_channels(&config)?;
+    let config = db.sync_notification_channels_from_config(&load_config)?;
     let key = format!("test:{}", uuid::Uuid::new_v4());
     let candidate = queued_candidate(
         &config,
@@ -976,51 +971,51 @@ async fn claude_source_state(
         Source::Native { delivery }
             if delivery.provider == native_probe::NativeProvider::Claude =>
         {
-            let delivery = delivery.clone();
-            let instance = db.notification_instance_id().unwrap_or_default();
-            Some(
-                agenthub_core::read_tasks::spawn_blocking(move || {
-                    let Ok(context) = agenthub_core::claude::notification_context_for_key(
-                        &agenthub_core::claude::ClaudePaths::default_for_user(),
-                        &delivery.session_key,
-                    ) else {
-                        return Pending;
-                    };
-                    let stream = &context.stream;
-                    if stream.id != delivery.thread_id
-                        || stream.session_key != delivery.session_key
-                        || (delivery.event.kind == "failure"
-                            && context.current_turn.as_ref() != Some(&delivery.event.turn_id))
-                    {
-                        return Obsolete;
-                    }
-                    let current = stream.events.iter().any(|event| {
-                        native_probe::same_event(event, &delivery.event)
-                            && (stream.event_key(&delivery.event) == delivery.event_key
-                                || event.prompt_id.as_deref().is_some_and(|p| {
-                                    stream.prompt_event_key(
-                                        p,
-                                        native_probe::event_category(event),
-                                        &instance,
-                                    ) == delivery.event_key
-                                }))
-                    });
-                    if !current {
-                        return Obsolete;
-                    }
-                    if delivery.event.kind == "completion"
-                        && context.completion_deferred(&delivery.event.turn_id)
-                    {
-                        return Pending;
-                    }
-                    Current
-                })
-                .await
-                .unwrap_or(Pending),
-            )
+            Some(claude_native_state(db, delivery).await.unwrap_or(Pending))
         }
         _ => None,
     }
+}
+
+pub(super) async fn claude_native_state(
+    db: &PanelDb,
+    delivery: &NativeDelivery,
+) -> Result<ClaudeNotificationState> {
+    use ClaudeNotificationState::*;
+    let delivery = delivery.clone();
+    let instance = db.notification_instance_id()?;
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        let context = agenthub_core::claude::notification_context_for_key(
+            &agenthub_core::claude::ClaudePaths::default_for_user(),
+            &delivery.session_key,
+        )?;
+        let stream = &context.stream;
+        if stream.id != delivery.thread_id
+            || stream.session_key != delivery.session_key
+            || (delivery.event.kind == "failure"
+                && context.current_turn.as_ref() != Some(&delivery.event.turn_id))
+        {
+            return Ok(Obsolete);
+        }
+        let current = stream.events.iter().any(|event| {
+            native_probe::same_event(event, &delivery.event)
+                && (stream.event_key(&delivery.event) == delivery.event_key
+                    || event.prompt_id.as_deref().is_some_and(|p| {
+                        stream.prompt_event_key(p, native_probe::event_category(event), &instance)
+                            == delivery.event_key
+                    }))
+        });
+        if !current {
+            return Ok(Obsolete);
+        }
+        if delivery.event.kind == "completion"
+            && context.completion_deferred(&delivery.event.turn_id)
+        {
+            return Ok(Pending);
+        }
+        Ok(Current)
+    })
+    .await?
 }
 
 async fn native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
@@ -1173,7 +1168,7 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
 }
 
 pub async fn retry_pending_with_config(db: &PanelDb, load_config: &ConfigLoader<'_>) -> Result<()> {
-    db.sync_notification_channels(&latest_config(load_config)?)?;
+    db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     for job in db.due_notification_deliveries(10)? {
         let candidate = match serde_json::from_value::<Candidate>(job.payload) {
             Ok(candidate) => candidate,

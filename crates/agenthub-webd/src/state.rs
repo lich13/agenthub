@@ -90,6 +90,10 @@ impl AppState {
         self.config.read().expect("config rwlock").clone()
     }
 
+    pub fn probe_settings_changed(&self, previous: &agenthub_core::config::ProbeConfig) -> bool {
+        &self.config.read().expect("config rwlock").probe != previous
+    }
+
     pub fn replace_config(&self, config: Config) {
         *self.config.write().expect("config rwlock") = config;
     }

@@ -183,11 +183,17 @@ impl SessionUseCases {
             SessionProvider::Dsh => {
                 return crate::dsh::sessions::read_attachment(&self.dsh, &request);
             }
-            SessionProvider::Codex => codex::thread_detail(&self.codex, &request.session_key)?
-                .into_iter()
-                .flat_map(|detail| detail.blocks)
-                .filter_map(|block| block.user_message)
-                .find(|message| message.id == request.message_id),
+            SessionProvider::Codex => {
+                codex::local_thread_summary(&self.codex, &request.session_key)?
+                    .map(|summary| {
+                        codex::thread_detail_page_from_summary(summary, false, None, None, None)
+                    })
+                    .transpose()?
+                    .into_iter()
+                    .flat_map(|detail| detail.blocks)
+                    .filter_map(|block| block.user_message)
+                    .find(|message| message.id == request.message_id)
+            }
             SessionProvider::Grok => {
                 grok::grok_session_detail_without_storage(&self.grok, &request.session_key)?
                     .events
@@ -239,6 +245,61 @@ impl SessionUseCases {
                     })
             })
             .collect();
+            return Ok(SessionBatchPreview {
+                provider: request.provider,
+                operation: request.operation,
+                items,
+            });
+        }
+        let batch = match request.provider {
+            SessionProvider::Codex => Some(
+                selected_codex::preview_archives(
+                    &self.codex,
+                    &request.session_keys,
+                    request.operation == SessionOperation::Archive,
+                )
+                .into_iter()
+                .map(|preview| {
+                    preview.map(|p| SessionBatchItem {
+                        session_key: p.id.clone(),
+                        id: p.id,
+                        title: p.title,
+                        paths: p.paths,
+                        bytes: p.bytes,
+                        allowed: true,
+                        reason: None,
+                        fingerprint: Some(p.fingerprint),
+                        descendants: Vec::new(),
+                        warnings: Vec::new(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            ),
+            SessionProvider::Antigravity => Some(crate::antigravity::sessions::preview_batch(
+                &self.antigravity,
+                &request.session_keys,
+                request.operation,
+                request.include_descendants,
+            )),
+            SessionProvider::Dsh if request.operation == SessionOperation::Delete => {
+                Some(crate::dsh::sessions::preview_delete_batch(
+                    &self.dsh,
+                    &request.session_keys,
+                    request.include_descendants,
+                ))
+            }
+            _ => None,
+        };
+        if let Some(batch) = batch {
+            let items = batch
+                .into_iter()
+                .zip(&request.session_keys)
+                .map(|(item, key)| {
+                    item.unwrap_or_else(|error| {
+                        self.blocked_item(request.provider, key, format!("{error:#}"), None)
+                    })
+                })
+                .collect();
             return Ok(SessionBatchPreview {
                 provider: request.provider,
                 operation: request.operation,
@@ -363,17 +424,8 @@ impl SessionUseCases {
                 warnings = p.warnings.unwrap_or_default();
                 (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }
-            SessionProvider::Codex => {
-                ensure!(
-                    codex::codex_task_identity(&self.codex, key)? == codex::CodexTaskIdentity::Main,
-                    "线程身份无法确认为主任务"
-                );
-                let p = selected_codex::preview_archive(
-                    &self.codex,
-                    key,
-                    operation == SessionOperation::Archive,
-                )?;
-                (p.id, p.title, p.paths, p.bytes, p.fingerprint)
+            SessionProvider::Codex | SessionProvider::Antigravity => {
+                unreachable!("provider preview handled as a batch")
             }
             SessionProvider::Grok => {
                 let p = grok.map_or_else(
@@ -381,14 +433,6 @@ impl SessionUseCases {
                     |context| context.preview(key),
                 )?;
                 (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
-            }
-            SessionProvider::Antigravity => {
-                return crate::antigravity::sessions::preview_batch_item(
-                    &self.antigravity,
-                    key,
-                    operation,
-                    include_descendants,
-                );
             }
             SessionProvider::Dsh => {
                 return crate::dsh::sessions::preview_batch_item(

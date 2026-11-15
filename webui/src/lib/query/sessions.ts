@@ -166,18 +166,14 @@ export function useSessionSelection(
     const modified = event.detail !== 0 && (event.shiftKey || isToggleSelectionClick(event));
     const next = clickSessionSelection(current, keys, key, event, activeKey);
     setState(next);
-    if (modified) {
+    if (modified || current.selecting || current.keys.length > 0 || prepare.error || execute.error) {
       epoch.current.value += 1;
       setPreview(null);
       setResult(null);
-    } else {
-      if (current.selecting || current.keys.length > 0) {
-        epoch.current.value += 1;
-        setPreview(null);
-        setResult(null);
-      }
-      open();
+      prepare.reset();
+      if (!execute.isPending) execute.reset();
     }
+    if (!modified) open();
   };
 
   const prepareBatch = (operation: SessionOperation, origin?: HTMLElement | null) => {
@@ -206,6 +202,8 @@ export function useSessionSelection(
     epoch.current.value += 1;
     setPreview(null);
     setResult(null);
+    prepare.reset();
+    if (!execute.isPending) execute.reset();
     setState(addSessionSelection({ ...current, keys: [] }, keys));
   };
 

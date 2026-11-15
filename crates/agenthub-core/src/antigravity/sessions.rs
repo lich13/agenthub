@@ -2395,6 +2395,16 @@ fn find_descendant_ids_with_live(
     all_live: Option<&Value>,
     root_id: &str,
 ) -> Result<Vec<String>> {
+    Ok(descendant_ids(
+        &read_children_map(paths, all_live)?,
+        root_id,
+    ))
+}
+
+fn read_children_map(
+    paths: &AntigravityPaths,
+    all_live: Option<&Value>,
+) -> Result<BTreeMap<String, Vec<String>>> {
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let db_path = paths.summaries_db();
     if db_path.is_file() {
@@ -2447,6 +2457,10 @@ fn find_descendant_ids_with_live(
             }
         }
     }
+    Ok(children_map)
+}
+
+fn descendant_ids(children_map: &BTreeMap<String, Vec<String>>, root_id: &str) -> Vec<String> {
     let mut result = BTreeSet::new();
     let mut stack = vec![root_id.to_owned()];
     while let Some(curr) = stack.pop() {
@@ -2458,7 +2472,7 @@ fn find_descendant_ids_with_live(
             }
         }
     }
-    Ok(result.into_iter().collect())
+    result.into_iter().collect()
 }
 
 fn owned_disk_paths(paths: &AntigravityPaths, id: &str) -> Vec<PathBuf> {
@@ -2495,16 +2509,60 @@ pub fn preview_batch_item(
     operation: SessionOperation,
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
-    let summary = session_summary_without_storage(paths, key)?;
-    let (live_rpc, all_live) = match connect_endpoint(paths)? {
-        Some((rpc, live)) => (
-            Some(rpc),
-            (operation == SessionOperation::Delete).then_some(live),
-        ),
-        None => (None, None),
-    };
+    preview_batch(paths, &[key.to_owned()], operation, include_descendants).remove(0)
+}
+
+pub fn preview_batch(
+    paths: &AntigravityPaths,
+    keys: &[String],
+    operation: SessionOperation,
+    include_descendants: bool,
+) -> Vec<Result<SessionBatchItem>> {
+    let context = (|| -> Result<_> {
+        let live = connect_endpoint(paths)?.map(|(_, payload)| payload);
+        let summaries = list_summaries_from_source(paths, None, live.as_ref())?
+            .into_iter()
+            .map(|summary| (summary.id.clone(), summary))
+            .collect::<BTreeMap<_, _>>();
+        let children = if operation == SessionOperation::Delete {
+            read_children_map(paths, live.as_ref())?
+        } else {
+            BTreeMap::new()
+        };
+        Ok((live, summaries, children))
+    })();
+    keys.iter()
+        .map(|key| {
+            valid_cascade_id(key)?;
+            let (live, summaries, children) = context
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+            let summary = summaries
+                .get(key)
+                .with_context(|| format!("未找到 Antigravity 会话：{key}"))?
+                .clone();
+            preview_from_summary(
+                paths,
+                summary,
+                live.as_ref(),
+                children,
+                operation,
+                include_descendants,
+            )
+        })
+        .collect()
+}
+
+fn preview_from_summary(
+    paths: &AntigravityPaths,
+    summary: ProviderSessionSummary,
+    all_live: Option<&Value>,
+    children: &BTreeMap<String, Vec<String>>,
+    operation: SessionOperation,
+    include_descendants: bool,
+) -> Result<SessionBatchItem> {
     if operation == SessionOperation::Delete
-        && (summary.status == "running" || is_cascade_running(all_live.as_ref(), &summary.id))
+        && (summary.status == "running" || is_cascade_running(all_live, &summary.id))
     {
         bail!(
             "{}",
@@ -2515,23 +2573,23 @@ pub fn preview_batch_item(
         );
     }
     if operation == SessionOperation::Delete
-        && live_rpc.is_none()
+        && all_live.is_none()
         && is_presence_locked_shared(paths, &summary.id)
     {
         bail!("会话当前已在 Antigravity 中打开，离线模式下无法安全删除");
     }
     let all_descendants = if operation == SessionOperation::Delete {
-        find_descendant_ids_with_live(paths, all_live.as_ref(), &summary.id)?
+        descendant_ids(children, &summary.id)
     } else {
         Vec::new()
     };
     if operation == SessionOperation::Delete {
         for child in &all_descendants {
             ensure!(
-                !is_cascade_running(all_live.as_ref(), child),
+                !is_cascade_running(all_live, child),
                 "子会话正在运行，请先在 Antigravity 中停止后再删除"
             );
-            if live_rpc.is_none() {
+            if all_live.is_none() {
                 ensure!(
                     !is_presence_locked_shared(paths, child),
                     "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
@@ -2745,6 +2803,64 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn batch_preview_reads_live_list_once_and_preserves_per_item_results() {
+        let root = env::temp_dir().join(format!("agenthub-ag-batch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        let ids: Vec<_> = (0..3).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let mut summaries = serde_json::Map::new();
+        for (n, id) in ids.iter().enumerate() {
+            fs::write(
+                root.join("conversations").join(format!("{id}.db")),
+                b"fixture",
+            )
+            .unwrap();
+            summaries.insert(id.clone(),json!({"summary":"Fixture","stepCount":2,"status":if n==1 {"CASCADE_RUN_STATUS_RUNNING"} else {"CASCADE_RUN_STATUS_IDLE"},"lastModifiedTime":"2026-01-01T00:00:00Z"}));
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.contains("GetAllCascadeTrajectories"));
+            let mut len = 0;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        len = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            reader.read_exact(&mut vec![0; len]).unwrap();
+            let body = json!({"trajectorySummaries":summaries}).to_string();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+        });
+        let paths = AntigravityPaths::with_fixed_rpc(root.clone(), port, "fixture-token");
+        let result = preview_batch(&paths, &ids, SessionOperation::Delete, true);
+        worker.join().unwrap();
+        assert!(result[0].is_ok());
+        assert!(result[1].is_err());
+        assert!(result[2].is_ok());
+        assert_eq!(result[0].as_ref().unwrap().id, ids[0]);
+        let offline = AntigravityPaths::offline(root.clone());
+        // Existing offline fixture behavior is exercised by the mutation tests.
+        assert!(preview_batch(
+            &offline,
+            &["invalid".into()],
+            SessionOperation::Delete,
+            true
+        )[0]
+        .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn offline_sqlite_pbtxt_and_transcript_support_all_five_actions() {

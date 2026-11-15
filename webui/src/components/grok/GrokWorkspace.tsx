@@ -155,8 +155,9 @@ export function GrokWorkspace({}: {}) {
       label: "删除任务文件",
       icon: <Trash2 size={15} />,
       danger: true,
-      disabled: actions.preview.isPending,
+      disabled: actions.preview.isPending || batch.busy,
       run: () => {
+        if (batch.busy) return;
         actions.remove.reset();
         actions.preview.mutate(item.id, { onSuccess: setPreview });
       },
@@ -236,6 +237,7 @@ export function GrokWorkspace({}: {}) {
               actions={
                 <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
                   <button
+                    disabled={batch.busy}
                     onClick={() => {
                       setTitle(selected.title);
                       setRenaming(true);
@@ -263,8 +265,8 @@ export function GrokWorkspace({}: {}) {
                 ariaLabel="Grok 任务名称"
                 value={title}
                 onChange={setTitle}
-                busy={actions.rename.isPending}
-                onSubmit={() =>
+                busy={actions.rename.isPending || batch.busy}
+                onSubmit={() => !batch.busy &&
                   actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) })
                 }
                 onCancel={() => setRenaming(false)}
@@ -296,12 +298,12 @@ export function GrokWorkspace({}: {}) {
           title={preview.title}
           paths={[preview.path]}
           summaryText={`${preview.fileCount} 个文件，${preview.bytes.toLocaleString()} 字节。仅删除此 session 目录；工作目录、worktree、配置与云端任务保留。`}
-          busy={actions.remove.isPending}
+          busy={actions.remove.isPending || batch.busy}
           error={actions.remove.error}
           residuals={actions.remove.data?.residuals}
           returnFocus={menuTrigger}
           onCancel={() => setPreview(null)}
-          onConfirm={() =>
+          onConfirm={() => !batch.busy &&
             actions.remove.mutate(
               { id: preview.id, confirmed: true, fingerprint: preview.fingerprint },
               {

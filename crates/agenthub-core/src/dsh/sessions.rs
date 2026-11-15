@@ -1533,12 +1533,64 @@ pub fn preview_batch_item_checked(
         .map(|index| index.archived)
         .unwrap_or_default();
     let root = find_root_session(paths, key)?;
-    let summary = build_summary(paths, &root, &archived);
     let all = if operation == SessionOperation::Delete {
         discover_all_sessions(paths)?
     } else {
-        vec![root]
+        vec![root.clone()]
     };
+    preview_from_sessions(
+        paths,
+        &root,
+        &archived,
+        &all,
+        operation,
+        include_descendants,
+    )
+}
+
+pub fn preview_delete_batch(
+    paths: &DshPaths,
+    keys: &[String],
+    include_descendants: bool,
+) -> Vec<Result<SessionBatchItem>> {
+    let context = (|| -> Result<_> {
+        check_host_dsh_stopped_for(paths)?;
+        let archived = registry(paths)?
+            .map(|index| index.archived)
+            .unwrap_or_default();
+        Ok((archived, discover_all_sessions(paths)?))
+    })();
+    keys.iter()
+        .map(|key| {
+            let (archived, all) = context
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+            valid_id(key)?;
+            let root = all
+                .iter()
+                .find(|session| session.id == *key && !session.is_subagent())
+                .with_context(|| format!("未找到 DeepSeek Harness 会话：{key}"))?;
+            preview_from_sessions(
+                paths,
+                root,
+                archived,
+                all,
+                SessionOperation::Delete,
+                include_descendants,
+            )
+        })
+        .collect()
+}
+
+fn preview_from_sessions(
+    paths: &DshPaths,
+    root: &DiscoveredSession,
+    archived: &BTreeSet<String>,
+    all: &[DiscoveredSession],
+    operation: SessionOperation,
+    include_descendants: bool,
+) -> Result<SessionBatchItem> {
+    let summary = build_summary(paths, root, archived);
     if operation == SessionOperation::Delete && !summary.can_delete {
         bail!(
             "{}",
@@ -1549,7 +1601,7 @@ pub fn preview_batch_item_checked(
         );
     }
     let all_descendants = if operation == SessionOperation::Delete {
-        find_subagent_descendants(&all, &summary.id)
+        find_subagent_descendants(all, &summary.id)
     } else {
         Vec::new()
     };
@@ -1570,7 +1622,7 @@ pub fn preview_batch_item_checked(
     };
     let mut all_ids = vec![summary.id.clone()];
     all_ids.extend(descendants.iter().cloned());
-    let target_paths = collect_owned_paths_for_ids(paths, &all, &all_ids);
+    let target_paths = collect_owned_paths_for_ids(paths, all, &all_ids);
     let (_, bytes) = session_delete::size(&target_paths);
     let stamp = file_stamp(&summary.path).ok();
     let fingerprint = hex::encode(Sha256::digest(format!(
@@ -1766,6 +1818,44 @@ pub fn execute_batch_item_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_batch_matches_single_previews_and_keeps_child_locks() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-batch-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        for (id, parent) in [("root", None), ("child", Some("root")), ("other", None)] {
+            let dir = home.join("sessions/project").join(id);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("session.v4.jsonl"),format!("{}\n",json!({"type":"session","version":4,"id":id,"origin":if parent.is_some(){"subagent"}else{"user"},"parentSession":parent,"cwd":"/workspace/fixture"}))).unwrap();
+        }
+        let keys = vec!["root".into(), "other".into(), "missing".into()];
+        let results = preview_delete_batch(&paths, &keys, true);
+        for (key, result) in keys[..2].iter().zip(&results) {
+            assert_eq!(
+                serde_json::to_value(result.as_ref().unwrap()).unwrap(),
+                serde_json::to_value(
+                    preview_batch_item_checked(&paths, key, SessionOperation::Delete, true, || Ok(
+                        ()
+                    ))
+                    .unwrap()
+                )
+                .unwrap()
+            );
+        }
+        assert_eq!(results[0].as_ref().unwrap().descendants, vec!["child"]);
+        assert!(results[2].is_err());
+        let root = find_root_session(&paths, "root").unwrap();
+        assert!(!is_session_locked_readonly(&root.dir));
+        let lock = try_acquire_session_lease(&home.join("sessions/project/child"))
+            .unwrap()
+            .unwrap();
+        let locked = preview_delete_batch(&paths, &keys, true);
+        assert!(locked[0].is_err());
+        assert!(locked[1].is_ok());
+        drop(lock);
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn projection_title_uses_first_prompt_and_keeps_the_last_preview() {

@@ -24,6 +24,17 @@ pub use notification_channels::{
     NOTIFICATION_LIFETIME_MS,
 };
 
+const NOTIFICATION_INDEXES: &str = "
+CREATE INDEX IF NOT EXISTS idx_native_probe_unfinished
+ ON native_probe_deliveries(status,created_at,event_key)
+ WHERE status='pending' OR status='delivering';
+CREATE INDEX IF NOT EXISTS idx_probe_events_notification_key
+ ON probe_events(json_extract(payload_json,'$.notification_event_key'))
+ WHERE json_valid(payload_json);
+CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_event
+ ON probe_error_incidents(event_id) WHERE event_id IS NOT NULL;
+";
+
 #[derive(Clone)]
 pub struct PanelDb {
     path: PathBuf,
@@ -117,7 +128,11 @@ impl PanelDb {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute_batch("PRAGMA foreign_keys=ON;")?;
             let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version >= SCHEMA_VERSION {
+            if version >= SCHEMA_VERSION && conn.query_row(
+                "SELECT count(*)=3 FROM sqlite_master WHERE type='index' AND name IN
+                 ('idx_native_probe_unfinished','idx_probe_events_notification_key','idx_probe_error_incidents_event')",
+                [], |row| row.get::<_, bool>(0),
+            )? {
                 return Ok(());
             }
         }
@@ -125,6 +140,7 @@ impl PanelDb {
         let mut conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version >= SCHEMA_VERSION {
+            conn.execute_batch(NOTIFICATION_INDEXES)?;
             return Ok(());
         }
         let populated: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')", [], |row| row.get(0))?;
@@ -245,6 +261,7 @@ impl PanelDb {
         )?;
         tx.execute_batch(desktop_submissions::SCHEMA)?;
         tx.execute_batch(notification_channels::SCHEMA)?;
+        tx.execute_batch(NOTIFICATION_INDEXES)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(())
