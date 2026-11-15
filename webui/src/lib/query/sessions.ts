@@ -182,8 +182,12 @@ export function useSessionSelection(
   };
 
   const clear = () => {
-    epoch.current.value += 1;
+    // Clearing a drawer must not interrupt a batch already being executed.
+    if (!execute.isPending) epoch.current.value += 1;
     setPreview(null);
+    setResult(null);
+    if (!prepare.isPending) prepare.reset();
+    if (!execute.isPending) execute.reset();
     setState({ ...current, selecting: false, keys: [], anchor: null, notice: null });
   };
 
@@ -212,6 +216,7 @@ export function useSessionSelection(
     if (!allowSelection) return;
     if (event.key === "Escape" && (selecting || selection.length > 0)) {
       event.preventDefault();
+      event.stopPropagation();
       clear();
       return;
     }
@@ -221,6 +226,7 @@ export function useSessionSelection(
       ((event.metaKey && event.key === "Backspace") || event.key === "Delete")
     ) {
       event.preventDefault();
+      event.stopPropagation();
       prepareBatch("delete", target);
     }
   };
@@ -250,14 +256,7 @@ export function useSessionSelection(
       setPreview(null);
       prepare.mutate({ operation, keys: [key] });
     },
-    cancel: () => {
-      epoch.current.value += 1;
-      setState(emptySessionSelection(scope));
-      setPreview(null);
-      setResult(null);
-      prepare.reset();
-      execute.reset();
-    },
+    cancel: clear,
     selectAll,
     clear,
     dismissPreview: () => {

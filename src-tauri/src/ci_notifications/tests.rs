@@ -219,3 +219,50 @@ fn observed_completion_in_baseline_second_notifies_but_unseen_history_does_not()
         assert_eq!(observer.observe(0, &state).len(), 1);
     }
 }
+
+#[test]
+fn bot_toggle_same_second_keeps_only_the_observed_attempt_with_a_current_repository() {
+    for (prior_status, attempt, seconds_before, readded, expected) in [
+        ("in_progress", 1, 0, false, 1),
+        ("in_progress", 1, 1, false, 0),
+        ("in_progress", 2, 0, false, 0),
+        ("completed", 1, 0, false, 0),
+        ("in_progress", 1, 0, true, 0),
+    ] {
+        let mut observer = Observer::default();
+        let mut state = snapshot();
+        state.runs = vec![run(
+            2,
+            prior_status,
+            (prior_status == "completed").then_some("cancelled"),
+            1,
+        )];
+        state.runs[0].is_bot = true;
+        let second = chrono::DateTime::parse_from_rfc3339(&state.runs[0].updated_at)
+            .unwrap()
+            .timestamp_millis();
+        state.last_scan_ms = second - 5000;
+        assert!(observer.observe(0, &state).is_empty());
+        state.bot_baseline_ms = second + 450;
+        if readded {
+            state.repository_baselines_ms.insert(2, second + 400);
+        }
+        state.runs[0].status = "completed".into();
+        state.runs[0].conclusion = Some("success".into());
+        state.runs[0].run_attempt = attempt;
+        state.runs[0].updated_at =
+            chrono::DateTime::from_timestamp_millis(second - seconds_before * 1000)
+                .unwrap()
+                .to_rfc3339();
+        let mut unseen = state.runs[0].clone();
+        unseen.id = 3;
+        state.runs.push(unseen);
+        state.last_scan_ms = second + 1000;
+        let events = observer.observe(0, &state);
+        assert_eq!(events.len(), expected);
+        if expected == 1 {
+            assert_eq!(events[0].run.id, 2);
+        }
+        assert!(observer.observe(0, &state).is_empty());
+    }
+}

@@ -527,22 +527,30 @@ fn record_activity(
 /// Recompute direct children independently of the parent's message window or stamp.
 /// Lifecycle fields belong to an event; status belongs to the current child turn.
 pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
+    let graph = read_graph(paths);
+    enrich_subagent_blocks_with_graph(paths, detail, graph.as_ref().ok());
+}
+
+fn enrich_subagent_blocks_with_graph(
+    paths: &CodexPaths,
+    detail: &mut ThreadDetail,
+    graph: Option<&HashMap<String, AgentRecord>>,
+) {
     let visible: HashSet<_> = detail.blocks.iter().map(|block| block.id.clone()).collect();
     detail.blocks.extend(
         std::mem::take(&mut detail.history_subagent_blocks)
             .into_iter()
             .filter(|block| !visible.contains(&block.id)),
     );
-    let graph = read_graph(paths);
     let mut collection = SubagentCollection {
         agents: Vec::new(),
         counts: SubagentCounts::default(),
-        complete: graph.is_ok(),
+        complete: graph.is_some(),
         warning: None,
     };
     let names = lifecycle::CreationNames::from_blocks(&detail.blocks);
     let mut current = HashMap::new();
-    if let Ok(graph) = &graph {
+    if let Some(graph) = graph {
         let mut records: Vec<_> = graph
             .values()
             .filter(|r| r.parents.contains(&detail.summary.id))
@@ -589,7 +597,7 @@ pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
             .as_deref()
             .is_none_or(|id| id == detail.summary.id)
         {
-            if let Ok(graph) = &graph {
+            if let Some(graph) = graph {
                 let records: Vec<_> = if let Some(id) = &explicit {
                     graph
                         .get(id)
@@ -760,7 +768,7 @@ fn verified_detail(
         current.parents == record.parents && validate_rollout(paths, current)? == path,
         "子智能体关联已变化，请重试"
     );
-    enrich_subagent_blocks(paths, &mut detail);
+    enrich_subagent_blocks_with_graph(paths, &mut detail, Some(&current_graph));
     Ok(SubagentDetailResponse {
         root_thread_id: request.root_thread_id.clone(),
         parent_thread_id: record

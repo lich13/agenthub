@@ -741,6 +741,22 @@ async fn inspect_steps_background_tasks(
     (tasks, has_active_child_processes)
 }
 
+type ChildrenByParent<'a> = BTreeMap<&'a str, Vec<&'a str>>;
+
+fn index_children_by_parent(summaries: &serde_json::Map<String, Value>) -> ChildrenByParent<'_> {
+    let mut children: ChildrenByParent<'_> = BTreeMap::new();
+    for (id, summary) in summaries {
+        if let Some(parent) = summary["parentConversationId"]
+            .as_str()
+            .or_else(|| summary["trajectoryMetadata"]["parentConversationId"].as_str())
+            .filter(|parent| !parent.is_empty())
+        {
+            children.entry(parent).or_default().push(id);
+        }
+    }
+    children
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn load_trajectory_with_context(
     client: &reqwest::Client,
@@ -750,6 +766,7 @@ async fn load_trajectory_with_context(
     id: &str,
     summary: &Value,
     summaries: &serde_json::Map<String, Value>,
+    children_by_parent: &ChildrenByParent<'_>,
     mut subagents: BTreeMap<String, antigravity::SubagentLiveness>,
     now_ms: i64,
     inspect_background: bool,
@@ -831,15 +848,13 @@ async fn load_trajectory_with_context(
                             .filter(|v| !v.is_empty())
                     })
                     .collect();
-                for (cand_id, cand_summary) in summaries {
-                    let parent_id = cand_summary["parentConversationId"]
-                        .as_str()
-                        .or_else(|| {
-                            cand_summary["trajectoryMetadata"]["parentConversationId"].as_str()
-                        })
-                        .unwrap_or("");
-                    if parent_id == sub_id && !settled_senders.contains(cand_id.as_str()) {
-                        children.insert(cand_id.clone());
+                for child in children_by_parent
+                    .get(sub_id.as_str())
+                    .into_iter()
+                    .flatten()
+                {
+                    if !settled_senders.contains(child) {
+                        children.insert((*child).to_owned());
                     }
                 }
                 for child_id in &children {
@@ -923,6 +938,7 @@ pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Resu
         cascade_id,
         summary,
         summaries,
+        &index_children_by_parent(summaries),
         subagents,
         now_ms,
         true,
@@ -963,6 +979,7 @@ async fn scan_at(
         "Antigravity source inventory exceeds limit"
     );
     let subagents_by_root = collect_subagents_by_root(summaries);
+    let children_by_parent = index_children_by_parent(summaries);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut scan = NativeScan::default();
     for (id, summary) in summaries {
@@ -1009,7 +1026,17 @@ async fn scan_at(
             continue;
         }
         let result = load_trajectory_with_context(
-            client, port, token, pid, id, summary, summaries, subagents, now_ms, !is_active,
+            client,
+            port,
+            token,
+            pid,
+            id,
+            summary,
+            summaries,
+            &children_by_parent,
+            subagents,
+            now_ms,
+            !is_active,
         )
         .await
         .and_then(|(response, ctx)| {

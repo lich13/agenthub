@@ -224,6 +224,8 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await toggle.focus();
     await page.keyboard.press("Meta+a");
     await expect(page.locator(`${row}.multi-selected`)).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(`${row}.multi-selected`)).toHaveCount(0);
     await toggle.click();
     const archived = page.locator(`.archived-list ${row}`);
     await expect(archived.first()).toBeVisible();
@@ -244,5 +246,35 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await expect(page.getByRole("button", { name: "恢复所选线程", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "全选", exact: true }).click();
     await expect(page.locator(`${row}.multi-selected`)).toHaveCount(await archived.count());
+    await toggle.click();
+    await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
+    await toggle.click();
+    await expect(page.locator(`.archived-list ${row}.multi-selected`)).toHaveCount(0);
+    let release!: () => void;
+    let started = false;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    await mockCommand(page, "sessions.bulkPreview", args => ({ ...args.request, items: args.request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Selected fixture", paths: [], bytes: 0, allowed: true, fingerprint: key })) }));
+    await mockCommand(page, "sessions.bulkExecute", async args => {
+      started = true;
+      await pending;
+      return { items: args.request.items.map((item: any) => ({ sessionKey: item.sessionKey, status: "succeeded" })) };
+    });
+    await archived.first().click({ modifiers: ["Meta"] });
+    await page.getByRole("button", { name: "恢复所选线程", exact: true }).click();
+    await page.getByRole("button", { name: "确认恢复 1 项", exact: true }).click();
+    await expect.poll(() => started).toBe(true);
+    await toggle.click();
+    await toggle.click();
+    await archived.first().click({ modifiers: ["Meta"] });
+    await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
+    release();
+    await expect(page.getByText("已完成 1 项，未完成 0 项", { exact: true })).toBeVisible();
+    await active.first().click({ modifiers: ["Meta"] });
+    await expect(page.locator(".batch-result-banner")).toHaveCount(0);
+    await mockCommand(page, "sessions.bulkPreview", () => { throw new Error("Fixture preview failure"); });
+    await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Fixture preview failure" })).toBeVisible();
+    await archived.first().click({ modifiers: ["Meta"] });
+    await expect(page.getByRole("alert").filter({ hasText: "Fixture preview failure" })).toHaveCount(0);
   });
 }

@@ -48,16 +48,16 @@ impl Observer {
             .map(|run| {
                 let key = (run.repository_id, run.id);
                 let eligible = run.notification_kind().is_some();
-                let source_baseline = snapshot
+                let repository_baseline = snapshot
                     .repository_baselines_ms
                     .get(&run.repository_id)
                     .copied()
-                    .unwrap_or(0)
-                    .max(if run.is_bot {
-                        snapshot.bot_baseline_ms
-                    } else {
-                        0
-                    });
+                    .unwrap_or(0);
+                let source_baseline = repository_baseline.max(if run.is_bot {
+                    snapshot.bot_baseline_ms
+                } else {
+                    0
+                });
                 let finished_ms = chrono::DateTime::parse_from_rfc3339(&run.updated_at)
                     .map_or(0, |time| time.timestamp_millis());
                 if !initial
@@ -69,7 +69,13 @@ impl Observer {
                         |(attempt, completed)| {
                             (*attempt != run.run_attempt || !completed)
                                 && (self.last_scan_ms >= source_baseline
-                                    || finished_ms > source_baseline)
+                                    || finished_ms > source_baseline
+                                    || (run.is_bot
+                                        && *attempt == run.run_attempt
+                                        && !completed
+                                        && self.last_scan_ms >= repository_baseline
+                                        && finished_ms.div_euclid(1000)
+                                            == snapshot.bot_baseline_ms.div_euclid(1000)))
                         },
                     )
                 {
@@ -79,7 +85,7 @@ impl Observer {
                         run: run.clone(),
                     });
                 }
-                (key, (run.run_attempt, eligible))
+                (key, (run.run_attempt, run.status == "completed"))
             })
             .collect();
         self.repositories = snapshot.scanned_repository_ids.clone();

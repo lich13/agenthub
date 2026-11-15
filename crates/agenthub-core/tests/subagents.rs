@@ -2011,3 +2011,22 @@ fn partial_child_records_keep_lifecycle_history_readable_and_status_unknown() {
         assert_eq!(fixture.snapshot(), before);
     }
 }
+
+#[test]
+fn child_detail_refreshes_nested_status_without_parent_rollout_changes() {
+    let fixture = NativeFixture::new(&[]);
+    let child = fixture.child(CHILD, ROOT, "/root/review", &[]);
+    let nested = fixture.child(
+        "grandchild",
+        CHILD,
+        "/root/review/nested",
+        &[event("task_started", "nested-one")],
+    );
+    let parent = fs::read(&child).unwrap();
+    assert_counts(&fixture.read(CHILD).unwrap().detail, [0, 1, 0, 0, 0, 0]);
+    append_jsonl(&nested, &[event("task_complete", "nested-one")]);
+    assert_counts(&fixture.read(CHILD).unwrap().detail, [0, 0, 1, 0, 0, 0]);
+    append_jsonl(&nested, &[event("task_started", "nested-two")]);
+    assert_counts(&fixture.read(CHILD).unwrap().detail, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(fs::read(child).unwrap(), parent);
+}

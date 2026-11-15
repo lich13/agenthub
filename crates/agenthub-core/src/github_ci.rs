@@ -996,23 +996,29 @@ fn reconcile_with_config(
             {
                 continue;
             }
-            let source_baseline = state
+            let repository_baseline = state
                 .snapshot
                 .repository_baselines_ms
                 .get(&run.repository_id)
                 .copied()
-                .unwrap_or(0)
-                .max(if run.is_bot {
-                    state.snapshot.bot_baseline_ms
-                } else {
-                    0
-                });
+                .unwrap_or(0);
+            let source_baseline = repository_baseline.max(if run.is_bot {
+                state.snapshot.bot_baseline_ms
+            } else {
+                0
+            });
             let newly_finished = previous.get(&(run.repository_id, run.id)).map_or_else(
                 || run.finished_ms() > state.baseline_ms.max(source_baseline),
                 |old| {
                     (old.run_attempt != run.run_attempt || old.status != "completed")
                         && (state.snapshot.last_scan_ms >= source_baseline
-                            || run.finished_ms() > source_baseline)
+                            || run.finished_ms() > source_baseline
+                            || (run.is_bot
+                                && old.run_attempt == run.run_attempt
+                                && old.status != "completed"
+                                && state.snapshot.last_scan_ms >= repository_baseline
+                                && run.finished_ms().div_euclid(1000)
+                                    == state.snapshot.bot_baseline_ms.div_euclid(1000)))
                 },
             );
             if newly_finished && pending.insert((run.repository_id, run.id, run.run_attempt)) {

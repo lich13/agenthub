@@ -851,6 +851,7 @@ async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication(
         root,
         &summary,
         &serde_json::Map::new(),
+        &BTreeMap::new(),
         BTreeMap::new(),
         chrono::Utc::now().timestamp_millis(),
         true,
@@ -897,6 +898,7 @@ async fn descendants_discovered_later_anchor_earlier_pending_work() {
         root,
         &json!({"trajectoryId":"fixture","status":"CASCADE_RUN_STATUS_IDLE"}),
         &summaries,
+        &index_children_by_parent(&summaries),
         BTreeMap::new(),
         now,
         true,
@@ -909,4 +911,63 @@ async fn descendants_discovered_later_anchor_earlier_pending_work() {
         "the later descendant timestamp must be present when evaluating the earlier branch"
     );
     assert!(context.subagents[second].unsettled_background);
+}
+
+#[tokio::test]
+async fn summary_parent_index_keeps_both_fields_and_excludes_settled_senders() {
+    let root = "11111111-1111-4111-8111-111111111111";
+    let child = "22222222-2222-4222-8222-222222222222";
+    let direct = "33333333-3333-4333-8333-333333333333";
+    let nested = "44444444-4444-4444-8444-444444444444";
+    let settled = "55555555-5555-4555-8555-555555555555";
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+        let observed = observed.clone();
+        async move {
+            let id = body["cascadeId"].as_str().unwrap();
+            observed.lock().unwrap().push(id.to_owned());
+            let mut steps = vec![json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:00Z"}})];
+            if id == root {
+                steps.push(json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","generic":{"name":"invoke_subagent","output":format!("Created the following subagent:\n{{\"conversationId\":\"{child}\"}}")},"metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:01Z"}}));
+            } else if id == child {
+                steps.push(json!({"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","status":"CORTEX_STEP_STATUS_DONE","systemMessage":{"agentMessage":{"sender":settled}},"metadata":{"executionId":"fixture"}}));
+            }
+            axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
+        }
+    }));
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let summaries = serde_json::Map::from_iter([
+        (direct.into(), json!({"parentConversationId":child})),
+        (
+            nested.into(),
+            json!({"trajectoryMetadata":{"parentConversationId":child}}),
+        ),
+        (settled.into(), json!({"parentConversationId":child})),
+        // A cycle in summary metadata must not cause another request for root.
+        (root.into(), json!({"parentConversationId":nested})),
+    ]);
+    let result = load_trajectory_with_context(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        0,
+        root,
+        &json!({"trajectoryId":"fixture"}),
+        &summaries,
+        &index_children_by_parent(&summaries),
+        BTreeMap::new(),
+        chrono::Utc::now().timestamp_millis(),
+        true,
+    )
+    .await;
+    task.abort();
+    result.unwrap();
+    let mut calls = calls.lock().unwrap().clone();
+    calls.sort();
+    assert_eq!(calls, vec![root, child, direct, nested]);
 }

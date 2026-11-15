@@ -66,15 +66,18 @@ pub fn is_sensitive_output_line(line: &str) -> bool {
 }
 
 pub fn redact_output(input: &str) -> String {
-    let mut out = Vec::new();
-    for line in input.lines() {
-        if is_sensitive_output_line(line) {
-            out.push("[redacted sensitive line]".to_string());
-        } else {
-            out.push(line.to_string());
+    let mut out = String::with_capacity(input.len());
+    for (index, line) in input.lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
         }
+        out.push_str(if is_sensitive_output_line(line) {
+            "[redacted sensitive line]"
+        } else {
+            line
+        });
     }
-    out.join("\n")
+    out
 }
 
 #[cfg(test)]
@@ -121,5 +124,21 @@ mod tests {
             redact_output("ok\nOPENAI_API_KEY=sk-secret\nPRIVATE_KEY=abc\naccess_key=abc\nend"),
             "ok\n[redacted sensitive line]\n[redacted sensitive line]\n[redacted sensitive line]\nend"
         );
+    }
+    #[test]
+    fn line_endings_empty_lines_and_unicode_keep_existing_output_shape() {
+        for (input, output) in [
+            ("", ""),
+            ("\n", ""),
+            ("\n\n", "\n"),
+            ("你好🦀\r\n\r\n末尾\n", "你好🦀\n\n末尾"),
+            ("a\r\nb\r", "a\nb\r"),
+            (
+                "\nTOKEN=fixture\r\n末尾\n",
+                "\n[redacted sensitive line]\n末尾",
+            ),
+        ] {
+            assert_eq!(redact_output(input), output);
+        }
     }
 }

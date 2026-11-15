@@ -115,87 +115,121 @@ impl PanelDb {
             0
         };
         let mut queued = 0;
-        for stream in &scan.streams {
-            let old = tx.query_row("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2", params![provider.as_str(),stream.session_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?))).optional()?;
-            let reset = baseline
-                || old.as_ref().is_some_and(|(identity, cursor)| {
-                    identity != &stream.identity
-                        || (provider != NativeProvider::GrokBot && *cursor > stream.record_count)
-                });
-            // Antigravity mutates a waiting step in place. A new request on a
-            // previously baselined step keeps that step's original timestamp.
-            let known_mutable_source = provider == NativeProvider::Antigravity && old.is_some();
-            let cursor = if reset {
-                if provider.local_only() {
-                    stream.settled_count.min(stream.record_count)
-                } else {
-                    stream.record_count
-                }
-            } else {
-                old.as_ref().map_or(0, |(_, cursor)| *cursor)
-            };
-            if !reset || provider.local_only() {
-                let now = Self::now();
-                for event in stream.events.iter() {
-                    let cursor_exempt =
-                        provider == NativeProvider::GrokBot && event.kind != "completion";
-                    let unrecorded_at_cursor = known_mutable_source
-                        && event.position == cursor
-                        && event.timestamp_ms >= activated_ms;
-                    if !reset
-                        && ((!cursor_exempt && !unrecorded_at_cursor && event.position <= cursor)
-                            || (!known_mutable_source && event.timestamp_ms < activated_ms)
-                            || (!provider.local_only()
-                                && !provider.event_enabled(config, &event.kind)))
-                    {
-                        continue;
-                    }
-                    let upgrade_historical_grokbot_completion = provider == NativeProvider::GrokBot
-                        && event.kind == "completion"
-                        && old.is_some()
-                        && event.timestamp_ms < grokbot_resume_cutoff_ms;
-                    let delivery = NativeDelivery {
-                        event_key: if let (NativeProvider::Claude, Some(instance), Some(prompt)) =
-                            (provider, instance.as_deref(), event.prompt_id.as_deref())
-                        {
-                            stream.prompt_event_key(prompt, &event.kind, instance)
-                        } else {
-                            stream.event_key(event)
-                        },
-                        provider,
-                        session_key: stream.session_key.clone(),
-                        thread_id: stream.id.clone(),
-                        title: redact_output(&stream.title),
-                        event: event.clone(),
-                    };
-                    let status = if reset
-                        || upgrade_historical_grokbot_completion
-                        || !provider.event_enabled(config, &event.kind)
-                    {
-                        "skipped"
+        if !scan.streams.is_empty() {
+            let mut read_cursor = tx.prepare("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2")?;
+            let mut insert_delivery = tx.prepare("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)")?;
+            let mut encrypt_delivery = tx.prepare(
+                "UPDATE native_probe_deliveries SET ciphertext=?2,nonce=?3 WHERE event_key=?1",
+            )?;
+            let mut touch_delivery = tx.prepare("UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped','unknown') AND updated_at<?3")?;
+            let mut write_cursor = tx.prepare("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at WHERE identity!=excluded.identity OR cursor!=excluded.cursor")?;
+            for stream in &scan.streams {
+                let old = read_cursor
+                    .query_row(params![provider.as_str(), stream.session_key], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?))
+                    })
+                    .optional()?;
+                let reset = baseline
+                    || old.as_ref().is_some_and(|(identity, cursor)| {
+                        identity != &stream.identity
+                            || (provider != NativeProvider::GrokBot
+                                && *cursor > stream.record_count)
+                    });
+                // Antigravity mutates a waiting step in place. A new request on a
+                // previously baselined step keeps that step's original timestamp.
+                let known_mutable_source = provider == NativeProvider::Antigravity && old.is_some();
+                let cursor = if reset {
+                    if provider.local_only() {
+                        stream.settled_count.min(stream.record_count)
                     } else {
-                        "pending"
-                    };
-                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),identity_record(&delivery, &stream.identity)?,status,now])?;
-                    if inserted > 0 && status == "pending" {
-                        let (ciphertext, nonce) =
-                            self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?;
-                        tx.execute("UPDATE native_probe_deliveries SET ciphertext=?2,nonce=?3 WHERE event_key=?1", params![delivery.event_key,ciphertext,nonce])?;
+                        stream.record_count
                     }
-                    if inserted == 0 && (cursor_exempt || event.position > stream.settled_count) {
-                        tx.execute(
-                            "UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped','unknown') AND updated_at<?3",
-                            params![delivery.event_key, now, now - 3600],
-                        )?;
-                    }
-                    if status == "pending" {
-                        queued += inserted;
+                } else {
+                    old.as_ref().map_or(0, |(_, cursor)| *cursor)
+                };
+                if !reset || provider.local_only() {
+                    let now = Self::now();
+                    for event in stream.events.iter() {
+                        let cursor_exempt =
+                            provider == NativeProvider::GrokBot && event.kind != "completion";
+                        let unrecorded_at_cursor = known_mutable_source
+                            && event.position == cursor
+                            && event.timestamp_ms >= activated_ms;
+                        if !reset
+                            && ((!cursor_exempt
+                                && !unrecorded_at_cursor
+                                && event.position <= cursor)
+                                || (!known_mutable_source && event.timestamp_ms < activated_ms)
+                                || (!provider.local_only()
+                                    && !provider.event_enabled(config, &event.kind)))
+                        {
+                            continue;
+                        }
+                        let upgrade_historical_grokbot_completion = provider
+                            == NativeProvider::GrokBot
+                            && event.kind == "completion"
+                            && old.is_some()
+                            && event.timestamp_ms < grokbot_resume_cutoff_ms;
+                        let delivery = NativeDelivery {
+                            event_key: if let (
+                                NativeProvider::Claude,
+                                Some(instance),
+                                Some(prompt),
+                            ) =
+                                (provider, instance.as_deref(), event.prompt_id.as_deref())
+                            {
+                                stream.prompt_event_key(prompt, &event.kind, instance)
+                            } else {
+                                stream.event_key(event)
+                            },
+                            provider,
+                            session_key: stream.session_key.clone(),
+                            thread_id: stream.id.clone(),
+                            title: redact_output(&stream.title),
+                            event: event.clone(),
+                        };
+                        let status = if reset
+                            || upgrade_historical_grokbot_completion
+                            || !provider.event_enabled(config, &event.kind)
+                        {
+                            "skipped"
+                        } else {
+                            "pending"
+                        };
+                        let inserted = insert_delivery.execute(params![
+                            delivery.event_key,
+                            provider.as_str(),
+                            identity_record(&delivery, &stream.identity)?,
+                            status,
+                            now
+                        ])?;
+                        if inserted > 0 && status == "pending" {
+                            let (ciphertext, nonce) =
+                                self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?;
+                            encrypt_delivery.execute(params![
+                                delivery.event_key,
+                                ciphertext,
+                                nonce
+                            ])?;
+                        }
+                        if inserted == 0 && (cursor_exempt || event.position > stream.settled_count)
+                        {
+                            touch_delivery.execute(params![delivery.event_key, now, now - 3600])?;
+                        }
+                        if status == "pending" {
+                            queued += inserted;
+                        }
                     }
                 }
+                let cursor = cursor.max(stream.settled_count.min(stream.record_count));
+                write_cursor.execute(params![
+                    provider.as_str(),
+                    stream.session_key,
+                    stream.identity,
+                    cursor,
+                    Self::now()
+                ])?;
             }
-            let cursor = cursor.max(stream.settled_count.min(stream.record_count));
-            tx.execute("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at WHERE identity!=excluded.identity OR cursor!=excluded.cursor",
-                params![provider.as_str(),stream.session_key,stream.identity,cursor,Self::now()])?;
         }
         tx.commit()?;
         Ok(queued)

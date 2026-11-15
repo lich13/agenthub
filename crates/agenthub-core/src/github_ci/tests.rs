@@ -1418,7 +1418,8 @@ fn whole_second_completions_use_observations_from_the_current_source_baseline() 
             second + 900,
         );
         assert!(state.pending.is_empty());
-        // A source cutoff changed since the running observation: do not replay it.
+        // A bot toggle within the completion second keeps an observed attempt;
+        // a repository re-add still discards the old observation.
         state.snapshot.runs = vec![running];
         if bot {
             state.snapshot.bot_baseline_ms = second + 600;
@@ -1437,7 +1438,7 @@ fn whole_second_completions_use_observations_from_the_current_source_baseline() 
             false,
             second + 950,
         );
-        assert!(state.pending.is_empty());
+        assert_eq!(state.pending.len(), usize::from(bot));
     }
 }
 
@@ -1546,4 +1547,55 @@ async fn current_config_is_checked_even_when_database_settings_are_unchanged() {
         .unwrap();
     assert!(load(&fixture.db).unwrap().snapshot.account.is_none());
     assert_eq!(monitor.active, None);
+}
+
+#[test]
+fn bot_toggle_same_second_requires_the_same_observed_unfinished_attempt() {
+    let second = 1_800_000_000_000;
+    for (old_status, attempt, finished_ms, expected) in [
+        ("in_progress", 1, second, 1),
+        ("in_progress", 1, second - 1000, 0),
+        ("in_progress", 2, second, 0),
+        ("completed", 1, second, 0),
+    ] {
+        let mut config = Config::default();
+        config.probe.notifications.github_ci_filter_bots = false;
+        let mut state = Stored::default();
+        let mut old = run(
+            1,
+            old_status,
+            (old_status == "completed").then_some("success"),
+            1,
+            second - 5000,
+        );
+        old.is_bot = true;
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![old],
+            &config,
+            true,
+            true,
+            second - 10000,
+        );
+        state.snapshot.last_scan_ms = second - 5000;
+        state.snapshot.bot_baseline_ms = second + 450;
+        let mut finished = run(1, "completed", Some("success"), attempt, finished_ms);
+        finished.is_bot = true;
+        let mut unseen = finished.clone();
+        unseen.id = 2;
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![finished, unseen],
+            &config,
+            true,
+            false,
+            second + 1000,
+        );
+        assert_eq!(state.pending.len(), expected);
+        if expected == 1 {
+            assert_eq!(state.pending[0].run.id, 1);
+        }
+    }
 }

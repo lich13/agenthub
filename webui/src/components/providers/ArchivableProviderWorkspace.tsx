@@ -94,7 +94,7 @@ export function ArchivableProviderWorkspace({
     handleBatchSucceeded,
     activeSelectedKey,
     () => {
-      if (archivedBatch.selecting || archivedBatch.selection.length) archivedBatch.clear();
+      archivedBatch.clear();
     },
   );
   const archivedBatch: SessionSelection = useSessionSelection(
@@ -104,7 +104,7 @@ export function ArchivableProviderWorkspace({
     handleBatchSucceeded,
     archivedSelectedKey,
     () => {
-      if (batch.selecting || batch.selection.length) batch.clear();
+      batch.clear();
     },
   );
 
@@ -340,16 +340,16 @@ export function ArchivableProviderWorkspace({
                 {queryEnabled && (
                   <div
                     className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}
-                    onKeyDown={event => {
-                      event.stopPropagation();
-                      archivedBatch.onListKeyDown(event, archivedOpen);
-                    }}
+                    onKeyDown={event => archivedBatch.onListKeyDown(event, archivedOpen)}
                   >
                     <button
                       type="button"
                       className="archived-toggle"
                       aria-expanded={archivedOpen}
-                      onClick={() => setArchivedOpen(open => !open)}
+                      onClick={() => {
+                        if (archivedOpen) archivedBatch.clear();
+                        setArchivedOpen(open => !open);
+                      }}
                     >
                       <ChevronRight size={14} className="archived-chevron" aria-hidden="true" />
                       <span>已归档</span>

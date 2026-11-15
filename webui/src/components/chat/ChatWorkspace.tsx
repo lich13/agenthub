@@ -240,7 +240,7 @@ function ThreadList({
     onBatchSucceeded,
     activeSelectedId,
     () => {
-      if (archivedBatch.selecting || archivedBatch.selection.length) archivedBatch.clear();
+      archivedBatch.clear();
     },
   );
   const archivedBatch: SessionSelection = useSessionSelection(
@@ -250,7 +250,7 @@ function ThreadList({
     onBatchSucceeded,
     archivedSelectedId,
     () => {
-      if (batch.selecting || batch.selection.length) batch.clear();
+      batch.clear();
     },
   );
   const rename = useReadOnlyThreadActions({});
@@ -396,16 +396,16 @@ function ThreadList({
         {!loading && !error && threads.length === 0 && <div className="muted-row">没有匹配任务</div>}
         <div
           className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}
-          onKeyDown={event => {
-            event.stopPropagation();
-            archivedBatch.onListKeyDown(event, archivedOpen);
-          }}
+          onKeyDown={event => archivedBatch.onListKeyDown(event, archivedOpen)}
         >
           <button
             type="button"
             className="archived-toggle"
             aria-expanded={archivedOpen}
-            onClick={() => setArchivedOpen(open => !open)}
+            onClick={() => {
+              if (archivedOpen) archivedBatch.clear();
+              setArchivedOpen(open => !open);
+            }}
           >
             <ChevronRight size={14} className="archived-chevron" aria-hidden="true" />
             <span>已归档</span>

@@ -3251,3 +3251,61 @@ fn dangling_main_link_still_owns_its_dedicated_directory() {
     assert!(!shared.exists());
     assert!(fs::symlink_metadata(&f.file).is_err());
 }
+
+#[test]
+fn jsonl_directories_are_rejected_from_cached_keys_and_filesystem_lookup() {
+    let f = Fixture::new();
+    f.complete();
+    let key = f.key();
+    fs::remove_file(&f.file).unwrap();
+    fs::create_dir(&f.file).unwrap();
+    let owned = f.file.join("keep.txt");
+    fs::write(&owned, "fixture").unwrap();
+    for cached in [true, false] {
+        if !cached {
+            LOCATED_SESSIONS
+                .lock()
+                .unwrap()
+                .remove(&(f.paths.projects.canonicalize().unwrap(), key.clone()));
+        }
+        assert!(preview_claude_delete(&f.paths, &key).is_err());
+        assert!(execute_claude_delete(
+            &f.paths,
+            ClaudeDeleteRequest {
+                session_key: key.clone(),
+                confirmed: true,
+                fingerprint: String::new(),
+            }
+        )
+        .is_err());
+        assert!(owned.exists());
+    }
+}
+
+#[test]
+fn missing_cached_main_preserves_another_projects_shared_data_and_jobs() {
+    let f = Fixture::new();
+    f.complete();
+    let key = f.key();
+    let other = f.paths.projects.join("other/native-fixture.jsonl");
+    fs::create_dir_all(other.parent().unwrap()).unwrap();
+    fs::write(&other, "fixture").unwrap();
+    fs::remove_file(&f.file).unwrap();
+    let side = f.paths.config.join("file-history/native-fixture/keep.txt");
+    fs::create_dir_all(side.parent().unwrap()).unwrap();
+    fs::write(&side, "fixture").unwrap();
+    // An unreadable jobs directory must not be consulted for a retained ID.
+    fs::write(f.paths.config.join("jobs"), "not a directory").unwrap();
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: key,
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(other.exists());
+    assert!(side.exists());
+}

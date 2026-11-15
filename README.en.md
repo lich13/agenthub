@@ -4,9 +4,9 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.21 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.22 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
-v2.1.21 fixes Claude session-directory ownership, CI settings races, and missed completions within the baseline second. Active and archived list selections remain exclusive. Antigravity releases raw child steps after extracting pending work, and Codex removes duplicate list processing. Notification summaries preserve ordinary exclamation marks and incomplete images, and stop formatting once the existing output budget is reached.
+v2.1.22 fixes archive drawer keyboard handling and stale selections, configuration cache refresh after atomic file replacement, Claude deletion boundaries, and CI completions in the second the bot filter is disabled. Notification scans reuse SQL statements, Antigravity reuses a parent index, and Codex child details reuse the verified relationship graph. RPC parsing and full-input redaction reduce intermediate copying and allocation.
 
 ## Highlights
 

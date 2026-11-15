@@ -20,7 +20,7 @@ impl RpcPayloadError {
 }
 
 pub(crate) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, RpcPayloadError> {
-    serde_json::from_value(value.clone()).map_err(|err| RpcPayloadError::new(err.to_string()))
+    T::deserialize(value).map_err(|err| RpcPayloadError::new(err.to_string()))
 }
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ pub(crate) fn rpc_payload_or_empty<T: DeserializeOwned>(
     if value.is_null() {
         serde_json::from_value(json!({}))
     } else {
-        serde_json::from_value(value.clone())
+        T::deserialize(value)
     }
     .map_err(|err| RpcPayloadError::new(err.to_string()))
 }
@@ -56,8 +56,10 @@ pub(crate) fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
     value: &Value,
     key: &str,
 ) -> Result<T, RpcPayloadError> {
-    let payload = value.get(key).cloned().unwrap_or_else(|| json!({}));
-    serde_json::from_value(payload).map_err(|err| RpcPayloadError::new(err.to_string()))
+    match value.get(key) {
+        Some(payload) => rpc_payload(payload),
+        None => rpc_payload(&json!({})),
+    }
 }
 
 pub(crate) fn rpc_required_string(value: &Value, key: &str) -> Result<String, RpcPayloadError> {
@@ -86,4 +88,44 @@ pub(crate) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String,
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+    #[serde(default)]
+    #[derive(Default)]
+    struct Request {
+        keys: Vec<String>,
+    }
+    #[test]
+    fn borrowed_requests_preserve_wrappers_null_defaults_and_parse_errors() {
+        let flat = json!({"keys":["first","第二个"]});
+        let request: Request = rpc_payload(&flat).unwrap();
+        assert_eq!(
+            rpc_wrapped_payload::<Request>(&json!({"request":flat,"ignored":true}), &["request"])
+                .unwrap(),
+            request
+        );
+        assert_eq!(
+            rpc_nested_payload_or_empty::<Request>(&json!({}), "request").unwrap(),
+            Request::default()
+        );
+        assert_eq!(
+            rpc_payload_or_empty::<Request>(&Value::Null).unwrap(),
+            Request::default()
+        );
+        assert!(
+            rpc_nested_payload_or_empty::<Request>(&json!({"request":null}), "request").is_err()
+        );
+        for invalid in [Value::Null, json!({"keys":false}), json!({"keys":[1]})] {
+            assert_eq!(
+                rpc_payload::<Request>(&invalid).unwrap_err().message(),
+                serde_json::from_value::<Request>(invalid)
+                    .unwrap_err()
+                    .to_string()
+            );
+        }
+    }
 }

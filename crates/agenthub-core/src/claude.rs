@@ -326,6 +326,20 @@ fn read_or_warning(path: &Path, summary_only: bool) -> Arc<Parsed> {
         })
     })
 }
+fn delete_file_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            ensure!(
+                meta.is_file() || meta.file_type().is_symlink(),
+                "Claude 会话不是普通文件或符号链接"
+            );
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
     ensure!(
         key.starts_with("claude:")
@@ -343,6 +357,7 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned())
     {
         if main_session_path(&root, &path) {
+            delete_file_exists(&path)?;
             return Ok(path);
         }
     }
@@ -352,7 +367,8 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .filter_entry(session_entry)
     {
         let entry = entry?;
-        if entry.path().extension().is_some_and(|ext| ext == "jsonl")
+        if (entry.file_type().is_file() || entry.file_type().is_symlink())
+            && entry.path().extension().is_some_and(|ext| ext == "jsonl")
             && key_for(&root, entry.path(), "") == key
         {
             return Ok(entry.into_path());
