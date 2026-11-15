@@ -228,10 +228,8 @@ fn compressed_thread_detail_page(
     limit: Option<usize>,
     before: Option<&str>,
 ) -> Result<ThreadDetail> {
-    use std::io::{BufRead, BufReader, Read};
-    let file = File::open(path)?;
-    let decoder = zstd::stream::read::Decoder::new(file)?;
-    let mut reader = BufReader::new(decoder.take(128 * 1024 * 1024));
+    use std::io::{BufRead, BufReader};
+    let mut reader = BufReader::new(crate::codex::rollout_file::open_reader(path)?);
     let mut line = Vec::new();
     let mut state = DetailState::default();
     loop {
@@ -338,6 +336,22 @@ fn compressed_thread_detail_page(
         }),
         history: None,
     })
+}
+
+pub(crate) fn valid_history_cursor(cursor: &str) -> bool {
+    let Some((kind, value)) = cursor.split_once(':') else {
+        return false;
+    };
+    match kind {
+        "b" => {
+            let (position, id) = value
+                .split_once(':')
+                .map_or((value, None), |(pos, id)| (pos, Some(id)));
+            position.parse::<usize>().is_ok() && id.is_none_or(|id| !id.is_empty())
+        }
+        "a" | "j" | "n" | "w" | "p" => !value.is_empty(),
+        _ => false,
+    }
 }
 
 fn history_end(blocks: &[Arc<MessageBlock>], before: Option<&str>) -> usize {

@@ -336,3 +336,65 @@ async fn startup_upgrade_is_idempotent_and_preserves_other_hooks_and_config() {
     );
     assert_eq!(fs::read_dir(&fixture.config.codex.home).unwrap().count(), 4);
 }
+
+#[tokio::test]
+async fn save_enable_then_immediate_question_survives_first_poll_and_stale_source_recheck() {
+    use agenthub_core::services::settings::{
+        apply_probe_settings_save_plan, ProbeSettingsSavePlan,
+    };
+    let mut fixture = Fixture::new(StatusCode::OK).await;
+    let path = fixture.root.join("config.toml");
+    fixture.config.probe.enabled = false;
+    fs::write(&path, toml::to_string(&fixture.config).unwrap()).unwrap();
+    let save = |enabled| {
+        apply_probe_settings_save_plan(
+            &path,
+            &fixture.db,
+            ProbeSettingsSavePlan {
+                config_patch: serde_json::from_value(json!({"probe":{"enabled":enabled}})).unwrap(),
+                secret_writes: vec![],
+            },
+        )
+        .unwrap()
+    };
+    let stale_disabled = fixture.config.clone();
+    fixture.config = save(true);
+    // Native event timestamps have millisecond resolution.
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    fixture.question("new-after-save");
+    let event = fixture.event("new-after-save");
+    let baseline = fixture
+        .db
+        .current_notification_baseline("probe_async_question_baseline")
+        .unwrap();
+    assert!(prepare_event(&stale_disabled, &fixture.db, event.clone())
+        .unwrap()
+        .suppression_reason
+        .is_some());
+    assert_eq!(
+        fixture
+            .db
+            .current_notification_baseline("probe_async_question_baseline")
+            .unwrap(),
+        baseline
+    );
+    run_with_threads(&|| Config::load(&path), &fixture.db, None)
+        .await
+        .unwrap();
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+    let stale_enabled = fixture.config.clone();
+    fixture.config = save(false);
+    prepare_event(&stale_enabled, &fixture.db, event).unwrap();
+    assert_eq!(
+        fixture
+            .db
+            .current_notification_baseline("probe_async_question_baseline")
+            .unwrap(),
+        None
+    );
+    fixture.config = save(true);
+    run_with_threads(&|| Config::load(&path), &fixture.db, None)
+        .await
+        .unwrap();
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+}

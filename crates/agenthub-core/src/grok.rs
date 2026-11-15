@@ -1317,15 +1317,25 @@ pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePrev
     DeletionContext::new(paths).preview(id)
 }
 
-pub(crate) struct DeletionContext<'a> {
-    paths: &'a GrokPaths,
+pub(crate) struct DeletionContext {
+    workspaces: Result<Vec<PathBuf>>,
 }
-impl<'a> DeletionContext<'a> {
-    pub(crate) fn new(paths: &'a GrokPaths) -> Self {
-        Self { paths }
+impl DeletionContext {
+    pub(crate) fn new(paths: &GrokPaths) -> Self {
+        Self {
+            workspaces: session_workspaces(paths),
+        }
+    }
+    fn locate(&self, id: &str) -> Result<Vec<PathBuf>> {
+        crate::session_delete::valid_id(id)?;
+        let workspaces = self
+            .workspaces
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+        locate_in_workspaces(workspaces, id)
     }
     pub(crate) fn summary(&self, id: &str) -> Result<GrokSessionSummary> {
-        let paths = locate_sessions(self.paths, id)?;
+        let paths = self.locate(id)?;
         let path = paths.first().context("Grok session not found")?;
         Ok(read_summary(path)
             .ok()
@@ -1333,7 +1343,7 @@ impl<'a> DeletionContext<'a> {
             .unwrap_or_else(|| fallback_summary(path)))
     }
     pub(crate) fn preview(&self, id: &str) -> Result<GrokDeletePreview> {
-        let paths = locate_sessions(self.paths, id)?;
+        let paths = self.locate(id)?;
         let (file_count, bytes) = crate::session_delete::size(&paths);
         Ok(GrokDeletePreview {
             id: id.into(),

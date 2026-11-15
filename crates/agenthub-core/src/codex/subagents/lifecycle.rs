@@ -209,57 +209,70 @@ struct CreationState {
     pending: HashMap<String, String>,
     stopped: bool,
 }
+static CREATION_CACHE: crate::jsonl_cache::JsonlCache<CreationState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_LIFECYCLE_CACHE_BYTES);
+
+pub(super) fn evict_idle(max_idle: std::time::Duration) {
+    CREATION_CACHE.evict_idle(max_idle);
+}
+
+fn consume_creation(state: &mut CreationState, line: &[u8]) -> Result<()> {
+    state.stopped |= line.len() > 20 * 1024 * 1024;
+    if state.stopped {
+        return Ok(());
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return Ok(());
+    };
+    let names = &mut state.names;
+    let pending = &mut state.pending;
+    let payload = value.get("payload").unwrap_or(&value);
+    match payload.get("type").and_then(Value::as_str) {
+        Some("function_call" | "custom_tool_call") => {
+            if let Some(agent) =
+                field(payload, &["name"]).and_then(|name| creation_activity(&name, payload))
+            {
+                if let Some(call) = field(payload, &["call_id"]) {
+                    ensure!(pending.len() < MAX_RECORDS, "子智能体创建记录过多");
+                    pending.insert(call, agent.name);
+                }
+            }
+        }
+        Some("function_call_output" | "custom_tool_call_output") => {
+            if let Some(name) = field(payload, &["call_id"]).and_then(|call| pending.remove(&call))
+            {
+                let raw = payload.get("output").unwrap_or(&Value::Null);
+                let parsed = raw
+                    .as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok());
+                let output = parsed.as_ref().unwrap_or(raw);
+                ensure!(names.names.len() < MAX_RECORDS, "子智能体创建记录过多");
+                names.names.push((
+                    field(output, &["agent_id", "thread_id", "id"]),
+                    field(output, &["task_name", "agent_path"]),
+                    name,
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 pub(super) fn creation_names(path: &Path) -> Result<CreationNames> {
-    static CACHE: crate::jsonl_cache::JsonlCache<CreationState> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_LIFECYCLE_CACHE_BYTES);
-    CACHE.read(
+    if crate::codex::rollout_file::is_compressed(path) {
+        let mut state = CreationState::default();
+        crate::codex::rollout_file::read_complete_lines(path, |line| {
+            consume_creation(&mut state, line)
+        })?;
+        return Ok(state.names);
+    }
+    CREATION_CACHE.read(
         path,
         |_| Ok(0),
         false,
-        |state, line, _, _| {
-            state.stopped |= line.len() > 20 * 1024 * 1024;
-            if state.stopped {
-                return Ok(());
-            }
-            let Ok(value) = serde_json::from_slice::<Value>(line) else {
-                return Ok(());
-            };
-            let names = &mut state.names;
-            let pending = &mut state.pending;
-            let payload = value.get("payload").unwrap_or(&value);
-            match payload.get("type").and_then(Value::as_str) {
-                Some("function_call" | "custom_tool_call") => {
-                    if let Some(agent) =
-                        field(payload, &["name"]).and_then(|name| creation_activity(&name, payload))
-                    {
-                        if let Some(call) = field(payload, &["call_id"]) {
-                            ensure!(pending.len() < MAX_RECORDS, "子智能体创建记录过多");
-                            pending.insert(call, agent.name);
-                        }
-                    }
-                }
-                Some("function_call_output" | "custom_tool_call_output") => {
-                    if let Some(name) =
-                        field(payload, &["call_id"]).and_then(|call| pending.remove(&call))
-                    {
-                        let raw = payload.get("output").unwrap_or(&Value::Null);
-                        let parsed = raw
-                            .as_str()
-                            .and_then(|s| serde_json::from_str::<Value>(s).ok());
-                        let output = parsed.as_ref().unwrap_or(raw);
-                        ensure!(names.names.len() < MAX_RECORDS, "子智能体创建记录过多");
-                        names.names.push((
-                            field(output, &["agent_id", "thread_id", "id"]),
-                            field(output, &["task_name", "agent_path"]),
-                            name,
-                        ));
-                    }
-                }
-                _ => {}
-            }
-
-            Ok(())
-        },
+        |state, line, _, _| consume_creation(state, line),
         |state, _| Ok(state.names.clone()),
         |state| {
             state

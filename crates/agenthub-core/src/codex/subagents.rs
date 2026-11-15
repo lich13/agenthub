@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File},
+    fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
@@ -240,7 +240,7 @@ fn validate_rollout(paths: &CodexPaths, record: &AgentRecord) -> Result<PathBuf>
         component = component.parent().context("子智能体路径无法验证")?;
     }
     ensure!(path.is_file(), "子智能体记录不是文件");
-    let file = File::open(&path)?;
+    let file = super::rollout_file::open_reader(&path)?;
     let mut reader = BufReader::new(file.take(512 * 1024));
     let mut line = String::new();
     while reader.read_line(&mut line)? > 0 {
@@ -318,76 +318,95 @@ impl Default for NativeState {
         }
     }
 }
+static NATIVE_CACHE: crate::jsonl_cache::JsonlCache<NativeState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_CACHE_BYTES);
+
+pub(super) fn evict_idle(max_idle: std::time::Duration) {
+    NATIVE_CACHE.evict_idle(max_idle);
+    lifecycle::evict_idle(max_idle);
+}
+
+fn consume_native(state: &mut NativeState, line: &[u8]) -> Result<()> {
+    if state.invalid || line.iter().all(u8::is_ascii_whitespace) {
+        return Ok(());
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        state.invalid = true;
+        return Ok(());
+    };
+    let mut status = state.status;
+    let mut turn = state.turn.take();
+    let pending = &mut state.pending;
+    let event = value.get("payload").unwrap_or(&value);
+    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+    let event_turn = field(event, &["turn_id", "turnId"]);
+    match kind {
+        "task_started" | "turn_started" | "turn/started" => {
+            turn = event_turn;
+            pending.clear();
+            status = SubagentStatus::Running;
+        }
+        "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted" | "turn/aborted"
+        | "turn_error" | "turn_failed"
+            if event_turn.is_none() || turn.is_none() || event_turn == turn =>
+        {
+            let terminal = field(event, &["status", "turn_status"]).unwrap_or_default();
+            status = if kind.contains("aborted")
+                || matches!(terminal.as_str(), "cancelled" | "canceled" | "interrupted")
+            {
+                SubagentStatus::Interrupted
+            } else if matches!(kind, "turn_error" | "turn_failed")
+                || matches!(terminal.as_str(), "failed" | "error")
+            {
+                SubagentStatus::Failed
+            } else if pending.is_empty() {
+                SubagentStatus::Completed
+            } else {
+                SubagentStatus::Unknown
+            };
+            pending.clear();
+        }
+        "function_call" | "custom_tool_call" => {
+            if let Some(call) = field(event, &["call_id", "callId"]) {
+                pending.insert(call);
+            }
+        }
+        "function_call_output" | "custom_tool_call_output" => {
+            if let Some(call) = field(event, &["call_id", "callId"]) {
+                pending.remove(&call);
+            }
+        }
+        "message"
+            if event.get("role").and_then(Value::as_str) == Some("user")
+                && status != SubagentStatus::Running =>
+        {
+            status = SubagentStatus::Unknown;
+        }
+        _ => {}
+    }
+
+    state.status = status;
+    state.turn = turn;
+    Ok(())
+}
+
 fn native_status(path: &Path) -> Result<SubagentStatus> {
-    static CACHE: crate::jsonl_cache::JsonlCache<NativeState> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_CACHE_BYTES);
-    CACHE.read(
+    if super::rollout_file::is_compressed(path) {
+        let mut state = NativeState::default();
+        let complete = super::rollout_file::read_complete_lines(path, |line| {
+            consume_native(&mut state, line)
+        })?;
+        return Ok(if complete && !state.invalid {
+            state.status
+        } else {
+            SubagentStatus::Unknown
+        });
+    }
+    NATIVE_CACHE.read(
         path,
         |_| Ok(0),
         false,
-        |state, line, _, _| {
-            if state.invalid || line.iter().all(u8::is_ascii_whitespace) {
-                return Ok(());
-            }
-            let Ok(value) = serde_json::from_slice::<Value>(line) else {
-                state.invalid = true;
-                return Ok(());
-            };
-            let mut status = state.status;
-            let mut turn = state.turn.take();
-            let pending = &mut state.pending;
-            let event = value.get("payload").unwrap_or(&value);
-            let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-            let event_turn = field(event, &["turn_id", "turnId"]);
-            match kind {
-                "task_started" | "turn_started" | "turn/started" => {
-                    turn = event_turn;
-                    pending.clear();
-                    status = SubagentStatus::Running;
-                }
-                "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted"
-                | "turn/aborted" | "turn_error" | "turn_failed"
-                    if event_turn.is_none() || turn.is_none() || event_turn == turn =>
-                {
-                    let terminal = field(event, &["status", "turn_status"]).unwrap_or_default();
-                    status = if kind.contains("aborted")
-                        || matches!(terminal.as_str(), "cancelled" | "canceled" | "interrupted")
-                    {
-                        SubagentStatus::Interrupted
-                    } else if matches!(kind, "turn_error" | "turn_failed")
-                        || matches!(terminal.as_str(), "failed" | "error")
-                    {
-                        SubagentStatus::Failed
-                    } else if pending.is_empty() {
-                        SubagentStatus::Completed
-                    } else {
-                        SubagentStatus::Unknown
-                    };
-                    pending.clear();
-                }
-                "function_call" | "custom_tool_call" => {
-                    if let Some(call) = field(event, &["call_id", "callId"]) {
-                        pending.insert(call);
-                    }
-                }
-                "function_call_output" | "custom_tool_call_output" => {
-                    if let Some(call) = field(event, &["call_id", "callId"]) {
-                        pending.remove(&call);
-                    }
-                }
-                "message"
-                    if event.get("role").and_then(Value::as_str) == Some("user")
-                        && status != SubagentStatus::Running =>
-                {
-                    status = SubagentStatus::Unknown;
-                }
-                _ => {}
-            }
-
-            state.status = status;
-            state.turn = turn;
-            Ok(())
-        },
+        |state, line, _, _| consume_native(state, line),
         |state, info| {
             Ok(if info.partial || state.invalid {
                 SubagentStatus::Unknown
@@ -789,10 +808,7 @@ pub fn read_subagent_detail(
 ) -> Result<SubagentDetailResponse> {
     if let Some(cursor) = &request.before {
         ensure!(
-            cursor
-                .strip_prefix("b:")
-                .and_then(|s| s.parse::<usize>().ok())
-                .is_some(),
+            super::rollout_events::valid_history_cursor(cursor),
             "无效的历史游标"
         );
     }

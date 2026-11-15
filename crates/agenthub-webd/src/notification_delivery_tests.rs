@@ -1946,3 +1946,49 @@ async fn large_source_proof_keeps_retry_and_detects_rewrites() {
     rewrite.write_all(b"x").unwrap();
     assert!(!same_source(&fixture.rollout, &proof));
 }
+
+#[tokio::test]
+async fn explicit_bark_test_remains_available_when_probe_is_off() {
+    let mut fixture = Fixture::new().await;
+    fixture.config.probe.enabled = false;
+    let path = fixture.root.join("config.toml");
+    fs::write(&path, toml::to_string(&fixture.config).unwrap()).unwrap();
+    let outcome = test(&path, &fixture.db).await.unwrap();
+    assert!(outcome.sent);
+    assert_eq!(fixture.bark.count(), 1);
+    fixture.config.probe.notifications.enabled = false;
+    fs::write(&path, toml::to_string(&fixture.config).unwrap()).unwrap();
+    let outcome = test(&path, &fixture.db).await.unwrap();
+    assert!(!outcome.sent && outcome.skipped);
+    assert_eq!(fixture.bark.count(), 1);
+}
+
+#[tokio::test]
+async fn error_monitor_switch_stops_its_retry_without_disabling_other_codex_events() {
+    let mut fixture = Fixture::new().await;
+    fixture.config.probe.error_monitor.enabled = false;
+    let ordinary = fixture.event();
+    let mut error = ordinary.clone();
+    error.payload["scan_source"] = json!("logs_2-turn-error");
+    let outcome = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &error,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.skipped && !outcome.sent);
+    let outcome = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &ordinary,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.sent);
+    assert_eq!(fixture.bark.count(), 1);
+}

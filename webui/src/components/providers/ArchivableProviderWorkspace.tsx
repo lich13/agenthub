@@ -188,6 +188,7 @@ export function ArchivableProviderWorkspace({
   }, [detail.data?.summary.archived, detail.data?.summary.sessionKey, pendingSearch]);
 
   const handleArchiveToggle = (item: ProviderSessionSummary) => {
+    if (anyBatchBusy) return;
     actions.archive.reset();
     actions.restore.reset();
     const mutation = item.archived ? actions.restore : actions.archive;
@@ -218,7 +219,7 @@ export function ArchivableProviderWorkspace({
       label: item.archived ? "恢复" : "归档",
       icon: item.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />,
       disabled:
-        !item.canArchive || targetBatch.busy || actions.archive.isPending || actions.restore.isPending,
+        !item.canArchive || anyBatchBusy || actions.archive.isPending || actions.restore.isPending,
       reason: !item.canArchive ? item.archiveBlockReason : null,
       run: () => handleArchiveToggle(item),
     },
@@ -246,7 +247,7 @@ export function ArchivableProviderWorkspace({
       label: "永久删除",
       icon: <Trash2 size={15} />,
       danger: true,
-      disabled: !item.canDelete || targetBatch.busy,
+      disabled: !item.canDelete || anyBatchBusy,
       reason: !item.canDelete ? item.deleteBlockReason : null,
       run: () => targetBatch.prepareSingle(item.sessionKey, "delete", returnFocus),
     },
@@ -269,7 +270,7 @@ export function ArchivableProviderWorkspace({
         <RenameableSession
           title={providerSessionLabel(item)}
           className={`provider-session ${isSelected ? "selected" : ""}`}
-          disabled={targetBatch.busy}
+          disabled={anyBatchBusy}
           selecting={targetBatch.selecting}
           selected={isSelected}
           multiSelected={targetBatch.selection.includes(item.sessionKey)}
@@ -299,6 +300,7 @@ export function ArchivableProviderWorkspace({
   };
 
   const anyBatchBusy = batch.busy || archivedBatch.busy;
+  useEffect(() => { if (anyBatchBusy) setRenaming(false); }, [anyBatchBusy]);
   const activeDetailBatch = selected?.archived ? archivedBatch : batch;
 
   return (
@@ -456,13 +458,14 @@ export function ArchivableProviderWorkspace({
               ariaLabel={`${label} 任务名称`}
               value={title}
               onChange={setTitle}
-              busy={actions.rename.isPending}
-              onSubmit={() =>
+              busy={anyBatchBusy || actions.rename.isPending}
+              onSubmit={() => {
+                if (anyBatchBusy) return;
                 actions.rename.mutate(
                   { sessionKey: selected.sessionKey, title },
                   { onSuccess: () => setRenaming(false) },
-                )
-              }
+                );
+              }}
               onCancel={() => setRenaming(false)}
             />
           )}

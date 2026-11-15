@@ -21,7 +21,7 @@ export function useBackgroundJobs(enabled: boolean) {
     queryFn: async () => {
       const job = await getJob(id, false);
       if (isTerminalJob(job.status)) {
-        for (const key of ["jobs", "update-status", "probe-status", "probe-events"]) {
+        for (const key of ["jobs", "update-status", "probe-status", "probe-events", "probe-settings"]) {
           void qc.invalidateQueries({ queryKey: [key] });
         }
       }

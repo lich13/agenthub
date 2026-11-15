@@ -320,3 +320,40 @@ for (const provider of ["claude", "grok"] as const) {
     release();
   });
 }
+
+for (const provider of ["codex", "antigravity", "dsh"] as const) {
+  for (const phase of ["preview", "execute"] as const) {
+    test(`${provider} closes an open rename and blocks detail writes during batch ${phase}`, async ({ page }) => {
+      await mockApi(page);
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let started = false;
+      await mockCommand(page, "sessions.bulkPreview", async args => {
+        if (phase === "preview") { started = true; await gate; }
+        return { ...args.request, items: args.request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Fixture", paths: [], bytes: 0, allowed: true, fingerprint: key })) };
+      });
+      await mockCommand(page, "sessions.bulkExecute", async args => {
+        started = true; await gate;
+        return { items: args.request.items.map((item: any) => ({ sessionKey: item.sessionKey, status: "succeeded" })) };
+      });
+      await page.goto("/");
+      if (provider !== "codex") await page.locator(".side-nav").getByRole("button", { name: provider === "antigravity" ? "Antigravity" : "DeepSeek Harness", exact: true }).click();
+      const row = page.locator(provider === "codex" ? ".thread-item" : ".provider-session").first();
+      await row.click();
+      const menuButton = page.getByRole("button", { name: provider === "codex" ? "任务操作" : provider === "antigravity" ? "Antigravity 任务操作" : "DeepSeek Harness 任务操作", exact: true });
+      await menuButton.click();
+      await page.getByRole("button", { name: "改名", exact: true }).click();
+      await expect(page.locator(".inline-rename")).toBeVisible();
+      await row.click({ modifiers: ["Meta"] });
+      await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
+      if (phase === "execute") await page.getByRole("dialog").getByRole("button", { name: "确认归档 1 项", exact: true }).click();
+      await expect.poll(() => started).toBe(true);
+      await expect(page.locator(".inline-rename")).toHaveCount(0);
+      await menuButton.click();
+      for (const name of ["改名", "归档", "永久删除"]) {
+        await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
+      }
+      release();
+    });
+  }
+}

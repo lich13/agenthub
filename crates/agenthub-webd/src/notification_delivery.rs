@@ -67,10 +67,8 @@ struct SourceProof {
 
 fn codex_path(config: &Config, event: &ProbeBuiltEvent) -> Option<PathBuf> {
     let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-    codex::notification_thread_headers(&paths)
-        .ok()?
-        .into_iter()
-        .find(|t| Some(&t.id) == event.thread_id.as_ref())?
+    codex::notification_thread_header(&paths, event.thread_id.as_deref()?)
+        .ok()??
         .rollout_path
 }
 
@@ -334,6 +332,8 @@ fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
         }
         Source::Codex { event, .. } => {
             config.probe.enabled
+                && (event.payload["scan_source"] != "logs_2-turn-error"
+                    || config.probe.error_monitor.enabled)
                 && probe_service::probe_event_bark_switch_enabled(config, &event.kind)
         }
         Source::Native { delivery } => {

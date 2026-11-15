@@ -16,10 +16,7 @@ pub(super) fn is_enabled(config: &Config) -> bool {
 }
 
 fn enabled(config: &Config) -> bool {
-    config.probe.enabled
-        && config.probe.notifications.enabled
-        && config.probe.notifications.notify_codex
-        && config.probe.notifications.notify_reply_needed
+    config.probe.codex_questions_enabled()
 }
 
 fn event_for(
@@ -90,10 +87,7 @@ pub fn prepare_event(
         return Ok(event);
     };
     let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-    let Ok(threads) = codex::notification_thread_headers(&paths) else {
-        return Ok(unconfirmed);
-    };
-    let Some(thread) = threads.into_iter().find(|t| t.id == id) else {
+    let Ok(Some(thread)) = codex::notification_thread_header(&paths, id) else {
         return Ok(unconfirmed);
     };
     let Some(path) = thread.rollout_path.as_deref() else {
@@ -131,7 +125,9 @@ pub fn prepare_event(
         event.suppression_reason = Some("question_transcript_identity_mismatch".into());
         return Ok(event);
     }
-    let since = db.notification_baseline("probe_async_question_baseline", enabled(config))?;
+    let since = db
+        .current_notification_baseline("probe_async_question_baseline")?
+        .filter(|_| enabled(config));
     let eligible = since
         .zip(call.created_at_ms)
         .is_some_and(|(since, created)| {
@@ -166,8 +162,10 @@ pub async fn run_with_threads(
     db: &PanelDb,
     preloaded_sorted: Option<&[ThreadSummary]>,
 ) -> Result<()> {
-    let config = &load_config()?;
-    let Some(since) = db.notification_baseline("probe_async_question_baseline", enabled(config))?
+    let config = &db.sync_notification_channels_from_config(load_config)?;
+    let Some(since) = db
+        .current_notification_baseline("probe_async_question_baseline")?
+        .filter(|_| enabled(config))
     else {
         return Ok(());
     };

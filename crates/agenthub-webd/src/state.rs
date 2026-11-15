@@ -1,6 +1,6 @@
 use agenthub_core::{
     codex::{resolve_codex_paths, CodexAppServerClient, CodexPaths, ResolvedCodexPaths},
-    config::Config,
+    config::{Config, ConfigCache},
     db::PanelDb,
     jobs::JobRunner,
     platform::PlatformPaths,
@@ -22,6 +22,7 @@ impl Drop for TestSandboxDir {
 #[derive(Clone)]
 pub struct AppState {
     config: Arc<RwLock<Config>>,
+    config_cache: Arc<ConfigCache>,
     host_surface: HostSurface,
     platform: PlatformPaths,
     pub db: PanelDb,
@@ -61,6 +62,7 @@ impl AppState {
         };
         Self {
             config: Arc::new(RwLock::new(config)),
+            config_cache: Arc::new(ConfigCache::default()),
             host_surface,
             platform,
             db,
@@ -90,8 +92,20 @@ impl AppState {
         self.config.read().expect("config rwlock").clone()
     }
 
-    pub fn probe_settings_changed(&self, previous: &agenthub_core::config::ProbeConfig) -> bool {
-        &self.config.read().expect("config rwlock").probe != previous
+    pub fn with_config_path(mut self, path: std::path::PathBuf) -> Self {
+        self.platform.config_file = path;
+        self
+    }
+
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.platform.config_file
+    }
+
+    pub fn refresh_config(&self) -> anyhow::Result<Config> {
+        let mut current = self.config.write().expect("config rwlock");
+        let loaded = self.config_cache.load(self.config_path())?;
+        *current = loaded.clone();
+        Ok(loaded)
     }
 
     pub fn replace_config(&self, config: Config) {

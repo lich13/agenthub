@@ -1,5 +1,5 @@
 use super::{
-    load_probe_threads, probe_config_path,
+    load_probe_threads,
     test_support::{sandboxed_test_config, write_executable_fixture, AsyncEnvGuard},
     update_service, UpdateAction,
 };
@@ -97,7 +97,11 @@ fn rpc_test_state_with_config_file() -> (crate::state::AppState, PathBuf, PathBu
         toml::to_string_pretty(&state.config()).unwrap(),
     )
     .unwrap();
-    (state, dir, config_path)
+    (
+        state.with_config_path(config_path.clone()),
+        dir,
+        config_path,
+    )
 }
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
@@ -780,6 +784,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
     config.security.secret_key = state.config().security.secret_key.clone();
     config.paths.db_path = state.config().paths.db_path.clone();
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let state = state.with_config_path(config_path.clone());
     let _config_env = AsyncEnvGuard::set_config(&config_path).await;
     let app = state.clone();
 
@@ -795,7 +800,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
         .get_secret_setting_bytes("probe_bark_device_key")
         .unwrap()
         .is_none());
-    assert!(!fs::read_to_string(probe_config_path())
+    assert!(!fs::read_to_string(&config_path)
         .unwrap()
         .contains("http://example.com"));
     fs::remove_dir_all(dir).unwrap();
@@ -854,6 +859,7 @@ async fn probe_settings_patch_rejects_missing_config_file() {
     let dir = temp_test_dir("agenthub-missing-config");
     fs::create_dir_all(&dir).unwrap();
     let missing_path = dir.join("missing-config.toml");
+    let state = state.with_config_path(missing_path.clone());
     let _config_env = AsyncEnvGuard::set_config(&missing_path).await;
     let app = state;
 
@@ -1504,4 +1510,45 @@ mod maintenance_security {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn settings_get_save_and_hook_jobs_use_the_startup_config_path() {
+    let (state, dir, config_path) = rpc_test_state_with_config_file();
+    let other = dir.join("other.toml");
+    fs::write(&other, toml::to_string(&state.config()).unwrap()).unwrap();
+    let untouched = fs::read(&other).unwrap();
+    let _env = AsyncEnvGuard::set_config(&other).await;
+    let mut updated = state.config();
+    updated.probe.poll_seconds = 77;
+    updated.probe.hooks.manage_stop_hook = !updated.probe.hooks.manage_stop_hook;
+    agenthub_core::config::write_config_atomic(&config_path, &toml::to_string(&updated).unwrap())
+        .unwrap();
+    let value = request_rpc_json(state.clone(), "probe.settings.get", "{}").await;
+    assert_eq!(value["probe"]["poll_seconds"], 77);
+    assert_eq!(state.config().probe, updated.probe);
+    request_rpc_json(
+        state.clone(),
+        "probe.settings.save",
+        r#"{"probe":{"poll_seconds":45}}"#,
+    )
+    .await;
+    assert_eq!(Config::load(&config_path).unwrap().probe.poll_seconds, 45);
+    assert_eq!(fs::read(&other).unwrap(), untouched);
+    let plan = agenthub_core::services::probe::plan_probe_action(
+        state.platform(),
+        ProbeAction::InstallHooks,
+        state.config_path(),
+    )
+    .unwrap();
+    let command = probe_process_command(state.platform(), state.config_path(), plan.action);
+    assert!(command
+        .args
+        .iter()
+        .any(|arg| arg == config_path.to_str().unwrap()));
+    fs::write(&config_path, "invalid TOML [").unwrap();
+    assert!(request_rpc_status(state, "probe.settings.get", "{}")
+        .await
+        .is_err());
+    fs::remove_dir_all(dir).unwrap();
 }

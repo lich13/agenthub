@@ -44,7 +44,7 @@ pub(crate) struct DesktopProbeEventsRequest {
 }
 
 pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
-    let config = state.config();
+    let config = state.refresh_config()?;
     let secret_state = settings_service::ProbeSecretState::from_secret_bytes(
         state
             .db
@@ -220,6 +220,27 @@ mod tests {
         .unwrap();
         let state = DesktopState::new(config, db, platform.clone());
         (temp, state, platform)
+    }
+
+    #[test]
+    fn probe_settings_get_refreshes_external_hook_changes_and_reports_invalid_config() {
+        let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
+        let initial = probe_settings_with_state(&state).unwrap();
+        let mut config = state.config();
+        config.probe.hooks.manage_stop_hook = !initial.probe.hooks.manage_stop_hook;
+        agenthub_core::config::write_config_atomic(
+            &platform.config_file,
+            &toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let refreshed = probe_settings_with_state(&state).unwrap();
+        assert_eq!(
+            refreshed.probe.hooks.manage_stop_hook,
+            config.probe.hooks.manage_stop_hook
+        );
+        assert_eq!(state.config().probe, config.probe);
+        std::fs::write(&platform.config_file, "invalid TOML [").unwrap();
+        assert!(probe_settings_with_state(&state).is_err());
     }
 
     #[test]

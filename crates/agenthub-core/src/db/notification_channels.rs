@@ -131,6 +131,7 @@ impl PanelDb {
                 &config,
                 Utc::now().timestamp_millis(),
             )?;
+            Self::sync_question_baselines(tx, &config, Utc::now().timestamp_millis())?;
             Ok(config)
         })
     }
@@ -156,11 +157,11 @@ impl PanelDb {
                 None => 0, // Preserve the existing Bark baseline.
             };
             tx.execute("INSERT INTO probe_notification_channels(channel,enabled,activated_ms) VALUES(?1,?2,?3) ON CONFLICT(channel) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms", params![channel.as_str(),enabled,activated])?;
-            if !enabled {
+            if !enabled || !config.probe.enabled || !config.probe.error_monitor.enabled {
                 let keys = tx.prepare("UPDATE probe_notification_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?2,
                     outcome_json=json_set(coalesce(outcome_json,'{}'),'$.sent',json('false'),'$.skipped',json('true'),'$.status','skipped','$.reason','notifications_disabled','$.next_retry_ms',NULL)
-                    WHERE channel=?1 AND status IN ('pending','delivering') RETURNING event_key")?
-                    .query_map(params![channel.as_str(),now], |row| row.get::<_,String>(0))?
+                    WHERE channel=?1 AND status IN ('pending','delivering') AND (?3=0 OR (?4=0 AND event_key NOT LIKE 'test:%') OR (?5=0 AND EXISTS(SELECT 1 FROM probe_events AS event JOIN probe_error_incidents AS incident ON incident.event_id=event.id WHERE json_valid(event.payload_json) AND json_extract(event.payload_json,'$.notification_event_key')=probe_notification_deliveries.event_key))) RETURNING event_key")?
+                    .query_map(params![channel.as_str(),now,enabled,config.probe.enabled,config.probe.error_monitor.enabled], |row| row.get::<_,String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 for key in keys {
                     publish_outcome(tx, &key, now)?;

@@ -31,8 +31,6 @@ pub(crate) use grok::{
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename, GrokListQuery,
 };
 pub(crate) use jobs::{job_detail, list_jobs};
-#[cfg(test)]
-pub(crate) use probe::probe_config_path;
 pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action, ProbeEventsQuery,

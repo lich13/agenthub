@@ -318,8 +318,22 @@ impl PanelDb {
     }
 
     pub fn notification_baseline(&self, key: &str, enabled: bool) -> Result<Option<i64>> {
-        let mut conn = self.conn.lock().expect("db mutex");
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        self.with_transaction(|tx| {
+            Self::notification_baseline_in_transaction(
+                tx,
+                key,
+                enabled,
+                chrono::Utc::now().timestamp_millis(),
+            )
+        })
+    }
+
+    pub(crate) fn notification_baseline_in_transaction(
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+        enabled: bool,
+        now_ms: i64,
+    ) -> Result<Option<i64>> {
         let previous: Option<String> = tx
             .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
                 row.get(0)
@@ -336,14 +350,38 @@ impl PanelDb {
             previous
                 .as_ref()
                 .and_then(|v| v["since_ms"].as_i64())
-                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+                .unwrap_or(now_ms)
         } else {
-            chrono::Utc::now().timestamp_millis()
+            now_ms
         };
         tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
             rusqlite::params![key, serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
-        tx.commit()?;
         Ok(enabled.then_some(since))
+    }
+
+    /// Reads used during source revalidation must never mutate enablement from an older snapshot.
+    pub fn current_notification_baseline(&self, key: &str) -> Result<Option<i64>> {
+        Ok(self
+            .get_setting(key)?
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+            .filter(|value| value["enabled"] == true)
+            .and_then(|value| value["since_ms"].as_i64()))
+    }
+
+    pub(crate) fn sync_question_baselines(
+        tx: &rusqlite::Transaction<'_>,
+        config: &crate::config::Config,
+        now_ms: i64,
+    ) -> Result<()> {
+        for key in ["probe_feedback_baseline", "probe_async_question_baseline"] {
+            Self::notification_baseline_in_transaction(
+                tx,
+                key,
+                config.probe.codex_questions_enabled(),
+                now_ms,
+            )?;
+        }
+        Ok(())
     }
 
     pub fn claim_feedback_delivery(&self, key: &str) -> Result<bool> {

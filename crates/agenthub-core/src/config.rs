@@ -10,6 +10,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod runtime_cache;
+pub use runtime_cache::{config_stamp, ConfigCache, ConfigFileStamp};
+
 pub const DEFAULT_HOST_LABEL: &str = "AgentHub";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1638,5 +1641,14 @@ mod atomic_write_tests {
         assert!(write_config_atomic(&root.join("missing.toml"), "unused").is_err());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+impl ProbeConfig {
+    pub fn codex_questions_enabled(&self) -> bool {
+        self.enabled
+            && self.notifications.enabled
+            && self.notifications.notify_codex
+            && self.notifications.notify_reply_needed
     }
 }

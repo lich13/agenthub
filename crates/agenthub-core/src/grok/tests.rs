@@ -1084,3 +1084,33 @@ fn empty_cleanup_rechecks_unknown_ownership_without_blocking_direct_delete() {
     activity::test_owner(None, "");
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn batch_preview_reuses_workspaces_and_execution_finds_new_matching_directories() {
+    let (paths, id, original) = fixture();
+    let context = DeletionContext::new(&paths);
+    let before = context.preview(&id).unwrap();
+    let extra = paths.sessions().join("later-workspace").join(&id);
+    fs::create_dir_all(&extra).unwrap();
+    fs::write(extra.join("native.jsonl"), "fixture").unwrap();
+    assert_eq!(context.preview(&id).unwrap().file_count, before.file_count);
+    assert_eq!(
+        DeletionContext::new(&paths)
+            .preview(&id)
+            .unwrap()
+            .file_count,
+        before.file_count + 1
+    );
+    let result = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id,
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!original.exists() && !extra.exists());
+    fs::remove_dir_all(paths.home).unwrap();
+}

@@ -250,3 +250,31 @@ test.each([0, 1])("selection clears old mutation %s errors even after selection 
     expect(open).toHaveBeenCalledTimes(action === "click" ? 1 : 0);
   }
 });
+
+test.each([false, true])("a failed second page keeps confirmed results without replay, switched machine=%s", async changedMachine => {
+  observed.lifecycle = true;
+  const keys = Array.from({ length: 201 }, (_, i) => `partial-${i}`);
+  const done = vi.fn(); selection(keys, undefined, done);
+  observed.states[0] = { ...observed.states[0], selecting: true, keys };
+  observed.states[1] = { provider: "codex", operation: "archive", items: keys.map(sessionKey => ({ sessionKey, allowed: true, fingerprint: "fixture" })) };
+  selection(keys, undefined, done);
+  let reject!: (error: Error) => void;
+  const pending = new Promise<never>((_, fail) => { reject = fail; });
+  vi.mocked(executeSessionBatch).mockResolvedValueOnce({ items: keys.slice(0, 100).map(sessionKey => ({ sessionKey, status: "succeeded" })) }).mockReturnValueOnce(pending);
+  const work = observed.mutations[1].mutationFn();
+  await Promise.resolve();
+  if (changedMachine) { observed.revision += 1; selection(keys, undefined, done); }
+  const assertion = expect(work).rejects.toThrow("Connection lost");
+  reject(new Error("Connection lost")); await assertion;
+  expect(executeSessionBatch).toHaveBeenCalledTimes(2);
+  expect(observed.states[1]).toBeNull();
+  if (changedMachine) {
+    expect(done).not.toHaveBeenCalled(); expect(observed.invalidate).not.toHaveBeenCalled();
+    expect(observed.states[2]).toBeNull();
+  } else {
+    expect(done).toHaveBeenCalledExactlyOnceWith(keys.slice(0,100), "archive");
+    expect(observed.states[0].keys).toEqual(keys.slice(100));
+    expect(observed.states[2].items).toHaveLength(100);
+    expect(observed.invalidate).toHaveBeenCalledOnce();
+  }
+});

@@ -295,9 +295,33 @@ impl PanelDb {
                 tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'",params![provider.as_str(),now_ms/1000])?;
             }
         }
-        if before.probe.notifications.enabled != after.probe.notifications.enabled {
+        if before.probe.notifications.enabled != after.probe.notifications.enabled
+            || before.probe.enabled != after.probe.enabled
+            || before.probe.error_monitor.enabled != after.probe.error_monitor.enabled
+        {
             self.sync_notification_channels_in_transaction(tx, before, now_ms)?;
             self.sync_notification_channels_in_transaction(tx, after, now_ms)?;
+            if !before.probe.enabled && after.probe.enabled {
+                tx.execute(
+                    "UPDATE probe_notification_channels SET activated_ms=?1",
+                    [now_ms],
+                )?;
+            }
+        }
+        if before.probe.codex_questions_enabled() != after.probe.codex_questions_enabled() {
+            Self::sync_question_baselines(tx, before, now_ms)?;
+            Self::sync_question_baselines(tx, after, now_ms)?;
+        }
+        let error_monitor_before = before.probe.enabled && before.probe.error_monitor.enabled;
+        let error_monitor_after = after.probe.enabled && after.probe.error_monitor.enabled;
+        if error_monitor_before != error_monitor_after {
+            tx.execute("UPDATE probe_error_incidents SET bark_status='skipped',updated_at=?1 WHERE bark_status='pending'", [now_ms / 1000])?;
+            if error_monitor_after {
+                tx.execute(
+                    "DELETE FROM settings WHERE key='probe_error_monitor_cursor'",
+                    [],
+                )?;
+            }
         }
         Ok(())
     }
@@ -505,6 +529,159 @@ impl PanelDb {
 mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+
+    #[test]
+    fn settings_save_updates_question_baselines_before_the_next_scan() {
+        use crate::services::settings::{apply_probe_settings_save_plan, ProbeSettingsSavePlan};
+        for field in ["probe", "enabled", "notify_codex", "notify_reply_needed"] {
+            let root = std::env::temp_dir()
+                .join(format!("agenthub-question-enable-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("config.toml");
+            let db = PanelDb::open_with_secret_box(
+                ":memory:",
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
+            let mut config = config();
+            config.probe.enabled = true;
+            config.probe.notifications.notify_codex = true;
+            config.probe.notifications.notify_reply_needed = true;
+            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+            for key in ["probe_feedback_baseline", "probe_async_question_baseline"] {
+                db.set_setting(key, r#"{"enabled":true,"since_ms":1}"#)
+                    .unwrap();
+            }
+            for enabled in [false, true] {
+                let patch = if field == "probe" {
+                    json!({"probe":{"enabled":enabled}})
+                } else {
+                    json!({"probe":{"notifications":{field:enabled}}})
+                };
+                apply_probe_settings_save_plan(
+                    &path,
+                    &db,
+                    ProbeSettingsSavePlan {
+                        config_patch: serde_json::from_value(patch).unwrap(),
+                        secret_writes: vec![],
+                    },
+                )
+                .unwrap();
+                let now = chrono::Utc::now().timestamp_millis();
+                for key in ["probe_feedback_baseline", "probe_async_question_baseline"] {
+                    let baseline = db.current_notification_baseline(key).unwrap();
+                    if enabled {
+                        assert!(baseline.is_some_and(|value| value > 1 && value <= now));
+                    } else {
+                        assert_eq!(baseline, None);
+                    }
+                }
+            }
+            let baseline = db
+                .current_notification_baseline("probe_async_question_baseline")
+                .unwrap();
+            db.sync_notification_channels_from_config(&|| Config::load(&path))
+                .unwrap();
+            assert_eq!(
+                db.current_notification_baseline("probe_async_question_baseline")
+                    .unwrap(),
+                baseline
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn probe_disable_clears_ordinary_queue_but_preserves_explicit_tests_and_resets_errors() {
+        use crate::db::NotificationChannel;
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let mut before = config();
+        before.probe.enabled = true;
+        before.probe.error_monitor.enabled = true;
+        db.sync_notification_channels(&before).unwrap();
+        for key in ["codex:queued", "test:queued"] {
+            assert!(db
+                .stage_notification_delivery(
+                    NotificationChannel::Bark,
+                    key,
+                    10,
+                    &json!({"chunks":["fixture"]})
+                )
+                .unwrap());
+        }
+        db.set_setting("probe_error_monitor_cursor", "fixture-old-cursor")
+            .unwrap();
+        let mut off = before.clone();
+        off.probe.enabled = false;
+        db.with_transaction(|tx| db.native_notification_settings_changed(tx, &before, &off, 100))
+            .unwrap();
+        assert_eq!(
+            db.notification_delivery_outcome(NotificationChannel::Bark, "codex:queued")
+                .unwrap()
+                .unwrap()["status"],
+            "skipped"
+        );
+        {
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(conn.query_row("SELECT count(*) FROM probe_notification_deliveries WHERE event_key='codex:queued' AND ciphertext IS NOT NULL", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+            assert_eq!(conn.query_row("SELECT count(*) FROM probe_notification_deliveries WHERE event_key='test:queued' AND status='pending' AND ciphertext IS NOT NULL", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        }
+        db.with_transaction(|tx| db.native_notification_settings_changed(tx, &off, &before, 200))
+            .unwrap();
+        assert!(db
+            .get_setting("probe_error_monitor_cursor")
+            .unwrap()
+            .is_none());
+        assert!(!db
+            .stage_notification_delivery(NotificationChannel::Bark, "codex:old", 199, &json!({}))
+            .unwrap());
+        assert!(db
+            .stage_notification_delivery(NotificationChannel::Bark, "codex:new", 201, &json!({}))
+            .unwrap());
+        assert!(db
+            .stage_notification_delivery(NotificationChannel::Bark, "codex:error", 201, &json!({}))
+            .unwrap());
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO probe_events(id,kind,source,payload_json,created_at) VALUES('error-event','turn_error','fixture',?1,0)", [json!({"notification_event_key":"codex:error","scan_source":"logs_2-turn-error"}).to_string()]).unwrap();
+            conn.execute("INSERT INTO probe_error_incidents(incident_key,source_ts,source_ts_nanos,source_row_id,thread_id,turn_id,classification,error_sha256,error_summary,event_id,bark_status,created_at,updated_at) VALUES('error',1,0,1,'fixture','turn','capacity','hash','fixture','error-event','pending',0,0)", []).unwrap();
+        }
+        let mut error_off = before.clone();
+        error_off.probe.error_monitor.enabled = false;
+        db.with_transaction(|tx| {
+            db.native_notification_settings_changed(tx, &before, &error_off, 300)
+        })
+        .unwrap();
+        assert_eq!(
+            db.notification_delivery_outcome(NotificationChannel::Bark, "codex:error")
+                .unwrap()
+                .unwrap()["status"],
+            "skipped"
+        );
+        assert!(db
+            .list_pending_probe_error_deliveries(100)
+            .unwrap()
+            .is_empty());
+        // An error-monitor switch does not cancel other Codex notifications.
+        assert!(db
+            .notification_delivery_outcome(NotificationChannel::Bark, "codex:new")
+            .unwrap()
+            .is_none());
+        db.set_setting("probe_error_monitor_cursor", "fixture-cursor")
+            .unwrap();
+        db.with_transaction(|tx| {
+            db.native_notification_settings_changed(tx, &error_off, &before, 400)
+        })
+        .unwrap();
+        assert!(db
+            .get_setting("probe_error_monitor_cursor")
+            .unwrap()
+            .is_none());
+    }
 
     #[test]
     fn settings_activation_precedes_hooks_and_partial_scans_preserve_full_baseline() {

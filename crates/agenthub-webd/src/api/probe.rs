@@ -16,7 +16,6 @@ use agenthub_core::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ProbeStatusQuery {
@@ -36,7 +35,7 @@ pub(crate) async fn patch_probe_settings(
     request: settings_service::ProbeSettingsSaveRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let config_path = probe_config_path();
+    let config_path = state.config_path().to_path_buf();
     if !config_path.exists() {
         return Err(api_error(
             ApiErrorKind::InvalidRequest,
@@ -82,7 +81,7 @@ pub(crate) async fn start_probe_action(
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let platform = linux_update_platform();
-    let config_path = probe_config_path();
+    let config_path = state.config_path().to_path_buf();
     let plan = probe_service::plan_probe_action(&platform, action, &config_path)?;
     let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)
         .map_err(|err| api_error(ApiErrorKind::Conflict, &err.to_string()))?;
@@ -91,12 +90,6 @@ pub(crate) async fn start_probe_action(
 
 fn probe_runtime(state: &AppState) -> ProbeRuntime {
     ProbeRuntime::new(state.config(), PlatformPaths::current())
-}
-
-pub(crate) fn probe_config_path() -> PathBuf {
-    std::env::var_os("AGENTHUB_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PlatformPaths::current().config_file)
 }
 
 async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Value {
@@ -229,7 +222,7 @@ pub(crate) fn spawn_probe_status_refresh(state: AppState) {
 }
 
 fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
-    probe_settings_value_for_config(state, &state.config())
+    probe_settings_value_for_config(state, &state.refresh_config()?)
 }
 
 fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {

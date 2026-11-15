@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.24"
+version = "2.1.25"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.24"
+version = "2.1.25"
 dependencies = [
  "agenthub-core",
  "anyhow",

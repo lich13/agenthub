@@ -108,6 +108,40 @@ export function ChatWorkspace({
     ),
   );
 
+  const onBatchSucceeded = (keys: string[]) => {
+    for (const key of keys) threadCache.clearArchivedThreadClientState(messageStore, key);
+    if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null);
+  };
+  const activeIds = useMemo(() => visibleThreads.map(t => t.id), [visibleThreads]);
+  const archivedIds = useMemo(() => visibleArchivedThreads.map(t => t.id), [visibleArchivedThreads]);
+  const activeSelectedId = resolvedSelected && activeIds.includes(resolvedSelected) ? resolvedSelected : null;
+  const archivedSelectedId = resolvedSelected && archivedIds.includes(resolvedSelected) ? resolvedSelected : null;
+
+  const batch: SessionSelection = useSessionSelection(
+    "codex",
+    `active\0${q}`,
+    activeIds,
+    onBatchSucceeded,
+    activeSelectedId,
+    () => {
+      archivedBatch.clear();
+    },
+  );
+  const archivedBatch: SessionSelection = useSessionSelection(
+    "codex",
+    `archived\0${q}`,
+    archivedIds,
+    onBatchSucceeded,
+    archivedSelectedId,
+    () => {
+      batch.clear();
+    },
+    "archived",
+  );
+  const deletion = useSessionSelection("codex", resolvedSelected ?? "", resolvedSelected ? [resolvedSelected] : [], keys => {
+    if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null);
+  });
+  const anyBatchBusy = batch.busy || archivedBatch.busy || deletion.busy;
   const list = (
     <ThreadList
       q={q}
@@ -134,10 +168,9 @@ export function ChatWorkspace({
         ) : undefined
       }
       error={threads.error?.message}
-      onBatchSucceeded={keys => {
-        for (const key of keys) threadCache.clearArchivedThreadClientState(messageStore, key);
-        if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null);
-      }}
+      batch={batch}
+      archivedBatch={archivedBatch}
+      detailBusy={deletion.busy}
     />
   );
 
@@ -170,6 +203,8 @@ export function ChatWorkspace({
           }
           selectedSummary={selectedThreadSummary}
           archivedView={isSelectedArchived}
+          deletion={deletion}
+          batchBusy={anyBatchBusy}
           slot={messageStore.getSlot(resolvedSelected)}
           messageStore={messageStore}
           onSelect={id => selectThread(id)}
@@ -209,7 +244,9 @@ function ThreadList({
   onRefresh,
   loading,
   error,
-  onBatchSucceeded,
+  batch,
+  archivedBatch,
+  detailBusy,
   newThread,
 }: {
   q: string;
@@ -225,35 +262,12 @@ function ThreadList({
   onRefresh: () => void;
   loading: boolean;
   error?: string;
-  onBatchSucceeded: (keys: string[]) => void;
+  batch: SessionSelection;
+  archivedBatch: SessionSelection;
+  detailBusy: boolean;
   newThread?: ReactNode;
 }) {
-  const activeIds = useMemo(() => threads.map(t => t.id), [threads]);
-  const archivedIds = useMemo(() => archivedThreads.map(t => t.id), [archivedThreads]);
-  const activeSelectedId = selectedId && activeIds.includes(selectedId) ? selectedId : null;
-  const archivedSelectedId = selectedId && archivedIds.includes(selectedId) ? selectedId : null;
-
-  const batch: SessionSelection = useSessionSelection(
-    "codex",
-    `active\0${q}`,
-    activeIds,
-    onBatchSucceeded,
-    activeSelectedId,
-    () => {
-      archivedBatch.clear();
-    },
-  );
-  const archivedBatch: SessionSelection = useSessionSelection(
-    "codex",
-    `archived\0${q}`,
-    archivedIds,
-    onBatchSucceeded,
-    archivedSelectedId,
-    () => {
-      batch.clear();
-    },
-    "archived",
-  );
+  const anyBatchBusy = batch.busy || archivedBatch.busy || detailBusy;
   const rename = useReadOnlyThreadActions({});
   const { feedback: menuFeedback, setFeedback: setMenuFeedback, copy: copyWithFeedback } =
     useCopyFeedback();
@@ -284,7 +298,7 @@ function ThreadList({
         <RenameableSession
           title={title}
           className={`thread-item ${selectedId === thread.id ? "selected" : ""}${running ? " running" : ""}`}
-          disabled={targetBatch.busy}
+          disabled={anyBatchBusy}
           selecting={targetBatch.selecting}
           selected={selectedId === thread.id}
           multiSelected={multiSelected}
@@ -299,7 +313,7 @@ function ThreadList({
               id: "archive",
               label: isArchived ? "恢复" : "归档",
               icon: isArchived ? <ArchiveRestore size={15} /> : <Archive size={15} />,
-              disabled: targetBatch.busy,
+              disabled: anyBatchBusy,
               run: () =>
                 targetBatch.prepareSingle(thread.id, isArchived ? "restore" : "archive"),
             },
@@ -350,7 +364,7 @@ function ThreadList({
               label: "永久删除",
               icon: <Trash2 size={15} />,
               danger: true,
-              disabled: targetBatch.busy,
+              disabled: anyBatchBusy,
               run: () => targetBatch.prepareSingle(thread.id, "delete"),
             },
           ]}
@@ -384,7 +398,7 @@ function ThreadList({
         actions={newThread}
       />
       <WorkspaceSearchInput disabled={batch.busy || archivedBatch.busy} value={q} onChange={setQ} placeholder="搜索标题或 ID" />
-      <div className="thread-scroll" onKeyDown={batch.onListKeyDown}>
+      <div className="thread-scroll" onKeyDown={event => batch.onListKeyDown(event, !archivedBatch.busy && !detailBusy)}>
         {error && (
           <div className="form-error" role="alert">
             {error}
@@ -397,7 +411,7 @@ function ThreadList({
         {!loading && !error && threads.length === 0 && <div className="muted-row">没有匹配任务</div>}
         <div
           className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}
-          onKeyDown={event => archivedBatch.onListKeyDown(event, archivedOpen)}
+          onKeyDown={event => archivedBatch.onListKeyDown(event, archivedOpen && !batch.busy && !detailBusy)}
         >
           <button
             type="button"
@@ -432,8 +446,8 @@ function ThreadList({
           )}
         </div>
       </div>
-      <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
-      <SessionBatchControls batch={archivedBatch} operations={["restore", "delete"]} showSelection={archivedOpen} />
+      <SessionBatchControls batch={{ ...batch, busy: anyBatchBusy }} operations={["archive", "delete"]} />
+      <SessionBatchControls batch={{ ...archivedBatch, busy: anyBatchBusy }} operations={["restore", "delete"]} showSelection={archivedOpen} />
       {menuFeedback && (
         <div role="status" className="task-feedback">
           {menuFeedback}

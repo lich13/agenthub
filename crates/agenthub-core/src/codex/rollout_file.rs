@@ -45,6 +45,35 @@ pub(crate) fn compressed_path(path: &Path) -> PathBuf {
     plain_path(path).with_extension("jsonl.zst")
 }
 
+/// Decode the native representation in memory without writing a second history.
+pub(crate) fn open_reader(path: &Path) -> anyhow::Result<Box<dyn std::io::Read>> {
+    let file = std::fs::File::open(path)?;
+    if is_compressed(path) {
+        Ok(Box::new(zstd::stream::read::Decoder::new(file)?))
+    } else {
+        Ok(Box::new(file))
+    }
+}
+
+pub(crate) fn read_complete_lines(
+    path: &Path,
+    mut consume: impl FnMut(&[u8]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(open_reader(path)?);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            return Ok(true);
+        }
+        if !line.ends_with(b"\n") {
+            return Ok(false);
+        }
+        consume(&line)?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

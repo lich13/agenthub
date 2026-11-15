@@ -7,8 +7,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { ProcessGroupView } from "../common/ProcessGroupView";
-import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls } from "../common/SessionBatchControls";
+import type { SessionSelection } from "../../lib/query/sessions";
 import { TaskMenu } from "../common/TaskMenu";
 import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import { useReadOnlyThreadActions, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
@@ -134,6 +134,8 @@ export function Conversation(props: {
   detail: ThreadDetail;
   selectedSummary?: ThreadSummary | null;
   archivedView?: boolean;
+  deletion: SessionSelection;
+  batchBusy: boolean;
   slot: ThreadMessageSlot;
   messageStore: ThreadMessageStoreController;
   onSelect: (id: SelectedThread) => void;
@@ -199,9 +201,8 @@ export function Conversation(props: {
   );
   const resolvedTimeline = slot.timeline ?? detail.timeline;
   const timelineEntries = useMemo(() => resolvedTimeline ?? getDerivedTimelineEntries(blocks), [resolvedTimeline, blocks]);
-  const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
-    if (keys.includes(props.threadId)) props.onSelect(null);
-  });
+  const deletion = props.deletion;
+  useEffect(() => { if (props.batchBusy) setRenaming(false); }, [props.batchBusy]);
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const history = useHistoryScroll({
     scopeKey: `${historyScope}:${navigation.generation}`, streamRef: stream,
@@ -301,14 +302,14 @@ export function Conversation(props: {
         <div className="conversation-header-actions">
           <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
           <TaskMenu triggerRef={deletion.returnFocus}>
-            <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
-            <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
+            <button disabled={archived || props.batchBusy || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
+            <button disabled={props.batchBusy || actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
             <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
             <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
             <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
             <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
             <button disabled={!canRevealLocalPath() || !detail.summary.rollout_path} title={!canRevealLocalPath() ? "仅可在本机 Finder 中显示本机会话" : !detail.summary.rollout_path ? "当前会话暂无本地文件路径" : undefined} onClick={() => { if (!detail.summary.rollout_path) return; void revealLocalPath(detail.summary.rollout_path).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); }}><FolderOpen size={15} />在 Finder 中显示</button>
-            <button className="danger-menu-item" disabled={actions.isPending || deletion.busy} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
+            <button className="danger-menu-item" disabled={props.batchBusy || actions.isPending} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
           </TaskMenu>
         </div>
       </header>
@@ -317,9 +318,9 @@ export function Conversation(props: {
         setAgentSelection({ root: props.threadId, machine: machineScope(), trigger });
       }} />}
       <SessionBatchControls batch={deletion} operations={[]} showSelection={false} />
-      {renaming && !archived && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
+      {renaming && !archived && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); if (props.batchBusy) return; actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
         <input aria-label="任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
-        <button className="icon-button" title="保存名称" disabled={actions.isPending || !title.trim()}><Check size={17} /></button>
+        <button className="icon-button" title="保存名称" disabled={props.batchBusy || actions.isPending || !title.trim()}><Check size={17} /></button>
         <button type="button" className="icon-button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button>
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}

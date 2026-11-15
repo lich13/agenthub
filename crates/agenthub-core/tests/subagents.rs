@@ -978,6 +978,16 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
     assert!(hidden.contains("grandchild"));
     assert!(thread_detail(&fixture.paths, CHILD).unwrap().is_none());
     assert!(fixture.read(CHILD).is_ok());
+    assert!(
+        agenthub_core::codex::notification_thread_header(&fixture.paths, ROOT)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        agenthub_core::codex::notification_thread_header(&fixture.paths, CHILD)
+            .unwrap()
+            .is_none()
+    );
     assert!(fixture.read("grandchild").is_ok());
     assert_eq!(fixture.snapshot(), before);
 }
@@ -1046,7 +1056,19 @@ fn invalid_thread_keys_and_history_cursors_are_rejected() {
     }
     assert!(fixture.read(&"a".repeat(257)).is_err());
     assert!(fixture.read(ROOT).is_err());
-    for cursor in ["", "500", "b:-1", "b:invalid", "b:1suffix"] {
+    for cursor in [
+        "",
+        "500",
+        "b:-1",
+        "b:invalid",
+        "b:1suffix",
+        "b:1:",
+        "a:",
+        "j:",
+        "n:",
+        "w:",
+        "p:",
+    ] {
         assert!(
             read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, Some(5), Some(cursor)))
                 .is_err()
@@ -2029,4 +2051,159 @@ fn child_detail_refreshes_nested_status_without_parent_rollout_changes() {
     append_jsonl(&nested, &[event("task_started", "nested-two")]);
     assert_counts(&fixture.read(CHILD).unwrap().detail, [0, 1, 0, 0, 0, 0]);
     assert_eq!(fs::read(child).unwrap(), parent);
+}
+
+fn compress_fixture_rollout(fixture: &NativeFixture, id: &str) -> PathBuf {
+    let plain = fixture.paths.sessions_dir().join(format!("{id}.jsonl"));
+    let compressed = plain.with_extension("jsonl.zst");
+    let mut encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&compressed).unwrap(), 1).unwrap();
+    std::io::copy(&mut fs::File::open(&plain).unwrap(), &mut encoder).unwrap();
+    encoder.finish().unwrap();
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+            params![compressed.to_str().unwrap(), id],
+        )
+        .unwrap();
+    fs::remove_file(plain).unwrap();
+    compressed
+}
+
+#[test]
+fn stable_refresh_and_timeline_cursors_read_plain_and_compressed_children() {
+    for compressed in [false, true] {
+        let fixture = NativeFixture::new(&spawn(
+            "spawn-child",
+            "review_code",
+            json!({"agent_id":CHILD}),
+        ));
+        let mut events = spawn("spawn-nested", "check_tests", json!({"agent_id":"nested"}));
+        events.push(event("task_started", "cursor-turn"));
+        for i in 0..12 {
+            events.push(message("user", &format!("Prompt {i}")));
+            events.push(message("assistant", &format!("Result {i}")));
+        }
+        events.push(image_message("child-image"));
+        events.push(event("task_complete", "cursor-turn"));
+        fixture.child(CHILD, ROOT, "/root/review", &events);
+        fixture.child(
+            "nested",
+            CHILD,
+            "/root/review/nested",
+            &[
+                image_message("nested-image"),
+                event("task_complete", "nested-turn"),
+            ],
+        );
+        if compressed {
+            for id in [ROOT, CHILD, "nested"] {
+                compress_fixture_rollout(&fixture, id);
+            }
+        }
+        let before = fixture.snapshot();
+        let child = fixture.read(CHILD).unwrap();
+        assert_eq!(child.agent.status, SubagentStatus::Completed);
+        assert_eq!(child.agent.name, "Review code");
+        let all = child.detail.blocks;
+        let read = |cursor: &str| {
+            read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, Some(4), Some(cursor)))
+                .unwrap()
+                .detail
+        };
+        let anchor = &all[10].id;
+        assert_eq!(
+            read(&format!("b:999:{anchor}")).blocks.last().unwrap().id,
+            all[9].id
+        );
+        assert_eq!(
+            read(&format!("a:{anchor}")).blocks.last().unwrap().id,
+            *anchor
+        );
+        assert_eq!(
+            read(&format!("p:{anchor}")).blocks.last().unwrap().id,
+            all[9].id
+        );
+        assert_eq!(
+            read(&format!("n:{anchor}")).blocks.first().unwrap().id,
+            all[11].id
+        );
+        assert_eq!(
+            read(&format!("w:{anchor}")).blocks.first().unwrap().id,
+            *anchor
+        );
+        assert!(read(&format!("j:{anchor}"))
+            .blocks
+            .iter()
+            .any(|b| &b.id == anchor));
+        for id in [CHILD, "nested"] {
+            let detail = fixture.read(id).unwrap();
+            if id == "nested" {
+                assert_eq!(detail.agent.name, "Check tests");
+            }
+            let image = fixture
+                .read_attachment(attachment_request(&detail.detail))
+                .unwrap();
+            assert_eq!(image.base64, PNG);
+        }
+        assert_eq!(fixture.snapshot(), before);
+    }
+}
+
+#[test]
+fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
+    use agenthub_core::services::search::{SearchScope, SearchUseCases, SessionSearchRequest};
+    let fixture = NativeFixture::new(&[]);
+    let plain = fixture.paths.sessions_dir().join(format!("{ROOT}.jsonl"));
+    let compressed = plain.with_extension("jsonl.zst");
+    let mut encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&compressed).unwrap(), 1).unwrap();
+    encoder.write_all(&fs::read(&plain).unwrap()).unwrap();
+    let mut padding = vec![b' '; 1024 * 1024];
+    *padding.last_mut().unwrap() = b'\n';
+    for _ in 0..129 {
+        encoder.write_all(&padding).unwrap();
+    }
+    for event in [
+        image_message("after-cutoff"),
+        message("assistant", "tail beyond old cutoff"),
+        event("task_complete", "tail"),
+    ] {
+        writeln!(encoder, "{event}").unwrap();
+    }
+    encoder.finish().unwrap();
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+            params![compressed.to_str().unwrap(), ROOT],
+        )
+        .unwrap();
+    fs::remove_file(plain).unwrap();
+    let detail = fixture.root_detail();
+    assert!(detail
+        .blocks
+        .iter()
+        .any(|b| b.text.as_deref() == Some("tail beyond old cutoff")));
+    assert_eq!(detail.timeline.as_ref().unwrap().len(), 1);
+    let mut request = attachment_request(&detail);
+    request.root_thread_id = None;
+    assert_eq!(fixture.read_attachment(request).unwrap().base64, PNG);
+    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Linux, &fixture.directory);
+    let found = SearchUseCases::new(&platform, fixture.paths.clone())
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Codex,
+            scope: SearchScope::Thread,
+            session_key: Some(ROOT.into()),
+            query: "tail beyond old cutoff".into(),
+            cursor: None,
+            limit: Some(10),
+        })
+        .unwrap();
+    assert_eq!(found.results.len(), 1);
+    // Corrupt/truncated compressed streams fail instead of returning a plausible prefix.
+    let file = fs::OpenOptions::new().write(true).open(compressed).unwrap();
+    file.set_len(file.metadata().unwrap().len() - 8).unwrap();
+    assert!(thread_detail(&fixture.paths, ROOT).is_err());
 }

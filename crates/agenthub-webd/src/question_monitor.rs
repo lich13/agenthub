@@ -20,10 +20,7 @@ pub(super) fn is_enabled(config: &Config) -> bool {
 }
 
 fn enabled(config: &Config) -> bool {
-    config.probe.enabled
-        && config.probe.notifications.enabled
-        && config.probe.notifications.notify_codex
-        && config.probe.notifications.notify_reply_needed
+    config.probe.codex_questions_enabled()
 }
 
 fn event_for(
@@ -92,10 +89,7 @@ pub fn prepare_event(
         return Ok(suppressed);
     };
     let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-    let Ok(threads) = codex::notification_thread_headers(&paths) else {
-        return Ok(suppressed);
-    };
-    let Some(thread) = threads.into_iter().find(|thread| thread.id == id) else {
+    let Ok(Some(thread)) = codex::notification_thread_header(&paths, id) else {
         return Ok(suppressed);
     };
     let Some(path) = thread.rollout_path else {
@@ -111,7 +105,10 @@ pub fn prepare_event(
     {
         return Ok(suppressed);
     }
-    let Some(since) = db.feedback_notification_baseline(enabled(config))? else {
+    let Some(since) = db
+        .current_notification_baseline("probe_feedback_baseline")?
+        .filter(|_| enabled(config))
+    else {
         suppressed.suppression_reason = Some("feedback_notifications_disabled".into());
         return Ok(suppressed);
     };
@@ -133,8 +130,11 @@ pub async fn run_with_threads(
     db: &PanelDb,
     preloaded_sorted: Option<&[codex::ThreadSummary]>,
 ) -> Result<()> {
-    let config = &load_config()?;
-    let Some(since) = db.feedback_notification_baseline(enabled(config))? else {
+    let config = &db.sync_notification_channels_from_config(load_config)?;
+    let Some(since) = db
+        .current_notification_baseline("probe_feedback_baseline")?
+        .filter(|_| enabled(config))
+    else {
         return Ok(());
     };
     let previous: HashMap<String, (u64, u128)> = db
@@ -326,6 +326,45 @@ mod tests {
             }
         });
         (url, receiver)
+    }
+
+    #[tokio::test]
+    async fn feedback_created_after_settings_save_is_sent_on_the_first_scan() {
+        use agenthub_core::services::settings::{
+            apply_probe_settings_save_plan, ProbeSettingsSavePlan,
+        };
+        let (url, requests) = mock_bark_server(1);
+        let mut fixture = Fixture::new(url);
+        fixture.config.probe.notifications.notify_reply_needed = false;
+        let path = fixture.root.join("config.toml");
+        fs::write(&path, toml::to_string(&fixture.config).unwrap()).unwrap();
+        apply_probe_settings_save_plan(
+            &path,
+            &fixture.db,
+            ProbeSettingsSavePlan {
+                config_patch: serde_json::from_value(
+                    json!({"probe":{"notifications":{"notify_reply_needed":true}}}),
+                )
+                .unwrap(),
+                secret_writes: vec![],
+            },
+        )
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let rollout = fixture.config.codex.home.join("sessions/rollout.jsonl");
+        let records = [
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"fresh-turn"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"请确认测试结果。"}]}}),
+            json!({"type":"event_msg","timestamp":chrono::Utc::now().to_rfc3339(),"payload":{"type":"task_complete","turn_id":"fresh-turn","status":"completed","last_agent_message":"请确认测试结果。"}}),
+        ];
+        let mut file = fs::OpenOptions::new().append(true).open(rollout).unwrap();
+        for record in records {
+            writeln!(file, "{record}").unwrap();
+        }
+        run_with_threads(&|| Config::load(&path), &fixture.db, None)
+            .await
+            .unwrap();
+        assert!(requests.recv_timeout(Duration::from_secs(2)).is_ok());
     }
 
     #[tokio::test]

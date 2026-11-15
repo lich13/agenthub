@@ -392,3 +392,79 @@ fn probe_error_monitor_concurrent_database_claim_records_one_incident() {
     assert_eq!(db.probe_error_incident_count().unwrap(), 1);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn reenabled_error_monitor_baselines_at_first_scan_without_replaying_disabled_errors() {
+    use agenthub_core::{
+        config::Config,
+        services::settings::{apply_probe_settings_save_plan, ProbeSettingsSavePlan},
+    };
+    let root = temp_dir("error-reenable");
+    let logs = root.join("logs_2.sqlite");
+    let conn = create_logs_db(&logs);
+    insert_log(
+        &conn,
+        100,
+        "codex_core::session::turn",
+        Some(THREAD_ID),
+        "baseline",
+    );
+    let baseline = scan_codex_turn_errors(&logs, None, 100).unwrap();
+    let db = PanelDb::open_with_secret_box(
+        ":memory:",
+        SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    db.set_setting(
+        "probe_error_monitor_cursor",
+        &serde_json::to_string(&baseline.cursor).unwrap(),
+    )
+    .unwrap();
+    let path = root.join("config.toml");
+    let mut config = Config::default();
+    config.probe.enabled = false;
+    config.probe.error_monitor.enabled = true;
+    fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+    insert_log(
+        &conn,
+        101,
+        "codex_core::session::turn",
+        Some(THREAD_ID),
+        CAPACITY_BODY,
+    );
+    apply_probe_settings_save_plan(
+        &path,
+        &db,
+        ProbeSettingsSavePlan {
+            config_patch: serde_json::from_value(serde_json::json!({"probe":{"enabled":true}}))
+                .unwrap(),
+            secret_writes: vec![],
+        },
+    )
+    .unwrap();
+    insert_log(
+        &conn,
+        102,
+        "codex_core::session::turn",
+        Some(THREAD_ID),
+        CAPACITY_BODY,
+    );
+    assert!(db
+        .get_setting("probe_error_monitor_cursor")
+        .unwrap()
+        .is_none());
+    let resumed = scan_codex_turn_errors(&logs, None, 100).unwrap();
+    assert!(resumed.baseline_only && resumed.incidents.is_empty());
+    insert_log(
+        &conn,
+        103,
+        "codex_core::session::turn",
+        Some(THREAD_ID),
+        CAPACITY_BODY,
+    );
+    let fresh = scan_codex_turn_errors(&logs, Some(&resumed.cursor), 100).unwrap();
+    assert_eq!(fresh.incidents.len(), 1);
+    assert_eq!(fresh.incidents[0].source_ts, 103);
+    drop(conn);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -1716,3 +1716,5 @@ fn tool_summary(text: &str) -> String {
         compact.chars().take(TOOL_SUMMARY_LIMIT).collect::<String>() + "..."
     }
 }
+
+pub(crate) use pagination::valid_history_cursor;

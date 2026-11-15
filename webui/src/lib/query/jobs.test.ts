@@ -17,5 +17,5 @@ test("terminal background jobs request only the summary and refresh affected pan
   useBackgroundJobs(true);
   await state.queries[0].queryFn();
   expect(getJob).toHaveBeenCalledExactlyOnceWith("fixture-job", false);
-  expect(state.invalidate.mock.calls.map(([input]) => input.queryKey)).toEqual([["jobs"], ["update-status"], ["probe-status"], ["probe-events"]]);
+  expect(state.invalidate.mock.calls.map(([input]) => input.queryKey)).toEqual([["jobs"], ["update-status"], ["probe-status"], ["probe-events"], ["probe-settings"]]);
 });

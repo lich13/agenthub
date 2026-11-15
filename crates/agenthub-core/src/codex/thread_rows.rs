@@ -208,11 +208,12 @@ pub(super) fn read_thread_rows_matching(
     let preview_expr = first_existing(&columns, &["preview"])
         .unwrap_or("NULL")
         .to_string();
+    let filter = if id.is_some() { " WHERE id = ?1" } else { "" };
     let sql = format!(
-        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {first_user_message_expr}, {preview_expr} FROM threads WHERE (?1 IS NULL OR id = ?1)"
+        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {first_user_message_expr}, {preview_expr} FROM threads{filter}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([id], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(id), |row| {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(1).ok();
         let updated_raw: Option<ValueCell> = row.get(2).ok();

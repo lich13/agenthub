@@ -342,7 +342,7 @@ impl SessionUseCases {
         provider: SessionProvider,
         key: &str,
         reason: String,
-        grok: Option<&grok::DeletionContext<'_>>,
+        grok: Option<&grok::DeletionContext>,
     ) -> SessionBatchItem {
         let mut item = SessionBatchItem {
             session_key: key.to_string(),
@@ -409,7 +409,7 @@ impl SessionUseCases {
         operation: SessionOperation,
         key: &str,
         include_descendants: bool,
-        grok: Option<&grok::DeletionContext<'_>>,
+        grok: Option<&grok::DeletionContext>,
         claude: Option<&Result<crate::claude::DeletionContext>>,
     ) -> Result<SessionBatchItem> {
         let mut warnings = Vec::new();

@@ -69,6 +69,7 @@ pub use user_input::{
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     rollout_events::evict_idle_detail_cache(max_idle);
     user_input::evict_idle_question_cache(max_idle);
+    subagents::evict_idle(max_idle);
 }
 
 pub fn list_threads(
@@ -121,6 +122,14 @@ pub fn notification_thread_headers(paths: &CodexPaths) -> Result<Vec<ThreadSumma
         .map(|row| row.summary)
         .filter(|thread| !matches!(thread.status, ThreadStatus::Archived))
         .collect())
+}
+
+/// Recheck one notification source without loading other threads or history.
+pub fn notification_thread_header(paths: &CodexPaths, id: &str) -> Result<Option<ThreadSummary>> {
+    Ok(thread_rows::read_thread_rows_matching(paths, Some(id))?
+        .into_iter()
+        .map(|row| row.summary)
+        .find(|thread| !matches!(thread.status, ThreadStatus::Archived)))
 }
 
 fn enrich_local_thread_row(

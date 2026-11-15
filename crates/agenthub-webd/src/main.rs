@@ -400,14 +400,15 @@ async fn install_probe_hooks(
     config_path: Option<&Path>,
     dry_run: bool,
 ) -> Result<Value> {
-    let mut out = install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
-        Ok(serde_json::to_value(
-            agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
-                platform, enabled, false,
-            )?,
-        )?)
-    })
-    .await?;
+    let mut out =
+        install_probe_hooks_with_repair(config, config_path, dry_run, |platform, enabled| {
+            Ok(serde_json::to_value(
+                agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
+                    platform, enabled, false,
+                )?,
+            )?)
+        })
+        .await?;
     if !dry_run && !config.probe.hooks.manage_stop_hook {
         if let Some(path) = config_path.filter(|p| p.exists()) {
             let before = read_optional_text(path)?;
@@ -424,7 +425,7 @@ async fn install_probe_hooks(
                 },
             )?;
             if patched != before {
-                fs::write(path, patched)
+                agenthub_core::config::write_config_atomic(path, &patched)
                     .with_context(|| format!("write probe config {}", path.display()))?;
                 out["changed"] = json!(true);
                 out["probe_config_changed"] = json!(true);
@@ -494,7 +495,7 @@ async fn remove_probe_hooks(
                 },
             )?;
             if patched != before {
-                fs::write(path, patched)
+                agenthub_core::config::write_config_atomic(path, &patched)
                     .with_context(|| format!("write probe config {}", path.display()))?;
                 probe_config_changed = true;
             }
@@ -532,13 +533,17 @@ fn prune_codex_hook_state_toml(text: &str) -> Result<String> {
 
 async fn install_probe_hooks_with_repair(
     config: &Config,
+    config_path: Option<&Path>,
     dry_run: bool,
     repair_error_monitor: impl FnOnce(&PlatformPaths, bool) -> Result<Value>,
 ) -> Result<Value> {
     let resolved = resolve_codex_paths(&config.codex.home);
     let hooks_path = resolved.home.join("hooks.json");
     let codex_config_path = resolved.home.join("config.toml");
-    let platform = PlatformPaths::current();
+    let mut platform = PlatformPaths::current();
+    if let Some(path) = config_path {
+        platform.config_file = path.to_path_buf();
+    }
     let hook_command = format!(
         "{} --config {} probe hook-stop",
         shell_quote(
@@ -1136,7 +1141,7 @@ async fn record_probe_event_with_bark_timeout(
     event: agenthub_core::probe::ProbeBuiltEvent,
     bark_timeout: std::time::Duration,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
-    let config = &load_config()?;
+    let config = &db.sync_notification_channels_from_config(load_config)?;
     if let Some(reason) = event
         .suppression_reason
         .as_deref()
@@ -1295,9 +1300,10 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let config = Config::load_runtime(&config_path)?;
     upgrade_managed_question_hooks_on_start(&config);
     let db = open_panel_db(&config)?;
-    let state = AppState::new_for_surface(config.clone(), db, HostSurface::LinuxServerApi);
+    let state = AppState::new_for_surface(config.clone(), db, HostSurface::LinuxServerApi)
+        .with_config_path(config_path.clone());
     spawn_probe_thread_scan(state.clone());
-    spawn_probe_error_monitor(state.clone(), config_path.clone());
+    spawn_probe_error_monitor(state.clone());
     github_ci_monitor::spawn(config_path.clone(), Some(state.clone()));
     api::spawn_probe_status_refresh(state.clone());
     ssh_server::serve(state).await?;
@@ -1771,7 +1777,7 @@ hooks = false
     }
 
     async fn install_probe_hooks_for_test(config: &Config, dry_run: bool) -> Result<Value> {
-        install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
+        install_probe_hooks_with_repair(config, None, dry_run, |platform, enabled| {
             Ok(json!({
                 "supported": true,
                 "enabled": enabled,
@@ -1784,6 +1790,29 @@ hooks = false
             }))
         })
         .await
+    }
+
+    #[tokio::test]
+    async fn installed_hook_commands_keep_the_explicit_config_path() {
+        let dir = temp_test_dir("agenthub-hooks-custom-config");
+        let home = dir.join("codex");
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        let config = test_config(home.clone());
+        let path = dir.join("custom config.toml");
+        let output = install_probe_hooks_with_repair(&config, Some(&path), false, |platform, _| {
+            assert_eq!(platform.config_file, path);
+            Ok(json!({"changed":false}))
+        })
+        .await
+        .unwrap();
+        let expected = shell_quote(&path.display().to_string(), QuoteStyle::Minimal);
+        for key in ["hook_command", "request_user_input_hook_command"] {
+            assert!(output[key]
+                .as_str()
+                .unwrap()
+                .contains(&format!("--config {expected} ")));
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

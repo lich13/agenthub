@@ -79,6 +79,35 @@ export function useSessionSelection(
     },
   });
 
+  const applyExecutionResult = (response: SessionBatchResult, generation: number, operation: SessionOperation) => {
+    if (generation !== executionEpoch.current.value) return;
+    const succeeded = [
+      ...new Set(
+        response.items.flatMap(i => [
+          ...(i.status === "succeeded" ? [i.sessionKey] : []),
+          ...(i.deletedIds ?? []),
+        ]),
+      ),
+    ];
+    onSucceeded?.(succeeded, operation);
+    setResult(response);
+    setState(prev => {
+      const remaining = prev.keys.filter(key => !succeeded.includes(key));
+      return {
+        ...prev,
+        selecting: remaining.length > 0 && prev.selecting,
+        keys: remaining,
+        anchor: prev.anchor && succeeded.includes(prev.anchor) ? null : prev.anchor,
+      };
+    });
+    void client.invalidateQueries({
+      predicate: query =>
+        provider === "codex"
+          ? /thread|system-capabilities|probe-status/.test(String(query.queryKey[0]))
+          : query.queryKey[0] === provider,
+    });
+  };
+
   const execute = useMutation({
     mutationFn: async () => {
       if (!preview) throw new Error("请先重新预览");
@@ -97,47 +126,26 @@ export function useSessionSelection(
       const response: SessionBatchResult = { items: [] };
       const size = request.operation === "delete" ? Math.max(1, items.length) : 100;
       const includeDescendants = hasSubagentTree(request.provider, request.operation);
-      for (let start = 0; start < items.length; start += size) {
-        if (generation !== executionEpoch.current.value) throw new Error("连接范围已变化");
-        const batchResult = await executeSessionBatch({
-          provider: request.provider,
-          operation: request.operation,
-          items: items.slice(start, start + size),
-          confirmed: true,
-          ...(includeDescendants ? { includeDescendants: true } : {}),
-        });
-        response.items.push(...batchResult.items);
+      try {
+        for (let start = 0; start < items.length; start += size) {
+          if (generation !== executionEpoch.current.value) throw new Error("连接范围已变化");
+          const batchResult = await executeSessionBatch({
+            provider: request.provider,
+            operation: request.operation,
+            items: items.slice(start, start + size),
+            confirmed: true,
+            ...(includeDescendants ? { includeDescendants: true } : {}),
+          });
+          response.items.push(...batchResult.items);
+        }
+      } catch (error) {
+        // A failed later page must not discard earlier confirmed results.
+        applyExecutionResult(response, generation, request.operation);
+        throw error;
       }
       return { response, generation, operation: request.operation };
     },
-    onSuccess: ({ response, generation, operation }) => {
-      if (generation !== executionEpoch.current.value) return;
-      const succeeded = [
-        ...new Set(
-          response.items.flatMap(i => [
-            ...(i.status === "succeeded" ? [i.sessionKey] : []),
-            ...(i.deletedIds ?? []),
-          ]),
-        ),
-      ];
-      onSucceeded?.(succeeded, operation);
-      setResult(response);
-      setState(prev => {
-        const remaining = prev.keys.filter(key => !succeeded.includes(key));
-        return {
-          ...prev,
-          selecting: remaining.length > 0 && prev.selecting,
-          keys: remaining,
-          anchor: prev.anchor && succeeded.includes(prev.anchor) ? null : prev.anchor,
-        };
-      });
-      void client.invalidateQueries({
-        predicate: query =>
-          provider === "codex"
-            ? /thread|system-capabilities|probe-status/.test(String(query.queryKey[0]))
-            : query.queryKey[0] === provider,
-      });
-    },
+    onSuccess: ({ response, generation, operation }) => applyExecutionResult(response, generation, operation),
   });
 
   useEffect(() => {

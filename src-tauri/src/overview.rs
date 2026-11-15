@@ -1,6 +1,6 @@
 use agenthub_core::{
     codex::{resolve_codex_paths, CodexPaths},
-    config::Config,
+    config::{Config, ConfigCache},
     db::PanelDb,
     jobs::JobRunner,
     platform::{PlatformKind, PlatformPaths},
@@ -26,6 +26,7 @@ pub struct AgentHubPaths {
 #[derive(Clone)]
 pub struct DesktopState {
     config: Arc<RwLock<Config>>,
+    config_cache: Arc<ConfigCache>,
     pub db: PanelDb,
     pub jobs: JobRunner,
     platform: PlatformPaths,
@@ -51,6 +52,7 @@ impl DesktopState {
         let jobs = JobRunner::new(db.clone());
         Self {
             config: Arc::new(RwLock::new(config)),
+            config_cache: Arc::new(ConfigCache::default()),
             db,
             jobs,
             platform,
@@ -60,6 +62,13 @@ impl DesktopState {
 
     pub fn config(&self) -> Config {
         self.config.read().expect("desktop config rwlock").clone()
+    }
+
+    pub fn refresh_config(&self) -> Result<Config> {
+        let mut current = self.config.write().expect("desktop config rwlock");
+        let loaded = self.config_cache.load(&self.platform.config_file)?;
+        *current = loaded.clone();
+        Ok(loaded)
     }
 
     pub fn replace_config(&self, config: Config) {
