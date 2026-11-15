@@ -210,11 +210,46 @@ impl SessionUseCases {
             crate::services::system::Capability::ThreadCleanup,
         )?;
         validate(request.provider, request.operation, &request.session_keys)?;
+        if request.provider == SessionProvider::Codex
+            && request.operation == SessionOperation::Delete
+        {
+            let items = selected_codex::tree::preview_batch(
+                &self.codex,
+                &request.session_keys,
+                request.include_descendants,
+            )
+            .into_iter()
+            .zip(&request.session_keys)
+            .map(|(preview, key)| {
+                preview
+                    .map(|tree| SessionBatchItem {
+                        session_key: key.clone(),
+                        id: tree.selected.id,
+                        title: tree.selected.title,
+                        paths: tree.selected.paths,
+                        bytes: tree.selected.bytes,
+                        allowed: true,
+                        reason: None,
+                        fingerprint: Some(tree.selected.fingerprint),
+                        descendants: tree.ids.into_iter().filter(|id| id != key).collect(),
+                        warnings: tree.warnings,
+                    })
+                    .unwrap_or_else(|error| {
+                        self.blocked_item(request.provider, key, format!("{error:#}"), None)
+                    })
+            })
+            .collect();
+            return Ok(SessionBatchPreview {
+                provider: request.provider,
+                operation: request.operation,
+                items,
+            });
+        }
         let grok = (request.provider == SessionProvider::Grok)
             .then(|| grok::DeletionContext::new(&self.grok));
         let claude = (request.provider == SessionProvider::Claude).then(|| {
             let mut context = crate::claude::DeletionContext::new(&self.claude)?;
-            context.select_preview(&request.session_keys);
+            context.select_preview(&self.claude, &request.session_keys);
             Ok(context)
         });
         let items = request
@@ -316,7 +351,6 @@ impl SessionUseCases {
         grok: Option<&grok::DeletionContext<'_>>,
         claude: Option<&Result<crate::claude::DeletionContext>>,
     ) -> Result<SessionBatchItem> {
-        let mut descendants = Vec::new();
         let mut warnings = Vec::new();
         let (id, title, paths, bytes, fingerprint) = match provider {
             SessionProvider::Grokbot => anyhow::bail!("Grok Bot 仅支持阅读"),
@@ -330,28 +364,16 @@ impl SessionUseCases {
                 (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }
             SessionProvider::Codex => {
-                if operation != SessionOperation::Delete {
-                    ensure!(
-                        codex::codex_task_identity(&self.codex, key)?
-                            == codex::CodexTaskIdentity::Main,
-                        "线程身份无法确认为主任务"
-                    );
-                }
-                if operation == SessionOperation::Delete {
-                    let tree =
-                        selected_codex::tree::preview(&self.codex, key, include_descendants)?;
-                    descendants = tree.ids.into_iter().filter(|id| id != key).collect();
-                    warnings = tree.warnings;
-                    let p = tree.selected;
-                    (p.id, p.title, p.paths, p.bytes, p.fingerprint)
-                } else {
-                    let p = selected_codex::preview_archive(
-                        &self.codex,
-                        key,
-                        operation == SessionOperation::Archive,
-                    )?;
-                    (p.id, p.title, p.paths, p.bytes, p.fingerprint)
-                }
+                ensure!(
+                    codex::codex_task_identity(&self.codex, key)? == codex::CodexTaskIdentity::Main,
+                    "线程身份无法确认为主任务"
+                );
+                let p = selected_codex::preview_archive(
+                    &self.codex,
+                    key,
+                    operation == SessionOperation::Archive,
+                )?;
+                (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }
             SessionProvider::Grok => {
                 let p = grok.map_or_else(
@@ -386,7 +408,7 @@ impl SessionUseCases {
             allowed: true,
             reason: None,
             fingerprint: Some(fingerprint),
-            descendants,
+            descendants: Vec::new(),
             warnings,
         })
     }

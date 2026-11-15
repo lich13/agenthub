@@ -252,6 +252,7 @@ function ThreadList({
     () => {
       batch.clear();
     },
+    "archived",
   );
   const rename = useReadOnlyThreadActions({});
   const { feedback: menuFeedback, setFeedback: setMenuFeedback, copy: copyWithFeedback } =
@@ -382,7 +383,7 @@ function ThreadList({
         onRefresh={onRefresh}
         actions={newThread}
       />
-      <WorkspaceSearchInput value={q} onChange={setQ} placeholder="搜索标题或 ID" />
+      <WorkspaceSearchInput disabled={batch.busy || archivedBatch.busy} value={q} onChange={setQ} placeholder="搜索标题或 ID" />
       <div className="thread-scroll" onKeyDown={batch.onListKeyDown}>
         {error && (
           <div className="form-error" role="alert">
@@ -432,9 +433,7 @@ function ThreadList({
         </div>
       </div>
       <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
-      {archivedOpen && (
-        <SessionBatchControls batch={archivedBatch} operations={["restore", "delete"]} />
-      )}
+      <SessionBatchControls batch={archivedBatch} operations={["restore", "delete"]} showSelection={archivedOpen} />
       {menuFeedback && (
         <div role="status" className="task-feedback">
           {menuFeedback}

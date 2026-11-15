@@ -182,7 +182,34 @@ impl DeletionContext {
             .map(Ok)
             .unwrap_or_else(|| locate(paths, key))
     }
-    pub(crate) fn select_preview(&mut self, keys: &[String]) {
+    fn register(&mut self, paths: &ClaudePaths, key: &str) -> Result<()> {
+        if self.by_key.contains_key(key) {
+            return Ok(());
+        }
+        let main = locate(paths, key)?;
+        let id = main
+            .file_stem()
+            .context("会话文件名缺失")?
+            .to_string_lossy()
+            .into_owned();
+        if delete_file_exists(&main)? {
+            // An existing file outside the batch index cannot prove ownership
+            // of every copy of this ID, even when explicitly selected.
+            self.unindexed_ids.insert(id.clone());
+        }
+        let copies = self.remaining.entry(id.clone()).or_default();
+        copies.insert(main.clone());
+        if copies.len() > 1 {
+            self.shared.insert(id);
+        }
+        self.by_key.insert(key.into(), main);
+        Ok(())
+    }
+    pub(crate) fn select_preview(&mut self, paths: &ClaudePaths, keys: &[String]) {
+        for key in keys {
+            // A failed target remains a per-item preview error.
+            let _ = self.register(paths, key);
+        }
         let selected: HashSet<_> = keys.iter().filter_map(|key| self.by_key.get(key)).collect();
         let mut last = HashMap::new();
         for path in keys.iter().filter_map(|key| self.by_key.get(key)) {
@@ -191,9 +218,11 @@ impl DeletionContext {
         self.preview_shared = last
             .into_iter()
             .filter(|(id, _)| {
-                self.remaining
-                    .get(id.as_ref())
-                    .is_none_or(|copies| copies.iter().all(|path| selected.contains(path)))
+                !self.unindexed_ids.contains(id.as_ref())
+                    && self
+                        .remaining
+                        .get(id.as_ref())
+                        .is_none_or(|copies| copies.iter().all(|path| selected.contains(path)))
             })
             .map(|(_, path)| path.clone())
             .collect();
@@ -262,7 +291,7 @@ fn delete_paths(
 
 pub fn preview_claude_delete(paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
     let mut context = DeletionContext::new(paths)?;
-    context.select_preview(&[key.to_owned()]);
+    context.select_preview(paths, &[key.to_owned()]);
     context.preview(paths, key)
 }
 
@@ -379,7 +408,7 @@ pub(crate) fn find_empty_inactive_sessions(
         .iter()
         .map(|(summary, _, _)| summary.session_key.clone())
         .collect();
-    context.select_preview(&keys);
+    context.select_preview(paths, &keys);
     out.retain_mut(
         |(summary, _, bytes)| match context.preview(paths, &summary.session_key) {
             Ok(preview) if preview.warnings.is_none() => {
@@ -593,6 +622,7 @@ fn delete_exclusive(
     context: &mut DeletionContext,
 ) -> Result<PendingDelete> {
     ensure!(request.confirmed, "删除需要明确确认");
+    context.register(paths, &request.session_key)?;
     let main = context.locate(paths, &request.session_key)?;
     let id = main
         .file_stem()
@@ -607,21 +637,7 @@ fn delete_exclusive(
         crate::session_delete::within(&projects, &main),
         "Claude 会话路径越界"
     );
-    let exists = delete_file_exists(&main)?;
-    if !context.by_key.contains_key(&request.session_key) {
-        if exists {
-            // A file discovered after the batch index cannot prove that all
-            // copies of this ID were included in that index.
-            context.unindexed_ids.insert(id.clone());
-        } else {
-            // A previously located, now missing main still owns its sidecars.
-            let copies = context.remaining.entry(id.clone()).or_default();
-            copies.insert(main.clone());
-            if copies.len() > 1 {
-                context.shared.insert(id.clone());
-            }
-        }
-    }
+    delete_file_exists(&main)?;
     // Unified cleanup supplies a fingerprint; ordinary deletion does not read
     // transcript contents or inspect/stop the native session's process.
     if !request.fingerprint.is_empty() {
@@ -723,11 +739,19 @@ pub(crate) fn execute_claude_delete_batch(
                 .collect()
         }
     };
+    let registered: Vec<_> = requests
+        .iter()
+        .map(|request| context.register(paths, &request.session_key))
+        .collect();
     let jobs = background_jobs(paths);
     let mut native = NativeCleanup::default();
     let mut pending: Vec<_> = requests
         .into_iter()
-        .map(|request| delete_exclusive(paths, request, &jobs, &mut native, &mut context))
+        .zip(registered)
+        .map(|(request, registered)| {
+            registered?;
+            delete_exclusive(paths, request, &jobs, &mut native, &mut context)
+        })
         .collect();
     let mut indexes = std::collections::BTreeMap::<PathBuf, BTreeSet<String>>::new();
     for item in pending
@@ -892,34 +916,45 @@ mod native_delete_tests {
 
     #[test]
     fn newly_discovered_main_does_not_authorize_native_or_shared_cleanup() {
-        let root = env::temp_dir().join(format!("agenthub-unindexed-{}", uuid::Uuid::new_v4()));
-        let paths = ClaudePaths {
-            config: root.clone(),
-            projects: root.join("projects"),
-        };
-        fs::create_dir_all(paths.projects.join("first")).unwrap();
-        fs::create_dir_all(paths.projects.join("second")).unwrap();
-        let project_root = paths.projects.canonicalize().unwrap();
-        let indexed = project_root.join("first/fixture.jsonl");
-        let added = project_root.join("second/fixture.jsonl");
-        fs::write(&indexed, "").unwrap();
-        let mut context = DeletionContext::new(&paths).unwrap();
-        fs::write(&added, "").unwrap();
-        let jobs = Err(anyhow::anyhow!("native jobs must be preserved"));
-        let mut native = NativeCleanup::default();
-        for path in [&added, &indexed] {
-            let request = ClaudeDeleteRequest {
-                session_key: key_for(&project_root, path, "fixture"),
-                confirmed: true,
-                fingerprint: String::new(),
+        for indexed_first in [false, true] {
+            let root = env::temp_dir().join(format!("agenthub-unindexed-{}", uuid::Uuid::new_v4()));
+            let paths = ClaudePaths {
+                config: root.clone(),
+                projects: root.join("projects"),
             };
-            let result =
-                delete_exclusive(&paths, request, &jobs, &mut native, &mut context).unwrap();
-            assert!(result.outcome.residuals.is_empty());
-            assert!(!path.exists());
+            fs::create_dir_all(paths.projects.join("first")).unwrap();
+            fs::create_dir_all(paths.projects.join("second")).unwrap();
+            let project_root = paths.projects.canonicalize().unwrap();
+            let indexed = project_root.join("first/fixture.jsonl");
+            let added = project_root.join("second/fixture.jsonl");
+            fs::write(&indexed, "").unwrap();
+            let mut context = DeletionContext::new(&paths).unwrap();
+            fs::write(&added, "").unwrap();
+            let jobs = Err(anyhow::anyhow!("native jobs must be preserved"));
+            let mut native = NativeCleanup::default();
+            let mut selected = vec![&added, &indexed];
+            if indexed_first {
+                selected.reverse();
+            }
+            for path in &selected {
+                context
+                    .register(&paths, &key_for(&project_root, path, "fixture"))
+                    .unwrap();
+            }
+            for path in selected {
+                let request = ClaudeDeleteRequest {
+                    session_key: key_for(&project_root, path, "fixture"),
+                    confirmed: true,
+                    fingerprint: String::new(),
+                };
+                let result =
+                    delete_exclusive(&paths, request, &jobs, &mut native, &mut context).unwrap();
+                assert!(result.outcome.residuals.is_empty());
+                assert!(!path.exists());
+            }
+            assert!(context.unindexed_ids.contains("fixture"));
+            fs::remove_dir_all(root).unwrap();
         }
-        assert!(context.unindexed_ids.contains("fixture"));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

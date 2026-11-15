@@ -416,6 +416,7 @@ fn xml_escape(value: &str) -> String {
 pub fn ensure_probe_error_monitor_launch_agent(
     platform: &PlatformPaths,
     enabled: bool,
+    helper_changed: bool,
 ) -> Result<ProbeErrorMonitorLaunchAgentStatus> {
     if platform.kind != PlatformKind::Macos {
         return Ok(ProbeErrorMonitorLaunchAgentStatus {
@@ -433,6 +434,7 @@ pub fn ensure_probe_error_monitor_launch_agent(
     ensure_probe_error_monitor_launch_agent_at(
         platform,
         enabled,
+        helper_changed,
         &home.join("Library/LaunchAgents"),
         Path::new("/bin/launchctl"),
     )
@@ -442,6 +444,7 @@ pub fn ensure_probe_error_monitor_launch_agent(
 pub fn ensure_probe_error_monitor_launch_agent_at(
     platform: &PlatformPaths,
     enabled: bool,
+    helper_changed: bool,
     launch_agents_dir: &Path,
     launchctl: &Path,
 ) -> Result<ProbeErrorMonitorLaunchAgentStatus> {
@@ -503,7 +506,8 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
     if changed {
         fs::write(&plist_path, desired)?;
     }
-    if changed && loaded_before {
+    let reload = changed || helper_changed;
+    if reload && loaded_before {
         let status = Command::new(launchctl)
             .arg("bootout")
             .arg(&service)
@@ -514,7 +518,7 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
             "launchctl bootout stale Probe error monitor failed"
         );
     }
-    if changed || !loaded_before {
+    if reload || !loaded_before {
         let status = Command::new(launchctl)
             .arg("bootstrap")
             .arg(&domain)
@@ -532,21 +536,22 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
         .output()
         .is_ok_and(|output| output.status.success());
     anyhow::ensure!(loaded, "Probe error monitor LaunchAgent is not loaded");
-    let status = Command::new(launchctl)
-        .arg("kickstart")
-        .arg("-k")
-        .arg(&service)
-        .status()
-        .context("restart Probe error monitor LaunchAgent")?;
-    anyhow::ensure!(
-        status.success(),
-        "launchctl kickstart Probe error monitor failed"
-    );
+    if !reload && loaded_before {
+        let status = Command::new(launchctl)
+            .arg("kickstart")
+            .arg(&service)
+            .status()
+            .context("start Probe error monitor LaunchAgent")?;
+        anyhow::ensure!(
+            status.success(),
+            "launchctl kickstart Probe error monitor failed"
+        );
+    }
     Ok(ProbeErrorMonitorLaunchAgentStatus {
         supported: true,
         enabled: true,
         loaded,
-        changed,
+        changed: reload,
         label: PROBE_ERROR_MONITOR_LAUNCH_AGENT_LABEL.to_string(),
         plist_path: Some(plist_path),
         helper_path: helper,

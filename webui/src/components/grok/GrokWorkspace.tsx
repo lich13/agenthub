@@ -178,7 +178,7 @@ export function GrokWorkspace({}: {}) {
                 if (selected && detailVisible) void detail.refetch();
               }}
             />
-            <WorkspaceSearchInput value={query} onChange={setQuery} placeholder="搜索任务" />
+            <WorkspaceSearchInput disabled={batch.busy} value={query} onChange={setQuery} placeholder="搜索任务" />
             <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
               {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
               {sessions.data?.map(item => (

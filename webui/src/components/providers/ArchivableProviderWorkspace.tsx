@@ -106,6 +106,7 @@ export function ArchivableProviderWorkspace({
     () => {
       batch.clear();
     },
+    "archived",
   );
 
   const detailTargetKey = pendingSearch && selectedKey ? selectedKey : listed?.sessionKey ?? null;
@@ -318,7 +319,7 @@ export function ArchivableProviderWorkspace({
           />
           <WorkspaceSearchInput
             value={query}
-            disabled={supported === false}
+            disabled={supported === false || batch.busy || archivedBatch.busy}
             onChange={setQuery}
             placeholder="搜索标题、ID 或工作目录"
           />
@@ -381,9 +382,7 @@ export function ArchivableProviderWorkspace({
           {supported === true && (
             <>
               <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
-              {archivedOpen && (
-                <SessionBatchControls batch={archivedBatch} operations={["restore", "delete"]} />
-              )}
+              <SessionBatchControls batch={archivedBatch} operations={["restore", "delete"]} showSelection={archivedOpen} />
             </>
           )}
         </>

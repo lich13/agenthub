@@ -108,18 +108,6 @@ pub(crate) fn descendants_from_edges(
     Ok(seen.into_iter().collect())
 }
 
-pub(crate) fn descendants(paths: &CodexPaths, roots: &[String]) -> Result<Vec<String>> {
-    for id in roots {
-        session_delete::valid_id(id)?;
-    }
-    descendants_from_edges(&spawn_edges(paths)?, roots)
-}
-
-struct Inventory {
-    files: BTreeSet<PathBuf>,
-    errors: Vec<String>,
-}
-
 struct BatchInventory {
     files_by_id: BTreeMap<String, BTreeSet<PathBuf>>,
     errors: Vec<String>,
@@ -283,14 +271,6 @@ fn collect_inventory_by_id(paths: &CodexPaths, ids: &BTreeSet<String>) -> BatchI
     result
 }
 
-fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
-    let batch = collect_inventory_by_id(paths, ids);
-    Inventory {
-        files: batch.files_by_id.into_values().flatten().collect(),
-        errors: batch.errors,
-    }
-}
-
 const DELETE_RESIDUALS_FILE: &str = ".agenthub-delete-residuals.json";
 
 fn delete_residuals_path(paths: &CodexPaths) -> PathBuf {
@@ -351,10 +331,11 @@ pub(crate) fn has_orphan_artifacts(paths: &CodexPaths, id: &str) -> bool {
         return false;
     }
     let ids = BTreeSet::from([id.to_string()]);
-    let inv = inventory(paths, &ids);
+    let inv = collect_inventory_by_id(paths, &ids);
     if inv
-        .files
-        .iter()
+        .files_by_id
+        .values()
+        .flatten()
         .any(|path| fs::symlink_metadata(path).is_ok())
     {
         return true;
@@ -484,35 +465,75 @@ pub(crate) fn ensure_ids_not_running(
     Ok(())
 }
 
-pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Result<TreePreview> {
-    session_delete::valid_id(id)?;
-    let (ids, relation_error) = if include_descendants {
-        match descendants(paths, &[id.into()]) {
-            Ok(ids) => (ids, None),
-            Err(error) => (vec![id.into()], Some(format!("父子关联无法读取: {error}"))),
-        }
-    } else {
-        (vec![id.into()], None)
-    };
-    let mut found = inventory(paths, &ids.iter().cloned().collect());
-    found.errors.extend(relation_error);
-    let files: Vec<_> = found
-        .files
-        .into_iter()
-        .filter(|p| fs::symlink_metadata(p).is_ok())
+pub(crate) fn preview_batch(
+    paths: &CodexPaths,
+    roots: &[String],
+    include_descendants: bool,
+) -> Vec<Result<TreePreview>> {
+    let edges = include_descendants.then(|| spawn_edges(paths));
+    let selections: Vec<Result<_>> = roots
+        .iter()
+        .map(|id| {
+            session_delete::valid_id(id)?;
+            let related = edges.as_ref().map(|edges| {
+                edges
+                    .as_ref()
+                    .map_err(|error| anyhow::anyhow!("{error}"))
+                    .and_then(|edges| descendants_from_edges(edges, std::slice::from_ref(id)))
+            });
+            Ok(match related {
+                Some(Ok(ids)) => (ids, None),
+                Some(Err(error)) => (vec![id.clone()], Some(format!("父子关联无法读取: {error}"))),
+                None => (vec![id.clone()], None),
+            })
+        })
         .collect();
-    let (_, bytes) = session_delete::size(&files);
-    Ok(TreePreview {
-        selected: SelectedCodexPreview {
-            id: id.into(),
-            title: id.into(),
-            paths: files,
-            bytes,
-            fingerprint: String::new(),
-        },
-        ids,
-        warnings: found.errors,
-    })
+    let ids = selections
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .flat_map(|(ids, _)| ids.iter().cloned())
+        .collect();
+    let inventory = collect_inventory_by_id(paths, &ids);
+    let mut sizes = BTreeMap::new();
+    roots
+        .iter()
+        .zip(selections)
+        .map(|(id, selection)| {
+            let (ids, relation_error) = selection?;
+            let paths: BTreeSet<_> = ids
+                .iter()
+                .filter_map(|id| inventory.files_by_id.get(id))
+                .flatten()
+                .cloned()
+                .collect();
+            let mut files = Vec::new();
+            let mut bytes = 0u64;
+            for path in paths {
+                let size = sizes.entry(path.clone()).or_insert_with(|| {
+                    fs::symlink_metadata(&path)
+                        .ok()
+                        .map(|_| session_delete::size(std::slice::from_ref(&path)).1)
+                });
+                if let Some(size) = size {
+                    files.push(path);
+                    bytes = bytes.saturating_add(*size);
+                }
+            }
+            let mut warnings = inventory.errors.clone();
+            warnings.extend(relation_error);
+            Ok(TreePreview {
+                selected: SelectedCodexPreview {
+                    id: id.clone(),
+                    title: id.clone(),
+                    paths: files,
+                    bytes,
+                    fingerprint: String::new(),
+                },
+                ids,
+                warnings,
+            })
+        })
+        .collect()
 }
 
 /// Single-pass batch size estimator for `ids` (avoids `O(K * N)` directory walks during dry-run).

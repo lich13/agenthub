@@ -977,6 +977,112 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
 }
 
 #[tokio::test]
+async fn a_failed_repository_cannot_borrow_another_repositories_observation_after_bot_cutoff() {
+    for code in [500, 429] {
+        let fixture = Database::new();
+        let server = Server::new().await;
+        let mut monitor = server.monitor();
+        let mut state = Stored::default();
+        let mut config = Config::default();
+        config.probe.notifications.notify_github_ci = true;
+        let time = 1_800_000_000_000;
+        server.set("/user", json!(account()));
+        server.set(
+            "/user/repos?affiliation=owner&per_page=100",
+            json!([
+                {"id":11,"full_name":"fixture/other"},{"id":10,"full_name":"fixture/repo"}
+            ]),
+        );
+        let good = "/repos/fixture/other/actions/runs?per_page=10";
+        let failed = "/repos/fixture/repo/actions/runs?per_page=10";
+        let mut bot = serde_json::to_value(run(1, "in_progress", None, 1, time)).unwrap();
+        bot["actor"] = json!({"type":"Bot"});
+        server.set(good, json!({"workflow_runs":[]}));
+        server.set(failed, json!({"workflow_runs":[bot.clone()]}));
+        monitor
+            .scan_with_config(&mut state, &config, true, time)
+            .await
+            .unwrap();
+        state.snapshot.bot_baseline_ms = time + 2000;
+        config.probe.notifications.github_ci_filter_bots = false;
+        server.reply(
+            failed,
+            code,
+            json!({}),
+            if code == 429 {
+                "Retry-After: 1\r\n"
+            } else {
+                ""
+            },
+        );
+        assert!(monitor
+            .scan_with_config(&mut state, &config, true, time + 3000)
+            .await
+            .is_err());
+        state.snapshot.last_scan_ms = time + 3000;
+        assert_eq!(state.snapshot.repository_observed_ms[&10], time);
+        assert_eq!(state.snapshot.repository_observed_ms[&11], time + 3000);
+        save(&fixture.db, &state).unwrap();
+        state = load(&fixture.db).unwrap();
+        monitor = server.monitor();
+        bot["status"] = "completed".into();
+        bot["conclusion"] = "success".into();
+        bot["updated_at"] = json!(chrono::DateTime::from_timestamp_millis(time + 1000)
+            .unwrap()
+            .to_rfc3339());
+        server.set(failed, json!({"workflow_runs":[bot]}));
+        monitor
+            .scan_with_config(&mut state, &config, true, time + 4000)
+            .await
+            .unwrap();
+        assert!(state.pending.is_empty());
+        assert_eq!(state.snapshot.repository_observed_ms[&10], time + 4000);
+    }
+}
+
+#[tokio::test]
+async fn direct_config_bot_toggles_reset_each_cutoff_even_when_repository_reads_fail() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    let config_path = fixture.root.join("config.toml");
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([{"id":10,"full_name":"fixture/repo"}]),
+    );
+    let path = "/repos/fixture/repo/actions/runs?per_page=10";
+    server.set(path, json!({"workflow_runs":[]}));
+    for filtered in [true, false, true, false] {
+        config.probe.notifications.github_ci_filter_bots = filtered;
+        std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+        if !filtered {
+            let mut state = load(&fixture.db).unwrap();
+            state.snapshot.bot_baseline_ms = 1;
+            save(&fixture.db, &state).unwrap();
+            server.reply(path, 500, json!({}), "");
+        }
+        monitor.next_poll_ms = 0;
+        monitor.repository_due_ms.insert(10, 0);
+        let before = now();
+        monitor
+            .tick_with_token(&fixture.db, &|| Config::load(&config_path), async {
+                Ok("fixture-only".into())
+            })
+            .await
+            .unwrap();
+        let state = load(&fixture.db).unwrap();
+        assert_eq!(state.snapshot.filter_bots, filtered);
+        if !filtered {
+            assert!(state.snapshot.bot_baseline_ms >= before);
+            assert!(state.snapshot.error.is_some());
+        }
+    }
+}
+
+#[tokio::test]
 async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_304_summaries() {
     let fixture = Database::new();
     let server = Server::new().await;
@@ -1391,6 +1497,10 @@ fn whole_second_completions_use_observations_from_the_current_source_baseline() 
             .insert(10, second + 200);
         state.snapshot.bot_baseline_ms = second + 300;
         state.snapshot.last_scan_ms = second + 400;
+        state
+            .snapshot
+            .repository_observed_ms
+            .insert(10, second + 400);
         let mut finished = running.clone();
         finished.status = "completed".into();
         finished.conclusion = Some("success".into());
@@ -1579,6 +1689,10 @@ fn bot_toggle_same_second_requires_the_same_observed_unfinished_attempt() {
             second - 10000,
         );
         state.snapshot.last_scan_ms = second - 5000;
+        state
+            .snapshot
+            .repository_observed_ms
+            .insert(10, second - 5000);
         state.snapshot.bot_baseline_ms = second + 450;
         let mut finished = run(1, "completed", Some("success"), attempt, finished_ms);
         finished.is_bot = true;

@@ -118,13 +118,16 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             edit_menu::install(app.handle())?;
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?;
-            }
+            let helper_changed = if let Ok(resource_dir) = app.path().resource_dir() {
+                resources::sync_agenthub_webd_helper_from_resource(&resource_dir)?
+            } else {
+                false
+            };
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             if let Err(error) = resources::repair_probe_error_monitor_launch_agent(
                 &state.config(),
                 state.platform(),
+                helper_changed,
             ) {
                 eprintln!("Probe monitor repair failed: {error}");
             }

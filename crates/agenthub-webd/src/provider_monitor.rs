@@ -104,15 +104,20 @@ async fn deliver_pending(
     let deliveries = db.pending_native_deliveries(100, provider)?;
     for delivery in deliveries {
         let config = &load_config()?;
+        let enabled = delivery.provider.enabled(config)
+            && delivery
+                .provider
+                .event_enabled(config, &delivery.event.kind);
+        if enabled && claude_completion_deferred(&delivery).await {
+            // Normal native work is not a failed Bark attempt. Keep the encrypted
+            // native event pending so a verified Stop hook can still claim it.
+            continue;
+        }
         // The delivery queue rechecks each source immediately before sending;
         // temporary read errors retain the existing bounded retries.
         if !db.claim_native_delivery(&delivery.event_key)? {
             continue;
         }
-        let enabled = delivery.provider.enabled(config)
-            && delivery
-                .provider
-                .event_enabled(config, &delivery.event.kind);
         let outcome = if !enabled {
             ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
@@ -127,6 +132,26 @@ async fn deliver_pending(
         db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
     }
     Ok(())
+}
+
+async fn claude_completion_deferred(delivery: &agenthub_core::db::NativeDelivery) -> bool {
+    if delivery.provider != NativeProvider::Claude || delivery.event.kind != "completion" {
+        return false;
+    }
+    let delivery = delivery.clone();
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::claude::notification_context_for_key(
+            &agenthub_core::claude::ClaudePaths::default_for_user(),
+            &delivery.session_key,
+        )
+        .is_ok_and(|context| {
+            context.stream.id == delivery.thread_id
+                && context.stream.session_key == delivery.session_key
+                && context.completion_deferred(&delivery.event.turn_id)
+        })
+    })
+    .await
+    .unwrap_or(false)
 }
 
 pub(super) async fn scan(provider: NativeProvider) -> Result<NativeScan> {
@@ -274,6 +299,145 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     use serde_json::Value;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn busy_claude_waits_without_claiming_bark_and_ready_poll_or_hook_sends_once() {
+        use serde_json::json;
+        use std::{fs, process::Command};
+        struct Owner(std::process::Child);
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        for hook_first in [false, true] {
+            let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
+            let (mut config, root) = sandboxed_test_config();
+            config.probe.notifications.enabled = true;
+            config.probe.notifications.server_url = server.url();
+            let claude_root = root.join("claude");
+            let _env = crate::api::test_support::AsyncEnvGuard::set_many(&[(
+                "CLAUDE_CONFIG_DIR",
+                &claude_root,
+            )])
+            .await;
+            let paths = agenthub_core::claude::ClaudePaths::default_for_user();
+            fs::create_dir_all(paths.projects.join("fixture")).unwrap();
+            fs::create_dir_all(paths.config.join("sessions")).unwrap();
+            let cwd = root.canonicalize().unwrap();
+            let executable = cwd.join("claude-owner/claude");
+            fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            fs::copy("/bin/sleep", &executable).unwrap();
+            let owner = Owner(
+                Command::new(&executable)
+                    .arg("60")
+                    .current_dir(&cwd)
+                    .spawn()
+                    .unwrap(),
+            );
+            let output = Command::new("ps")
+                .args(["-p", &owner.0.id().to_string(), "-o", "lstart="])
+                .env("LC_ALL", "C")
+                .env("TZ", "UTC")
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let proc_start = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+            let domain = if cfg!(target_os = "macos") {
+                "darwin".to_owned()
+            } else {
+                format!(
+                    "linux:{}:{}",
+                    fs::read_to_string("/etc/machine-id").unwrap().trim(),
+                    fs::read_link("/proc/self/ns/pid").unwrap().display()
+                )
+            };
+            let registration = paths.config.join("sessions/fixture.json");
+            let mut row = json!({"pid":owner.0.id(),"sessionId":"fixture","cwd":cwd,"procStart":proc_start,"startedAt":chrono::Utc::now().timestamp_millis(),"pidDomain":domain,"status":"busy"});
+            fs::write(&registration, row.to_string()).unwrap();
+            let db = PanelDb::open_with_secret_box(
+                root.join("pending.sqlite"),
+                agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap();
+            db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+                .unwrap();
+            db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+                .unwrap();
+            let timestamp = chrono::DateTime::from_timestamp_millis(
+                chrono::Utc::now().timestamp_millis() + 1000,
+            )
+            .unwrap()
+            .to_rfc3339();
+            let transcript = paths.projects.join("fixture/fixture.jsonl");
+            let rows = [
+                json!({"type":"user","uuid":"user","promptId":"prompt-fixture","sessionId":"fixture","cwd":cwd,"version":"2.1.322","timestamp":timestamp,"message":{"role":"user","content":"Fixture request"}}),
+                json!({"type":"assistant","uuid":"answer","parentUuid":"user","sessionId":"fixture","cwd":cwd,"version":"2.1.322","timestamp":timestamp,"message":{"role":"assistant","content":"Fixture ready","stop_reason":"end_turn"}}),
+            ];
+            fs::write(
+                &transcript,
+                rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+            )
+            .unwrap();
+            let scan = native_probe::scan(NativeProvider::Claude).unwrap();
+            assert_eq!(
+                db.stage_native_notifications_with_hooks(
+                    NativeProvider::Claude,
+                    &scan,
+                    &config,
+                    true
+                )
+                .unwrap(),
+                1
+            );
+            for _ in 0..4 {
+                deliver_pending(&|| Ok(config.clone()), &db, None)
+                    .await
+                    .unwrap();
+                assert_eq!(db.pending_native_deliveries(100, None).unwrap().len(), 1);
+                assert!(db.list_probe_events(10).unwrap().is_empty());
+                assert_eq!(
+                    rusqlite::Connection::open(db.path())
+                        .unwrap()
+                        .query_row(
+                            "SELECT COUNT(*) FROM probe_notification_deliveries",
+                            [],
+                            |r| r.get::<_, u64>(0)
+                        )
+                        .unwrap(),
+                    0
+                );
+            }
+            if hook_first {
+                let hook = crate::claude_hook::parse(&json!({"session_id":"fixture","prompt_id":"prompt-fixture","transcript_path":transcript,"hook_event_name":"Stop","last_assistant_message":"Fixture ready","background_tasks":[]})).unwrap().unwrap();
+                notification_delivery::claude_hook(
+                    &|| Ok(config.clone()),
+                    &db,
+                    hook,
+                    Duration::from_secs(3),
+                )
+                .await
+                .unwrap();
+            }
+            row["status"] = "idle".into();
+            fs::write(&registration, row.to_string()).unwrap();
+            agenthub_core::evict_idle_detail_caches(Duration::ZERO);
+            deliver_pending(&|| Ok(config.clone()), &db, None)
+                .await
+                .unwrap();
+            deliver_pending(&|| Ok(config.clone()), &db, None)
+                .await
+                .unwrap();
+            assert!(server.request().contains("Fixture ready"));
+            let requests: u64 = rusqlite::Connection::open(db.path()).unwrap().query_row("SELECT SUM(attempts) FROM probe_notification_deliveries WHERE event_key LIKE 'native:%'", [], |r| r.get(0)).unwrap();
+            assert_eq!(requests, 1);
+            assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn provider_hook_leaves_other_pending_notifications_and_bodies_intact() {

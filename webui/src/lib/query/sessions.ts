@@ -33,10 +33,12 @@ export function useSessionSelection(
   onSucceeded?: (keys: string[], operation: SessionOperation) => void,
   activeKey?: string | null,
   onSelectionStart?: () => void,
+  partition: "active" | "archived" = "active",
 ) {
   const client = useQueryClient();
   const connection = useConnection();
   const scope = `${connection.revision}\0${connection.target}\0${provider}\0${filterKey}`;
+  const executionScope = `${connection.revision}\0${connection.target}\0${provider}\0${partition}`;
   const returnFocus = useRef<HTMLElement | null>(null);
   const [state, setState] = useState(() => emptySessionSelection(scope));
   const current = syncSessionSelection(state, scope, keys);
@@ -45,6 +47,10 @@ export function useSessionSelection(
   const [result, setResult] = useState<SessionBatchResult | null>(null);
   const epoch = useRef({ scope, value: 0 });
   if (epoch.current.scope !== scope) epoch.current = { scope, value: epoch.current.value + 1 };
+  const executionEpoch = useRef({ scope: executionScope, value: 0 });
+  if (executionEpoch.current.scope !== executionScope) {
+    executionEpoch.current = { scope: executionScope, value: executionEpoch.current.value + 1 };
+  }
 
   const prepare = useMutation({
     mutationFn: async (
@@ -54,7 +60,6 @@ export function useSessionSelection(
       const sessionKeys = typeof input === "string" ? selection : input.keys;
       const generation = epoch.current.value;
       const includeDescendants = hasSubagentTree(provider, operation);
-      if (generation !== epoch.current.value) throw new Error("选择范围已变化，请重新预览");
       const response: SessionBatchPreview = { provider, operation, items: [] };
       const size = operation === "delete" ? Math.max(1, sessionKeys.length) : 100;
       for (let start = 0; start < sessionKeys.length; start += size) {
@@ -77,7 +82,7 @@ export function useSessionSelection(
   const execute = useMutation({
     mutationFn: async () => {
       if (!preview) throw new Error("请先重新预览");
-      const generation = epoch.current.value;
+      const generation = executionEpoch.current.value;
       const request = preview;
       // Every attempt consumes its preview, including an uncertain transport failure.
       setPreview(null);
@@ -93,7 +98,7 @@ export function useSessionSelection(
       const size = request.operation === "delete" ? Math.max(1, items.length) : 100;
       const includeDescendants = hasSubagentTree(request.provider, request.operation);
       for (let start = 0; start < items.length; start += size) {
-        if (generation !== epoch.current.value) throw new Error("选择范围已变化");
+        if (generation !== executionEpoch.current.value) throw new Error("连接范围已变化");
         const batchResult = await executeSessionBatch({
           provider: request.provider,
           operation: request.operation,
@@ -106,6 +111,7 @@ export function useSessionSelection(
       return { response, generation, operation: request.operation };
     },
     onSuccess: ({ response, generation, operation }) => {
+      if (generation !== executionEpoch.current.value) return;
       const succeeded = [
         ...new Set(
           response.items.flatMap(i => [
@@ -114,19 +120,17 @@ export function useSessionSelection(
           ]),
         ),
       ];
-      if (generation === epoch.current.value) {
-        onSucceeded?.(succeeded, operation);
-        setResult(response);
-        setState(prev => {
-          const remaining = prev.keys.filter(key => !succeeded.includes(key));
-          return {
-            ...prev,
-            selecting: remaining.length > 0 && prev.selecting,
-            keys: remaining,
-            anchor: prev.anchor && succeeded.includes(prev.anchor) ? null : prev.anchor,
-          };
-        });
-      }
+      onSucceeded?.(succeeded, operation);
+      setResult(response);
+      setState(prev => {
+        const remaining = prev.keys.filter(key => !succeeded.includes(key));
+        return {
+          ...prev,
+          selecting: remaining.length > 0 && prev.selecting,
+          keys: remaining,
+          anchor: prev.anchor && succeeded.includes(prev.anchor) ? null : prev.anchor,
+        };
+      });
       void client.invalidateQueries({
         predicate: query =>
           provider === "codex"
@@ -141,8 +145,13 @@ export function useSessionSelection(
     setPreview(null);
     setResult(null);
     prepare.reset();
-    execute.reset();
+    if (!execute.isPending) execute.reset();
   }, [scope]);
+
+  useEffect(() => {
+    execute.reset();
+    setResult(null);
+  }, [executionScope]);
 
   const visibleKeys = keys.join("\0");
   useEffect(() => {
@@ -183,10 +192,10 @@ export function useSessionSelection(
 
   const clear = () => {
     // Clearing a drawer must not interrupt a batch already being executed.
-    if (!execute.isPending) epoch.current.value += 1;
+    epoch.current.value += 1;
     setPreview(null);
     setResult(null);
-    if (!prepare.isPending) prepare.reset();
+    prepare.reset();
     if (!execute.isPending) execute.reset();
     setState({ ...current, selecting: false, keys: [], anchor: null, notice: null });
   };
@@ -247,6 +256,7 @@ export function useSessionSelection(
     toggle: (key: string) =>
       select(key, { detail: 1, metaKey: true, shiftKey: false, ctrlKey: false }, () => {}),
     prepareSingle: (key: string, operation: SessionOperation, origin?: HTMLElement | null) => {
+      if (busy) return;
       onSelectionStart?.();
       returnFocus.current =
         origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -254,6 +264,8 @@ export function useSessionSelection(
       setState({ ...current, selecting: false, keys: [key], anchor: key, notice: null });
       setResult(null);
       setPreview(null);
+      execute.reset();
+      prepare.reset();
       prepare.mutate({ operation, keys: [key] });
     },
     cancel: clear,
@@ -262,6 +274,7 @@ export function useSessionSelection(
     dismissPreview: () => {
       epoch.current.value += 1;
       setPreview(null);
+      prepare.reset();
     },
   };
 }

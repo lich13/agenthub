@@ -1,6 +1,10 @@
 use super::*;
 use serde_json::json;
 
+fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Result<TreePreview> {
+    preview_batch(paths, &[id.to_owned()], include_descendants).remove(0)
+}
+
 fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutcome> {
     execute_batch(paths, &[selected.to_vec()]).remove(0)
 }
@@ -67,6 +71,47 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.paths.home);
+    }
+}
+
+#[test]
+fn batch_preview_matches_individual_targets_with_overlaps_missing_files_and_warnings() {
+    for broken_index in [false, true] {
+        let f = Fixture::new();
+        fs::write(
+            rollout_file::compressed_path(&f.file(CHILD)),
+            "compressed fixture",
+        )
+        .unwrap();
+        fs::remove_file(f.file(OTHER)).unwrap();
+        fs::create_dir_all(f.paths.home.join("shell_snapshots")).unwrap();
+        fs::write(
+            f.paths
+                .home
+                .join("shell_snapshots")
+                .join(format!("{CHILD}.sh")),
+            "snapshot",
+        )
+        .unwrap();
+        if broken_index {
+            fs::write(f.paths.state_db(), "broken SQLite fixture").unwrap();
+        }
+        let keys = [ROOT.into(), CHILD.into(), OTHER.into(), "../invalid".into()];
+        let batch = preview_batch(&f.paths, &keys, true);
+        for (key, item) in keys.iter().zip(batch) {
+            let single = preview(&f.paths, key, true);
+            if key == "../invalid" {
+                assert!(item.is_err() && single.is_err());
+                continue;
+            }
+            let item = item.unwrap();
+            let single = single.unwrap();
+            assert_eq!(item.selected.paths, single.selected.paths);
+            assert_eq!(item.selected.bytes, single.selected.bytes);
+            assert_eq!(item.ids, single.ids);
+            assert_eq!(item.warnings, single.warnings);
+            assert_eq!(item.warnings.is_empty(), !broken_index);
+        }
     }
 }
 
@@ -229,7 +274,7 @@ fn cycles_and_missing_child_rows_are_deduplicated() {
             [CHILD],
         )
         .unwrap();
-    let ids = descendants(&f.paths, &[ROOT.into()]).unwrap();
+    let ids = descendants_from_edges(&spawn_edges(&f.paths).unwrap(), &[ROOT.into()]).unwrap();
     assert_eq!(ids.len(), 3);
     assert!(execute_ids(&f.paths, &ids).unwrap().error.is_none());
 }

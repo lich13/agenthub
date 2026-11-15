@@ -699,6 +699,7 @@ export type GithubCiStatus = {
   filter_bots?: boolean;
   scanned_repository_ids?: number[];
   repository_baselines_ms?: Record<string, number>;
+  repository_observed_ms?: Record<string, number>;
   bot_baseline_ms?: number;
   error: string | null;
   refreshing: boolean;

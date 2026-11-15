@@ -11,6 +11,7 @@ fn snapshot() -> Snapshot {
         scanned_repository_ids: BTreeSet::from([2]),
         baseline_ms: 1,
         last_scan_ms: 10,
+        repository_observed_ms: BTreeMap::from([(2, 10)]),
         runs: vec![
             run(1, "completed", Some("success"), 1),
             run(2, "in_progress", None, 1),
@@ -26,6 +27,29 @@ fn run(id: u64, status: &str, conclusion: Option<&str>, attempt: u64) -> Run {
         "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
         "repository_id":2,"repository_name":"fixture/repo"
     })).unwrap()
+}
+
+#[test]
+fn unrelated_repository_updates_do_not_advance_failed_repository_observations() {
+    let mut observer = Observer::default();
+    let mut state = snapshot();
+    let time = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+        .unwrap()
+        .timestamp_millis();
+    state.runs[1].is_bot = true;
+    state.last_scan_ms = time - 5000;
+    state.repository_baselines_ms.insert(2, time - 10000);
+    state.repository_observed_ms.insert(2, time - 5000);
+    observer.observe(0, &state);
+    state.bot_baseline_ms = time + 1000;
+    state.last_scan_ms = time + 2000;
+    state.repository_observed_ms.insert(3, time + 2000);
+    assert!(observer.observe(0, &state).is_empty());
+    state.runs[1].status = "completed".into();
+    state.runs[1].conclusion = Some("success".into());
+    state.repository_observed_ms.insert(2, time + 3000);
+    state.last_scan_ms = time + 3000;
+    assert!(observer.observe(0, &state).is_empty());
 }
 
 #[test]
@@ -199,6 +223,7 @@ fn observed_completion_in_baseline_second_notifies_but_unseen_history_does_not()
             .timestamp_millis();
         state.baseline_ms = second + 100;
         state.last_scan_ms = second + 400;
+        state.repository_observed_ms.insert(2, second + 400);
         state.repository_baselines_ms.insert(2, second + 200);
         state.bot_baseline_ms = second + 300;
         for run in &mut state.runs {
@@ -242,6 +267,7 @@ fn bot_toggle_same_second_keeps_only_the_observed_attempt_with_a_current_reposit
             .unwrap()
             .timestamp_millis();
         state.last_scan_ms = second - 5000;
+        state.repository_observed_ms.insert(2, second - 5000);
         assert!(observer.observe(0, &state).is_empty());
         state.bot_baseline_ms = second + 450;
         if readded {

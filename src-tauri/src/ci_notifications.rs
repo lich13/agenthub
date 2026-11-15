@@ -1,7 +1,7 @@
 use agenthub_core::github_ci::{Event, Request, Snapshot};
 use agenthub_core::services::remote::{MachineTarget, RemoteInvokeRequest};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     time::Duration,
 };
 use tauri::Manager;
@@ -15,6 +15,7 @@ struct Observer {
     baseline_ms: i64,
     last_scan_ms: i64,
     repositories: BTreeSet<u64>,
+    repository_observed_ms: BTreeMap<u64, i64>,
     runs: HashMap<(u64, u64), (u64, bool)>,
 }
 
@@ -58,6 +59,11 @@ impl Observer {
                 } else {
                     0
                 });
+                let observed_ms = self
+                    .repository_observed_ms
+                    .get(&run.repository_id)
+                    .copied()
+                    .unwrap_or(0);
                 let finished_ms = chrono::DateTime::parse_from_rfc3339(&run.updated_at)
                     .map_or(0, |time| time.timestamp_millis());
                 if !initial
@@ -68,12 +74,12 @@ impl Observer {
                         || finished_ms > self.baseline_ms.max(source_baseline),
                         |(attempt, completed)| {
                             (*attempt != run.run_attempt || !completed)
-                                && (self.last_scan_ms >= source_baseline
+                                && (observed_ms >= source_baseline
                                     || finished_ms > source_baseline
                                     || (run.is_bot
                                         && *attempt == run.run_attempt
                                         && !completed
-                                        && self.last_scan_ms >= repository_baseline
+                                        && observed_ms >= repository_baseline
                                         && finished_ms.div_euclid(1000)
                                             == snapshot.bot_baseline_ms.div_euclid(1000)))
                         },
@@ -89,6 +95,7 @@ impl Observer {
             })
             .collect();
         self.repositories = snapshot.scanned_repository_ids.clone();
+        self.repository_observed_ms = snapshot.repository_observed_ms.clone();
         self.runs = runs;
         self.last_scan_ms = snapshot.last_scan_ms;
         events

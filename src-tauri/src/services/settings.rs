@@ -62,7 +62,7 @@ pub(crate) fn probe_save_settings_with_state(
     request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
     probe_save_settings_with_state_and_repair(state, request, |config, platform| {
-        crate::resources::repair_probe_error_monitor_launch_agent(config, platform)
+        crate::resources::repair_probe_error_monitor_launch_agent(config, platform, false)
             .map(|_| ())
             .map_err(anyhow::Error::msg)
     })

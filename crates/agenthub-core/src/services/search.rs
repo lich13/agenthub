@@ -2,12 +2,7 @@ use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    claude::{self, ClaudeDetailRequest},
-    codex, grok,
-    platform::PlatformPaths,
-    services::sessions::SessionProvider,
-};
+use crate::{claude, codex, grok, platform::PlatformPaths, services::sessions::SessionProvider};
 
 const MAX_QUERY_BYTES: usize = 512;
 const MAX_RESULTS: usize = 200;
@@ -331,29 +326,13 @@ impl SearchUseCases {
                     summary.updated_at.clone(),
                 );
             }
-            let mut before = None;
-            for _ in 0..MAX_CLAUDE_PAGES {
-                if output.len() >= MAX_RESULTS {
-                    break;
-                }
-                let page = match claude::claude_session_detail_without_storage(
-                    &self.claude,
-                    &ClaudeDetailRequest {
-                        agent_id: None,
-                        session_key: summary.session_key.clone(),
-                        limit: Some(500),
-                        before: before.clone(),
-                    },
-                ) {
-                    Ok(page) => page,
-                    Err(_) => {
-                        push_warning(warnings);
-                        break;
-                    }
-                };
-                for event in &page.events {
+            let read = claude::visit_search_events(
+                &self.claude,
+                &summary.session_key,
+                MAX_CLAUDE_PAGES,
+                |event| {
                     if output.len() >= MAX_RESULTS {
-                        break;
+                        return Ok(false);
                     }
                     let corpus = json_corpus(event)?;
                     if let Some(snippet) = find_snippet(&corpus, needle) {
@@ -369,14 +348,11 @@ impl SearchUseCases {
                             event.timestamp.clone(),
                         );
                     }
-                }
-                if !page.has_more {
-                    break;
-                }
-                before = page.before_cursor;
-                if before.is_none() {
-                    break;
-                }
+                    Ok(output.len() < MAX_RESULTS)
+                },
+            );
+            if read.is_err() {
+                push_warning(warnings);
             }
         }
         Ok(())

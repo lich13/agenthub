@@ -48,7 +48,7 @@ test("Finder Command-click batch archive confirms explicit keys, retains failed 
   expect(previews).toBe(3);
 });
 
-test("filter changes invalidate an in-flight batch preview and Shift-range + Escape follow Finder semantics", async ({ page }) => {
+test("canceling an in-flight preview restores filtering and Shift-range + Escape follow Finder semantics", async ({ page }) => {
   await mockApi(page);
   let release!: () => void;
   let started = false;
@@ -64,7 +64,11 @@ test("filter changes invalidate an in-flight batch preview and Shift-range + Esc
   await rows.first().click({ modifiers: ["Meta"] });
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   await expect.poll(() => started).toBe(true);
-  await page.locator(".search-box input").first().fill("no matching fixture");
+  const search = page.locator(".search-box input").first();
+  await expect(search).toBeDisabled();
+  await page.getByRole("button", { name: "取消多选", exact: true }).click();
+  await expect(search).toBeEnabled();
+  await search.fill("no matching fixture");
   release();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
@@ -269,6 +273,8 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await toggle.focus();
     await page.keyboard.press("Meta+a");
     await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
+    await expect(page.locator(".search-box input").first()).toBeDisabled();
+    await toggle.click();
     release();
     await expect(page.getByText("已完成 1 项，未完成 0 项", { exact: true })).toBeVisible();
     await active.first().click({ modifiers: ["Meta"] });
@@ -276,6 +282,7 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await mockCommand(page, "sessions.bulkPreview", () => { throw new Error("Fixture preview failure"); });
     await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "Fixture preview failure" })).toBeVisible();
+    await toggle.click();
     await archived.first().click({ modifiers: ["Meta"] });
     await expect(page.getByRole("alert").filter({ hasText: "Fixture preview failure" })).toHaveCount(0);
   });

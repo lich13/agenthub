@@ -71,6 +71,104 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn search_event_visits_match_detail_pages_and_stop_without_reading_children() {
+    let f = Fixture::new();
+    let rows: Vec<_> = (0..1002)
+        .map(|i| {
+            f.row(
+                &format!("row-{i}"),
+                (i > 0).then(|| format!("row-{}", i - 1)).as_deref(),
+                if i % 2 == 0 { "user" } else { "assistant" },
+                json!(format!("visible fixture {i}")),
+            )
+        })
+        .collect();
+    f.write(&rows);
+    let mut expected = vec![];
+    let mut before = None;
+    for _ in 0..2 {
+        let page = claude_session_detail_without_storage(
+            &f.paths,
+            &ClaudeDetailRequest {
+                session_key: f.key(),
+                agent_id: None,
+                before,
+                limit: Some(500),
+            },
+        )
+        .unwrap();
+        expected.extend(page.events.iter().map(|e| serde_json::to_value(e).unwrap()));
+        before = page.before_cursor;
+    }
+    let mut actual = vec![];
+    visit_search_events(&f.paths, &f.key(), 2, |event| {
+        actual.push(serde_json::to_value(event)?);
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(actual, expected);
+    let mut first = vec![];
+    visit_search_events(&f.paths, &f.key(), 64, |event| {
+        first.push(event.id.clone());
+        Ok(first.len() < 3)
+    })
+    .unwrap();
+    assert_eq!(
+        first,
+        expected[..3]
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn missing_main_batch_previews_and_cleans_shared_paths_only_after_all_copies_succeed() {
+    for (reverse, fail) in [(false, false), (true, false), (false, true), (true, true)] {
+        let f = Fixture::new();
+        f.complete();
+        let other = f.paths.projects.join("other/native-fixture.jsonl");
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::copy(&f.file, &other).unwrap();
+        let listed = list_claude_sessions_without_storage(&f.paths, 10, None).unwrap();
+        let mut keys: Vec<_> = listed.iter().map(|s| s.session_key.clone()).collect();
+        fs::remove_file(&other).unwrap();
+        let shared = f.paths.config.join("debug/native-fixture.txt");
+        fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        fs::write(&shared, "shared fixture").unwrap();
+        if reverse {
+            keys.reverse();
+        }
+        let mut context = DeletionContext::new(&f.paths).unwrap();
+        context.select_preview(&f.paths, &keys);
+        let previews: Vec<_> = keys
+            .iter()
+            .map(|k| context.preview(&f.paths, k).unwrap())
+            .collect();
+        assert!(!previews[0].paths.contains(&shared));
+        assert!(previews[1].paths.contains(&shared));
+        if fail {
+            fs::create_dir(other.with_file_name("sessions-index.json")).unwrap();
+        }
+        let results = mutations::execute_claude_delete_batch(
+            &f.paths,
+            keys.into_iter()
+                .map(|session_key| ClaudeDeleteRequest {
+                    session_key,
+                    confirmed: true,
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        );
+        assert_eq!(
+            results.iter().all(|r| r.as_ref().is_ok_and(|r| r.deleted)),
+            !fail
+        );
+        assert_eq!(shared.exists(), fail);
+    }
+}
+
+#[test]
 fn lists_sort_by_conversation_time_and_ignore_metadata_and_tools() {
     let f = Fixture::new();
     let mut first = f.row("u1", None, "user", json!("Fixture request"));
@@ -3152,7 +3250,7 @@ fn duplicate_ids_keep_shared_data_until_every_project_copy_and_index_succeeds() 
         } else {
             vec![f.key(), other_key.clone()]
         };
-        context.select_preview(&selected);
+        context.select_preview(&f.paths, &selected);
         let first = context.preview(&f.paths, &f.key()).unwrap();
         assert!(!first.paths.contains(&sidecar));
         if mode != "single" {

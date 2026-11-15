@@ -403,7 +403,7 @@ async fn install_probe_hooks(
     let mut out = install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
         Ok(serde_json::to_value(
             agenthub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
-                platform, enabled,
+                platform, enabled, false,
             )?,
         )?)
     })

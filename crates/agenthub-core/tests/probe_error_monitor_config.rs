@@ -43,13 +43,24 @@ fn probe_error_monitor_launch_agent_repair_is_idempotent_and_unloads_when_disabl
     let launch_agents = root.join("LaunchAgents");
     let launchctl = root.join("launchctl");
     let state = root.join("launchctl-loaded");
+    let calls = root.join("launchctl-calls");
     std::fs::write(
         &launchctl,
         format!(
-            "#!/bin/sh\ncase \"$1\" in\n  print) test -f '{}' ;;\n  bootstrap) touch '{}' ;;\n  kickstart) exit 0 ;;\n  bootout) rm -f '{}' ;;\n  *) exit 2 ;;\nesac\n",
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> '{}'
+case "$1" in
+  print) test -f '{}' ;;
+  bootstrap) touch '{}' ;;
+  kickstart) test "$2" != '-k' ;;
+  bootout) rm -f '{}' ;;
+  *) exit 2 ;;
+esac
+"#,
+            calls.display(),
             state.display(),
             state.display(),
-            state.display(),
+            state.display()
         ),
     )
     .unwrap();
@@ -63,20 +74,83 @@ fn probe_error_monitor_launch_agent_repair_is_idempotent_and_unloads_when_disabl
         }
     }
 
-    let first =
-        ensure_probe_error_monitor_launch_agent_at(&platform, true, &launch_agents, &launchctl)
-            .unwrap();
+    let first = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        true,
+        false,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap();
     assert!(first.changed);
     assert!(first.loaded);
-    let second =
-        ensure_probe_error_monitor_launch_agent_at(&platform, true, &launch_agents, &launchctl)
-            .unwrap();
+    let second = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        true,
+        false,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap();
     assert!(!second.changed);
     assert!(second.loaded);
 
-    let disabled =
-        ensure_probe_error_monitor_launch_agent_at(&platform, false, &launch_agents, &launchctl)
-            .unwrap();
+    let recorded = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("bootstrap "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("kickstart "))
+            .count(),
+        1
+    );
+    assert!(!recorded.contains("bootout "));
+    let upgraded = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        true,
+        true,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap();
+    assert!(upgraded.changed && upgraded.loaded);
+    let recorded = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("bootstrap "))
+            .count(),
+        2
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("bootout "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        recorded
+            .lines()
+            .filter(|s| s.starts_with("kickstart "))
+            .count(),
+        1
+    );
+
+    let disabled = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        false,
+        false,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap();
     assert!(disabled.changed);
     assert!(!disabled.loaded);
     assert!(!disabled.plist_path.unwrap().exists());
@@ -127,9 +201,14 @@ fn probe_error_monitor_launch_agent_preserves_plist_when_unload_fails() {
         std::fs::set_permissions(&launchctl, permissions).unwrap();
     }
 
-    let error =
-        ensure_probe_error_monitor_launch_agent_at(&platform, false, &launch_agents, &launchctl)
-            .unwrap_err();
+    let error = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        false,
+        false,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("bootout"));
     assert!(plist.is_file());
@@ -169,9 +248,14 @@ fn probe_error_monitor_launch_agent_requires_loaded_state_after_bootstrap() {
         }
     }
 
-    let error =
-        ensure_probe_error_monitor_launch_agent_at(&platform, true, &launch_agents, &launchctl)
-            .unwrap_err();
+    let error = ensure_probe_error_monitor_launch_agent_at(
+        &platform,
+        true,
+        false,
+        &launch_agents,
+        &launchctl,
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("not loaded"));
     std::fs::remove_dir_all(root).unwrap();

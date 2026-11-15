@@ -200,7 +200,17 @@ pub struct Snapshot {
     pub filter_bots: bool,
     pub scanned_repository_ids: BTreeSet<u64>,
     pub repository_baselines_ms: BTreeMap<u64, i64>,
+    /// Last changed result or first successful observation across a source baseline.
+    /// Stable polls do not advance this value or write the snapshot.
+    pub repository_observed_ms: BTreeMap<u64, i64>,
     pub bot_baseline_ms: i64,
+}
+
+fn set_bot_filter(snapshot: &mut Snapshot, before: bool, filter_bots: bool, time: i64) {
+    if before && !filter_bots {
+        snapshot.bot_baseline_ms = time;
+    }
+    snapshot.filter_bots = filter_bots;
 }
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -336,7 +346,12 @@ pub(crate) fn settings_changed(
     update_state_in_transaction(tx, |state, request| {
         state.snapshot.monitored_repositories =
             after.probe.notifications.github_ci_repositories.clone();
-        state.snapshot.filter_bots = after.probe.notifications.github_ci_filter_bots;
+        set_bot_filter(
+            &mut state.snapshot,
+            before.probe.notifications.github_ci_filter_bots,
+            after.probe.notifications.github_ci_filter_bots,
+            now(),
+        );
         if enabled(before) == enabled(after) {
             let repos_changed = before.probe.notifications.github_ci_repositories
                 != after.probe.notifications.github_ci_repositories;
@@ -351,9 +366,6 @@ pub(crate) fn settings_changed(
                         after.probe.notifications.github_ci_filter_bots,
                     )
                 });
-                if bots_changed && !after.probe.notifications.github_ci_filter_bots {
-                    state.snapshot.bot_baseline_ms = now();
-                }
                 if repos_changed {
                     state
                         .snapshot
@@ -375,6 +387,10 @@ pub(crate) fn settings_changed(
                     state
                         .snapshot
                         .repository_baselines_ms
+                        .retain(|id, _| retained_repo_ids.contains(id));
+                    state
+                        .snapshot
+                        .repository_observed_ms
                         .retain(|id, _| retained_repo_ids.contains(id));
                     if after_repos.iter().any(|entry| {
                         let trimmed = entry.trim();
@@ -399,6 +415,7 @@ pub(crate) fn settings_changed(
         state.baseline_ms = 0;
         state.monitored_repo_ids.clear();
         state.snapshot.repository_baselines_ms.clear();
+        state.snapshot.repository_observed_ms.clear();
         state.snapshot.bot_baseline_ms = 0;
         state.pending.clear();
 
@@ -499,6 +516,13 @@ impl Monitor {
         let active = enabled(&config);
         let original = state.clone();
         let enabled_before = state.snapshot.enabled;
+        let filter_before = state.snapshot.filter_bots;
+        set_bot_filter(
+            &mut state.snapshot,
+            filter_before,
+            config.probe.notifications.github_ci_filter_bots,
+            time,
+        );
         self.active = Some(active);
         let mut account_ready = false;
         if !active {
@@ -515,6 +539,7 @@ impl Monitor {
             state.baseline_ms = 0;
             state.monitored_repo_ids.clear();
             state.snapshot.repository_baselines_ms.clear();
+            state.snapshot.repository_observed_ms.clear();
             state.snapshot.bot_baseline_ms = 0;
             state.pending.clear();
         } else if time < self.retry_at {
@@ -799,6 +824,7 @@ impl Monitor {
         let mut runs = Vec::new();
         let mut errors = Vec::new();
         let mut scanned_repo_ids = HashSet::new();
+        let mut observed = BTreeMap::new();
         let configured_repos = &config.probe.notifications.github_ci_repositories;
         let repositories = state.snapshot.repositories.clone();
         self.repository_due_ms.retain(|id, _| {
@@ -854,6 +880,34 @@ impl Monitor {
             match result {
                 Ok(mut incoming) => {
                     scanned_repo_ids.insert(repo.id);
+                    let baseline = state
+                        .baseline_ms
+                        .max(
+                            state
+                                .snapshot
+                                .repository_baselines_ms
+                                .get(&repo.id)
+                                .copied()
+                                .unwrap_or(0),
+                        )
+                        .max(if config.probe.notifications.github_ci_filter_bots {
+                            0
+                        } else {
+                            state.snapshot.bot_baseline_ms
+                        });
+                    if state
+                        .snapshot
+                        .repository_observed_ms
+                        .get(&repo.id)
+                        .is_none_or(|at| *at < baseline)
+                        || incoming.iter().ne(state
+                            .snapshot
+                            .runs
+                            .iter()
+                            .filter(|run| run.repository_id == repo.id))
+                    {
+                        observed.insert(repo.id, time);
+                    }
                     runs.append(&mut incoming);
                 }
                 Err(e) => {
@@ -888,6 +942,7 @@ impl Monitor {
         }
         reconcile_with_config(state, account, runs, config, active, baseline, time);
         if active {
+            state.snapshot.repository_observed_ms.extend(observed);
             state.monitored_repo_ids.extend(&scanned_repo_ids);
             for id in scanned_repo_ids {
                 state
@@ -899,6 +954,10 @@ impl Monitor {
             state
                 .snapshot
                 .repository_baselines_ms
+                .retain(|id, _| state.monitored_repo_ids.contains(id));
+            state
+                .snapshot
+                .repository_observed_ms
                 .retain(|id, _| state.monitored_repo_ids.contains(id));
         }
         if !errors.is_empty() {
@@ -1007,16 +1066,22 @@ fn reconcile_with_config(
             } else {
                 0
             });
+            let observed_ms = state
+                .snapshot
+                .repository_observed_ms
+                .get(&run.repository_id)
+                .copied()
+                .unwrap_or(0);
             let newly_finished = previous.get(&(run.repository_id, run.id)).map_or_else(
                 || run.finished_ms() > state.baseline_ms.max(source_baseline),
                 |old| {
                     (old.run_attempt != run.run_attempt || old.status != "completed")
-                        && (state.snapshot.last_scan_ms >= source_baseline
+                        && (observed_ms >= source_baseline
                             || run.finished_ms() > source_baseline
                             || (run.is_bot
                                 && old.run_attempt == run.run_attempt
                                 && old.status != "completed"
-                                && state.snapshot.last_scan_ms >= repository_baseline
+                                && observed_ms >= repository_baseline
                                 && run.finished_ms().div_euclid(1000)
                                     == state.snapshot.bot_baseline_ms.div_euclid(1000)))
                 },

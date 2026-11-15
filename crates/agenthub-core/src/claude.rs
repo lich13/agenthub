@@ -676,6 +676,36 @@ pub(crate) fn claude_session_detail_without_storage(
         before_cursor: (start > 0).then(|| parsed.events[start].id.clone()),
     })
 }
+/// Visit the same newest-first pages as search without constructing UI detail.
+pub(crate) fn visit_search_events(
+    paths: &ClaudePaths,
+    key: &str,
+    max_pages: usize,
+    mut visit: impl FnMut(&ClaudeHistoryEvent) -> Result<bool>,
+) -> Result<()> {
+    let (_, parsed) = resolve(paths, key)?;
+    for page in parsed.events.rchunks(500).take(max_pages) {
+        for event in page {
+            let mut refreshed;
+            let event = if event.user_message.is_some() {
+                refreshed = (**event).clone();
+                refreshed
+                    .user_message
+                    .as_mut()
+                    .unwrap()
+                    .refresh_files(Some(&parsed.cwd));
+                &refreshed
+            } else {
+                event.as_ref()
+            };
+            if !visit(event)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn read_attachment(
     paths: &ClaudePaths,
     request: &crate::user_message::SessionAttachmentRequest,

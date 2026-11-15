@@ -97,7 +97,7 @@ export function SessionBatchControls({
               className="icon-button compact"
               title="取消多选"
               aria-label="取消多选"
-              disabled={batch.busy}
+              disabled={batch.execute.isPending}
               onClick={batch.clear}
             >
               <X size={15} />
