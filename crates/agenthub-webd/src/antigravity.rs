@@ -792,8 +792,7 @@ async fn load_trajectory_with_context(
             visited.insert(id.to_owned());
             struct InspectedSubagent {
                 id: String,
-                traj_id: String,
-                steps: Vec<Value>,
+                work: antigravity::TurnPendingWork,
                 tasks: BTreeMap<String, antigravity::TaskLiveness>,
                 active_children: bool,
                 children: BTreeSet<String>,
@@ -865,9 +864,8 @@ async fn load_trajectory_with_context(
                     }
                 }
                 inspected_subagents.push(InspectedSubagent {
-                    id: sub_id,
-                    traj_id: sub_traj_id,
-                    steps: sub_steps,
+                    id: sub_id.clone(),
+                    work: antigravity::collect_turn_pending_work(&sub_id, &sub_traj_id, &sub_steps),
                     tasks: sub_tasks,
                     active_children: sub_active_children,
                     children,
@@ -875,24 +873,18 @@ async fn load_trajectory_with_context(
             }
 
             for item in inspected_subagents.into_iter().rev() {
-                let sub_ctx = antigravity::TrajectoryLivenessContext {
-                    has_active_subagents: false,
-                    has_active_child_processes: item.active_children,
-                    now_ms: Some(now_ms),
-                    subagents: subagents.clone(),
-                    tasks: item.tasks,
-                };
                 let child_unsettled = item.children.iter().any(|cid| {
                     subagents
                         .get(cid)
                         .is_some_and(|s| s.active || s.unsettled_background)
                 });
                 if child_unsettled
-                    || antigravity::has_unsettled_background_work(
+                    || item.work.is_unsettled(
                         &item.id,
-                        &item.traj_id,
-                        &item.steps,
-                        &sub_ctx,
+                        &subagents,
+                        &item.tasks,
+                        item.active_children,
+                        Some(now_ms),
                     )
                 {
                     subagents.entry(item.id).or_default().unsettled_background = true;

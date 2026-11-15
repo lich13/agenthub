@@ -471,13 +471,25 @@ impl Config {
     }
 
     pub fn save_probe_patch(path: &Path, patch: &ProbeConfigFilePatch) -> Result<Self> {
+        Self::save_probe_patch_with_before(path, patch).map(|(_, after)| after)
+    }
+
+    pub(crate) fn save_probe_patch_with_before(
+        path: &Path,
+        patch: &ProbeConfigFilePatch,
+    ) -> Result<(Self, Self)> {
         let text = fs::read_to_string(path)?;
+        let before = Self::from_text(&text, path)?;
         let updated = patch_probe_config_toml(&text, patch)?;
-        let config = Self::from_text(&updated, path)?;
+        let config = if updated == text {
+            before.clone()
+        } else {
+            Self::from_text(&updated, path)?
+        };
         if updated != text {
             write_config_atomic(path, &updated)?;
         }
-        Ok(config)
+        Ok((before, config))
     }
 
     /// The App and its monitor share the existing sibling env file. Server

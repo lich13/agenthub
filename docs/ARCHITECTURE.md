@@ -8,9 +8,9 @@
 
 现有 serve／monitor 启动独立扫描循环，App 与 Hook 的后台启动判断均包含 CI 开关。关闭 CI 时只读取现有缓存，首次读取与手动刷新均不请求扫描，refreshing 为 false；DesktopState 不再持有独立 Monitor。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存，按 60 秒核对账号和凭据，5 秒扫描复用已有 token。ETag 缓存仅保存解析后的账号、仓库和运行摘要，Bot 身份在 200 响应时计算，304 不重复解析完整响应。扫描按到期时间调度，未变快照不新增写入。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接、ETag 及同源校验；账号名下公开／私有／fork 仓库目录每 10 分钟分页刷新，并淘汰已消失仓库的运行缓存。有符合来源筛选条件的未结束运行时每 5 秒、空闲时每 60 秒仅查询该仓库首页 `per_page=10`，不翻运行历史或追查窗口外旧运行／旧重跑。前端先筛选仓库，再按现有更新时间最多展示 20 条，展示上限不限制通知判断。运行日志和产物通过 GitHub 查看。
 
-扫描期间新增刷新请求由本轮结果满足，设置启停或基线变化仍丢弃旧结果。限流时间只留在 Monitor 内存，限流期间的刷新及时结束并返回现有错误；状态保留首次读取需要的 last_scan_ms，旧版含 retry_at_ms 的状态可读取但不再写入或公开该字段。
+Linux 服务与独立 Mac monitor 共用配置文件缓存，扫描快照及最终提交都在短 SQLite 事务内读取最新有效配置。设置保存从同一事务内读取文件旧值、原子替换 TOML、写加密设置并更新 CI 基线；网络请求在事务外。扫描期间新增刷新请求由已提交结果满足，设置启停、仓库、Bot 筛选或基线变化时丢弃旧结果并保留刷新请求，同时合并并发确认。限流时间只留在 Monitor 内存，限流期间的刷新及时结束并返回现有错误；状态保留首次读取需要的 last_scan_ms，旧版含 retry_at_ms 的状态可读取但不再写入或公开该字段。
 
-现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化的基线轮跳过全部已完成记录，在途任务结束仍通知。Monitor::tick 直接返回可投递事件，Stored.pending 继续持久化；成功处理的事件批量确认一次，中途失败保留尚未处理项。过期事件过滤、首发有效性和加密队列重试复核保持。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 直接使用 GitHub 返回的 html_url。通知历史维护直接使用 SQL 删除结果计数，移除无调用的统计及 dry-run 分支；去重按复合主键原子认领或过期续期，过期标记一次批量删除，保留期、保护集合及范围不变。
+现有 settings 保存基线、有界摘要与待交接事件，未变化时不重写；协议 2、schema 3 无变化。首次启用、重新启用及账号变化的基线轮跳过全部已完成记录，在途任务结束仍通知。Bark 与 Mac 对当前来源基线内已观察到的未完成 → 完成或新 attempt 使用状态变化判定，避免 GitHub 整秒时间戳早于毫秒基线而漏报；无有效前态时仍按截止时间跳过历史。Monitor::tick 直接返回可投递事件，Stored.pending 继续持久化；成功处理的事件批量确认一次，中途失败保留尚未处理项。过期事件过滤、首发有效性和加密队列重试复核保持。账号 ID、仓库 ID、run ID、attempt 构成投递身份；仅 success、failure、timed_out 进入现有加密 Bark 队列。关闭、切号及新 attempt 会停止旧投递，重启保留去重与有限重试。Bark 内部请求增加可选 url，旧队列未含该字段仍可读取；CI 直接使用 GitHub 返回的 html_url。通知历史维护直接使用 SQL 删除结果计数，移除无调用的统计及 dry-run 分支；去重按复合主键原子认领或过期续期，过期标记一次批量删除，保留期、保护集合及范围不变。
 
 桌面通过单个 5 秒串行观察任务读取当前机器缓存，与 Probe 页面可见性无关；`github.ci.status` 的 `cached_only` 默认 false，为 true 时不请求扫描，响应带已有 `baseline_ms` 及来源机器的 `monitored_repositories`、`filter_bots`、`scanned_repository_ids`。新加入的仓库首次结果独立建立基线，成功扫描过的空仓库后续新运行照常通知；不读取本机配置替代远程筛选。观察状态仅保留机器修订、账号、启用基线及运行尝试身份，不落盘；首次观察跳过已完成记录，换机、切号和重新启用重新建立基线。读取沿用现有 SSH 通道，迟到响应不参与通知。macOS 使用 UserNotifications，请求系统授权、支持前台呈现和点击打开运行页；Bark 的持久化队列、确认与重试独立保留；桌面详情缓存空闲回收仍为 60 秒。完成记录不再额外受全局 1000 条限制。
 
@@ -21,6 +21,8 @@ CI 比对以本轮临时索引查找新旧运行及待发事件，排序、attem
 隐藏扫描统一 start/poll/cancel，取消旧无模式入口；线程行及其中两种父 ID／JSON 关系只读一次，再在同一连接中补充 spawn edges。来源租约保持至终态写完；统一预览使用 NoRequest 无参数契约，兼容旧空请求，内部固定范围以枚举遍历；执行仍校验外部范围、确认、目标和指纹，不同步扫描隐藏线程；分页器负责开始／停止与终态回调，缺失分页进度直接报错。Probe 两端共用保存入口，使用已有 toml_edit 依赖按语义编辑目标表和键，保留未知内容、注释及多行字符串；待写文本直接解析并加载 env、规范化，仅在文本变化时原子替换配置路径并保留原权限，不维护符号链接；空补丁不写 TOML，Key 仍加密写入，env 仍为 0600。DSH 归档／恢复只定位目标，删除继续使用排他租约并核验 inode 和后代；统一归档清理直接由 execute 扫描与校验一次；改名与归档后复用定位结果及最新归档集合生成摘要。
 
 ## 运行架构与模块
+
+Codex `list_threads` 统一负责列表筛选、排序和截取，Linux／Tauri 适配直接返回共享加载结果；归档条件仍在正文补充前筛选。
 
 `desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，SSH RPC/Tauri 只做薄适配。
 
@@ -165,6 +167,8 @@ Probe 复用原生轮询、启用基线、消息游标、加密队列与有限�
 
 ### Antigravity 与 DeepSeek Harness
 
+Antigravity 当前回合遍历完整相关子代理树，沿用循环去重；每个子代理提取待处理任务、子代理 ID 与时间锚点后释放原始 steps，逆序评估时共享最终状态表，保留较晚发现后代的最新时间，不为优化新增深度或数量限制。
+
 `antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、Tauri 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
 
 Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；该服务只报告本次运行已加载的会话，列表因此合并 `conversation_summaries.db` 中尚未加载的根会话（在线条目优先，时间统一为 RFC 3339）；自动探测未命中、分页网络不可达、没有可见消息或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
@@ -187,6 +191,8 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 搜索通过 `DisclosureRevealContext` 挂载命中折叠内容后定位，优先精确原生 ID，其次最深别名节点；Codex 压缩只豁免当前机器/线程最近命中的一个块，不展开整段历史。时间线位置只在布局变化时重测，刻度有界挂载且键盘可达全部记录。工作区按需加载，隐藏窗口暂停界面轮询，后台 monitor 独立运行。
 
+普通与归档会话选择通过同一选择入口互斥，点击、快捷键、原生菜单和浮动栏均清除另一范围。归档按钮展开时全选已加载归档项，收起时消费全选而不选中普通列表；输入框与弹窗继续独立处理。
+
 显式折叠选择按机器、Provider、会话、活动身份保存在有界内存中，不写数据库。机器、线程或来源变化取消无效请求并丢弃迟到响应；子智能体面板有独立分页、滚动与嵌套返回，父视图保持挂载。连续工具组保持原位置，完成默认收起，活动/失败默认展开，指令组始终默认收起；用户选择优先于默认值。
 
 ### 附件、路径与 Plan
@@ -203,7 +209,7 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 Codex 依据原生父子关系生成后代集合，循环去重；includeDescendants 和 SessionBatchSelection.descendants 明确传递确认范围。执行不再发现新后代，也不扩大到引用目标历史的其他线程。直接清理普通／归档 rollout、压缩副本、writer 锁、shell snapshots、visualizations、原生数据库、分页历史和名称索引，不调用 helper。归档、恢复仍使用原有指纹和状态规则。
 
-Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。精确匹配 `jobs/*/state.json` 的原生 ID、`sessionId` 或 `resumeSessionId` 后，先使用来源机器已有的 `claude rm` 清理后台记录及工作树；原生命令未支持或未成功时保留历史，不强制移除或停止原生进程。没有匹配后台记录时不需要 CLI。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
+Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。主列表、缓存／回退定位及删除索引共用目录过滤：同名主 JSONL（含正常或失效符号链接）拥有其附属目录，内部 JSONL 不作为独立主会话；子代理只读入口保持独立。精确匹配 `jobs/*/state.json` 的原生 ID、`sessionId` 或 `resumeSessionId` 后，先使用来源机器已有的 `claude rm` 清理后台记录及工作树；原生命令未支持或未成功时保留历史，不强制移除或停止原生进程。没有匹配后台记录时不需要 CLI。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
 
 单条、批量和统一清理共用删除实现。统一清理先核验当前允许集、指纹和活动状态，再把固定目标交给 Codex／Claude／Grok 已有批量入口，合并共享索引写回。仅保留 cleanup.unifiedDryRun／cleanup.unifiedExecute 与渐进 cleanup.hiddenDryRun，旧独立 archive／hiddenExecute／dshArchive 入口及适配器已删除。缺失文件视为完成；权限、文件系统和数据库失败返回逐项 failed/residuals，继续处理其他独立目标及平台，不回滚整批；DSH 共享索引或原生运行状态变化仍停止相关写入。新执行不会因单项失败停止整批；移除恒为 false 的 stoppedEarly 响应字段。数据库修改按目标事务执行。原生程序之后新写入的数据在刷新后显示，不启动重复删除任务。
 
@@ -267,7 +273,7 @@ claude.hooks 是仅限本机的 status／install／remove 操作。安装须设�
 
 hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成还须具备对应回合终态，保留有效分支上较早回合的完成补发。StopFailure 为 API 错误结束的候选；Hook 首次处理、首次发送与每次重试均核验当前主回合、执行活动及终态，轮询失败使用相同规则。新回合、同回合恢复、成功或取消使旧失败过期并清空待投递正文；普通元数据追加和仍打开的进程不表示恢复执行，独立后台任务不阻挡主回合提醒。身份或终态未写完整时沿用有限重试。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
 
-所有通知来源共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 AgentHub 深链。
+所有通知来源共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文先完整脱敏，再去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符；一旦确定截断便停止整理后续正文，保持空白和省略号规则。仅完整有效的图片语法被删除，普通感叹号、数组和未完成图片文字保留，链接文字复用内联标记与控制字符清理。不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 AgentHub 深链。
 
 Bark 保存和发送前共用 URL 校验。HTTPS 拒绝回环、未指定、链路本地、IPv4 私网、IPv6 ULA 及对应映射地址；拒绝数字 IP 别名、非法 authority 和 URL 凭据。保留普通 HTTPS 主机名与真实 HTTP 回环服务，不作 DNS 解析。无效配置保留原值并停止投递，不改用默认服务携带原密钥发送。
 

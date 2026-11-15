@@ -17,9 +17,9 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("./connection", () => ({ useConnection: () => ({ revision: 1, target: "local" }) }));
 
 const nativeSelectAll = readFileSync(new URL("../../../../src-tauri/src/select_all.js", import.meta.url), "utf8");
-function selection(keys: string[]) {
+function selection(keys: string[], onSelectionStart?: () => void) {
   let result!: ReturnType<typeof useSessionSelection>;
-  function Probe() { result = useSessionSelection("codex", "filtered", keys); return null; }
+  function Probe() { result = useSessionSelection("codex", "filtered", keys, undefined, undefined, onSelectionStart); return null; }
   renderToString(createElement(Probe));
   return result;
 }
@@ -85,5 +85,23 @@ test("static page focus and busy selection do not select global text", () => {
   expect(nativeAction(selection(["underlying"]), "DIV", "", "", false).execCommand).not.toHaveBeenCalled();
   observed.busy = true;
   expect(nativeAction(selection(["underlying"])).execCommand).not.toHaveBeenCalled();
+  expect(observed.updates).toEqual([]);
+});
+
+test("click, toolbar and native select-all share exclusive selection entry", () => {
+  const clearOther = vi.fn();
+  const batch = selection(["visible"], clearOther);
+  batch.select("visible", { detail: 1, metaKey: true, ctrlKey: false, shiftKey: false }, () => {});
+  batch.selectAll();
+  nativeAction(batch);
+  expect(clearOther).toHaveBeenCalledTimes(3);
+});
+test("closed archive drawer consumes select-all without changing either selection", () => {
+  const clearOther = vi.fn();
+  const event = { key: "a", metaKey: true, target: null, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  selection(["cached-archived"], clearOther).onListKeyDown(event as any, false);
+  expect(event.preventDefault).toHaveBeenCalledOnce();
+  expect(event.stopPropagation).toHaveBeenCalledOnce();
+  expect(clearOther).not.toHaveBeenCalled();
   expect(observed.updates).toEqual([]);
 });

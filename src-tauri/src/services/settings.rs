@@ -82,7 +82,7 @@ fn probe_save_settings_with_state_and_repair(
         anyhow::bail!("config file not found: {}", config_path.display());
     }
     let response_config =
-        settings_service::apply_probe_settings_save_plan(&config_path, &state.db, &config, plan)?;
+        settings_service::apply_probe_settings_save_plan(&config_path, &state.db, plan)?;
     state.replace_config(response_config.clone());
     repair_error_monitor(&response_config, state.platform())?;
     probe_settings_with_state(state)

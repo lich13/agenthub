@@ -9,17 +9,14 @@ pub(super) fn spawn(config_path: PathBuf, state: Option<AppState>) {
         let mut cache = monitor_start::DaemonMonitorCache::default();
         loop {
             let result = async {
-                let config = match &state {
-                    Some(state) => state.config(),
-                    None => cache.load_config(&config_path)?,
+                let config = cache.load_config(&config_path)?;
+                let db = match &state {
+                    Some(state) => state.db.clone(),
+                    None => cache.panel_db(&config)?,
                 };
-                let db = cache.panel_db(&config)?;
-                let events = monitor.tick(&db, &config).await?;
-                deliver_events(&db, events, &|| match &state {
-                    Some(state) => Ok(state.config()),
-                    None => cache.load_config(&config_path),
-                })
-                .await?;
+                let load_config = || cache.load_config(&config_path);
+                let events = monitor.tick(&db, &load_config).await?;
+                deliver_events(&db, events, &load_config).await?;
                 Ok::<_, anyhow::Error>(())
             }
             .await;

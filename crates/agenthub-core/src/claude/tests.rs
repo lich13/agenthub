@@ -3188,3 +3188,66 @@ fn duplicate_ids_keep_shared_data_until_every_project_copy_and_index_succeeds() 
         assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 0);
     }
 }
+
+#[test]
+fn main_session_entries_exclude_dedicated_transcripts_even_from_cached_keys() {
+    let f = Fixture::new();
+    f.complete();
+    let inner = f
+        .file
+        .with_extension("")
+        .join("history/continued/native-fixture.jsonl");
+    fs::create_dir_all(inner.parent().unwrap()).unwrap();
+    fs::write(&inner, "").unwrap();
+    let root = f.paths.projects.canonicalize().unwrap();
+    let key = key_for(&root, &inner, "native-fixture");
+    assert_eq!(list_claude_sessions(&f.paths, 100, None).unwrap().len(), 1);
+    assert!(find_empty_inactive_sessions(&f.paths).unwrap().is_empty());
+    assert!(resolve(&f.paths, &key).is_err());
+    assert!(execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: key.clone(),
+            confirmed: true,
+            fingerprint: String::new()
+        }
+    )
+    .is_err());
+    LOCATED_SESSIONS
+        .lock()
+        .unwrap()
+        .remove(&(root, key.clone()));
+    assert!(locate(&f.paths, &key).is_err());
+    assert!(f.file.exists());
+    assert!(inner.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_main_link_still_owns_its_dedicated_directory() {
+    let f = Fixture::new();
+    std::os::unix::fs::symlink(f.root.join("absent.jsonl"), &f.file).unwrap();
+    let inner = f
+        .file
+        .with_extension("")
+        .join("history/nested/native-fixture.jsonl");
+    fs::create_dir_all(inner.parent().unwrap()).unwrap();
+    fs::write(&inner, "").unwrap();
+    let shared = f.paths.config.join("file-history/native-fixture");
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(shared.join("fixture"), "fixture").unwrap();
+    assert!(files(&f.paths).unwrap().is_empty());
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: f.key(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!inner.exists());
+    assert!(!shared.exists());
+    assert!(fs::symlink_metadata(&f.file).is_err());
+}

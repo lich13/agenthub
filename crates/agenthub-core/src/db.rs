@@ -383,6 +383,15 @@ impl PanelDb {
     }
 
     pub fn set_secret_setting_bytes(&self, key: &str, plaintext: &[u8]) -> Result<()> {
+        self.with_transaction(|tx| self.set_secret_setting_bytes_in_transaction(tx, key, plaintext))
+    }
+
+    pub(crate) fn set_secret_setting_bytes_in_transaction(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+        plaintext: &[u8],
+    ) -> Result<()> {
         if plaintext.is_empty() {
             return Ok(());
         }
@@ -392,7 +401,8 @@ impl PanelDb {
             "nonce": general_purpose::STANDARD.encode(nonce)
         })
         .to_string();
-        self.set_setting(key, &value)
+        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![key,value,Self::now()])?;
+        Ok(())
     }
 
     pub fn remove_secret_setting(&self, key: &str) -> Result<()> {

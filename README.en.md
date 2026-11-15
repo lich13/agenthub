@@ -4,9 +4,9 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.20 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.21 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
-v2.1.20 fixes native Select All in dialogs and empty lists, CI credential retries, source notification baselines, and concurrent settings writes. Codex filters archive state before reading session histories; Antigravity reuses one process snapshot per root inspection. Cleanup ownership, the Grok Bot upgrade cutoff, and notification summary truncation are also corrected.
+v2.1.21 fixes Claude session-directory ownership, CI settings races, and missed completions within the baseline second. Active and archived list selections remain exclusive. Antigravity releases raw child steps after extracting pending work, and Codex removes duplicate list processing. Notification summaries preserve ordinary exclamation marks and incomplete images, and stop formatting once the existing output budget is reached.
 
 ## Highlights
 

@@ -87,13 +87,25 @@ export function ArchivableProviderWorkspace({
     },
     [selectedKey],
   );
-  const batch = useSessionSelection(provider, `active:${query}`, activeKeys, handleBatchSucceeded, activeSelectedKey);
-  const archivedBatch = useSessionSelection(
+  const batch: SessionSelection = useSessionSelection(
+    provider,
+    `active:${query}`,
+    activeKeys,
+    handleBatchSucceeded,
+    activeSelectedKey,
+    () => {
+      if (archivedBatch.selecting || archivedBatch.selection.length) archivedBatch.clear();
+    },
+  );
+  const archivedBatch: SessionSelection = useSessionSelection(
     provider,
     `archived:${query}`,
     archivedKeys,
     handleBatchSucceeded,
     archivedSelectedKey,
+    () => {
+      if (batch.selecting || batch.selection.length) batch.clear();
+    },
   );
 
   const detailTargetKey = pendingSearch && selectedKey ? selectedKey : listed?.sessionKey ?? null;
@@ -248,7 +260,6 @@ export function ArchivableProviderWorkspace({
   const renderSessionRow = (
     item: ProviderSessionSummary,
     targetBatch: SessionSelection,
-    otherBatch: SessionSelection,
     batchMenu: ThreadMenuAction[],
   ) => {
     const isSelected = item.sessionKey === selected?.sessionKey;
@@ -263,7 +274,6 @@ export function ArchivableProviderWorkspace({
           multiSelected={targetBatch.selection.includes(item.sessionKey)}
           renameBlockReason={!item.canRename ? item.renameBlockReason || "当前线程不可改名" : undefined}
           onSelect={event => {
-            if (otherBatch.selecting || otherBatch.selection.length) otherBatch.clear();
             targetBatch.select(item.sessionKey, event, () => {
               setSelectedKey(item.sessionKey);
               setRenaming(false);
@@ -320,7 +330,7 @@ export function ArchivableProviderWorkspace({
             ) : (
               <>
                 {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-                {sessions.data?.map(item => renderSessionRow(item, batch, archivedBatch, activeBatchMenu))}
+                {sessions.data?.map(item => renderSessionRow(item, batch, activeBatchMenu))}
                 {(supported === undefined || sessions.isLoading) && (
                   <div className="muted-row">正在读取任务...</div>
                 )}
@@ -328,7 +338,13 @@ export function ArchivableProviderWorkspace({
                   <div className="muted-row">{`未发现 ${label} 会话`}</div>
                 )}
                 {queryEnabled && (
-                  <div className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}>
+                  <div
+                    className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}
+                    onKeyDown={event => {
+                      event.stopPropagation();
+                      archivedBatch.onListKeyDown(event, archivedOpen);
+                    }}
+                  >
                     <button
                       type="button"
                       className="archived-toggle"
@@ -342,19 +358,13 @@ export function ArchivableProviderWorkspace({
                       )}
                     </button>
                     {archivedOpen && (
-                      <div
-                        className="archived-list"
-                        onKeyDown={event => {
-                          event.stopPropagation();
-                          archivedBatch.onListKeyDown(event);
-                        }}
-                      >
+                      <div className="archived-list">
                         {archivedSessions.error && (
                           <div className="form-error" role="alert">{archivedSessions.error.message}</div>
                         )}
                         {archivedSessions.isLoading && <div className="muted-row">正在读取已归档会话...</div>}
                         {archivedSessions.data?.map(item =>
-                          renderSessionRow(item, archivedBatch, batch, archivedBatchMenu),
+                          renderSessionRow(item, archivedBatch, archivedBatchMenu),
                         )}
                         {!archivedSessions.isLoading &&
                           !archivedSessions.error &&

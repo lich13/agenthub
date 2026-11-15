@@ -22,12 +22,8 @@ pub fn apply_probe_settings_save_plan(
     config_path: &Path,
     plan: settings_service::ProbeSettingsSavePlan,
 ) -> Result<Config> {
-    let response_config = settings_service::apply_probe_settings_save_plan(
-        config_path,
-        &state.db,
-        &state.config(),
-        plan,
-    )?;
+    let response_config =
+        settings_service::apply_probe_settings_save_plan(config_path, &state.db, plan)?;
     state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -74,9 +70,7 @@ pub fn list_threads_read_model(
         .threads()
         .list_read(query)?;
     let paths = state.codex_paths();
-    let inputs = thread_service::load_thread_read_model_inputs(&paths, &plan)?;
-    let view = thread_service::thread_list_read_model(inputs, plan.query);
-    Ok(view)
+    thread_service::load_thread_read_model_inputs(&paths, &plan)
 }
 
 pub fn probe_threads_read_model(

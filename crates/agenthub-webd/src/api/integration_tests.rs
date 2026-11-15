@@ -1080,27 +1080,6 @@ fn thread_block_page_uses_before_cursor() {
 }
 
 #[test]
-fn filter_thread_summaries_separates_active_and_archived_lists() {
-    let recent = fallback_summary("recent-thread", "recent");
-    let mut archived = fallback_summary("archived-thread", "archived");
-    archived.status = ThreadStatus::Archived;
-
-    let active_rows = thread_service::filter_thread_summaries(
-        vec![recent.clone(), archived.clone()],
-        false,
-        None,
-        10,
-    );
-    let archived_rows =
-        thread_service::filter_thread_summaries(vec![recent, archived], true, None, 10);
-
-    assert_eq!(active_rows.len(), 1);
-    assert_eq!(active_rows[0].id, "recent-thread");
-    assert_eq!(archived_rows.len(), 1);
-    assert_eq!(archived_rows[0].id, "archived-thread");
-}
-
-#[test]
 fn thread_list_plan_clamps_requested_page_size() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     for (limit, expected) in [(Some(120), 120), (None, 80), (Some(0), 1), (Some(900), 500)] {

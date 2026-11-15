@@ -56,7 +56,9 @@ pub(super) fn summary(input: &str) -> String {
 }
 
 pub(super) fn redacted_summary(input: &str) -> String {
-    let mut lines = Vec::new();
+    let mut text = String::new();
+    let mut count = 0;
+    let mut lines = 0;
     let mut fenced = false;
     let mut hidden = false;
     for line in input.lines() {
@@ -87,7 +89,6 @@ pub(super) fn redacted_summary(input: &str) -> String {
         if fenced || indented {
             continue;
         }
-        let lower = line.to_ascii_lowercase();
         if [
             "thread_id",
             "turn_id",
@@ -102,56 +103,132 @@ pub(super) fn redacted_summary(input: &str) -> String {
             "{\"tool",
         ]
         .iter()
-        .any(|s| lower.starts_with(s))
-        {
+        .any(|s| {
+            line.get(..s.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(s))
+        }) {
             continue;
         }
         line = line.trim_start_matches(['#', '>', '-', '*', '+', ' ']);
-        if let Some((number, rest)) = line.split_once(". ") {
-            if number.chars().all(|c| c.is_ascii_digit()) {
-                line = rest;
-            }
+        let number_end = line
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(line.len());
+        if let Some(rest) = line[number_end..].strip_prefix(". ") {
+            line = rest;
         }
-        let mut text = String::new();
-        let mut chars = line.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '!' && chars.peek() == Some(&'[') {
-                chars.next();
-                for ch in chars.by_ref() {
-                    if ch == ']' {
-                        break;
-                    }
-                }
-                skip_link_target(&mut chars);
-            } else if c == '[' {
-                for ch in chars.by_ref() {
-                    if ch == ']' {
-                        break;
-                    }
-                    text.push(ch);
-                }
-                skip_link_target(&mut chars);
-            } else if !matches!(c, '*' | '`' | '~') && (!c.is_control() || c == '\t') {
-                text.push(c);
-            }
+        let separator = usize::from(lines > 0);
+        // One extra visible character proves truncation. Trailing whitespace
+        // and hidden lines do not consume the existing summary budget.
+        let (plain, truncated) = plain_line(
+            line,
+            if lines == 4 {
+                1
+            } else {
+                (301usize - count - separator).max(1)
+            },
+        );
+        if plain.is_empty() {
+            continue;
         }
-        let text = text.replace("__", "");
-        if !text.trim().is_empty() {
-            lines.push(text.trim().to_string());
+        if lines == 4 {
+            return truncated_summary(&text);
         }
+        if separator > 0 {
+            text.push('\n');
+        }
+        count += separator + plain.chars().count();
+        text.push_str(&plain);
+        if truncated || count > 300 {
+            return truncated_summary(&text);
+        }
+        lines += 1;
     }
-    let truncated_lines = lines.len() > 4;
-    let text = lines.into_iter().take(4).collect::<Vec<_>>().join("\n");
-    if truncated_lines || text.chars().count() > 300 {
-        format!("{}…", text.chars().take(299).collect::<String>().trim_end())
-    } else {
-        text
-    }
+    text
 }
 
-fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+fn truncated_summary(text: &str) -> String {
+    format!("{}…", text.chars().take(299).collect::<String>().trim_end())
+}
+
+fn plain_line(line: &str, limit: usize) -> (String, bool) {
+    let mut text = String::new();
+    let mut count = 0;
+    let mut append = |c: char| {
+        if count == 0 && c.is_whitespace() {
+            return true;
+        }
+        count += 1;
+        if count <= limit {
+            text.push(c);
+        }
+        c.is_whitespace() || count < limit
+    };
+    let mut underscore = false;
+    let complete = {
+        let mut clean = |c: char| {
+            if matches!(c, '*' | '`' | '~') || (c.is_control() && c != '\t') {
+                return true;
+            }
+            if c == '_' {
+                underscore = !underscore;
+                return true;
+            }
+            if underscore {
+                underscore = false;
+                if !append('_') {
+                    return false;
+                }
+            }
+            append(c)
+        };
+        inline_text(line, &mut clean)
+    };
+    let complete = complete && (!underscore || append('_'));
+    (text.trim_end().to_owned(), !complete)
+}
+
+fn inline_text(line: &str, emit: &mut impl FnMut(char) -> bool) -> bool {
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '!' && chars.peek() == Some(&'[') {
+            let mut candidate = chars.clone();
+            candidate.next();
+            if candidate.by_ref().any(|c| c == ']') && skip_link_target(&mut candidate) {
+                chars = candidate;
+                continue;
+            }
+            // A macro, array expression or incomplete image remains ordinary text.
+            if !emit('!') || !emit(chars.next().expect("opening bracket")) {
+                return false;
+            }
+            for ch in chars.by_ref() {
+                if !emit(ch) {
+                    return false;
+                }
+                if ch == ']' {
+                    break;
+                }
+            }
+        } else if c == '[' {
+            for ch in chars.by_ref() {
+                if ch == ']' {
+                    break;
+                }
+                if !emit(ch) {
+                    return false;
+                }
+            }
+            skip_link_target(&mut chars);
+        } else if !emit(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
     if chars.peek() != Some(&'(') {
-        return;
+        return false;
     }
     let mut candidate = chars.clone();
     candidate.next();
@@ -166,7 +243,7 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                 Some('\\') => {
                     candidate.next();
                 }
-                Some('<') | None => return,
+                Some('<') | None => return false,
                 _ => {}
             }
         }
@@ -179,13 +256,13 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                     candidate.next();
                     continue;
                 }
-                '<' => return,
+                '<' => return false,
                 '(' => depth += 1,
                 ')' if depth == 0 => break,
                 ')' => depth -= 1,
                 c if c.is_whitespace() => {
                     if depth != 0 {
-                        return;
+                        return false;
                     }
                     break;
                 }
@@ -194,7 +271,7 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
             candidate.next();
         }
         if depth != 0 {
-            return;
+            return false;
         }
     }
     let separated = candidate.peek().is_some_and(|c| c.is_whitespace());
@@ -211,7 +288,7 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                         candidate.next();
                     }
                     Some(ch) if ch == end => break,
-                    None => return,
+                    None => return false,
                     _ => {}
                 }
             }
@@ -222,6 +299,9 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     }
     if candidate.next() == Some(')') {
         *chars = candidate;
+        true
+    } else {
+        false
     }
 }
 
@@ -309,5 +389,55 @@ fn summary_preserves_nonlinks_and_incomplete_targets() {
     assert_eq!(
         summary("[报告](https://example.invalid/a(b) 未完成"),
         "报告(https://example.invalid/a(b) 未完成"
+    );
+}
+
+#[test]
+fn summary_preserves_nonimage_expressions_and_cleans_link_labels() {
+    assert_eq!(
+        summary("vec![1, 2, 3] ![unfinished ![alt](target"),
+        "vec![1, 2, 3] ![unfinished ![alt](target"
+    );
+    assert_eq!(
+        summary("![not an image](x <1) tail"),
+        "![not an image](x <1) tail"
+    );
+    assert_eq!(
+        summary(
+            "![image](</fixture/image(1).png>) [**清理** `标题` __完成__](https://example.invalid)"
+        ),
+        "清理 标题 完成"
+    );
+    assert_eq!(
+        redacted_summary("[a\u{7}**b**](https://example.invalid)"),
+        "ab"
+    );
+}
+
+#[test]
+fn summary_budget_preserves_exact_boundaries_and_ignored_tails() {
+    let exact = "中".repeat(300);
+    assert_eq!(redacted_summary(&exact), exact);
+    assert_eq!(redacted_summary(&format!("{exact} **__**   ")), exact);
+    assert_eq!(
+        redacted_summary(&format!("{exact}\n```\nhidden\n```")),
+        exact
+    );
+    assert_eq!(
+        redacted_summary(&format!("{exact}\nextra")),
+        format!("{}…", "中".repeat(299))
+    );
+    assert_eq!(redacted_summary(&format!("a{}b", " ".repeat(1000))), "a…");
+    assert_eq!(
+        redacted_summary(&format!(
+            "{}\n__**__\n![image](target)\n```\nhidden\n```",
+            "a\nb\nc\nd"
+        )),
+        "a\nb\nc\nd"
+    );
+    assert_eq!(redacted_summary("a\nb\nc\nd\n__**extra**__"), "a\nb\nc\nd…");
+    assert_eq!(
+        redacted_summary(&format!("{}__**__\n", "🧑‍💻".repeat(100))),
+        "🧑‍💻".repeat(100)
     );
 }

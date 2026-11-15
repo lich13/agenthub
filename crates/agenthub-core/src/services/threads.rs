@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
+    codex::{MessageBlock, ThreadDetail, ThreadSummary},
     platform::PlatformPaths,
     services::system::{require_capability, Capability},
 };
@@ -52,18 +52,6 @@ pub struct ThreadBlocksPage {
     pub total_blocks: usize,
     pub has_more_blocks: bool,
     pub before_cursor: Option<String>,
-}
-
-pub fn thread_list_read_model(
-    threads: Vec<ThreadSummary>,
-    query: ThreadsQuery,
-) -> Vec<ThreadSummary> {
-    filter_thread_summaries(
-        threads,
-        query.archived.unwrap_or(false),
-        query.q.as_deref(),
-        requested_thread_limit(query.limit),
-    )
 }
 
 pub fn load_thread_read_model_inputs(
@@ -144,38 +132,6 @@ pub fn thread_blocks_page_for_plan(
         has_more_blocks: window.has_more_blocks,
         before_cursor: window.before_cursor,
     }
-}
-
-pub fn filter_thread_summaries(
-    mut rows: Vec<ThreadSummary>,
-    archived: bool,
-    q: Option<&str>,
-    limit: usize,
-) -> Vec<ThreadSummary> {
-    let needle = q
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    rows.retain(|row| {
-        if matches!(row.status, ThreadStatus::Archived) != archived {
-            return false;
-        }
-        if let Some(needle) = &needle {
-            row.id.to_ascii_lowercase().contains(needle)
-                || row.title.to_ascii_lowercase().contains(needle)
-                || row
-                    .latest_message
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase()
-                    .contains(needle)
-        } else {
-            true
-        }
-    });
-    ThreadSummary::sort_by_message_time(&mut rows);
-    rows.truncate(limit.max(1));
-    rows
 }
 
 pub fn normalize_thread_detail_block_limit(limit: Option<usize>, full: bool) -> Option<usize> {

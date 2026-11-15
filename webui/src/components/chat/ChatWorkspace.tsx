@@ -233,19 +233,25 @@ function ThreadList({
   const activeSelectedId = selectedId && activeIds.includes(selectedId) ? selectedId : null;
   const archivedSelectedId = selectedId && archivedIds.includes(selectedId) ? selectedId : null;
 
-  const batch = useSessionSelection(
+  const batch: SessionSelection = useSessionSelection(
     "codex",
     `active\0${q}`,
     activeIds,
     onBatchSucceeded,
     activeSelectedId,
+    () => {
+      if (archivedBatch.selecting || archivedBatch.selection.length) archivedBatch.clear();
+    },
   );
-  const archivedBatch = useSessionSelection(
+  const archivedBatch: SessionSelection = useSessionSelection(
     "codex",
     `archived\0${q}`,
     archivedIds,
     onBatchSucceeded,
     archivedSelectedId,
+    () => {
+      if (batch.selecting || batch.selection.length) batch.clear();
+    },
   );
   const rename = useReadOnlyThreadActions({});
   const { feedback: menuFeedback, setFeedback: setMenuFeedback, copy: copyWithFeedback } =
@@ -265,7 +271,6 @@ function ThreadList({
   const renderThreadRow = (
     thread: ThreadSummary,
     targetBatch: SessionSelection,
-    otherBatch: SessionSelection,
     batchMenu: ReturnType<typeof buildBatchContextMenuActions>,
   ) => {
     const title = threadListItemText(thread);
@@ -284,7 +289,6 @@ function ThreadList({
           multiSelected={multiSelected}
           renameBlockReason={isArchived ? sharedDisabledStates.renameArchivedThread : undefined}
           onSelect={event => {
-            if (otherBatch.selecting || otherBatch.selection.length) otherBatch.clear();
             targetBatch.select(thread.id, event, () => onSelect(thread.id));
           }}
           onRename={next => rename.mutateAsync({ kind: "rename", id: thread.id, title: next })}
@@ -387,10 +391,16 @@ function ThreadList({
         )}
         {loading && <div className="muted-row">正在读取 Codex 状态...</div>}
         {threads.map((thread) => {
-          return renderThreadRow(thread, batch, archivedBatch, activeBatchMenu);
+          return renderThreadRow(thread, batch, activeBatchMenu);
         })}
         {!loading && !error && threads.length === 0 && <div className="muted-row">没有匹配任务</div>}
-        <div className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}>
+        <div
+          className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}
+          onKeyDown={event => {
+            event.stopPropagation();
+            archivedBatch.onListKeyDown(event, archivedOpen);
+          }}
+        >
           <button
             type="button"
             className="archived-toggle"
@@ -404,13 +414,7 @@ function ThreadList({
             )}
           </button>
           {archivedOpen && (
-            <div
-              className="archived-list"
-              onKeyDown={event => {
-                event.stopPropagation();
-                archivedBatch.onListKeyDown(event);
-              }}
-            >
+            <div className="archived-list">
               {archivedError && (
                 <div className="form-error" role="alert">
                   {archivedError}
@@ -418,7 +422,7 @@ function ThreadList({
               )}
               {archivedLoading && <div className="muted-row">正在读取已归档任务...</div>}
               {archivedThreads.map(thread =>
-                renderThreadRow(thread, archivedBatch, batch, archivedBatchMenu),
+                renderThreadRow(thread, archivedBatch, archivedBatchMenu),
               )}
               {!archivedLoading && !archivedError && archivedThreads.length === 0 && (
                 <div className="muted-row">暂无已归档任务</div>

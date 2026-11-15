@@ -32,6 +32,7 @@ export function useSessionSelection(
   keys: string[],
   onSucceeded?: (keys: string[], operation: SessionOperation) => void,
   activeKey?: string | null,
+  onSelectionStart?: () => void,
 ) {
   const client = useQueryClient();
   const connection = useConnection();
@@ -152,6 +153,7 @@ export function useSessionSelection(
 
   const select = (key: string, event: SessionClick, open: () => void) => {
     if (busy || (isMacLikePlatform() && event.ctrlKey && event.detail !== 0)) return;
+    onSelectionStart?.();
     const modified = event.detail !== 0 && (event.shiftKey || isToggleSelectionClick(event));
     const next = clickSessionSelection(current, keys, key, event, activeKey);
     setState(next);
@@ -187,13 +189,14 @@ export function useSessionSelection(
 
   const selectAll = () => {
     if (!keys.length || busy) return;
+    onSelectionStart?.();
     epoch.current.value += 1;
     setPreview(null);
     setResult(null);
     setState(addSessionSelection({ ...current, keys: [] }, keys));
   };
 
-  const onListKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+  const onListKeyDown = (event: ReactKeyboardEvent<HTMLElement>, allowSelection = true) => {
     const target = event.target as HTMLElement | null;
     const textInput = target?.tagName === "INPUT" &&
       !["checkbox", "radio", "button", "submit", "reset", "image", "file", "range", "color"].includes((target as HTMLInputElement).type);
@@ -203,9 +206,10 @@ export function useSessionSelection(
     if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a") {
       event.preventDefault();
       event.stopPropagation();
-      selectAll();
+      if (allowSelection) selectAll();
       return;
     }
+    if (!allowSelection) return;
     if (event.key === "Escape" && (selecting || selection.length > 0)) {
       event.preventDefault();
       clear();
@@ -237,6 +241,7 @@ export function useSessionSelection(
     toggle: (key: string) =>
       select(key, { detail: 1, metaKey: true, shiftKey: false, ctrlKey: false }, () => {}),
     prepareSingle: (key: string, operation: SessionOperation, origin?: HTMLElement | null) => {
+      onSelectionStart?.();
       returnFocus.current =
         origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       epoch.current.value += 1;

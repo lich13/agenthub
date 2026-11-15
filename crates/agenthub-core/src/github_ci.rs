@@ -226,29 +226,58 @@ fn save(db: &PanelDb, state: &Stored) -> Result<()> {
         Ok(())
     })
 }
+fn read_state(tx: &rusqlite::Transaction<'_>) -> Result<(Option<String>, Stored, i64)> {
+    let read = |key: &str| -> Result<Option<String>> {
+        Ok(tx
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    };
+    let original = read(STATE)?;
+    let state = original
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or_default();
+    let request = read(REFRESH)?
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+    Ok((original, state, request))
+}
 fn update_state<T>(
     db: &PanelDb,
     update: impl FnOnce(&mut Stored, &mut i64) -> Result<T>,
 ) -> Result<T> {
-    db.with_transaction(|tx| {
-        let read = |key: &str| -> Result<Option<String>> {
-            Ok(tx.query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0)).optional()?)
-        };
-        let original = read(STATE)?;
-        let mut state: Stored = original.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-        let old_request = read(REFRESH)?.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let mut request = old_request;
-        let result = update(&mut state, &mut request)?;
-        let next = serde_json::to_string(&state)?;
-        let changed = original.as_deref() != Some(&next);
-        for (key, value, changed) in [(STATE, next, changed), (REFRESH, request.to_string(), request != old_request)] {
-            if changed {
-                tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", rusqlite::params![key,value,chrono::Utc::now().timestamp()])?;
-            }
-        }
-        Ok(result)
-    })
+    db.with_transaction(|tx| update_state_in_transaction(tx, update))
 }
+fn update_state_in_transaction<T>(
+    tx: &rusqlite::Transaction<'_>,
+    update: impl FnOnce(&mut Stored, &mut i64) -> Result<T>,
+) -> Result<T> {
+    let (original, mut state, old_request) = read_state(tx)?;
+    let mut request = old_request;
+    let result = update(&mut state, &mut request)?;
+    let next = serde_json::to_string(&state)?;
+    let changed = original.as_deref() != Some(&next);
+    for (key, value, changed) in [
+        (STATE, next, changed),
+        (REFRESH, request.to_string(), request != old_request),
+    ] {
+        if changed {
+            tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", rusqlite::params![key,value,chrono::Utc::now().timestamp()])?;
+        }
+    }
+    Ok(result)
+}
+fn same_settings(before: &Config, after: &Config) -> bool {
+    enabled(before) == enabled(after)
+        && before.probe.notifications.github_ci_repositories
+            == after.probe.notifications.github_ci_repositories
+        && before.probe.notifications.github_ci_filter_bots
+            == after.probe.notifications.github_ci_filter_bots
+}
+
 fn request_ms(db: &PanelDb) -> Result<i64> {
     Ok(db
         .get_setting(REFRESH)?
@@ -296,16 +325,15 @@ pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<boo
                 && matches_run_filter(r, repositories, filter_bots)
         }))
 }
-pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result<()> {
-    if enabled(before) == enabled(after)
-        && before.probe.notifications.github_ci_repositories
-            == after.probe.notifications.github_ci_repositories
-        && before.probe.notifications.github_ci_filter_bots
-            == after.probe.notifications.github_ci_filter_bots
-    {
+pub(crate) fn settings_changed(
+    tx: &rusqlite::Transaction<'_>,
+    before: &Config,
+    after: &Config,
+) -> Result<()> {
+    if same_settings(before, after) {
         return Ok(());
     }
-    update_state(db, |state, request| {
+    update_state_in_transaction(tx, |state, request| {
         state.snapshot.monitored_repositories =
             after.probe.notifications.github_ci_repositories.clone();
         state.snapshot.filter_bots = after.probe.notifications.github_ci_filter_bots;
@@ -439,18 +467,22 @@ impl Monitor {
             active: None,
         })
     }
-    pub async fn tick(&mut self, db: &PanelDb, config: &Config) -> Result<Vec<Event>> {
-        self.tick_with_token(db, config, gh_token()).await
+    pub async fn tick(
+        &mut self,
+        db: &PanelDb,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
+    ) -> Result<Vec<Event>> {
+        self.tick_with_token(db, load_config, gh_token()).await
     }
 
     async fn tick_with_token(
         &mut self,
         db: &PanelDb,
-        config: &Config,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
         token: impl std::future::Future<Output = Result<String>>,
     ) -> Result<Vec<Event>> {
         let request = request_ms(db)?;
-        let active = enabled(config);
+        let active = enabled(&load_config()?);
         let time = now();
         if self.active == Some(active)
             && request <= self.request_ms
@@ -458,7 +490,13 @@ impl Monitor {
         {
             return Ok(Vec::new());
         }
-        let mut state = load(db)?;
+        // The save path takes the same transaction before replacing the file.
+        // Read the file cache here, never a caller's potentially stale Config.
+        let (config, mut state, request, time) = db.with_transaction(|tx| {
+            let (_, state, request) = read_state(tx)?;
+            Ok((load_config()?, state, request, now()))
+        })?;
+        let active = enabled(&config);
         let original = state.clone();
         let enabled_before = state.snapshot.enabled;
         self.active = Some(active);
@@ -506,7 +544,7 @@ impl Monitor {
                     state.snapshot.account.clone().expect("known account")
                 };
                 account_ready = true;
-                self.scan_due(&mut state, config, account, active, time, refresh)
+                self.scan_due(&mut state, &config, account, active, time, refresh)
                     .await
             }
             .await;
@@ -540,7 +578,9 @@ impl Monitor {
         // No network request holds this transaction. Settings and acknowledgements
         // may commit while GitHub responds; merge only against their current state.
         let committed = update_state(db, |current, latest_request| {
-            if current.snapshot.monitored_repositories != original.snapshot.monitored_repositories
+            if !same_settings(&load_config()?, &config)
+                || current.snapshot.monitored_repositories
+                    != original.snapshot.monitored_repositories
                 || current.snapshot.filter_bots != original.snapshot.filter_bots
                 || current.baseline_ms != original.baseline_ms
                 || current.snapshot.enabled != original.snapshot.enabled
@@ -953,13 +993,27 @@ fn reconcile_with_config(
                 || repo_newly_monitored
                 || run.notification_kind().is_none()
                 || !matches_run_filter(run, repositories, filter_bots)
-                || (run.is_bot && run.finished_ms() <= state.snapshot.bot_baseline_ms)
             {
                 continue;
             }
+            let source_baseline = state
+                .snapshot
+                .repository_baselines_ms
+                .get(&run.repository_id)
+                .copied()
+                .unwrap_or(0)
+                .max(if run.is_bot {
+                    state.snapshot.bot_baseline_ms
+                } else {
+                    0
+                });
             let newly_finished = previous.get(&(run.repository_id, run.id)).map_or_else(
-                || run.finished_ms() > state.baseline_ms,
-                |old| old.run_attempt != run.run_attempt || old.status != "completed",
+                || run.finished_ms() > state.baseline_ms.max(source_baseline),
+                |old| {
+                    (old.run_attempt != run.run_attempt || old.status != "completed")
+                        && (state.snapshot.last_scan_ms >= source_baseline
+                            || run.finished_ms() > source_baseline)
+                },
             );
             if newly_finished && pending.insert((run.repository_id, run.id, run.run_attempt)) {
                 state.pending.push(Event {

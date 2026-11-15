@@ -153,17 +153,7 @@ impl DeletionContext {
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|entry| {
-                !matches!(
-                    entry.file_name().to_str(),
-                    Some("subagents" | "tool-results")
-                ) && !(entry.file_type().is_dir()
-                    && entry.depth() >= 2
-                    && entry
-                        .path()
-                        .with_file_name(format!("{}.jsonl", entry.file_name().to_string_lossy()))
-                        .is_file())
-            })
+            .filter_entry(session_entry)
         {
             let entry = entry.context("无法扫描 Claude 会话")?;
             if (entry.file_type().is_file() || entry.file_type().is_symlink())
@@ -1021,6 +1011,27 @@ esac
                 "exclusive transcript",
             )
             .unwrap();
+        }
+        if case == "normal" {
+            let inner = history[0]
+                .with_extension("")
+                .join("history/continued")
+                .join(history[0].file_name().unwrap());
+            let key = key_for(&paths.projects.canonicalize().unwrap(), &inner, "");
+            assert!(execute_claude_delete(
+                &paths,
+                ClaudeDeleteRequest {
+                    session_key: key,
+                    confirmed: true,
+                    fingerprint: String::new()
+                }
+            )
+            .is_err());
+            assert!(history[0].exists());
+            assert!(
+                !root.join("calls").exists(),
+                "an attached transcript cannot remove its main session's jobs"
+            );
         }
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let batch_paths = paths.clone();

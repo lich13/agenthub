@@ -64,10 +64,13 @@ impl Observer {
                     && self.repositories.contains(&run.repository_id)
                     && eligible
                     && agenthub_core::github_ci::matches_run_filter(run, repositories, filter_bots)
-                    && finished_ms > source_baseline
                     && self.runs.get(&key).map_or_else(
-                        || finished_ms > self.baseline_ms,
-                        |(attempt, completed)| *attempt != run.run_attempt || !completed,
+                        || finished_ms > self.baseline_ms.max(source_baseline),
+                        |(attempt, completed)| {
+                            (*attempt != run.run_attempt || !completed)
+                                && (self.last_scan_ms >= source_baseline
+                                    || finished_ms > source_baseline)
+                        },
                     )
                 {
                     events.push(Event {

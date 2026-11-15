@@ -864,3 +864,49 @@ async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication(
         assert_eq!(calls.iter().filter(|call| **call == id).count(), 1);
     }
 }
+
+#[tokio::test]
+async fn descendants_discovered_later_anchor_earlier_pending_work() {
+    let root = "11111111-1111-4111-8111-111111111111";
+    let first = "22222222-2222-4222-8222-222222222222";
+    let second = "33333333-3333-4333-8333-333333333333";
+    let missing = "44444444-4444-4444-8444-444444444444";
+    let late = "55555555-5555-4555-8555-555555555555";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| async move {
+        let id = body["cascadeId"].as_str().unwrap();
+        let children: &[&str] = if id == root { &[first, second] } else if id == first { &[missing] } else if id == second { &[late] } else { &[] };
+        let mut steps = vec![json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:00Z"}})];
+        steps.extend(children.iter().map(|child| json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","generic":{"name":"invoke_subagent","output":format!("Created the following subagent:\n{{\"conversationId\":\"{child}\"}}")},"metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:01Z"}})));
+        axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
+    }));
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let summaries = serde_json::Map::from_iter([(
+        late.into(),
+        json!({"parentConversationId":second,"status":"CASCADE_RUN_STATUS_IDLE","lastModifiedTime":"2026-01-01T00:04:59Z"}),
+    )]);
+    let now = agenthub_core::native_probe::timestamp(&json!("2026-01-01T00:05:00Z")).unwrap();
+    let (_, context) = load_trajectory_with_context(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        42,
+        root,
+        &json!({"trajectoryId":"fixture","status":"CASCADE_RUN_STATUS_IDLE"}),
+        &summaries,
+        BTreeMap::new(),
+        now,
+        true,
+    )
+    .await
+    .unwrap();
+    task.abort();
+    assert!(
+        context.subagents[first].unsettled_background,
+        "the later descendant timestamp must be present when evaluating the earlier branch"
+    );
+    assert!(context.subagents[second].unsettled_background);
+}

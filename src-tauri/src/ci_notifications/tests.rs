@@ -188,3 +188,34 @@ fn source_baselines_cover_repository_readd_and_bot_toggle_missed_between_polls()
         assert!(observer.observe(0, &state).is_empty());
     }
 }
+
+#[test]
+fn observed_completion_in_baseline_second_notifies_but_unseen_history_does_not() {
+    for bot in [false, true] {
+        let mut observer = Observer::default();
+        let mut state = snapshot();
+        let second = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+            .unwrap()
+            .timestamp_millis();
+        state.baseline_ms = second + 100;
+        state.last_scan_ms = second + 400;
+        state.repository_baselines_ms.insert(2, second + 200);
+        state.bot_baseline_ms = second + 300;
+        for run in &mut state.runs {
+            run.is_bot = bot;
+        }
+        assert!(observer.observe(0, &state).is_empty());
+        state.last_scan_ms = second + 800;
+        state.runs[1].status = "completed".into();
+        state.runs[1].conclusion = Some("success".into());
+        let mut unseen = run(3, "completed", Some("failure"), 1);
+        unseen.is_bot = bot;
+        state.runs.push(unseen);
+        let events = observer.observe(0, &state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].run.id, 2);
+        assert!(observer.observe(0, &state).is_empty());
+        state.runs[1].run_attempt += 1;
+        assert_eq!(observer.observe(0, &state).len(), 1);
+    }
+}

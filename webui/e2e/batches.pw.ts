@@ -198,3 +198,51 @@ test("Command+A and native Select All use row and selection-bar focus and preser
   await expect(page.locator(".thread-item.multi-selected")).toHaveCount(await archived.count());
   await expect(page.getByRole("button", { name: "恢复所选线程", exact: true })).toBeVisible();
 });
+
+for (const provider of ["codex", "antigravity", "dsh"] as const) {
+  test(`${provider} active and archived selections stay exclusive through every select-all entry`, async ({ page }) => {
+    await mockApi(page);
+    if (provider !== "codex") {
+      await mockCommand(page, `${provider}.list`, args => {
+        const archived = Boolean((args.request ?? args).archived);
+        return [1, 2].map(index => ({
+          id: `${provider}-${archived}-${index}`, sessionKey: `${provider}-${archived}-${index}`,
+          title: `${archived ? "Archived" : "Active"} fixture ${index}`, cwd: "/isolated/workspace", path: "/isolated/session",
+          archived, updatedAt: "2026-10-01T00:00:00Z", messageCount: 2, status: "recent",
+          canRename: true, canArchive: true, canDelete: true,
+        }));
+      });
+    }
+    await page.goto("/");
+    if (provider !== "codex") {
+      await page.locator(".side-nav").getByRole("button", { name: provider === "antigravity" ? "Antigravity" : "DeepSeek Harness", exact: true }).click();
+    }
+    const row = provider === "codex" ? ".thread-item" : ".provider-session";
+    const active = page.locator(`${row}:not(.archived-list ${row})`);
+    const toggle = page.locator(".archived-toggle");
+    await active.first().click({ modifiers: ["Meta"] });
+    await toggle.focus();
+    await page.keyboard.press("Meta+a");
+    await expect(page.locator(`${row}.multi-selected`)).toHaveCount(1);
+    await toggle.click();
+    const archived = page.locator(`.archived-list ${row}`);
+    await expect(archived.first()).toBeVisible();
+    // Focus stays on the drawer button after opening it.
+    await page.keyboard.press("Meta+a");
+    await expect(page.locator(`${row}.multi-selected`)).toHaveCount(await archived.count());
+    await expect(page.locator(".finder-selection-bar")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "恢复所选线程", exact: true })).toBeVisible();
+    // Move focus without clicking: the keyboard path must clear archived selection.
+    await page.locator(row).first().focus();
+    await page.keyboard.press("Meta+a");
+    await expect(page.locator(`.archived-list ${row}.multi-selected`)).toHaveCount(0);
+    await expect(page.locator(".finder-selection-bar")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "归档所选线程", exact: true })).toBeVisible();
+    await toggle.focus();
+    await page.evaluate(readFileSync(new URL("../../src-tauri/src/select_all.js", import.meta.url), "utf8"));
+    await expect(page.locator(".finder-selection-bar")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "恢复所选线程", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "全选", exact: true }).click();
+    await expect(page.locator(`${row}.multi-selected`)).toHaveCount(await archived.count());
+  });
+}

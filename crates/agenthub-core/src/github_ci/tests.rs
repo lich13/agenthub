@@ -1,4 +1,7 @@
 use super::*;
+fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result<()> {
+    db.with_transaction(|tx| super::settings_changed(tx, before, after))
+}
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -189,11 +192,19 @@ async fn disabled_monitor_and_manual_refresh_only_read_cached_results() {
     let config = Config::default();
     assert!(!enabled(&config));
     let mut monitor = Monitor::new().unwrap();
-    assert!(monitor.tick(&fixture.db, &config).await.unwrap().is_empty());
+    assert!(monitor
+        .tick(&fixture.db, &|| Ok(config.clone()))
+        .await
+        .unwrap()
+        .is_empty());
     let before = fixture.db.get_setting(STATE).unwrap();
     assert!(before.is_none());
     for _ in 0..10 {
-        assert!(monitor.tick(&fixture.db, &config).await.unwrap().is_empty());
+        assert!(monitor
+            .tick(&fixture.db, &|| Ok(config.clone()))
+            .await
+            .unwrap()
+            .is_empty());
     }
     assert_eq!(before, fixture.db.get_setting(STATE).unwrap());
     assert!(monitor.token.is_empty());
@@ -211,7 +222,7 @@ async fn disabled_monitor_and_manual_refresh_only_read_cached_results() {
     assert_eq!(request_ms(&fixture.db).unwrap(), 0);
     fixture.db.set_setting(REFRESH, &now().to_string()).unwrap();
     assert!(monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             panic!("disabled CI must not read credentials even with an old refresh request")
         })
         .await
@@ -245,7 +256,7 @@ async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
         )
         .unwrap();
         assert!(monitor
-            .tick_with_token(&fixture.db, &config, async {
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
                 panic!("credentials must not be read during cooldown")
             })
             .await
@@ -563,7 +574,7 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
     .unwrap();
     let during = now() + 1;
     monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             fixture
                 .db
                 .set_setting(REFRESH, &during.to_string())
@@ -587,7 +598,9 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
     );
     assert_eq!(load(&fixture.db).unwrap().request_ms, during);
     monitor
-        .tick_with_token(&fixture.db, &config, async { panic!("idle must not scan") })
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            panic!("idle must not scan")
+        })
         .await
         .unwrap();
     assert_eq!(stored, fixture.db.get_setting(STATE).unwrap());
@@ -608,7 +621,7 @@ async fn settings_reset_during_scan_is_preserved() {
     state.baseline_ms = now() - 1000;
     save(&fixture.db, &state).unwrap();
     let events = monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             settings_changed(&fixture.db, &config, &Config::default()).unwrap();
             Ok("fixture-only".into())
         })
@@ -998,7 +1011,9 @@ async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_30
         json!({"workflow_runs":[bot]}),
     );
     monitor
-        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            Ok("fixture-only".into())
+        })
         .await
         .unwrap();
     let due = monitor.repository_due_ms[&10];
@@ -1011,7 +1026,7 @@ async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_30
     monitor.repository_due_ms.insert(10, time - 1);
     monitor.next_poll_ms = time - 1;
     monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             panic!("fast poll must reuse gh credentials")
         })
         .await
@@ -1029,7 +1044,9 @@ async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_30
     monitor.credentials_due_ms = time - 1;
     monitor.next_poll_ms = time - 1;
     monitor
-        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            Ok("fixture-only".into())
+        })
         .await
         .unwrap();
     assert_eq!(server.requests.lock().unwrap().len(), 7);
@@ -1066,7 +1083,9 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
         json!({"workflow_runs":[run(1,"in_progress",None,1,now())]}),
     );
     monitor
-        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            Ok("fixture-only".into())
+        })
         .await
         .unwrap();
     monitor.credentials_due_ms = 0;
@@ -1074,7 +1093,9 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
     monitor.repository_due_ms.insert(10, 0);
     server.reply("/user", 401, json!({}), "");
     assert!(monitor
-        .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            Ok("fixture-only".into())
+        })
         .await
         .unwrap()
         .is_empty());
@@ -1082,7 +1103,7 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
     assert!(monitor.next_poll_ms >= now() + 59_000);
     let count = server.requests.lock().unwrap().len();
     monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             panic!("account retry is not yet due")
         })
         .await
@@ -1117,7 +1138,7 @@ async fn credential_failure_after_restart_and_short_account_limit_retry_verify_a
         monitor.token.clear();
         server.reply("/user", 429, json!({}), "Retry-After: 1\r\n");
         monitor
-            .tick_with_token(&fixture.db, &config, async {
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
                 if limited {
                     Ok("fixture-only".into())
                 } else {
@@ -1132,7 +1153,9 @@ async fn credential_failure_after_restart_and_short_account_limit_retry_verify_a
         }
         let count = server.requests.lock().unwrap().len();
         monitor
-            .tick_with_token(&fixture.db, &config, async { panic!("cooldown") })
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+                panic!("cooldown")
+            })
             .await
             .unwrap();
         assert_eq!(server.requests.lock().unwrap().len(), count);
@@ -1141,7 +1164,7 @@ async fn credential_failure_after_restart_and_short_account_limit_retry_verify_a
         server.set("/user", json!(account()));
         server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
         monitor
-            .tick_with_token(&fixture.db, &config, async {
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
                 Ok("fixture-recovered".into())
             })
             .await
@@ -1170,7 +1193,9 @@ async fn failed_repository_catalog_waits_and_manual_refresh_recovers() {
         );
         monitor.repository_due_ms.insert(10, 0);
         monitor
-            .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+                Ok("fixture-only".into())
+            })
             .await
             .unwrap();
         if limited {
@@ -1180,7 +1205,9 @@ async fn failed_repository_catalog_waits_and_manual_refresh_recovers() {
         }
         let count = server.requests.lock().unwrap().len();
         monitor
-            .tick_with_token(&fixture.db, &config, async { panic!("no tight loop") })
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+                panic!("no tight loop")
+            })
             .await
             .unwrap();
         assert_eq!(count, server.requests.lock().unwrap().len());
@@ -1192,7 +1219,9 @@ async fn failed_repository_catalog_waits_and_manual_refresh_recovers() {
             .unwrap();
         server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
         monitor
-            .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+                Ok("fixture-only".into())
+            })
             .await
             .unwrap();
         assert!(load(&fixture.db).unwrap().snapshot.error.is_none());
@@ -1216,7 +1245,7 @@ async fn repository_and_bot_settings_saved_during_scan_cannot_be_overwritten() {
             after.probe.notifications.github_ci_repositories = vec!["fixture/selected".into()];
         }
         monitor
-            .tick_with_token(&fixture.db, &config, async {
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
                 settings_changed(&fixture.db, &config, &after).unwrap();
                 Ok("fixture-only".into())
             })
@@ -1235,7 +1264,9 @@ async fn repository_and_bot_settings_saved_during_scan_cannot_be_overwritten() {
         assert!(request_ms(&fixture.db).unwrap() > current.request_ms);
         assert_eq!(monitor.active, None);
         monitor
-            .tick_with_token(&fixture.db, &after, async { Ok("fixture-only".into()) })
+            .tick_with_token(&fixture.db, &|| Ok(after.clone()), async {
+                Ok("fixture-only".into())
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -1326,7 +1357,7 @@ async fn acknowledgement_during_scan_is_not_reinserted() {
     );
     save(&fixture.db, &state).unwrap();
     assert!(monitor
-        .tick_with_token(&fixture.db, &config, async {
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
             acknowledge(&fixture.db, &[key]).unwrap();
             Ok("fixture-only".into())
         })
@@ -1334,4 +1365,185 @@ async fn acknowledgement_during_scan_is_not_reinserted() {
         .unwrap()
         .is_empty());
     assert!(load(&fixture.db).unwrap().pending.is_empty());
+}
+
+#[test]
+fn whole_second_completions_use_observations_from_the_current_source_baseline() {
+    for bot in [false, true] {
+        let second = 1_800_000_000_000;
+        let mut config = Config::default();
+        config.probe.notifications.github_ci_filter_bots = false;
+        let mut state = Stored::default();
+        let mut running = run(1, "in_progress", None, 1, second);
+        running.is_bot = bot;
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![running.clone()],
+            &config,
+            true,
+            true,
+            second + 100,
+        );
+        state
+            .snapshot
+            .repository_baselines_ms
+            .insert(10, second + 200);
+        state.snapshot.bot_baseline_ms = second + 300;
+        state.snapshot.last_scan_ms = second + 400;
+        let mut finished = running.clone();
+        finished.status = "completed".into();
+        finished.conclusion = Some("success".into());
+        let mut unseen = finished.clone();
+        unseen.id = 2;
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![finished.clone(), unseen],
+            &config,
+            true,
+            false,
+            second + 800,
+        );
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.pending[0].run.id, 1);
+        state.pending.clear();
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![finished.clone()],
+            &config,
+            true,
+            false,
+            second + 900,
+        );
+        assert!(state.pending.is_empty());
+        // A source cutoff changed since the running observation: do not replay it.
+        state.snapshot.runs = vec![running];
+        if bot {
+            state.snapshot.bot_baseline_ms = second + 600;
+        } else {
+            state
+                .snapshot
+                .repository_baselines_ms
+                .insert(10, second + 600);
+        }
+        reconcile_with_config(
+            &mut state,
+            account(),
+            vec![finished],
+            &config,
+            true,
+            false,
+            second + 950,
+        );
+        assert!(state.pending.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn config_file_and_state_save_during_scan_leave_refresh_pending_for_latest_settings() {
+    use crate::services::settings::{apply_probe_settings_save_plan, ProbeSettingsSavePlan};
+    for notifications in [
+        json!({"notify_github_ci": false}),
+        json!({"github_ci_repositories": ["fixture/selected"]}),
+        json!({"github_ci_filter_bots": false}),
+    ] {
+        let fixture = Database::new();
+        let server = Server::new().await;
+        let mut monitor = server.monitor();
+        let mut config = Config::default();
+        config.probe.notifications.notify_github_ci = true;
+        config.paths.db_path = fixture.db.path().to_path_buf();
+        let path = fixture.root.join("config.toml");
+        std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+        server.set("/user", json!(account()));
+        server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+        let load_config = || Config::load(&path);
+        let events = monitor
+            .tick_with_token(&fixture.db, &load_config, async {
+                apply_probe_settings_save_plan(
+                    &path,
+                    &fixture.db,
+                    ProbeSettingsSavePlan {
+                        config_patch: serde_json::from_value(
+                            json!({"probe": {"notifications": notifications}}),
+                        )
+                        .unwrap(),
+                        secret_writes: vec![crate::services::settings::SecretSettingWritePlan {
+                            setting_key: "fixture-secret".into(),
+                            secret_value: "fixture-only".into(),
+                        }],
+                    },
+                )
+                .unwrap();
+                Ok("fixture-only".into())
+            })
+            .await
+            .unwrap();
+        assert!(events.is_empty());
+        let saved = load(&fixture.db).unwrap();
+        assert!(
+            saved.snapshot.account.is_none(),
+            "obsolete scan must not commit"
+        );
+        assert_eq!(monitor.active, None);
+        assert_eq!(
+            fixture
+                .db
+                .get_secret_setting_bytes("fixture-secret")
+                .unwrap()
+                .unwrap(),
+            b"fixture-only"
+        );
+        // No in-memory Config replacement is needed: a separate monitor reads the saved file.
+        let after = load_config().unwrap();
+        if enabled(&after) {
+            assert!(request_ms(&fixture.db).unwrap() > saved.request_ms);
+        }
+        monitor
+            .tick_with_token(&fixture.db, &load_config, async {
+                Ok("fixture-only".into())
+            })
+            .await
+            .unwrap();
+        let current = load(&fixture.db).unwrap();
+        assert_eq!(current.snapshot.enabled, enabled(&after));
+        assert_eq!(
+            current.snapshot.monitored_repositories,
+            after.probe.notifications.github_ci_repositories
+        );
+        assert_eq!(
+            current.snapshot.filter_bots,
+            after.probe.notifications.github_ci_filter_bots
+        );
+        assert_eq!(current.request_ms, request_ms(&fixture.db).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn current_config_is_checked_even_when_database_settings_are_unchanged() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    let current_config = Mutex::new(config);
+    let load_config = || Ok(current_config.lock().unwrap().clone());
+    server.set("/user", json!(account()));
+    server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+    monitor
+        .tick_with_token(&fixture.db, &load_config, async {
+            current_config
+                .lock()
+                .unwrap()
+                .probe
+                .notifications
+                .notify_github_ci = false;
+            Ok("fixture-only".into())
+        })
+        .await
+        .unwrap();
+    assert!(load(&fixture.db).unwrap().snapshot.account.is_none());
+    assert_eq!(monitor.active, None);
 }

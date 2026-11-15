@@ -296,7 +296,7 @@ fn step_is_foreign(id: &str, summary_trajectory_id: &str, step: &Value) -> bool 
             .is_some_and(|orig| !orig.is_empty() && orig != id)
 }
 
-struct TurnPendingWork {
+pub struct TurnPendingWork {
     last_root_step_ms: Option<i64>,
     pending_tasks: BTreeMap<String, PendingTaskRecord>,
     pending_subagents: BTreeMap<String, Option<i64>>,
@@ -309,7 +309,7 @@ fn system_message_sender(step: &Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-fn collect_turn_pending_work(
+pub fn collect_turn_pending_work(
     id: &str,
     summary_trajectory_id: &str,
     steps: &[Value],
@@ -553,73 +553,92 @@ pub fn has_unsettled_background_work(
     steps: &[Value],
     ctx: &TrajectoryLivenessContext,
 ) -> bool {
-    let TurnPendingWork {
-        last_root_step_ms,
-        pending_tasks,
-        pending_subagents,
-    } = collect_turn_pending_work(id, summary_trajectory_id, steps);
+    collect_turn_pending_work(id, summary_trajectory_id, steps).is_unsettled(
+        id,
+        &ctx.subagents,
+        &ctx.tasks,
+        ctx.has_active_child_processes,
+        ctx.now_ms,
+    )
+}
 
-    if pending_tasks.is_empty() && pending_subagents.is_empty() {
-        return false;
-    }
-    let Some(now_ms) = ctx.now_ms else {
-        return true;
-    };
-
-    let max_subagent_modified_ms = ctx
-        .subagents
-        .iter()
-        .filter(|(k, _)| k.as_str() != id)
-        .filter_map(|(_, s)| s.last_modified_ms)
-        .max();
-
-    for (cid, spawn_ms) in &pending_subagents {
-        let sub = ctx.subagents.get(cid);
-        if sub.is_some_and(|s| s.active || s.unsettled_background) {
-            return true;
-        }
-        let anchor_ms = [
+impl TurnPendingWork {
+    /// Evaluate after discovering descendants, without retaining their raw steps.
+    pub fn is_unsettled(
+        &self,
+        id: &str,
+        subagents: &BTreeMap<String, SubagentLiveness>,
+        tasks: &BTreeMap<String, TaskLiveness>,
+        has_active_child_processes: bool,
+        now_ms: Option<i64>,
+    ) -> bool {
+        let Self {
             last_root_step_ms,
-            *spawn_ms,
-            sub.and_then(|s| s.last_modified_ms),
-            max_subagent_modified_ms,
-        ]
-        .into_iter()
-        .flatten()
-        .max()
-        .unwrap_or(now_ms);
-        if now_ms.saturating_sub(anchor_ms) < BACKGROUND_HANDOFF_GRACE_MS {
-            return true;
-        }
-    }
+            pending_tasks,
+            pending_subagents,
+        } = self;
 
-    for (task_id, rec) in &pending_tasks {
-        let task = ctx.tasks.get(task_id);
-        let anchor_ms = [
-            last_root_step_ms,
-            rec.spawn_ms,
-            rec.expected_deadline_ms,
-            task.and_then(|t| t.last_activity_ms),
-        ]
-        .into_iter()
-        .flatten()
-        .max()
-        .unwrap_or(now_ms);
-        let grace = if rec.step_running || task.is_some_and(|t| t.active) {
-            ACTIVE_BACKGROUND_TASK_CAP_MS
-        } else if (task.is_some() || rec.expected_deadline_ms.is_some())
-            && !ctx.has_active_child_processes
-        {
-            BACKGROUND_HANDOFF_GRACE_MS
-        } else {
-            UNTRACKED_TASK_QUIESCENCE_MS
+        if pending_tasks.is_empty() && pending_subagents.is_empty() {
+            return false;
+        }
+        let Some(now_ms) = now_ms else {
+            return true;
         };
-        if now_ms.saturating_sub(anchor_ms) < grace {
-            return true;
-        }
-    }
 
-    false
+        let max_subagent_modified_ms = subagents
+            .iter()
+            .filter(|(k, _)| k.as_str() != id)
+            .filter_map(|(_, s)| s.last_modified_ms)
+            .max();
+
+        for (cid, spawn_ms) in pending_subagents {
+            let sub = subagents.get(cid);
+            if sub.is_some_and(|s| s.active || s.unsettled_background) {
+                return true;
+            }
+            let anchor_ms = [
+                *last_root_step_ms,
+                *spawn_ms,
+                sub.and_then(|s| s.last_modified_ms),
+                max_subagent_modified_ms,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(now_ms);
+            if now_ms.saturating_sub(anchor_ms) < BACKGROUND_HANDOFF_GRACE_MS {
+                return true;
+            }
+        }
+
+        for (task_id, rec) in pending_tasks {
+            let task = tasks.get(task_id);
+            let anchor_ms = [
+                *last_root_step_ms,
+                rec.spawn_ms,
+                rec.expected_deadline_ms,
+                task.and_then(|t| t.last_activity_ms),
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(now_ms);
+            let grace = if rec.step_running || task.is_some_and(|t| t.active) {
+                ACTIVE_BACKGROUND_TASK_CAP_MS
+            } else if (task.is_some() || rec.expected_deadline_ms.is_some())
+                && !has_active_child_processes
+            {
+                BACKGROUND_HANDOFF_GRACE_MS
+            } else {
+                UNTRACKED_TASK_QUIESCENCE_MS
+            };
+            if now_ms.saturating_sub(anchor_ms) < grace {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 pub fn snapshot(id: &str, summary: &Value, response: &Value) -> Result<NativeStreamSnapshot> {

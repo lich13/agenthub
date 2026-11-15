@@ -239,6 +239,44 @@ fn key_for(root: &Path, path: &Path, _id: &str) -> String {
     key
 }
 
+// A same-name JSONL owns its sibling directory, including when the main
+// file is a link that explicit deletion must unlink without following it.
+fn excluded_session_directory(path: &Path, depth: usize) -> bool {
+    if matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("subagents" | "tool-results")
+    ) {
+        return true;
+    }
+    if depth < 2 {
+        return false;
+    }
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let mut main_name = name.to_os_string();
+    main_name.push(".jsonl");
+    fs::symlink_metadata(path.with_file_name(main_name))
+        .is_ok_and(|metadata| metadata.is_file() || metadata.file_type().is_symlink())
+}
+
+fn session_entry(entry: &walkdir::DirEntry) -> bool {
+    !entry.file_type().is_dir() || !excluded_session_directory(entry.path(), entry.depth())
+}
+
+fn main_session_path(root: &Path, path: &Path) -> bool {
+    crate::session_delete::within(root, path)
+        && path
+            .ancestors()
+            .skip(1)
+            .take_while(|parent| *parent != root)
+            .all(|parent| {
+                parent.strip_prefix(root).is_ok_and(|relative| {
+                    !excluded_session_directory(parent, relative.components().count())
+                })
+            })
+}
+
 fn files(paths: &ClaudePaths) -> Result<Vec<PathBuf>> {
     if !paths.projects.exists() {
         return Ok(vec![]);
@@ -256,7 +294,7 @@ fn files(paths: &ClaudePaths) -> Result<Vec<PathBuf>> {
         .follow_links(false)
         .max_depth(8)
         .into_iter()
-        .filter_entry(|e| !matches!(e.file_name().to_str(), Some("subagents" | "tool-results")))
+        .filter_entry(session_entry)
     {
         let entry = entry.context("无法扫描 Claude 会话")?;
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|x| x == "jsonl") {
@@ -304,14 +342,14 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .ok()
         .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned())
     {
-        if crate::session_delete::within(&root, &path) {
+        if main_session_path(&root, &path) {
             return Ok(path);
         }
     }
     for entry in walkdir::WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !matches!(e.file_name().to_str(), Some("subagents" | "tool-results")))
+        .filter_entry(session_entry)
     {
         let entry = entry?;
         if entry.path().extension().is_some_and(|ext| ext == "jsonl")
@@ -347,7 +385,7 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
     if let Some(path) = located {
         // Revalidate every native identity, including the ancestor chain. The
         // lookup stores only paths discovered by our own bounded directory scan.
-        let safe = path.starts_with(&root)
+        let safe = main_session_path(&root, &path)
             && path
                 .ancestors()
                 .take_while(|parent| *parent != root)
