@@ -34,7 +34,6 @@ pub(crate) use jobs::{job_detail, list_jobs};
 pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action, ProbeEventsQuery,
-    ProbeStatusQuery,
 };
 pub(crate) use provider_sessions::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,

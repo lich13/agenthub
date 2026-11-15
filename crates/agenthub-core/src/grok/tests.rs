@@ -1114,3 +1114,14 @@ fn batch_preview_reuses_workspaces_and_execution_finds_new_matching_directories(
     assert!(!original.exists() && !extra.exists());
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn idle_cleanup_releases_summary_metadata_cache() {
+    let (paths, _, path) = fixture();
+    read_summary_metadata(&path).unwrap();
+    let file = path.join("summary.json");
+    assert!(GROK_SUMMARY_CACHE.cached_weight(&file) > 0);
+    evict_idle_detail_cache(Duration::ZERO);
+    assert_eq!(GROK_SUMMARY_CACHE.cached_weight(&file), 0);
+    fs::remove_dir_all(paths.home).unwrap();
+}

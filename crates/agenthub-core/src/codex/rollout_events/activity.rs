@@ -296,30 +296,17 @@ impl ScanState {
         scan
     }
 }
+static SCAN_CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES);
+
+pub(crate) fn evict_idle_scan_cache(max_idle: std::time::Duration) {
+    SCAN_CACHE.evict_idle(max_idle);
+}
+
 pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutScan> {
-    if crate::codex::rollout_file::is_compressed(path) {
-        use std::io::{BufRead, BufReader, Read};
-        let file = fs::File::open(path)?;
-        let decoder = zstd::stream::read::Decoder::new(file)?;
-        let mut reader = BufReader::new(decoder.take(64 * 1024 * 1024));
-        let mut line = Vec::new();
-        let mut state = ScanState::default();
-        loop {
-            line.clear();
-            if reader.read_until(b'\n', &mut line)? == 0 {
-                break;
-            }
-            if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-                state.push(value);
-            }
-        }
-        return Ok(state.summary());
-    }
-    static CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES);
-    CACHE.read(
+    crate::codex::rollout_file::read_cached(
+        &SCAN_CACHE,
         path,
-        |_| Ok(0),
         true,
         |state, line, _, _| {
             if let Ok(value) = serde_json::from_slice::<Value>(line) {
@@ -340,27 +327,42 @@ pub fn rollout_hook_stop_message_selection(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<RolloutMessageSelection>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    Ok(select_rollout_message_inner(&text, turn_id))
+    select_rollout_message(path, turn_id)
+}
+
+fn select_rollout_message(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<RolloutMessageSelection>> {
+    let read = || {
+        let file = File::open(path)?;
+        select_rollout_message_inner(std::io::BufReader::new(file), turn_id)
+    };
+    read().with_context(|| format!("read rollout {}", path.display()))
 }
 
 fn select_rollout_message_inner(
-    text: &str,
+    mut input: impl std::io::BufRead,
     turn_id: Option<&str>,
-) -> Option<RolloutMessageSelection> {
+) -> Result<Option<RolloutMessageSelection>> {
     let mut latest_assistant = None;
     let mut latest_unresolved_action: Option<PendingHookStopAction> = None;
     let mut latest_task_complete = None;
     let mut candidate_count = 0usize;
     let mut current_turn_id: Option<String> = None;
     let mut async_questions = super::super::user_input::AsyncQuestionTracker::default();
-    for (index, line) in text.lines().enumerate() {
-        let line_number = index + 1;
+    let mut line = String::new();
+    let mut line_number = 0;
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            break;
+        }
+        line_number += 1;
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+        let Ok(mut value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         normalize_canonical_turn(&mut value, &mut current_turn_id);
@@ -485,16 +487,16 @@ fn select_rollout_message_inner(
         .pending()
         .find(|call| turn_id.is_none_or(|id| id == call.turn_id))
     {
-        return Some(RolloutMessageSelection {
-            message: crate::services::probe::format_probe_pending_elicitation(&call.pending()?),
+        return Ok(call.pending().map(|pending| RolloutMessageSelection {
+            message: crate::services::probe::format_probe_pending_elicitation(&pending),
             source: "request_user_input".to_string(),
             strategy: "unresolved_async_question".to_string(),
             selected_turn_id: Some(call.turn_id.clone()),
             selected_line: Some(call.line),
             candidate_count: candidate_count + 1,
-        });
+        }));
     }
-    let mut selection = latest_unresolved_action
+    let selection = latest_unresolved_action
         .map(|pending| RolloutMessageSelection {
             message: pending.message,
             source: pending.source.to_string(),
@@ -504,9 +506,11 @@ fn select_rollout_message_inner(
             candidate_count: 0,
         })
         .or(latest_task_complete)
-        .or(latest_assistant)?;
-    selection.candidate_count = candidate_count;
-    Some(selection)
+        .or(latest_assistant);
+    Ok(selection.map(|mut selection| {
+        selection.candidate_count = candidate_count;
+        selection
+    }))
 }
 
 fn should_replace_pending_hook_stop_action(
@@ -557,9 +561,7 @@ pub fn rollout_completion_last_agent_message_selection(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<RolloutMessageSelection>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    Ok(select_rollout_message_inner(&text, turn_id))
+    select_rollout_message(path, turn_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -843,4 +845,68 @@ pub(crate) fn rollout_has_confirmed_inactive_state(path: &Path) -> Result<bool> 
 pub(crate) fn rollout_has_running_signal(path: &Path) -> Result<bool> {
     let scan = scan_rollout(path, 80)?;
     Ok(scan.running)
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_selection_preserves_lines_scope_and_propagates_late_read_errors() {
+        let rows = [
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"old"}}).to_string(),
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"old","last_agent_message":"old answer"}}).to_string(),
+            String::from("invalid record"), String::new(),
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"new"}}).to_string(),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"new answer"}]}}).to_string(),
+        ].join("\r\n");
+        let selection = select_rollout_message_inner(rows.as_bytes(), Some("new"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.message, "new answer");
+        assert_eq!(selection.selected_line, Some(6));
+        assert_eq!(selection.candidate_count, 1);
+        assert_eq!(
+            select_rollout_message_inner(rows.as_bytes(), Some("old"))
+                .unwrap()
+                .unwrap()
+                .message,
+            "old answer"
+        );
+        let invalid = [rows.as_bytes(), b"\n\xff"].concat();
+        assert!(select_rollout_message_inner(invalid.as_slice(), None).is_err());
+        struct FailedRead;
+        impl std::io::Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture read failed"))
+            }
+        }
+        let broken = std::io::Read::chain(rows.as_bytes(), FailedRead);
+        assert!(select_rollout_message_inner(std::io::BufReader::new(broken), None).is_err());
+    }
+
+    #[test]
+    fn idle_cleanup_releases_plain_and_compressed_summary_cache() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-scan-idle-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let plain = root.join("history.jsonl");
+        let compressed = root.join("history.jsonl.zst");
+        let bytes = b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn\"}}\n";
+        fs::write(&plain, bytes).unwrap();
+        fs::write(
+            &compressed,
+            zstd::stream::encode_all(&bytes[..], 1).unwrap(),
+        )
+        .unwrap();
+        for path in [&plain, &compressed] {
+            assert!(scan_rollout(path, 80).unwrap().running);
+            assert!(SCAN_CACHE.cached_weight(path) > 0);
+        }
+        crate::codex::evict_idle_detail_cache(std::time::Duration::ZERO);
+        for path in [&plain, &compressed] {
+            assert_eq!(SCAN_CACHE.cached_weight(path), 0);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

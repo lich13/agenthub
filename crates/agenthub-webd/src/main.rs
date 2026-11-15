@@ -249,17 +249,25 @@ async fn run_probe_command(
 ) -> Result<()> {
     let cache = monitor_start::DaemonMonitorCache::default();
     let load_config = || cache.load_config(config_path);
+    let mut platform = PlatformPaths::current();
+    platform.config_file = config_path.to_path_buf();
     match command {
         ProbeCommand::Status => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&probe_runtime(config).status().await?)?
+                serde_json::to_string_pretty(
+                    &ProbeRuntime::new(config.clone(), platform.clone())
+                        .status()
+                        .await?
+                )?
             );
         }
         ProbeCommand::HookStatus => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&probe_runtime(config).hook_status())?
+                serde_json::to_string_pretty(
+                    &ProbeRuntime::new(config.clone(), platform.clone()).hook_status()
+                )?
             );
         }
         ProbeCommand::Events { limit } => {
@@ -1590,7 +1598,7 @@ fn spawn_probe_thread_scan(state: AppState) {
 
 async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let _guard = PROBE_THREAD_SCAN_LOCK.lock().await;
-    let config = state.config();
+    let config = state.refresh_config()?;
     if !config.probe.enabled || !config.probe.notifications.enabled {
         return Ok(0);
     }
@@ -1652,7 +1660,7 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                 active_markers.push(key);
             }
             let (outcome, bark) =
-                record_probe_event_with_bark(&|| Ok(state.config()), &state.db, event).await?;
+                record_probe_event_with_bark(&|| state.refresh_config(), &state.db, event).await?;
             if outcome.recorded || bark.sent {
                 recorded += 1;
             }
@@ -4088,7 +4096,7 @@ last_error = "old agenthub request hook"
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let state = AppState::new(config, db.clone());
+        let state = passive_test_state(config, db.clone(), &dir);
 
         let count = run_probe_thread_scan_if_due(state).await.unwrap();
 
@@ -4166,13 +4174,15 @@ last_error = "old agenthub request hook"
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
-        let first_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
-            .await
-            .unwrap();
+        let first_count =
+            run_probe_thread_scan_if_due(passive_test_state(config.clone(), db.clone(), &dir))
+                .await
+                .unwrap();
         db.maintain_probe_events(1, 100).unwrap();
-        let second_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
-            .await
-            .unwrap();
+        let second_count =
+            run_probe_thread_scan_if_due(passive_test_state(config.clone(), db.clone(), &dir))
+                .await
+                .unwrap();
         fs::write(
             &rollout,
             [
@@ -4183,9 +4193,10 @@ last_error = "old agenthub request hook"
             .join("\n"),
         )
         .unwrap();
-        let answered_count = run_probe_thread_scan_if_due(AppState::new(config, db.clone()))
-            .await
-            .unwrap();
+        let answered_count =
+            run_probe_thread_scan_if_due(passive_test_state(config, db.clone(), &dir))
+                .await
+                .unwrap();
 
         assert_eq!(first_count, 1);
         assert_eq!(second_count, 0);
@@ -4458,7 +4469,7 @@ last_error = "old agenthub request hook"
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let state = AppState::new(config, db.clone());
+        let state = passive_test_state(config, db.clone(), &dir);
 
         let count = run_probe_thread_scan_if_due(state).await.unwrap();
 
@@ -4483,6 +4494,41 @@ last_error = "old agenthub request hook"
             .unwrap()
             .contains("等待回复"));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn passive_test_state(config: Config, db: PanelDb, dir: &Path) -> AppState {
+        let config_path = dir.join("passive-config.toml");
+        fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+        AppState::new(config, db).with_config_path(config_path)
+    }
+
+    #[tokio::test]
+    async fn passive_scan_reloads_external_disable_and_reports_bad_config() {
+        let dir = temp_test_dir("agenthub-passive-config-refresh");
+        fs::create_dir_all(&dir).unwrap();
+        let mut config = test_config(dir.join("unreadable-codex"));
+        config.probe.enabled = true;
+        config.probe.notifications.enabled = true;
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let state = passive_test_state(config.clone(), db, &dir);
+        config.probe.enabled = false;
+        agenthub_core::config::write_config_atomic(
+            state.config_path(),
+            &toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            run_probe_thread_scan_if_due(state.clone()).await.unwrap(),
+            0
+        );
+        assert!(!state.config().probe.enabled);
+        fs::write(state.config_path(), "[invalid").unwrap();
+        assert!(run_probe_thread_scan_if_due(state).await.is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn test_config(codex_home: PathBuf) -> Config {

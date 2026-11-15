@@ -242,7 +242,7 @@
       "tauriCommand": "commands::probe::getProbeStatus",
       "webuiWrapper": "getProbeStatus",
       "dtoOwner": "probe",
-      "requestDto": "NoRequest",
+      "requestDto": "ProbeStatusRequest",
       "responseDto": "ProbeStatusResponse"
     },
     {
@@ -1079,6 +1079,10 @@
     "ProbeSettingsSaveResponse": {
       "core": "ProbeSettingsSaveResponse",
       "webui": "ProbeSettingsSaveResponse"
+    },
+    "ProbeStatusRequest": {
+      "core": "ProbeStatusRequest",
+      "webui": "ProbeStatusRequest"
     },
     "ProbeStatusResponse": {
       "core": "ProbeStatusResponse",

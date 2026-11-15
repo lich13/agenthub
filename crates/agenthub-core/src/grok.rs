@@ -556,6 +556,7 @@ static GROK_LAST_MESSAGE_CACHE: crate::read_cache::ReadCache<Option<String>> =
 
 pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     GROK_DETAIL_CACHE.evict_idle(max_idle);
+    GROK_SUMMARY_CACHE.evict_idle(max_idle);
     GROK_LAST_MESSAGE_CACHE.evict_idle(max_idle);
     activity::evict_idle_cache(max_idle);
     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
@@ -1113,6 +1114,9 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
     Ok(summary)
 }
 
+static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Value> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES);
+
 fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");
     if !file.is_file() {
@@ -1126,9 +1130,7 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
         fs::metadata(&file)?.len() <= 1024 * 1024,
         "Grok summary exceeds size limit"
     );
-    static CACHE: crate::read_cache::ReadCache<Value> =
-        crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES);
-    let value = CACHE.read(
+    let value = GROK_SUMMARY_CACHE.read(
         &file,
         |_, size| size.saturating_mul(4),
         || Ok(serde_json::from_str::<Value>(&fs::read_to_string(&file)?)?),

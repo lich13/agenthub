@@ -6,7 +6,9 @@ use agenthub_core::probe::ProbeStatus;
 #[tauri::command(rename = "probe.status")]
 pub async fn getProbeStatus(
     state: tauri::State<'_, DesktopState>,
+    refresh: Option<bool>,
 ) -> std::result::Result<ProbeStatus, String> {
+    let _ = refresh; // Desktop status already performs a fresh read.
     probe_service::desktop_probe_status_with_state(&state)
         .await
         .map_err(|err| err.to_string())

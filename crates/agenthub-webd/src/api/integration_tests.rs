@@ -565,7 +565,9 @@ async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
     mark_codex_home(&codex_home);
     let mut config = state.config();
     config.codex.home = codex_home.clone();
-    state.replace_config(config);
+    let config_path = dir.join("custom-config.toml");
+    fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+    let state = state.with_config_path(config_path);
     let app = state.clone();
 
     let status = request_rpc_json(app.clone(), "probe.status", "{}").await;
@@ -597,7 +599,9 @@ async fn probe_status_route_caches_initial_snapshot_and_throttles_background_ref
     mark_codex_home(&codex_home);
     let mut config = state.config();
     config.codex.home = codex_home.clone();
-    state.replace_config(config);
+    let config_path = dir.join("custom-config.toml");
+    fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+    let state = state.with_config_path(config_path);
     let app = state.clone();
 
     let first_status = request_rpc_json(app.clone(), "probe.status", "{}").await;
@@ -1550,5 +1554,31 @@ async fn settings_get_save_and_hook_jobs_use_the_startup_config_path() {
     assert!(request_rpc_status(state, "probe.settings.get", "{}")
         .await
         .is_err());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn forced_probe_status_refreshes_disk_config_and_keeps_custom_hook_path() {
+    let (state, dir, path) = rpc_test_state_with_config_file();
+    let initial = request_rpc_json(state.clone(), "probe.status", "{}").await;
+    let mut config = state.config();
+    config.probe.enabled = !config.probe.enabled;
+    agenthub_core::config::write_config_atomic(&path, &toml::to_string(&config).unwrap()).unwrap();
+    let cached = request_rpc_json(state.clone(), "probe.status", "{}").await;
+    assert_eq!(cached["enabled"], initial["enabled"]);
+    let fresh = request_rpc_json(state.clone(), "probe.status", r#"{"refresh":true}"#).await;
+    assert_eq!(fresh["enabled"], config.probe.enabled);
+    assert_eq!(fresh["config_path"], path.to_string_lossy().as_ref());
+    assert!(fresh["hook_command"]
+        .as_str()
+        .unwrap()
+        .contains(path.to_str().unwrap()));
+    assert_eq!(fresh["snapshot_status"], "fresh");
+    let cached = request_rpc_json(state.clone(), "probe.status", "{}").await;
+    assert_eq!(cached["enabled"], config.probe.enabled);
+    fs::write(&path, "[invalid").unwrap();
+    let invalid = request_rpc_json(state, "probe.status", r#"{"refresh":true}"#).await;
+    assert_eq!(invalid["available"], false);
+    assert!(invalid["error"].is_string());
     fs::remove_dir_all(dir).unwrap();
 }

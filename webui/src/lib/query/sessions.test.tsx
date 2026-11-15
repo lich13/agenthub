@@ -251,9 +251,9 @@ test.each([0, 1])("selection clears old mutation %s errors even after selection 
   }
 });
 
-test.each([false, true])("a failed second page keeps confirmed results without replay, switched machine=%s", async changedMachine => {
+test.each([[150, false], [201, false], [201, true]] as const)("a failed second page keeps all %s results without replay, switched machine=%s", async (count, changedMachine) => {
   observed.lifecycle = true;
-  const keys = Array.from({ length: 201 }, (_, i) => `partial-${i}`);
+  const keys = Array.from({ length: count }, (_, i) => `partial-${i}`);
   const done = vi.fn(); selection(keys, undefined, done);
   observed.states[0] = { ...observed.states[0], selecting: true, keys };
   observed.states[1] = { provider: "codex", operation: "archive", items: keys.map(sessionKey => ({ sessionKey, allowed: true, fingerprint: "fixture" })) };
@@ -274,7 +274,25 @@ test.each([false, true])("a failed second page keeps confirmed results without r
   } else {
     expect(done).toHaveBeenCalledExactlyOnceWith(keys.slice(0,100), "archive");
     expect(observed.states[0].keys).toEqual(keys.slice(100));
-    expect(observed.states[2].items).toHaveLength(100);
+    expect(observed.states[2].items).toHaveLength(count);
+    expect(observed.states[2].items.slice(100, 200)).toEqual(keys.slice(100, 200).map(sessionKey => ({ sessionKey, status: "failed", message: "请求中断，结果未确认" })));
+    expect(observed.states[2].items.slice(200)).toEqual(keys.slice(200).map(sessionKey => ({ sessionKey, status: "failed", message: "前序请求中断，未执行" })));
     expect(observed.invalidate).toHaveBeenCalledOnce();
   }
+});
+
+
+test("a first-page failure keeps selection without an empty success result", async () => {
+  observed.lifecycle = true;
+  const keys = ["first", "second"];
+  const done = vi.fn(); selection(keys, undefined, done);
+  observed.states[0] = { ...observed.states[0], selecting: true, keys };
+  observed.states[1] = { provider: "codex", operation: "delete", items: keys.map(sessionKey => ({ sessionKey, allowed: true, descendants: [] })) };
+  selection(keys, undefined, done);
+  vi.mocked(executeSessionBatch).mockRejectedValueOnce(new Error("Connection lost"));
+  await expect(observed.mutations[1].mutationFn()).rejects.toThrow("Connection lost");
+  expect(done).not.toHaveBeenCalled();
+  expect(observed.states[0].keys).toEqual(keys);
+  expect(observed.states[2]).toBeNull();
+  expect(observed.invalidate).not.toHaveBeenCalled();
 });

@@ -89,7 +89,7 @@ export function useSessionSelection(
         ]),
       ),
     ];
-    onSucceeded?.(succeeded, operation);
+    if (succeeded.length) onSucceeded?.(succeeded, operation);
     setResult(response);
     setState(prev => {
       const remaining = prev.keys.filter(key => !succeeded.includes(key));
@@ -126,8 +126,9 @@ export function useSessionSelection(
       const response: SessionBatchResult = { items: [] };
       const size = request.operation === "delete" ? Math.max(1, items.length) : 100;
       const includeDescendants = hasSubagentTree(request.provider, request.operation);
+      let start = 0;
       try {
-        for (let start = 0; start < items.length; start += size) {
+        for (; start < items.length; start += size) {
           if (generation !== executionEpoch.current.value) throw new Error("连接范围已变化");
           const batchResult = await executeSessionBatch({
             provider: request.provider,
@@ -139,8 +140,14 @@ export function useSessionSelection(
           response.items.push(...batchResult.items);
         }
       } catch (error) {
-        // A failed later page must not discard earlier confirmed results.
-        applyExecutionResult(response, generation, request.operation);
+        if (response.items.length) {
+          response.items.push(...items.slice(start).map((item, index) => ({
+            sessionKey: item.sessionKey,
+            status: "failed" as const,
+            message: index < size ? "请求中断，结果未确认" : "前序请求中断，未执行",
+          })));
+          applyExecutionResult(response, generation, request.operation);
+        }
         throw error;
       }
       return { response, generation, operation: request.operation };

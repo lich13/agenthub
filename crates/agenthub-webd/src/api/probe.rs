@@ -17,10 +17,7 @@ use agenthub_core::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ProbeStatusQuery {
-    pub(crate) refresh: Option<bool>,
-}
+pub(crate) use probe_service::ProbeStatusRequest as ProbeStatusQuery;
 
 pub(crate) async fn get_probe_status(state: AppState, query: ProbeStatusQuery) -> ApiResponse {
     ok(probe_status_cached_value(state, query.refresh.unwrap_or(false)).await)
@@ -88,8 +85,11 @@ pub(crate) async fn start_probe_action(
     ok(json!({"job_id": id}))
 }
 
-fn probe_runtime(state: &AppState) -> ProbeRuntime {
-    ProbeRuntime::new(state.config(), PlatformPaths::current())
+fn probe_runtime(state: &AppState) -> anyhow::Result<ProbeRuntime> {
+    Ok(ProbeRuntime::new(
+        state.refresh_config()?,
+        state.platform().clone(),
+    ))
 }
 
 async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Value {
@@ -132,7 +132,7 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
 }
 
 async fn probe_status_fresh_value(state: AppState) -> Value {
-    match probe_runtime(&state).status().await {
+    match async { probe_runtime(&state)?.status().await }.await {
         Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
         Err(err) => json!({
             "label": "Probe",

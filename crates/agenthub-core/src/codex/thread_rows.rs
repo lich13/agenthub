@@ -284,7 +284,7 @@ pub(super) fn read_thread_rows_matching(
 }
 
 #[derive(Debug)]
-enum ValueCell {
+pub(super) enum ValueCell {
     Null,
     Integer(i64),
     Real(f64),
@@ -305,7 +305,7 @@ impl rusqlite::types::FromSql for ValueCell {
     }
 }
 
-fn format_cell_time(cell: &ValueCell) -> Option<String> {
+pub(super) fn format_cell_time(cell: &ValueCell) -> Option<String> {
     match cell {
         ValueCell::Null => None,
         ValueCell::Integer(v) => format_timestamp(*v),

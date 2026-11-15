@@ -220,6 +220,17 @@ impl<T: Clone> ReadCache<T> {
         Ok(Arc::unwrap_or_clone(value))
     }
 
+    #[cfg(test)]
+    pub(crate) fn cached_weight(&self, path: &Path) -> u64 {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.path == path)
+            .map(|entry| entry.bytes)
+            .sum()
+    }
+
     pub(crate) fn evict_idle(&self, max_idle: std::time::Duration) {
         if let Ok(mut entries) = self.entries.lock() {
             let now = std::time::Instant::now();

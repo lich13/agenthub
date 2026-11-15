@@ -84,6 +84,16 @@ fn open(path: &Path) -> Result<File> {
     Ok(options.open(path)?)
 }
 
+pub(crate) fn open_regular(path: &Path) -> Result<File> {
+    let before = Stamp::read(path)?;
+    let file = open(path)?;
+    ensure!(
+        Stamp::from_metadata(&file.metadata()?)? == before,
+        "会话文件身份已变化，请重试"
+    );
+    Ok(file)
+}
+
 fn anchor(file: &mut File, offset: u64) -> Result<[u8; 32]> {
     let mut digest = Sha256::new();
     let mut bytes = vec![0; offset.min(4096) as usize];
@@ -183,12 +193,51 @@ impl<S: Default> JsonlCache<S> {
         source: (&Path, &str),
         start: impl FnOnce(u64) -> Result<u64>,
         accept_complete_tail: bool,
+        consume: impl FnMut(&mut S, &[u8], usize, u64) -> Result<()>,
+        finish: impl FnOnce(&mut S, ReadInfo<'_>) -> Result<R>,
+        weight: impl FnOnce(&S) -> u64,
+    ) -> Result<R> {
+        self.read_source(
+            (source.0, source.1, false),
+            start,
+            accept_complete_tail,
+            consume,
+            finish,
+            weight,
+        )
+    }
+
+    /// Compressed files share this cache's budget. Any source change rebuilds
+    /// the decoded snapshot; unchanged files need no decompression or parsing.
+    pub fn read_compressed<R>(
+        &self,
+        path: &Path,
+        accept_complete_tail: bool,
+        consume: impl FnMut(&mut S, &[u8], usize, u64) -> Result<()>,
+        finish: impl FnOnce(&mut S, ReadInfo<'_>) -> Result<R>,
+        weight: impl FnOnce(&S) -> u64,
+    ) -> Result<R> {
+        self.read_source(
+            (path, "", true),
+            |_| Ok(0),
+            accept_complete_tail,
+            consume,
+            finish,
+            weight,
+        )
+    }
+
+    fn read_source<R>(
+        &self,
+        source: (&Path, &str, bool),
+        start: impl FnOnce(u64) -> Result<u64>,
+        accept_complete_tail: bool,
         mut consume: impl FnMut(&mut S, &[u8], usize, u64) -> Result<()>,
         finish: impl FnOnce(&mut S, ReadInfo<'_>) -> Result<R>,
         weight: impl FnOnce(&S) -> u64,
     ) -> Result<R> {
         use std::sync::atomic::Ordering;
-        let (path, scope) = source;
+        let (path, scope, compressed) = source;
         let now_ms = monotonic_ms();
         let entry = {
             let mut entries = self
@@ -228,7 +277,8 @@ impl<S: Default> JsonlCache<S> {
                 );
                 let mut separator = 0;
                 let append = cached.as_ref().is_some_and(|value| {
-                    before.size > value.stamp.size
+                    !compressed
+                        && before.size > value.stamp.size
                         && before.same_file(&value.stamp)
                         && anchor(&mut file, value.offset).ok() == Some(value.anchor)
                         && (value.terminated || {
@@ -273,10 +323,15 @@ impl<S: Default> JsonlCache<S> {
                     snapshot.terminated = true;
                 }
                 file.seek(SeekFrom::Start(snapshot.offset))?;
-                let mut input =
-                    BufReader::with_capacity(64 * 1024, file.take(before.size - snapshot.offset));
+                let input = (&mut file).take(before.size - snapshot.offset);
+                let input: Box<dyn Read + '_> = if compressed {
+                    Box::new(zstd::stream::read::Decoder::new(input)?)
+                } else {
+                    Box::new(input)
+                };
+                let mut input = BufReader::with_capacity(64 * 1024, input);
                 let mut line = Vec::new();
-                let read_line = |input: &mut BufReader<std::io::Take<File>>,
+                let read_line = |input: &mut BufReader<Box<dyn Read + '_>>,
                                  line: &mut Vec<u8>|
                  -> Result<usize> {
                     if let Some(limit) = self.max_line_bytes {
@@ -310,11 +365,14 @@ impl<S: Default> JsonlCache<S> {
                     snapshot.offset += length as u64;
                     snapshot.terminated = line.ends_with(b"\n");
                 }
-                let mut file = input.into_inner().into_inner();
-                snapshot.anchor = anchor(&mut file, snapshot.offset)?;
+                drop(input);
+                if !compressed {
+                    snapshot.anchor = anchor(&mut file, snapshot.offset)?;
+                }
                 let after = Stamp::read(path)?;
                 ensure!(
-                    after == before || (after.same_file(&before) && after.size > before.size),
+                    after == before
+                        || (!compressed && after.same_file(&before) && after.size > before.size),
                     "会话文件已变化，请重试"
                 );
                 snapshot.stamp = before;
@@ -366,6 +424,17 @@ impl<S: Default> JsonlCache<S> {
             entries.retain(|candidate| !Arc::ptr_eq(candidate, &entry));
         }
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_weight(&self, path: &Path) -> u64 {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.path == path)
+            .map(|entry| entry.weight.load(std::sync::atomic::Ordering::Relaxed))
+            .sum()
     }
 
     pub fn evict_idle(&self, max_idle: std::time::Duration) {

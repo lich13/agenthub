@@ -7,7 +7,7 @@ use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
     require_capability(state.platform(), Capability::Probe)?;
-    let config = state.config();
+    let config = state.refresh_config()?;
     let mut status = ProbeRuntime::new(config, state.platform().clone())
         .status()
         .await?;

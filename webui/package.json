@@ -1,7 +1,7 @@
 {
   "name": "agenthub-webui",
   "private": true,
-  "version": "2.1.25",
+  "version": "2.1.26",
   "type": "module",
   "scripts": {
     "dev": "vite",

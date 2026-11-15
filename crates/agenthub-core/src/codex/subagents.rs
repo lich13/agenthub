@@ -103,6 +103,7 @@ struct AgentRecord {
     nickname: Option<String>,
     role: Option<String>,
     rollout: PathBuf,
+    archived: bool,
     cwd: Option<String>,
     updated_at: Option<String>,
 }
@@ -143,7 +144,7 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
             .unwrap_or_else(|| "NULL".into())
     };
     let sql = format!(
-        "SELECT id, rollout_path, {}, {}, {}, {}, {}, {}, {}, {} FROM threads LIMIT {}",
+        "SELECT id, rollout_path, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} FROM threads LIMIT {}",
         select(&["source"]),
         select(&["parent_thread_id", "parentThreadId"]),
         select(&["agent_path", "agentPath"]),
@@ -152,6 +153,8 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
         select(&["agent_role", "agentRole"]),
         select(&["cwd"]),
         select(&["updated_at", "created_at"]),
+        select(&["archived"]),
+        select(&["archived_at"]),
         MAX_RECORDS + 1
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -172,6 +175,13 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
             Ok(AgentRecord {
                 id: row.get(0)?,
                 rollout: row.get::<_, Option<String>>(1)?.unwrap_or_default().into(),
+                archived: row.get::<_, Option<bool>>(10)?.unwrap_or(false)
+                    || row
+                        .get::<_, super::thread_rows::ValueCell>(11)
+                        .ok()
+                        .as_ref()
+                        .and_then(super::thread_rows::format_cell_time)
+                        .is_some(),
                 parents,
                 path: row
                     .get::<_, Option<String>>(4)?
@@ -226,12 +236,14 @@ fn validate_key(key: &str) -> Result<()> {
 
 fn validate_rollout(paths: &CodexPaths, record: &AgentRecord) -> Result<PathBuf> {
     let home = fs::canonicalize(&paths.home).context("会话根目录不可用")?;
-    let path = fs::canonicalize(&record.rollout).context("子智能体记录已清理或不存在")?;
+    let rollout = super::resolve_existing_rollout_path(paths, &record.rollout, record.archived)
+        .context("子智能体记录已清理或不存在")?;
+    let path = fs::canonicalize(&rollout).context("子智能体记录已清理或不存在")?;
     ensure!(
         path.starts_with(home.join("sessions")) || path.starts_with(home.join("archived_sessions")),
         "子智能体记录不在会话目录内"
     );
-    let mut component = record.rollout.as_path();
+    let mut component = rollout.as_path();
     while component != paths.home && component != home {
         ensure!(
             !fs::symlink_metadata(component)?.file_type().is_symlink(),
@@ -391,20 +403,9 @@ fn consume_native(state: &mut NativeState, line: &[u8]) -> Result<()> {
 }
 
 fn native_status(path: &Path) -> Result<SubagentStatus> {
-    if super::rollout_file::is_compressed(path) {
-        let mut state = NativeState::default();
-        let complete = super::rollout_file::read_complete_lines(path, |line| {
-            consume_native(&mut state, line)
-        })?;
-        return Ok(if complete && !state.invalid {
-            state.status
-        } else {
-            SubagentStatus::Unknown
-        });
-    }
-    NATIVE_CACHE.read(
+    super::rollout_file::read_cached(
+        &NATIVE_CACHE,
         path,
-        |_| Ok(0),
         false,
         |state, line, _, _| consume_native(state, line),
         |state, info| {

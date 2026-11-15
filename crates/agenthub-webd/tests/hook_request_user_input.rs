@@ -1,6 +1,6 @@
 use agenthub_core::{config::Config, db::PanelDb, platform::PlatformKind};
 use rusqlite::{params, Connection};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     fs,
     io::{Read, Write},
@@ -664,4 +664,59 @@ fn seed_local_thread_title(
         .to_string(),
     )
     .unwrap();
+}
+
+#[test]
+fn cli_probe_status_uses_custom_config_for_managed_hooks_and_removal() {
+    let (root, _, config) = test_config("custom-status");
+    let path = root.join("config with spaces.toml");
+    write_config(&path, &config);
+    let run = |command| {
+        let output = Command::new(cargo_webd_binary())
+            .arg("--config")
+            .arg(&path)
+            .args(["probe", command])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    // Install commands come from this CLI's dry run. Keep the test independent
+    // of the user's launchd service while exercising actual CLI status/removal.
+    let output = Command::new(cargo_webd_binary())
+        .arg("--config")
+        .arg(&path)
+        .args(["probe", "hooks-install", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let install: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hooks = serde_json::json!({"hooks":{
+        "Stop":[{"matcher":"*","hooks":[{"type":"command","command":install["hook_command"]}]}],
+        "PreToolUse":[{"matcher":agenthub_core::probe::PROBE_QUESTION_HOOK_MATCHER,"hooks":[{"type":"command","command":install["request_user_input_hook_command"],"timeout":5}]}]
+    }});
+    fs::write(
+        config.codex.home.join("hooks.json"),
+        serde_json::to_vec(&hooks).unwrap(),
+    )
+    .unwrap();
+    for command in ["status", "hook-status"] {
+        let status = run(command);
+        assert_eq!(status["hook_status"], "managed");
+        assert_eq!(status["stale_command_count"], 0);
+        assert!(status["hook_command"]
+            .as_str()
+            .unwrap()
+            .contains(path.to_str().unwrap()));
+        if command == "status" {
+            assert_eq!(status["config_path"], path.to_string_lossy().as_ref());
+        }
+    }
+    run("hooks-remove");
+    assert_ne!(run("hook-status")["hook_status"], "managed");
+    fs::remove_dir_all(root).unwrap();
 }

@@ -940,3 +940,173 @@ fn excessive_changed_ids_request_reset_instead_of_partial_changes() {
     assert!(metadata.reset);
     assert!(metadata.changed_ids.is_empty());
 }
+
+fn compressed_read(
+    cache: &JsonlCache<Vec<u64>>,
+    path: &Path,
+    count: &AtomicUsize,
+    accept_tail: bool,
+    weight: u64,
+) -> Result<View> {
+    cache.read_compressed(
+        path,
+        accept_tail,
+        |state, line, _, _| consume(state, line, count),
+        |state, info| view(state, info),
+        |_| weight,
+    )
+}
+
+#[test]
+fn compressed_snapshots_reuse_and_rebuild_on_replacement_rewrite_append_and_truncation() {
+    let fixture = Fixture::new();
+    let encode = |bytes: &[u8]| zstd::stream::encode_all(bytes, 1).unwrap();
+    let path = fixture.file("history.jsonl.zst", &encode(b"{\"id\":1}\n"));
+    let cache = JsonlCache::new(CACHE_BYTES);
+    let count = AtomicUsize::new(0);
+    let initial = compressed_read(&cache, &path, &count, false, 0).unwrap();
+    let hot = compressed_read(&cache, &path, &count, false, 0).unwrap();
+    assert_eq!(initial.revision, hot.revision);
+    assert!(!hot.changed);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    for atomic in [true, false] {
+        let old = fs::metadata(&path).unwrap();
+        let target = if atomic {
+            path.with_extension("replacement")
+        } else {
+            path.clone()
+        };
+        fs::write(
+            &target,
+            encode(if atomic {
+                b"{\"id\":2}\n"
+            } else {
+                b"{\"id\":3}\n"
+            }),
+        )
+        .unwrap();
+        File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(old.modified().unwrap())
+            .unwrap();
+        assert_eq!(fs::metadata(&target).unwrap().len(), old.len());
+        if atomic {
+            fs::rename(target, &path).unwrap();
+        }
+        let next = compressed_read(&cache, &path, &count, false, 0).unwrap();
+        assert_ne!(next.epoch, initial.epoch);
+        assert_eq!(next.ids, if atomic { vec![2] } else { vec![3] });
+    }
+    append(&path, &encode(b"{\"id\":4}\n"));
+    assert_eq!(
+        compressed_read(&cache, &path, &count, false, 0)
+            .unwrap()
+            .ids,
+        vec![3, 4]
+    );
+    fs::write(&path, encode(b"{\"id\":5}\n")).unwrap();
+    assert_eq!(
+        compressed_read(&cache, &path, &count, false, 0)
+            .unwrap()
+            .ids,
+        vec![5]
+    );
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(5)
+        .unwrap();
+    assert!(compressed_read(&cache, &path, &count, false, 0).is_err());
+}
+
+#[test]
+fn compressed_snapshots_share_budget_and_release_oversize_and_idle_state() {
+    let fixture = Fixture::new();
+    let plain = fixture.file("plain.jsonl", b"{\"id\":1}\n");
+    let compressed = fixture.file(
+        "compressed.jsonl.zst",
+        &zstd::stream::encode_all(&b"{\"id\":2}\n"[..], 1).unwrap(),
+    );
+    let cache = JsonlCache::new(5 * 1024);
+    let count = AtomicUsize::new(0);
+    let original = read_weighted(&cache, &plain, &count, false, 4096).unwrap();
+    compressed_read(&cache, &compressed, &count, false, 4096).unwrap();
+    assert_eq!(cache.entries.lock().unwrap().len(), 1);
+    assert_ne!(
+        read_weighted(&cache, &plain, &count, false, 4096)
+            .unwrap()
+            .epoch,
+        original.epoch
+    );
+    let oversize = compressed_read(&cache, &compressed, &count, false, 6000).unwrap();
+    let rebuilt = compressed_read(&cache, &compressed, &count, false, 6000).unwrap();
+    assert_ne!(oversize.epoch, rebuilt.epoch);
+    assert_eq!(oversize.ids, vec![2]);
+    assert!(cache.entries.lock().unwrap().is_empty());
+    compressed_read(&cache, &compressed, &count, false, 4096).unwrap();
+    cache.evict_idle(Duration::ZERO);
+    assert!(cache.entries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn compressed_tail_and_regular_file_rules_match_jsonl() {
+    let fixture = Fixture::new();
+    let path = fixture.file(
+        "tail.jsonl.zst",
+        &zstd::stream::encode_all(&b"{\"id\":1}"[..], 1).unwrap(),
+    );
+    let count = AtomicUsize::new(0);
+    let strict = compressed_read(&JsonlCache::new(CACHE_BYTES), &path, &count, false, 0).unwrap();
+    assert!(strict.partial && strict.ids.is_empty());
+    assert_eq!(
+        compressed_read(&JsonlCache::new(CACHE_BYTES), &path, &count, true, 0)
+            .unwrap()
+            .ids,
+        vec![1]
+    );
+    assert!(compressed_read(
+        &JsonlCache::new(CACHE_BYTES),
+        &fixture.root,
+        &count,
+        true,
+        0
+    )
+    .is_err());
+    #[cfg(unix)]
+    {
+        let link = fixture.root.join("link.jsonl.zst");
+        std::os::unix::fs::symlink(path, &link).unwrap();
+        assert!(compressed_read(&JsonlCache::new(CACHE_BYTES), &link, &count, true, 0).is_err());
+        assert!(super::open_regular(&link).is_err());
+    }
+}
+
+#[test]
+fn compressed_source_replacement_during_read_is_rejected() {
+    let fixture = Fixture::new();
+    let bytes = zstd::stream::encode_all(&b"{\"id\":1}\n"[..], 1).unwrap();
+    let path = fixture.file("source.jsonl.zst", &bytes);
+    let replacement = fixture.file("replacement.jsonl.zst", &bytes);
+    let cache = JsonlCache::<Vec<u64>>::new(CACHE_BYTES);
+    let result = cache.read_compressed(
+        &path,
+        false,
+        |_, _, _, _| {
+            fs::rename(&replacement, &path)?;
+            Ok(())
+        },
+        |_, _| Ok(()),
+        |_| 0,
+    );
+    assert!(result.is_err());
+    let count = AtomicUsize::new(0);
+    assert_eq!(
+        compressed_read(&cache, &path, &count, false, 0)
+            .unwrap()
+            .ids,
+        vec![1]
+    );
+}

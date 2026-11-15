@@ -48,12 +48,9 @@ pub fn thread_detail_page_from_summary(
             history: None,
         });
     };
-    if crate::codex::rollout_file::is_compressed(&path) {
-        return compressed_thread_detail_page(&path, summary, compact, limit, before);
-    }
-    DETAIL_CACHE.read(
+    crate::codex::rollout_file::read_cached(
+        &DETAIL_CACHE,
         &path,
-        |_| Ok(0),
         true,
         |state, line, _, _| {
             if line.iter().all(u8::is_ascii_whitespace) {
@@ -219,123 +216,6 @@ pub fn thread_detail_page_from_summary(
                 + crate::history_navigation::weight(&state.timeline)
         },
     )
-}
-
-fn compressed_thread_detail_page(
-    path: &Path,
-    summary: ThreadSummary,
-    compact: bool,
-    limit: Option<usize>,
-    before: Option<&str>,
-) -> Result<ThreadDetail> {
-    use std::io::{BufRead, BufReader};
-    let mut reader = BufReader::new(crate::codex::rollout_file::open_reader(path)?);
-    let mut line = Vec::new();
-    let mut state = DetailState::default();
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        state.raw_event_count += 1;
-        if let Ok(mut value) = serde_json::from_slice::<Value>(&line) {
-            normalize_canonical_turn(&mut value, &mut state.turn_context);
-            if let Some(message) = parse_message_event(&value) {
-                state.messages.push(message);
-            }
-            state.builder.push_event(&value, state.raw_event_count);
-        }
-    }
-    let blocks = state.builder.finish_uncompacted();
-    let compacted = compact_chat_history(blocks.clone(), CHAT_HISTORY_LIMIT);
-    let timeline = crate::history_navigation::update_timeline(
-        &state.timeline,
-        blocks
-            .iter()
-            .filter(|block| block.role == "user")
-            .map(|block| {
-                (
-                    block.id.as_str(),
-                    block.user_message.as_ref(),
-                    block.text.as_deref(),
-                    false,
-                )
-            }),
-    );
-    let seeking = before.is_some_and(|cursor| {
-        cursor.starts_with("j:")
-            || cursor.starts_with("n:")
-            || cursor.starts_with("w:")
-            || cursor.starts_with("p:")
-    });
-    let source = if compact && !seeking {
-        &compacted
-    } else {
-        &blocks
-    };
-    let total_blocks = source.len();
-    let end = history_end(source, before);
-    let start = limit
-        .filter(|n| *n > 0)
-        .map_or(0, |n| end.saturating_sub(n));
-    let (start, end) = crate::history_navigation::seek_window(
-        source.iter().map(|block| block.id.as_str()),
-        before,
-        limit.unwrap_or(120).clamp(1, 500),
-    )?
-    .unwrap_or((start, end));
-    let mut page_blocks: Vec<_> = source[start..end]
-        .iter()
-        .map(|block| (**block).clone())
-        .collect();
-    for message in page_blocks
-        .iter_mut()
-        .filter_map(|block| block.user_message.as_mut())
-    {
-        message.refresh_files(summary.cwd.as_deref());
-    }
-    Ok(ThreadDetail {
-        timeline: before.is_none().then_some(timeline),
-        after_cursor: crate::history_navigation::after_cursor(
-            end,
-            total_blocks,
-            source
-                .get(end.saturating_sub(1))
-                .map(|block| block.id.as_str()),
-        ),
-        history_subagent_blocks: if limit.is_some() {
-            source
-                .iter()
-                .filter(|block| block.subagent.is_some())
-                .map(|block| (**block).clone())
-                .collect()
-        } else {
-            Vec::new()
-        },
-        summary,
-        subagents: None,
-        subagent_updates: Default::default(),
-        messages: if limit.is_none() {
-            state.messages
-        } else {
-            Vec::new()
-        },
-        blocks: page_blocks,
-        raw_event_count: state.raw_event_count,
-        total_blocks,
-        has_more_blocks: start > 0,
-        before_cursor: (start > 0).then(|| {
-            if seeking {
-                format!("p:{}", source[start].id)
-            } else {
-                format!("b:{start}")
-            }
-        }),
-        history: None,
-    })
 }
 
 pub(crate) fn valid_history_cursor(cursor: &str) -> bool {

@@ -3,19 +3,20 @@ import type {
   ProbeEventsResponse,
   ProbeJobAction,
   ProbeSettings,
-  ProbeStatus
+  ProbeStatus,
+  ProbeStatusRequest
 } from "../../types";
 import { callCommand } from "./transport";
 import { currentDemoFixtureKey, jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
 
-export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
+export async function getProbeStatus(request: ProbeStatusRequest = {}): Promise<OptionalResult<ProbeStatus>> {
   if (USE_DEMO) {
     return {
       available: true,
       data: (await import("./demo")).demoProbeStatus(currentDemoFixtureKey())
     };
   }
-  return normalizeOptionalResult<ProbeStatus>(await callCommand<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
+  return normalizeOptionalResult<ProbeStatus>(await callCommand<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status", request));
 }
 
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {

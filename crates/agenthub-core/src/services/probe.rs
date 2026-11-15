@@ -16,6 +16,11 @@ use std::{path::Path, str::FromStr};
 
 pub const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeStatusRequest {
+    pub refresh: Option<bool>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ProbeStatusAggregation {
     pub recent_event_count: usize,

@@ -222,6 +222,29 @@ mod tests {
         (temp, state, platform)
     }
 
+    #[tokio::test]
+    async fn probe_status_refreshes_disk_settings_and_reports_invalid_config() {
+        let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
+        let mut config = state.config();
+        config.probe.enabled = !config.probe.enabled;
+        agenthub_core::config::write_config_atomic(
+            &platform.config_file,
+            &toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let status = crate::services::probe::desktop_probe_status_with_state(&state)
+            .await
+            .unwrap();
+        assert_eq!(status.enabled, config.probe.enabled);
+        assert_eq!(status.config_path, platform.config_file);
+        std::fs::write(&platform.config_file, "[invalid").unwrap();
+        assert!(
+            crate::services::probe::desktop_probe_status_with_state(&state)
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn probe_settings_get_refreshes_external_hook_changes_and_reports_invalid_config() {
         let (_temp, state, platform) = command_test_state(PlatformKind::Macos);

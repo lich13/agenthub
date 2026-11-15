@@ -902,19 +902,32 @@ fn rollout_paths_outside_session_roots_and_directory_paths_are_rejected() {
 fn symlinked_files_and_intermediate_directories_are_rejected() {
     use std::os::unix::fs::symlink;
 
-    for directory_link in [false, true] {
+    for (directory_link, compressed) in [(false, false), (true, false), (false, true), (true, true)]
+    {
         let fixture =
             NativeFixture::new(&spawn("spawn-symlink", "review", json!({"agent_id":CHILD})));
-        let original = fixture.child(CHILD, ROOT, "/root/review", &[]);
+        let mut original = fixture.child(CHILD, ROOT, "/root/review", &[]);
+        if compressed {
+            original = compress_fixture_rollout(&fixture, CHILD);
+        }
+        let name = if compressed {
+            "child.jsonl.zst"
+        } else {
+            "child.jsonl"
+        };
         let indexed = if directory_link {
             let actual = fixture.paths.sessions_dir().join("actual");
             fs::create_dir(&actual).unwrap();
-            fs::rename(&original, actual.join("child.jsonl")).unwrap();
+            fs::rename(&original, actual.join(name)).unwrap();
             let link = fixture.paths.sessions_dir().join("linked");
             symlink(actual, &link).unwrap();
-            link.join("child.jsonl")
+            link.join(name)
         } else {
-            let target = fixture.paths.sessions_dir().join("target.jsonl");
+            let target = fixture.paths.sessions_dir().join(if compressed {
+                "target.jsonl.zst"
+            } else {
+                "target.jsonl"
+            });
             fs::rename(&original, &target).unwrap();
             symlink(target, &original).unwrap();
             original
@@ -2154,7 +2167,7 @@ fn stable_refresh_and_timeline_cursors_read_plain_and_compressed_children() {
 #[test]
 fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
     use agenthub_core::services::search::{SearchScope, SearchUseCases, SessionSearchRequest};
-    let fixture = NativeFixture::new(&[]);
+    let fixture = NativeFixture::new(&[event("task_started", "tail")]);
     let plain = fixture.paths.sessions_dir().join(format!("{ROOT}.jsonl"));
     let compressed = plain.with_extension("jsonl.zst");
     let mut encoder =
@@ -2187,6 +2200,12 @@ fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
         .iter()
         .any(|b| b.text.as_deref() == Some("tail beyond old cutoff")));
     assert_eq!(detail.timeline.as_ref().unwrap().len(), 1);
+    assert!(!matches!(detail.summary.status, ThreadStatus::Running));
+    assert_eq!(
+        detail.summary.latest_message.as_deref(),
+        Some("tail beyond old cutoff")
+    );
+    assert!(detail.history.is_some());
     let mut request = attachment_request(&detail);
     request.root_thread_id = None;
     assert_eq!(fixture.read_attachment(request).unwrap().base64, PNG);
@@ -2206,4 +2225,98 @@ fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
     let file = fs::OpenOptions::new().write(true).open(compressed).unwrap();
     file.set_len(file.metadata().unwrap().len() - 8).unwrap();
     assert!(thread_detail(&fixture.paths, ROOT).is_err());
+}
+
+#[test]
+fn native_compression_and_archiving_resolve_old_child_paths_without_changing_indexes() {
+    for archive_mode in ["active", "flag", "timestamp"] {
+        let fixture = NativeFixture::new(&spawn("create", "review", json!({"agent_id":CHILD})));
+        let original = fixture.child(
+            CHILD,
+            ROOT,
+            "/root/reviewer",
+            &[
+                message("assistant", "child final"),
+                event("task_complete", "child-turn"),
+            ],
+        );
+        let mut actual = compress_fixture_rollout(&fixture, CHILD);
+        fixture.set_rollout(CHILD, &original);
+        if archive_mode != "active" {
+            let target = fixture
+                .paths
+                .home
+                .join("archived_sessions")
+                .join(actual.file_name().unwrap());
+            fs::rename(&actual, &target).unwrap();
+            actual = target;
+            if archive_mode == "flag" {
+                fixture
+                    .connection()
+                    .execute("UPDATE threads SET archived=1 WHERE id=?1", [CHILD])
+                    .unwrap();
+            } else {
+                fixture.connection().execute_batch("ALTER TABLE threads DROP COLUMN archived; ALTER TABLE threads ADD COLUMN archived_at INTEGER;").unwrap();
+                fixture
+                    .connection()
+                    .execute("UPDATE threads SET archived_at=1 WHERE id=?1", [CHILD])
+                    .unwrap();
+            }
+        }
+        let before = fixture.snapshot();
+        let detail = fixture.read(CHILD).unwrap();
+        assert_eq!(detail.detail.summary.rollout_path.as_ref(), Some(&actual));
+        assert!(detail
+            .detail
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("child final")));
+        assert_eq!(detail.agent.status, SubagentStatus::Completed);
+        assert_eq!(fixture.snapshot(), before);
+    }
+}
+
+#[test]
+fn compressed_detail_history_is_stable_until_source_replacement() {
+    let fixture = NativeFixture::new(&[message("user", "first"), message("assistant", "answer")]);
+    let path = compress_fixture_rollout(&fixture, ROOT);
+    let first = agenthub_core::codex::thread_detail_page(&fixture.paths, ROOT, Some(1), None, None)
+        .unwrap()
+        .unwrap();
+    let history = first.history.unwrap();
+    let hot = agenthub_core::codex::thread_detail_page(
+        &fixture.paths,
+        ROOT,
+        Some(1),
+        first.before_cursor.as_deref(),
+        Some(&history.revision),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hot.history.as_ref().unwrap().revision, history.revision);
+    assert!(!hot.history.unwrap().reset);
+    let mut bytes = zstd::stream::decode_all(fs::File::open(&path).unwrap()).unwrap();
+    writeln!(bytes, "{}", message("assistant", "updated answer")).unwrap();
+    let replacement = path.with_extension("replacement");
+    fs::write(
+        &replacement,
+        zstd::stream::encode_all(bytes.as_slice(), 1).unwrap(),
+    )
+    .unwrap();
+    fs::rename(replacement, path).unwrap();
+    let changed = agenthub_core::codex::thread_detail_page(
+        &fixture.paths,
+        ROOT,
+        Some(1),
+        None,
+        Some(&history.revision),
+    )
+    .unwrap()
+    .unwrap();
+    assert_ne!(changed.history.as_ref().unwrap().epoch, history.epoch);
+    assert!(changed.history.unwrap().reset);
+    assert_eq!(
+        changed.blocks.last().unwrap().text.as_deref(),
+        Some("updated answer")
+    );
 }

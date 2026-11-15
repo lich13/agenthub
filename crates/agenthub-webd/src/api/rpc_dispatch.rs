@@ -10,7 +10,7 @@ use super::{
     hidden_threads_delete_dry_run, job_detail, list_jobs, patch_probe_settings, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, thread_blocks, thread_detail, unified_cleanup_dry_run,
-    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery, ProbeStatusQuery,
+    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery,
 };
 use crate::{
     api::payload::{
@@ -164,15 +164,7 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
         rpc_commands::DSH_RESTORE => {
             dsh_restore(state, rpc_wrapped_payload(&args, &["request"])?).await
         }
-        rpc_commands::PROBE_STATUS => {
-            get_probe_status(
-                state,
-                ProbeStatusQuery {
-                    refresh: args.get("refresh").and_then(Value::as_bool),
-                },
-            )
-            .await
-        }
+        rpc_commands::PROBE_STATUS => get_probe_status(state, rpc_payload(&args)?).await,
         rpc_commands::PROBE_SETTINGS_GET => get_probe_settings(state).await,
         rpc_commands::PROBE_SETTINGS_SAVE => {
             patch_probe_settings(state, rpc_wrapped_payload(&args, &["settings"])?).await

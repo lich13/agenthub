@@ -68,6 +68,7 @@ pub use user_input::{
 
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     rollout_events::evict_idle_detail_cache(max_idle);
+    rollout_events::evict_idle_scan_cache(max_idle);
     user_input::evict_idle_question_cache(max_idle);
     subagents::evict_idle(max_idle);
 }

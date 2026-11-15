@@ -304,6 +304,10 @@
       "rust": "crates/agenthub-core/src/services/settings.rs#SettingsView",
       "ts": "webui/src/types.ts#ProbeSettings"
     },
+    "ProbeStatusRequest": {
+      "rust": "crates/agenthub-core/src/services/probe.rs#ProbeStatusRequest",
+      "ts": "webui/src/types.ts#ProbeStatusRequest"
+    },
     "ProbeStatusResponse": {
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "ts": "webui/src/types.ts#ProbeStatus"
@@ -7167,6 +7171,17 @@
             "serde": []
           }
         ]
+      },
+      "ProbeStatusRequest": {
+        "fields": [
+          {
+            "name": "refresh",
+            "serde": [],
+            "type": "Option < bool >"
+          }
+        ],
+        "kind": "struct",
+        "serde": []
       }
     },
     "crates/agenthub-core/src/services/remote.rs": {
@@ -9561,17 +9576,6 @@
         ],
         "kind": "struct",
         "serde": []
-      },
-      "ProbeStatusQuery": {
-        "fields": [
-          {
-            "name": "refresh",
-            "serde": [],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
       }
     },
     "crates/agenthub-webd/src/api/threads.rs": {
@@ -10153,7 +10157,7 @@
     },
     "webui/src/lib/api/probe.ts": {
       "calls": [
-        "callCommand<ProbeStatus|OptionalResult<ProbeStatus>>(\"probe.status\")",
+        "callCommand<ProbeStatus|OptionalResult<ProbeStatus>>(\"probe.status\",request)",
         "callCommand<ProbeSettings|OptionalResult<ProbeSettings>>(\"probe.settings.get\")",
         "callCommand<ProbeSettings>(\"probe.settings.save\",{settings:normalizedSettings})",
         "callCommand<ProbeEventsResponse|OptionalResult<ProbeEventsResponse>>(\"probe.events\",{limit})",
@@ -10315,6 +10319,7 @@
         "ProbeLiveSession": "exporttypeProbeLiveSession={provider:\"codex\"|\"claude_code\"|\"grok\"|\"grokbot\"|\"antigravity\"|\"dsh\"|string;id:string;session_key:string;title:string;bucket:\"running\"|\"reply_needed\"|\"recoverable\"|string;updated_at?:string|null;cwd?:string|null;};",
         "ProbeSettings": "exporttypeProbeSettings={codex:{home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;workspace?:string|null;host_label:string;};probe:Record<string,unknown>&{enabled?:boolean;poll_seconds?:number;recent_limit?:number;hooks?:Record<string,unknown>&{manage_stop_hook?:boolean;};error_monitor?:Record<string,unknown>&{enabled?:boolean;};notifications?:Record<string,unknown>&{enabled?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grokbot?:boolean;notify_github_ci?:boolean;github_ci_repositories?:string[];github_ci_filter_bots?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};observability?:Record<string,unknown>&{event_retention_days?:number;hook_event_max_lines?:number;hook_cooldown_max_lines?:number;log_max_bytes?:number;};};discovery_warnings?:string[]|null;notifications:Record<string,unknown>&{enabled?:boolean;device_key?:string;device_key_configured?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grokbot?:boolean;notify_github_ci?:boolean;github_ci_repositories?:string[];github_ci_filter_bots?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};};",
         "ProbeStatus": "exporttypeProbeStatus={provider_notifications?:{provider:\"grok\"|\"grokbot\"|\"claude_code\";enabled:boolean;last_scan_at:number;streams:number;read_errors:number;failed_deliveries:number;pending_deliveries:number;failure_supported:boolean}[];label?:string|null;enabled:boolean;available?:boolean|null;platform:\"linux\"|\"macos\"|\"windows\"|string;service_kind:string;service_name:string;flavor?:string|null;hook_status:string;hook_command?:string|null;actual_commands?:string[]|null;stale_command_count?:number|null;empty_group_count?:number|null;bark_status:string;recent_event_count:number;running_count:number;reply_needed_count:number;recoverable_count:number;running_threads?:ThreadSummary[];reply_needed_threads?:ThreadSummary[];recoverable_threads?:ThreadSummary[];active_sessions?:ProbeLiveSession[];config_path:string;lifecycle_status?:string|null;doctor_status?:string|null;runtime_version?:string|null;codex_home?:string|null;codex_hooks_path?:string|null;dsh_sessions_path?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;host_label?:string|null;snapshot_age_seconds?:number|null;is_refreshing?:boolean|null;snapshot_status?:string|null;error_monitor_enabled?:boolean|null;error_monitor_status?:string|null;error_monitor_last_scan_at?:string|number|null;error_monitor_last_error?:string|null;error_monitor_incident_count?:number|null;};",
+        "ProbeStatusRequest": "exporttypeProbeStatusRequest={refresh?:boolean};",
         "ProviderDetailRequest": "exporttypeProviderDetailRequest={sessionKey:string;limit?:number;before?:string};",
         "ProviderDetailResponse": "exporttypeProviderDetailResponse=ProviderSessionDetail;",
         "ProviderHistoryEvent": "exporttypeProviderHistoryEvent={id:string;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;turnId?:string|null;status?:string|null;detail?:string|null;result?:string|null;userMessage?:UserMessageContent|null;};",

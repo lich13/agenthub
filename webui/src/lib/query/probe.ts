@@ -15,11 +15,12 @@ import { useConnection } from "./connection";
 import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
 import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 import { backgroundJobKey } from "./jobs";
+import { probeStatusQueryKey, refreshProbeStatus } from "./probeStatus";
 
 export type { HookProviderId };
 
 export const probeQueryKeys = {
-  status: ["probe-status"] as const,
+  status: probeStatusQueryKey,
   settings: ["probe-settings"] as const,
   events: ["probe-events"] as const,
   jobs: ["jobs"] as const
@@ -29,7 +30,7 @@ export function useProbeQueries({ historyOpen }: { historyOpen: boolean }) {
   return {
     status: useQuery({
       queryKey: probeQueryKeys.status,
-      queryFn: getProbeStatus,
+      queryFn: () => getProbeStatus(),
       refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
@@ -65,8 +66,9 @@ export function useProbeActions(input: {
   onSaveError: (error: Error) => void;
 }) {
   const qc = useQueryClient();
-  const invalidateProbe = () => {
-    qc.invalidateQueries({ queryKey: probeQueryKeys.status });
+  const invalidateProbe = (refresh = false) => {
+    if (refresh) void refreshProbeStatus(qc);
+    else void qc.invalidateQueries({ queryKey: probeQueryKeys.status });
     qc.invalidateQueries({ queryKey: probeQueryKeys.events });
   };
 
@@ -78,7 +80,7 @@ export function useProbeActions(input: {
 
   return {
     refresh: () => {
-      invalidateProbe();
+      invalidateProbe(true);
       qc.invalidateQueries({ queryKey: probeQueryKeys.settings });
     },
     job: useMutation({
@@ -100,7 +102,7 @@ export function useProbeActions(input: {
         input.onSaveSuccess(settings, submittedDeviceKey);
         qc.invalidateQueries({ queryKey: ["github-ci"] });
         qc.invalidateQueries({ queryKey: probeQueryKeys.settings });
-        invalidateProbe();
+        invalidateProbe(true);
       },
       onError: (error: Error) => input.onSaveError(error)
     })
@@ -120,7 +122,10 @@ export function useClaudeHooks(onSuccess: () => void, provider: HookProviderId =
     mutationFn: (action: ClaudeHooksAction) => manageClaudeHooks(action, true, provider),
     onSuccess: async () => {
       onSuccess();
-      await queryClient.invalidateQueries({ queryKey: ["claude-hooks", provider] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["claude-hooks", provider] }),
+        refreshProbeStatus(queryClient),
+      ]);
     }
   });
   return { local, revision: connection.revision, status, mutation };

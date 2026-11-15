@@ -47,7 +47,7 @@ pub(crate) fn compressed_path(path: &Path) -> PathBuf {
 
 /// Decode the native representation in memory without writing a second history.
 pub(crate) fn open_reader(path: &Path) -> anyhow::Result<Box<dyn std::io::Read>> {
-    let file = std::fs::File::open(path)?;
+    let file = crate::jsonl_cache::open_regular(path)?;
     if is_compressed(path) {
         Ok(Box::new(zstd::stream::read::Decoder::new(file)?))
     } else {
@@ -55,22 +55,26 @@ pub(crate) fn open_reader(path: &Path) -> anyhow::Result<Box<dyn std::io::Read>>
     }
 }
 
-pub(crate) fn read_complete_lines(
+/// Keep ordinary and compressed rollout snapshots in the same bounded pool.
+pub(crate) fn read_cached<S: Default, R>(
+    cache: &crate::jsonl_cache::JsonlCache<S>,
     path: &Path,
-    mut consume: impl FnMut(&[u8]) -> anyhow::Result<()>,
-) -> anyhow::Result<bool> {
-    use std::io::BufRead;
-    let mut reader = std::io::BufReader::new(open_reader(path)?);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            return Ok(true);
-        }
-        if !line.ends_with(b"\n") {
-            return Ok(false);
-        }
-        consume(&line)?;
+    accept_complete_tail: bool,
+    consume: impl FnMut(&mut S, &[u8], usize, u64) -> anyhow::Result<()>,
+    finish: impl FnOnce(&mut S, crate::jsonl_cache::ReadInfo<'_>) -> anyhow::Result<R>,
+    weight: impl FnOnce(&S) -> u64,
+) -> anyhow::Result<R> {
+    if is_compressed(path) {
+        cache.read_compressed(path, accept_complete_tail, consume, finish, weight)
+    } else {
+        cache.read(
+            path,
+            |_| Ok(0),
+            accept_complete_tail,
+            consume,
+            finish,
+            weight,
+        )
     }
 }
 

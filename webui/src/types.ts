@@ -1,3 +1,4 @@
+export type ProbeStatusRequest = { refresh?: boolean };
 export type TimelineEntry = { id: string; title: string; preview?: string };
 export type HistoryMetadata = { epoch: string; revision: string; changedIds?: string[]; reset?: boolean; changes?: { revision: string; changedIds: string[]; reset?: boolean }[] };
 

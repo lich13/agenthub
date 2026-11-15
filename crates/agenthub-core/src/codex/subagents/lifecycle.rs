@@ -261,16 +261,9 @@ fn consume_creation(state: &mut CreationState, line: &[u8]) -> Result<()> {
 }
 
 pub(super) fn creation_names(path: &Path) -> Result<CreationNames> {
-    if crate::codex::rollout_file::is_compressed(path) {
-        let mut state = CreationState::default();
-        crate::codex::rollout_file::read_complete_lines(path, |line| {
-            consume_creation(&mut state, line)
-        })?;
-        return Ok(state.names);
-    }
-    CREATION_CACHE.read(
+    crate::codex::rollout_file::read_cached(
+        &CREATION_CACHE,
         path,
-        |_| Ok(0),
         false,
         |state, line, _, _| consume_creation(state, line),
         |state, _| Ok(state.names.clone()),

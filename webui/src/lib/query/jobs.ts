@@ -1,6 +1,7 @@
 import { useMutationState, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { getJob } from "../api/jobs";
+import { refreshProbeStatus } from "./probeStatus";
 
 export const backgroundJobKey = ["background-job"] as const;
 export const isTerminalJob = (status?: string) => status === "succeeded" || status === "failed" || status === "cancelled";
@@ -21,7 +22,8 @@ export function useBackgroundJobs(enabled: boolean) {
     queryFn: async () => {
       const job = await getJob(id, false);
       if (isTerminalJob(job.status)) {
-        for (const key of ["jobs", "update-status", "probe-status", "probe-events", "probe-settings"]) {
+        void refreshProbeStatus(qc);
+        for (const key of ["jobs", "update-status", "probe-events", "probe-settings"]) {
           void qc.invalidateQueries({ queryKey: [key] });
         }
       }
