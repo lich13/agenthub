@@ -153,25 +153,75 @@ fn skip_link_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     if chars.peek() != Some(&'(') {
         return;
     }
-    chars.next();
-    let mut depth = 1;
-    let mut angle = false;
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\\' => {
-                chars.next();
+    let mut candidate = chars.clone();
+    candidate.next();
+    while candidate.peek().is_some_and(|c| c.is_whitespace()) {
+        candidate.next();
+    }
+    if candidate.peek() == Some(&'<') {
+        candidate.next();
+        loop {
+            match candidate.next() {
+                Some('>') => break,
+                Some('\\') => {
+                    candidate.next();
+                }
+                Some('<') | None => return,
+                _ => {}
             }
-            '<' => angle = true,
-            '>' => angle = false,
-            '(' if !angle => depth += 1,
-            ')' if !angle => {
-                depth -= 1;
-                if depth == 0 {
+        }
+    } else {
+        let mut depth = 0;
+        while let Some(&ch) = candidate.peek() {
+            match ch {
+                '\\' => {
+                    candidate.next();
+                    candidate.next();
+                    continue;
+                }
+                '<' => return,
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                c if c.is_whitespace() => {
+                    if depth != 0 {
+                        return;
+                    }
                     break;
                 }
+                _ => {}
             }
-            _ => {}
+            candidate.next();
         }
+        if depth != 0 {
+            return;
+        }
+    }
+    let separated = candidate.peek().is_some_and(|c| c.is_whitespace());
+    while candidate.peek().is_some_and(|c| c.is_whitespace()) {
+        candidate.next();
+    }
+    if separated {
+        if let Some(&quote @ ('"' | '\'' | '(')) = candidate.peek() {
+            candidate.next();
+            let end = if quote == '(' { ')' } else { quote };
+            loop {
+                match candidate.next() {
+                    Some('\\') => {
+                        candidate.next();
+                    }
+                    Some(ch) if ch == end => break,
+                    None => return,
+                    _ => {}
+                }
+            }
+            while candidate.peek().is_some_and(|c| c.is_whitespace()) {
+                candidate.next();
+            }
+        }
+    }
+    if candidate.next() == Some(')') {
+        *chars = candidate;
     }
 }
 
@@ -241,5 +291,23 @@ fn summary_strips_balanced_and_angle_wrapped_link_targets() {
     assert_eq!(
         summary("![图](</fixture/image(1).png>) [保留](https://example.invalid/a\\)b)"),
         "保留"
+    );
+}
+
+#[test]
+fn summary_preserves_nonlinks_and_incomplete_targets() {
+    assert_eq!(
+        summary("结果见 [表1](误差 <0.01) 部署完成"),
+        "结果见 表1(误差 <0.01) 部署完成"
+    );
+    assert_eq!(summary("状态 [0](x <1"), "状态 0(x <1");
+    assert_eq!(summary("[表1](误差 0.01) 完成"), "表1(误差 0.01) 完成");
+    assert_eq!(
+        summary("[报告](https://example.invalid/a \"报告标题\") 完成"),
+        "报告 完成"
+    );
+    assert_eq!(
+        summary("[报告](https://example.invalid/a(b) 未完成"),
+        "报告(https://example.invalid/a(b) 未完成"
     );
 }

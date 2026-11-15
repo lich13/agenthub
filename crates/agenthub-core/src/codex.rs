@@ -77,6 +77,7 @@ pub fn list_threads(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let mut rows = read_thread_rows(paths)?;
+    rows.retain(|row| matches!(row.summary.status, ThreadStatus::Archived) == archived);
     let session_index = read_session_index(paths).unwrap_or_default();
     rows.retain_mut(|row| enrich_local_thread_row(paths, row, session_index.get(&row.summary.id)));
     let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
@@ -85,9 +86,6 @@ pub fn list_threads(
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty());
     rows.retain(|row| {
-        if matches!(row.status, ThreadStatus::Archived) != archived {
-            return false;
-        }
         if let Some(needle) = &needle {
             let title = row.title.to_ascii_lowercase();
             let id = row.id.to_ascii_lowercase();

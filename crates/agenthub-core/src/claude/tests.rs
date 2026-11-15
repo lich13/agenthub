@@ -3132,6 +3132,10 @@ fn duplicate_ids_keep_shared_data_until_every_project_copy_and_index_succeeds() 
         let other = f.paths.projects.join("other/native-fixture.jsonl");
         fs::create_dir_all(other.parent().unwrap()).unwrap();
         fs::write(&other, "unreadable transcript remains directly deletable").unwrap();
+        // Exclusive history below the main transcript is not another project copy.
+        let exclusive = f.file.with_extension("").join("history/nested");
+        fs::create_dir_all(&exclusive).unwrap();
+        fs::write(exclusive.join("native-fixture.jsonl"), "exclusive history").unwrap();
         let sidecar = f.paths.config.join("file-history/native-fixture");
         fs::create_dir_all(&sidecar).unwrap();
         fs::write(sidecar.join("fixture"), "shared").unwrap();

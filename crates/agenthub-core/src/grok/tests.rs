@@ -1048,3 +1048,39 @@ fn ordinary_grok_delete_allows_running_session_and_corrupt_history() {
     assert!(!path.exists());
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn empty_cleanup_rechecks_unknown_ownership_without_blocking_direct_delete() {
+    let (paths, id, path) = fixture();
+    let fingerprint = grok_fingerprint(&locate_sessions(&paths, &id).unwrap()).unwrap();
+    fs::write(paths.home.join("active_sessions.json"), "invalid json").unwrap();
+    let error = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id: id.clone(),
+            confirmed: true,
+            fingerprint,
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("占用状态无法确认"));
+    assert!(path.exists());
+    // Direct deletion still does not consult activity; repair the shared index
+    // so this assertion covers successful deletion rather than index residuals.
+    activity::test_owner(Some(&id), "/work");
+    fs::write(paths.home.join("active_sessions.json"), "{}").unwrap();
+    assert!(
+        execute_grok_delete(
+            &paths,
+            GrokDeleteRequest {
+                id,
+                confirmed: true,
+                fingerprint: String::new()
+            }
+        )
+        .unwrap()
+        .deleted
+    );
+    activity::test_owner(None, "");
+    fs::remove_dir_all(paths.home).unwrap();
+}

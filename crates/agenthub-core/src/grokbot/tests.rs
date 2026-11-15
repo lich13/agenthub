@@ -423,6 +423,11 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
             [hist_ts - 60_000],
         )
         .unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE key='grokbot_resume_cutoff_ms'",
+            [],
+        )
+        .unwrap();
     }
     f.replica(json!([msg("hist-1", hist_ts, "Historical reply")]));
     assert_eq!(

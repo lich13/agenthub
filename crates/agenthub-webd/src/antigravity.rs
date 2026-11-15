@@ -303,20 +303,10 @@ fn process_command_matches_spec(proc_cmd: &str, spec_cmd: &str) -> bool {
         .any(|seg| norm_proc.contains(&seg))
 }
 
-fn ps_table_matches_untracked_commands(
-    table: &str,
-    root_pid: u32,
-    specs: &[antigravity::UntrackedCommandSpec],
-    now_ms: i64,
-) -> bool {
-    if root_pid == 0 || specs.is_empty() {
-        return false;
-    }
-    const MAX_COMMAND_AGE_MS: i64 = 4 * 3_600 * 1_000;
-    const EARLY_CLOCK_SLACK_MS: i64 = 5_000;
-    const LATE_SPAWN_WINDOW_MS: i64 = 15_000;
+type ProcessRow = (u32, u32, i64, String);
 
-    let mut rows: Vec<(u32, u32, i64, &str)> = Vec::new();
+fn parse_process_table(table: &str) -> Vec<ProcessRow> {
+    let mut rows: Vec<ProcessRow> = Vec::new();
     for line in table.lines() {
         let trimmed = line.trim_start();
         if trimmed.is_empty() {
@@ -344,15 +334,40 @@ fn ps_table_matches_untracked_commands(
         };
         let cmd = cmd.trim();
         if !cmd.is_empty() {
-            rows.push((pid, ppid, elapsed_ms, cmd));
+            rows.push((pid, ppid, elapsed_ms, cmd.to_owned()));
         }
     }
 
+    rows
+}
+
+#[cfg(test)]
+fn ps_table_matches_untracked_commands(
+    table: &str,
+    root_pid: u32,
+    specs: &[antigravity::UntrackedCommandSpec],
+    now_ms: i64,
+) -> bool {
+    process_rows_match(&parse_process_table(table), root_pid, specs, now_ms)
+}
+
+fn process_rows_match(
+    rows: &[ProcessRow],
+    root_pid: u32,
+    specs: &[antigravity::UntrackedCommandSpec],
+    now_ms: i64,
+) -> bool {
+    if root_pid == 0 || specs.is_empty() {
+        return false;
+    }
+    const MAX_COMMAND_AGE_MS: i64 = 4 * 3_600 * 1_000;
+    const EARLY_CLOCK_SLACK_MS: i64 = 5_000;
+    const LATE_SPAWN_WINDOW_MS: i64 = 15_000;
     let mut descendants = BTreeSet::new();
     let mut frontier = BTreeSet::from([root_pid]);
     for _ in 0..16 {
         let mut next_frontier = BTreeSet::new();
-        for &(pid, ppid, _, _) in &rows {
+        for &(pid, ppid, _, _) in rows {
             if pid != root_pid && frontier.contains(&ppid) && descendants.insert(pid) {
                 next_frontier.insert(pid);
             }
@@ -366,11 +381,11 @@ fn ps_table_matches_untracked_commands(
         return false;
     }
 
-    rows.into_iter().any(|(pid, _, elapsed_ms, cmd)| {
-        if !descendants.contains(&pid) || elapsed_ms > MAX_COMMAND_AGE_MS {
+    rows.iter().any(|(pid, _, elapsed_ms, cmd)| {
+        if !descendants.contains(pid) || *elapsed_ms > MAX_COMMAND_AGE_MS {
             return false;
         }
-        let start_ms = now_ms.saturating_sub(elapsed_ms);
+        let start_ms = now_ms.saturating_sub(*elapsed_ms);
         specs.iter().any(|spec| {
             spec.spawn_ms > 0
                 && start_ms >= spec.spawn_ms.saturating_sub(EARLY_CLOCK_SLACK_MS)
@@ -380,18 +395,35 @@ fn ps_table_matches_untracked_commands(
     })
 }
 
-fn has_matching_active_child_process(
-    root_pid: u32,
-    specs: &[antigravity::UntrackedCommandSpec],
-    now_ms: i64,
-) -> bool {
-    if root_pid == 0 || specs.is_empty() {
-        return false;
+// One lazy snapshot belongs to one root load, including all inspected children.
+// An unavailable process table is also consumed once; the next load tries again.
+#[derive(Default)]
+struct ProcessSnapshot(Option<Vec<ProcessRow>>);
+impl ProcessSnapshot {
+    async fn matches(
+        &mut self,
+        root_pid: u32,
+        specs: Vec<antigravity::UntrackedCommandSpec>,
+        now_ms: i64,
+    ) -> bool {
+        if root_pid == 0 || specs.is_empty() {
+            return false;
+        }
+        let cached = self.0.take();
+        let (rows, matched) = tokio::task::spawn_blocking(move || {
+            let rows = cached.unwrap_or_else(|| {
+                read_ps_process_table()
+                    .map(|table| parse_process_table(&table))
+                    .unwrap_or_default()
+            });
+            let matched = process_rows_match(&rows, root_pid, &specs, now_ms);
+            (rows, matched)
+        })
+        .await
+        .unwrap_or_default();
+        self.0 = Some(rows);
+        matched
     }
-    let Some(table) = read_ps_process_table() else {
-        return false;
-    };
-    ps_table_matches_untracked_commands(&table, root_pid, specs, now_ms)
 }
 
 async fn fetch_incremental_executor_metadatas(
@@ -681,6 +713,7 @@ async fn fetch_subagent_trajectory(
 }
 
 async fn inspect_steps_background_tasks(
+    processes: &mut ProcessSnapshot,
     pid: u32,
     id: &str,
     summary_traj_id: &str,
@@ -703,11 +736,7 @@ async fn inspect_steps_background_tasks(
     let untracked_specs =
         antigravity::collect_untracked_task_commands(id, summary_traj_id, steps, &tasks);
     if !untracked_specs.is_empty() {
-        has_active_child_processes = tokio::task::spawn_blocking(move || {
-            has_matching_active_child_process(pid, &untracked_specs, now_ms)
-        })
-        .await
-        .unwrap_or(false);
+        has_active_child_processes = processes.matches(pid, untracked_specs, now_ms).await;
     }
     (tasks, has_active_child_processes)
 }
@@ -725,6 +754,7 @@ async fn load_trajectory_with_context(
     now_ms: i64,
     inspect_background: bool,
 ) -> Result<(Value, antigravity::TrajectoryLivenessContext)> {
+    let mut processes = ProcessSnapshot::default();
     let has_active_subagents = subagents.values().any(|s| s.active);
     let response = fetch_probe_trajectory(client, port, token, id, summary).await?;
     let mut tasks = BTreeMap::new();
@@ -744,8 +774,15 @@ async fn load_trajectory_with_context(
     if inspect_background && recent_activity {
         if let Some(steps) = response["trajectory"]["steps"].as_array() {
             let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
-            (tasks, has_active_child_processes) =
-                inspect_steps_background_tasks(pid, id, summary_traj_id, steps, now_ms).await;
+            (tasks, has_active_child_processes) = inspect_steps_background_tasks(
+                &mut processes,
+                pid,
+                id,
+                summary_traj_id,
+                steps,
+                now_ms,
+            )
+            .await;
 
             let mut queue: VecDeque<String> =
                 antigravity::collect_pending_subagent_ids(id, summary_traj_id, steps)
@@ -774,9 +811,15 @@ async fn load_trajectory_with_context(
                     .and_then(|s| s["trajectoryId"].as_str())
                     .unwrap_or("")
                     .to_owned();
-                let (sub_tasks, sub_active_children) =
-                    inspect_steps_background_tasks(pid, &sub_id, &sub_traj_id, &sub_steps, now_ms)
-                        .await;
+                let (sub_tasks, sub_active_children) = inspect_steps_background_tasks(
+                    &mut processes,
+                    pid,
+                    &sub_id,
+                    &sub_traj_id,
+                    &sub_steps,
+                    now_ms,
+                )
+                .await;
                 let mut children =
                     antigravity::collect_pending_subagent_ids(&sub_id, &sub_traj_id, &sub_steps);
                 let settled_senders: BTreeSet<&str> = sub_steps

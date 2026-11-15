@@ -79,11 +79,6 @@ impl PanelDb {
         } else {
             prior.map_or(0, |(_, ts, _)| ts)
         };
-        let prior_scanned_at = if baseline {
-            0
-        } else {
-            prior.map_or(0, |(_, _, scanned)| scanned)
-        };
         tx.execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms,scanned_at=excluded.scanned_at,stream_count=excluded.stream_count,error_count=excluded.error_count WHERE enabled!=excluded.enabled OR activated_ms!=excluded.activated_ms OR stream_count!=excluded.stream_count OR error_count!=excluded.error_count OR (excluded.enabled AND scanned_at!=excluded.scanned_at)",
             params![provider.as_str(), enabled, activated_ms, Self::now(), scan.streams.len(), scan.errors])?;
         if !enabled {
@@ -91,6 +86,34 @@ impl PanelDb {
             tx.commit()?;
             return Ok(0);
         }
+        // The message-level notification upgrade has one fixed cutoff. Later
+        // empty scans must not move it past a newly arrived message.
+        let grokbot_resume_cutoff_ms = if provider == NativeProvider::GrokBot {
+            let key = "grokbot_resume_cutoff_ms";
+            let existing: Option<String> = tx
+                .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if let Some(value) = existing {
+                value.parse::<i64>()?
+            } else {
+                let cutoff = if baseline {
+                    activated_ms
+                } else {
+                    prior.map_or(0, |(_, _, scanned)| {
+                        scanned.saturating_add(1).saturating_mul(1000)
+                    })
+                };
+                tx.execute(
+                    "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)",
+                    params![key, cutoff.to_string(), Self::now()],
+                )?;
+                cutoff
+            }
+        } else {
+            0
+        };
         let mut queued = 0;
         for stream in &scan.streams {
             let old = tx.query_row("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2", params![provider.as_str(),stream.session_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?))).optional()?;
@@ -129,10 +152,8 @@ impl PanelDb {
                     }
                     let upgrade_historical_grokbot_completion = provider == NativeProvider::GrokBot
                         && event.kind == "completion"
-                        && old.as_ref().is_some_and(|(_, old_cursor)| *old_cursor == 0)
-                        && prior_scanned_at > 0
-                        && event.timestamp_ms
-                            < prior_scanned_at.saturating_add(1).saturating_mul(1000);
+                        && old.is_some()
+                        && event.timestamp_ms < grokbot_resume_cutoff_ms;
                     let delivery = NativeDelivery {
                         event_key: if let (NativeProvider::Claude, Some(instance), Some(prompt)) =
                             (provider, instance.as_deref(), event.prompt_id.as_deref())
@@ -643,6 +664,89 @@ mod tests {
             .unwrap(),
             "failed"
         );
+    }
+
+    #[test]
+    fn grokbot_upgrade_cutoff_is_fixed_for_nonzero_and_later_empty_streams() {
+        let path = std::env::temp_dir().join(format!(
+            "agenthub-grok-cutoff-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let open = || {
+            PanelDb::open_with_secret_box(
+                &path,
+                crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap()
+        };
+        let db = open();
+        let mut config = config();
+        config.probe.notifications.notify_grokbot = true;
+        let cutoff = (PanelDb::now() + 1) * 1000;
+        let mut old = scan("old", 3, cutoff - 100);
+        old.streams[0].provider = NativeProvider::GrokBot;
+        db.stage_native_notifications(NativeProvider::GrokBot, &old, &config)
+            .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM settings WHERE key='grokbot_resume_cutoff_ms'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE native_probe_providers SET activated_ms=1,scanned_at=?1",
+                [cutoff / 1000 - 1],
+            )
+            .unwrap();
+        }
+        let mut resumed = scan("old", 6, cutoff - 1);
+        resumed.streams[0].provider = NativeProvider::GrokBot;
+        std::sync::Arc::make_mut(&mut resumed.streams[0].events)[5].timestamp_ms = cutoff + 1;
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::GrokBot, &resumed, &config)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pending_native_deliveries(10, Some(NativeProvider::GrokBot))
+                .unwrap()[0]
+                .event
+                .position,
+            6
+        );
+        let mut empty = scan("later", 0, cutoff + 100);
+        empty.streams[0].provider = NativeProvider::GrokBot;
+        db.stage_native_notifications(NativeProvider::GrokBot, &empty, &config)
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE native_probe_providers SET scanned_at=?1",
+                [cutoff / 1000 + 10],
+            )
+            .unwrap();
+        drop(db);
+        let db = open();
+        let mut message = scan("later", 1, cutoff + 200);
+        message.streams[0].provider = NativeProvider::GrokBot;
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::GrokBot, &message, &config)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::GrokBot, &message, &config)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.get_setting("grokbot_resume_cutoff_ms").unwrap(),
+            Some(cutoff.to_string())
+        );
+        drop(db);
+        std::fs::remove_file(path).unwrap();
     }
 
     fn config() -> Config {

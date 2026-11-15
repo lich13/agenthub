@@ -23,11 +23,13 @@ function selection(keys: string[]) {
   renderToString(createElement(Probe));
   return result;
 }
-function nativeAction(batch: ReturnType<typeof useSessionSelection>, tagName = "BUTTON", dialog = false) {
+function nativeAction(batch: ReturnType<typeof useSessionSelection>, tagName = "BUTTON", scope = "", type = "text", insideList = true) {
   const execCommand = vi.fn();
+  const select = vi.fn();
   const target = {
-    tagName, isContentEditable: tagName === "EDITOR", closest: () => dialog ? {} : null,
-    dispatchEvent(event: any) { event.target = target; batch.onListKeyDown(event); return !event.defaultPrevented; },
+    tagName, type, select, isContentEditable: tagName === "EDITOR",
+    closest: (selector: string) => scope && selector.split(",").includes(scope) ? {} : null,
+    dispatchEvent(event: any) { event.target = target; if (insideList) batch.onListKeyDown(event); return !event.defaultPrevented; },
   };
   class KeyEvent {
     defaultPrevented = false;
@@ -36,23 +38,52 @@ function nativeAction(batch: ReturnType<typeof useSessionSelection>, tagName = "
     stopPropagation() {}
   }
   runInNewContext(nativeSelectAll, { document: { activeElement: target, execCommand }, KeyboardEvent: KeyEvent });
-  return execCommand;
+  return { execCommand, select };
 }
 beforeEach(() => { observed.updates = []; observed.busy = false; });
 test("native Edit Select All reaches the same selection action for only loaded filtered keys", () => {
-  expect(nativeAction(selection(["visible-a", "visible-c"]))).not.toHaveBeenCalled();
+  expect(nativeAction(selection(["visible-a", "visible-c"])).execCommand).not.toHaveBeenCalled();
   expect(observed.updates.at(-1).keys).toEqual(["visible-a", "visible-c"]);
 });
-test.each(["INPUT", "TEXTAREA", "EDITOR"])("native Select All keeps text selection in %s", tag => {
-  expect(nativeAction(selection(["underlying"]), tag)).toHaveBeenCalledWith("selectAll");
+test.each(["INPUT", "TEXTAREA"])("native Select All keeps text selection in %s", tag => {
+  const action = nativeAction(selection(["underlying"]), tag);
+  expect(action.select).toHaveBeenCalledOnce();
+  expect(action.execCommand).not.toHaveBeenCalled();
   expect(observed.updates).toEqual([]);
 });
-test("dialog focus cannot select the underlying list", () => {
-  expect(nativeAction(selection(["underlying"]), "BUTTON", true)).toHaveBeenCalledWith("selectAll");
+test.each(["text", "search", "password", "number", "email"])("%s input keeps native text selection", type => {
+  const action = nativeAction(selection(["underlying"]), "INPUT", "", type);
+  expect(action.select).toHaveBeenCalledOnce();
+  expect(action.execCommand).not.toHaveBeenCalled();
   expect(observed.updates).toEqual([]);
 });
-test("busy selection remains unchanged", () => {
+test("editable content uses native text selection", () => {
+  expect(nativeAction(selection(["underlying"]), "EDITOR").execCommand).toHaveBeenCalledWith("selectAll");
+  expect(observed.updates).toEqual([]);
+});
+test.each(["dialog", '[role="dialog"]', '[role="alertdialog"]', '[role="menu"]'])("%s focus cannot select the underlying list or page", scope => {
+  expect(nativeAction(selection(["underlying"]), "BUTTON", scope).execCommand).not.toHaveBeenCalled();
+  expect(observed.updates).toEqual([]);
+  const event = { target: { tagName: "BUTTON", closest: (selector: string) => selector.split(",").includes(scope) }, key: "a", metaKey: true, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  selection(["underlying"]).onListKeyDown(event as any);
+  expect(observed.updates).toEqual([]);
+});
+test.each(["checkbox", "radio", "button"])("%s is a list control, not a text editor", type => {
+  const action = nativeAction(selection(["visible"]), "INPUT", "", type);
+  expect(action.select).not.toHaveBeenCalled();
+  expect(action.execCommand).not.toHaveBeenCalled();
+  expect(observed.updates.at(-1).keys).toEqual(["visible"]);
+});
+test("empty lists consume Command+A without selecting page text", () => {
+  expect(nativeAction(selection([])).execCommand).not.toHaveBeenCalled();
+  const event = { key: "a", metaKey: true, target: null, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  selection([]).onListKeyDown(event as any);
+  expect(event.preventDefault).toHaveBeenCalledOnce();
+  expect(observed.updates).toEqual([]);
+});
+test("static page focus and busy selection do not select global text", () => {
+  expect(nativeAction(selection(["underlying"]), "DIV", "", "", false).execCommand).not.toHaveBeenCalled();
   observed.busy = true;
-  nativeAction(selection(["underlying"]));
+  expect(nativeAction(selection(["underlying"])).execCommand).not.toHaveBeenCalled();
   expect(observed.updates).toEqual([]);
 });

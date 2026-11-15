@@ -690,16 +690,7 @@ fn execute_grok_empty_scope(
     let targets = empty_scope_targets(
         targets,
         &allowed,
-        |id| {
-            crate::grok::grok_session_summary(paths, id)
-                .ok()
-                .and_then(|s| {
-                    s.deletion_eligibility.filter(|e| !e.allowed).map(|e| {
-                        e.reason
-                            .unwrap_or_else(|| "Grok 会话正在运行，无法删除".into())
-                    })
-                })
-        },
+        |id| crate::grok::empty_cleanup_block_reason(paths, id),
         scope,
     );
     let requests = targets
@@ -1236,4 +1227,43 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+}
+
+#[test]
+fn grok_cleanup_reports_unknown_ownership_as_failure() {
+    let root = std::env::temp_dir().join(format!(
+        "agenthub-cleanup-ownership-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let paths = crate::grok::GrokPaths { home: root.clone() };
+    let id = "11111111-1111-4111-8111-111111111111";
+    let session = paths.sessions().join("fixture").join(id);
+    std::fs::create_dir_all(&session).unwrap();
+    std::fs::write(
+        session.join("summary.json"),
+        serde_json::json!({"info":{"id":id,"cwd":"/fixture"},"num_messages":0}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(session.join("updates.jsonl"), "").unwrap();
+    std::fs::write(paths.home.join("active_sessions.json"), "{}").unwrap();
+    let candidates = crate::grok::find_empty_inactive_sessions(&paths).unwrap();
+    assert_eq!(candidates.len(), 1);
+    std::fs::write(paths.home.join("active_sessions.json"), "invalid").unwrap();
+    let target = UnifiedCleanupTargetSelection {
+        scope: SCOPE_GROK_EMPTY.into(),
+        id: id.into(),
+        fingerprint: Some(candidates[0].1.clone()),
+    };
+    let mut result = UnifiedCleanupScopeResult::default();
+    execute_grok_empty_scope(&paths, vec![target], &mut result).unwrap();
+    assert_eq!(
+        (
+            result.failed_count,
+            result.skipped_count,
+            result.deleted_count
+        ),
+        (1, 0, 0)
+    );
+    assert!(session.exists());
+    std::fs::remove_dir_all(root).unwrap();
 }

@@ -860,6 +860,10 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
 
     // Full catalog of repositories is retained for UI selection, but only fixture/repo was polled for runs.
     assert_eq!(state.snapshot.repositories.len(), 2);
+    assert_eq!(
+        state.snapshot.repository_baselines_ms,
+        BTreeMap::from([(10, time)])
+    );
     assert_eq!(state.snapshot.runs.len(), 1);
     assert_eq!(state.snapshot.runs[0].repository_name, "fixture/repo");
     assert!(state.pending.is_empty());
@@ -892,6 +896,8 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
         .is_err());
     save(&fixture.db, &state).unwrap();
 
+    assert!(!state.snapshot.repository_baselines_ms.contains_key(&11));
+
     // First successful scan of newly added fixture/other must baseline its already-completed run (id 20) without firing a notification.
     server.set(
         other_runs_path,
@@ -909,6 +915,10 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
         .iter()
         .any(|r| r.contains(other_runs_path)));
     assert_eq!(state.snapshot.runs.len(), 3);
+    assert_eq!(
+        state.snapshot.repository_baselines_ms,
+        BTreeMap::from([(10, time), (11, time + 2000)])
+    );
     assert!(state.pending.is_empty());
 
     // When the in-progress run (id 21) on fixture/other finishes on the next poll, it notifies normally.
@@ -937,6 +947,20 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
         .await
         .unwrap();
     assert!(state.pending.is_empty());
+    save(&fixture.db, &state).unwrap();
+    let snapshot = status(
+        &fixture.db,
+        &expanded_config,
+        Request {
+            cached_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot.repository_baselines_ms,
+        BTreeMap::from([(10, time), (11, time + 5000)])
+    );
 }
 
 #[tokio::test]
@@ -1054,7 +1078,8 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
         .await
         .unwrap()
         .is_empty());
-    assert_eq!(monitor.next_poll_ms, monitor.credentials_due_ms);
+    assert_eq!(monitor.credentials_due_ms, 0);
+    assert!(monitor.next_poll_ms >= now() + 59_000);
     let count = server.requests.lock().unwrap().len();
     monitor
         .tick_with_token(&fixture.db, &config, async {
@@ -1069,4 +1094,244 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
         .error
         .unwrap()
         .contains("登录已失效"));
+}
+
+#[tokio::test]
+async fn credential_failure_after_restart_and_short_account_limit_retry_verify_account_again() {
+    for limited in [false, true] {
+        let fixture = Database::new();
+        let server = Server::new().await;
+        let mut config = Config::default();
+        config.probe.notifications.notify_github_ci = true;
+        let mut state = Stored::default();
+        reconcile(
+            &mut state,
+            account(),
+            vec![run(1, "in_progress", None, 1, now())],
+            true,
+            true,
+            now(),
+        );
+        save(&fixture.db, &state).unwrap();
+        let mut monitor = server.monitor();
+        monitor.token.clear();
+        server.reply("/user", 429, json!({}), "Retry-After: 1\r\n");
+        monitor
+            .tick_with_token(&fixture.db, &config, async {
+                if limited {
+                    Ok("fixture-only".into())
+                } else {
+                    anyhow::bail!("fixture missing credential")
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(monitor.credentials_due_ms, 0);
+        if limited {
+            assert_eq!(monitor.next_poll_ms, monitor.retry_at);
+        }
+        let count = server.requests.lock().unwrap().len();
+        monitor
+            .tick_with_token(&fixture.db, &config, async { panic!("cooldown") })
+            .await
+            .unwrap();
+        assert_eq!(server.requests.lock().unwrap().len(), count);
+        monitor.next_poll_ms = 0;
+        monitor.retry_at = 0;
+        server.set("/user", json!(account()));
+        server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+        monitor
+            .tick_with_token(&fixture.db, &config, async {
+                Ok("fixture-recovered".into())
+            })
+            .await
+            .unwrap();
+        assert!(load(&fixture.db).unwrap().snapshot.error.is_none());
+        let requests = server.requests.lock().unwrap();
+        assert!(requests[count].starts_with("GET /user "));
+        assert!(!requests[count].contains("Bearer \r"));
+    }
+}
+
+#[tokio::test]
+async fn failed_repository_catalog_waits_and_manual_refresh_recovers() {
+    for limited in [false, true] {
+        let fixture = Database::new();
+        let server = Server::new().await;
+        let mut monitor = server.monitor();
+        let mut config = Config::default();
+        config.probe.notifications.notify_github_ci = true;
+        server.set("/user", json!(account()));
+        server.reply(
+            "/user/repos?affiliation=owner&per_page=100",
+            if limited { 429 } else { 500 },
+            json!({}),
+            if limited { "Retry-After: 1\r\n" } else { "" },
+        );
+        monitor.repository_due_ms.insert(10, 0);
+        monitor
+            .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+            .await
+            .unwrap();
+        if limited {
+            assert_eq!(monitor.next_poll_ms, monitor.retry_at);
+        } else {
+            assert!(monitor.next_poll_ms >= now() + 59_000);
+        }
+        let count = server.requests.lock().unwrap().len();
+        monitor
+            .tick_with_token(&fixture.db, &config, async { panic!("no tight loop") })
+            .await
+            .unwrap();
+        assert_eq!(count, server.requests.lock().unwrap().len());
+        assert!(load(&fixture.db).unwrap().snapshot.error.is_some());
+        monitor.retry_at = 0;
+        fixture
+            .db
+            .set_setting(REFRESH, &(now() + 1).to_string())
+            .unwrap();
+        server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+        monitor
+            .tick_with_token(&fixture.db, &config, async { Ok("fixture-only".into()) })
+            .await
+            .unwrap();
+        assert!(load(&fixture.db).unwrap().snapshot.error.is_none());
+    }
+}
+
+#[tokio::test]
+async fn repository_and_bot_settings_saved_during_scan_cannot_be_overwritten() {
+    for bot_change in [false, true] {
+        let fixture = Database::new();
+        let server = Server::new().await;
+        let mut monitor = server.monitor();
+        let mut config = Config::default();
+        config.probe.notifications.notify_github_ci = true;
+        server.set("/user", json!(account()));
+        server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
+        let mut after = config.clone();
+        if bot_change {
+            after.probe.notifications.github_ci_filter_bots = false;
+        } else {
+            after.probe.notifications.github_ci_repositories = vec!["fixture/selected".into()];
+        }
+        monitor
+            .tick_with_token(&fixture.db, &config, async {
+                settings_changed(&fixture.db, &config, &after).unwrap();
+                Ok("fixture-only".into())
+            })
+            .await
+            .unwrap();
+        let current = load(&fixture.db).unwrap();
+        assert_eq!(
+            current.snapshot.monitored_repositories,
+            after.probe.notifications.github_ci_repositories
+        );
+        assert_eq!(
+            current.snapshot.filter_bots,
+            after.probe.notifications.github_ci_filter_bots
+        );
+        assert!(current.snapshot.account.is_none());
+        assert!(request_ms(&fixture.db).unwrap() > current.request_ms);
+        assert_eq!(monitor.active, None);
+        monitor
+            .tick_with_token(&fixture.db, &after, async { Ok("fixture-only".into()) })
+            .await
+            .unwrap();
+        assert_eq!(
+            load(&fixture.db).unwrap().request_ms,
+            request_ms(&fixture.db).unwrap()
+        );
+    }
+}
+
+#[test]
+fn source_bot_cutoff_survives_restart_and_suppresses_unseen_history() {
+    let fixture = Database::new();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    let time = now() - 10000;
+    let mut state = Stored::default();
+    reconcile(
+        &mut state,
+        account(),
+        vec![run(1, "in_progress", None, 1, time)],
+        true,
+        true,
+        time,
+    );
+    save(&fixture.db, &state).unwrap();
+    let mut after = config.clone();
+    after.probe.notifications.github_ci_filter_bots = false;
+    settings_changed(&fixture.db, &config, &after).unwrap();
+    let mut restored = load(&fixture.db).unwrap();
+    let cutoff = restored.snapshot.bot_baseline_ms;
+    let mut old = run(2, "completed", Some("success"), 1, cutoff - 1);
+    old.is_bot = true;
+    let mut new = run(3, "completed", Some("success"), 1, cutoff + 1);
+    new.is_bot = true;
+    reconcile_with_config(
+        &mut restored,
+        account(),
+        vec![old, new],
+        &after,
+        true,
+        false,
+        cutoff + 2,
+    );
+    assert_eq!(
+        restored
+            .pending
+            .iter()
+            .map(|e| e.run.id)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
+}
+
+#[tokio::test]
+async fn acknowledgement_during_scan_is_not_reinserted() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let mut monitor = server.monitor();
+    let mut config = Config::default();
+    config.probe.notifications.notify_github_ci = true;
+    let time = now() - 2000;
+    let mut state = Stored::default();
+    reconcile(
+        &mut state,
+        account(),
+        vec![run(1, "in_progress", None, 1, time)],
+        true,
+        true,
+        time,
+    );
+    reconcile(
+        &mut state,
+        account(),
+        vec![run(1, "completed", Some("success"), 1, time + 1000)],
+        true,
+        false,
+        time + 1000,
+    );
+    let key = state.pending[0].key();
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([{"id":10,"full_name":"fixture/repo"}]),
+    );
+    server.set(
+        "/repos/fixture/repo/actions/runs?per_page=10",
+        json!({"workflow_runs":state.snapshot.runs}),
+    );
+    save(&fixture.db, &state).unwrap();
+    assert!(monitor
+        .tick_with_token(&fixture.db, &config, async {
+            acknowledge(&fixture.db, &[key]).unwrap();
+            Ok("fixture-only".into())
+        })
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(load(&fixture.db).unwrap().pending.is_empty());
 }

@@ -157,7 +157,12 @@ impl DeletionContext {
                 !matches!(
                     entry.file_name().to_str(),
                     Some("subagents" | "tool-results")
-                )
+                ) && !(entry.file_type().is_dir()
+                    && entry.depth() >= 2
+                    && entry
+                        .path()
+                        .with_file_name(format!("{}.jsonl", entry.file_name().to_string_lossy()))
+                        .is_file())
             })
         {
             let entry = entry.context("无法扫描 Claude 会话")?;
@@ -1007,6 +1012,15 @@ esac
                 }
             }
             fs::write(&history[0], "").unwrap();
+        }
+        if case == "normal" {
+            let exclusive = history[0].with_extension("").join("history/continued");
+            fs::create_dir_all(&exclusive).unwrap();
+            fs::write(
+                exclusive.join(history[0].file_name().unwrap()),
+                "exclusive transcript",
+            )
+            .unwrap();
         }
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let batch_paths = paths.clone();

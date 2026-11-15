@@ -261,6 +261,17 @@ impl PanelDb {
         .map_err(Into::into)
     }
 
+    pub(crate) fn with_transaction<T>(
+        &self,
+        update: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let result = update(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     pub fn get_setting_with_updated_at(&self, key: &str) -> Result<Option<(String, i64)>> {
         let conn = self.conn.lock().expect("db mutex");
         conn.query_row(

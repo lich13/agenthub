@@ -1478,6 +1478,22 @@ pub fn execute_grok_delete(
     execute_grok_delete_batch(paths, vec![request]).remove(0)
 }
 
+pub(crate) fn empty_cleanup_block_reason(paths: &GrokPaths, id: &str) -> Option<String> {
+    let check = || -> Result<()> {
+        let located = locate_in_workspaces(&session_workspaces(paths)?, id)?;
+        let snapshot = activity::Snapshot::capture(paths);
+        for path in located {
+            let summary = read_summary(&path)?.unwrap_or_else(|| fallback_summary(&path));
+            ensure!(
+                snapshot.ownership(&summary) == activity::Ownership::Inactive,
+                "Grok 会话正在运行或占用状态无法确认，请退出后重试"
+            );
+        }
+        Ok(())
+    };
+    check().err().map(|e| e.to_string())
+}
+
 pub(crate) fn execute_grok_delete_batch(
     paths: &GrokPaths,
     requests: Vec<GrokDeleteRequest>,
@@ -1506,8 +1522,8 @@ pub(crate) fn execute_grok_delete_batch(
                         .flatten()
                         .unwrap_or_else(|| fallback_summary(path));
                     ensure!(
-                        snapshot.ownership(&summary) != activity::Ownership::Open,
-                        "Grok 会话正在运行，请先退出后再删除"
+                        snapshot.ownership(&summary) == activity::Ownership::Inactive,
+                        "Grok 会话正在运行或占用状态无法确认，请退出后重试"
                     );
                 }
                 ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");

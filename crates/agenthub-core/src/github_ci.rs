@@ -2,9 +2,10 @@
 use crate::{config::Config, db::PanelDb};
 use anyhow::{Context, Result};
 use reqwest::{header, Client, StatusCode};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     time::Duration,
 };
 use tokio::process::Command;
@@ -184,7 +185,7 @@ impl Event {
         )
     }
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Snapshot {
     pub account: Option<Account>,
@@ -198,8 +199,10 @@ pub struct Snapshot {
     pub monitored_repositories: Vec<String>,
     pub filter_bots: bool,
     pub scanned_repository_ids: BTreeSet<u64>,
+    pub repository_baselines_ms: BTreeMap<u64, i64>,
+    pub bot_baseline_ms: i64,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 struct Stored {
     snapshot: Snapshot,
@@ -216,12 +219,35 @@ fn load(db: &PanelDb) -> Result<Stored> {
         .transpose()
         .map(Option::unwrap_or_default)
 }
+#[cfg(test)]
 fn save(db: &PanelDb, state: &Stored) -> Result<()> {
-    let next = serde_json::to_string(state)?;
-    if db.get_setting(STATE)?.as_deref() != Some(&next) {
-        db.set_setting(STATE, &next)?;
-    }
-    Ok(())
+    update_state(db, |current, _| {
+        *current = state.clone();
+        Ok(())
+    })
+}
+fn update_state<T>(
+    db: &PanelDb,
+    update: impl FnOnce(&mut Stored, &mut i64) -> Result<T>,
+) -> Result<T> {
+    db.with_transaction(|tx| {
+        let read = |key: &str| -> Result<Option<String>> {
+            Ok(tx.query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0)).optional()?)
+        };
+        let original = read(STATE)?;
+        let mut state: Stored = original.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
+        let old_request = read(REFRESH)?.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let mut request = old_request;
+        let result = update(&mut state, &mut request)?;
+        let next = serde_json::to_string(&state)?;
+        let changed = original.as_deref() != Some(&next);
+        for (key, value, changed) in [(STATE, next, changed), (REFRESH, request.to_string(), request != old_request)] {
+            if changed {
+                tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", rusqlite::params![key,value,chrono::Utc::now().timestamp()])?;
+            }
+        }
+        Ok(result)
+    })
 }
 fn request_ms(db: &PanelDb) -> Result<i64> {
     Ok(db
@@ -271,67 +297,90 @@ pub fn event_current(db: &PanelDb, config: &Config, event: &Event) -> Result<boo
         }))
 }
 pub fn settings_changed(db: &PanelDb, before: &Config, after: &Config) -> Result<()> {
-    if enabled(before) == enabled(after) {
-        let repos_changed = before.probe.notifications.github_ci_repositories
-            != after.probe.notifications.github_ci_repositories;
-        let bots_changed = before.probe.notifications.github_ci_filter_bots
-            != after.probe.notifications.github_ci_filter_bots;
-        if repos_changed || bots_changed {
-            let mut state = load(db)?;
-            let after_repos = &after.probe.notifications.github_ci_repositories;
-            state.pending.retain(|event| {
-                matches_run_filter(
-                    &event.run,
-                    after_repos,
-                    after.probe.notifications.github_ci_filter_bots,
-                )
-            });
-            if repos_changed {
-                state
-                    .snapshot
-                    .runs
-                    .retain(|run| matches_run_filter(run, after_repos, false));
-                let retained_repo_ids: HashSet<u64> = state
-                    .snapshot
-                    .repositories
-                    .iter()
-                    .filter(|repo| !repo.archived && matches_repository_filter(repo, after_repos))
-                    .map(|repo| repo.id)
-                    .chain(state.snapshot.runs.iter().map(|run| run.repository_id))
-                    .collect();
-                state
-                    .monitored_repo_ids
-                    .retain(|id| retained_repo_ids.contains(id));
-                if after_repos.iter().any(|entry| {
-                    let trimmed = entry.trim();
-                    !trimmed.is_empty()
-                        && !state.snapshot.repositories.iter().any(|repo| {
-                            trimmed.eq_ignore_ascii_case(&repo.full_name)
-                                || trimmed == repo.id.to_string()
-                        })
-                }) {
-                    state.repositories_at_ms = 0;
-                }
-            }
-            save(db, &state)?;
-            if enabled(after) {
-                db.set_setting(REFRESH, &now().to_string())?;
-            }
-        }
+    if enabled(before) == enabled(after)
+        && before.probe.notifications.github_ci_repositories
+            == after.probe.notifications.github_ci_repositories
+        && before.probe.notifications.github_ci_filter_bots
+            == after.probe.notifications.github_ci_filter_bots
+    {
         return Ok(());
     }
-    let mut state = load(db)?;
-    state.snapshot.enabled = false;
-    state.baseline_ms = 0;
-    state.monitored_repo_ids.clear();
-    state.pending.clear();
-    save(db, &state)?;
-    if enabled(after) {
-        db.set_setting(REFRESH, &now().to_string())?;
-    } else {
-        db.set_setting(REFRESH, "0")?;
-    }
-    Ok(())
+    update_state(db, |state, request| {
+        state.snapshot.monitored_repositories =
+            after.probe.notifications.github_ci_repositories.clone();
+        state.snapshot.filter_bots = after.probe.notifications.github_ci_filter_bots;
+        if enabled(before) == enabled(after) {
+            let repos_changed = before.probe.notifications.github_ci_repositories
+                != after.probe.notifications.github_ci_repositories;
+            let bots_changed = before.probe.notifications.github_ci_filter_bots
+                != after.probe.notifications.github_ci_filter_bots;
+            if repos_changed || bots_changed {
+                let after_repos = &after.probe.notifications.github_ci_repositories;
+                state.pending.retain(|event| {
+                    matches_run_filter(
+                        &event.run,
+                        after_repos,
+                        after.probe.notifications.github_ci_filter_bots,
+                    )
+                });
+                if bots_changed && !after.probe.notifications.github_ci_filter_bots {
+                    state.snapshot.bot_baseline_ms = now();
+                }
+                if repos_changed {
+                    state
+                        .snapshot
+                        .runs
+                        .retain(|run| matches_run_filter(run, after_repos, false));
+                    let retained_repo_ids: HashSet<u64> = state
+                        .snapshot
+                        .repositories
+                        .iter()
+                        .filter(|repo| {
+                            !repo.archived && matches_repository_filter(repo, after_repos)
+                        })
+                        .map(|repo| repo.id)
+                        .chain(state.snapshot.runs.iter().map(|run| run.repository_id))
+                        .collect();
+                    state
+                        .monitored_repo_ids
+                        .retain(|id| retained_repo_ids.contains(id));
+                    state
+                        .snapshot
+                        .repository_baselines_ms
+                        .retain(|id, _| retained_repo_ids.contains(id));
+                    if after_repos.iter().any(|entry| {
+                        let trimmed = entry.trim();
+                        !trimmed.is_empty()
+                            && !state.snapshot.repositories.iter().any(|repo| {
+                                trimmed.eq_ignore_ascii_case(&repo.full_name)
+                                    || trimmed == repo.id.to_string()
+                            })
+                    }) {
+                        state.repositories_at_ms = 0;
+                    }
+                }
+
+                if enabled(after) {
+                    *request = now();
+                }
+            }
+            return Ok(());
+        }
+
+        state.snapshot.enabled = false;
+        state.baseline_ms = 0;
+        state.monitored_repo_ids.clear();
+        state.snapshot.repository_baselines_ms.clear();
+        state.snapshot.bot_baseline_ms = 0;
+        state.pending.clear();
+
+        if enabled(after) {
+            *request = now();
+        } else {
+            *request = 0;
+        }
+        Ok(())
+    })
 }
 
 pub fn acknowledge(db: &PanelDb, keys: &[String]) -> Result<()> {
@@ -339,11 +388,12 @@ pub fn acknowledge(db: &PanelDb, keys: &[String]) -> Result<()> {
         return Ok(());
     }
     let keys: HashSet<_> = keys.iter().map(String::as_str).collect();
-    let mut state = load(db)?;
-    state
-        .pending
-        .retain(|event| !keys.contains(event.key().as_str()));
-    save(db, &state)
+    update_state(db, |state, _| {
+        state
+            .pending
+            .retain(|event| !keys.contains(event.key().as_str()));
+        Ok(())
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -409,88 +459,123 @@ impl Monitor {
             return Ok(Vec::new());
         }
         let mut state = load(db)?;
-        let baseline_before = state.baseline_ms;
+        let original = state.clone();
         let enabled_before = state.snapshot.enabled;
         self.active = Some(active);
+        let mut account_ready = false;
         if !active {
-            let changed = enabled_before
-                || baseline_before != 0
-                || !state.monitored_repo_ids.is_empty()
-                || !state.pending.is_empty()
-                || state.request_ms != request;
+            if !state.snapshot.enabled
+                && state.baseline_ms == 0
+                && state.monitored_repo_ids.is_empty()
+                && state.pending.is_empty()
+                && state.request_ms == request
+            {
+                self.request_ms = request;
+                return Ok(Vec::new());
+            }
             state.snapshot.enabled = false;
             state.baseline_ms = 0;
             state.monitored_repo_ids.clear();
+            state.snapshot.repository_baselines_ms.clear();
+            state.snapshot.bot_baseline_ms = 0;
             state.pending.clear();
-            state.request_ms = request;
-            self.request_ms = request;
-            if changed {
-                save(db, &state)?;
-            }
-            return Ok(Vec::new());
-        }
-        if time < self.retry_at {
-            state.request_ms = request;
-            self.request_ms = request;
+        } else if time < self.retry_at {
             state.snapshot.error = Some("GitHub 请求限流，稍后刷新".into());
-            save(db, &state)?;
-            return Ok(Vec::new());
-        }
-        let before = serde_json::to_string(&state)?;
-        let refresh = request > self.request_ms || !enabled_before;
-        let check_account =
-            refresh || time >= self.credentials_due_ms || state.snapshot.account.is_none();
-        let mut account_ready = false;
-        let result = async {
-            if check_account {
-                self.credentials_due_ms = time + POLL_SECONDS * 1000;
-                let token = token.await?;
-                if token != self.token {
-                    self.cache.clear();
-                    self.repository_due_ms.clear();
-                    self.token = token;
+        } else {
+            let refresh = request > self.request_ms || !enabled_before;
+            let check_account = refresh
+                || self.token.is_empty()
+                || time >= self.credentials_due_ms
+                || state.snapshot.account.is_none();
+            let result = async {
+                if check_account {
+                    // Only a verified account can extend the credential lease.
+                    self.credentials_due_ms = 0;
+                    let token = token.await?;
+                    if token != self.token {
+                        self.cache.clear();
+                        self.repository_due_ms.clear();
+                        self.token = token;
+                    }
                 }
+                let account = if check_account {
+                    let account = self.account().await?;
+                    self.credentials_due_ms = time + POLL_SECONDS * 1000;
+                    account
+                } else {
+                    state.snapshot.account.clone().expect("known account")
+                };
+                account_ready = true;
+                self.scan_due(&mut state, config, account, active, time, refresh)
+                    .await
             }
-            let account = if check_account {
-                self.account().await?
+            .await;
+            self.next_poll_ms = if result.is_err()
+                && (!account_ready
+                    || state.repositories_at_ms == original.repositories_at_ms
+                        && time - state.repositories_at_ms >= 600000)
+            {
+                // Directory failures occur before repository deadlines are advanced.
+                if self.retry_at > time {
+                    self.retry_at
+                } else {
+                    time + POLL_SECONDS * 1000
+                }
             } else {
-                state.snapshot.account.clone().expect("known account")
+                self.repository_due_ms
+                    .values()
+                    .copied()
+                    .chain(std::iter::once(self.credentials_due_ms))
+                    .min()
+                    .unwrap_or(time + POLL_SECONDS * 1000)
             };
-            account_ready = true;
-            self.scan_due(&mut state, config, account, active, time, refresh)
-                .await
+            if self.retry_at > time {
+                self.next_poll_ms = self.retry_at;
+            }
+            state.snapshot.error = result.err().map(|error| error.to_string());
         }
-        .await;
-        // Settings may reset the baseline while GitHub is responding. A refresh,
-        // however, is satisfied by this scan instead of discarding its results.
-        let current = load(db)?;
-        if current.baseline_ms != baseline_before || current.snapshot.enabled != enabled_before {
+        state.snapshot.monitored_repositories =
+            config.probe.notifications.github_ci_repositories.clone();
+        state.snapshot.filter_bots = config.probe.notifications.github_ci_filter_bots;
+        // No network request holds this transaction. Settings and acknowledgements
+        // may commit while GitHub responds; merge only against their current state.
+        let committed = update_state(db, |current, latest_request| {
+            if current.snapshot.monitored_repositories != original.snapshot.monitored_repositories
+                || current.snapshot.filter_bots != original.snapshot.filter_bots
+                || current.baseline_ms != original.baseline_ms
+                || current.snapshot.enabled != original.snapshot.enabled
+                || current.snapshot.repository_baselines_ms
+                    != original.snapshot.repository_baselines_ms
+                || current.snapshot.bot_baseline_ms != original.snapshot.bot_baseline_ms
+                || current.monitored_repo_ids != original.monitored_repo_ids
+            {
+                return Ok(false);
+            }
+            let pending_before: HashSet<_> = original.pending.iter().map(Event::key).collect();
+            let pending_now: HashSet<_> = current.pending.iter().map(Event::key).collect();
+            state.pending.retain(|event| {
+                let key = event.key();
+                !pending_before.contains(&key) || pending_now.contains(&key)
+            });
+            state.request_ms = *latest_request;
+            if state != *current {
+                state.snapshot.last_scan_ms = time;
+                *current = state.clone();
+            }
+            Ok(true)
+        })?;
+        if !committed {
             self.active = None;
             return Ok(Vec::new());
         }
-        state.request_ms = request_ms(db)?;
         self.request_ms = state.request_ms;
-        self.next_poll_ms = self
-            .repository_due_ms
-            .values()
-            .copied()
-            .chain(std::iter::once(self.credentials_due_ms))
-            .min()
-            .unwrap_or(time + POLL_SECONDS * 1000);
-        if !account_ready {
-            self.next_poll_ms = self.credentials_due_ms;
-        }
-        state.snapshot.error = result.err().map(|error| error.to_string());
-        if serde_json::to_string(&state)? != before {
-            state.snapshot.last_scan_ms = time;
-            save(db, &state)?;
-        }
         Ok(if account_ready {
             state.pending
         } else {
             Vec::new()
         })
     }
+
     pub fn wait_duration(&self) -> Duration {
         if self.active != Some(true) {
             return Duration::from_secs(2);
@@ -763,7 +848,18 @@ impl Monitor {
         }
         reconcile_with_config(state, account, runs, config, active, baseline, time);
         if active {
-            state.monitored_repo_ids.extend(scanned_repo_ids);
+            state.monitored_repo_ids.extend(&scanned_repo_ids);
+            for id in scanned_repo_ids {
+                state
+                    .snapshot
+                    .repository_baselines_ms
+                    .entry(id)
+                    .or_insert(time);
+            }
+            state
+                .snapshot
+                .repository_baselines_ms
+                .retain(|id, _| state.monitored_repo_ids.contains(id));
         }
         if !errors.is_empty() {
             anyhow::bail!("{}", errors.join("；"));
@@ -857,6 +953,7 @@ fn reconcile_with_config(
                 || repo_newly_monitored
                 || run.notification_kind().is_none()
                 || !matches_run_filter(run, repositories, filter_bots)
+                || (run.is_bot && run.finished_ms() <= state.snapshot.bot_baseline_ms)
             {
                 continue;
             }

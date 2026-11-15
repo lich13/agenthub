@@ -48,15 +48,25 @@ impl Observer {
             .map(|run| {
                 let key = (run.repository_id, run.id);
                 let eligible = run.notification_kind().is_some();
+                let source_baseline = snapshot
+                    .repository_baselines_ms
+                    .get(&run.repository_id)
+                    .copied()
+                    .unwrap_or(0)
+                    .max(if run.is_bot {
+                        snapshot.bot_baseline_ms
+                    } else {
+                        0
+                    });
+                let finished_ms = chrono::DateTime::parse_from_rfc3339(&run.updated_at)
+                    .map_or(0, |time| time.timestamp_millis());
                 if !initial
                     && self.repositories.contains(&run.repository_id)
                     && eligible
                     && agenthub_core::github_ci::matches_run_filter(run, repositories, filter_bots)
+                    && finished_ms > source_baseline
                     && self.runs.get(&key).map_or_else(
-                        || {
-                            chrono::DateTime::parse_from_rfc3339(&run.updated_at)
-                                .is_ok_and(|time| time.timestamp_millis() > self.baseline_ms)
-                        },
+                        || finished_ms > self.baseline_ms,
                         |(attempt, completed)| *attempt != run.run_attempt || !completed,
                     )
                 {

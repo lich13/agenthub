@@ -157,3 +157,34 @@ fn new_readded_and_empty_repositories_get_independent_baselines() {
     state.last_scan_ms += 1;
     assert!(observer.observe(0, &state).is_empty());
 }
+
+#[test]
+fn source_baselines_cover_repository_readd_and_bot_toggle_missed_between_polls() {
+    for bot in [false, true] {
+        let mut observer = Observer::default();
+        let mut state = snapshot();
+        state.runs[1].is_bot = bot;
+        observer.observe(0, &state);
+        let finished = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+            .unwrap()
+            .timestamp_millis();
+        if bot {
+            state.bot_baseline_ms = finished + 1000;
+        } else {
+            state.repository_baselines_ms.insert(2, finished + 1000);
+        }
+        state.runs[1].status = "completed".into();
+        state.runs[1].conclusion = Some("success".into());
+        let mut unseen = run(3, "completed", Some("failure"), 1);
+        unseen.is_bot = bot;
+        state.runs.push(unseen);
+        state.last_scan_ms += 1;
+        assert!(observer.observe(0, &state).is_empty());
+        state.runs[1].run_attempt += 1;
+        state.runs[1].updated_at = chrono::DateTime::from_timestamp_millis(finished + 2000)
+            .unwrap()
+            .to_rfc3339();
+        assert_eq!(observer.observe(0, &state).len(), 1);
+        assert!(observer.observe(0, &state).is_empty());
+    }
+}

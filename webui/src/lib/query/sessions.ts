@@ -195,11 +195,12 @@ export function useSessionSelection(
 
   const onListKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.closest("dialog"))) {
+    const textInput = target?.tagName === "INPUT" &&
+      !["checkbox", "radio", "button", "submit", "reset", "image", "file", "range", "color"].includes((target as HTMLInputElement).type);
+    if (target && (textInput || target.tagName === "TEXTAREA" || target.isContentEditable || target.closest('dialog,[role="dialog"],[role="alertdialog"],[role="menu"]'))) {
       return;
     }
     if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a") {
-      if (!keys.length) return;
       event.preventDefault();
       event.stopPropagation();
       selectAll();
