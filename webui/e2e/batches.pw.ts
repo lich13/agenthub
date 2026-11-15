@@ -265,7 +265,9 @@ for (const provider of ["codex", "antigravity", "dsh"] as const) {
     await expect.poll(() => started).toBe(true);
     await toggle.click();
     await toggle.click();
-    await archived.first().click({ modifiers: ["Meta"] });
+    await expect(archived.first()).toBeDisabled();
+    await toggle.focus();
+    await page.keyboard.press("Meta+a");
     await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
     release();
     await expect(page.getByText("已完成 1 项，未完成 0 项", { exact: true })).toBeVisible();

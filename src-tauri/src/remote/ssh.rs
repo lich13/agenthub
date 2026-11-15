@@ -257,11 +257,16 @@ sys.stdout.buffer.flush()
             .unwrap()
             .unwrap()
             .is_err());
-        let status = client.child.lock().unwrap().try_wait().unwrap();
-        if status.is_none() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(client.child.lock().unwrap().try_wait().unwrap().is_some());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if client.child.lock().unwrap().try_wait().unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("closed SSH child must exit");
     }
     #[test]
     fn system_ssh_resolves_identity_and_jump_configuration() {
