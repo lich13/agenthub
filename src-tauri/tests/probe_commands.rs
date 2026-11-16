@@ -28,11 +28,10 @@ fn desktop_state(temp: &tempfile::TempDir) -> DesktopState {
         SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    DesktopState::new(
-        config,
-        db,
-        PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path()),
-    )
+    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
+    std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
+    std::fs::write(&platform.config_file, toml::to_string(&config).unwrap()).unwrap();
+    DesktopState::new(config, db, platform)
 }
 
 fn write_codex_thread(
