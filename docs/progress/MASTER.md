@@ -6,7 +6,7 @@
 
 浏览器交互耗时只作诊断，Playwright 功能回归仍为 CI 检查；不新增性能阈值。
 
-最近正式版本为 [**v2.1.26**](https://github.com/lich13/agenthub/releases/tag/v2.1.26)，发布提交为 [`5aa71e3`](https://github.com/lich13/agenthub/commit/5aa71e31082058a18aacd144a517477080df5a2d)。测试夹具修正后的 [main CI](https://github.com/lich13/agenthub/actions/runs/43810502542) 全部通过，八项正式资产复用原标签构建结果，保留标签且未重新构建；原标签 CI 的失败及修正见下文。服务端已通过部署脚本升级为 agenthub-webd 2.1.26，服务为 active、健康为 ok；Mac 使用同版正式 DMG 从 2.1.25 原地更新至 2.1.26 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面及通知实收待用户验收。
+最近正式版本为 [**v2.1.27**](https://github.com/lich13/agenthub/releases/tag/v2.1.27)，发布提交为 [`1ced96f`](https://github.com/lich13/agenthub/commit/1ced96ffff43573c8e7cd5e8fd8ed509317bb669)。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/44420379162) 的发布边界检查、前端（含 Playwright 功能回归）、后端与 macOS Tauri 检查、两端打包及发布七项任务全部通过，已发布八项正式资产。服务端已通过部署脚本升级为 agenthub-webd 2.1.27，服务为 active、健康为 ok；Mac 使用同版正式 DMG（校验与签名通过）从 2.1.26 原地更新至 2.1.27 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面、Codex 列表及通知实收待用户验收。
 
 ## v2.1.27 实现与验证
 
@@ -31,7 +31,15 @@ Codex 0.168 起在新会话 rollout 首行写入 `account_scoped`，其历史与
 
 已知边界：解除改变 rollout 首行，该线程正在等待重试的 Codex 通知按来源已变处理、不再发送（重试窗口最长 10 分钟）；Codex 原生压缩维护进行中手动动作返回忙碌；Codex 的 resume 账号校验若日后启用，解除后列表可见但恢复仍可能被拒绝；自动开关不处理压缩文件和回退副本。
 
-受影响 Core／webd／Tauri 模块完整测试、两套 Clippy 与格式、WebUI 类型检查与完整 Vitest、wire／契约检查、版本、工作区、隐私、安装脚本及发布说明生成检查通过。用例覆盖首行判定各分支、明文清除后的长度／inode／mtime 与追加写入、压缩文件内容／权限／mtime 与临时文件清理、遗留副本清理、线程锁与维护锁占用、回退副本、符号链接文件／根目录／数据目录、时间预算、子线程树、审计只记数量，以及本次构建 CLI 的 Stop Hook 开关两种行为。Playwright 用例随 CI 运行。Claude 忙碌等待用例的假进程由 `/bin/sleep` 副本改为 ad-hoc 签名副本：macOS 27 会在启动后数毫秒内终止搬离系统卷的平台二进制，基线在本机 30 次中失败 9 次，修正后 40 次全部通过；产品逻辑未改。
+受影响 Core／webd／Tauri 模块完整测试、两套 Clippy 与格式、WebUI 类型检查与完整 Vitest、wire／契约检查、版本、工作区、隐私、安装脚本及发布说明生成检查通过。用例覆盖首行判定各分支、明文清除后的长度／inode／mtime 与追加写入、压缩文件内容／权限／mtime 与临时文件清理、遗留副本清理、线程锁与维护锁占用、回退副本、符号链接文件／根目录／数据目录、时间预算、子线程树、审计只记数量，以及本次构建 CLI 的 Stop Hook 开关两种行为。Playwright 用例随标签 CI 的前端检查通过。Claude 忙碌等待用例的假进程由 `/bin/sleep` 副本改为 ad-hoc 签名副本：macOS 27 会在启动后数毫秒内终止搬离系统卷的平台二进制，基线在本机 30 次中失败 9 次，修正后 40 次全部通过；产品逻辑未改。
+
+下表比较 v2.1.26 与 v2.1.27 对应标签 CI 生成并正式发布的同类资产；三项均略增，不能声称包体积或用户数据占用下降。
+
+| 发布资产 | v2.1.26 字节 | v2.1.27 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG | 17,266,672 | 17,394,151 | +127,479（+0.738%） |
+| macOS updater | 16,695,992 | 16,814,579 | +118,587（+0.710%） |
+| Linux x86_64 webd | 7,493,793 | 7,515,316 | +21,523（+0.287%） |
 
 待用户验收：「更新与维护 → Codex 账号隔离」检查并解除后，`codex resume` 列表出现此前隐藏的会话，远程机器重复一次；开启「回合结束后自动解除」后新会话跑完一回合再检查应为 0；归档／恢复一个已被 Codex 压缩的旧线程；远程不可达时启动 App 立即出现界面。真实界面、Codex 列表与通知实收未由助手代验。
 
@@ -66,7 +74,7 @@ Probe 的 Linux／Tauri 新鲜状态和被动扫描复用原配置文件缓存�
 | macOS updater | 16,688,512 | 16,695,992 | +7,480（+0.045%） |
 | Linux x86_64 webd | 7,484,369 | 7,493,793 | +9,424（+0.126%） |
 
-受影响 Core 缓存／Codex／Claude／Grok／native probe 模块、webd（含本次构建 CLI Hook 测试）、Tauri 设置入口及相关通知、分页、框架与 wire 契约集成测试通过；前端刷新、批量、分页、作业和切机测试及类型检查、两套 Clippy、格式、版本、工作区、源文件隐私、安装脚本及发布说明生成检查通过。用例覆盖自定义路径、外部原子配置替换与损坏、129MiB 压缩历史尾部及附件／搜索、旧索引定位、文件替换／截断／同大小同 mtime、缓存预算与空闲释放、首批失败及 150／201 项中断。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/43758972251) 的前后端检查、两端打包与发布边界检查通过，Tauri 集成测试因夹具未写入配置文件失败；仅修正测试夹具的 [`6a7d61d`](https://github.com/lich13/agenthub/commit/6a7d61de5854b70d88b199b5a8e940f32e3efa7e) 已通过本机该集成测试、格式与隐私检查，以及全部 [main CI](https://github.com/lich13/agenthub/actions/runs/43810502542)，包括完整回归、浏览器与 Tauri 检查；产品源码与标签一致。
+受影响 Core 缓存／Codex／Claude／Grok／native probe 模块、webd（含本次构建 CLI Hook 测试）、Tauri 设置入口及相关通知、分页、框架与 wire 契约集成测试通过；前端刷新、批量、分页、作业和切机测试及类型检查、两套 Clippy、格式、版本、工作区、源文件隐私、安装脚本及发布说明生成检查通过。用例覆盖自定义路径、外部原子配置替换与损坏、129MiB 压缩历史尾部及附件／搜索、旧索引定位、文件替换／截断／同大小同 mtime、缓存预算与空闲释放、首批失败及 150／201 项中断。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/43758972251) 的前后端检查、两端打包与发布边界检查通过，Tauri 集成测试因夹具未写入配置文件失败；仅修正测试夹具的 [`6a7d61d`](https://github.com/lich13/agenthub/commit/6a7d61de5854b70d88b199b5a8e940f32e3efa7e) 已通过本机该集成测试、格式与隐私检查，以及全部 [main CI](https://github.com/lich13/agenthub/actions/runs/43810502542)，包括完整回归、浏览器与 Tauri 检查；产品源码与标签一致。八项正式资产复用原标签构建结果，保留标签且未重新构建；服务端已通过部署脚本升级为 agenthub-webd 2.1.26，Mac 使用同版正式 DMG 从 2.1.25 原地更新并启动。
 
 待用户验收：打开压缩主／子线程，检查分页、时间线、搜索与附件；Probe 修改开关或安装／移除 Hook 后状态应立即一致；批量中断显示已完成及全部未完成项。真实界面、业务与通知实收未由助手代验。
 
