@@ -254,6 +254,22 @@ impl<'a> ThreadUseCases<'a> {
     pub fn rename(self, request: ThreadRenameRequest) -> Result<ThreadStateActionPlan> {
         jobs::plan_thread_rename_with_capability(self.platform, request)
     }
+
+    pub fn account_scope_status(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<crate::codex::account_scope::CodexAccountScopeStatus> {
+        system::require_capability(self.platform, Capability::ThreadCleanup)?;
+        Ok(crate::codex::account_scope::status(paths))
+    }
+
+    pub fn account_scope_clear(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<crate::codex::account_scope::CodexAccountScopeResult> {
+        system::require_capability(self.platform, Capability::ThreadCleanup)?;
+        crate::codex::account_scope::clear(paths)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

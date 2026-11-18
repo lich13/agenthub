@@ -9,7 +9,7 @@ import { executeSessionBatch, previewSessionBatch } from "../api/sessions";
 const observed = vi.hoisted(() => ({
   updates: [] as any[], busy: false, states: [] as any[], stateIndex: 0,
   mutations: [] as any[], resets: [] as ReturnType<typeof vi.fn>[],
-  invalidate: vi.fn(),
+  invalidate: vi.fn(), client: null as any,
   lifecycle: false, refs: [] as any[], refIndex: 0, effects: [] as (() => void)[],
   deps: [] as any[], effectIndex: 0, filter: "filtered", revision: 1,
   pending: [false, false], errors: [null, null] as (Error | null)[],
@@ -42,7 +42,7 @@ vi.mock("react", async original => {
   };
 });
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: observed.invalidate }),
+  useQueryClient: () => observed.client ?? { invalidateQueries: observed.invalidate },
   useMutation: (options: any) => {
     const index = observed.mutations.length;
     observed.mutations.push(options);
@@ -50,16 +50,16 @@ vi.mock("@tanstack/react-query", () => ({
     return { error: observed.errors[index], isPending: observed.lifecycle ? observed.pending[index] : observed.busy, reset, mutate: vi.fn() };
   },
 }));
-vi.mock("./connection", () => ({ useConnection: () => ({ revision: observed.revision, target: "local" }) }));
+vi.mock("./connection", () => ({ useConnection: () => ({ revision: observed.revision, target: "local" }), machineScope: () => "local:" }));
 vi.mock("../api/sessions", () => ({ executeSessionBatch: vi.fn(), previewSessionBatch: vi.fn() }));
 
 const nativeSelectAll = readFileSync(new URL("../../../../src-tauri/src/select_all.js", import.meta.url), "utf8");
-function selection(keys: string[], onSelectionStart?: () => void, onSucceeded?: () => void) {
+function selection(keys: string[], onSelectionStart?: () => void, onSucceeded?: () => void, provider: Parameters<typeof useSessionSelection>[0] = "codex") {
   observed.stateIndex = 0;
   observed.refIndex = 0; observed.effectIndex = 0;
   if (observed.lifecycle) { observed.mutations = []; observed.resets = []; }
   let result!: ReturnType<typeof useSessionSelection>;
-  function Probe() { result = useSessionSelection("codex", observed.filter, keys, onSucceeded, undefined, onSelectionStart); return null; }
+  function Probe() { result = useSessionSelection(provider, observed.filter, keys, onSucceeded, undefined, onSelectionStart); return null; }
   renderToString(createElement(Probe));
   for (const effect of observed.effects.splice(0)) effect();
   return result;
@@ -83,7 +83,7 @@ function nativeAction(batch: ReturnType<typeof useSessionSelection>, tagName = "
 }
 beforeEach(() => {
   observed.updates = []; observed.busy = false; observed.states = [];
-  observed.mutations = []; observed.resets = []; observed.invalidate.mockReset();
+  observed.mutations = []; observed.resets = []; observed.invalidate.mockReset(); observed.client = null;
   observed.lifecycle = false; observed.refs = []; observed.effects = []; observed.deps = [];
   observed.filter = "filtered"; observed.revision = 1; observed.pending = [false, false]; observed.errors = [null, null];
   vi.mocked(executeSessionBatch).mockReset(); vi.mocked(previewSessionBatch).mockReset();
@@ -295,4 +295,55 @@ test("a first-page failure keeps selection without an empty success result", asy
   expect(observed.states[0].keys).toEqual(keys);
   expect(observed.states[2]).toBeNull();
   expect(observed.invalidate).not.toHaveBeenCalled();
+});
+
+// Grok and Claude Code key their lists by filter; the other providers add the
+// machine scope and the archive partition. Only Grok rows are identified by id.
+const flatLists = (provider: string) => provider === "grok" || provider === "claude_code";
+const listKeys = (provider: string) => flatLists(provider)
+  ? [[provider, "sessions", ""], [provider, "sessions", "filtered"]]
+  : [[provider, "local:", "sessions", "active", ""], [provider, "local:", "sessions", "archived", "filtered"]];
+const detailKey = (provider: string) => flatLists(provider) ? [provider, "session", "deleted"] : [provider, "local:", "session", "deleted"];
+const sessionRows = (provider: string, keys: string[]) => keys.map(key => provider === "grok" ? { id: key } : { id: `native-${key}`, sessionKey: key });
+const realQuery = () => vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
+
+test.each([["grok", "claude_code"], ["claude_code", "grok"], ["antigravity", "dsh"], ["dsh", "antigravity"]] as const)("%s delete drops succeeded rows from its list caches before the refetch returns", async (provider, other) => {
+  const { QueryClient, QueryObserver } = await realQuery();
+  const client = observed.client = new QueryClient();
+  const [mountedList, idleList] = listKeys(provider);
+  client.setQueryData(mountedList, sessionRows(provider, ["deleted", "failed", "kept", "child"]));
+  client.setQueryData(idleList, sessionRows(provider, ["deleted", "child"]));
+  const detail = { summary: sessionRows(provider, ["deleted"])[0] };
+  client.setQueryData(detailKey(provider), detail);
+  const otherRows = sessionRows(other, ["deleted"]);
+  client.setQueryData(listKeys(other)[0], otherRows);
+  const refetch = vi.fn(() => new Promise<never>(() => {}));
+  const unmount = new QueryObserver(client, { queryKey: mountedList, queryFn: refetch, staleTime: Infinity }).subscribe(() => {});
+
+  selection(["deleted", "failed", "kept"], undefined, undefined, provider);
+  observed.mutations[1].onSuccess({ generation: 0, operation: "delete", response: { items: [
+    { sessionKey: "deleted", status: "succeeded", deletedIds: ["child"] },
+    { sessionKey: "failed", status: "failed", message: "Fixture failure" },
+  ] } });
+
+  expect(refetch).toHaveBeenCalledOnce();
+  expect(client.getQueryState(mountedList)?.fetchStatus).toBe("fetching");
+  expect(client.getQueryData(mountedList)).toEqual(sessionRows(provider, ["failed", "kept"]));
+  expect(client.getQueryData(idleList)).toEqual([]);
+  expect(client.getQueryState(idleList)?.isInvalidated).toBe(true);
+  expect(client.getQueryData(detailKey(provider))).toBe(detail);
+  expect(client.getQueryData(listKeys(other)[0])).toBe(otherRows);
+  unmount();
+});
+
+test.each([["codex", "delete"], ["antigravity", "archive"], ["antigravity", "restore"]] as const)("%s %s leaves cached lists to the refetch", async (provider, operation) => {
+  const { QueryClient } = await realQuery();
+  const client = observed.client = new QueryClient();
+  const prune = vi.spyOn(client, "setQueriesData");
+  const cached = sessionRows(provider, ["done", "kept"]);
+  client.setQueryData(listKeys(provider)[0], cached);
+  selection(["done", "kept"], undefined, undefined, provider);
+  observed.mutations[1].onSuccess({ generation: 0, operation, response: { items: [{ sessionKey: "done", status: "succeeded" }] } });
+  expect(prune).not.toHaveBeenCalled();
+  expect(client.getQueryData(listKeys(provider)[0])).toBe(cached);
 });

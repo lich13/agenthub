@@ -61,6 +61,9 @@ pub struct ProbeErrorMonitorConfig {
 pub struct ProbeHooksConfig {
     #[serde(default = "default_true")]
     pub manage_stop_hook: bool,
+    /// Lets the Codex Stop hook drop the account marker from the thread it just finished.
+    #[serde(default)]
+    pub clear_account_scope: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +177,7 @@ pub struct ProbeErrorMonitorConfigPatch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeHooksConfigPatch {
     pub manage_stop_hook: Option<bool>,
+    pub clear_account_scope: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +291,7 @@ impl Default for ProbeHooksConfig {
     fn default() -> Self {
         Self {
             manage_stop_hook: true,
+            clear_account_scope: false,
         }
     }
 }
@@ -797,6 +802,11 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
         editor.set_usize("probe", "recent_limit", probe.recent_limit)?;
         if let Some(hooks) = probe.hooks.as_ref() {
             editor.set_bool("probe.hooks", "manage_stop_hook", hooks.manage_stop_hook)?;
+            editor.set_bool(
+                "probe.hooks",
+                "clear_account_scope",
+                hooks.clear_account_scope,
+            )?;
         }
         if let Some(error_monitor) = probe.error_monitor.as_ref() {
             editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled)?;
@@ -1293,6 +1303,7 @@ mod tests {
         assert_eq!(config.probe.poll_seconds, 15);
         assert_eq!(config.probe.recent_limit, 50);
         assert!(config.probe.hooks.manage_stop_hook);
+        assert!(!config.probe.hooks.clear_account_scope);
         assert!(!config.probe.notifications.enabled);
         assert_eq!(config.probe.notifications.server_url, "https://api.day.app");
         assert!(config.probe.notifications.notify_reply_needed);
@@ -1386,6 +1397,37 @@ group = "old"
         assert!(output.contains("[probe.notifications]"));
         assert!(output.contains("enabled = true"));
         assert!(output.contains("group = \"AgentHub\""));
+    }
+
+    #[test]
+    fn account_scope_switch_is_opt_in_and_patched_beside_the_stop_hook_flag() {
+        let hooks = |text: &str| -> super::ProbeHooksConfig {
+            toml::from_str::<toml::Value>(text).unwrap()["probe"]["hooks"]
+                .clone()
+                .try_into()
+                .unwrap()
+        };
+        let input = "[probe.hooks]\nmanage_stop_hook = true # keep\n";
+        assert!(!hooks(input).clear_account_scope);
+        let patch = ProbeConfigFilePatch {
+            probe: Some(ProbeSettingsPatch {
+                hooks: Some(super::ProbeHooksConfigPatch {
+                    clear_account_scope: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let output = super::patch_probe_config_toml(input, &patch).unwrap();
+        assert!(output.contains("manage_stop_hook = true # keep"));
+        assert_eq!(
+            hooks(&output),
+            super::ProbeHooksConfig {
+                manage_stop_hook: true,
+                clear_account_scope: true,
+            }
+        );
     }
 
     #[test]

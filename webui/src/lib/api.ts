@@ -37,6 +37,8 @@ export {
   archiveThread,
   restoreThread,
   renameThread,
+  getCodexAccountScopeStatus,
+  clearCodexAccountScope,
 } from "./api/threads";
 export type { ThreadDetailOptions } from "./api/threads";
 export {

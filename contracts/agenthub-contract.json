@@ -73,7 +73,8 @@
     "corePanelTitles": [
       "更新与维护",
       "执行记录",
-      "全平台线程清理"
+      "全平台线程清理",
+      "Codex 账号隔离"
     ],
     "actionLabels": {
       "dryRun": "Dry-run",
@@ -208,6 +209,30 @@
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsRenameResponse"
+    },
+    {
+      "id": "threads.accountScopeStatus",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "threads.account_scope_status",
+      "linuxRpc": "threads.accountScopeStatus",
+      "tauriCommand": "commands::threads::accountScopeStatus",
+      "webuiWrapper": "getCodexAccountScopeStatus",
+      "dtoOwner": "threads",
+      "requestDto": "NoRequest",
+      "responseDto": "CodexAccountScopeStatus"
+    },
+    {
+      "id": "threads.accountScopeClear",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "threads.account_scope_clear",
+      "linuxRpc": "threads.accountScopeClear",
+      "tauriCommand": "commands::threads::accountScopeClear",
+      "webuiWrapper": "clearCodexAccountScope",
+      "dtoOwner": "threads",
+      "requestDto": "NoRequest",
+      "responseDto": "CodexAccountScopeResult"
     },
     {
       "id": "jobs.list",
@@ -1111,6 +1136,22 @@
     "ThreadsRestoreResponse": {
       "core": "ThreadsRestoreResponse",
       "webui": "ThreadsRestoreResponse"
+    },
+    "CodexAccountScopeStatus": {
+      "core": "CodexAccountScopeStatus",
+      "webui": "CodexAccountScopeStatus"
+    },
+    "CodexAccountScopeResult": {
+      "core": "CodexAccountScopeResult",
+      "webui": "CodexAccountScopeResult"
+    },
+    "CodexAccountScopeItem": {
+      "core": "CodexAccountScopeItem",
+      "webui": "CodexAccountScopeItem"
+    },
+    "CodexAccountScopeReason": {
+      "core": "CodexAccountScopeReason",
+      "webui": "CodexAccountScopeReason"
     },
     "UpdatesCheckResponse": {
       "core": "UpdatesCheckResponse",

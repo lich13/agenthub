@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod account_scope;
 mod app_server_client;
 mod assistant_question;
 #[cfg(unix)]

@@ -49,6 +49,8 @@ pub fn run() {
         commands::threads::archiveThread,
         commands::threads::restoreThread,
         commands::threads::renameThread,
+        commands::threads::accountScopeStatus,
+        commands::threads::accountScopeClear,
         commands::probe::getProbeStatus,
         commands::probe::getGithubCiStatus,
         commands::updates::getUpdateStatus,

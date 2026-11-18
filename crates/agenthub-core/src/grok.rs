@@ -1115,7 +1115,8 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
 }
 
 static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Value> =
-    crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES);
+    crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES)
+        .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES);
 
 fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");

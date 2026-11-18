@@ -5,6 +5,7 @@ export type RuntimeCapabilityMatrix = {
   threadSubagents?: boolean;
   claudeSubagents?: boolean;
   hiddenCleanupScan?: boolean;
+  codexAccountScope?: boolean;
   antigravityNotifications?: boolean;
   dshNotifications?: boolean;
   antigravitySessions?: boolean;
@@ -31,6 +32,7 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     threadSubagents: core.thread_subagents === true,
     claudeSubagents: core.claude_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
+    codexAccountScope: core.codex_account_scope === true,
     antigravityNotifications: !remote && core.antigravity_notifications === true,
     dshNotifications: !remote && core.dsh_notifications === true,
     antigravitySessions: core.antigravity_sessions === true,

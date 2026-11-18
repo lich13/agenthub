@@ -722,6 +722,38 @@ fn entry_limit_evicts_least_recently_read_file() {
 }
 
 #[test]
+fn raised_entry_limit_reuses_more_sources_than_the_default() {
+    const SOURCES: usize = 100;
+    let fixture = Fixture::new();
+    let cache = JsonlCache::new(CACHE_BYTES).with_entry_limit(SOURCES);
+    let count = AtomicUsize::new(0);
+    let paths: Vec<_> = (0..SOURCES)
+        .map(|index| fixture.file(&format!("history-{index}.jsonl"), b"{\"id\":1}\n"))
+        .collect();
+    let views: Vec<_> = paths
+        .iter()
+        .map(|path| read(&cache, path, &count).unwrap())
+        .collect();
+    assert_eq!(count.load(Ordering::SeqCst), SOURCES);
+
+    for (path, view) in paths.iter().zip(&views) {
+        let warm = read(&cache, path, &count).unwrap();
+        assert!(!warm.changed);
+        assert_eq!(warm.epoch, view.epoch);
+    }
+    assert_eq!(count.load(Ordering::SeqCst), SOURCES);
+
+    // The raised value is still a limit: one more source evicts the oldest.
+    let newest = fixture.file("history-newest.jsonl", b"{\"id\":2}\n");
+    read(&cache, &newest, &count).unwrap();
+    assert_ne!(
+        read(&cache, &paths[0], &count).unwrap().epoch,
+        views[0].epoch
+    );
+    assert_eq!(count.load(Ordering::SeqCst), SOURCES + 2);
+}
+
+#[test]
 fn byte_budget_evicts_cached_state_before_entry_limit() {
     let fixture = Fixture::new();
     let first_path = fixture.file("first.jsonl", b"{\"id\":1}\n");

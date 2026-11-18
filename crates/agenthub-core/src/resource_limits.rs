@@ -7,6 +7,7 @@ const MIB: u64 = 1024 * 1024;
 pub(crate) const SOURCE_CACHE_ENTRIES: usize = 64;
 pub(crate) const CODEX_DETAIL_CACHE_BYTES: u64 = 128 * MIB;
 pub(crate) const CODEX_SCAN_CACHE_BYTES: u64 = 8 * MIB;
+pub(crate) const CODEX_SCAN_ENTRIES: usize = 2000;
 pub(crate) const CODEX_INDEX_CACHE_BYTES: u64 = 16 * MIB;
 pub(crate) const CODEX_QUESTION_CACHE_BYTES: u64 = 4 * MIB;
 pub(crate) const SUBAGENT_LIFECYCLE_CACHE_BYTES: u64 = 4 * MIB;

@@ -35,6 +35,43 @@ pub(crate) async fn subagent_detail(
     ok(result)
 }
 
+pub(crate) async fn account_scope_status(state: AppState) -> ApiResponse {
+    ok(agenthub_core::read_tasks::spawn_blocking(move || {
+        AgentHubUseCases::new(state.platform())
+            .threads()
+            .account_scope_status(&state.codex_paths())
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
+}
+
+pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
+    let auth = crate::audit::actor();
+    ok(
+        agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let result = AgentHubUseCases::new(state.platform())
+                .threads()
+                .account_scope_clear(&state.codex_paths())?;
+            state.db.record_audit(
+                Some(&auth.admin_id),
+                "codex_account_scope.clear",
+                Some("codex_account_scope"),
+                None,
+                None,
+                serde_json::json!({
+                    "cleared_threads": result.cleared_threads,
+                    "cleared_files": result.cleared_files,
+                    "remaining_files": result.remaining_files,
+                    "skipped_threads": result.items.len(),
+                }),
+            )?;
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
+}
+
 pub(crate) async fn list_threads(state: AppState, query: ThreadsQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         linux_adapter::list_threads_read_model(&state, query)

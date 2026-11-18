@@ -70,6 +70,10 @@ impl Stamp {
             self == other
         }
     }
+    /// An append keeps the file and never shrinks it.
+    fn grew_into(&self, next: &Self) -> bool {
+        self.same_file(next) && next.len >= self.len
+    }
 }
 
 // Reject links in every component below the configured root, including the leaf.
@@ -121,11 +125,14 @@ struct Source {
     owner: String,
 }
 impl Source {
+    /// Re-reads both stamps under the reuse rule of `can_reuse_size`: the same
+    /// directory and primary file, where the primary may only have grown.
     fn current(&self) -> bool {
         metadata(&self.root, &self.directory)
-            .is_some_and(|(_, meta)| Stamp::new(&meta) == self.directory_stamp)
+            .is_some_and(|(_, meta)| self.directory_stamp.same_file(&Stamp::new(&meta)))
             && self.primary.as_ref().is_none_or(|(path, stamp)| {
-                metadata(&self.root, path).is_some_and(|(_, meta)| Stamp::new(&meta) == *stamp)
+                metadata(&self.root, path)
+                    .is_some_and(|(_, meta)| stamp.grew_into(&Stamp::new(&meta)))
             })
     }
     fn same_slot(&self, other: &Self) -> bool {
@@ -137,7 +144,7 @@ impl Source {
             && match (&self.primary, &next.primary) {
                 (None, None) => true,
                 (Some((path, stamp)), Some((next_path, next_stamp))) => {
-                    path == next_path && stamp.same_file(next_stamp) && next_stamp.len >= stamp.len
+                    path == next_path && stamp.grew_into(next_stamp)
                 }
                 _ => false,
             }
@@ -349,7 +356,8 @@ fn scan(source: &Source) -> SessionStorageSize {
             partial = true;
         }
     }
-    // A replaced or changing source cannot publish a result under an old identity.
+    // A replaced or truncated source cannot publish a result under an old identity.
+    // An append during the scan keeps it, as the request side does until the TTL.
     if !source.current() {
         return SessionStorageSize::unavailable(StorageScope::Directory);
     }
@@ -361,5 +369,74 @@ fn scan(source: &Source) -> SessionStorageSize {
         } else {
             StorageStatus::Complete
         },
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // The stamps a request captures before its scan is queued.
+    fn requested(root: &Path, directory: &Path, primary: &Path) -> Source {
+        let (directory, directory_meta) = metadata(root, directory).unwrap();
+        let (primary, primary_meta) = metadata(root, primary).unwrap();
+        Source {
+            root: root.canonicalize().unwrap(),
+            directory,
+            directory_stamp: Stamp::new(&directory_meta),
+            primary: Some((primary, Stamp::new(&primary_meta))),
+            owner: "fixture-owner".into(),
+        }
+    }
+
+    #[test]
+    fn scan_keeps_a_completed_size_for_appends_and_rejects_changed_identities() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-storage-scan-{}", uuid::Uuid::new_v4()));
+        let directory = root.join("native-id");
+        let primary = root.join("native-id.jsonl");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(&primary, b"original-primary").unwrap();
+        fs::write(directory.join("state"), b"state").unwrap();
+        let unavailable = SessionStorageSize::unavailable(StorageScope::Directory);
+
+        let source = requested(&root, &directory, &primary);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&primary)
+            .unwrap()
+            .write_all(b"-appended")
+            .unwrap();
+        fs::write(directory.join("later"), b"later").unwrap();
+        assert_eq!(
+            scan(&source),
+            SessionStorageSize {
+                bytes: Some(16 + 9 + 5 + 5),
+                scope: StorageScope::Directory,
+                status: StorageStatus::Complete,
+            }
+        );
+
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&primary)
+            .unwrap()
+            .set_len(1)
+            .unwrap();
+        assert_eq!(scan(&source), unavailable);
+
+        // The replacement is larger, so only the changed identity rejects it.
+        let source = requested(&root, &directory, &primary);
+        let replacement = root.join("replacement.jsonl");
+        fs::write(&replacement, b"replacement-primary").unwrap();
+        fs::rename(&replacement, &primary).unwrap();
+        assert_eq!(scan(&source), unavailable);
+
+        let source = requested(&root, &directory, &primary);
+        fs::rename(&directory, root.join("original-directory")).unwrap();
+        fs::create_dir(&directory).unwrap();
+        assert_eq!(scan(&source), unavailable);
+        fs::remove_dir_all(root).unwrap();
     }
 }

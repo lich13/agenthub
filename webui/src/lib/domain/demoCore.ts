@@ -33,6 +33,7 @@ const capabilityFields = {
   grokbot_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_sessions: { "linux-api": true, "macos-tauri": true },
   hidden_cleanup_scan: { "linux-api": true, "macos-tauri": true },
+  codex_account_scope: { "linux-api": true, "macos-tauri": true },
   thread_archive_actions: { "linux-api": true, "macos-tauri": true },
 } satisfies Record<keyof SystemCapabilities, CapabilityFieldValues>;
 

@@ -117,6 +117,10 @@ export const contractDtoNames = [
   "ThreadsListResponse",
   "ThreadsRenameResponse",
   "ThreadsRestoreResponse",
+  "CodexAccountScopeStatus",
+  "CodexAccountScopeResult",
+  "CodexAccountScopeItem",
+  "CodexAccountScopeReason",
   "UpdatesCheckResponse",
   "UpdatesInstallResponse",
   "UpdatesStatusResponse"

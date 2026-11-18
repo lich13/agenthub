@@ -25,6 +25,7 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 
 export const OPS_PANEL_TITLES = {
   unifiedCleanup: "全平台线程清理",
+  codexAccountScope: "Codex 账号隔离",
   jobs: "Job History"
 } as const;
 

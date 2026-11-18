@@ -1,4 +1,6 @@
 import type {
+  CodexAccountScopeResult,
+  CodexAccountScopeStatus,
   CodexConfig,
   HiddenThreadDeletePlan,
   JobRecord,
@@ -354,6 +356,19 @@ export function demoHiddenThreadDeletePlan(request: import("../../types").Hidden
     },
     hidden_source_counts: { exec: 1, subagent: 3 },
     integrity: "ok"
+  };
+}
+
+export function demoCodexAccountScopeStatus(): CodexAccountScopeStatus {
+  return { scopedThreads: 3, scopedFiles: 4 };
+}
+
+export function demoCodexAccountScopeResult(): CodexAccountScopeResult {
+  return {
+    clearedThreads: 2,
+    clearedFiles: 3,
+    remainingFiles: 0,
+    items: [{ threadId: "019e-scoped-busy", reason: "busy" }]
   };
 }
 

@@ -178,9 +178,11 @@ describe("user-visible Markdown", () => {
     expect(first).toContain("：/fixture/one/guide.md");
     expect(warm).toContain("：/fixture/two/guide.md");
 
+    // Four fillers stay under the entry limit; each one's text weighs just over
+    // half of the byte budget, so only byte pressure can evict the fixture.
     const count = kind === "entries" ? cacheBudget.entries + 1 : 4;
     for (let index = 0; index < count; index += 1) {
-      const filler = `Eviction fixture ${kind} ${index}. ${kind === "bytes" ? "x".repeat(6000) : "Small body."}`;
+      const filler = `Eviction fixture ${kind} ${index}. ${kind === "bytes" ? "x".repeat(cacheBudget.markdownBytes / 4) : "Small body."}`;
       renderScoped(filler, "/fixture/one");
       renderScoped(filler, "/fixture/two");
       expect(parseCounts.get(filler)).toBe(1);

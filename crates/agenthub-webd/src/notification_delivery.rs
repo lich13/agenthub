@@ -240,18 +240,12 @@ pub async fn codex(
         .or_else(|| event.payload["notification_source_ms"].as_i64())
         .or(db.notification_first_seen_ms(&event.dedupe_key)?)
         .unwrap_or_else(|| Utc::now().timestamp_millis());
-    let proof_config = config.clone();
-    let proof_event = event.clone();
-    let fingerprint = agenthub_core::read_tasks::spawn_blocking(move || {
-        codex_fingerprint(&proof_config, &proof_event)
-    })
-    .await?;
-    let candidate = queued_candidate(
+    let mut candidate = queued_candidate(
         config,
         db,
         Source::Codex {
             event: Box::new(event.clone()),
-            fingerprint,
+            fingerprint: None,
             original_body: Some(event.bark_body.clone()),
         },
         super::notification_format::request(
@@ -264,6 +258,23 @@ pub async fn codex(
         ),
         origin_ms,
     )?;
+    if let Some(skipped) =
+        skipped_before_staging(config, NotificationChannel::Bark, &candidate, bark_allowed)
+    {
+        return Ok(skipped);
+    }
+    // Only a delivery that reaches staging needs the rollout proof, so the skips above
+    // never hash the file. Staging must still follow this step: a retry treats a
+    // candidate without proof as a changed source.
+    let proof_config = config.clone();
+    let proof_event = event.clone();
+    let proof = agenthub_core::read_tasks::spawn_blocking(move || {
+        codex_fingerprint(&proof_config, &proof_event)
+    })
+    .await?;
+    if let Source::Codex { fingerprint, .. } = &mut candidate.source {
+        *fingerprint = proof;
+    }
     let bark = deliver(
         load_config,
         config,
@@ -653,6 +664,30 @@ async fn process_claude_hook(
     Ok(())
 }
 
+/// Skips that follow from the configuration and the caller's dedupe claim alone,
+/// so they are known before any source proof or queue entry is needed.
+fn skipped_before_staging(
+    config: &Config,
+    channel: NotificationChannel,
+    candidate: &Candidate,
+    legacy_allowed: bool,
+) -> Option<ProbeBarkOutcome> {
+    let enabled = channel.enabled(config);
+    if !enabled || !event_enabled(config, candidate) {
+        return Some(ProbeBarkOutcome::skipped(
+            if enabled {
+                "event_switch_disabled"
+            } else {
+                "notifications_disabled"
+            },
+            enabled,
+            event_enabled(config, candidate),
+            false,
+        ));
+    }
+    (!legacy_allowed).then(|| ProbeBarkOutcome::skipped("dedupe", enabled, true, true))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn deliver(
     load_config: &ConfigLoader<'_>,
@@ -665,20 +700,8 @@ async fn deliver(
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
     let enabled = channel.enabled(config);
-    if !enabled || !event_enabled(config, candidate) {
-        return Ok(ProbeBarkOutcome::skipped(
-            if enabled {
-                "event_switch_disabled"
-            } else {
-                "notifications_disabled"
-            },
-            enabled,
-            event_enabled(config, candidate),
-            false,
-        ));
-    }
-    if !legacy_allowed {
-        return Ok(ProbeBarkOutcome::skipped("dedupe", enabled, true, true));
+    if let Some(skipped) = skipped_before_staging(config, channel, candidate, legacy_allowed) {
+        return Ok(skipped);
     }
     let aliases = claude_aliases(db, candidate)?;
     let staged = db.stage_notification_delivery_with_aliases(

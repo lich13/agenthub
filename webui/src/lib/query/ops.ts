@@ -1,16 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import {
+  clearCodexAccountScope,
   dryRunUnifiedCleanup,
   startUnifiedCleanup,
   dryRunHiddenThreadDelete,
+  getCodexAccountScopeStatus,
+  getProbeSettings,
+  getProbeStatus,
   getUpdateStatus,
   listJobs,
+  saveProbeSettings,
   updates,
   type RuntimeCapabilityMatrix,
   type UnifiedUpdateAction
 } from "../api";
 import type {
+  CodexAccountScopeResult,
   HiddenThreadDeletePlan,
   UnifiedCleanupPlan,
   UnifiedCleanupResult,
@@ -19,6 +25,7 @@ import type {
 import { backgroundJobKey } from "./jobs";
 import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
 import { HiddenScanRunner } from "./hiddenScan";
+import { probeQueryKeys } from "./probe";
 import { visiblePollInterval } from "./shared";
 
 export const opsQueryKeys = {
@@ -58,7 +65,7 @@ export function useOpsActions({ capabilities }: { capabilities: RuntimeCapabilit
       },
       onSuccess: (result) => {
         if (result.status) {
-          qc.setQueryData(opsQueryKeys.updateStatus, result.status);
+          qc.setQueryData([...opsQueryKeys.updateStatus, machineScope()], result.status);
         }
         invalidateJobs();
         qc.invalidateQueries({ queryKey: opsQueryKeys.updateStatus });
@@ -151,5 +158,42 @@ export function useUnifiedCleanupActions(input: {
         invalidateAllCleanedProviders();
       }
     })
+  };
+}
+
+/** The service time-boxes each call; continue while a call still clears files and leaves some. */
+export async function clearAllCodexAccountScope(): Promise<CodexAccountScopeResult> {
+  let clearedThreads = 0;
+  let clearedFiles = 0;
+  for (;;) {
+    const round = await clearCodexAccountScope();
+    clearedThreads += round.clearedThreads;
+    clearedFiles += round.clearedFiles;
+    // Every call retries what is still scoped, so the last one lists the current reasons.
+    if (round.remainingFiles === 0 || round.clearedFiles === 0) return { ...round, clearedThreads, clearedFiles };
+  }
+}
+
+export function useCodexAccountScope(enabled: boolean) {
+  const qc = useQueryClient();
+  const settings = useQuery({ queryKey: probeQueryKeys.settings, queryFn: getProbeSettings, enabled, staleTime: 15000 });
+  const probe = useQuery({ queryKey: probeQueryKeys.status, queryFn: () => getProbeStatus(), enabled, staleTime: 10000 });
+  const check = useMutation({ mutationFn: getCodexAccountScopeStatus });
+  const clear = useMutation({ mutationFn: clearAllCodexAccountScope, onSuccess: () => check.mutate() });
+  const save = useMutation({
+    mutationFn: (value: boolean) => saveProbeSettings({ probe: { hooks: { clear_account_scope: value } } }),
+    onSuccess: saved => qc.setQueryData(probeQueryKeys.settings, { available: true, data: saved })
+  });
+  return {
+    check,
+    clear,
+    auto: {
+      // The switch only takes effect inside the installed Codex Stop hook.
+      hookInstalled: probe.data?.data?.hook_status === "managed",
+      enabled: settings.data?.data?.probe.hooks?.clear_account_scope === true,
+      pending: save.isPending,
+      error: save.error,
+      set: (value: boolean) => save.mutate(value)
+    }
   };
 }

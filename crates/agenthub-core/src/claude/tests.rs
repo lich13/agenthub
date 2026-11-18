@@ -3407,3 +3407,36 @@ fn missing_cached_main_preserves_another_projects_shared_data_and_jobs() {
     assert!(other.exists());
     assert!(side.exists());
 }
+
+#[test]
+fn uncached_key_resolves_by_path_and_parses_only_the_located_transcript() {
+    let f = Fixture::new();
+    f.complete();
+    // Sorts before the target, so a lookup in path order visits it first.
+    fs::copy(&f.file, f.file.with_file_name("earlier.jsonl")).unwrap();
+    let root = f.paths.projects.canonicalize().unwrap();
+    let forget = |key: &str| {
+        LOCATED_SESSIONS
+            .lock()
+            .unwrap()
+            .remove(&(root.clone(), key.to_owned()));
+    };
+
+    let key = f.key();
+    forget(&key);
+    reader::BODY_RECORDS.with(|count| count.set(0));
+    let (path, parsed) = resolve(&f.paths, &key).unwrap();
+    assert_eq!(path, root.join("project/native-fixture.jsonl"));
+    assert_eq!(parsed.id, "native-fixture");
+    assert_eq!(parsed.message_count, 2);
+    assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 2);
+
+    let missing = key_for(&root, &root.join("project/absent.jsonl"), "");
+    forget(&missing);
+    reader::BODY_RECORDS.with(|count| count.set(0));
+    assert_eq!(
+        resolve(&f.paths, &missing).err().unwrap().to_string(),
+        "Claude 会话已变化或不存在，请刷新列表"
+    );
+    assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 0);
+}

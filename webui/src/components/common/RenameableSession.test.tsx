@@ -324,4 +324,76 @@ describe("RenameableSession event boundaries", () => {
     view.render();
     expect(view.find(element => element.type === "input")).toBeUndefined();
   });
+
+  const alert = (view: ReturnType<typeof mount>) => view.find(element => element.props.role === "alert")?.props.children;
+  const failRename = async (view: ReturnType<typeof mount>) => {
+    view.row().props.onKeyDown(key("F2"));
+    view.render();
+    view.input().props.onChange({ target: { value: "Changed fixture" } });
+    view.render();
+    view.input().props.onBlur();
+    await Promise.resolve();
+    view.render();
+    vi.runAllTimers();
+  };
+
+  test.each(["Changed fixture", "  Changed fixture "])("blur after a failed rename abandons the draft %j without resending it", async draft => {
+    const onRename = vi.fn(async () => { throw new Error("Fixture rename failed"); });
+    const view = mount({ onRename });
+    await failRename(view);
+    expect(onRename).toHaveBeenCalledExactlyOnceWith("Changed fixture");
+    expect(alert(view)).toBe("Fixture rename failed");
+    expect(view.input().props.value).toBe("Changed fixture");
+    expect(view.host(view.input()).focus).toHaveBeenCalledTimes(2);
+
+    view.input().props.onChange({ target: { value: draft } });
+    view.render();
+    view.input().props.onBlur();
+    await Promise.resolve();
+    view.render();
+    expect(onRename).toHaveBeenCalledOnce();
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+    expect(alert(view)).toBeUndefined();
+    expect(view.row().props.title).toBe("Fixture session");
+  });
+
+  test("Enter retries a failed rename", async () => {
+    const onRename = vi.fn<(title: string) => Promise<void>>().mockRejectedValueOnce(new Error("Fixture rename failed")).mockResolvedValue(undefined);
+    const view = mount({ onRename });
+    await failRename(view);
+    view.input().props.onKeyDown(key("Enter"));
+    await Promise.resolve();
+    view.render();
+    expect(onRename).toHaveBeenCalledTimes(2);
+    expect(onRename).toHaveBeenLastCalledWith("Changed fixture");
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+  });
+
+  test("a draft changed after a failed rename saves on blur", async () => {
+    const onRename = vi.fn<(title: string) => Promise<void>>().mockRejectedValueOnce(new Error("Fixture rename failed")).mockResolvedValue(undefined);
+    const view = mount({ onRename });
+    await failRename(view);
+    view.input().props.onChange({ target: { value: "Another fixture" } });
+    view.render();
+    view.input().props.onBlur();
+    await Promise.resolve();
+    view.render();
+    expect(onRename).toHaveBeenCalledTimes(2);
+    expect(onRename).toHaveBeenLastCalledWith("Another fixture");
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+  });
+
+  test("reopening the editor after an abandoned failure saves the same name on blur", async () => {
+    const onRename = vi.fn<(title: string) => Promise<void>>().mockRejectedValueOnce(new Error("Fixture rename failed")).mockResolvedValue(undefined);
+    const view = mount({ onRename });
+    await failRename(view);
+    view.input().props.onBlur();
+    view.render();
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+
+    await failRename(view);
+    expect(onRename).toHaveBeenCalledTimes(2);
+    expect(onRename).toHaveBeenLastCalledWith("Changed fixture");
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+  });
 });

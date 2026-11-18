@@ -12,6 +12,7 @@ recent_limit = 50
 
 [probe.hooks]
 manage_stop_hook = true
+clear_account_scope = false
 
 [probe.notifications]
 enabled = false

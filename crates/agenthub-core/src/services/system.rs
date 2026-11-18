@@ -163,6 +163,8 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub hidden_cleanup_scan: bool,
     #[serde(default)]
+    pub codex_account_scope: bool,
+    #[serde(default)]
     pub antigravity_notifications: bool,
     #[serde(default)]
     pub dsh_notifications: bool,
@@ -227,6 +229,7 @@ pub fn system_capabilities_for_surface(
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),
         thread_cleanup,
         hidden_cleanup_scan: thread_cleanup,
+        codex_account_scope: thread_cleanup,
         antigravity_notifications: platform.kind == PlatformKind::Macos
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         dsh_notifications: platform.kind == PlatformKind::Macos

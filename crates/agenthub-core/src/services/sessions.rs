@@ -480,6 +480,22 @@ impl SessionUseCases {
         {
             return Ok(self.bulk_delete_native(&request));
         }
+        // Codex archive/restore verifies its whole batch against one inventory.
+        let mut archives = if request.provider == SessionProvider::Codex {
+            let targets: Vec<_> = request
+                .items
+                .iter()
+                .map(|item| (item.session_key.as_str(), item.fingerprint.as_str()))
+                .collect();
+            selected_codex::execute_archives(
+                &self.codex,
+                &targets,
+                request.operation == SessionOperation::Archive,
+            )
+        } else {
+            Vec::new()
+        }
+        .into_iter();
         let mut results = Vec::new();
         for item in &request.items {
             let mut result = SessionBatchItemResult {
@@ -520,12 +536,7 @@ impl SessionUseCases {
                     return Ok(());
                 }
                 if request.operation != SessionOperation::Delete {
-                    return selected_codex::execute_archive(
-                        &self.codex,
-                        &item.session_key,
-                        request.operation == SessionOperation::Archive,
-                        &item.fingerprint,
-                    );
+                    return archives.next().expect("one archive result per item");
                 }
                 unreachable!("native deletion was handled as a batch")
             })();
@@ -826,6 +837,104 @@ mod tests {
         assert!(service.antigravity.brain_dir().join(&ag_a).exists());
         assert!(service.antigravity.brain_dir().join(&ag_b).exists());
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_archive_batch_blocks_only_the_target_changed_after_preview() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-archive-execute-{}", uuid::Uuid::new_v4()));
+        let service = SessionUseCases {
+            platform: crate::platform::PlatformPaths::desktop_current(),
+            codex: CodexPaths::new(root.join("codex")),
+            grok: GrokPaths {
+                home: root.join("grok"),
+            },
+            claude: crate::claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+                root.join("antigravity"),
+            ),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
+            },
+        };
+        std::fs::create_dir_all(service.codex.sessions_dir()).unwrap();
+        let conn = rusqlite::Connection::open(service.codex.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,source TEXT,status TEXT,archived INTEGER,archived_at INTEGER);").unwrap();
+        let ids: Vec<_> = (0..3).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let mut files = Vec::new();
+        for id in &ids {
+            let path = service
+                .codex
+                .sessions_dir()
+                .join(format!("rollout-fixture-{id}.jsonl"));
+            std::fs::write(
+                &path,
+                format!(
+                    "{}\n{}\n",
+                    serde_json::json!({"type":"session_meta","payload":{"id":id}}),
+                    serde_json::json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}})
+                ),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO threads VALUES(?1,'Fixture',?2,'cli','completed',0,NULL)",
+                rusqlite::params![id, path.to_str().unwrap()],
+            )
+            .unwrap();
+            files.push(path);
+        }
+        let preview = service
+            .bulk_preview(SessionBatchRequest {
+                provider: SessionProvider::Codex,
+                operation: SessionOperation::Archive,
+                session_keys: ids.clone(),
+                include_descendants: false,
+            })
+            .unwrap();
+        assert!(preview.items.iter().all(|item| item.allowed));
+
+        let mut text = std::fs::read_to_string(&files[1]).unwrap();
+        text.push_str("{}\n");
+        std::fs::write(&files[1], text).unwrap();
+        let result = service
+            .bulk_execute(SessionBatchExecuteRequest {
+                provider: SessionProvider::Codex,
+                operation: SessionOperation::Archive,
+                items: preview
+                    .items
+                    .into_iter()
+                    .map(|item| SessionBatchSelection {
+                        session_key: item.session_key,
+                        fingerprint: item.fingerprint.unwrap(),
+                        descendants: Vec::new(),
+                    })
+                    .collect(),
+                confirmed: false,
+                include_descendants: false,
+            })
+            .unwrap();
+
+        for (index, (id, item)) in ids.iter().zip(&result.items).enumerate() {
+            let changed = index == 1;
+            assert_eq!(&item.session_key, id);
+            assert_eq!(item.status, if changed { "blocked" } else { "succeeded" });
+            assert_eq!(
+                item.message.as_deref(),
+                changed.then_some("线程或文件已变化，请重新预览")
+            );
+            let archived: bool = conn
+                .query_row("SELECT archived FROM threads WHERE id=?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(archived, !changed);
+        }
+        assert_eq!(result.items.len(), ids.len());
+        drop(conn);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

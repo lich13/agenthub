@@ -495,8 +495,7 @@ fn probe_codex_buckets_with_paths(
     limit: usize,
 ) -> Result<(Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>)> {
     let limit = limit.clamp(1, 200);
-    let mut threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
-    ThreadSummary::sort_by_message_time(&mut threads);
+    let threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
     let mut running = Vec::new();
     let mut reply_needed = Vec::new();
     let mut recoverable = Vec::new();
@@ -563,7 +562,6 @@ pub fn probe_threads_for_status_with_paths(
                 | ("recent", ThreadStatus::Recent)
         )
     });
-    ThreadSummary::sort_by_message_time(&mut threads);
     threads.truncate(limit);
     Ok(threads)
 }

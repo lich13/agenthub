@@ -321,9 +321,14 @@ pub async fn remoteGet(
 ) -> Result<RemoteConnectionView, String> {
     let view = state.view();
     if view.target == MachineTarget::Remote {
-        let _ = state.ensure_client(view.revision).await;
+        // The window renders at once; the first remote request joins this handshake.
+        let state = state.inner().clone();
+        let revision = view.revision;
+        tauri::async_runtime::spawn(async move {
+            let _ = state.ensure_client(revision).await;
+        });
     }
-    Ok(state.view())
+    Ok(view)
 }
 #[tauri::command(rename = "remote.sshHosts")]
 pub async fn remoteSshHosts() -> Result<SshHostList, String> {

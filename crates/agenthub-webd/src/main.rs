@@ -66,7 +66,7 @@ const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
 const ANTIGRAVITY_DETACHED_SETTLE_DELAY_MS: u64 = 120;
 const PROBE_ERROR_MONITOR_CURSOR_SETTING: &str = "probe_error_monitor_cursor";
 const PROBE_ERROR_MONITOR_STATUS_SETTING: &str = "probe_error_monitor_status";
-const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 100;
+const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 1_000;
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_ERROR_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -427,6 +427,7 @@ async fn install_probe_hooks(
                     probe: Some(agenthub_core::config::ProbeSettingsPatch {
                         hooks: Some(agenthub_core::config::ProbeHooksConfigPatch {
                             manage_stop_hook: Some(true),
+                            ..Default::default()
                         }),
                         ..Default::default()
                     }),
@@ -462,6 +463,8 @@ async fn remove_probe_hooks(
     let backup_path = hooks_path.with_extension(format!("json.agenthub-probe-bak-{stamp}"));
     let codex_config_backup_path =
         codex_config_path.with_extension(format!("toml.agenthub-probe-bak-{stamp}"));
+    let mut hooks_backed_up = false;
+    let mut codex_config_backed_up = false;
     if hooks_json_changed && !dry_run {
         fs::copy(&hooks_path, &backup_path).with_context(|| {
             format!(
@@ -470,6 +473,7 @@ async fn remove_probe_hooks(
                 backup_path.display()
             )
         })?;
+        hooks_backed_up = true;
         fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
             .with_context(|| format!("write hooks {}", hooks_path.display()))?;
     }
@@ -482,6 +486,7 @@ async fn remove_probe_hooks(
                     codex_config_backup_path.display()
                 )
             })?;
+            codex_config_backed_up = true;
         }
         fs::write(&codex_config_path, codex_config_after)
             .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
@@ -497,6 +502,7 @@ async fn remove_probe_hooks(
                     probe: Some(agenthub_core::config::ProbeSettingsPatch {
                         hooks: Some(agenthub_core::config::ProbeHooksConfigPatch {
                             manage_stop_hook: Some(false),
+                            ..Default::default()
                         }),
                         ..Default::default()
                     }),
@@ -520,8 +526,8 @@ async fn remove_probe_hooks(
         "hooks_json": hooks_path,
         "codex_config": codex_config_path,
         "resolved_codex_home": resolved.home,
-        "backup_path": if hooks_json_changed && had_hooks_file { Some(backup_path) } else { None },
-        "codex_config_backup_path": if codex_config_changed && codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
+        "backup_path": hooks_backed_up.then_some(backup_path),
+        "codex_config_backup_path": codex_config_backed_up.then_some(codex_config_backup_path),
     }))
 }
 
@@ -529,14 +535,11 @@ fn prune_codex_hook_state_toml(text: &str) -> Result<String> {
     if text.trim().is_empty() {
         return Ok(String::new());
     }
-    let mut value: toml::Value = toml::from_str(text).context("parse Codex config.toml")?;
-    let Some(root) = value.as_table_mut() else {
-        return Ok(text.to_string());
-    };
-    if !prune_codex_hook_state(root) {
+    let mut document: toml_edit::DocumentMut = text.parse().context("parse Codex config.toml")?;
+    if !prune_codex_hook_state(document.as_table_mut()) {
         return Ok(text.to_string());
     }
-    toml::to_string_pretty(&value).context("serialize Codex config.toml")
+    Ok(document.to_string())
 }
 
 async fn install_probe_hooks_with_repair(
@@ -594,6 +597,8 @@ async fn install_probe_hooks_with_repair(
         "toml.agenthub-probe-bak-{}",
         chrono::Utc::now().format("%Y%m%d%H%M%S")
     ));
+    let mut hooks_backed_up = false;
+    let mut codex_config_backed_up = false;
     if hooks_json_changed && !dry_run {
         if let Some(parent) = hooks_path.parent() {
             fs::create_dir_all(parent)
@@ -607,6 +612,7 @@ async fn install_probe_hooks_with_repair(
                     backup_path.display()
                 )
             })?;
+            hooks_backed_up = true;
         }
         fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
             .with_context(|| format!("write hooks {}", hooks_path.display()))?;
@@ -624,6 +630,7 @@ async fn install_probe_hooks_with_repair(
                     codex_config_backup_path.display()
                 )
             })?;
+            codex_config_backed_up = true;
         }
         fs::write(&codex_config_path, codex_config_after)
             .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
@@ -650,8 +657,8 @@ async fn install_probe_hooks_with_repair(
         "resolved_codex_home": resolved.home,
         "codex_home_source": resolved.codex_home_source,
         "discovery_warnings": resolved.discovery_warnings,
-        "backup_path": if hooks_path.exists() { Some(backup_path) } else { None },
-        "codex_config_backup_path": if codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
+        "backup_path": hooks_backed_up.then_some(backup_path),
+        "codex_config_backup_path": codex_config_backed_up.then_some(codex_config_backup_path),
         "hook_command": hook_command,
         "request_user_input_hook_command": request_user_input_hook_command,
         "reload_result": Value::Null,
@@ -667,47 +674,70 @@ fn read_optional_text(path: &Path) -> Result<String> {
     }
 }
 
+/// Edits the user's Codex configuration in place: everything outside
+/// `features.hooks` and the stale hook state keeps its bytes.
 fn ensure_codex_hooks_feature(text: &str) -> Result<String> {
-    let mut value: toml::Value = if text.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
+    let mut document = if text.trim().is_empty() {
+        toml_edit::DocumentMut::new()
     } else {
-        toml::from_str(text).context("parse Codex config.toml")?
+        text.parse::<toml_edit::DocumentMut>()
+            .context("parse Codex config.toml")?
     };
-    let root = value
-        .as_table_mut()
-        .context("Codex config.toml root must be a table")?;
-    let features = root
-        .entry("features")
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-    if !features.is_table() {
-        *features = toml::Value::Table(toml::map::Map::new());
+    let root = document.as_table_mut();
+    if !root
+        .get("features")
+        .is_some_and(toml_edit::Item::is_table_like)
+    {
+        let mut features = toml_edit::Table::new();
+        // A table without a position is printed next to the table visited before it,
+        // which can be the middle of the file. Append it instead.
+        features.set_position(usize::MAX);
+        root.insert("features", toml_edit::Item::Table(features));
     }
-    let features = features
-        .as_table_mut()
+    let features = root
+        .get_mut("features")
+        .and_then(toml_edit::Item::as_table_like_mut)
         .context("Codex config features must be a table")?;
     let mut changed = false;
-    if !matches!(features.get("hooks"), Some(toml::Value::Boolean(true))) {
-        features.insert("hooks".to_string(), toml::Value::Boolean(true));
+    if features.get("hooks").and_then(toml_edit::Item::as_bool) != Some(true) {
+        let mut enabled = toml_edit::Value::from(true);
+        match features.get_mut("hooks") {
+            // Replacing only the value keeps the key spelling and its trailing comment.
+            Some(toml_edit::Item::Value(previous)) => {
+                *enabled.decor_mut() = previous.decor().clone();
+                *previous = enabled;
+            }
+            _ => {
+                features.insert("hooks", toml_edit::Item::Value(enabled));
+            }
+        }
         changed = true;
     }
     changed |= prune_codex_hook_state(root);
     if !changed {
         return Ok(text.to_string());
     }
-    toml::to_string_pretty(&value).context("serialize Codex config.toml")
+    Ok(document.to_string())
 }
 
-fn prune_codex_hook_state(root: &mut toml::map::Map<String, toml::Value>) -> bool {
-    let Some(hooks) = root.get_mut("hooks").and_then(toml::Value::as_table_mut) else {
+fn prune_codex_hook_state(root: &mut toml_edit::Table) -> bool {
+    let Some(hooks) = root
+        .get_mut("hooks")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
         return false;
     };
-    let Some(state) = hooks.get_mut("state").and_then(toml::Value::as_table_mut) else {
+    let Some(state) = hooks
+        .get_mut("state")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
         return false;
     };
     let stale_keys = state
-        .keys()
+        .iter()
+        .map(|(key, _)| key)
         .filter(|key| is_codex_hook_state_key(key))
-        .cloned()
+        .map(str::to_string)
         .collect::<Vec<_>>();
     if stale_keys.is_empty() {
         return false;
@@ -1784,6 +1814,91 @@ hooks = false
         assert!(updated.contains("hooks = true"));
     }
 
+    const COMMENTED_CODEX_CONFIG: &str = r#"# 個人 Codex 設定
+model = "gpt-5" # inline note
+approval_policy = "on-request"
+
+[features]
+# keep this line
+zeta = true
+hooks = false # was off
+alpha = true
+
+[projects."/workspace/fixture"]
+trust_level = "trusted"
+"#;
+
+    #[test]
+    fn codex_config_patch_keeps_comments_key_order_and_untouched_bytes() {
+        assert_eq!(
+            ensure_codex_hooks_feature(COMMENTED_CODEX_CONFIG).unwrap(),
+            COMMENTED_CODEX_CONFIG.replace("hooks = false # was off", "hooks = true # was off")
+        );
+
+        // A missing table is appended, also when existing tables are interleaved.
+        let without_features = r#"# header
+model = "gpt-5"   # spaced
+
+[projects."/workspace/first"]
+trust_level = "trusted"
+
+[notice]
+hide = true
+
+[projects."/workspace/second"]
+trust_level = "trusted"
+"#;
+        assert_eq!(
+            ensure_codex_hooks_feature(without_features).unwrap(),
+            format!("{without_features}\n[features]\nhooks = true\n")
+        );
+    }
+
+    #[test]
+    fn codex_hook_state_prune_removes_only_stale_entries() {
+        let original = r#"# header
+model = "gpt-5"
+
+[features]
+hooks = true # managed
+
+[hooks.state."/tmp/.codex/hooks.json:stop:0:0"]
+last_error = "old agenthub hook"
+
+# third-party state stays
+[hooks.state."/tmp/.codex/custom.json:session_start:0:0"]
+last_error = "kept"
+
+[hooks.state."/tmp/.codex/hooks.json:pre_tool_use:0:0"]
+last_error = "old agenthub request hook"
+
+[profiles.fixture] # trailing table
+model = "gpt-5"
+"#;
+        let expected = r#"# header
+model = "gpt-5"
+
+[features]
+hooks = true # managed
+
+# third-party state stays
+[hooks.state."/tmp/.codex/custom.json:session_start:0:0"]
+last_error = "kept"
+
+[profiles.fixture] # trailing table
+model = "gpt-5"
+"#;
+        assert_eq!(prune_codex_hook_state_toml(original).unwrap(), expected);
+        assert_eq!(ensure_codex_hooks_feature(original).unwrap(), expected);
+    }
+
+    #[test]
+    fn codex_config_without_changes_is_returned_byte_for_byte() {
+        let original = "# header\r\n[features]\nhooks=true   # already on\n\tzeta = 1\n\n[hooks.state.\"/tmp/.codex/custom.json:stop:0:0\"]\nlast_error = 'kept'\n# trailing\n";
+        assert_eq!(ensure_codex_hooks_feature(original).unwrap(), original);
+        assert_eq!(prune_codex_hook_state_toml(original).unwrap(), original);
+    }
+
     async fn install_probe_hooks_for_test(config: &Config, dry_run: bool) -> Result<Value> {
         install_probe_hooks_with_repair(config, None, dry_run, |platform, enabled| {
             Ok(json!({
@@ -2030,6 +2145,141 @@ last_error = "old agenthub request hook"
         assert!(!codex_config.contains("[hooks.state."));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const STALE_CODEX_HOOK_STATE: &str =
+        "\n[hooks.state.\"/tmp/.codex/hooks.json:stop:0:0\"]\nlast_error = \"old agenthub hook\"\n";
+
+    /// Both files exist and both installing and removing the hooks would rewrite them.
+    fn seed_stale_probe_hook_files(codex_home: &Path) -> (Vec<u8>, String) {
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let hooks = serde_json::to_vec_pretty(&json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "*",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/opt/agenthub/bin/agenthubd --config /opt/agenthub/config.toml probe hook-stop"
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+        let codex_config = format!("{COMMENTED_CODEX_CONFIG}{STALE_CODEX_HOOK_STATE}");
+        fs::write(codex_home.join("hooks.json"), &hooks).unwrap();
+        fs::write(codex_home.join("config.toml"), &codex_config).unwrap();
+        (hooks, codex_config)
+    }
+
+    fn probe_backup_files(codex_home: &Path) -> Vec<String> {
+        fs::read_dir(codex_home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("agenthub-probe-bak"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn probe_hook_runs_that_copy_nothing_report_no_backup_paths() {
+        let dir = temp_test_dir("agenthub-hooks-no-backup");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let config = test_config(codex_home.clone());
+        let assert_no_backup = |result: &Value, case: &str| {
+            assert!(result["backup_path"].is_null(), "{case}");
+            assert!(result["codex_config_backup_path"].is_null(), "{case}");
+            assert!(probe_backup_files(&codex_home).is_empty(), "{case}");
+        };
+
+        let preview = install_probe_hooks_for_test(&config, true).await.unwrap();
+        assert_eq!(preview["changed"], true);
+        assert_no_backup(&preview, "dry run without files");
+        assert!(!codex_home.join("hooks.json").exists());
+        assert!(!codex_home.join("config.toml").exists());
+
+        let created = install_probe_hooks_for_test(&config, false).await.unwrap();
+        assert_eq!(created["hooks_json_changed"], true);
+        assert_eq!(created["codex_config_changed"], true);
+        assert_no_backup(&created, "newly created files");
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            "[features]\nhooks = true\n"
+        );
+
+        let unchanged = install_probe_hooks_for_test(&config, false).await.unwrap();
+        assert_eq!(unchanged["changed"], false);
+        assert_no_backup(&unchanged, "unchanged install");
+
+        let (hooks, codex_config) = seed_stale_probe_hook_files(&codex_home);
+        for (case, result) in [
+            (
+                "install dry run",
+                install_probe_hooks_for_test(&config, true).await.unwrap(),
+            ),
+            (
+                "remove dry run",
+                remove_probe_hooks(&config, None, true).await.unwrap(),
+            ),
+        ] {
+            assert_eq!(result["hooks_json_changed"], true, "{case}");
+            assert_eq!(result["codex_config_changed"], true, "{case}");
+            assert_no_backup(&result, case);
+        }
+        assert_eq!(fs::read(codex_home.join("hooks.json")).unwrap(), hooks);
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            codex_config
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_hook_changes_back_up_the_previous_files_and_keep_unrelated_config_text() {
+        let dir = temp_test_dir("agenthub-hooks-backup-copy");
+        let codex_home = dir.join(".codex");
+        let (hooks, codex_config) = seed_stale_probe_hook_files(&codex_home);
+        let config = test_config(codex_home.clone());
+        let enabled_config =
+            COMMENTED_CODEX_CONFIG.replace("hooks = false # was off", "hooks = true # was off");
+
+        let installed = install_probe_hooks_for_test(&config, false).await.unwrap();
+        assert_eq!(
+            fs::read(installed["backup_path"].as_str().unwrap()).unwrap(),
+            hooks
+        );
+        assert_eq!(
+            fs::read_to_string(installed["codex_config_backup_path"].as_str().unwrap()).unwrap(),
+            codex_config
+        );
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            enabled_config
+        );
+
+        let hooks = fs::read(codex_home.join("hooks.json")).unwrap();
+        let codex_config = format!("{enabled_config}{STALE_CODEX_HOOK_STATE}");
+        fs::write(codex_home.join("config.toml"), &codex_config).unwrap();
+        let removed = remove_probe_hooks(&config, None, false).await.unwrap();
+        assert_eq!(
+            fs::read(removed["backup_path"].as_str().unwrap()).unwrap(),
+            hooks
+        );
+        assert_eq!(
+            fs::read_to_string(removed["codex_config_backup_path"].as_str().unwrap()).unwrap(),
+            codex_config
+        );
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            enabled_config
+        );
+
+        let unchanged = remove_probe_hooks(&config, None, false).await.unwrap();
+        assert_eq!(unchanged["changed"], false);
+        assert!(unchanged["backup_path"].is_null());
+        assert!(unchanged["codex_config_backup_path"].is_null());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

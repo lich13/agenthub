@@ -69,22 +69,32 @@ export function SearchPanel() {
   const connection = useConnection();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [scope, setScope] = useState<SearchScope>("thread");
   const [cursor, setCursor] = useState<string | null>(null);
   const [results, setResults] = useState<SessionSearchResult[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [feedback, setFeedback] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const request = useMemo<SessionSearchRequest | null>(() => workspace && query.trim() ? {
+  const trimmedQuery = query.trim();
+  // Search only once the trimmed input has been stable for 200 ms. Until then
+  // there is no request, so typing neither queries intermediate strings nor
+  // keeps showing results for an older one.
+  const searchQuery = debouncedQuery === trimmedQuery ? trimmedQuery : "";
+  const request = useMemo<SessionSearchRequest | null>(() => workspace && searchQuery ? {
     provider: workspace.provider,
     scope: scope === "thread" && workspace.sessionKey ? "thread" : "provider",
     sessionKey: scope === "thread" ? workspace.sessionKey : null,
-    query,
+    query: searchQuery,
     cursor,
     limit: 50
-  } : null, [workspace, scope, query, cursor]);
+  } : null, [workspace, scope, searchQuery, cursor]);
   const search = useSessionSearch(request);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(trimmedQuery), 200);
+    return () => window.clearTimeout(timer);
+  }, [trimmedQuery]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -106,17 +116,16 @@ export function SearchPanel() {
     setResults([]);
     setNextCursor(null);
     setActiveIndex(0);
-    setFeedback("");
-  }, [connection.revision, connection.target, connection.sshHost, workspace?.provider, workspace?.sessionKey, scope, query]);
+  }, [connection.revision, connection.target, connection.sshHost, workspace?.provider, workspace?.sessionKey, scope, searchQuery]);
 
   useEffect(() => {
     if (!search.data) return;
-    if (search.data.query !== query.trim() || search.data.provider !== workspace?.provider || search.data.scope !== request?.scope) return;
+    if (search.data.query !== searchQuery || search.data.provider !== workspace?.provider || search.data.scope !== request?.scope) return;
     setResults(current => cursor ? [...current, ...search.data!.results.filter(item => !current.some(existing => existing.resultId === item.resultId))] : search.data!.results);
     setNextCursor(search.data.nextCursor ?? null);
-  }, [search.data, cursor, query, workspace?.provider, request?.scope]);
+  }, [search.data, cursor, searchQuery, workspace?.provider, request?.scope]);
 
-  const close = () => { setOpen(false); setFeedback(""); };
+  const close = () => setOpen(false);
   const select = (result: SessionSearchResult) => {
     if (!workspace) return;
     workspace.selectResult(result);
@@ -147,7 +156,7 @@ export function SearchPanel() {
         {search.isFetching && <div className="muted-row">正在搜索...</div>}
         {search.error && <div role="alert" className="form-error">{search.error.message}</div>}
         {search.data?.warnings?.map(warning => <div key={warning} role="status" className="task-feedback">{warning}</div>)}
-        {!search.isFetching && !search.error && query.trim() && !results.length && <div className="muted-row">没有匹配内容</div>}
+        {!search.isFetching && !search.error && searchQuery && !results.length && <div className="muted-row">没有匹配内容</div>}
         <div className="session-search-results" role="listbox" aria-label="搜索结果">
           {results.map((result, index) => <button key={result.resultId} type="button" role="option" aria-selected={index === activeIndex} className={`session-search-result ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(result)}>
             <span className="search-result-heading"><strong>{result.title}</strong><small>{labelForKind(result.matchKind)}</small></span>
@@ -156,7 +165,7 @@ export function SearchPanel() {
           </button>)}
         </div>
         {nextCursor && <button type="button" className="secondary-button search-load-more" disabled={search.isFetching} onClick={() => setCursor(nextCursor)}>加载更多</button>}
-        {currentTarget && <div className="session-search-footer"><button className="icon-button" type="button" title="上一个结果" onClick={() => move(-1)}><ArrowUp size={15} /></button><button className="icon-button" type="button" title="下一个结果" onClick={() => move(1)}><ArrowDown size={15} /></button>{feedback && <span role="status">{feedback}</span>}</div>}
+        {currentTarget && <div className="session-search-footer"><button className="icon-button" type="button" title="上一个结果" onClick={() => move(-1)}><ArrowUp size={15} /></button><button className="icon-button" type="button" title="下一个结果" onClick={() => move(1)}><ArrowDown size={15} /></button></div>}
       </section>
     </div>}
   </>;

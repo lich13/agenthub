@@ -10,6 +10,7 @@ pub(super) async fn handle_hook_stop_command(
 ) -> Result<HookStopResult> {
     let config = &load_config()?;
     let stdin_payload = read_optional_stdin_json()?;
+    clear_account_scope(config, stdin_payload.as_ref(), thread_id.as_deref());
     let event_input = hook_stop_event_input(
         config,
         stdin_payload.as_ref(),
@@ -19,6 +20,24 @@ pub(super) async fn handle_hook_stop_command(
     )?;
     let event = probe_runtime(config).build_event(event_input);
     handle_built_probe_event(load_config, db, event).await
+}
+
+/// Runs before the event is built so this turn's delivery proof covers the rewritten header.
+fn clear_account_scope(config: &Config, payload: Option<&Value>, cli_thread_id: Option<&str>) {
+    if !config.probe.hooks.clear_account_scope {
+        return;
+    }
+    let Some(thread_id) = cli_thread_id.map(str::to_string).or_else(|| {
+        payload.and_then(|value| {
+            read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
+        })
+    }) else {
+        return;
+    };
+    let paths = resolve_codex_paths(&config.codex.home).codex_paths();
+    if let Err(error) = agenthub_core::codex::account_scope::clear_thread_tree(&paths, &thread_id) {
+        tracing::debug!("probe hook-stop account scope diagnostic: {error:#}");
+    }
 }
 
 pub(super) async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {

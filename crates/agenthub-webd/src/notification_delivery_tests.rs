@@ -388,6 +388,163 @@ async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
     }
 }
 
+fn assert_same_outcome(actual: &ProbeBarkOutcome, expected: &ProbeBarkOutcome, case: &str) {
+    // Debug output also covers the fields that are never serialized.
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{case}");
+}
+
+fn queued_deliveries(fixture: &Fixture) -> i64 {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM probe_notification_deliveries",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn codex_skips_known_before_staging_keep_their_outcomes_and_queue_nothing() {
+    let event_switch = || ProbeBarkOutcome::skipped("event_switch_disabled", true, false, false);
+    for (case, expected) in [
+        (
+            "channel",
+            ProbeBarkOutcome::skipped("notifications_disabled", false, true, false),
+        ),
+        (
+            "channel-and-event",
+            ProbeBarkOutcome::skipped("notifications_disabled", false, false, false),
+        ),
+        ("probe", event_switch()),
+        ("provider", event_switch()),
+        ("event", event_switch()),
+        ("error-monitor", event_switch()),
+        (
+            "legacy-dedupe",
+            ProbeBarkOutcome::skipped("dedupe", true, true, true),
+        ),
+    ] {
+        let mut fixture = Fixture::new().await;
+        let mut event = fixture.event();
+        let probe = &mut fixture.config.probe;
+        match case {
+            "channel" => probe.notifications.enabled = false,
+            "channel-and-event" => {
+                probe.notifications.enabled = false;
+                probe.notifications.notify_completion = false;
+            }
+            "probe" => probe.enabled = false,
+            "provider" => probe.notifications.notify_codex = false,
+            "event" => probe.notifications.notify_completion = false,
+            "error-monitor" => {
+                probe.error_monitor.enabled = false;
+                event.payload["scan_source"] = json!("logs_2-turn-error");
+            }
+            "legacy-dedupe" => {}
+            _ => unreachable!(),
+        }
+        let outcome = codex(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &event,
+            case != "legacy-dedupe",
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_same_outcome(&outcome, &expected, case);
+        assert_eq!(queued_deliveries(&fixture), 0, "{case}");
+        assert_eq!(fixture.bark.count(), 0, "{case}");
+    }
+}
+
+#[tokio::test]
+async fn codex_skips_decided_while_staging_keep_the_dedupe_outcome() {
+    let dedupe = ProbeBarkOutcome::skipped("dedupe", true, true, true);
+
+    let fixture = Fixture::new().await;
+    let event = fixture.event();
+    let load_config = || Ok(fixture.config.clone());
+    let first = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert!(first.sent);
+    let repeated = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert_same_outcome(&repeated, &dedupe, "existing delivery");
+    assert_eq!(queued_deliveries(&fixture), 1);
+    assert_eq!(fixture.bark.count(), 1);
+
+    let mut fixture = Fixture::new().await;
+    for enabled in [false, true] {
+        fixture.config.probe.notifications.enabled = enabled;
+        fixture
+            .db
+            .sync_notification_channels(&fixture.config)
+            .unwrap();
+    }
+    let mut event = fixture.event();
+    event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);
+    let before_baseline = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert_same_outcome(&before_baseline, &dedupe, "before baseline");
+    assert_eq!(queued_deliveries(&fixture), 0);
+    assert_eq!(fixture.bark.count(), 0);
+}
+
+#[tokio::test]
+async fn a_staged_codex_delivery_keeps_its_rollout_proof_for_the_retry_source_check() {
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"error":"fixture transient failure"}),
+    ));
+    let event = fixture.event();
+    let key = codex_key(&event);
+    let first = codex(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.status.as_deref(), Some("waiting_retry"));
+    fixture.due_now(&key);
+    let mut queued = fixture.db.due_notification_deliveries(10).unwrap();
+    assert_eq!(queued.len(), 1);
+    let candidate: Candidate = serde_json::from_value(queued.remove(0).payload).unwrap();
+    let Source::Codex {
+        fingerprint: Some(proof),
+        ..
+    } = &candidate.source
+    else {
+        panic!("a staged Codex delivery must carry its rollout proof");
+    };
+    let rollout = fs::read(&fixture.rollout).unwrap();
+    assert_eq!(
+        proof.identity,
+        native_probe::file_identity(&fixture.rollout).unwrap()
+    );
+    assert_eq!(proof.length, rollout.len() as u64);
+    assert_eq!(proof.digest, hex::encode(Sha256::digest(&rollout)));
+    assert!(current(&fixture.config, &fixture.db, &candidate).await);
+    fixture.bark.reply(Reply::bark());
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+    assert_eq!(fixture.bark.count(), 2);
+}
+
 #[tokio::test]
 async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay() {
     let fixture = Fixture::new().await;

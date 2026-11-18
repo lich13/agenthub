@@ -329,6 +329,16 @@ mod tests {
             let executable = cwd.join("claude-owner/claude");
             fs::create_dir_all(executable.parent().unwrap()).unwrap();
             fs::copy("/bin/sleep", &executable).unwrap();
+            // macOS kills a relocated copy of a platform binary on launch; an ad-hoc
+            // signature turns the copy into an ordinary executable.
+            #[cfg(target_os = "macos")]
+            assert!(Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&executable)
+                .output()
+                .unwrap()
+                .status
+                .success());
             let owner = Owner(
                 Command::new(&executable)
                     .arg("60")

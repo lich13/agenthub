@@ -89,6 +89,34 @@ test("unified cross-platform cleanup requires preview, explicit confirmation, an
   await assertContrast(page, ".form-error, .status-chip, .danger-button");
 });
 
+test("Codex account scope clears after a check and one confirmation", async ({ page }) => {
+  await mockApi(page);
+  let cleared = 0;
+  await mockCommand(page, "threads.accountScopeClear", (_, next) => {
+    cleared += 1;
+    return next();
+  });
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
+  const card = page.locator(".panel").filter({ has: page.getByText("Codex 账号隔离", { exact: true }) });
+  await expect(card.getByRole("button", { name: "解除", exact: true })).toBeDisabled();
+  await card.getByRole("button", { name: "检查", exact: true }).click();
+  await expect(card.locator("header .status-chip")).toHaveText("3 个会话");
+  await card.getByRole("button", { name: "解除", exact: true }).click();
+  expect(cleared).toBe(0);
+  await card.getByRole("button", { name: "确认解除", exact: true }).click();
+  await expect(card.locator(".unified-cleanup-result")).toContainText("已解除 2 个会话");
+  await expect(card.locator(".cleanup-result-item")).toHaveText("019e-scoped-busy：Codex 使用中");
+  expect(cleared).toBe(1);
+  const automatic = card.getByLabel("回合结束后自动解除");
+  await expect(automatic).not.toBeChecked();
+  // The switch follows the saved setting, so it only flips once the save returns.
+  await automatic.click();
+  await expect(automatic).toBeChecked();
+  await assertContrast(page, ".status-chip, .danger-button, .unified-cleanup-result");
+});
+
 test("native log maintenance is retired on every settings surface", async ({ page }) => {
   const calls = await mockApi(page);
   await page.goto("/");

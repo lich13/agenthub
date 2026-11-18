@@ -1,4 +1,4 @@
-/** Per-WebView retained-text budgets. Trees restored for a render and React /
+/** Per-WebView retained-text budgets. Rendered Markdown elements and React /
  * DOM allocations are separate; these values are not a process memory cap. */
 export const RENDER_CACHE_BUDGET = {
   entries: 512,

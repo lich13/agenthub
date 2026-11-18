@@ -14,52 +14,62 @@ use agenthub_core::services::{probe as probe_service, settings::ProbeSettingsSav
 use anyhow::Result;
 
 #[tauri::command(rename = "probe.settings.get")]
-pub fn getProbeSettings(
+pub async fn getProbeSettings(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopProbeSettings, String> {
-    settings_service::probe_settings_with_state(&state).map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || settings_service::probe_settings_with_state(&state)).await
 }
 
 #[tauri::command(rename = "probe.settings.save")]
-pub fn saveProbeSettings(
+pub async fn saveProbeSettings(
     state: tauri::State<'_, DesktopState>,
     settings: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings, String> {
-    settings_service::probe_save_settings_with_state(&state, settings)
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || settings_service::probe_save_settings_with_state(&state, settings))
+        .await
+}
+
+async fn probe_action(
+    state: tauri::State<'_, DesktopState>,
+    action: probe_service::ProbeAction,
+) -> Result<DesktopActionResponse, String> {
+    let state = state.inner().clone();
+    super::blocking(move || settings_service::probe_action_with_state(&state, action)).await
 }
 
 #[tauri::command(rename = "probe.barkTest")]
-pub fn probeBarkTest(
+pub async fn probeBarkTest(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
-        .map_err(|err| err.to_string())
+    probe_action(state, probe_service::ProbeAction::BarkTest).await
 }
 
 #[tauri::command(rename = "probe.installHooks")]
-pub fn probeInstallHooks(
+pub async fn probeInstallHooks(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::InstallHooks)
-        .map_err(|err| err.to_string())
+    probe_action(state, probe_service::ProbeAction::InstallHooks).await
 }
 
 #[tauri::command(rename = "probe.removeHooks")]
-pub fn probeRemoveHooks(
+pub async fn probeRemoveHooks(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::RemoveHooks)
-        .map_err(|err| err.to_string())
+    probe_action(state, probe_service::ProbeAction::RemoveHooks).await
 }
 
 #[tauri::command(rename = "probe.events")]
-pub fn getProbeEvents(
+pub async fn getProbeEvents(
     state: tauri::State<'_, DesktopState>,
     limit: Option<u32>,
 ) -> Result<DesktopProbeEventsResponse, String> {
-    settings_service::probe_events_with_state(&state, DesktopProbeEventsRequest { limit })
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || {
+        settings_service::probe_events_with_state(&state, DesktopProbeEventsRequest { limit })
+    })
+    .await
 }
 
 #[tauri::command(rename = "cleanup.hiddenDryRun")]

@@ -416,14 +416,10 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
             }
         }
     }
+    // The key is derived from the path alone, so only the located file is parsed.
     for path in files(paths)? {
-        let parsed = read_or_warning(&path, true);
-        if key_for(&root, &path, &parsed.id) == key {
+        if key_for(&root, &path, "") == key {
             let parsed = read_or_warning(&path, false);
-            ensure!(
-                key_for(&root, &path, &parsed.id) == key,
-                "Claude 会话身份已变化，请刷新列表"
-            );
             return Ok((path, parsed));
         }
     }

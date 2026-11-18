@@ -639,6 +639,7 @@ fn normalize_codex_patch(mut patch: CodexProbeConfigPatch) -> CodexProbeConfigPa
 fn normalize_probe_hooks_patch(patch: ProbeHooksConfigPatch) -> ProbeHooksConfigPatch {
     ProbeHooksConfigPatch {
         manage_stop_hook: patch.manage_stop_hook,
+        clear_account_scope: patch.clear_account_scope,
     }
 }
 

@@ -128,7 +128,7 @@ impl Outcome {
     }
 }
 
-fn same_source(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+pub(crate) fn same_source(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     if !after.is_file()
         || before.len() != after.len()
         || before.modified().ok() != after.modified().ok()

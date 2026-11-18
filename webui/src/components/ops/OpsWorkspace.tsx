@@ -17,6 +17,7 @@ import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import { Panel } from "../common/Panel";
 import { JobList } from "../jobs/JobList";
+import { CodexAccountScope } from "./CodexAccountScope";
 import { CleanupPagination, UnifiedThreadCleanup } from "./UnifiedThreadCleanup";
 import { UpdatePanel } from "./UpdatePanel";
 
@@ -114,6 +115,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
         onAction={action => jobMutation.mutate({ action })}
       />
       <UnifiedThreadCleanup key={machineScope()} capabilities={capabilities} />
+      <CodexAccountScope key={`account-scope:${machineScope()}`} capabilities={capabilities} />
       <details
         className="execution-history"
         open={historyOpen}

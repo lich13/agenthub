@@ -1,4 +1,4 @@
-import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../../types";
+import type { CodexAccountScopeResult, CodexAccountScopeStatus, MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../../types";
 import { callCommand } from "./transport";
 import { USE_DEMO } from "./shared";
 import type { SubagentDetailRequest, SubagentDetailResponse } from "../../types";
@@ -53,4 +53,14 @@ export async function restoreThread(threadId: string) {
 
 export async function renameThread(threadId: string, name: string) {
   return callCommand("threads.rename", { threadId, name });
+}
+
+export async function getCodexAccountScopeStatus(): Promise<CodexAccountScopeStatus> {
+  if (USE_DEMO) return (await import("./demo")).demoCodexAccountScopeStatus();
+  return callCommand<CodexAccountScopeStatus>("threads.accountScopeStatus");
+}
+
+export async function clearCodexAccountScope(): Promise<CodexAccountScopeResult> {
+  if (USE_DEMO) return (await import("./demo")).demoCodexAccountScopeResult();
+  return callCommand<CodexAccountScopeResult>("threads.accountScopeClear");
 }

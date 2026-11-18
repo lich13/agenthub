@@ -246,6 +246,12 @@ pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) 
             )
             .await
         }
+        rpc_commands::THREADS_ACCOUNT_SCOPE_STATUS => {
+            super::threads::account_scope_status(state).await
+        }
+        rpc_commands::THREADS_ACCOUNT_SCOPE_CLEAR => {
+            super::threads::account_scope_clear(state).await
+        }
         rpc_commands::SYSTEM_CAPABILITIES => system_capabilities(state).await,
         rpc_commands::JOBS_LIST => list_jobs(state, rpc_query_strings(&args, &["limit"])).await,
         rpc_commands::JOBS_DETAIL => {

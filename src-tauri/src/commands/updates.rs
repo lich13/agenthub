@@ -10,11 +10,12 @@ use agenthub_core::services::updates::UpdateStatus;
 use tauri::AppHandle;
 
 #[tauri::command(rename = "updates.status")]
-pub fn getUpdateStatus(
+pub async fn getUpdateStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<UpdateStatus, String> {
-    update_service::desktop_update_status_with_state(&state, None, None)
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || update_service::desktop_update_status_with_state(&state, None, None))
+        .await
 }
 
 #[tauri::command(rename = "updates.check")]

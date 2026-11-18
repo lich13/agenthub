@@ -316,6 +316,7 @@ export type SystemCapabilities = {
   prune_backups: boolean;
   thread_cleanup?: boolean;
   hidden_cleanup_scan?: boolean;
+  codex_account_scope?: boolean;
   antigravity_notifications?: boolean;
   dsh_notifications?: boolean;
   antigravity_sessions?: boolean;
@@ -374,6 +375,26 @@ export type JobRecord = {
 export type HiddenThreadSelection = { id: string; fingerprint?: string | null };
 export type HiddenThreadCandidate = HiddenThreadSelection & { title: string; allowed: boolean; reason: string | null };
 export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped" | "failed"; reason: string | null; residuals?: string[] };
+
+export type CodexAccountScopeStatus = {
+  scopedThreads: number;
+  scopedFiles: number;
+};
+
+export type CodexAccountScopeReason = "format" | "busy" | "changed" | "original_missing" | "failed";
+
+export type CodexAccountScopeItem = {
+  threadId: string;
+  reason: CodexAccountScopeReason;
+  detail?: string | null;
+};
+
+export type CodexAccountScopeResult = {
+  clearedThreads: number;
+  clearedFiles: number;
+  remainingFiles: number;
+  items: CodexAccountScopeItem[];
+};
 
 export type HiddenThreadDeletePlan = {
   scan?: HiddenScanProgress | null;
@@ -514,6 +535,7 @@ export type ProbeSettings = {
     recent_limit?: number;
     hooks?: Record<string, unknown> & {
       manage_stop_hook?: boolean;
+      clear_account_scope?: boolean;
     };
     error_monitor?: Record<string, unknown> & {
       enabled?: boolean;

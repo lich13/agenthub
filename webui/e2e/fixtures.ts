@@ -145,6 +145,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
               dsh_notifications: view.capabilities.dsh_notifications,
               grokbot_sessions: view.capabilities.grokbot_sessions,
               grokbot_notifications: view.capabilities.grokbot_notifications,
+              codex_account_scope: view.capabilities.codex_account_scope,
             },
           };
         },
@@ -186,6 +187,8 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "threads.archive": () => { archived.add(args.threadId); return { ok: true }; },
         "threads.restore": () => { archived.delete(args.threadId); return { ok: true }; },
         "threads.blocks": () => demo.demoThreadBlockPage(args.id),
+        "threads.accountScopeStatus": demo.demoCodexAccountScopeStatus,
+        "threads.accountScopeClear": demo.demoCodexAccountScopeResult,
         "updates.status": () => demo.demoUpdateStatus(fixture()),
         "jobs.list": () => demo.demoJobs().map(job => ({...job, output:""})),
         "jobs.detail": () => ({ ...demo.demoJob(args.id), ...(args.includeOutput === false ? {output:""} : {}), status: ++jobReads < 3 ? "running" : "succeeded" }),

@@ -8,7 +8,7 @@ import {
   type SessionOperation,
   type SessionProvider,
 } from "../api/sessions";
-import { useConnection } from "./connection";
+import { machineScope, useConnection } from "./connection";
 import {
   addSessionSelection,
   clickSessionSelection,
@@ -100,6 +100,20 @@ export function useSessionSelection(
         anchor: prev.anchor && succeeded.includes(prev.anchor) ? null : prev.anchor,
       };
     });
+    if (operation === "delete" && provider !== "codex" && succeeded.length) {
+      // Workspaces fall back to the first cached row, so deleted rows leave the
+      // provider's list caches now instead of when the refetch below returns.
+      const rowKey = provider === "grok" ? "id" : "sessionKey";
+      client.setQueriesData<Array<Record<typeof rowKey, string>>>(
+        {
+          queryKey:
+            provider === "grok" || provider === "claude_code"
+              ? [provider, "sessions"]
+              : [provider, machineScope(), "sessions"],
+        },
+        rows => (Array.isArray(rows) ? rows.filter(row => !succeeded.includes(row[rowKey])) : rows),
+      );
+    }
     void client.invalidateQueries({
       predicate: query =>
         provider === "codex"

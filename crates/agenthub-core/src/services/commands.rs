@@ -31,6 +31,8 @@ pub const THREADS_BLOCKS: &str = "threads.blocks";
 pub const THREADS_ARCHIVE: &str = "threads.archive";
 pub const THREADS_RESTORE: &str = "threads.restore";
 pub const THREADS_RENAME: &str = "threads.rename";
+pub const THREADS_ACCOUNT_SCOPE_STATUS: &str = "threads.accountScopeStatus";
+pub const THREADS_ACCOUNT_SCOPE_CLEAR: &str = "threads.accountScopeClear";
 pub const JOBS_LIST: &str = "jobs.list";
 pub const JOBS_DETAIL: &str = "jobs.detail";
 pub const PROBE_STATUS: &str = "probe.status";
@@ -58,6 +60,8 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     THREADS_ARCHIVE,
     THREADS_RESTORE,
     THREADS_RENAME,
+    THREADS_ACCOUNT_SCOPE_STATUS,
+    THREADS_ACCOUNT_SCOPE_CLEAR,
     JOBS_LIST,
     JOBS_DETAIL,
     PROBE_STATUS,
@@ -110,6 +114,7 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | THREADS_DETAIL
             | THREADS_SUBAGENT_DETAIL
             | THREADS_BLOCKS
+            | THREADS_ACCOUNT_SCOPE_STATUS
             | JOBS_LIST
             | JOBS_DETAIL
             | PROBE_STATUS

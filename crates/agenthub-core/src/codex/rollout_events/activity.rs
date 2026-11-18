@@ -297,7 +297,8 @@ impl ScanState {
     }
 }
 static SCAN_CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
-    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES);
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES)
+        .with_entry_limit(crate::resource_limits::CODEX_SCAN_ENTRIES);
 
 pub(crate) fn evict_idle_scan_cache(max_idle: std::time::Duration) {
     SCAN_CACHE.evict_idle(max_idle);
@@ -680,7 +681,7 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
             completed = turn.zip(timestamp);
         }
     }
-    let after = std::fs::metadata(path)?;
+    let after = fs::metadata(path)?;
     if metadata.len() != after.len() || metadata.modified()? != after.modified()? {
         return Ok(None);
     }
@@ -825,7 +826,8 @@ pub(crate) fn rollout_has_confirmed_inactive_state(path: &Path) -> Result<bool> 
     if scan.running || scan.active_turn_id.is_some() || scan.reply_needed {
         return Ok(false);
     }
-    let text = fs::read_to_string(path)?;
+    let mut text = String::new();
+    crate::codex::rollout_file::open_reader(path)?.read_to_string(&mut text)?;
     let mut terminal = false;
     let mut turn_context = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {

@@ -44,6 +44,38 @@ pub async fn getSubagentDetail(
     .map_err(|err| err.to_string())
 }
 
+#[tauri::command(rename = "threads.accountScopeStatus")]
+pub async fn accountScopeStatus(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<agenthub_core::codex::account_scope::CodexAccountScopeStatus, String> {
+    let paths = state.codex_paths();
+    let platform = state.platform().clone();
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(&platform)
+            .threads()
+            .account_scope_status(&paths)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "threads.accountScopeClear")]
+pub async fn accountScopeClear(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<agenthub_core::codex::account_scope::CodexAccountScopeResult, String> {
+    let paths = state.codex_paths();
+    let platform = state.platform().clone();
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(&platform)
+            .threads()
+            .account_scope_clear(&paths)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
 #[tauri::command(rename = "threads.list")]
 pub async fn listThreads(
     state: tauri::State<'_, DesktopState>,
@@ -112,21 +144,27 @@ pub async fn getThreadBlocks(
     .map_err(|err| err.to_string())?
 }
 #[tauri::command(rename = "threads.archive")]
-pub fn archiveThread(
+pub async fn archiveThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    thread_service::archive_thread_with_state(&state, thread_id_request(threadId))
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || {
+        thread_service::archive_thread_with_state(&state, thread_id_request(threadId))
+    })
+    .await
 }
 
 #[tauri::command(rename = "threads.restore")]
-pub fn restoreThread(
+pub async fn restoreThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    thread_service::restore_thread_with_state(&state, thread_id_request(threadId))
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    super::blocking(move || {
+        thread_service::restore_thread_with_state(&state, thread_id_request(threadId))
+    })
+    .await
 }
 
 #[tauri::command(rename = "threads.rename")]

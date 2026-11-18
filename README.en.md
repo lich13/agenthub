@@ -4,9 +4,9 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.26 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.27 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
-v2.1.26 fixes custom Probe configuration paths and status refresh, compressed history summaries and subagent lookup after native file moves, and interrupted batch counts. Compressed history reuses existing cache budgets and paging; Codex notifications stream records, and idle Codex/Grok summary caches are released.
+v2.1.27 adds Codex account-scope checking and clearing: sessions hidden after switching Codex accounts reappear in Codex's own history and resume lists, with an optional automatic clear when a turn ends. It also fixes archive/restore for natively compressed threads, the blank window at startup when a remote machine is unreachable, and Codex configuration comments lost when installing hooks, and reduces repeated reads for thread lists, archive execution, Claude lookup and skipped notifications.
 
 ## Highlights
 
@@ -31,6 +31,7 @@ Claude sessions now include a read-only subagent list on local and remote machin
 - **Console-First Probe & 5-Platform Hooks/Host Matrix**: Presents the global master switch, Bark channel configuration and test push, one-click notification switches for all six providers, and consistent management cards for Codex (`~/.codex/hooks.json`), Claude Code (`~/.claude/settings.json`), Grok Build (`~/.grok/hooks/agenthub.json`), Antigravity (`~/.gemini/config/hooks.json`), and DSH (`session.lock` + `.zstd` stream).
 - **GitHub CI Monitoring, Repository Filter & Bot Filter**: Displays GitHub Actions workflow runs for the active `gh` account on the selected machine; polls the latest 10 runs every 5 seconds for repositories with eligible unfinished runs and every 60 seconds when idle, refreshes owned public, private, and fork repositories every 10 minutes, and displays up to 20 runs after filtering. Supports persisted repository filtering (`github_ci_repositories`) and defaults to filtering out bot-triggered runs (`github_ci_filter_bots = true`, excluding `dependabot[bot]`, `renovate[bot]`, `github-actions[bot]`, and bot branches). The Mac reads the selected machine’s cached results and source filters every 5 seconds. When enabled, success, failure, and timeout events notify Bark and authorized macOS system notifications with direct links to the GitHub run. Initial observation, re-enabling, account switching, and filter toggling never replay historical runs.
 - **Cross-Provider Cleanup with Execution-Side Guards**: "Settings → Updates & Maintenance → Cross-Platform Thread Cleanup" covers six scopes across five providers (Codex Archived, Codex Hidden, Antigravity Archived, DSH Archived, Claude Code Empty/Idle, Grok Empty/Idle) with streaming batch scans, 100-item paginated previews, and per-scope selection.
+- **Codex Account-Scope Clearing**: Since Codex 0.168, sessions marked `account_scoped` are shown only to the account that created them, so switching accounts hides the rest from Codex's history and resume lists. "Settings → Updates & Maintenance → Codex 账号隔离" counts marked sessions and clears them after one confirmation: only the marker on the first line of the session file is replaced with spaces of equal length; content, creator identity and file length stay unchanged, and Codex credentials are never read. It works on local and remote machines. With "回合结束后自动解除" enabled, the installed Codex Stop hook handles new sessions when a turn ends.
 - **Named Remote Linux Host Management**: "Settings → Remote Connections" manages multiple named SSH hosts, reusing local OpenSSH config (`Include`, keys, `ssh-agent`, jump hosts) and supporting one-click "Install & Connect" for the matching `agenthub-webd` version. Switching machines isolates caches, pagination, and late responses without interrupting accepted background tasks.
 
 All model inference and tool execution remain inside each agent's native runtime; AgentHub never bundles model runtimes or mutates unrecognized native session files.
@@ -98,7 +99,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.26**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.27**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (Tauri updater archive and Minisign signature);

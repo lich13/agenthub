@@ -149,6 +149,7 @@ struct Entry<S> {
 pub(crate) struct JsonlCache<S> {
     entries: Mutex<VecDeque<Arc<Entry<S>>>>,
     max_bytes: u64,
+    max_entries: usize,
     max_line_bytes: Option<u64>,
 }
 
@@ -157,8 +158,14 @@ impl<S: Default> JsonlCache<S> {
         Self {
             entries: Mutex::new(VecDeque::new()),
             max_bytes,
+            max_entries: crate::resource_limits::SOURCE_CACHE_ENTRIES,
             max_line_bytes: None,
         }
+    }
+
+    pub const fn with_entry_limit(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     pub const fn with_line_limit(mut self, max_bytes: u64) -> Self {
@@ -408,8 +415,7 @@ impl<S: Default> JsonlCache<S> {
             .iter()
             .map(|entry| entry.weight.load(Ordering::Relaxed))
             .sum::<u64>();
-        while entries.len() > crate::resource_limits::SOURCE_CACHE_ENTRIES || bytes > self.max_bytes
-        {
+        while entries.len() > self.max_entries || bytes > self.max_bytes {
             let Some(index) = entries
                 .iter()
                 .position(|entry| Arc::strong_count(entry) == 1)

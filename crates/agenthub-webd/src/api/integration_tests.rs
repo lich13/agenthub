@@ -211,6 +211,72 @@ async fn unified_cleanup_preview_accepts_no_arguments_and_legacy_empty_request()
 }
 
 #[tokio::test]
+async fn codex_account_scope_is_reported_cleared_and_audited_by_count() {
+    const THREAD: &str = "11111111-1111-4111-8111-111111111111";
+    let sandbox = temp_test_dir("agenthub-account-scope");
+    let codex_home = sandbox.join(".codex");
+    init_isolated_codex_home(&codex_home);
+    let mut config = Config::default();
+    config.codex.home = codex_home.clone();
+    config.paths.data_dir = sandbox.join("data");
+    config.paths.db_path = sandbox.join("data/panel.sqlite");
+    let db = PanelDb::open_with_secret_box(
+        &config.paths.db_path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let db_path = config.paths.db_path.clone();
+    let state = crate::state::AppState::new(config, db).with_test_sandbox(sandbox.clone());
+
+    let rollout = codex_home
+        .join("sessions/2026/01/01")
+        .join(format!("rollout-2026-01-01T00-00-00-{THREAD}.jsonl"));
+    fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    let header = |marker: &str| {
+        format!(
+            r#"{{"timestamp":"2026-01-01T00:00:00.000Z","type":"session_meta","payload":{{{marker}"id":"{THREAD}","cwd":"/fixture"}}}}"#
+        ) + "\n"
+    };
+    fs::write(&rollout, header(r#""account_scoped":true,"#)).unwrap();
+
+    let status = || request_rpc_json(state.clone(), "threads.accountScopeStatus", "{}");
+    assert_eq!(
+        status().await,
+        json!({"scopedThreads": 1, "scopedFiles": 1})
+    );
+    assert_eq!(
+        request_rpc_json(state.clone(), "threads.accountScopeClear", "{}").await,
+        json!({"clearedThreads": 1, "clearedFiles": 1, "remainingFiles": 0, "items": []})
+    );
+    assert_eq!(
+        status().await,
+        json!({"scopedThreads": 0, "scopedFiles": 0})
+    );
+    assert_eq!(
+        fs::read_to_string(&rollout).unwrap(),
+        header(&" ".repeat(r#""account_scoped":true,"#.len()))
+    );
+
+    let audit: (String, String, Option<String>, String) = Connection::open(db_path)
+        .unwrap()
+        .query_row(
+            "SELECT action, target_type, target_id, detail_json FROM audit_log",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (audit.0.as_str(), audit.1.as_str(), audit.2),
+        ("codex_account_scope.clear", "codex_account_scope", None)
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&audit.3).unwrap(),
+        json!({"cleared_threads": 1, "cleared_files": 1, "remaining_files": 0, "skipped_threads": 0})
+    );
+    let _ = fs::remove_dir_all(sandbox);
+}
+
+#[tokio::test]
 async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     let (mut state, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");

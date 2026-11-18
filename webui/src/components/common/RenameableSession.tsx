@@ -41,6 +41,7 @@ export function RenameableSession({
   const busy = useRef(false);
   const cancelled = useRef(false);
   const mounted = useRef(true);
+  const failedDraft = useRef<string | null>(null);
   const useBatchMenu = Boolean(multiSelected && batchMenuActions?.length);
   const suppressSingleActions = (selecting && !useBatchMenu) || multiSelected;
 
@@ -81,6 +82,7 @@ export function RenameableSession({
       return;
     }
     cancelled.current = false;
+    failedDraft.current = null;
     setError("");
     setDraft(title);
     setEditing(true);
@@ -102,6 +104,12 @@ export function RenameableSession({
       finish(restoreFocus);
       return;
     }
+    // A blur must not replay the write that already failed for this draft; it
+    // abandons the rename instead. Only Enter, which restores focus, retries.
+    if (!restoreFocus && next === failedDraft.current) {
+      finish(false);
+      return;
+    }
     busy.current = true;
     setSaving(true);
     setError("");
@@ -109,6 +117,7 @@ export function RenameableSession({
       await onRename(next);
       if (mounted.current) finish(restoreFocus);
     } catch (reason) {
+      failedDraft.current = next;
       if (mounted.current) {
         setError(reason instanceof Error ? reason.message : "改名失败，请重试");
         requestAnimationFrame(() => input.current?.focus());

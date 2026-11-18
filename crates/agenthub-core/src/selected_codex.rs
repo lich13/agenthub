@@ -1,5 +1,7 @@
 //! Native Codex archive/restore rules and direct selected deletion.
-use crate::codex::{rollout_has_confirmed_inactive_state, rollout_has_running_signal, CodexPaths};
+use crate::codex::{
+    rollout_file, rollout_has_confirmed_inactive_state, rollout_has_running_signal, CodexPaths,
+};
 use anyhow::{ensure, Context, Result};
 use rusqlite::{types::ValueRef, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -74,7 +76,7 @@ impl ArchiveInventory {
                 .or_else(|| row.get("rollout_path"))
                 .and_then(Value::as_str)
             {
-                if let Ok(actual) = fs::canonicalize(path) {
+                if let Ok(actual) = fs::canonicalize(existing_rollout(Path::new(path))) {
                     index_owners
                         .entry(actual)
                         .or_default()
@@ -90,7 +92,7 @@ impl ArchiveInventory {
                 statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             {
                 let (id, path) = row?;
-                if let Ok(actual) = fs::canonicalize(path) {
+                if let Ok(actual) = fs::canonicalize(existing_rollout(Path::new(&path))) {
                     database_owners.entry(actual).or_default().insert(id);
                 }
             }
@@ -119,14 +121,19 @@ impl ArchiveInventory {
     }
 }
 
-fn snapshot(
-    paths: &CodexPaths,
-    conn: &Connection,
-    id: &str,
-    expected_archived: Option<bool>,
-) -> Result<SelectedCodexPreview> {
-    let inventory = ArchiveInventory::read(paths, conn)?;
-    snapshot_from_inventory(paths, conn, id, expected_archived, &inventory)
+/// Codex compresses an idle rollout in place while its records keep the plain path.
+fn existing_rollout(path: &Path) -> PathBuf {
+    if fs::symlink_metadata(path).is_err() {
+        for sibling in [
+            rollout_file::plain_path(path),
+            rollout_file::compressed_path(path),
+        ] {
+            if fs::symlink_metadata(&sibling).is_ok() {
+                return sibling;
+            }
+        }
+    }
+    path.to_path_buf()
 }
 
 fn snapshot_from_inventory(
@@ -206,7 +213,7 @@ fn snapshot_from_inventory(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        files.insert(PathBuf::from(path));
+        files.insert(existing_rollout(Path::new(path)));
     }
     for entry in index_rows {
         if entry.get("id").and_then(Value::as_str) == Some(id) {
@@ -215,7 +222,7 @@ fn snapshot_from_inventory(
                 .or_else(|| entry.get("rollout_path"))
                 .and_then(Value::as_str)
             {
-                files.insert(PathBuf::from(path));
+                files.insert(existing_rollout(Path::new(path)));
             }
         }
     }
@@ -225,8 +232,12 @@ fn snapshot_from_inventory(
             .files
             .iter()
             .filter(|path| {
-                path.file_name()
-                    .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+                path.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy();
+                    name.strip_suffix(".zst")
+                        .unwrap_or(&name)
+                        .ends_with(&suffix)
+                })
             })
             .cloned(),
     );
@@ -351,38 +362,73 @@ pub fn preview_archives(
         .collect()
 }
 
+/// Single-target form of `execute_archives`; the service always executes a batch.
+#[cfg(test)]
 pub fn execute_archive(
     paths: &CodexPaths,
     id: &str,
     archive: bool,
     fingerprint: &str,
 ) -> Result<()> {
-    let _guard = MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
-    let mut conn = open(paths, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure!(
-        snapshot(paths, &tx, id, Some(!archive))?.fingerprint == fingerprint,
-        "线程或文件已变化，请重新预览"
-    );
-    let columns = crate::archive::table_columns(&tx, "threads")?;
-    ensure!(columns.contains("archived_at"), "原生归档字段不可用");
-    let at = archive.then(|| chrono::Utc::now().timestamp());
-    let changed = if columns.contains("archived") {
-        tx.execute(
-            "UPDATE threads SET archived=?2,archived_at=?3 WHERE id=?1",
-            rusqlite::params![id, archive, at],
-        )?
-    } else {
-        tx.execute(
-            "UPDATE threads SET archived_at=?2 WHERE id=?1",
-            rusqlite::params![id, at],
-        )?
+    execute_archives(paths, &[(id, fingerprint)], archive).remove(0)
+}
+
+/// Executes `(id, fingerprint)` targets in order. The inventory is read once
+/// outside any write transaction on the native database; every target is then
+/// rechecked and updated in its own short transaction, so one failure never
+/// rolls back another target.
+pub fn execute_archives(
+    paths: &CodexPaths,
+    items: &[(&str, &str)],
+    archive: bool,
+) -> Vec<Result<()>> {
+    let context = (|| -> Result<_> {
+        let guard = MUTATION_LOCK
+            .lock()
+            .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
+        let conn = open(paths, true)?;
+        let inventory = ArchiveInventory::read(paths, &conn)?;
+        Ok((guard, conn, inventory))
+    })();
+    let (_guard, mut conn, inventory) = match context {
+        Ok(context) => context,
+        Err(error) => {
+            return items
+                .iter()
+                .map(|_| Err(anyhow::anyhow!("{error:#}")))
+                .collect()
+        }
     };
-    ensure!(changed == 1, "线程身份已变化");
-    tx.commit()?;
-    Ok(())
+    items
+        .iter()
+        .map(|&(id, fingerprint)| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            ensure!(
+                snapshot_from_inventory(paths, &tx, id, Some(!archive), &inventory)?.fingerprint
+                    == fingerprint,
+                "线程或文件已变化，请重新预览"
+            );
+            ensure!(
+                inventory.columns.contains("archived_at"),
+                "原生归档字段不可用"
+            );
+            let at = archive.then(|| chrono::Utc::now().timestamp());
+            let changed = if inventory.columns.contains("archived") {
+                tx.execute(
+                    "UPDATE threads SET archived=?2,archived_at=?3 WHERE id=?1",
+                    rusqlite::params![id, archive, at],
+                )?
+            } else {
+                tx.execute(
+                    "UPDATE threads SET archived_at=?2 WHERE id=?1",
+                    rusqlite::params![id, at],
+                )?
+            };
+            ensure!(changed == 1, "线程身份已变化");
+            tx.commit()?;
+            Ok(())
+        })
+        .collect()
 }
 
 fn content_hash(path: &Path) -> Result<Vec<u8>> {
@@ -401,7 +447,7 @@ fn content_hash(path: &Path) -> Result<Vec<u8>> {
 
 fn session_header_id(path: &Path) -> Result<Option<String>> {
     let mut line = String::new();
-    BufReader::new(fs::File::open(path)?)
+    BufReader::new(rollout_file::open_reader(path)?)
         .take(1024 * 1024)
         .read_line(&mut line)?;
     let header: Value = serde_json::from_str(&line).context("线程文件头损坏")?;
@@ -483,6 +529,109 @@ fn read_row_value(row: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn snapshot(
+        paths: &CodexPaths,
+        conn: &Connection,
+        id: &str,
+        expected_archived: Option<bool>,
+    ) -> Result<SelectedCodexPreview> {
+        let inventory = ArchiveInventory::read(paths, conn)?;
+        snapshot_from_inventory(paths, conn, id, expected_archived, &inventory)
+    }
+
+    #[test]
+    fn archive_and_restore_follow_a_natively_compressed_rollout() {
+        let home = std::env::temp_dir().join(format!(
+            "agenthub-archive-compressed-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = CodexPaths::new(&home);
+        fs::create_dir_all(paths.sessions_dir()).unwrap();
+        let conn = Connection::open(paths.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,source TEXT,status TEXT,archived INTEGER,archived_at INTEGER);").unwrap();
+        // The native records keep the plain path; only the compressed file exists.
+        // Every case owns its file, so no cached scan can outlive a rewritten one.
+        let thread = |rows: &dyn Fn(&str) -> Vec<Value>| {
+            let id = uuid::Uuid::new_v4().to_string();
+            let plain = paths
+                .sessions_dir()
+                .join(format!("rollout-fixture-{id}.jsonl"));
+            let text: String = rows(&id).iter().map(|row| format!("{row}\n")).collect();
+            fs::write(
+                rollout_file::compressed_path(&plain),
+                zstd::stream::encode_all(text.as_bytes(), 0).unwrap(),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO threads VALUES(?1,'Fixture',?2,'cli','completed',0,NULL)",
+                rusqlite::params![id, plain.to_str().unwrap()],
+            )
+            .unwrap();
+            (id, plain)
+        };
+        let meta = |id: &str| json!({"type":"session_meta","payload":{"id":id}});
+        let event =
+            |kind: &str| json!({"type":"event_msg","payload":{"type":kind,"turn_id":"turn"}});
+        let preview = |id: &String, archive| {
+            preview_archives(&paths, std::slice::from_ref(id), archive).remove(0)
+        };
+
+        let (id, plain) = thread(&|id| vec![meta(id), event("task_complete")]);
+        let compressed = rollout_file::compressed_path(&plain);
+        fs::write(
+            paths.session_index(),
+            format!("{}\n", json!({"id":id,"path":plain})),
+        )
+        .unwrap();
+        for archive in [true, false] {
+            let item = preview(&id, archive).unwrap();
+            assert_eq!(item.paths, std::slice::from_ref(&compressed));
+            assert_eq!(item.bytes, fs::metadata(&compressed).unwrap().len());
+            execute_archive(&paths, &id, archive, &item.fingerprint).unwrap();
+            let archived: bool = conn
+                .query_row("SELECT archived FROM threads WHERE id=?1", [&id], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(archived, archive);
+        }
+        assert!(!plain.exists());
+
+        // Without a recorded path, only the directory walk finds the compressed file.
+        let (walked, walked_plain) = thread(&|id| vec![meta(id), event("task_complete")]);
+        conn.execute(
+            "UPDATE threads SET rollout_path=NULL WHERE id=?1",
+            [&walked],
+        )
+        .unwrap();
+        assert_eq!(
+            preview(&walked, true).unwrap().paths,
+            [rollout_file::compressed_path(&walked_plain)]
+        );
+
+        // Every existing rule still guards a compressed file.
+        let blocked = |rows: &dyn Fn(&str) -> Vec<Value>| {
+            let (id, _) = thread(rows);
+            format!("{:#}", preview(&id, true).unwrap_err())
+        };
+        assert!(
+            blocked(&|_| vec![meta("another-id"), event("task_complete")])
+                .contains("线程文件身份与选中 ID 不一致")
+        );
+        assert!(
+            blocked(&|id| vec![meta(id), event("task_started")]).contains("线程文件仍有运行信号")
+        );
+        assert!(blocked(&|id| vec![meta(id)]).contains("线程终态无法确认"));
+        conn.execute(
+            "INSERT INTO threads VALUES('another-thread','Other',?1,'cli','completed',0,NULL)",
+            [plain.to_str().unwrap()],
+        )
+        .unwrap();
+        assert!(format!("{:#}", preview(&id, true).unwrap_err()).contains("文件仍被其他线程引用"));
+        drop(conn);
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn archive_batch_matches_single_preview_and_rechecks_changes_before_execution() {
