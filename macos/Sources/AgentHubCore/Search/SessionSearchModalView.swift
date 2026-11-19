@@ -107,8 +107,19 @@ public struct SessionSearchModalView: View {
                                 text: $query,
                                 maxLength: 500,
                                 placeholder: scope == .thread ? "搜索当前线程内容…" : "搜索当前 Provider 全部会话…",
+                                autoFocus: true,
                                 onSubmit: { confirmCurrentSelection() },
-                                onCancel: { onClose() }
+                                onCancel: { onClose() },
+                                onMoveUp: {
+                                    if !results.isEmpty {
+                                        selectedIndex = max(0, selectedIndex - 1)
+                                    }
+                                },
+                                onMoveDown: {
+                                    if !results.isEmpty {
+                                        selectedIndex = min(results.count - 1, selectedIndex + 1)
+                                    }
+                                }
                             )
                             if !query.isEmpty {
                                 Button {

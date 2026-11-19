@@ -215,6 +215,7 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
                             text: $renameDraft,
                             maxLength: 200,
                             placeholder: "输入会话名称",
+                            autoFocus: true,
                             onSubmit: { Task { await submitInlineRename() } },
                             onCancel: { onCancelInlineRename?() }
                         )
@@ -279,49 +280,120 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     }
 }
 
-// MARK: - AppKit NSTextField Subclass Guarding Enter/Esc Against Active IME Marked Text
+// MARK: - AppKit NSTextField + Custom Field Editor Capturing Pre-keyDown IME Marked-Text State
+
+public final class IMEFieldEditorTextView: NSTextView {
+    public private(set) var wasComposingBeforeKeyDown: Bool = false
+
+    override public func keyDown(with event: NSEvent) {
+        let pre = hasMarkedText()
+        wasComposingBeforeKeyDown = pre
+        defer { wasComposingBeforeKeyDown = false }
+        super.keyDown(with: event)
+    }
+
+    /// Simulates the exact macOS IME candidate-commit / cancel sequence where `hasMarkedText()` is `true`
+    /// upon `keyDown` entry, `inputContext` clears marked text while committing the candidate, and then forwards
+    /// `doCommand(by:)` (`insertNewline:` or `cancelOperation:`) during the same keystroke.
+    public func performSimulatedIMECandidateKeyCommand(_ selector: Selector) {
+        let pre = hasMarkedText()
+        wasComposingBeforeKeyDown = pre
+        defer { wasComposingBeforeKeyDown = false }
+        unmarkText()
+        doCommand(by: selector)
+    }
+}
+
+private final class IMEGuardedTextFieldCell: NSTextFieldCell {
+    private lazy var customFieldEditor: IMEFieldEditorTextView = {
+        let editor = IMEFieldEditorTextView(frame: .zero)
+        editor.isFieldEditor = true
+        editor.isRichText = false
+        editor.importsGraphics = false
+        editor.allowsUndo = true
+        return editor
+    }()
+
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+        customFieldEditor
+    }
+}
+
+public final class IMEGuardedNSTextField: NSTextField {
+    override public class var cellClass: AnyClass? {
+        get { IMEGuardedTextFieldCell.self }
+        set {}
+    }
+
+    public var autoFocusOnWindowAttach: Bool = false
+    private var didAutoFocus: Bool = false
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if autoFocusOnWindowAttach, !didAutoFocus, let window {
+            didAutoFocus = true
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+    }
+}
 
 public struct IMEGuardedInlineTextField: NSViewRepresentable {
     @Binding public var text: String
     public var maxLength: Int
     public var placeholder: String
+    public var autoFocus: Bool
     public var onSubmit: () -> Void
     public var onCancel: () -> Void
     public var onBlur: (() -> Void)?
+    public var onMoveUp: (() -> Void)?
+    public var onMoveDown: (() -> Void)?
 
     public init(
         text: Binding<String>,
         maxLength: Int = 200,
         placeholder: String = "",
+        autoFocus: Bool = false,
         onSubmit: @escaping () -> Void,
         onCancel: @escaping () -> Void,
-        onBlur: (() -> Void)? = nil
+        onBlur: (() -> Void)? = nil,
+        onMoveUp: (() -> Void)? = nil,
+        onMoveDown: (() -> Void)? = nil
     ) {
         self._text = text
         self.maxLength = maxLength
         self.placeholder = placeholder
+        self.autoFocus = autoFocus
         self.onSubmit = onSubmit
         self.onCancel = onCancel
         self.onBlur = onBlur
+        self.onMoveUp = onMoveUp
+        self.onMoveDown = onMoveDown
     }
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    public func makeNSView(context: Context) -> NSTextField {
-        let tf = NSTextField()
+    public func makeNSView(context: Context) -> IMEGuardedNSTextField {
+        let tf = IMEGuardedNSTextField()
+        tf.cell = IMEGuardedTextFieldCell(textCell: "")
+        tf.isEditable = true
+        tf.isSelectable = true
         tf.isBordered = false
         tf.drawsBackground = false
         tf.focusRingType = .none
         tf.font = DesignFonts.nsBodyFont(size: 13)
         tf.placeholderString = placeholder
         tf.stringValue = text
+        tf.autoFocusOnWindowAttach = autoFocus
         tf.delegate = context.coordinator
         return tf
     }
 
-    public func updateNSView(_ nsView: NSTextField, context: Context) {
+    public func updateNSView(_ nsView: IMEGuardedNSTextField, context: Context) {
         context.coordinator.parent = self
         if (nsView.currentEditor() as? NSTextView)?.hasMarkedText() != true && nsView.stringValue != text {
             nsView.stringValue = text
@@ -353,7 +425,8 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
         }
 
         public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if textView.hasMarkedText() {
+            let wasComposing = (textView as? IMEFieldEditorTextView)?.wasComposingBeforeKeyDown == true
+            if wasComposing || textView.hasMarkedText() {
                 return false
             }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
@@ -362,6 +435,14 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
             }
             if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
                 parent.onCancel()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.moveUp(_:)), let onMoveUp = parent.onMoveUp {
+                onMoveUp()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.moveDown(_:)), let onMoveDown = parent.onMoveDown {
+                onMoveDown()
                 return true
             }
             return false

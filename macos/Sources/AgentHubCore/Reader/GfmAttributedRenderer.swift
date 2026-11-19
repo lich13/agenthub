@@ -6,7 +6,7 @@ import Foundation
 public enum GfmRenderedSegment {
     case prose(attributed: NSAttributedString, isQuote: Bool)
     case codeBlock(language: String?, code: String)
-    case table(alignments: [GfmAlignment], headers: [String], rows: [[String]])
+    case table(alignments: [GfmAlignment], headers: [NSAttributedString], rows: [[NSAttributedString]])
     case thematicBreak
     case instructionsFold(id: String, text: String, lines: Int, bytes: Int)
 }
@@ -226,9 +226,39 @@ public final class GfmLayoutCache {
 
             case let .table(alignments, headers, rows):
                 flushProse()
-                let headerTexts = headers.map(plainTextFromInlines)
-                let rowTexts = rows.map { $0.map(plainTextFromInlines) }
-                output.append(.table(alignments: alignments, headers: headerTexts, rows: rowTexts))
+                let headerAttrs = headers.enumerated().map { colIdx, cellInlines in
+                    let align = colIdx < alignments.count ? alignments[colIdx] : .none
+                    return renderInlines(
+                        cellInlines,
+                        baseSize: 13,
+                        baseWeight: .semibold,
+                        lineHeightMultiple: 1.4,
+                        paragraphSpacingBefore: 0,
+                        paragraphSpacingAfter: 0,
+                        headIndent: 0,
+                        alignment: nsTextAlignment(for: align),
+                        textColor: palette.textPrimary.nsColor,
+                        palette: palette
+                    )
+                }
+                let rowAttrs = rows.map { row in
+                    row.enumerated().map { colIdx, cellInlines in
+                        let align = colIdx < alignments.count ? alignments[colIdx] : .none
+                        return renderInlines(
+                            cellInlines,
+                            baseSize: 13,
+                            baseWeight: .regular,
+                            lineHeightMultiple: 1.4,
+                            paragraphSpacingBefore: 0,
+                            paragraphSpacingAfter: 0,
+                            headIndent: 0,
+                            alignment: nsTextAlignment(for: align),
+                            textColor: palette.textPrimary.nsColor,
+                            palette: palette
+                        )
+                    }
+                }
+                output.append(.table(alignments: alignments, headers: headerAttrs, rows: rowAttrs))
 
             case .thematicBreak:
                 flushProse()
@@ -283,6 +313,32 @@ public final class GfmLayoutCache {
         return out
     }
 
+    public static func safeRenderableHref(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if FileLinksAndPlanExport.fileLinkTarget(trimmed) != nil {
+            return trimmed
+        }
+        if trimmed.hasPrefix("#") {
+            return trimmed
+        }
+        if let comps = URLComponents(string: trimmed),
+           let scheme = comps.scheme?.lowercased(),
+           ["https", "http", "mailto"].contains(scheme)
+        {
+            return trimmed
+        }
+        return nil
+    }
+
+    private static func nsTextAlignment(for alignment: GfmAlignment) -> NSTextAlignment {
+        switch alignment {
+        case .left, .none: .left
+        case .center: .center
+        case .right: .right
+        }
+    }
+
     private static func renderInlines(
         _ inlines: [GfmInline],
         baseSize: CGFloat,
@@ -291,6 +347,7 @@ public final class GfmLayoutCache {
         paragraphSpacingBefore: CGFloat,
         paragraphSpacingAfter: CGFloat,
         headIndent: CGFloat,
+        alignment: NSTextAlignment = .left,
         textColor: NSColor,
         palette: DesignPalette
     ) -> NSAttributedString {
@@ -302,6 +359,7 @@ public final class GfmLayoutCache {
         para.paragraphSpacing = paragraphSpacingAfter
         para.firstLineHeadIndent = headIndent > 0 ? max(0, headIndent - 14) : 0
         para.headIndent = headIndent
+        para.alignment = alignment
 
         let result = NSMutableAttributedString()
 
@@ -330,21 +388,25 @@ public final class GfmLayoutCache {
                     }
                     if let linkURL {
                         attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                        if let parsed = URL(string: linkURL) {
-                            attrs[.link] = parsed
-                        } else {
-                            attrs[.link] = linkURL
-                        }
+                        // Preserve literal source href string so file paths never invent a web origin
+                        attrs[.link] = linkURL
                     }
                     result.append(NSAttributedString(string: str, attributes: attrs))
 
                 case let .code(codeStr):
-                    let attrs: [NSAttributedString.Key: Any] = [
-                        .font: DesignFonts.nsMonoFont(size: 13, weight: .regular),
-                        .foregroundColor: palette.textPrimary.nsColor,
+                    var attrs: [NSAttributedString.Key: Any] = [
+                        .font: DesignFonts.nsMonoFont(size: max(12, baseSize - 2), weight: .regular),
+                        .foregroundColor: linkURL != nil ? palette.accent.nsColor : palette.textPrimary.nsColor,
                         .backgroundColor: palette.hover.nsColor,
                         .paragraphStyle: para,
                     ]
+                    if strike {
+                        attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                    if let linkURL {
+                        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                        attrs[.link] = linkURL
+                    }
                     result.append(NSAttributedString(string: " \(codeStr) ", attributes: attrs))
 
                 case let .strong(children):
@@ -357,7 +419,7 @@ public final class GfmLayoutCache {
                     appendList(children, bold: bold, italic: italic, strike: true, linkURL: linkURL)
 
                 case let .link(url, _, children):
-                    appendList(children, bold: bold, italic: italic, strike: strike, linkURL: url)
+                    appendList(children, bold: bold, italic: italic, strike: strike, linkURL: safeRenderableHref(url))
 
                 case let .image(url, alt, _):
                     let label = alt.isEmpty ? url : "🖼 \(alt)"

@@ -231,4 +231,93 @@ final class GoldenVectorsAndDomainParityTests: XCTestCase {
             FileLinkTarget(path: "/Users/example/repo/src/main.rs", resolved: true)
         )
     }
+
+    // MARK: - 8. PagedEventHistoryStore Reverse Pagination + Poll Retention & 60/3 Search Single-Item Reveal
+
+    @MainActor
+    func testPagedEventHistoryPrependRetentionAndSearchSingleTargetReveal() throws {
+        // 1) 60/3 single-item reveal (`searchHistoryReveal.test.ts` parity): reveals ONLY `msg-2` without unfolding all 65 chat blocks!
+        var blocks: [MessageBlock] = []
+        for i in 0 ..< 5 {
+            blocks.append(MessageBlock(id: "plan-\(i)", role: "assistant", kind: "plan", status: "completed", text: "# Plan \(i)"))
+        }
+        for i in 0 ..< 65 {
+            blocks.append(MessageBlock(id: "msg-\(i)", role: i.isMultiple(of: 2) ? "user" : "assistant", kind: "message", text: "Hello \(i)"))
+        }
+        let singleRevealed = ConversationViewModel.compactConversationBlocks(
+            blocks,
+            showAllHistory: false,
+            revealedBlockId: "msg-2"
+        )
+        XCTAssertTrue(singleRevealed.contains { $0.id == "msg-2" }, "Target older block msg-2 must be revealed")
+        XCTAssertFalse(singleRevealed.contains { $0.id == "msg-0" }, "Unrelated folded older blocks must remain compacted")
+        XCTAssertTrue(singleRevealed.contains { $0.id == "chat-history-collapsed" }, "Collapse banner must remain with decremented count")
+
+        // 2) PagedEventHistoryStore (Claude / Grok / Antigravity / DSH / GrokBot parity):
+        // Load head page [10..19], prepend older page [0..9], then poll updated head [10..20] -> older [0..9] MUST be retained!
+        struct MockPagedEvent: Equatable, Sendable {
+            var id: String
+            var text: String
+        }
+        let historyStore = PagedEventHistoryStore<MockPagedEvent> { ev, _ in ev.id }
+        let head10to19 = (10 ..< 20).map { i in
+            MockPagedEvent(id: "ev-\(i)", text: "Body \(i)")
+        }
+        let epochMeta = try JSONDecoder().decode(HistoryMetadata.self, from: Data("{\"epoch\":\"e1\",\"revision\":\"r1\",\"reset\":false}".utf8))
+        let slot1 = historyStore.applyHeadPoll(
+            key: "local::claude:s1",
+            headEvents: head10to19,
+            history: epochMeta,
+            totalEvents: 20,
+            beforeCursor: "10",
+            hasMore: true,
+            timeline: nil
+        )
+        XCTAssertEqual(slot1.events.count, 10)
+        XCTAssertTrue(slot1.hasMore)
+        XCTAssertEqual(slot1.beforeCursor, "10")
+
+        let older0to9 = (0 ..< 10).map { i in
+            MockPagedEvent(id: "ev-\(i)", text: "Older \(i)")
+        }
+        let slot2 = historyStore.applyOlderPage(
+            key: "local::claude:s1",
+            expectedCursor: "10",
+            olderEvents: older0to9,
+            history: epochMeta,
+            totalEvents: 20,
+            beforeCursor: nil,
+            hasMore: false
+        )
+        XCTAssertEqual(slot2.events.map(\.id), (0 ..< 20).map { "ev-\($0)" })
+        XCTAssertFalse(slot2.hasMore)
+
+        // Subsequent poll brings updated ev-19 and new ev-20: older ev-0..ev-9 MUST remain intact!
+        var head10to20 = head10to19
+        head10to20[9].text = "Body 19 updated"
+        head10to20.append(MockPagedEvent(id: "ev-20", text: "New tail 20"))
+        let slot3 = historyStore.applyHeadPoll(
+            key: "local::claude:s1",
+            headEvents: head10to20,
+            history: epochMeta,
+            totalEvents: 21,
+            beforeCursor: "10",
+            hasMore: true,
+            timeline: nil
+        )
+        XCTAssertEqual(slot3.events.count, 21)
+        XCTAssertEqual(slot3.events.first?.id, "ev-0")
+        XCTAssertEqual(slot3.events[19].text, "Body 19 updated")
+        XCTAssertEqual(slot3.events.last?.id, "ev-20")
+        XCTAssertFalse(slot3.hasMore, "All 21 events are already in memory")
+
+        // 3) SubagentPanelView status priority sorting: running/creating -> failed -> interrupted -> completed
+        let unsorted = [
+            SubagentActivity(agentId: "a1", name: "Done", status: "completed"),
+            SubagentActivity(agentId: "a2", name: "Err", status: "failed"),
+            SubagentActivity(agentId: "a3", name: "Active", status: "running"),
+            SubagentActivity(agentId: "a4", name: "Stopped", status: "interrupted"),
+        ]
+        XCTAssertEqual(SubagentPanelView.sortByStatusPriority(unsorted).map(\.id), ["a3", "a2", "a4", "a1"])
+    }
 }

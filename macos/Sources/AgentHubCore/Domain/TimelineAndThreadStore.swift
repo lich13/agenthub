@@ -421,3 +421,158 @@ public final class ThreadMessageStore: ObservableObject {
         }
     }
 }
+
+// MARK: - Universal Paged History Store for Claude, Grok, Antigravity, DSH & GrokBot (usePagedHistory.ts parity)
+
+public struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
+    public var events: [Event]
+    public var history: HistoryMetadata?
+    public var totalEvents: Int?
+    public var beforeCursor: String?
+    public var hasMore: Bool
+    public var timeline: [TimelineEntry]?
+    public var subagents: SubagentCollection?
+
+    public init() {
+        self.events = []
+        self.hasMore = false
+    }
+}
+
+@MainActor
+public final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObject {
+    private var slots: [String: PagedEventSlot<Event>] = [:]
+    private let idOf: (Event, Int) -> String
+
+    public init(idOf: @escaping (Event, Int) -> String) {
+        self.idOf = idOf
+    }
+
+    public func slot(for key: String) -> PagedEventSlot<Event> {
+        slots[key] ?? PagedEventSlot()
+    }
+
+    public func clearAll() {
+        slots.removeAll()
+    }
+
+    @discardableResult
+    public func applyHeadPoll(
+        key: String,
+        headEvents: [Event],
+        history: HistoryMetadata?,
+        totalEvents: Int?,
+        beforeCursor: String?,
+        hasMore: Bool,
+        timeline: [TimelineEntry]?,
+        subagents: SubagentCollection? = nil
+    ) -> PagedEventSlot<Event> {
+        var current = slot(for: key)
+        let rewritten: Bool = {
+            if history?.reset == true { return true }
+            if let oldH = current.history, let newH = history {
+                if oldH.epoch != newH.epoch { return true }
+                if let changes = newH.changes,
+                   let idx = changes.firstIndex(where: { $0.revision == oldH.revision }),
+                   changes[(idx + 1)...].contains(where: { $0.reset == true })
+                {
+                    return true
+                }
+            }
+            if let oldTotal = current.totalEvents, let newTotal = totalEvents, newTotal < oldTotal {
+                return true
+            }
+            return false
+        }()
+
+        if rewritten || current.events.isEmpty {
+            current.events = headEvents
+            current.beforeCursor = beforeCursor
+            current.hasMore = hasMore && beforeCursor != nil
+        } else {
+            current.events = mergeEvents(existing: current.events, incoming: headEvents, prepend: false)
+            if let totalEvents, current.events.count >= totalEvents {
+                current.beforeCursor = nil
+                current.hasMore = false
+            } else if current.beforeCursor == nil, let beforeCursor {
+                current.beforeCursor = beforeCursor
+                current.hasMore = hasMore
+            }
+        }
+        current.history = history
+        current.totalEvents = totalEvents ?? max(current.totalEvents ?? 0, current.events.count)
+        current.timeline = timeline ?? (rewritten ? nil : current.timeline)
+        current.subagents = subagents ?? (rewritten ? nil : current.subagents)
+        slots[key] = current
+        return current
+    }
+
+    @discardableResult
+    public func applyOlderPage(
+        key: String,
+        expectedCursor: String,
+        olderEvents: [Event],
+        history: HistoryMetadata?,
+        totalEvents: Int?,
+        beforeCursor: String?,
+        hasMore: Bool
+    ) -> PagedEventSlot<Event> {
+        var current = slot(for: key)
+        if let oldH = current.history, let pageH = history, oldH.epoch != pageH.epoch {
+            return current
+        }
+        if let sb = current.beforeCursor, sb != expectedCursor {
+            return current
+        }
+        current.events = mergeEvents(existing: current.events, incoming: olderEvents, prepend: true)
+        if let totalEvents {
+            current.totalEvents = max(totalEvents, current.events.count)
+        }
+        // Stop pagination if cursor does not advance or page is empty (AGENTS.md:130)
+        if olderEvents.isEmpty || beforeCursor == nil || beforeCursor == expectedCursor {
+            current.beforeCursor = nil
+            current.hasMore = false
+        } else {
+            current.beforeCursor = beforeCursor
+            current.hasMore = hasMore
+        }
+        slots[key] = current
+        return current
+    }
+
+    private func mergeEvents(existing: [Event], incoming: [Event], prepend: Bool) -> [Event] {
+        if existing.isEmpty { return incoming }
+        if incoming.isEmpty { return existing }
+
+        var existingIndexById: [String: Int] = [:]
+        for (idx, ev) in existing.enumerated() {
+            existingIndexById[idOf(ev, idx)] = idx
+        }
+
+        if prepend {
+            var updatedExisting = existing
+            var prepended: [Event] = []
+            for (idx, ev) in incoming.enumerated() {
+                let id = idOf(ev, idx)
+                if let matchIdx = existingIndexById[id] {
+                    updatedExisting[matchIdx] = ev
+                } else {
+                    prepended.append(ev)
+                }
+            }
+            return prepended + updatedExisting
+        } else {
+            var out = existing
+            for (idx, ev) in incoming.enumerated() {
+                let id = idOf(ev, existing.count + idx)
+                if let matchIdx = existingIndexById[id] {
+                    out[matchIdx] = ev
+                } else {
+                    existingIndexById[id] = out.count
+                    out.append(ev)
+                }
+            }
+            return out
+        }
+    }
+}

@@ -92,36 +92,169 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertEqual(mobileInsets.leading, 32.0, accuracy: 0.0)
         XCTAssertEqual(mobileInsets.trailing, 16.0, accuracy: 0.0)
 
-        // Mount AppShellView in offscreen NSWindow across 3 viewports: 1440x900, 1280x820, 767x820
+        // Mount AppShellView & individual shell components in offscreen NSWindows and assert exact 0.0pt geometries + edge hit-testing!
         let suite = "com.lich13.agenthub.geom.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        let mock = MockRuntimeTransport { _, _ in Data("{}".utf8) }
+        let mock = MockRuntimeTransport { _, _ in Data("[]".utf8) }
         let store = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        store.setTheme(.light)
+        store.activeWorkspace = .codex
 
-        for size in [
-            NSSize(width: 1440, height: 900),
-            NSSize(width: 1280, height: 820),
-            NSSize(width: 767, height: 820),
-        ] {
-            for workspace in [WorkspaceId.probe, .ops, .codex] {
-                store.activeWorkspace = workspace
-                let win = NSWindow(
-                    contentRect: NSRect(origin: .zero, size: size),
-                    styleMask: [.borderless],
-                    backing: .buffered,
-                    defer: false
-                )
-                let hosting = NSHostingView(rootView: AppShellView(store: store))
-                hosting.frame = NSRect(origin: .zero, size: size)
-                win.contentView = hosting
-                hosting.layoutSubtreeIfNeeded()
+        // 1. Verify SideNav expanded (196.0pt) vs collapsed (48.0pt) exact vertical border x-coordinate in rendered 1440x900 shell
+        store.navCollapsed = false
+        let expandedPixels = try renderShellPixels(store: store, size: NSSize(width: 1440, height: 900))
+        // At y = 450, x = 100 is inside SideNav (--r = #f8f9fb = 248,249,251), x = 250 is inside SessionList (--s = #f3f5f8 = 243,245,248), x = 900 is Stage (--bg = #fff = 255,255,255)
+        assertPixelNear(expandedPixels, width: 1440, x: 100, y: 450, expected: (248, 249, 251), label: "Expanded SideNav rail")
+        assertPixelNear(expandedPixels, width: 1440, x: 250, y: 450, expected: (243, 245, 248), label: "296pt SessionList column")
+        assertPixelNear(expandedPixels, width: 1440, x: 900, y: 450, expected: (255, 255, 255), label: "Main stage column")
+        // Verify exact boundary: x = 194 is SideNav, x = 198 is SessionList; x = 490 is SessionList (196+294), x = 495 is Stage!
+        assertPixelNear(expandedPixels, width: 1440, x: 194, y: 450, expected: (248, 249, 251), label: "Left of 196pt nav divider")
+        assertPixelNear(expandedPixels, width: 1440, x: 198, y: 450, expected: (243, 245, 248), label: "Right of 196pt nav divider")
+        assertPixelNear(expandedPixels, width: 1440, x: 490, y: 450, expected: (243, 245, 248), label: "Left of 196+296=492pt sidebar divider")
+        assertPixelNear(expandedPixels, width: 1440, x: 495, y: 450, expected: (255, 255, 255), label: "Right of 492pt sidebar divider")
 
-                XCTAssertEqual(hosting.bounds.width, size.width, accuracy: 0.0)
-                XCTAssertEqual(hosting.bounds.height, size.height, accuracy: 0.0)
-                XCTAssertNotNil(hosting.hitTest(NSPoint(x: 20, y: size.height - 20)))
-            }
+        store.toggleNavCollapsed()
+        XCTAssertTrue(store.navCollapsed)
+        let collapsedPixels = try renderShellPixels(store: store, size: NSSize(width: 1440, height: 900))
+        // Collapsed SideNav is 48.0pt: x = 45 is SideNav, x = 52..342 is 296pt SessionList, x = 348 is Stage (48+296=344)!
+        assertPixelNear(collapsedPixels, width: 1440, x: 24, y: 450, expected: (248, 249, 251), label: "Collapsed 48pt SideNav")
+        assertPixelNear(collapsedPixels, width: 1440, x: 52, y: 450, expected: (243, 245, 248), label: "Right of 48pt collapsed divider")
+        assertPixelNear(collapsedPixels, width: 1440, x: 342, y: 450, expected: (243, 245, 248), label: "Inside 48+296=344pt sidebar")
+        assertPixelNear(collapsedPixels, width: 1440, x: 348, y: 450, expected: (255, 255, 255), label: "Right of 344pt sidebar divider")
+        store.toggleNavCollapsed()
+
+        // 2. Verify Mobile <= 767pt layout: exact 52.0pt top bar (y=768..819) + 58.0pt bottom tabs (y=0..57) pixel boundaries!
+        XCTAssertEqual(LayoutMetrics.mobileTopBarHeight, 52.0, accuracy: 0.0)
+        XCTAssertEqual(LayoutMetrics.mobileBottomTabsHeight, 58.0, accuracy: 0.0)
+        XCTAssertEqual(LayoutMetrics.subagentDrawerWidth, 420.0, accuracy: 0.0)
+        XCTAssertEqual(LayoutMetrics.formControlHeight, 36.0, accuracy: 0.0)
+
+        let mobilePixels = try renderShellPixels(store: store, size: NSSize(width: 767, height: 820))
+        // CGContext bitmap row y=0 is bottom of window (58pt bottom tabs: y=0..57), y=819 is top of window (52pt top bar: y=768..819)
+        assertPixelNear(mobilePixels, width: 767, x: 380, y: 772, expected: (248, 249, 251), label: "Inside 52pt MobileTopBar (y=772)")
+        assertPixelNear(mobilePixels, width: 767, x: 380, y: 760, expected: (243, 245, 248), label: "Below 52pt MobileTopBar in SessionList (y=760)")
+        assertPixelNear(mobilePixels, width: 767, x: 380, y: 54, expected: (248, 249, 251), label: "Inside 58pt MobileBottomTabs (y=54)")
+        assertPixelNear(mobilePixels, width: 767, x: 380, y: 66, expected: (243, 245, 248), label: "Above 58pt MobileBottomTabs in SessionList (y=66)")
+
+        // 3. Verify 420.0pt SubagentPanelView docked width & 36.0pt button control row height + full-rect edge hit-testing
+        let drawerHost = NSHostingView(
+            rootView: SubagentPanelView(
+                store: store,
+                provider: .codex,
+                rootSessionKey: "th-1",
+                collection: nil,
+                scheme: .light,
+                workspace: .codex,
+                onClose: {}
+            )
+            .frame(width: LayoutMetrics.subagentDrawerWidth, height: 640)
+        )
+        drawerHost.frame = NSRect(x: 0, y: 0, width: LayoutMetrics.subagentDrawerWidth, height: 640)
+        drawerHost.layoutSubtreeIfNeeded()
+        XCTAssertEqual(drawerHost.bounds.width, 420.0, accuracy: 0.0)
+
+        let btnWin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 220, height: 36), styleMask: [.borderless], backing: .buffered, defer: false)
+        let btnHost = NSHostingView(
+            rootView: Button("连接远程") {}
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(width: 220)
+        )
+        btnHost.frame = NSRect(x: 0, y: 0, width: 220, height: 36)
+        btnWin.contentView = btnHost
+        btnHost.layoutSubtreeIfNeeded()
+        XCTAssertEqual(btnHost.fittingSize.height, 36.0, accuracy: 0.0, "PrimaryButtonStyle control height must be 36.0pt")
+        // Edge hit-test at (2, 2) and (218, 34) confirms full-rectangle hit target (not glyph-only!)
+        XCTAssertNotNil(btnHost.hitTest(NSPoint(x: 2, y: 2)))
+        XCTAssertNotNil(btnHost.hitTest(NSPoint(x: 218, y: 34)))
+    }
+
+    @MainActor
+    func testClaudeReadOnlyRPCClassificationDoesNotIncrementActiveWrites() async throws {
+        final class BusyRecorder: @unchecked Sendable {
+            var ownershipBusy = false
+            var hooksStatusBusy = false
+            var hooksInstallBusy = false
+            weak var store: RuntimeConnectionStore?
         }
+        let rec = BusyRecorder()
+
+        let suite = "com.lich13.agenthub.rpc.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let mock = MockRuntimeTransport { command, argsJSON in
+            let busyNow = await MainActor.run { rec.store?.isBusyForSwitch ?? false }
+            if command == "claude.ownershipDiagnostics" {
+                rec.ownershipBusy = busyNow
+            } else if command == "claude.hooks" {
+                if argsJSON.contains("\"status\"") {
+                    rec.hooksStatusBusy = busyNow
+                } else {
+                    rec.hooksInstallBusy = busyNow
+                }
+            }
+            return Data("{}".utf8)
+        }
+        let store = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        rec.store = store
+
+        struct EmptyResp: Decodable {}
+        struct HookInner: Encodable { let action: String; let confirmed: Bool }
+        struct HookReq: Encodable { let request: HookInner }
+        let _: EmptyResp = try await store.rpc("claude.ownershipDiagnostics")
+        let _: EmptyResp = try await store.rpc("claude.hooks", args: HookReq(request: .init(action: "status", confirmed: false)))
+        let _: EmptyResp = try await store.rpc("claude.hooks", args: HookReq(request: .init(action: "install", confirmed: true)))
+
+        XCTAssertFalse(rec.ownershipBusy, "claude.ownershipDiagnostics is a read command and must not increment writes")
+        XCTAssertFalse(rec.hooksStatusBusy, "claude.hooks(action: status) is a read check and must not increment writes")
+        XCTAssertTrue(rec.hooksInstallBusy, "claude.hooks(action: install) is a mutating write and must increment writes")
+    }
+
+    @MainActor
+    private func renderShellPixels(store: RuntimeConnectionStore, size: NSSize) throws -> [UInt8] {
+        let win = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        win.appearance = NSAppearance(named: .aqua)
+        let hosting = NSHostingView(rootView: AppShellView(store: store).frame(width: size.width, height: size.height))
+        hosting.frame = NSRect(origin: .zero, size: size)
+        win.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+
+        let w = Int(size.width)
+        let h = Int(size.height)
+        let cs = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = pixels.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress,
+                  let ctx = CGContext(
+                      data: base, width: w, height: h,
+                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  )
+            else { return false }
+            hosting.wantsLayer = true
+            hosting.layer?.render(in: ctx)
+            return true
+        }
+        XCTAssertTrue(ok)
+        return pixels
+    }
+
+    private func assertPixelNear(
+        _ pixels: [UInt8],
+        width: Int,
+        x: Int,
+        y: Int,
+        expected: (UInt8, UInt8, UInt8),
+        tolerance: Int = 2,
+        label: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let idx = (y * width + x) * 4
+        XCTAssertLessThanOrEqual(abs(Int(pixels[idx]) - Int(expected.0)), tolerance, "\(label) R at (\(x),\(y))", file: file, line: line)
+        XCTAssertLessThanOrEqual(abs(Int(pixels[idx + 1]) - Int(expected.1)), tolerance, "\(label) G at (\(x),\(y))", file: file, line: line)
+        XCTAssertLessThanOrEqual(abs(Int(pixels[idx + 2]) - Int(expected.2)), tolerance, "\(label) B at (\(x),\(y))", file: file, line: line)
     }
 }

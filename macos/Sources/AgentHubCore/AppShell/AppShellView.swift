@@ -4,6 +4,7 @@ import SwiftUI
 public extension Notification.Name {
     static let agentHubSelectAllRequested = Notification.Name("AgentHubSelectAllRequested")
     static let agentHubSearchRequested = Notification.Name("AgentHubSearchRequested")
+    static let agentHubOpenMobileThreadsRequested = Notification.Name("AgentHubOpenMobileThreadsRequested")
 }
 
 public struct AppShellView: View {
@@ -88,11 +89,15 @@ public struct AppShellView: View {
         VStack(spacing: 0) {
             // 52pt Mobile TopBar
             HStack(spacing: 10) {
-                Button {} label: {
+                Button {
+                    NotificationCenter.default.post(name: .agentHubOpenMobileThreadsRequested, object: nil)
+                } label: {
                     LucideIcon(.menu, size: 20)
                 }
                 .buttonStyle(IconButtonStyle(dimension: 32))
                 .disabled(store.activeWorkspace != .codex)
+                .help(store.activeWorkspace == .codex ? "打开线程" : "线程列表仅用于 Codex")
+                .accessibilityLabel("打开线程")
 
                 Spacer()
                 Text(store.activeWorkspace.label)
@@ -183,8 +188,15 @@ public struct AppShellView: View {
                     codexNewThreadSlot: { onCreated in
                         AnyView(NewDesktopThreadButton(connection: store, onCreated: onCreated))
                     },
-                    codexCollaborationFooterSlot: { threadId, _ in
-                        AnyView(DesktopCollaborationFooterView(connection: store, threadId: threadId))
+                    codexCollaborationFooterSlot: { threadId, _, onStreamUpdated in
+                        AnyView(
+                            DesktopCollaborationFooterView(
+                                connection: store,
+                                threadId: threadId,
+                                onStreamUpdated: onStreamUpdated
+                            )
+                            .id("\(store.revision):\(threadId)")
+                        )
                     }
                 )
             }

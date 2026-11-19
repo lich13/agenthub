@@ -21,14 +21,14 @@
 
 本机自动化验证与同版本产物尺寸对照（`2.1.27`）：
 
-- Rust `agenthub-ffi` 107 项测试（含继承的 99 项 `src-tauri` 测试、`drift_guard`、C ABI 生命周期与 Minisign 验签）、`src-tauri` 测试、工作区 `cargo fmt`／`clippy -D warnings`／`security-audit` 全部通过。
-- Swift Debug 与 Release `-O -whole-module-optimization` 编译及 `AGENTHUB_RENDER_TESTS=1 swift test` 25 项测试套件全部通过：覆盖 73 个非预览 WebUI 测试档映射守卫（`ParityManifest.json`）、5 组跨语言 Golden Vectors、离屏几何／热区与反向分页／折叠 `0.0pt` 锚点断言、纯色 sRGB `<=1/255` 与 WCAG 对比度、浅／深色与五平台快照一致性（`<=0.1%`）及合成 `setMarkedText` 输入法组字零误送断言。
-- 打包与隐私门禁：`dist/bundle/AgentHub.app` 与预览包 `dist/preview/bundle/AgentHub.app` 均通过 `codesign --verify --deep --strict`、`privacy-check.py --payload`（`649 checked, 0 failures`）、一次性加密 Minisign 签发 + `deploy/agenthub-webd/install-safety.py verify` 回验及 `scripts/test-install-script.sh`。
+- Rust `agenthub-ffi` 108 项测试（含继承的 99 项 `src-tauri` 测试、`drift_guard`、C ABI 生命周期、GFM 裸链自动识别与 Minisign 验签）、`src-tauri` 测试、工作区 `cargo fmt`／`clippy -D warnings`／`security-audit` 全部通过。
+- Swift Debug 与 Release `-O -whole-module-optimization` 编译及 `AGENTHUB_RENDER_TESTS=1 swift test` 30 项测试套件全部通过：覆盖 73 个非预览 WebUI 测试档映射守卫（`ParityManifest.json`）、5 组跨语言 Golden Vectors、全六平台反向分页与 `60/3` 单项展开、离屏子视图几何／整块矩形热区与反向分页／折叠／返回栈 `0.0pt` 锚点断言、真实 `styles.css` 与徽章像素 sRGB `<=1/255` 及 WCAG 对比度、浅／深色与五平台锁定基线快照校验（`SnapshotBaselines.json`，`<=0.1%`）及协作框／行内搜索框合成 `setMarkedText` 输入法组字零误送断言。
+- 打包与隐私门禁：`dist/bundle/AgentHub.app` 与预览包 `dist/preview/bundle/AgentHub.app` 均通过 `codesign --verify --deep --strict`、`privacy-check.py --payload`、一次性加密 Minisign 签发 + `deploy/agenthub-webd/install-safety.py verify` 回验及 `scripts/test-install-script.sh`。
 
 | 产物（`2.1.27` arm64） | 既有 Tauri 正式版字节 | 原生 Swift 6 阶段 A 字节 | 变化 |
 | --- | ---: | ---: | ---: |
-| macOS ARM64 DMG | 17,394,151 | 16,549,911 | -844,240（-4.85%） |
-| macOS updater `.tar.gz` | 16,814,579 | 15,249,012 | -1,565,567（-9.31%） |
+| macOS ARM64 DMG | 17,394,151 | 16,717,498 | -676,653（-3.89%） |
+| macOS updater `.tar.gz` | 16,814,579 | 15,441,128 | -1,373,451（-8.17%） |
 
 待用户并排实机验收：直接启动 `open dist/preview/bundle/AgentHub.app`（独立 Bundle ID `com.lich13.agenthub.preview` 与独立数据目录 `~/Library/Application Support/AgentHubPreview`）与已安装正式版 Tauri `AgentHub.app` 同屏并排对照：核对六大 Provider 真实历史会话排版与滚动跟手度、系统拼音／注音输入法在协作框及行内改名中的实打体验、本机 Codex 桌面 IPC 连接／排队／审批、SSH 远程机器切换，以及 Bark／macOS 通知中心实收跳转。确认无误后进入阶段 B 移除 `src-tauri/` 与 `webui/` 并定版发布。
 

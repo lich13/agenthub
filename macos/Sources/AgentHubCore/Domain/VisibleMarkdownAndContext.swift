@@ -893,6 +893,36 @@ public enum FileLinksAndPlanExport {
         return "\(reserved ? "_\(stem)" : stem).md"
     }
 
+    public struct FileLinkSpan: Equatable, Sendable {
+        public var nsRange: NSRange
+        public var href: String
+        public var label: String
+    }
+
+    public static func fileLinkSpans(_ text: String) -> [FileLinkSpan] {
+        guard text.contains("[") || text.contains("<") else { return [] }
+        let ns = text as NSString
+        var out: [FileLinkSpan] = []
+        // Match inline Markdown [label](href) and autolink <file:///...> outside code
+        let pattern = "(?:\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\))|(?:<(file:[^>\\s]+)>)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        for m in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            if m.range(at: 1).location != NSNotFound, m.range(at: 2).location != NSNotFound {
+                let label = ns.substring(with: m.range(at: 1))
+                let href = ns.substring(with: m.range(at: 2))
+                if fileLinkTarget(href) != nil {
+                    out.append(FileLinkSpan(nsRange: m.range, href: href, label: label))
+                }
+            } else if m.range(at: 3).location != NSNotFound {
+                let href = ns.substring(with: m.range(at: 3))
+                if fileLinkTarget(href) != nil {
+                    out.append(FileLinkSpan(nsRange: m.range, href: href, label: href))
+                }
+            }
+        }
+        return out
+    }
+
     private static func containsControlCharacters(_ value: String) -> Bool {
         value.unicodeScalars.contains { $0.value <= 0x1F || $0.value == 0x7F }
     }

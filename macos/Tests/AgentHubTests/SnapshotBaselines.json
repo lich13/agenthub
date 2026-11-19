@@ -1,0 +1,29 @@
+{
+  "maxRegionalPixelDriftRatio": 0.001,
+  "desktopRegions": [
+    { "name": "sideNav", "x": 8, "y": 240, "width": 180, "height": 360, "token": "railBg" },
+    { "name": "sessionList", "x": 212, "y": 240, "width": 260, "height": 360, "token": "surface" },
+    { "name": "mainStage", "x": 540, "y": 240, "width": 620, "height": 360, "token": "background" }
+  ],
+  "mobileRegions": [
+    { "name": "mobileTopBar", "x": 120, "y": 780, "width": 520, "height": 32, "token": "railBg" },
+    { "name": "mobileStage", "x": 120, "y": 240, "width": 520, "height": 360, "token": "surface" },
+    { "name": "mobileBottomTabs", "x": 120, "y": 8, "width": 520, "height": 36, "token": "railBg" }
+  ],
+  "providerExpectedSelectedNavColors": {
+    "light": {
+      "codex": { "selected": [228, 232, 239], "accent": [13, 13, 13] },
+      "claude": { "selected": [228, 232, 239], "accent": [166, 61, 28] },
+      "grok": { "selected": [228, 232, 239], "accent": [23, 23, 23] },
+      "antigravity": { "selected": [228, 232, 239], "accent": [24, 90, 188] },
+      "dsh": { "selected": [228, 232, 239], "accent": [36, 66, 200] }
+    },
+    "dark": {
+      "codex": { "selected": [42, 49, 61], "accent": [236, 236, 236] },
+      "claude": { "selected": [42, 49, 61], "accent": [243, 160, 132] },
+      "grok": { "selected": [42, 49, 61], "accent": [248, 250, 252] },
+      "antigravity": { "selected": [42, 49, 61], "accent": [138, 180, 248] },
+      "dsh": { "selected": [42, 49, 61], "accent": [125, 149, 255] }
+    }
+  }
+}

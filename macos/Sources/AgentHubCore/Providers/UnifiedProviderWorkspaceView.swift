@@ -30,9 +30,14 @@ public struct UnifiedProviderWorkspaceView: View {
     public let isCompactMobile: Bool
     public let scheme: ColorSchemeKind
     public var codexNewThreadSlot: (@MainActor (@escaping (String) -> Void) -> AnyView)?
-    public var codexCollaborationFooterSlot: (@MainActor (String, String?) -> AnyView)?
+    public var codexCollaborationFooterSlot: (@MainActor (String, String?, @escaping @MainActor () -> Void) -> AnyView)?
 
     @StateObject private var threadStore = ThreadMessageStore()
+    @StateObject private var claudeHistoryStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
+    @StateObject private var grokHistoryStore = PagedEventHistoryStore<GrokHistoryEvent> { ev, idx in
+        ev.id ?? ev.userMessage?.id ?? "\(ev.kind):\(ev.callId ?? ""):\(ev.timestamp ?? ""):\(idx)"
+    }
+    @StateObject private var providerHistoryStore = PagedEventHistoryStore<ProviderHistoryEvent> { ev, _ in ev.id }
     @StateObject private var motionObserver = AccessibilityMotionObserver()
 
     @State private var query: String = ""
@@ -50,7 +55,11 @@ public struct UnifiedProviderWorkspaceView: View {
     @State private var hasMoreOlder: Bool = false
     @State private var loadingOlder: Bool = false
     @State private var showAllHistory: Bool = false
+    @State private var revealedPositionKey: String?
+    @State private var pendingJumpPositionKey: String?
     @State private var latestReplyText: String?
+    @State private var renameRequestSeqByKey: [String: Int] = [:]
+    @State private var codexTailRefreshTask: Task<Void, Never>?
 
     @State private var selectionState = SessionSelectionEngine.empty(scope: "init")
     @State private var batchBusy: Bool = false
@@ -74,7 +83,7 @@ public struct UnifiedProviderWorkspaceView: View {
         isCompactMobile: Bool,
         scheme: ColorSchemeKind,
         codexNewThreadSlot: (@MainActor (@escaping (String) -> Void) -> AnyView)? = nil,
-        codexCollaborationFooterSlot: (@MainActor (String, String?) -> AnyView)? = nil
+        codexCollaborationFooterSlot: (@MainActor (String, String?, @escaping @MainActor () -> Void) -> AnyView)? = nil
     ) {
         self.store = store
         self.workspace = workspace
@@ -220,14 +229,52 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             }
         }
+        .background(
+            WorkspaceKeyboardShortcutMonitorView(
+                isModalOpen: searchModalOpen || batchPreview != nil || claudeDeletePreview != nil || grokDeletePreview != nil || previewImageItem != nil,
+                onRenameSelected: {
+                    guard provider != .grokbot, !selectionState.selecting, let item = selectedItem else { return false }
+                    renameRequestSeqByKey[item.sessionKey, default: 0] += 1
+                    return true
+                },
+                onEscapeClearSelection: {
+                    guard selectionState.selecting else { return false }
+                    selectionState = SessionSelectionEngine.empty(scope: selectionState.scope)
+                    return true
+                },
+                onBatchDelete: {
+                    guard provider != .grokbot, !batchBusy, selectionState.selecting, !selectionState.keys.isEmpty else { return false }
+                    Task { await prepareBatch(operation: .delete, keys: selectionState.keys) }
+                    return true
+                }
+            )
+            .frame(width: 0, height: 0)
+        )
         .onAppear { ensureCoordinator() }
         .onReceive(NotificationCenter.default.publisher(for: .agentHubSearchRequested)) { _ in
             searchModalOpen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentHubOpenMobileThreadsRequested)) { _ in
+            if workspace == .codex {
+                mobileDetailOpen = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentHubSelectAllRequested)) { _ in
             if provider != .grokbot && !searchModalOpen && batchPreview == nil {
                 selectAllVisible()
             }
+        }
+        .onChange(of: store.revision) { _ in
+            subagentDrawerOpen = false
+            selectedSubagent = nil
+            revealedPositionKey = nil
+            pendingJumpPositionKey = nil
+            claudeHistoryStore.clearAll()
+            grokHistoryStore.clearAll()
+            providerHistoryStore.clearAll()
+        }
+        .onChange(of: selectedItem?.sessionKey) { _ in
+            revealedPositionKey = nil
         }
         // 5s Session List Polling Clock (paused when window hidden)
         .task(id: "\(store.revision):\(workspace.rawValue):\(query):\(archivedOpen)") {
@@ -394,6 +441,7 @@ public struct UnifiedProviderWorkspaceView: View {
             disabled: batchBusy,
             canRename: item.canRename,
             renameBlockReason: item.renameBlockReason,
+            externalRenameRequestId: renameRequestSeqByKey[item.sessionKey, default: 0],
             rowMenuActions: rowActions,
             batchMenuActions: batchMenu,
             onRowClick: { click in
@@ -524,7 +572,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                         activeId: activeTimelineId,
                                         availableWidth: availableWidth
                                     ) { entry in
-                                        _ = coordinatorRef?.scrollToPositionKey(entry.id, reduceMotion: motionObserver.reduceMotion)
+                                        Task { await jumpAndRevealPositionKey(entry.id) }
                                     }
                                 }
                             }
@@ -540,7 +588,9 @@ public struct UnifiedProviderWorkspaceView: View {
                         if workspace == .codex, store.target == .local, store.capabilities.codexDesktop,
                            let footerSlot = codexCollaborationFooterSlot
                         {
-                            footerSlot(item.sessionKey, item.cwd.isEmpty ? nil : item.cwd)
+                            footerSlot(item.sessionKey, item.cwd.isEmpty ? nil : item.cwd) {
+                                scheduleDebouncedCodexTailRefresh()
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -653,6 +703,8 @@ public struct UnifiedProviderWorkspaceView: View {
             onRename: provider == .grokbot ? nil : {
                 if isHeaderMenu {
                     headerInlineRename = true
+                } else {
+                    renameRequestSeqByKey[item.sessionKey, default: 0] += 1
                 }
             },
             onToggleArchive: supportsArchive ? {
@@ -665,7 +717,7 @@ public struct UnifiedProviderWorkspaceView: View {
             },
             onRevealInFinder: { path in
                 Task {
-                    try? await FileOpenerService.revealFromArgsJSON("{\"paths\":[\"\(path)\"]}")
+                    try? await FileOpenerService.revealPaths([path])
                 }
             },
             onDelete: provider == .grokbot ? nil : {
@@ -800,7 +852,17 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private func scheduleDebouncedCodexTailRefresh() {
+        codexTailRefreshTask?.cancel()
+        codexTailRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled, provider == .codex, let item = selectedItem else { return }
+            await fetchSessionDetail(for: item)
+        }
+    }
+
     private func fetchSessionDetail(for item: UnifiedSessionSummaryItem) async {
+        let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
         do {
             switch provider {
             case .codex:
@@ -821,14 +883,15 @@ public struct UnifiedProviderWorkspaceView: View {
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
                     planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.threadSubagents
+                    subagentsSupported: store.capabilities.threadSubagents,
+                    revealedBlockId: revealedPositionKey
                 )
                 timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .codex,
                     sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
                 latestReplyText = rows.reversed().compactMap { r -> String? in
-                    if case let .assistant(md, _) = r.kind { return md }
+                    if case let .assistant(md, _) = r.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }
                     return nil
                 }.first
 
@@ -838,15 +901,25 @@ public struct UnifiedProviderWorkspaceView: View {
                     "claude.detail",
                     args: Req(sessionKey: item.sessionKey, limit: 160)
                 )
-                subagents = detail.subagents
-                hasMoreOlder = detail.hasMore
-                beforeCursor = detail.beforeCursor
-                rows = ConversationRowBuilder.buildClaudeRows(events: detail.events)
-                timelineEntries = detail.timeline ?? TimelineViewModel.userTimelineEntries(
-                    provider: .claudeCode,
-                    sources: detail.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                let slot = claudeHistoryStore.applyHeadPoll(
+                    key: historyScope,
+                    headEvents: detail.events,
+                    history: detail.history,
+                    totalEvents: detail.totalEvents,
+                    beforeCursor: detail.beforeCursor,
+                    hasMore: detail.hasMore,
+                    timeline: detail.timeline,
+                    subagents: detail.subagents
                 )
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return md }; return nil }.first
+                subagents = slot.subagents
+                hasMoreOlder = slot.hasMore
+                beforeCursor = slot.beforeCursor
+                rows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
+                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                    provider: .claudeCode,
+                    sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                )
+                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
 
             case .grok:
                 struct Req: Encodable { let id: String; let limit: Int }
@@ -854,12 +927,26 @@ public struct UnifiedProviderWorkspaceView: View {
                     "grok.detail",
                     args: Req(id: item.sessionKey, limit: 160)
                 )
+                let slot = grokHistoryStore.applyHeadPoll(
+                    key: historyScope,
+                    headEvents: detail.events,
+                    history: detail.history,
+                    totalEvents: detail.totalEvents,
+                    beforeCursor: detail.beforeCursor,
+                    hasMore: detail.hasMore ?? false,
+                    timeline: detail.timeline
+                )
                 subagents = nil
-                hasMoreOlder = detail.hasMore ?? false
-                beforeCursor = detail.beforeCursor
-                rows = ConversationRowBuilder.buildGrokRows(events: detail.events, fallbackTitle: item.title)
-                timelineEntries = detail.timeline ?? []
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return md }; return nil }.first
+                hasMoreOlder = slot.hasMore
+                beforeCursor = slot.beforeCursor
+                rows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
+                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                    provider: .grok,
+                    sources: slot.events.enumerated().map { idx, ev in
+                        TimelineSourceItem(id: ev.id ?? ev.userMessage?.id ?? "grok-\(idx)", role: nil, kind: ev.kind, text: ev.text, userMessage: ev.userMessage)
+                    }
+                )
+                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
@@ -872,44 +959,138 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160)),
                     localOnly: provider == .grokbot
                 )
+                let slot = providerHistoryStore.applyHeadPoll(
+                    key: historyScope,
+                    headEvents: detail.events,
+                    history: detail.history,
+                    totalEvents: detail.totalEvents,
+                    beforeCursor: detail.beforeCursor,
+                    hasMore: detail.hasMore,
+                    timeline: detail.timeline
+                )
                 subagents = nil
-                hasMoreOlder = detail.hasMore
-                beforeCursor = detail.beforeCursor
-                rows = ConversationRowBuilder.buildProviderRows(events: detail.events, providerLabel: workspace.label)
-                timelineEntries = detail.timeline ?? []
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return md }; return nil }.first
+                hasMoreOlder = slot.hasMore
+                beforeCursor = slot.beforeCursor
+                rows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
+                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                    provider: provider,
+                    sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                )
+                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+            }
+
+            if let pending = pendingJumpPositionKey, selectedItem?.sessionKey == item.sessionKey {
+                pendingJumpPositionKey = nil
+                await jumpAndRevealPositionKey(pending)
             }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func loadOlderPageIfNeeded() async {
-        guard hasMoreOlder, !loadingOlder, let cursor = beforeCursor, let item = selectedItem else { return }
+    @discardableResult
+    private func loadOlderPageIfNeeded() async -> Bool {
+        guard hasMoreOlder, !loadingOlder, let cursor = beforeCursor, let item = selectedItem else { return false }
         loadingOlder = true
         defer { loadingOlder = false }
-        if provider == .codex {
+        let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
+
+        switch provider {
+        case .codex:
             struct BlocksArgs: Encodable {
                 struct Opts: Encodable { let limit: Int; let before: String }
                 let id: String
                 let options: Opts
             }
-            if let page: ThreadBlockPage = try? await store.rpc(
+            guard let page: ThreadBlockPage = try? await store.rpc(
                 "threads.blocks",
                 args: BlocksArgs(id: item.sessionKey, options: .init(limit: 120, before: cursor))
-            ) {
-                let slot = threadStore.applyBlockPage(page, expectedCursor: cursor)
-                hasMoreOlder = slot.hasMoreBlocks
-                beforeCursor = slot.beforeCursor
-                let nextRows = ConversationRowBuilder.buildCodexRows(
-                    blocks: slot.blocks,
-                    showAllHistory: showAllHistory || slot.showAllHistory,
-                    planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.threadSubagents
-                )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-                rows = nextRows
+            ) else { return false }
+            let slot = threadStore.applyBlockPage(page, expectedCursor: cursor)
+            let advanced = (!page.blocks.isEmpty && slot.beforeCursor != cursor)
+            hasMoreOlder = advanced ? slot.hasMoreBlocks : false
+            beforeCursor = advanced ? slot.beforeCursor : nil
+            let nextRows = ConversationRowBuilder.buildCodexRows(
+                blocks: slot.blocks,
+                showAllHistory: showAllHistory || slot.showAllHistory,
+                planFallbackTitle: item.title,
+                subagentsSupported: store.capabilities.threadSubagents,
+                revealedBlockId: revealedPositionKey
+            )
+            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+            rows = nextRows
+            return advanced || !page.blocks.isEmpty
+
+        case .claudeCode:
+            struct Req: Encodable { let sessionKey: String; let limit: Int; let before: String }
+            guard let page: ClaudeSessionDetail = try? await store.rpc(
+                "claude.detail",
+                args: Req(sessionKey: item.sessionKey, limit: 160, before: cursor)
+            ) else { return false }
+            let slot = claudeHistoryStore.applyOlderPage(
+                key: historyScope,
+                expectedCursor: cursor,
+                olderEvents: page.events,
+                history: page.history,
+                totalEvents: page.totalEvents,
+                beforeCursor: page.beforeCursor,
+                hasMore: page.hasMore
+            )
+            hasMoreOlder = slot.hasMore
+            beforeCursor = slot.beforeCursor
+            let nextRows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
+            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+            rows = nextRows
+            return !page.events.isEmpty
+
+        case .grok:
+            struct Req: Encodable { let id: String; let limit: Int; let before: String }
+            guard let page: GrokSessionDetail = try? await store.rpc(
+                "grok.detail",
+                args: Req(id: item.sessionKey, limit: 160, before: cursor)
+            ) else { return false }
+            let slot = grokHistoryStore.applyOlderPage(
+                key: historyScope,
+                expectedCursor: cursor,
+                olderEvents: page.events,
+                history: page.history,
+                totalEvents: page.totalEvents,
+                beforeCursor: page.beforeCursor,
+                hasMore: page.hasMore ?? false
+            )
+            hasMoreOlder = slot.hasMore
+            beforeCursor = slot.beforeCursor
+            let nextRows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
+            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+            rows = nextRows
+            return !page.events.isEmpty
+
+        case .antigravity, .dsh, .grokbot:
+            let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
+            struct Wrap: Encodable {
+                struct Inner: Encodable { let sessionKey: String; let limit: Int; let before: String }
+                let request: Inner
             }
+            guard let page: ProviderSessionDetail = try? await store.rpc(
+                cmd,
+                args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160, before: cursor)),
+                localOnly: provider == .grokbot
+            ) else { return false }
+            let slot = providerHistoryStore.applyOlderPage(
+                key: historyScope,
+                expectedCursor: cursor,
+                olderEvents: page.events,
+                history: page.history,
+                totalEvents: page.totalEvents,
+                beforeCursor: page.beforeCursor,
+                hasMore: page.hasMore
+            )
+            hasMoreOlder = slot.hasMore
+            beforeCursor = slot.beforeCursor
+            let nextRows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
+            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+            rows = nextRows
+            return !page.events.isEmpty
         }
     }
 
@@ -1082,19 +1263,54 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private func jumpAndRevealPositionKey(_ positionKey: String?) async {
+        guard let positionKey, !positionKey.isEmpty, let item = selectedItem else { return }
+        let capturedRevision = store.revision
+        let capturedSession = item.sessionKey
+
+        // Unfold single target block inside Codex 60/3 compact history if needed
+        if provider == .codex, revealedPositionKey != positionKey {
+            revealedPositionKey = positionKey
+            let slot = threadStore.slot(for: item.sessionKey)
+            if !slot.blocks.isEmpty {
+                let rebuilt = ConversationRowBuilder.buildCodexRows(
+                    blocks: slot.blocks,
+                    showAllHistory: showAllHistory || slot.showAllHistory,
+                    planFallbackTitle: item.title,
+                    subagentsSupported: store.capabilities.threadSubagents,
+                    revealedBlockId: positionKey
+                )
+                coordinatorRef?.updateRowsPreservingAnchor(rebuilt, preferAutoFollowBottom: false)
+                rows = rebuilt
+            }
+        }
+
+        if coordinatorRef?.scrollToPositionKey(positionKey, reduceMotion: motionObserver.reduceMotion) == true {
+            return
+        }
+
+        // Bounded backward paging until positionKey is loaded or cursor stops advancing (AGENTS.md:37, 130)
+        var attempts = 0
+        while attempts < 25, hasMoreOlder, store.revision == capturedRevision, selectedItem?.sessionKey == capturedSession {
+            attempts += 1
+            let loaded = await loadOlderPageIfNeeded()
+            if !loaded { break }
+            if coordinatorRef?.scrollToPositionKey(positionKey, reduceMotion: motionObserver.reduceMotion) == true {
+                return
+            }
+        }
+    }
+
     private func handleSearchResultSelected(_ result: SessionSearchResult) {
         if selectedItem?.sessionKey != result.sessionKey {
+            pendingJumpPositionKey = result.positionKey
             selectedKey = result.sessionKey
             mobileDetailOpen = true
             if supportsArchive && !activeItems.contains(where: { $0.sessionKey == result.sessionKey }) {
                 archivedOpen = true
             }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                _ = coordinatorRef?.scrollToPositionKey(result.positionKey, reduceMotion: motionObserver.reduceMotion)
-            }
         } else {
-            _ = coordinatorRef?.scrollToPositionKey(result.positionKey, reduceMotion: motionObserver.reduceMotion)
+            Task { await jumpAndRevealPositionKey(result.positionKey) }
         }
     }
 

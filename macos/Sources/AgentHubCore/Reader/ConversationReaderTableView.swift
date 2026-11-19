@@ -99,14 +99,15 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public func updateRowsPreservingAnchor(
         _ nextRows: [ConversationRowItem],
-        preferAutoFollowBottom: Bool = false
+        preferAutoFollowBottom: Bool = false,
+        forceScrollToBottom: Bool = false
     ) {
         guard let tableView, let clipView = scrollView?.contentView else {
             rows = nextRows
             return
         }
         let wasEmpty = rows.isEmpty
-        let shouldFollow = preferAutoFollowBottom && (wasEmpty || isNearBottom())
+        let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && (wasEmpty || isNearBottom()))
         let anchor = shouldFollow ? nil : captureScrollAnchor()
 
         isRestoringScroll = true
@@ -132,6 +133,25 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
                 self.scrollView?.reflectScrolledClipView(clipView)
             }
+        }
+        isRestoringScroll = false
+        refreshViewportAttachmentsAndTimeline()
+    }
+
+    public func restoreExplicitAnchor(_ anchor: ScrollAnchorSnapshot) {
+        guard let tableView, let clipView = scrollView?.contentView,
+              let idx = rows.firstIndex(where: { $0.timelineId == anchor.timelineId })
+        else { return }
+        isRestoringScroll = true
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            ctx.allowsImplicitAnimation = false
+            tableView.tile()
+            tableView.layoutSubtreeIfNeeded()
+            let minY = -(self.scrollView?.contentInsets.top ?? 0)
+            let newRect = tableView.rect(ofRow: idx)
+            clipView.setBoundsOrigin(NSPoint(x: 0, y: max(minY, newRect.minY - anchor.deltaY)))
+            self.scrollView?.reflectScrolledClipView(clipView)
         }
         isRestoringScroll = false
         refreshViewportAttachmentsAndTimeline()
@@ -352,7 +372,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             }
             if !proj.contextBlocks.isEmpty {
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: "\(row.timelineId):context", initiallyOpen: false)
-                h += open ? 128 : 34
+                if open {
+                    let ctxText = proj.contextBlocks.map { UserContextEngine.visibleContextText($0.text) }.joined(separator: "\n\n")
+                    h += 34 + 8 + Self.measureMonospaceBoxHeight(text: ctxText, width: min(width, 620))
+                } else {
+                    h += 34
+                }
             }
             let bubbleWidth = max(120, min(width * 0.82, width - 32))
             let para = NSMutableParagraphStyle()
@@ -373,7 +398,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return max(44, h)
 
         case let .assistant(markdown, foldInstructions):
-            return measureMarkdownSegmentsHeight(markdown: markdown, foldInstructions: foldInstructions, width: width) + 12
+            return measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: foldInstructions, width: width) + 12
 
         case let .executionGroup(group):
             let isOpen = disclosureStore.isOpen(
@@ -391,17 +416,22 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                     aliases: cmd.sourceIds,
                     initiallyOpen: !cmd.instructionFile && (cmd.status == .running || cmd.status == .failed)
                 )
-                h += cmdOpen ? 136 : 36
+                if cmdOpen {
+                    let detail = cmd.sections.map { "\($0.label)\n\($0.text)" }.joined(separator: "\n\n")
+                    h += 36 + 8 + Self.measureMonospaceBoxHeight(text: detail.isEmpty ? "暂无输出" : detail, width: width - 16)
+                } else {
+                    h += 36
+                }
             }
             return h
 
         case let .thinking(_, text, running):
             let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: row.id, initiallyOpen: running)
             if !open { return 38 }
-            return 48 + measureMarkdownSegmentsHeight(markdown: text, foldInstructions: false, width: max(120, width - 28))
+            return 48 + measureMarkdownSegmentsHeight(ownerId: row.id, markdown: text, foldInstructions: false, width: max(120, width - 28))
 
         case let .plan(markdown, _, _):
-            return 56 + measureMarkdownSegmentsHeight(markdown: markdown, foldInstructions: false, width: max(120, width - 32))
+            return 56 + measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: false, width: max(120, width - 32))
 
         case let .question(_, questions):
             return CGFloat(56 + questions.count * 76)
@@ -420,7 +450,17 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
-    private func measureMarkdownSegmentsHeight(markdown: String, foldInstructions: Bool, width: CGFloat) -> CGFloat {
+    public static func measureMonospaceBoxHeight(text: String, width: CGFloat) -> CGFloat {
+        let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
+        let attr = NSAttributedString(
+            string: cleaned.isEmpty ? " " : cleaned,
+            attributes: [.font: DesignFonts.nsMonoFont(size: 12)]
+        )
+        let measured = ReaderSelectableTextView.measureHeight(attributed: attr, width: max(80, width - 24))
+        return min(220, max(48, measured + 18))
+    }
+
+    private func measureMarkdownSegmentsHeight(ownerId: String, markdown: String, foldInstructions: Bool, width: CGFloat) -> CGFloat {
         let segs = GfmLayoutCache.shared.getOrRender(
             markdown: markdown,
             foldInstructions: foldInstructions,
@@ -441,9 +481,14 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 total += CGFloat(rows.count + 1) * 34 + 28
             case .thematicBreak:
                 total += 21
-            case let .instructionsFold(id, _, _, _):
-                let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: id, initiallyOpen: false)
-                total += open ? 140 : 38
+            case let .instructionsFold(id, text, _, _):
+                let scopedKey = "\(ownerId):\(id)"
+                let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: scopedKey, initiallyOpen: false)
+                if open {
+                    total += 42 + measureMarkdownSegmentsHeight(ownerId: scopedKey, markdown: text, foldInstructions: false, width: width)
+                } else {
+                    total += 38
+                }
             }
         }
         return max(28, total)
@@ -502,13 +547,13 @@ public final class ConversationRowCellView: NSTableCellView {
         case let .user(msg, rawText, namesOnly):
             buildUserView(item: item, msg: msg, rawText: rawText, namesOnly: namesOnly, width: contentWidth, coordinator: coordinator)
         case let .assistant(markdown, foldInstructions):
-            buildMarkdownViews(markdown: markdown, foldInstructions: foldInstructions, width: contentWidth, showCopyReply: true, coordinator: coordinator)
+            buildMarkdownViews(ownerId: item.id, markdown: markdown, foldInstructions: foldInstructions, width: contentWidth, showCopyReply: true, coordinator: coordinator)
         case let .executionGroup(group):
             buildExecutionGroupView(group: group, width: contentWidth, coordinator: coordinator)
         case let .thinking(title, text, running):
             buildThinkingView(id: item.id, title: title, text: text, running: running, width: contentWidth, coordinator: coordinator)
         case let .plan(markdown, statusText, fallbackTitle):
-            buildPlanView(markdown: markdown, statusText: statusText, fallbackTitle: fallbackTitle, width: contentWidth, coordinator: coordinator)
+            buildPlanView(id: item.id, markdown: markdown, statusText: statusText, fallbackTitle: fallbackTitle, width: contentWidth, coordinator: coordinator)
         case let .question(header, questions):
             buildQuestionView(header: header, questions: questions, answers: nil, width: contentWidth, coordinator: coordinator)
         case let .questionResult(statusText, questions, answers):
@@ -593,7 +638,7 @@ public final class ConversationRowCellView: NSTableCellView {
             rightAlignRow.addArrangedSubview(toggle)
             if open {
                 let text = proj.contextBlocks.map { UserContextEngine.visibleContextText($0.text) }.joined(separator: "\n\n")
-                let box = makeMonospaceDetailBox(text: text, width: min(width, 620), palette: palette)
+                let box = makeMonospaceDetailBox(text: text, width: min(width, 620), palette: palette, coordinator: coordinator, linkifyFiles: false)
                 rightAlignRow.addArrangedSubview(box)
             }
         }
@@ -641,6 +686,7 @@ public final class ConversationRowCellView: NSTableCellView {
     }
 
     private func buildMarkdownViews(
+        ownerId: String,
         markdown: String,
         foldInstructions: Bool,
         width: CGFloat,
@@ -648,6 +694,7 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) {
         let palette = coordinator.palette
+        let cleanedSource = VisibleMarkdownEngine.visibleMarkdown(markdown)
         let segs = GfmLayoutCache.shared.getOrRender(
             markdown: markdown,
             foldInstructions: foldInstructions,
@@ -694,7 +741,7 @@ public final class ConversationRowCellView: NSTableCellView {
                 containerStack.addArrangedSubview(makeCodeBlockView(lang: lang, code: code, width: width, coordinator: coordinator))
 
             case let .table(_, headers, rows):
-                containerStack.addArrangedSubview(makeTableView(headers: headers, rows: rows, width: width, palette: palette))
+                containerStack.addArrangedSubview(makeTableView(headers: headers, rows: rows, width: width, palette: palette, coordinator: coordinator))
 
             case .thematicBreak:
                 let rule = NSView()
@@ -707,20 +754,28 @@ public final class ConversationRowCellView: NSTableCellView {
                 ])
                 containerStack.addArrangedSubview(rule)
 
-            case let .instructionsFold(id, text, lines, _):
-                let open = coordinator.disclosureStore.isOpen(scope: coordinator.sessionScopeKey, stateKey: id, initiallyOpen: false)
+            case let .instructionsFold(id, text, lines, bytes):
+                let scopedKey = "\(ownerId):\(id)"
+                let open = coordinator.disclosureStore.isOpen(scope: coordinator.sessionScopeKey, stateKey: scopedKey, initiallyOpen: false)
                 let btn = makeDisclosureHeaderButton(
                     title: "AGENTS.md",
-                    meta: "\(lines) 行",
+                    meta: "\(lines) 行 · \(bytes) 字节",
                     open: open,
                     width: width,
                     palette: palette
                 ) { [weak coordinator] in
-                    coordinator?.toggleDisclosurePreservingAnchor(stateKey: id, currentlyOpen: open)
+                    coordinator?.toggleDisclosurePreservingAnchor(stateKey: scopedKey, currentlyOpen: open)
                 }
                 containerStack.addArrangedSubview(btn)
                 if open {
-                    containerStack.addArrangedSubview(makeMonospaceDetailBox(text: text, width: width, palette: palette))
+                    buildMarkdownViews(
+                        ownerId: scopedKey,
+                        markdown: text,
+                        foldInstructions: false,
+                        width: width,
+                        showCopyReply: false,
+                        coordinator: coordinator
+                    )
                 }
             }
         }
@@ -732,11 +787,37 @@ public final class ConversationRowCellView: NSTableCellView {
             copyBtn.contentTintColor = palette.textMuted.nsColor
             copyBtn.onTap = { [weak coordinator] in
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(markdown, forType: .string)
+                NSPasteboard.general.setString(cleanedSource, forType: .string)
                 coordinator?.onCopyFeedback?("已复制答复")
             }
             containerStack.addArrangedSubview(copyBtn)
         }
+    }
+
+    private func handleActivatedHref(_ href: String, coordinator: ConversationTableCoordinator) -> Bool {
+        if let fileTarget = FileLinksAndPlanExport.fileLinkTarget(href, cwd: coordinator.cwd) {
+            if coordinator.store.target == .local && fileTarget.resolved {
+                let targetPath = fileTarget.path
+                Task {
+                    try? await FileOpenerService.revealPaths([targetPath])
+                }
+            } else {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(fileTarget.path, forType: .string)
+                coordinator.onCopyFeedback?(
+                    fileTarget.resolved ? "已复制路径" : "已复制原路径；缺少工作目录，无法定位。"
+                )
+            }
+            return true
+        }
+        if let url = URL(string: href),
+           let scheme = url.scheme?.lowercased(),
+           scheme == "https" || scheme == "http" || scheme == "mailto"
+        {
+            NSWorkspace.shared.open(url)
+            return true
+        }
+        return false
     }
 
     private func makeProseTextView(
@@ -752,26 +833,9 @@ public final class ConversationRowCellView: NSTableCellView {
             tv.widthAnchor.constraint(equalToConstant: width),
             tv.heightAnchor.constraint(equalToConstant: h),
         ])
-        tv.onLinkActivated = { [weak coordinator] href in
-            guard let coordinator else { return false }
-            if let fileTarget = FileLinksAndPlanExport.fileLinkTarget(href, cwd: coordinator.cwd) {
-                if coordinator.store.target == .local && fileTarget.resolved {
-                    let targetPath = fileTarget.path
-                    Task {
-                        try? await FileOpenerService.revealFromArgsJSON("{\"paths\":[\"\(targetPath)\"]}")
-                    }
-                } else {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(fileTarget.path, forType: .string)
-                    coordinator.onCopyFeedback?("已复制路径")
-                }
-                return true
-            }
-            if let url = URL(string: href), url.scheme == "https" || url.scheme == "http" {
-                NSWorkspace.shared.open(url)
-                return true
-            }
-            return false
+        tv.onLinkActivated = { [weak self, weak coordinator] href in
+            guard let self, let coordinator else { return false }
+            return self.handleActivatedHref(href, coordinator: coordinator)
         }
         return tv
     }
@@ -845,10 +909,11 @@ public final class ConversationRowCellView: NSTableCellView {
     }
 
     private func makeTableView(
-        headers: [String],
-        rows: [[String]],
+        headers: [NSAttributedString],
+        rows: [[NSAttributedString]],
         width: CGFloat,
-        palette: DesignPalette
+        palette: DesignPalette,
+        coordinator: ConversationTableCoordinator
     ) -> NSView {
         let scroll = NSScrollView()
         scroll.hasHorizontalScroller = true
@@ -876,13 +941,15 @@ public final class ConversationRowCellView: NSTableCellView {
                 cellBox.layer?.borderWidth = 0.5
                 cellBox.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
 
-                let text = cIdx < cols.count ? cols[cIdx] : ""
-                let lbl = NSTextField(labelWithString: text)
-                lbl.font = DesignFonts.nsBodyFont(size: 13, weight: rIdx == 0 ? .semibold : .regular)
-                lbl.textColor = palette.textPrimary.nsColor
-                lbl.lineBreakMode = .byTruncatingTail
-                lbl.frame = NSRect(x: 12, y: 8, width: colWidth - 24, height: 18)
-                cellBox.addSubview(lbl)
+                let cellAttr = cIdx < cols.count ? cols[cIdx] : NSAttributedString(string: "")
+                let tv = ReaderSelectableTextView()
+                tv.textStorage?.setAttributedString(cellAttr)
+                tv.frame = NSRect(x: 12, y: 7, width: max(40, colWidth - 24), height: 20)
+                tv.onLinkActivated = { [weak self, weak coordinator] href in
+                    guard let self, let coordinator else { return false }
+                    return self.handleActivatedHref(href, coordinator: coordinator)
+                }
+                cellBox.addSubview(tv)
                 docView.addSubview(cellBox)
             }
         }
@@ -946,7 +1013,13 @@ public final class ConversationRowCellView: NSTableCellView {
             if cmdOpen {
                 let detail = cmd.sections.map { "\($0.label)\n\($0.text)" }.joined(separator: "\n\n")
                 containerStack.addArrangedSubview(
-                    makeMonospaceDetailBox(text: detail.isEmpty ? "暂无输出" : detail, width: width - 16, palette: palette)
+                    makeMonospaceDetailBox(
+                        text: detail.isEmpty ? "暂无输出" : detail,
+                        width: width - 16,
+                        palette: palette,
+                        coordinator: coordinator,
+                        linkifyFiles: true
+                    )
                 )
             }
         }
@@ -973,11 +1046,12 @@ public final class ConversationRowCellView: NSTableCellView {
         }
         containerStack.addArrangedSubview(btn)
         if open {
-            buildMarkdownViews(markdown: text, foldInstructions: false, width: max(120, width - 20), showCopyReply: false, coordinator: coordinator)
+            buildMarkdownViews(ownerId: id, markdown: text, foldInstructions: false, width: max(120, width - 20), showCopyReply: false, coordinator: coordinator)
         }
     }
 
     private func buildPlanView(
+        id: String,
         markdown: String,
         statusText: String,
         fallbackTitle: String,
@@ -985,6 +1059,7 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) {
         let palette = coordinator.palette
+        let cleanedPlan = VisibleMarkdownEngine.visibleMarkdown(markdown)
         let headerRow = NSStackView()
         headerRow.orientation = .horizontal
         headerRow.spacing = 8
@@ -999,7 +1074,7 @@ public final class ConversationRowCellView: NSTableCellView {
         copyBtn.font = DesignFonts.nsBodyFont(size: 12, weight: .medium)
         copyBtn.onTap = { [weak coordinator] in
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(markdown, forType: .string)
+            NSPasteboard.general.setString(cleanedPlan, forType: .string)
             coordinator?.onCopyFeedback?("已复制计划")
         }
 
@@ -1008,12 +1083,12 @@ public final class ConversationRowCellView: NSTableCellView {
         saveBtn.font = DesignFonts.nsBodyFont(size: 12, weight: .medium)
         saveBtn.onTap = { [weak coordinator] in
             guard let coordinator else { return }
-            let filename = FileLinksAndPlanExport.planFilename(markdown: markdown, fallbackTitle: fallbackTitle)
+            let filename = FileLinksAndPlanExport.planFilename(markdown: cleanedPlan, fallbackTitle: fallbackTitle)
             Task { @MainActor in
                 struct Wrap: Encodable { let request: PlanSaveRequest }
                 if let saved: PlanSaveResult = try? await coordinator.store.rpc(
                     "plans.save",
-                    args: Wrap(request: PlanSaveRequest(filename: filename, markdown: markdown)),
+                    args: Wrap(request: PlanSaveRequest(filename: filename, markdown: cleanedPlan)),
                     localOnly: true
                 ) {
                     coordinator.onCopyFeedback?("已保存至 \(saved.path)")
@@ -1026,7 +1101,7 @@ public final class ConversationRowCellView: NSTableCellView {
         headerRow.addArrangedSubview(copyBtn)
         headerRow.addArrangedSubview(saveBtn)
         containerStack.addArrangedSubview(headerRow)
-        buildMarkdownViews(markdown: markdown, foldInstructions: false, width: width, showCopyReply: false, coordinator: coordinator)
+        buildMarkdownViews(ownerId: id, markdown: cleanedPlan, foldInstructions: false, width: width, showCopyReply: false, coordinator: coordinator)
     }
 
     private func buildQuestionView(
@@ -1162,26 +1237,69 @@ public final class ConversationRowCellView: NSTableCellView {
         return btn
     }
 
-    private func makeMonospaceDetailBox(text: String, width: CGFloat, palette: DesignPalette) -> NSView {
+    private func makeMonospaceDetailBox(
+        text: String,
+        width: CGFloat,
+        palette: DesignPalette,
+        coordinator: ConversationTableCoordinator,
+        linkifyFiles: Bool
+    ) -> NSView {
+        let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: DesignFonts.nsMonoFont(size: 12),
+            .foregroundColor: palette.textSecondary.nsColor,
+        ]
+        let attr = NSMutableAttributedString()
+        if linkifyFiles {
+            let spans = FileLinksAndPlanExport.fileLinkSpans(cleaned)
+            let ns = cleaned as NSString
+            var cursor = 0
+            for span in spans where span.nsRange.location >= cursor {
+                if span.nsRange.location > cursor {
+                    let prefix = ns.substring(with: NSRange(location: cursor, length: span.nsRange.location - cursor))
+                    attr.append(NSAttributedString(string: prefix, attributes: baseAttrs))
+                }
+                var linkAttrs = baseAttrs
+                linkAttrs[.foregroundColor] = palette.accent.nsColor
+                linkAttrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                linkAttrs[.link] = span.href
+                attr.append(NSAttributedString(string: span.label, attributes: linkAttrs))
+                cursor = span.nsRange.location + span.nsRange.length
+            }
+            if cursor < ns.length {
+                attr.append(NSAttributedString(string: ns.substring(from: cursor), attributes: baseAttrs))
+            }
+        } else {
+            attr.append(NSAttributedString(string: cleaned, attributes: baseAttrs))
+        }
+
+        let innerW = max(80, width - 24)
+        let contentH = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: innerW))
+        let boxH = min(220, max(48, contentH + 18))
+
         let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
+        scroll.hasVerticalScroller = contentH + 18 > boxH
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = true
         scroll.backgroundColor = palette.codeBg.nsColor
         scroll.wantsLayer = true
         scroll.layer?.cornerRadius = 8
         scroll.layer?.borderWidth = 1
         scroll.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
-        let lbl = NSTextField(wrappingLabelWithString: String(text.prefix(8000)))
-        lbl.font = DesignFonts.nsMonoFont(size: 12)
-        lbl.textColor = palette.textSecondary.nsColor
-        lbl.isSelectable = true
-        lbl.preferredMaxLayoutWidth = max(80, width - 24)
-        lbl.frame = NSRect(x: 10, y: 8, width: max(80, width - 24), height: 96)
-        scroll.documentView = lbl
+
+        let tv = ReaderSelectableTextView()
+        tv.textStorage?.setAttributedString(attr)
+        tv.textContainerInset = NSSize(width: 10, height: 8)
+        tv.frame = NSRect(x: 0, y: 0, width: max(100, width), height: max(boxH, contentH + 16))
+        tv.onLinkActivated = { [weak self, weak coordinator] href in
+            guard let self, let coordinator else { return false }
+            return self.handleActivatedHref(href, coordinator: coordinator)
+        }
+        scroll.documentView = tv
         scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             scroll.widthAnchor.constraint(equalToConstant: max(100, width)),
-            scroll.heightAnchor.constraint(equalToConstant: 96),
+            scroll.heightAnchor.constraint(equalToConstant: boxH),
         ])
         return scroll
     }
@@ -1313,7 +1431,11 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         nsView.backgroundColor = coordinator.palette.background.nsColor
 
         if coordinator.rows != rows || sessionChanged {
-            coordinator.updateRowsPreservingAnchor(rows, preferAutoFollowBottom: sessionChanged || true)
+            coordinator.updateRowsPreservingAnchor(
+                rows,
+                preferAutoFollowBottom: true,
+                forceScrollToBottom: sessionChanged
+            )
         }
     }
 }

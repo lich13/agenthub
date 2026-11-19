@@ -11,7 +11,7 @@ public final class RuntimeConnectionStore: ObservableObject {
         "jobs.list", "jobs.detail", "probe.status", "probe.settings.get",
         "probe.events", "updates.status", "grokbot.list", "grokbot.detail",
         "grok.list", "grok.detail", "grok.deletePreview", "claude.list",
-        "claude.detail", "claude.deletePreview", "antigravity.list",
+        "claude.detail", "claude.ownershipDiagnostics", "claude.deletePreview", "antigravity.list",
         "antigravity.detail", "dsh.list", "dsh.detail",
         "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview",
         "codex.desktop.attach", "codex.desktop.catalog", "codex.desktop.diagnostics",
@@ -175,7 +175,14 @@ public final class RuntimeConnectionStore: ObservableObject {
         }
         let capturedRevision = revision
         let capturedTarget = target
-        let isWrite = !Self.readCommands.contains(command)
+        let isReadHookStatus: Bool = {
+            guard command == "claude.hooks",
+                  case let .object(req)? = argsObject["request"],
+                  case let .string(act)? = req["action"]
+            else { return false }
+            return act == "status"
+        }()
+        let isWrite = !Self.readCommands.contains(command) && !isReadHookStatus
         if isWrite { writes += 1 }
         defer { if isWrite { writes = max(0, writes - 1) } }
 

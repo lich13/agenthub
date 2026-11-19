@@ -231,6 +231,114 @@ public enum ProviderMenuMatrixBuilder {
         }
         return false
     }
+
+    public static func shouldTriggerRenameKey(
+        keyCode: UInt16,
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let disallowed: NSEvent.ModifierFlags = [.command, .control, .option]
+        guard modifierFlags.intersection(disallowed).isEmpty else { return false }
+        return keyCode == 120 || charactersIgnoringModifiers == "\u{F705}"
+    }
+}
+
+public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
+    public var isModalOpen: Bool
+    public var onRenameSelected: () -> Bool
+    public var onEscapeClearSelection: () -> Bool
+    public var onBatchDelete: () -> Bool
+
+    public init(
+        isModalOpen: Bool,
+        onRenameSelected: @escaping () -> Bool,
+        onEscapeClearSelection: @escaping () -> Bool,
+        onBatchDelete: @escaping () -> Bool
+    ) {
+        self.isModalOpen = isModalOpen
+        self.onRenameSelected = onRenameSelected
+        self.onEscapeClearSelection = onEscapeClearSelection
+        self.onBatchDelete = onBatchDelete
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    public func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    public func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.attach(to: nsView)
+    }
+
+    public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    public final class Coordinator {
+        var parent: WorkspaceKeyboardShortcutMonitorView
+        private weak var hostView: NSView?
+        private var monitor: Any?
+
+        init(parent: WorkspaceKeyboardShortcutMonitorView) {
+            self.parent = parent
+        }
+
+        func attach(to view: NSView) {
+            hostView = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                return self.handleKeyDown(event) ? nil : event
+            }
+        }
+
+        func detach() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        private func handleKeyDown(_ event: NSEvent) -> Bool {
+            guard !parent.isModalOpen,
+                  let win = hostView?.window,
+                  event.window === win,
+                  win.attachedSheet == nil,
+                  NSApp.modalWindow == nil
+            else { return false }
+
+            if let tv = win.firstResponder as? NSTextView, tv.isEditable {
+                return false
+            }
+
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if ProviderMenuMatrixBuilder.shouldTriggerRenameKey(
+                keyCode: event.keyCode,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                modifierFlags: flags
+            ) {
+                return parent.onRenameSelected()
+            }
+            if event.keyCode == 53 && flags.isEmpty {
+                return parent.onEscapeClearSelection()
+            }
+            if ProviderMenuMatrixBuilder.shouldTriggerBatchDeleteKey(
+                keyCode: event.keyCode,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                modifierFlags: flags
+            ) {
+                return parent.onBatchDelete()
+            }
+            return false
+        }
+    }
 }
 
 // MARK: - Session Storage Badge & Renameable Session Row
@@ -281,6 +389,7 @@ public struct RenameableSessionRowView: View {
     public let disabled: Bool
     public let canRename: Bool
     public let renameBlockReason: String?
+    public var externalRenameRequestId: Int = 0
     public let rowMenuActions: [SessionMenuAction]
     public let batchMenuActions: [SessionMenuAction]
     public let onRowClick: (SessionClick) -> Void
@@ -304,6 +413,7 @@ public struct RenameableSessionRowView: View {
                         text: $draft,
                         maxLength: 200,
                         placeholder: "线程名称",
+                        autoFocus: true,
                         onSubmit: { Task { await saveRename(restoreFocus: true) } },
                         onCancel: {
                             editing = false
@@ -435,6 +545,11 @@ public struct RenameableSessionRowView: View {
         }
         .onChange(of: selecting) { isSel in
             if isSel { editing = false; errorText = nil }
+        }
+        .onChange(of: externalRenameRequestId) { reqId in
+            if reqId > 0 {
+                beginRename()
+            }
         }
     }
 

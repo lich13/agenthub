@@ -255,9 +255,11 @@ public final class CodexDesktopStore: ObservableObject {
     @Published public private(set) var busy: Bool = false
     @Published public var actionError: String?
     @Published public private(set) var attachmentBindingId: String?
+    public private(set) var lastAttachmentBounds = DesktopAttachmentBounds(x: 0, y: 0, width: 640, height: 160)
 
     public var onItemsAttached: (([DesktopChosenItem]) -> Void)?
     public var onAttachmentError: ((String) -> Void)?
+    public var onStreamViewUpdated: (() -> Void)?
 
     public init(connection: RuntimeConnectionStore, threadId: String) {
         self.connection = connection
@@ -310,6 +312,7 @@ public final class CodexDesktopStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self, self.connection.revision == rev, decoded.threadId == tid else { return }
                         self.view = decoded
+                        self.onStreamViewUpdated?()
                     }
                 },
                 onStreamClosed: nil
@@ -329,6 +332,7 @@ public final class CodexDesktopStore: ObservableObject {
             await unbindAttachments(sessionId: sessionId, bindingId: bindingId)
         }
         guard let sessionId = view?.sessionId else { return }
+        view = nil
         struct DetachWrap: Encodable {
             struct Inner: Encodable { let revision: UInt64; let sessionId: String }
             let request: Inner
@@ -368,6 +372,7 @@ public final class CodexDesktopStore: ObservableObject {
                 localOnly: true
             )
             view = updated
+            onStreamViewUpdated?()
         } catch {
             actionError = error.localizedDescription
             throw error
@@ -418,6 +423,50 @@ public final class CodexDesktopStore: ObservableObject {
         )
     }
 
+    public struct ReferenceCatalogBatch: Equatable, Sendable {
+        public var items: [DesktopCatalogItem]
+        public var nextCursors: [String: String]
+        public var errors: [String: String]
+        public var sourceKinds: [String]
+    }
+
+    /// Fans out `"mentions"` into `["plugins", "apps"]` (matching `useDesktopReferenceCatalog.ts`),
+    /// since Rust `codex.desktop.catalog` only accepts `models | modes | skills | plugins | apps`.
+    public func fetchReferenceCatalog(
+        kind: String,
+        query: String,
+        cursors: [String: String] = [:],
+        nextPageOnly: Bool = false,
+        forceRefetch: Bool = false,
+        retryKind: String? = nil
+    ) async -> ReferenceCatalogBatch {
+        let kinds = (kind == "mentions") ? ["plugins", "apps"] : [kind]
+        var mergedItems: [DesktopCatalogItem] = []
+        var nextCursors: [String: String] = [:]
+        var errors: [String: String] = [:]
+
+        for sourceKind in kinds {
+            if let retryKind, retryKind != sourceKind { continue }
+            let cursor = nextPageOnly ? cursors[sourceKind] : nil
+            if nextPageOnly && cursor == nil { continue }
+            do {
+                let page = try await fetchCatalog(
+                    kind: sourceKind,
+                    query: query,
+                    cursor: cursor,
+                    forceRefetch: forceRefetch
+                )
+                mergedItems.append(contentsOf: page.items)
+                if let next = page.nextCursor, !next.isEmpty {
+                    nextCursors[sourceKind] = next
+                }
+            } catch {
+                errors[sourceKind] = error.localizedDescription
+            }
+        }
+        return ReferenceCatalogBatch(items: mergedItems, nextCursors: nextCursors, errors: errors, sourceKinds: kinds)
+    }
+
     public func chooseItem(kind: String) async throws -> DesktopChosenItem? {
         struct ChooseWrap: Encodable {
             struct Inner: Encodable { let revision: UInt64; let sessionId: String?; let kind: String }
@@ -443,9 +492,10 @@ public final class CodexDesktopStore: ObservableObject {
         )
     }
 
-    // MARK: - Attachment Binding, Paste & Drop
+    // MARK: - Attachment Binding, Live Bounds/Handles Sync, Paste & Drop
 
     public func bindAttachmentsIfNeeded(bounds: DesktopAttachmentBounds, handles: [String]) async {
+        lastAttachmentBounds = bounds
         guard let sessionId = view?.sessionId, view?.writable == true, attachmentBindingId == nil else { return }
         let rev = connection.revision
         let payload: [String: JSONValue] = [
@@ -487,11 +537,45 @@ public final class CodexDesktopStore: ObservableObject {
         }
     }
 
-    /// Returns `true` when Rust disposition is `"text"`, instructing `ComposerNSTextView` to invoke `super.paste` preserving Undo!
+    public func updateAttachmentBoundsAndHandles(bounds: DesktopAttachmentBounds? = nil, handles: [String]) async {
+        let effectiveBounds = bounds ?? lastAttachmentBounds
+        lastAttachmentBounds = effectiveBounds
+        guard let sessionId = view?.sessionId, view?.writable == true else { return }
+        guard let bindingId = attachmentBindingId else {
+            await bindAttachmentsIfNeeded(bounds: effectiveBounds, handles: handles)
+            return
+        }
+        let payload: [String: JSONValue] = [
+            "request": .object([
+                "revision": .number(Double(connection.revision)),
+                "sessionId": .string(sessionId),
+                "action": .object([
+                    "type": .string("bounds"),
+                    "bindingId": .string(bindingId),
+                    "bounds": .object([
+                        "x": .number(effectiveBounds.x), "y": .number(effectiveBounds.y),
+                        "width": .number(effectiveBounds.width), "height": .number(effectiveBounds.height),
+                    ]),
+                    "handles": .array(handles.map { .string($0) }),
+                ]),
+            ]),
+        ]
+        guard let jsonData = try? JSONEncoder().encode(payload),
+              let jsonStr = String(data: jsonData, encoding: .utf8)
+        else { return }
+        do {
+            _ = try await connection.transport.desktopAttachments(requestJSON: jsonStr, onEventFrame: nil, onEventClosed: nil)
+        } catch {
+            attachmentBindingId = nil
+            await bindAttachmentsIfNeeded(bounds: effectiveBounds, handles: handles)
+        }
+    }
+
+    /// Returns `true` when Rust disposition falls back to plain-text paste (`super.paste` preserving Undo).
     public func handlePasteboardIngress(currentHandles: [String]) async -> Bool {
         if attachmentBindingId == nil {
             await bindAttachmentsIfNeeded(
-                bounds: DesktopAttachmentBounds(x: 0, y: 0, width: 640, height: 160),
+                bounds: lastAttachmentBounds,
                 handles: currentHandles
             )
         }
@@ -515,7 +599,16 @@ public final class CodexDesktopStore: ObservableObject {
         do {
             let resData = try await connection.transport.desktopPasteCurrentGeneralPasteboard(requestJSON: jsonStr)
             let res = try JSONDecoder().decode(DesktopAttachmentResult.self, from: resData)
-            return res.pasteDisposition == "text"
+            if res.pasteDisposition == "text" {
+                return true
+            }
+            if res.pasteDisposition == "unsupported" {
+                let hasPlainText = !(NSPasteboard.general.string(forType: .string) ?? "").isEmpty
+                if hasPlainText { return true }
+                onAttachmentError?("剪贴板没有可添加的文件或图片")
+                return false
+            }
+            return false
         } catch {
             actionError = error.localizedDescription
             return false
@@ -558,5 +651,127 @@ public final class CodexDesktopStore: ObservableObject {
         {
             _ = try? await connection.transport.desktopAttachments(requestJSON: jsonStr, onEventFrame: nil, onEventClosed: nil)
         }
+    }
+}
+
+// MARK: - Primitive JSON-Schema Elicitation Form Engine (DesktopRequests.tsx:81-108)
+
+public enum ElicitationSchemaFormEngine {
+    public struct ChoiceOption: Equatable, Sendable {
+        public var encodedJSON: String
+        public var label: String
+    }
+
+    public struct FieldSpec: Equatable, Sendable, Identifiable {
+        public var key: String
+        public var type: String
+        public var title: String
+        public var description: String?
+        public var required: Bool
+        public var choices: [ChoiceOption]?
+        public var maxLength: Int
+
+        public var id: String { key }
+    }
+
+    private static func jsonString(_ value: JSONValue?) -> String? {
+        guard case let .string(s)? = value else { return nil }
+        return s
+    }
+
+    private static func jsonDouble(_ value: JSONValue?) -> Double? {
+        guard case let .number(n)? = value else { return nil }
+        return n
+    }
+
+    public static func parseFields(from schema: JSONValue?) -> [FieldSpec] {
+        guard case let .object(root)? = schema,
+              case let .object(props)? = root["properties"]
+        else { return [] }
+        let requiredKeys: Set<String> = {
+            guard case let .array(arr)? = root["required"] else { return [] }
+            return Set(arr.compactMap { jsonString($0) })
+        }()
+        return props.keys.sorted().compactMap { key -> FieldSpec? in
+            guard case let .object(fieldObj)? = props[key] else { return nil }
+            let type = jsonString(fieldObj["type"]) ?? "string"
+            let title = jsonString(fieldObj["title"]).flatMap { $0.isEmpty ? nil : $0 } ?? key
+            let description = jsonString(fieldObj["description"]).flatMap { $0.isEmpty ? nil : $0 }
+            let maxLen = min(4096, max(1, Int(jsonDouble(fieldObj["maxLength"]) ?? 4096)))
+            let enumNames: [String] = {
+                guard case let .array(arr)? = fieldObj["enumNames"] else { return [] }
+                return arr.compactMap { jsonString($0) }
+            }()
+            var choices: [ChoiceOption]? = nil
+            if case let .array(enumVals)? = fieldObj["enum"] {
+                choices = enumVals.enumerated().compactMap { idx, val in
+                    guard let data = try? JSONEncoder().encode(val),
+                          let encoded = String(data: data, encoding: .utf8)
+                    else { return nil }
+                    let fallbackLabel: String
+                    switch val {
+                    case let .bool(b): fallbackLabel = b ? "是" : "否"
+                    case let .string(s): fallbackLabel = s
+                    case let .number(n): fallbackLabel = n.truncatingRemainder(dividingBy: 1) == 0 ? String(Int64(n)) : String(n)
+                    default: fallbackLabel = encoded
+                    }
+                    let label = idx < enumNames.count ? enumNames[idx] : fallbackLabel
+                    return ChoiceOption(encodedJSON: encoded, label: label)
+                }
+            } else if type == "boolean" {
+                choices = [
+                    ChoiceOption(encodedJSON: "true", label: enumNames.count > 0 ? enumNames[0] : "是"),
+                    ChoiceOption(encodedJSON: "false", label: enumNames.count > 1 ? enumNames[1] : "否"),
+                ]
+            }
+            return FieldSpec(
+                key: key,
+                type: type,
+                title: title,
+                description: description,
+                required: requiredKeys.contains(key),
+                choices: choices,
+                maxLength: maxLen
+            )
+        }
+    }
+
+    public static func buildSubmissionContent(
+        fields: [FieldSpec],
+        rawValues: [String: String]
+    ) throws -> [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        for field in fields {
+            let raw = rawValues[field.key] ?? ""
+            if raw.isEmpty {
+                if field.required {
+                    throw AgentHubFFIError("请检查表单内容")
+                }
+                continue
+            }
+            if field.choices != nil && field.type != "boolean" {
+                guard let data = raw.data(using: .utf8),
+                      let parsed = try? JSONDecoder().decode(JSONValue.self, from: data)
+                else {
+                    throw AgentHubFFIError("请检查表单内容")
+                }
+                out[field.key] = parsed
+            } else if field.type == "boolean" {
+                out[field.key] = .bool(raw == "true")
+            } else if field.type == "integer" {
+                guard let intVal = Int64(raw.trimmingCharacters(in: .whitespaces)) else {
+                    throw AgentHubFFIError("请检查表单内容")
+                }
+                out[field.key] = .number(Double(intVal))
+            } else if field.type == "number" {
+                guard let num = Double(raw.trimmingCharacters(in: .whitespaces)), num.isFinite else {
+                    throw AgentHubFFIError("请检查表单内容")
+                }
+                out[field.key] = .number(num)
+            } else {
+                out[field.key] = .string(String(raw.prefix(field.maxLength)))
+            }
+        }
+        return out
     }
 }

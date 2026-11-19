@@ -230,12 +230,23 @@ pub fn parse_gfm_markdown(source: &str) -> GfmDocument {
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
                     if let Some(Frame::Paragraph(inlines)) = stack.pop() {
-                        push_block(&mut stack, GfmBlock::Paragraph { inlines });
+                        push_block(
+                            &mut stack,
+                            GfmBlock::Paragraph {
+                                inlines: expand_gfm_autolinks_in_inlines(inlines),
+                            },
+                        );
                     }
                 }
                 TagEnd::Heading(_) => {
                     if let Some(Frame::Heading(level, inlines)) = stack.pop() {
-                        push_block(&mut stack, GfmBlock::Heading { level, inlines });
+                        push_block(
+                            &mut stack,
+                            GfmBlock::Heading {
+                                level,
+                                inlines: expand_gfm_autolinks_in_inlines(inlines),
+                            },
+                        );
                     }
                 }
                 TagEnd::CodeBlock => {
@@ -277,7 +288,7 @@ pub fn parse_gfm_markdown(source: &str) -> GfmDocument {
                     {
                         if !trailing_inlines.is_empty() {
                             blocks.push(GfmBlock::Paragraph {
-                                inlines: trailing_inlines,
+                                inlines: expand_gfm_autolinks_in_inlines(trailing_inlines),
                             });
                         }
                         if let Some(Frame::List { items, .. }) = stack.last_mut() {
@@ -313,7 +324,7 @@ pub fn parse_gfm_markdown(source: &str) -> GfmDocument {
                 TagEnd::TableCell => {
                     if let Some(Frame::TableCell(inlines)) = stack.pop() {
                         if let Some(Frame::Table { current_row, .. }) = stack.last_mut() {
-                            current_row.push(inlines);
+                            current_row.push(expand_gfm_autolinks_in_inlines(inlines));
                         }
                     }
                 }
@@ -337,16 +348,40 @@ pub fn parse_gfm_markdown(source: &str) -> GfmDocument {
                 }
                 TagEnd::Strong => {
                     if let Some(Frame::Strong(children)) = stack.pop() {
+                        let inside_link = stack
+                            .iter()
+                            .any(|f| matches!(f, Frame::Link { .. } | Frame::Image { .. }));
+                        let children = if inside_link {
+                            children
+                        } else {
+                            expand_gfm_autolinks_in_inlines(children)
+                        };
                         push_inline(&mut stack, GfmInline::Strong { children });
                     }
                 }
                 TagEnd::Emphasis => {
                     if let Some(Frame::Emphasis(children)) = stack.pop() {
+                        let inside_link = stack
+                            .iter()
+                            .any(|f| matches!(f, Frame::Link { .. } | Frame::Image { .. }));
+                        let children = if inside_link {
+                            children
+                        } else {
+                            expand_gfm_autolinks_in_inlines(children)
+                        };
                         push_inline(&mut stack, GfmInline::Emphasis { children });
                     }
                 }
                 TagEnd::Strikethrough => {
                     if let Some(Frame::Strikethrough(children)) = stack.pop() {
+                        let inside_link = stack
+                            .iter()
+                            .any(|f| matches!(f, Frame::Link { .. } | Frame::Image { .. }));
+                        let children = if inside_link {
+                            children
+                        } else {
+                            expand_gfm_autolinks_in_inlines(children)
+                        };
                         push_inline(&mut stack, GfmInline::Strikethrough { children });
                     }
                 }
@@ -437,6 +472,155 @@ fn push_text(stack: &mut [Frame], value: &str) {
     );
 }
 
+fn expand_gfm_autolinks_in_inlines(inlines: Vec<GfmInline>) -> Vec<GfmInline> {
+    let mut out = Vec::with_capacity(inlines.len());
+    for inline in inlines {
+        match inline {
+            GfmInline::Text { text } => {
+                for piece in split_gfm_autolink_literals(&text) {
+                    merge_or_push_inline(&mut out, piece);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn is_autolink_boundary_prev(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(ch) => ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '<' | '*' | '_' | '~'),
+    }
+}
+
+fn trim_gfm_autolink_candidate(raw: &str) -> &str {
+    let mut len = raw.len();
+    while len > 0 {
+        let slice = &raw[..len];
+        let Some(last) = slice.chars().next_back() else {
+            break;
+        };
+        let drop_char = match last {
+            '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' | '\'' | '"' => true,
+            ')' => {
+                let opens = slice.bytes().filter(|&b| b == b'(').count();
+                let closes = slice.bytes().filter(|&b| b == b')').count();
+                closes > opens
+            }
+            ']' => {
+                let opens = slice.bytes().filter(|&b| b == b'[').count();
+                let closes = slice.bytes().filter(|&b| b == b']').count();
+                closes > opens
+            }
+            ';' => {
+                // Strip trailing HTML entity-like `&...;` or bare `;`
+                true
+            }
+            _ => false,
+        };
+        if drop_char {
+            len -= last.len_utf8();
+        } else {
+            break;
+        }
+    }
+    &raw[..len]
+}
+
+fn valid_autolink_domain(after_prefix: &str) -> bool {
+    let host_end = after_prefix
+        .find(['/', '?', '#'])
+        .unwrap_or(after_prefix.len());
+    let host = &after_prefix[..host_end];
+    if host.is_empty() || !host.contains('.') || host.ends_with('.') || host.contains('_') {
+        return false;
+    }
+    host.split('.').all(|part| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == ':')
+    })
+}
+
+fn split_gfm_autolink_literals(value: &str) -> Vec<GfmInline> {
+    if !value.contains("http://") && !value.contains("https://") && !value.contains("www.") {
+        return vec![GfmInline::Text {
+            text: value.to_string(),
+        }];
+    }
+    let mut out: Vec<GfmInline> = Vec::new();
+    let mut plain_start = 0usize;
+    let mut idx = 0usize;
+
+    while idx < value.len() {
+        let rest = &value[idx..];
+        let prefix_info = if rest.starts_with("https://") {
+            Some(("https://", false))
+        } else if rest.starts_with("http://") {
+            Some(("http://", false))
+        } else if rest.starts_with("www.") {
+            Some(("www.", true))
+        } else {
+            None
+        };
+
+        let prev_char = value[..idx].chars().next_back();
+        if let Some((prefix, needs_http_scheme)) = prefix_info {
+            if is_autolink_boundary_prev(prev_char) {
+                let token_end = rest
+                    .find(|c: char| c.is_whitespace() || c == '<' || c == '>')
+                    .unwrap_or(rest.len());
+                let trimmed = trim_gfm_autolink_candidate(&rest[..token_end]);
+                let after_prefix = trimmed.strip_prefix(prefix).unwrap_or("");
+                if trimmed.len() > prefix.len() && valid_autolink_domain(after_prefix) {
+                    if plain_start < idx {
+                        merge_or_push_inline(
+                            &mut out,
+                            GfmInline::Text {
+                                text: value[plain_start..idx].to_string(),
+                            },
+                        );
+                    }
+                    let url = if needs_http_scheme {
+                        format!("http://{trimmed}")
+                    } else {
+                        trimmed.to_string()
+                    };
+                    out.push(GfmInline::Link {
+                        url,
+                        title: None,
+                        children: vec![GfmInline::Text {
+                            text: trimmed.to_string(),
+                        }],
+                    });
+                    idx += trimmed.len();
+                    plain_start = idx;
+                    continue;
+                }
+            }
+        }
+        let step = rest.chars().next().map_or(1, char::len_utf8);
+        idx += step;
+    }
+
+    if plain_start < value.len() {
+        merge_or_push_inline(
+            &mut out,
+            GfmInline::Text {
+                text: value[plain_start..].to_string(),
+            },
+        );
+    }
+    if out.is_empty() {
+        out.push(GfmInline::Text {
+            text: String::new(),
+        });
+    }
+    out
+}
+
 fn push_inline(stack: &mut [Frame], inline: GfmInline) {
     match stack.last_mut() {
         Some(
@@ -521,5 +705,35 @@ mod tests {
 
         let last_json = serde_json::to_string(&doc.blocks.last().unwrap()).unwrap();
         assert!(last_json.contains("<script>alert(1)</script>"));
+    }
+
+    #[test]
+    fn parses_gfm_extended_autolinks_without_corrupting_markdown_links_or_code() {
+        let md = "See https://example.com/wiki/Rust_(lang), (visit www.example.com.), `https://example.com/raw`, and [https://example.com](https://github.com/lich13/agenthub).";
+        let doc = parse_gfm_markdown(md);
+        let GfmBlock::Paragraph { inlines } = &doc.blocks[0] else {
+            panic!("expected paragraph");
+        };
+        let links: Vec<(&str, String)> = inlines
+            .iter()
+            .filter_map(|inline| match inline {
+                GfmInline::Link { url, children, .. } => Some((url.as_str(), plain_text(children))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "https://example.com/wiki/Rust_(lang)",
+                    "https://example.com/wiki/Rust_(lang)".to_string(),
+                ),
+                ("http://www.example.com", "www.example.com".to_string()),
+                (
+                    "https://github.com/lich13/agenthub",
+                    "https://example.com".to_string(),
+                ),
+            ]
+        );
     }
 }

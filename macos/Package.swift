@@ -56,6 +56,7 @@ let package = Package(
             path: "Tests/AgentHubTests",
             resources: [
                 .copy("ParityManifest.json"),
+                .copy("SnapshotBaselines.json"),
             ]
         ),
     ],

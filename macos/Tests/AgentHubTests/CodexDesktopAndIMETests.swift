@@ -1,5 +1,6 @@
 @testable import AgentHubCore
 import AppKit
+import SwiftUI
 import XCTest
 
 final class CodexDesktopAndIMETests: XCTestCase {
@@ -133,5 +134,170 @@ final class CodexDesktopAndIMETests: XCTestCase {
         XCTAssertEqual(decideObj["requestKey"] as? String, "req-1")
         XCTAssertEqual(decideObj["allow"] as? Bool, true)
         XCTAssertEqual(decideObj["decision"] as? String, "acceptForSession")
+    }
+
+    // MARK: - 4. Inline Search/Rename Field Editor Pre-keyDown IME Guard, Mentions Fanout, Bounds Sync & Elicitation Schema
+
+    @MainActor
+    func testInlineSearchFieldEditorIMEGuardBlocksSubmitCancelAndArrowsDuringMarkedText() throws {
+        var arrowMoves: [String] = []
+        var submitted = 0
+        var textVal = ""
+        let binding = SwiftUI.Binding<String>(get: { textVal }, set: { textVal = $0 })
+        let host = NSHostingView(
+            rootView: IMEGuardedInlineTextField(
+                text: binding,
+                placeholder: "搜索",
+                onSubmit: { submitted += 1 },
+                onCancel: {},
+                onMoveUp: { arrowMoves.append("up") },
+                onMoveDown: { arrowMoves.append("down") }
+            )
+            .frame(width: 320, height: 28)
+        )
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 80)
+        win.contentView = host
+        host.layoutSubtreeIfNeeded()
+
+        func findTextField(_ root: NSView) -> IMEGuardedNSTextField? {
+            if let tf = root as? IMEGuardedNSTextField { return tf }
+            for sub in root.subviews {
+                if let found = findTextField(sub) { return found }
+            }
+            return nil
+        }
+        let field = try XCTUnwrap(findTextField(host))
+        win.makeFirstResponder(field)
+        let editor = try XCTUnwrap(field.currentEditor() as? IMEFieldEditorTextView)
+
+        // Active IME marked text -> Down/Return MUST NOT move search result selection or submit!
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        let downEvent = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: win.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: 125
+        ))
+        editor.keyDown(with: downEvent)
+        XCTAssertTrue(arrowMoves.isEmpty, "Arrow key during IME candidate navigation must not move search list!")
+        XCTAssertEqual(submitted, 0)
+
+        // Commit IME composition -> Down arrow now navigates search results!
+        editor.unmarkText()
+        _ = field.delegate?.control?(field, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:)))
+        XCTAssertEqual(arrowMoves, ["down"])
+    }
+
+    @MainActor
+    func testMentionsCatalogFanoutAttachmentBoundsSyncAndElicitationSchemaEncoding() async throws {
+        let suite = "com.lich13.agenthub.desktop.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let mock = MockRuntimeTransport { command, argsJSON in
+            if command == "codex.desktop.attach" {
+                return Data("""
+                {"sessionId":"sess-1","threadId":"th-1","revision":0,"connected":true,"writable":true,"runtime":"idle","requests":[],"queue":[]}
+                """.utf8)
+            }
+            if command == "codex.desktop.attachments" {
+                return Data("{\"bindingId\":\"bind-1\",\"pasteDisposition\":null}".utf8)
+            }
+            if command == "codex.desktop.catalog" {
+                if let data = argsJSON.data(using: .utf8),
+                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let req = root["request"] as? [String: Any],
+                   let kind = req["kind"] as? String
+                {
+                    let itemJSON = """
+                    {"items":[{"handle":"h-\(kind)","kind":"\(kind == "plugins" ? "plugin" : "app")","name":"\(kind)-item","description":"desc","reasoningEfforts":[]}],"nextCursor":null}
+                    """
+                    return Data(itemJSON.utf8)
+                }
+            }
+            return Data("{\"ok\":true}".utf8)
+        }
+
+        let conn = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        let desktop = CodexDesktopStore(connection: conn, threadId: "th-1")
+        await desktop.connect(confirmOwner: true)
+        XCTAssertEqual(desktop.view?.sessionId, "sess-1")
+
+        // 1) "@" mentions catalog MUST fan out to ["plugins", "apps"] (never sending invalid "mentions" to Rust!)
+        let batch = await desktop.fetchReferenceCatalog(kind: "mentions", query: "git")
+        let catalogKinds = mock.recordedCalls
+            .filter { $0.command == "codex.desktop.catalog" }
+            .compactMap { call -> String? in
+                guard let d = call.args.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      let req = root["request"] as? [String: Any]
+                else { return nil }
+                return req["kind"] as? String
+            }
+        XCTAssertEqual(catalogKinds, ["plugins", "apps"])
+        XCTAssertEqual(batch.items.map(\.handle), ["h-plugins", "h-apps"])
+
+        // 2) Live attachment bounds & handles sync sends "bind" then "bounds"
+        await desktop.updateAttachmentBoundsAndHandles(
+            bounds: DesktopAttachmentBounds(x: 512, y: 620, width: 780, height: 74),
+            handles: ["h-1"]
+        )
+        await desktop.updateAttachmentBoundsAndHandles(
+            bounds: DesktopAttachmentBounds(x: 512, y: 580, width: 780, height: 114),
+            handles: ["h-1", "h-2"]
+        )
+        let attachmentActionTypes = mock.recordedCalls
+            .filter { $0.command == "codex.desktop.attachments" }
+            .compactMap { call -> String? in
+                guard let d = call.args.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      let req = root["request"] as? [String: Any],
+                      let act = req["action"] as? [String: Any]
+                else { return nil }
+                return act["type"] as? String
+            }
+        XCTAssertEqual(attachmentActionTypes, ["bind", "bounds"])
+
+        // 3) Top-left window coordinate conversion matches attachment bounds space
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820), styleMask: [.borderless], backing: .buffered, defer: false)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1280, height: 820))
+        let composerView = NSView(frame: NSRect(x: 512, y: 60, width: 720, height: 80)) // bottom-left y=60..140 -> top-left y=680..760!
+        container.addSubview(composerView)
+        win.contentView = container
+        let topLeftBounds = try XCTUnwrap(ComposerNSTextView.topLeftWindowBounds(for: composerView))
+        XCTAssertEqual(topLeftBounds, DesktopAttachmentBounds(x: 512, y: 680, width: 720, height: 80))
+
+        // 4) ElicitationSchemaFormEngine primitive types, enums, booleans, required validation & "__proto__" safety
+        let schemaJSON = """
+        {
+          "properties": {
+            "__proto__": { "type": "string", "title": "Proto Key" },
+            "approved": { "type": "boolean", "title": "Approve" },
+            "count": { "type": "integer", "title": "Count" },
+            "tier": { "type": "string", "enum": ["fast", "deep"], "enumNames": ["快速", "深度"] }
+          },
+          "required": ["count"]
+        }
+        """
+        let schemaVal = try JSONDecoder().decode(JSONValue.self, from: Data(schemaJSON.utf8))
+        let fields = ElicitationSchemaFormEngine.parseFields(from: schemaVal)
+        XCTAssertEqual(fields.map(\.key), ["__proto__", "approved", "count", "tier"])
+        XCTAssertThrowsError(try ElicitationSchemaFormEngine.buildSubmissionContent(fields: fields, rawValues: [:]), "Missing required count must fail")
+        XCTAssertThrowsError(try ElicitationSchemaFormEngine.buildSubmissionContent(fields: fields, rawValues: ["count": "not-an-int"]))
+
+        let validContent = try ElicitationSchemaFormEngine.buildSubmissionContent(
+            fields: fields,
+            rawValues: [
+                "__proto__": "safe-val",
+                "approved": "true",
+                "count": "42",
+                "tier": "\"deep\"",
+            ]
+        )
+        XCTAssertEqual(validContent["__proto__"], .string("safe-val"))
+        XCTAssertEqual(validContent["approved"], .bool(true))
+        XCTAssertEqual(validContent["count"], .number(42))
+        XCTAssertEqual(validContent["tier"], .string("deep"))
     }
 }

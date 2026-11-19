@@ -588,16 +588,20 @@ public enum FileOpenerService {
         return URL(fileURLWithPath: trimmed)
     }
 
-    public static func revealFromArgsJSON(_ argsJSON: String) async throws {
-        let decoded = try JSONDecoder().decode(RevealArgs.self, from: Data(argsJSON.utf8))
-        let list = decoded.paths ?? (decoded.path.map { [$0] } ?? [])
-        let urls = try list.map(validateRevealPath)
+    public static func revealPaths(_ paths: [String]) async throws {
+        let urls = try paths.map(validateRevealPath)
         guard !urls.isEmpty else {
             throw AgentHubFFIError("文件路径无效，无法在 Finder 中显示")
         }
         await MainActor.run {
             NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
+    }
+
+    public static func revealFromArgsJSON(_ argsJSON: String) async throws {
+        let decoded = try JSONDecoder().decode(RevealArgs.self, from: Data(argsJSON.utf8))
+        let list = decoded.paths ?? (decoded.path.map { [$0] } ?? [])
+        try await revealPaths(list)
     }
 }
 

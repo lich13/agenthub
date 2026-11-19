@@ -159,11 +159,84 @@ public final class ComposerNSTextView: NSTextView {
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL], !urls.isEmpty {
             let paths = urls.map(\.path)
-            let loc = convert(sender.draggingLocation, from: nil)
-            onFilesDropped?(paths, loc)
+            let topLeftPt: NSPoint
+            if let win = window {
+                let winPt = sender.draggingLocation
+                let winH = win.contentView?.bounds.height ?? win.frame.height
+                topLeftPt = NSPoint(x: max(0, winPt.x), y: max(0, winH - winPt.y))
+            } else {
+                let loc = convert(sender.draggingLocation, from: nil)
+                topLeftPt = NSPoint(x: max(0, loc.x), y: max(0, loc.y))
+            }
+            onFilesDropped?(paths, topLeftPt)
             return true
         }
         return super.performDragOperation(sender)
+    }
+
+    public static func topLeftWindowBounds(for view: NSView) -> DesktopAttachmentBounds? {
+        guard let win = view.window else { return nil }
+        let contentRect = win.contentView?.bounds ?? NSRect(origin: .zero, size: win.frame.size)
+        let rectInWin = view.convert(view.bounds, to: nil)
+        let winW = max(1.0, Double(contentRect.width))
+        let winH = max(1.0, Double(contentRect.height))
+        let rawLeft = Double(rectInWin.minX)
+        let rawRight = Double(rectInWin.maxX)
+        let rawTop = winH - Double(rectInWin.maxY)
+        let rawBottom = winH - Double(rectInWin.minY)
+        let x = max(0.0, rawLeft)
+        let y = max(0.0, rawTop)
+        let width = min(winW, rawRight) - x
+        let height = min(winH, rawBottom) - y
+        guard width > 0, height > 0, width <= 65536, height <= 65536 else { return nil }
+        return DesktopAttachmentBounds(x: x, y: y, width: width, height: height)
+    }
+}
+
+public final class ComposerScrollView: NSScrollView {
+    public var onWindowBoundsChanged: ((DesktopAttachmentBounds) -> Void)?
+    private var lastReportedBounds: DesktopAttachmentBounds?
+    private var pendingReport = false
+
+    override public func layout() {
+        super.layout()
+        scheduleBoundsReport()
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResizeNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidResize(_:)),
+                name: NSWindow.didResizeNotification,
+                object: window
+            )
+        }
+        scheduleBoundsReport()
+    }
+
+    @objc private func windowDidResize(_ notification: Notification) {
+        scheduleBoundsReport()
+    }
+
+    private func scheduleBoundsReport() {
+        guard !pendingReport else { return }
+        pendingReport = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pendingReport = false
+            guard let next = ComposerNSTextView.topLeftWindowBounds(for: self),
+                  next != self.lastReportedBounds
+            else { return }
+            self.lastReportedBounds = next
+            self.onWindowBoundsChanged?(next)
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
@@ -180,17 +253,19 @@ public struct ComposerTextEditorRepresentable: NSViewRepresentable {
     public let onInlineCompletionKey: (ComposerNSTextView.InlineKeyAction) -> Bool
     public let onInterceptPaste: (@escaping (Bool) -> Void) -> Void
     public let onFilesDropped: ([String], NSPoint) -> Void
+    public var onWindowBoundsChanged: ((DesktopAttachmentBounds) -> Void)? = nil
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    public func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+    public func makeNSView(context: Context) -> ComposerScrollView {
+        let scroll = ComposerScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
+        scroll.onWindowBoundsChanged = onWindowBoundsChanged
 
         let tv = ComposerNSTextView()
         tv.delegate = context.coordinator
@@ -204,8 +279,9 @@ public struct ComposerTextEditorRepresentable: NSViewRepresentable {
         return scroll
     }
 
-    public func updateNSView(_ nsView: NSScrollView, context: Context) {
+    public func updateNSView(_ nsView: ComposerScrollView, context: Context) {
         context.coordinator.parent = self
+        nsView.onWindowBoundsChanged = onWindowBoundsChanged
         if let tv = context.coordinator.textView {
             applyProps(to: tv, coordinator: context.coordinator)
         }
@@ -276,6 +352,7 @@ public struct ManualResizableComposerBox: View {
     public let onInlineCompletionKey: (ComposerNSTextView.InlineKeyAction) -> Bool
     public let onInterceptPaste: (@escaping (Bool) -> Void) -> Void
     public let onFilesDropped: ([String], NSPoint) -> Void
+    public var onWindowBoundsChanged: ((DesktopAttachmentBounds) -> Void)? = nil
 
     @State private var manualHeight: CGFloat = ComposerNSTextView.minManualHeight // 54pt initial
     @State private var dragStartHeight: CGFloat?
@@ -292,7 +369,8 @@ public struct ManualResizableComposerBox: View {
                 onCommandEnterSend: onCommandEnterSend,
                 onInlineCompletionKey: onInlineCompletionKey,
                 onInterceptPaste: onInterceptPaste,
-                onFilesDropped: onFilesDropped
+                onFilesDropped: onFilesDropped,
+                onWindowBoundsChanged: onWindowBoundsChanged
             )
             .frame(height: manualHeight)
 

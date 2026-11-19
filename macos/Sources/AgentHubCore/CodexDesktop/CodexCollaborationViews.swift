@@ -89,6 +89,7 @@ public struct NewDesktopThreadButton: View {
 public struct DesktopCollaborationFooterView: View {
     @Environment(\.agentHubPalette) private var palette
     @StateObject private var desktop: CodexDesktopStore
+    public var onStreamUpdated: (@MainActor () -> Void)?
 
     @State private var draft = ReferenceDraft()
     @State private var caretStart: Int = 0
@@ -96,7 +97,16 @@ public struct DesktopCollaborationFooterView: View {
     @State private var targetCaretToRestore: Int?
     @State private var dismissedInlineKey: String = ""
     @State private var inlineItems: [DesktopCatalogItem] = []
+    @State private var inlineNextCursors: [String: String] = [:]
+    @State private var inlineErrors: [String: String] = [:]
+    @State private var inlineBusy: Bool = false
     @State private var selectedOptionIndex: Int = 0
+    @State private var catalogPickerKind: String = ""
+    @State private var catalogPickerQuery: String = ""
+    @State private var pickerItems: [DesktopCatalogItem] = []
+    @State private var pickerNextCursors: [String: String] = [:]
+    @State private var pickerErrors: [String: String] = [:]
+    @State private var pickerBusy: Bool = false
     @State private var discardMessageId: String?
     @State private var copyDiagState: String = "idle"
     @State private var localError: String?
@@ -104,9 +114,20 @@ public struct DesktopCollaborationFooterView: View {
     @State private var settingsPopoverOpen: Bool = false
     @State private var modelCatalog: [DesktopCatalogItem] = []
     @State private var modeCatalog: [DesktopCatalogItem] = []
+    @State private var modelCatalogError: String?
+    @State private var modeCatalogError: String?
+    @State private var settingsCatalogLoading: Bool = false
+    @State private var settingsNotice: String?
+    @State private var settingsError: String?
+    @State private var cleanupToken: UUID?
 
-    public init(connection: RuntimeConnectionStore, threadId: String) {
+    public init(
+        connection: RuntimeConnectionStore,
+        threadId: String,
+        onStreamUpdated: (@MainActor () -> Void)? = nil
+    ) {
         self._desktop = StateObject(wrappedValue: CodexDesktopStore(connection: connection, threadId: threadId))
+        self.onStreamUpdated = onStreamUpdated
     }
 
     private var writable: Bool {
@@ -115,6 +136,7 @@ public struct DesktopCollaborationFooterView: View {
 
     private var activeInlineQuery: InlineReferenceQuery? {
         guard writable,
+              catalogPickerKind.isEmpty,
               let q = DesktopReferencesEngine.inlineQuery(text: draft.text, start: caretStart, end: caretEnd),
               !draft.spans.contains(where: { $0.start <= caretStart && caretStart <= $0.end })
         else { return nil }
@@ -327,6 +349,10 @@ public struct DesktopCollaborationFooterView: View {
                             logicalX: Double(point.x),
                             logicalY: Double(point.y)
                         )
+                    },
+                    onWindowBoundsChanged: { bounds in
+                        let handles = draft.references.map(\.handle)
+                        Task { await desktop.updateAttachmentBoundsAndHandles(bounds: bounds, handles: handles) }
                     }
                 )
 
@@ -335,9 +361,9 @@ public struct DesktopCollaborationFooterView: View {
                     Menu {
                         Button("文件或图片") { Task { await chooseAndAttachFile() } }
                             .disabled(desktop.busy || draft.references.count >= 32)
-                        Button("技能 ($)") { insertTriggerSymbol("$") }
+                        Button("技能 ($)") { openCatalogPicker("skills") }
                             .disabled(desktop.busy || draft.references.count >= 32)
-                        Button("插件与应用 (@)") { insertTriggerSymbol("@") }
+                        Button("插件与应用 (@)") { openCatalogPicker("mentions") }
                             .disabled(desktop.busy || draft.references.count >= 32)
                         Button("在 Codex 中管理目标") { Task { await desktop.openInCodexApp() } }
                             .disabled(desktop.busy)
@@ -360,7 +386,8 @@ public struct DesktopCollaborationFooterView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(desktop.view?.model ?? "模型设置")
+                            let selectedModelName = modelCatalog.first(where: { $0.handle == desktop.view?.model })?.name
+                            Text(selectedModelName ?? desktop.view?.model ?? "模型设置")
                                 .font(DesignFonts.body(12, weight: .medium))
                             if let eff = desktop.view?.reasoningEffort, !eff.isEmpty {
                                 Text(eff).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
@@ -394,7 +421,7 @@ public struct DesktopCollaborationFooterView: View {
                         }
                         .buttonStyle(IconButtonStyle(dimension: 30))
                         .disabled(desktop.busy)
-                        .accessibilityLabel("停止当前回合")
+                        .accessibilityLabel("停止当前回合并暂停队列")
                     }
 
                     // Layer 1 IME Guard: NO .keyboardShortcut(.return, modifiers: .command) here!
@@ -410,6 +437,10 @@ public struct DesktopCollaborationFooterView: View {
                     .buttonStyle(PlainHitButtonStyle())
                     .disabled(desktop.busy || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.references.isEmpty))
                     .accessibilityLabel(desktop.view?.activeTurnId != nil ? "排队发送" : "发送")
+                }
+
+                if !catalogPickerKind.isEmpty {
+                    referenceCatalogPickerPanel
                 }
             }
 
@@ -449,6 +480,9 @@ public struct DesktopCollaborationFooterView: View {
             }
         }
         .onAppear {
+            desktop.onStreamViewUpdated = {
+                onStreamUpdated?()
+            }
             desktop.onItemsAttached = { items in
                 let additions = items.filter { item in !draft.references.contains(where: { $0.handle == item.handle }) }
                 if draft.references.count + additions.count > 32 {
@@ -460,25 +494,74 @@ public struct DesktopCollaborationFooterView: View {
                 }
             }
             desktop.onAttachmentError = { err in localError = err }
+            let storeRef = desktop
+            cleanupToken = desktop.connection.registerBeforeMachineChange {
+                await storeRef.detachIfNeeded()
+            }
             Task {
                 await desktop.connect(confirmOwner: false)
                 await desktop.bindAttachmentsIfNeeded(
-                    bounds: DesktopAttachmentBounds(x: 0, y: 0, width: 640, height: 160),
+                    bounds: desktop.lastAttachmentBounds,
                     handles: draft.references.map(\.handle)
                 )
             }
         }
         .onDisappear {
+            if let token = cleanupToken {
+                desktop.connection.unregisterBeforeMachineChange(token)
+                cleanupToken = nil
+            }
             Task { await desktop.detachIfNeeded() }
+        }
+        .onChange(of: desktop.connection.isWindowVisible) { visible in
+            if !visible {
+                Task { await desktop.detachIfNeeded() }
+            } else if desktop.view == nil {
+                let handles = draft.references.map(\.handle)
+                Task {
+                    await desktop.connect(confirmOwner: false)
+                    await desktop.bindAttachmentsIfNeeded(bounds: desktop.lastAttachmentBounds, handles: handles)
+                }
+            }
+        }
+        .onChange(of: draft.references.map(\.handle)) { handles in
+            Task { await desktop.updateAttachmentBoundsAndHandles(handles: handles) }
         }
         .task(id: activeInlineQuery.map { "\($0.kind):\($0.query)" } ?? "") {
             guard let q = activeInlineQuery else {
                 inlineItems = []
+                inlineNextCursors = [:]
+                inlineErrors = [:]
+                inlineBusy = false
                 return
             }
-            if let cat = try? await desktop.fetchCatalog(kind: q.kind, query: q.query) {
-                inlineItems = cat.items
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            inlineBusy = true
+            let batch = await desktop.fetchReferenceCatalog(kind: q.kind, query: q.query)
+            guard !Task.isCancelled else { return }
+            inlineItems = batch.items
+            inlineNextCursors = batch.nextCursors
+            inlineErrors = batch.errors
+            inlineBusy = false
+        }
+        .task(id: catalogPickerKind.isEmpty ? "" : "\(catalogPickerKind):\(catalogPickerQuery)") {
+            guard !catalogPickerKind.isEmpty, writable else {
+                pickerItems = []
+                pickerNextCursors = [:]
+                pickerErrors = [:]
+                pickerBusy = false
+                return
             }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            pickerBusy = true
+            let batch = await desktop.fetchReferenceCatalog(kind: catalogPickerKind, query: catalogPickerQuery)
+            guard !Task.isCancelled else { return }
+            pickerItems = batch.items
+            pickerNextCursors = batch.nextCursors
+            pickerErrors = batch.errors
+            pickerBusy = false
         }
     }
 
@@ -511,56 +594,318 @@ public struct DesktopCollaborationFooterView: View {
     }
 
     private var settingsPopoverContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("协作模型与模式").font(DesignFonts.body(13, weight: .semibold))
-            ForEach(modelCatalog.prefix(8)) { model in
-                Button(model.name) {
-                    Task {
-                        try? await desktop.act(.settings(
-                            model: model.handle,
-                            reasoningEffort: model.defaultReasoningEffort,
-                            mode: desktop.view?.mode ?? .default
-                        ))
-                        settingsPopoverOpen = false
+        let selectedModel = modelCatalog.first { $0.handle == desktop.view?.model }
+        let availableModes = modeCatalog.filter { $0.handle == "default" || $0.handle == "plan" }
+        let currentEffort = desktop.view?.reasoningEffort ?? ""
+        let currentMode = desktop.view?.mode ?? .default
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("模型、思考强度与模式").font(DesignFonts.body(13, weight: .semibold))
+
+            if let modelErr = modelCatalogError {
+                HStack(spacing: 6) {
+                    Text("模型：\(modelErr)").font(DesignFonts.body(11)).foregroundStyle(palette.errFg.color)
+                    Button("重试模型目录") {
+                        Task { await loadSettingsCatalogs(forceModels: true, forceModes: false) }
                     }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(desktop.busy || settingsCatalogLoading)
                 }
-                .buttonStyle(SecondaryButtonStyle())
             }
-            HStack(spacing: 6) {
-                Button("默认模式") {
-                    if let m = desktop.view?.model {
-                        Task { try? await desktop.act(.settings(model: m, reasoningEffort: desktop.view?.reasoningEffort, mode: .default)) }
+            if let modeErr = modeCatalogError {
+                HStack(spacing: 6) {
+                    Text("模式：\(modeErr)").font(DesignFonts.body(11)).foregroundStyle(palette.errFg.color)
+                    Button("重试模式目录") {
+                        Task { await loadSettingsCatalogs(forceModels: false, forceModes: true) }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(desktop.busy || settingsCatalogLoading)
+                }
+            }
+            if let settingsError, !settingsError.isEmpty {
+                Text(settingsError).font(DesignFonts.body(11)).foregroundStyle(palette.errFg.color)
+            }
+            if let settingsNotice, !settingsNotice.isEmpty {
+                Text(settingsNotice).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("模型").font(DesignFonts.body(11, weight: .medium)).foregroundStyle(palette.textSecondary.color)
+                Menu {
+                    ForEach(modelCatalog) { model in
+                        Button(model.name) {
+                            settingsNotice = nil
+                            applyDesktopSettings(
+                                model: model.handle,
+                                reasoningEffort: model.defaultReasoningEffort,
+                                mode: currentMode
+                            )
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(selectedModel?.name ?? desktop.view?.model ?? (settingsCatalogLoading ? "读取模型…" : "没有可用模型"))
+                            .font(DesignFonts.body(12))
+                        Spacer()
+                        LucideIcon(.chevronDown, size: 12)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                }
+                .disabled(desktop.busy || settingsCatalogLoading || modelCatalog.isEmpty)
+            }
+
+            if let selectedModel {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("思考强度").font(DesignFonts.body(11, weight: .medium)).foregroundStyle(palette.textSecondary.color)
+                    Menu {
+                        Button("继承原生默认") {
+                            settingsNotice = nil
+                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: nil, mode: currentMode)
+                        }
+                        ForEach(selectedModel.reasoningEfforts, id: \.self) { effort in
+                            Button(effort) {
+                                settingsNotice = nil
+                                applyDesktopSettings(model: selectedModel.handle, reasoningEffort: effort, mode: currentMode)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(currentEffort.isEmpty ? "继承原生默认" : currentEffort)
+                                .font(DesignFonts.body(12))
+                            Spacer()
+                            LucideIcon(.chevronDown, size: 12)
+                        }
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                    }
+                    .disabled(desktop.busy || settingsCatalogLoading || selectedModel.reasoningEfforts.isEmpty)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("模式").font(DesignFonts.body(11, weight: .medium)).foregroundStyle(palette.textSecondary.color)
+                HStack(spacing: 6) {
+                    ForEach(availableModes.isEmpty ? [
+                        DesktopCatalogItem(handle: "default", kind: "mode", name: "默认", description: "", reasoningEfforts: []),
+                        DesktopCatalogItem(handle: "plan", kind: "mode", name: "Plan", description: "", reasoningEfforts: []),
+                    ] : availableModes) { modeItem in
+                        let modeVal: DesktopMode = (modeItem.handle == "plan") ? .plan : .default
+                        Button(modeItem.name) {
+                            guard let selectedModel else { return }
+                            let validEffort: String?
+                            if !currentEffort.isEmpty && selectedModel.reasoningEfforts.contains(currentEffort) {
+                                validEffort = currentEffort
+                                settingsNotice = nil
+                            } else {
+                                validEffort = nil
+                                settingsNotice = currentEffort.isEmpty ? nil : "当前思考强度不可用，将继承原生默认"
+                            }
+                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: validEffort, mode: modeVal)
+                        }
+                        .buttonStyle(currentMode == modeVal ? AnyButtonStyle(PrimaryButtonStyle()) : AnyButtonStyle(SecondaryButtonStyle()))
+                        .disabled(desktop.busy || settingsCatalogLoading || selectedModel == nil || availableModes.isEmpty)
                     }
                 }
-                .buttonStyle(SecondaryButtonStyle())
-                Button("Plan 模式") {
-                    if let m = desktop.view?.model {
-                        Task { try? await desktop.act(.settings(model: m, reasoningEffort: desktop.view?.reasoningEffort, mode: .plan)) }
-                    }
-                }
-                .buttonStyle(SecondaryButtonStyle())
             }
         }
         .padding(14)
-        .frame(width: 240)
+        .frame(width: 280)
     }
 
-    private func loadSettingsCatalogs() async {
-        if let models = try? await desktop.fetchCatalog(kind: "models", query: "") {
-            modelCatalog = models.items
-        }
-        if let modes = try? await desktop.fetchCatalog(kind: "modes", query: "") {
-            modeCatalog = modes.items
+    private func applyDesktopSettings(model: String, reasoningEffort: String?, mode: DesktopMode) {
+        settingsError = nil
+        Task {
+            do {
+                try await desktop.act(.settings(model: model, reasoningEffort: reasoningEffort, mode: mode))
+                settingsError = nil
+            } catch {
+                settingsError = error.localizedDescription
+            }
         }
     }
 
-    private func insertTriggerSymbol(_ sym: String) {
-        let nextText = draft.text + (draft.text.isEmpty || draft.text.hasSuffix(" ") ? sym : " \(sym)")
-        draft = DesktopReferencesEngine.edit(draft, text: nextText)
-        let end = (nextText as NSString).length
-        caretStart = end
-        caretEnd = end
-        targetCaretToRestore = end
+    private func loadSettingsCatalogs(forceModels: Bool = false, forceModes: Bool = false) async {
+        settingsCatalogLoading = true
+        defer { settingsCatalogLoading = false }
+        if forceModels || modelCatalog.isEmpty || modelCatalogError != nil {
+            do {
+                let models = try await desktop.fetchCatalog(kind: "models", query: "", forceRefetch: forceModels)
+                modelCatalog = models.items
+                modelCatalogError = nil
+            } catch {
+                modelCatalogError = error.localizedDescription
+            }
+        }
+        if forceModes || modeCatalog.isEmpty || modeCatalogError != nil {
+            do {
+                let modes = try await desktop.fetchCatalog(kind: "modes", query: "", forceRefetch: forceModes)
+                modeCatalog = modes.items
+                modeCatalogError = nil
+            } catch {
+                modeCatalogError = error.localizedDescription
+            }
+        }
+    }
+
+    private func openCatalogPicker(_ kind: String) {
+        catalogPickerKind = kind
+        catalogPickerQuery = ""
+        selectedOptionIndex = 0
+    }
+
+    private var referenceCatalogPickerPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Menu {
+                    Button("插件与应用") { catalogPickerKind = "mentions"; catalogPickerQuery = "" }
+                    Button("技能") { catalogPickerKind = "skills"; catalogPickerQuery = "" }
+                    Button("应用") { catalogPickerKind = "apps"; catalogPickerQuery = "" }
+                    Button("插件") { catalogPickerKind = "plugins"; catalogPickerQuery = "" }
+                } label: {
+                    Text(catalogKindLabel(catalogPickerKind))
+                        .font(DesignFonts.body(12, weight: .medium))
+                }
+                .frame(width: 100)
+
+                IMEGuardedInlineTextField(
+                    text: $catalogPickerQuery,
+                    placeholder: "搜索名称",
+                    onSubmit: {},
+                    onCancel: { catalogPickerKind = "" }
+                )
+                .frame(height: 28)
+                .padding(.horizontal, 6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(palette.elevated.color))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+
+                Button {
+                    catalogPickerKind = ""
+                } label: {
+                    LucideIcon(.x, size: 13)
+                }
+                .buttonStyle(IconButtonStyle(dimension: 26))
+                .accessibilityLabel("关闭引用")
+            }
+
+            if pickerBusy {
+                Text("正在读取…").font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
+            }
+            ForEach(pickerErrors.keys.sorted(), id: \.self) { srcKind in
+                if let msg = pickerErrors[srcKind] {
+                    HStack(spacing: 6) {
+                        Text("\(srcKind == "apps" ? "应用：" : (srcKind == "plugins" ? "插件：" : ""))\(msg)")
+                            .font(DesignFonts.body(11))
+                            .foregroundStyle(palette.errFg.color)
+                        Button("重试") {
+                            Task {
+                                pickerBusy = true
+                                let batch = await desktop.fetchReferenceCatalog(
+                                    kind: catalogPickerKind,
+                                    query: catalogPickerQuery,
+                                    forceRefetch: true,
+                                    retryKind: srcKind
+                                )
+                                pickerErrors.removeValue(forKey: srcKind)
+                                for (k, v) in batch.errors { pickerErrors[k] = v }
+                                if !batch.items.isEmpty {
+                                    let existing = Set(pickerItems.map(\.handle))
+                                    pickerItems.append(contentsOf: batch.items.filter { !existing.contains($0.handle) })
+                                }
+                                pickerBusy = false
+                            }
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                    }
+                }
+            }
+
+            ForEach(pickerItems.prefix(12)) { item in
+                Button {
+                    commitPickerReference(item.asChosenItem)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(item.name)
+                            .font(DesignFonts.body(12, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                        Text("\(item.kind == "plugin" ? "插件" : (item.kind == "app" ? "应用" : "技能"))\(item.description.isEmpty ? "" : " · \(item.description)")")
+                            .font(DesignFonts.body(11))
+                            .foregroundStyle(palette.textMuted.color)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+            }
+
+            if !pickerBusy && pickerErrors.isEmpty && pickerItems.isEmpty {
+                Text(catalogEmptyLabel(catalogPickerKind))
+                    .font(DesignFonts.body(11))
+                    .foregroundStyle(palette.textMuted.color)
+            }
+
+            if !pickerNextCursors.isEmpty {
+                Button("下一页") {
+                    Task {
+                        pickerBusy = true
+                        let batch = await desktop.fetchReferenceCatalog(
+                            kind: catalogPickerKind,
+                            query: catalogPickerQuery,
+                            cursors: pickerNextCursors,
+                            nextPageOnly: true
+                        )
+                        pickerItems = batch.items
+                        pickerNextCursors = batch.nextCursors
+                        pickerErrors = batch.errors
+                        pickerBusy = false
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(pickerBusy)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+    }
+
+    private func catalogKindLabel(_ kind: String) -> String {
+        switch kind {
+        case "skills": "技能"
+        case "apps": "应用"
+        case "plugins": "插件"
+        default: "插件与应用"
+        }
+    }
+
+    private func catalogEmptyLabel(_ kind: String) -> String {
+        switch kind {
+        case "apps": "没有可用应用"
+        case "plugins": "没有可用插件"
+        case "skills": "没有可用技能"
+        default: "没有可用引用"
+        }
+    }
+
+    private func commitPickerReference(_ item: DesktopChosenItem) {
+        do {
+            let inserted = try DesktopReferencesEngine.insert(draft, item: item, start: caretStart, end: caretEnd)
+            draft = inserted.draft
+            caretStart = inserted.caret
+            caretEnd = inserted.caret
+            targetCaretToRestore = inserted.caret
+            catalogPickerKind = ""
+            dismissedInlineKey = ""
+            localError = nil
+        } catch {
+            localError = error.localizedDescription
+        }
     }
 
     private func commitInlineReference(_ item: DesktopChosenItem) {
@@ -706,7 +1051,18 @@ public struct DesktopRequestsListView: View {
 
     @State private var expandedKey: String?
     @State private var openDiffFiles: Set<String> = []
-    @State private var questionAnswers: [String: String] = [:]
+    @State private var openExtraKeys: Set<String> = []
+    @State private var questionChoices: [String: String] = [:]
+    @State private var questionFreeAnswers: [String: String] = [:]
+
+    private func resolvedQuestionAnswer(reqKey: String, questionId: String) -> String {
+        let compound = "\(reqKey):\(questionId)"
+        let free = questionFreeAnswers[compound] ?? ""
+        if !free.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return free
+        }
+        return questionChoices[compound] ?? ""
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -729,69 +1085,38 @@ public struct DesktopRequestsListView: View {
 
                     if shown {
                         if let review = req.review {
-                            if let cmd = review.command {
-                                Text(cmd).font(DesignFonts.mono(12)).padding(8).background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
-                            }
-                            // Per-file lazy diff disclosure (only mounts diff text when expanded!)
-                            ForEach(Array(review.changes.enumerated()), id: \.offset) { fIdx, file in
-                                let fileKey = "\(req.key):\(fIdx)"
-                                let fileOpen = openDiffFiles.contains(fileKey)
-                                Button {
-                                    if fileOpen { openDiffFiles.remove(fileKey) }
-                                    else { openDiffFiles.insert(fileKey) }
-                                } label: {
-                                    Text("\(fileOpen ? "▾" : "▸") \(file.path) · \(file.kind)\(file.truncated ? " · 已截断" : "")")
-                                        .font(DesignFonts.mono(11))
-                                        .foregroundStyle(palette.textSecondary.color)
-                                }
-                                .buttonStyle(PlainHitButtonStyle())
-
-                                if fileOpen {
-                                    ScrollView(.horizontal) {
-                                        Text(file.diff)
-                                            .font(DesignFonts.mono(11))
-                                            .foregroundStyle(palette.textPrimary.color)
-                                            .padding(8)
-                                    }
-                                    .frame(maxHeight: 160)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
-                                }
-                            }
+                            approvalReviewView(reqKey: req.key, review: review)
                         } else if !req.body.isEmpty {
                             Text(req.body).font(DesignFonts.mono(12))
                         }
 
                         if req.canAccept && req.kind == "question" {
                             ForEach(req.questions) { q in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(q.question).font(DesignFonts.body(12, weight: .semibold))
-                                    ForEach(Array(q.options.enumerated()), id: \.offset) { _, opt in
-                                        Button(opt.label) {
-                                            questionAnswers["\(req.key):\(q.id)"] = opt.label
-                                        }
-                                        .buttonStyle(SecondaryButtonStyle())
+                                let compound = "\(req.key):\(q.id)"
+                                DesktopQuestionFieldView(
+                                    question: q,
+                                    busy: busy,
+                                    selectedChoice: questionChoices[compound] ?? "",
+                                    freeAnswer: questionFreeAnswers[compound] ?? "",
+                                    onSelectChoice: { label in
+                                        questionChoices[compound] = label
+                                        questionFreeAnswers[compound] = ""
+                                    },
+                                    onChangeFreeAnswer: { val in
+                                        questionFreeAnswers[compound] = String(val.prefix(4096))
                                     }
-                                    let answerBinding = Binding<String>(
-                                        get: { questionAnswers["\(req.key):\(q.id)"] ?? "" },
-                                        set: { questionAnswers["\(req.key):\(q.id)"] = String($0.prefix(4096)) }
-                                    )
-                                    if q.secret {
-                                        SecureField("输入密钥或敏感回答", text: answerBinding)
-                                            .textFieldStyle(.roundedBorder)
-                                    } else {
-                                        TextField("回答", text: answerBinding)
-                                            .textFieldStyle(.roundedBorder)
-                                    }
-                                }
+                                )
                             }
                             Button("提交回答") {
                                 let payload = req.questions.map { q in
-                                    DesktopAnswer(questionId: q.id, answers: [questionAnswers["\(req.key):\(q.id)"] ?? ""])
+                                    DesktopAnswer(questionId: q.id, answers: [resolvedQuestionAnswer(reqKey: req.key, questionId: q.id)])
                                 }
                                 onAct(.answer(requestKey: req.key, answers: payload))
                             }
                             .buttonStyle(PrimaryButtonStyle())
-                            .disabled(busy || req.questions.contains { (questionAnswers["\(req.key):\($0.id)"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                            .disabled(busy || req.questions.contains { resolvedQuestionAnswer(reqKey: req.key, questionId: $0.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                        } else if req.canAccept && req.kind == "elicitation" {
+                            DesktopElicitationFormView(request: req, busy: busy, onAct: onAct)
                         } else {
                             HStack(spacing: 8) {
                                 if ["command", "file", "permissions"].contains(req.kind) {
@@ -809,6 +1134,16 @@ public struct DesktopRequestsListView: View {
                                             .disabled(busy)
                                     }
                                 }
+                                if req.kind == "elicitation" {
+                                    Button("拒绝") { onAct(.elicitation(requestKey: req.key, accept: false, content: nil)) }
+                                        .buttonStyle(DangerButtonStyle(soft: true))
+                                        .disabled(busy)
+                                }
+                                if !req.canAccept {
+                                    Text("请在 Codex 中查看完整请求并处理。")
+                                        .font(DesignFonts.body(11))
+                                        .foregroundStyle(palette.textMuted.color)
+                                }
                                 Button("在 Codex 中打开", action: onOpenCodex)
                                     .buttonStyle(SecondaryButtonStyle())
                                     .disabled(busy)
@@ -819,6 +1154,253 @@ public struct DesktopRequestsListView: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface.color))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func approvalReviewView(reqKey: String, review: DesktopReview) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let cmd = review.command {
+                Text(cmd)
+                    .font(DesignFonts.mono(12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+            }
+            if let cwd = review.cwd {
+                HStack(spacing: 4) {
+                    Text("工作目录：").font(DesignFonts.body(12)).foregroundStyle(palette.textSecondary.color)
+                    Text(cwd).font(DesignFonts.mono(12)).foregroundStyle(palette.textPrimary.color)
+                }
+            }
+            if let reason = review.reason {
+                Text(reason).font(DesignFonts.body(12)).foregroundStyle(palette.textSecondary.color)
+            }
+            ForEach(Array(review.changes.enumerated()), id: \.offset) { fIdx, file in
+                let fileKey = "\(reqKey):\(fIdx)"
+                let fileOpen = openDiffFiles.contains(fileKey)
+                Button {
+                    if fileOpen { openDiffFiles.remove(fileKey) }
+                    else { openDiffFiles.insert(fileKey) }
+                } label: {
+                    Text("\(fileOpen ? "▾" : "▸") \(file.path) · \(file.kind)\(file.truncated ? " · 已截断" : "")")
+                        .font(DesignFonts.mono(11))
+                        .foregroundStyle(palette.textSecondary.color)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+
+                if fileOpen {
+                    ScrollView(.horizontal) {
+                        Text(file.diff)
+                            .font(DesignFonts.mono(11))
+                            .foregroundStyle(palette.textPrimary.color)
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 160)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+                }
+            }
+            if let net = review.permissions?.network {
+                Text("网络权限").font(DesignFonts.body(12, weight: .medium)).foregroundStyle(palette.textSecondary.color)
+                Text(net).font(DesignFonts.mono(11)).padding(8).frame(maxWidth: .infinity, alignment: .leading).background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+            }
+            if let fs = review.permissions?.fileSystem {
+                Text("文件系统权限").font(DesignFonts.body(12, weight: .medium)).foregroundStyle(palette.textSecondary.color)
+                Text(fs).font(DesignFonts.mono(11)).padding(8).frame(maxWidth: .infinity, alignment: .leading).background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+            }
+            if let extra = review.extra, !extra.isEmpty {
+                let extraOpen = openExtraKeys.contains(reqKey)
+                Button {
+                    if extraOpen { openExtraKeys.remove(reqKey) }
+                    else { openExtraKeys.insert(reqKey) }
+                } label: {
+                    Text("\(extraOpen ? "▾" : "▸") 其他请求信息")
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.textSecondary.color)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+                if extraOpen {
+                    Text(extra)
+                        .font(DesignFonts.mono(11))
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+                }
+            }
+            if review.truncated {
+                Text("内容超出显示上限，请在 Codex 中查看完整请求并处理。")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+        }
+    }
+}
+
+private struct DesktopQuestionFieldView: View {
+    @Environment(\.agentHubPalette) private var palette
+    let question: DesktopQuestion
+    let busy: Bool
+    let selectedChoice: String
+    let freeAnswer: String
+    let onSelectChoice: (String) -> Void
+    let onChangeFreeAnswer: (String) -> Void
+
+    @State private var localText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(question.header.isEmpty ? question.question : question.header)
+                .font(DesignFonts.body(12, weight: .semibold))
+            if !question.header.isEmpty {
+                Text(question.question)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.textSecondary.color)
+            }
+            ForEach(Array(question.options.enumerated()), id: \.offset) { _, opt in
+                let isSelected = (selectedChoice == opt.label) && freeAnswer.isEmpty
+                Button {
+                    localText = ""
+                    onSelectChoice(opt.label)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(isSelected ? palette.accent.color : palette.textMuted.color)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(opt.label).font(DesignFonts.body(12, weight: .medium)).foregroundStyle(palette.textPrimary.color)
+                            if !opt.description.isEmpty {
+                                Text(opt.description).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+                .disabled(busy)
+            }
+            Text(question.options.isEmpty ? "回答" : "或填写回答")
+                .font(DesignFonts.body(11))
+                .foregroundStyle(palette.textSecondary.color)
+            Group {
+                if question.secret {
+                    SecureField("输入密钥或敏感回答", text: $localText)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    TextField("回答", text: $localText)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            .disabled(busy)
+            .onAppear { localText = freeAnswer }
+            .onChange(of: freeAnswer) { next in
+                if localText != next { localText = next }
+            }
+            .onChange(of: localText) { next in
+                let clamped = String(next.prefix(4096))
+                if clamped != localText { localText = clamped }
+                onChangeFreeAnswer(clamped)
+            }
+        }
+    }
+}
+
+private struct DesktopElicitationFormView: View {
+    @Environment(\.agentHubPalette) private var palette
+    let request: DesktopPendingRequest
+    let busy: Bool
+    let onAct: (DesktopAction) -> Void
+
+    @State private var rawValues: [String: String] = [:]
+    @State private var formError: String?
+
+    var body: some View {
+        let fields = ElicitationSchemaFormEngine.parseFields(from: request.formSchema)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(fields) { field in
+                DesktopElicitationFieldRow(
+                    field: field,
+                    busy: busy,
+                    value: rawValues[field.key] ?? "",
+                    onChange: { rawValues[field.key] = $0 }
+                )
+            }
+            if let formError, !formError.isEmpty {
+                Text(formError).font(DesignFonts.body(12)).foregroundStyle(palette.errFg.color)
+            }
+            HStack(spacing: 8) {
+                Button("拒绝") {
+                    onAct(.elicitation(requestKey: request.key, accept: false, content: nil))
+                }
+                .buttonStyle(DangerButtonStyle(soft: true))
+                .disabled(busy)
+
+                Button("提交") {
+                    do {
+                        let content = try ElicitationSchemaFormEngine.buildSubmissionContent(fields: fields, rawValues: rawValues)
+                        formError = nil
+                        onAct(.elicitation(requestKey: request.key, accept: true, content: content))
+                    } catch {
+                        formError = error.localizedDescription
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(busy)
+            }
+        }
+    }
+}
+
+private struct DesktopElicitationFieldRow: View {
+    @Environment(\.agentHubPalette) private var palette
+    let field: ElicitationSchemaFormEngine.FieldSpec
+    let busy: Bool
+    let value: String
+    let onChange: (String) -> Void
+
+    @State private var localText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(field.title)\(field.required ? " *" : "")")
+                .font(DesignFonts.body(12, weight: .medium))
+            if let choices = field.choices {
+                Menu {
+                    Button("请选择") { onChange("") }
+                    ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
+                        Button(choice.label) { onChange(choice.encodedJSON) }
+                    }
+                } label: {
+                    let currentLabel = choices.first(where: { $0.encodedJSON == value })?.label ?? "请选择"
+                    HStack {
+                        Text(currentLabel).font(DesignFonts.body(12))
+                        Spacer()
+                        LucideIcon(.chevronDown, size: 12)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.elevated.color))
+                }
+                .disabled(busy)
+            } else {
+                TextField(field.title, text: $localText)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(busy)
+                    .onAppear { localText = value }
+                    .onChange(of: localText) { next in
+                        let clamped = String(next.prefix(field.maxLength))
+                        if clamped != localText { localText = clamped }
+                        onChange(clamped)
+                    }
+            }
+            if let desc = field.description {
+                Text(desc).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
             }
         }
     }
