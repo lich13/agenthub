@@ -8,6 +8,30 @@
 
 最近正式版本为 [**v2.1.27**](https://github.com/lich13/agenthub/releases/tag/v2.1.27)，发布提交为 [`1ced96f`](https://github.com/lich13/agenthub/commit/1ced96ffff43573c8e7cd5e8fd8ed509317bb669)。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/44420379162) 的发布边界检查、前端（含 Playwright 功能回归）、后端与 macOS Tauri 检查、两端打包及发布七项任务全部通过，已发布八项正式资产。服务端已通过部署脚本升级为 agenthub-webd 2.1.27，服务为 active、健康为 ok；Mac 使用同版正式 DMG（校验与签名通过）从 2.1.26 原地更新至 2.1.27 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面、Codex 列表及通知实收待用户验收。
 
+## macOS Swift 6 原生化重构（`feat/macos-swift-native` 阶段 A）
+
+分支 `feat/macos-swift-native` 已完成 M1–M4（阶段 A）开发、自动化门禁与并排验收包构建；`src-tauri/` 与 `webui/` 源码及配置保持零改动，待用户实机并排确认后再执行阶段 B 退役旧目录与发版。
+
+实现要点：
+
+1. **Rust `crates/agenthub-ffi` 无死锁 C ABI 与契约守卫（M1）**：剥离 `tauri`、`objc2-*` 与 `block2` 依赖，保留 `agenthub-core` 与 `agenthub-webd` 不变；零耦合模块以 `#[path]` 直接引用，宿主耦合模块派生为纯 Rust 实现并由 `drift_guard` 锁定 20 份来源 SHA-256 及全部 73 项注册命令 AST。剪贴板项数（`<=32`）、UTF-16／字节上限、C `ImageIO` 尺寸验界与无损 PNG 转码、选档 `Semaphore(1)` 与 `300s` 超时取消、Minisign `"ED"` 验签更新器及 `pulldown-cmark` GFM AST 解析留在 Rust；所有 Host 回调非阻塞返回，串流 `StreamSink` 单调递增 `seq` 并保证单次 `closed` 帧与六步确定性 `shutdown`。预览隔离模式（`com.lich13.agenthub.preview` 或 `AGENTHUB_ISOLATED_DATA_DIR`）启动时以 `0600` 原子预写独立 `[paths]` `config.toml`，隔离 SQLite `flock`、Keychain 与 `remote-connection.json`，同时跳过 helper 同步、LaunchAgent 写入、后台 CI 系统推播与原地更新安装。
+2. **Swift 6 宿主外壳、偏好迁移、Probe 与设置页（M2）**：采用单一 `macos/Package.swift`（`swift-tools-version: 6.0`、最低部署目标 `macOS 12.0`、零外部依赖）。完整嵌入 53 个 Lucide 向量图标与六平台品牌图标，首次启动只读迁移旧版 WebKit `localStorage` UTF-16LE（主题与导航折叠态），对齐窗口 `visibleFrame` 首帧定位、SSH 远程机器管理、GitHub CI 监控、Probe 6 指标与默认展开 8 项高级参数、五平台 Hook 矩阵、Bark 配置、全平台 6 范围清理、隐藏线程分页扫描与 Codex 账号隔离。
+3. **六平台工作区、AppKit 阅读器、搜索与子智能体抽屉（M3）**：统一实现 Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness 与 Grok Bot 列表轮询、六平台精确右键／顶栏菜单矩阵、多选批次操作列（归档／恢复按 100 项分批，删除单批，`⌘+Backspace`／`Forward Delete` 触发确认）、行内与顶栏改名及 Codex `120s` 乐观标题缓存。核心阅读列采用 `NSScrollView` + 无表头 view-based `NSTableView` + 可选只读 `NSTextView`，配备 `256` 项／`2 MiB` GFM 布局缓存、视口上下 `±240pt` 缩略图按需读取与离视口释放、纯内存 `2000` 键 FIFO 折叠状态表、反向分页与折叠开合同帧 `0.0pt` 像素锚点锁定（`NSTableView.tile()` 同步重算）、左侧 `22pt` 时间轴导轨、`⌘F` 搜索弹窗与 `420pt` 子智能体停靠／抽屉面板。
+4. **本机 Codex 协作区与原生打包验签（M4 阶段 A）**：`ComposerNSTextView` 默认高 `54pt`、仅经底部手柄在 `54pt–160pt` 手动调高，提交前校验 `<=131,072` UTF-16 与 `<=256 KiB` UTF-8；实作三层输入法组字守卫（禁挂 `.keyboardShortcut`、`performKeyEquivalent` 组字态转发 `inputContext`、`keyDown` 前置快照 `hasMarkedText()`），完整衔接 `$`／`@` UTF-16↔UTF-8 引用区间、`⌘V` 原始剪贴板快照（`"text"` 回退 `super.paste` 保留 Undo）、原生文件拖放、待发队列（含 `outcome_unknown` 二次确认移除）与单档懒展开审批／密文问答。新增 `scripts/sign-minisign-archive.py` 与 `scripts/package-macos-swift-arm64.sh`（注入 `--remap-path-prefix`、`-file-prefix-map` 与 `-no-serialize-debugging-options`）。
+
+本机自动化验证与同版本产物尺寸对照（`2.1.27`）：
+
+- Rust `agenthub-ffi` 107 项测试（含继承的 99 项 `src-tauri` 测试、`drift_guard`、C ABI 生命周期与 Minisign 验签）、`src-tauri` 测试、工作区 `cargo fmt`／`clippy -D warnings`／`security-audit` 全部通过。
+- Swift Debug 与 Release `-O -whole-module-optimization` 编译及 `AGENTHUB_RENDER_TESTS=1 swift test` 25 项测试套件全部通过：覆盖 73 个非预览 WebUI 测试档映射守卫（`ParityManifest.json`）、5 组跨语言 Golden Vectors、离屏几何／热区与反向分页／折叠 `0.0pt` 锚点断言、纯色 sRGB `<=1/255` 与 WCAG 对比度、浅／深色与五平台快照一致性（`<=0.1%`）及合成 `setMarkedText` 输入法组字零误送断言。
+- 打包与隐私门禁：`dist/bundle/AgentHub.app` 与预览包 `dist/preview/bundle/AgentHub.app` 均通过 `codesign --verify --deep --strict`、`privacy-check.py --payload`（`649 checked, 0 failures`）、一次性加密 Minisign 签发 + `deploy/agenthub-webd/install-safety.py verify` 回验及 `scripts/test-install-script.sh`。
+
+| 产物（`2.1.27` arm64） | 既有 Tauri 正式版字节 | 原生 Swift 6 阶段 A 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG | 17,394,151 | 16,549,911 | -844,240（-4.85%） |
+| macOS updater `.tar.gz` | 16,814,579 | 15,249,012 | -1,565,567（-9.31%） |
+
+待用户并排实机验收：直接启动 `open dist/preview/bundle/AgentHub.app`（独立 Bundle ID `com.lich13.agenthub.preview` 与独立数据目录 `~/Library/Application Support/AgentHubPreview`）与已安装正式版 Tauri `AgentHub.app` 同屏并排对照：核对六大 Provider 真实历史会话排版与滚动跟手度、系统拼音／注音输入法在协作框及行内改名中的实打体验、本机 Codex 桌面 IPC 连接／排队／审批、SSH 远程机器切换，以及 Bark／macOS 通知中心实收跳转。确认无误后进入阶段 B 移除 `src-tauri/` 与 `webui/` 并定版发布。
+
 ## v2.1.27 实现与验证
 
 Codex 0.168 起在新会话 rollout 首行写入 `account_scoped`，其历史与 resume 列表按该行隐藏其他账号创建的会话，文件和数据库不受影响。新增共享动作 `threads.accountScopeStatus`／`threads.accountScopeClear`、可缺省能力 `codex_account_scope` 和「更新与维护」中的「Codex 账号隔离」卡片：检查只统计，解除把首行中 Codex 写出的精确标记替换为等长空白，替换结果必须等于原 JSON 去掉该字段。明文文件原地写入并恢复 mtime，inode、长度和偏移不变；压缩文件重编码到同目录临时文件，核对摘要后在 Codex 协调锁内原子替换。锁文件只读打开且从不创建，线程锁只在协调锁内探测；回退副本在原始文件属于该线程且已无标记时才处理；两个入口都不进入符号链接的会话根目录。响应与审计不含路径和正文，不读取 Codex 凭据，不修改原生数据库。单次调用约 20 秒，界面在仍有进展时继续调用。

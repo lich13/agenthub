@@ -179,7 +179,13 @@ public struct AppShellView: View {
                     store: store,
                     workspace: store.activeWorkspace,
                     isCompactMobile: isCompactMobile,
-                    scheme: effectiveScheme
+                    scheme: effectiveScheme,
+                    codexNewThreadSlot: { onCreated in
+                        AnyView(NewDesktopThreadButton(connection: store, onCreated: onCreated))
+                    },
+                    codexCollaborationFooterSlot: { threadId, _ in
+                        AnyView(DesktopCollaborationFooterView(connection: store, threadId: threadId))
+                    }
                 )
             }
         }

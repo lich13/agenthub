@@ -14,6 +14,18 @@ public struct AgentHubFFIError: LocalizedError, Equatable, Sendable {
 
 public protocol RuntimeTransport: Sendable {
     func invokeRawJSON(command: String, argsJSON: String) async throws -> Data
+    func desktopAttach(
+        requestJSON: String,
+        onStreamFrame: @escaping @Sendable (Data) -> Void,
+        onStreamClosed: (@Sendable () -> Void)?
+    ) async throws -> Data
+    func desktopAttachments(
+        requestJSON: String,
+        onEventFrame: (@Sendable (Data) -> Void)?,
+        onEventClosed: (@Sendable () -> Void)?
+    ) async throws -> Data
+    @MainActor func desktopPasteCurrentGeneralPasteboard(requestJSON: String) async throws -> Data
+    func desktopDropFiles(paths: [String], logicalX: Double, logicalY: Double)
     func setMainWindowState(visible: Bool, focused: Bool)
     func parseGfmMarkdown(_ markdown: String) -> Data
     func shutdown()
@@ -397,16 +409,106 @@ public final class FFIRuntimeBridge: RuntimeTransport, @unchecked Sendable {
         }
     }
 
-    public func desktopPaste(
-        requestJSON: String,
-        rawPasteboard: UnsafePointer<AgentHubRawPasteboard>
-    ) async throws -> Data {
+    @MainActor
+    public func desktopPasteCurrentGeneralPasteboard(requestJSON: String) async throws -> Data {
         let (reqId, rt) = try nextIdAndRuntime()
+        let pb = NSPasteboard.general
+        let countBefore = Int64(pb.changeCount)
+        let items = pb.pasteboardItems ?? []
+        let totalItemCount = items.count
+
+        // Up to 33 file URLs packed into a single contiguous UTF-8 arena so every pointer stays valid across the C call
+        var urlBytesArena: [CChar] = []
+        var urlSlices: [(offset: Int, utf8Len: Int, utf16Len: Int)] = []
+        for item in items.prefix(33) {
+            if let urlStr = item.string(forType: .fileURL) {
+                let bytes = Array(urlStr.utf8).map { CChar(bitPattern: $0) }
+                let offset = urlBytesArena.count
+                urlBytesArena.append(contentsOf: bytes)
+                urlSlices.append((offset: offset, utf8Len: bytes.count, utf16Len: (urlStr as NSString).length))
+            }
+        }
+
+        // Raw image bytes without any Swift decoding/transcoding (<=64MiB passed to Rust ImageIO)
+        let maxRawImageBytes = 64 * 1024 * 1024
+        var imageKind = AGENTHUB_RAW_IMAGE_NONE
+        var imageDeclaredBytes = 0
+        var imageData: Data?
+        if let png = pb.data(forType: .png) {
+            imageKind = AGENTHUB_RAW_IMAGE_PNG
+            imageDeclaredBytes = png.count
+            if png.count <= maxRawImageBytes { imageData = png }
+        } else if let tiff = pb.data(forType: .tiff) {
+            imageKind = AGENTHUB_RAW_IMAGE_TIFF
+            imageDeclaredBytes = tiff.count
+            if tiff.count <= maxRawImageBytes { imageData = tiff }
+        } else if let jpeg = pb.data(forType: NSPasteboard.PasteboardType("public.jpeg")) {
+            imageKind = AGENTHUB_RAW_IMAGE_JPEG
+            imageDeclaredBytes = jpeg.count
+            if jpeg.count <= maxRawImageBytes { imageData = jpeg }
+        }
+
+        // Raw string (<=262,144 UTF-16 code units passed to Rust path batch check)
+        let pbString = pb.string(forType: .string)
+        let hasString = (pbString != nil)
+        let stringUtf16Len = pbString.map { ($0 as NSString).length } ?? 0
+        let stringUtf8: [UInt8]? = (pbString != nil && stringUtf16Len <= 262_144) ? Array(pbString!.utf8) : nil
+        let countAfter = Int64(pb.changeCount)
+
         return try await withCheckedThrowingContinuation { continuation in
             let rpcBox = RpcContinuationBox(continuation)
             let rpcOpaque = Unmanaged.passRetained(rpcBox).toOpaque()
-            requestJSON.withCString { reqPtr in
-                agenthub_ffi_desktop_paste(rt, reqPtr, rawPasteboard, reqId, cRpcCallback, rpcOpaque)
+
+            urlBytesArena.withUnsafeBufferPointer { arenaBuf in
+                let cFileUrls: [AgentHubRawFileUrl] = urlSlices.map { slice in
+                    let ptr = (slice.utf8Len > 0 && arenaBuf.baseAddress != nil)
+                        ? arenaBuf.baseAddress!.advanced(by: slice.offset)
+                        : nil
+                    return AgentHubRawFileUrl(utf8_ptr: ptr, utf8_len: slice.utf8Len, utf16_len: slice.utf16Len)
+                }
+                cFileUrls.withUnsafeBufferPointer { urlsBuf in
+                    let invokeWithImageAndString = { (imgPtr: UnsafePointer<UInt8>?, imgLen: Int, strPtr: UnsafePointer<CChar>?, strLen: Int) in
+                        var snapshot = AgentHubRawPasteboard(
+                            change_count_before: countBefore,
+                            change_count_after: countAfter,
+                            total_item_count: totalItemCount,
+                            file_urls_ptr: urlsBuf.baseAddress,
+                            file_urls_len: urlsBuf.count,
+                            image_kind: imageKind,
+                            image_declared_bytes: imageDeclaredBytes,
+                            image_bytes_ptr: imgPtr,
+                            image_bytes_len: imgLen,
+                            has_string: hasString,
+                            string_utf16_len: stringUtf16Len,
+                            string_utf8_ptr: strPtr,
+                            string_utf8_len: strLen
+                        )
+                        requestJSON.withCString { reqPtr in
+                            withUnsafePointer(to: &snapshot) { snapPtr in
+                                agenthub_ffi_desktop_paste(rt, reqPtr, snapPtr, reqId, cRpcCallback, rpcOpaque)
+                            }
+                        }
+                    }
+
+                    let withStr = { (imgPtr: UnsafePointer<UInt8>?, imgLen: Int) in
+                        if let stringUtf8, !stringUtf8.isEmpty {
+                            stringUtf8.withUnsafeBufferPointer { sBuf in
+                                let cPtr = UnsafeRawPointer(sBuf.baseAddress!).assumingMemoryBound(to: CChar.self)
+                                invokeWithImageAndString(imgPtr, imgLen, cPtr, sBuf.count)
+                            }
+                        } else {
+                            invokeWithImageAndString(imgPtr, imgLen, nil, 0)
+                        }
+                    }
+
+                    if let imageData, !imageData.isEmpty {
+                        imageData.withUnsafeBytes { rawBytes in
+                            withStr(rawBytes.bindMemory(to: UInt8.self).baseAddress, imageData.count)
+                        }
+                    } else {
+                        withStr(nil, 0)
+                    }
+                }
             }
         }
     }
@@ -528,6 +630,34 @@ public final class MockRuntimeTransport: RuntimeTransport, @unchecked Sendable {
     public func invokeRawJSON(command: String, argsJSON: String) async throws -> Data {
         let currentHandler = recordAndFetchHandler(command: command, argsJSON: argsJSON)
         return try await currentHandler(command, argsJSON)
+    }
+
+    public func desktopAttach(
+        requestJSON: String,
+        onStreamFrame: @escaping @Sendable (Data) -> Void,
+        onStreamClosed: (@Sendable () -> Void)? = nil
+    ) async throws -> Data {
+        defer { onStreamClosed?() }
+        return try await invokeRawJSON(command: "codex.desktop.attach", argsJSON: requestJSON)
+    }
+
+    public func desktopAttachments(
+        requestJSON: String,
+        onEventFrame: (@Sendable (Data) -> Void)? = nil,
+        onEventClosed: (@Sendable () -> Void)? = nil
+    ) async throws -> Data {
+        defer { onEventClosed?() }
+        return try await invokeRawJSON(command: "codex.desktop.attachments", argsJSON: requestJSON)
+    }
+
+    @MainActor
+    public func desktopPasteCurrentGeneralPasteboard(requestJSON: String) async throws -> Data {
+        try await invokeRawJSON(command: "codex.desktop.paste", argsJSON: requestJSON)
+    }
+
+    public func desktopDropFiles(paths: [String], logicalX: Double, logicalY: Double) {
+        let encoded = (try? JSONEncoder().encode(paths)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        _ = recordAndFetchHandler(command: "codex.desktop.dropFiles", argsJSON: encoded)
     }
 
     public func setMainWindowState(visible: Bool, focused: Bool) {
