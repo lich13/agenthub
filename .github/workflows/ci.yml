@@ -175,3 +175,15 @@ jobs:
           path: ${{ runner.temp }}/agenthub-desktop-performance
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Build Rust FFI static archive for macOS Swift 6 host
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
+      - name: Build native Swift 6 app (Debug & Release WMO)
+        run: |
+          swift build --package-path macos -c debug
+          swift build --package-path macos -c release -Xswiftc -O -Xswiftc -whole-module-optimization
+      - name: Run native Swift 6 parity & offscreen render tests
+        env:
+          AGENTHUB_RENDER_TESTS: "1"
+        run: swift test --package-path macos

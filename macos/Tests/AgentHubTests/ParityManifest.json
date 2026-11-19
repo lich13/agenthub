@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "retiredPreviewOnlyFiles": ["webui/src/lib/domain/demoCore.test.ts"],
+  "requiredSourceTestFileCount": 73,
+  "milestone": "M2"
+}

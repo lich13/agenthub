@@ -1,0 +1,4 @@
+module CAgentHubFFI [system] {
+    header "include/agenthub_ffi.h"
+    export *
+}
