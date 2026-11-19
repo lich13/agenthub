@@ -21,6 +21,7 @@ public struct ProbeWorkspaceView: View {
     @State private var hookStatuses: [String: ClaudeHooksStatus] = [:]
     @State private var pendingHookDialog: (provider: String, name: String, action: String, path: String)?
     @State private var hookBusy: Bool = false
+    @State private var advancedSettingsOpen: Bool = true
 
     public init(store: RuntimeConnectionStore) {
         self.store = store
@@ -44,100 +45,105 @@ public struct ProbeWorkspaceView: View {
     }
 
     public var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Header
-                    HStack {
-                        Text("Probe")
-                            .font(DesignFonts.body(18, weight: .semibold))
-                            .foregroundStyle(palette.textPrimary.color)
-                        Spacer()
-                        Button {
-                            Task { await refreshAll(force: true) }
-                        } label: {
-                            LucideIcon(.refreshCw, size: 17)
+        GeometryReader { geo in
+            let isNarrow = geo.size.width <= LayoutMetrics.mobileBreakpoint
+            ZStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Header
+                        HStack {
+                            Text("Probe")
+                                .font(DesignFonts.body(22, weight: .semibold))
+                                .foregroundStyle(palette.textPrimary.color)
+                            Spacer()
+                            Button {
+                                Task { await refreshAll(force: true) }
+                            } label: {
+                                LucideIcon(.refreshCw, size: 17)
+                            }
+                            .buttonStyle(IconButtonStyle(dimension: 32))
+                            .help("刷新 Probe")
                         }
-                        .buttonStyle(IconButtonStyle(dimension: 32))
-                        .help("刷新 Probe")
-                    }
 
-                    // 1. Full-width GitHub CI Panel
-                    if store.capabilities.githubCi {
-                        GithubCiCardView(
-                            store: store,
-                            draft: $draft,
-                            saving: saving,
-                            saveMessage: saveTarget == "ci" ? saveMessage : nil,
-                            onSave: { Task { await saveSettings(target: "ci") } }
-                        )
-                    }
-
-                    // 2 & 3. Notification & Runtime Settings Panel (6 metrics + switches + 8 advanced fields)
-                    PanelCard(title: "通知配置与快捷开关", icon: .slidersHorizontal) {
-                        if let actionMessage {
-                            Text(actionMessage.text)
-                                .font(DesignFonts.body(12))
-                                .foregroundStyle((actionMessage.tone == .success ? palette.okFg : palette.errFg).color)
+                        // 1. Full-width GitHub CI Panel
+                        if store.capabilities.githubCi {
+                            GithubCiCardView(
+                                store: store,
+                                draft: $draft,
+                                saving: saving,
+                                saveMessage: saveTarget == "ci" ? saveMessage : nil,
+                                onSave: { Task { await saveSettings(target: "ci") } }
+                            )
                         }
+
+                        // 2 & 3. Notification & Runtime Settings Panel (6 metrics + switches + 8 advanced fields)
+                        PanelCard(title: "通知配置与快捷开关", icon: .slidersHorizontal) {
+                            if let actionMessage {
+                                Text(actionMessage.text)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle((actionMessage.tone == .success ? palette.okFg : palette.errFg).color)
+                            }
+                            if let d = draft {
+                                runtimeSettingsBody(draft: d, isNarrow: isNarrow)
+                            } else {
+                                Text(loadingStatus ? "正在读取设置" : "设置不可用")
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textMuted.color)
+                            }
+                        }
+
+                        // 3b. Bark Panel
                         if let d = draft {
-                            runtimeSettingsBody(draft: d)
-                        } else {
-                            Text(loadingStatus ? "正在读取设置" : "设置不可用")
-                                .font(DesignFonts.body(12))
-                                .foregroundStyle(palette.textMuted.color)
+                            barkPanelBody(draft: d)
                         }
+
+                        // 4. 5-Platform Host Matrix
+                        hostMatrixSection(isNarrow: isNarrow)
+
+                        // 5. Live Overview (top 12)
+                        liveOverviewPanel
+
+                        // 6. Recent Events
+                        recentEventsPanel
+
+                        // 7. Execution History (default collapsed)
+                        JobHistorySectionView(store: store, title: "执行记录")
                     }
-
-                    // 3b. Bark Panel
-                    if let d = draft {
-                        barkPanelBody(draft: d)
-                    }
-
-                    // 4. 5-Platform Host Matrix
-                    hostMatrixSection
-
-                    // 5. Live Overview (top 12)
-                    liveOverviewPanel
-
-                    // 6. Recent Events
-                    recentEventsPanel
-
-                    // 7. Execution History (default collapsed)
-                    JobHistorySectionView(store: store, title: "执行记录")
+                    .frame(maxWidth: 1060, alignment: .leading)
+                    .padding(.vertical, isNarrow ? 18 : 28)
+                    .padding(.horizontal, isNarrow ? 14 : 32)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(24)
-            }
 
-            if let dialog = pendingHookDialog {
-                ConfirmDialogOverlay(
-                    title: dialog.action == "install" ? "写入 \(dialog.name) 通知 Hook" : "移除 \(dialog.name) 通知 Hook",
-                    busy: hookBusy || jobBusy,
-                    onCancel: { pendingHookDialog = nil }
-                ) {
-                    if !dialog.path.isEmpty {
-                        Text(dialog.path)
-                            .font(DesignFonts.mono(12))
-                            .foregroundStyle(palette.textSecondary.color)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(palette.codeBg.color))
-                    }
-                    HStack(spacing: 8) {
-                        Spacer()
-                        Button("取消") {
-                            pendingHookDialog = nil
+                if let dialog = pendingHookDialog {
+                    ConfirmDialogOverlay(
+                        title: dialog.action == "install" ? "写入 \(dialog.name) 通知 Hook" : "移除 \(dialog.name) 通知 Hook",
+                        busy: hookBusy || jobBusy,
+                        onCancel: { pendingHookDialog = nil }
+                    ) {
+                        if !dialog.path.isEmpty {
+                            Text(dialog.path)
+                                .font(DesignFonts.mono(12))
+                                .foregroundStyle(palette.textSecondary.color)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(palette.codeBg.color))
                         }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(hookBusy || jobBusy)
+                        FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                            Button("取消") {
+                                pendingHookDialog = nil
+                            }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(hookBusy || jobBusy)
 
-                        Button(dialog.action == "install" ? "确认写入" : "确认移除") {
-                            let captured = dialog
-                            pendingHookDialog = nil
-                            Task { await executeHookDialog(captured) }
+                            Button(dialog.action == "install" ? "确认写入" : "确认移除") {
+                                let captured = dialog
+                                pendingHookDialog = nil
+                                Task { await executeHookDialog(captured) }
+                            }
+                            .buttonStyle(dialog.action == "remove" ? AnyButtonStyle(DangerButtonStyle(soft: false)) : AnyButtonStyle(PrimaryButtonStyle()))
+                            .disabled(hookBusy || jobBusy)
                         }
-                        .buttonStyle(dialog.action == "remove" ? AnyButtonStyle(DangerButtonStyle(soft: false)) : AnyButtonStyle(PrimaryButtonStyle()))
-                        .disabled(hookBusy || jobBusy)
                     }
                 }
             }
@@ -159,7 +165,7 @@ public struct ProbeWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func runtimeSettingsBody(draft d: ProbeSettingsDraft) -> some View {
+    private func runtimeSettingsBody(draft d: ProbeSettingsDraft, isNarrow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             // 6 Status Metric Cards
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -195,7 +201,10 @@ public struct ProbeWorkspaceView: View {
             }
 
             // Probe & Error Monitor switches
-            HStack(spacing: 12) {
+            LazyVGrid(
+                columns: isNarrow ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: 10
+            ) {
                 toggleRow("启用 Probe", isOn: d.probeEnabled) { next in
                     updateDraft { $0.probeEnabled = next }
                 }
@@ -217,7 +226,10 @@ public struct ProbeWorkspaceView: View {
                     default: true
                     }
                 }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                let platformCols = isNarrow
+                    ? [GridItem(.flexible())]
+                    : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: platformCols, spacing: 8) {
                     ForEach(visiblePlatforms) { platform in
                         let streams = status?.providerNotifications?.first(where: { $0.provider == platform.rawValue })?.streams
                         HStack(spacing: 8) {
@@ -250,38 +262,59 @@ public struct ProbeWorkspaceView: View {
                 }
             }
 
-            // Default-expanded 8 Advanced Parameters
+            // Default-expanded 8 Advanced Parameters Disclosure (styles.css:868)
             VStack(alignment: .leading, spacing: 10) {
-                Text("高级轮询与保留参数")
-                    .font(DesignFonts.body(13, weight: .semibold))
-                    .foregroundStyle(palette.textPrimary.color)
+                Button {
+                    advancedSettingsOpen.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        LucideIcon(advancedSettingsOpen ? .chevronDown : .chevronRight, size: 15)
+                            .foregroundStyle(palette.textMuted.color)
+                        Text("高级设置")
+                            .font(DesignFonts.body(13, weight: .semibold))
+                            .foregroundStyle(palette.textSecondary.color)
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    labeledField("Codex Home", placeholder: "auto", value: d.codexHome) { v in
-                        updateDraft { $0.codexHome = v }
-                    }
-                    labeledField("主机标签", placeholder: "AgentHub", value: d.hostLabel) { v in
-                        updateDraft { $0.hostLabel = v }
-                    }
-                    labeledField("轮询秒数", placeholder: "5..3600", value: d.pollSecondsText) { v in
-                        updateDraft { $0.pollSecondsText = v }
-                    }
-                    labeledField("最近事件数", placeholder: "1..500", value: d.recentLimitText) { v in
-                        updateDraft { $0.recentLimitText = v }
-                    }
-                    labeledField("通知事件保留天数", placeholder: "1..3650", value: d.eventRetentionDaysText) { v in
-                        updateDraft { $0.eventRetentionDaysText = v }
-                    }
-                    labeledField("Hook 事件行数", placeholder: "10..10000", value: d.hookEventMaxLinesText) { v in
-                        updateDraft { $0.hookEventMaxLinesText = v }
-                    }
-                    labeledField("冷却行数", placeholder: "10..10000", value: d.hookCooldownMaxLinesText) { v in
-                        updateDraft { $0.hookCooldownMaxLinesText = v }
-                    }
-                    labeledField("日志上限 MiB", placeholder: "0.00390625..8", value: d.logMaxMiBText) { v in
-                        updateDraft { $0.logMaxMiBText = v }
+                if advancedSettingsOpen {
+                    let advCols = isNarrow
+                        ? [GridItem(.flexible())]
+                        : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+                    LazyVGrid(columns: advCols, spacing: 10) {
+                        labeledField("Codex Home", placeholder: "auto", value: d.codexHome) { v in
+                            updateDraft { $0.codexHome = v }
+                        }
+                        labeledField("主机标签", placeholder: "AgentHub", value: d.hostLabel) { v in
+                            updateDraft { $0.hostLabel = v }
+                        }
+                        labeledField("轮询秒数", placeholder: "5..3600", value: d.pollSecondsText) { v in
+                            updateDraft { $0.pollSecondsText = v }
+                        }
+                        labeledField("最近事件数", placeholder: "1..500", value: d.recentLimitText) { v in
+                            updateDraft { $0.recentLimitText = v }
+                        }
+                        labeledField("通知事件保留天数", placeholder: "1..3650", value: d.eventRetentionDaysText) { v in
+                            updateDraft { $0.eventRetentionDaysText = v }
+                        }
+                        labeledField("Hook 事件行数", placeholder: "10..10000", value: d.hookEventMaxLinesText) { v in
+                            updateDraft { $0.hookEventMaxLinesText = v }
+                        }
+                        labeledField("冷却行数", placeholder: "10..10000", value: d.hookCooldownMaxLinesText) { v in
+                            updateDraft { $0.hookCooldownMaxLinesText = v }
+                        }
+                        labeledField("日志上限 MiB", placeholder: "0.00390625..8", value: d.logMaxMiBText) { v in
+                            updateDraft { $0.logMaxMiBText = v }
+                        }
                     }
                 }
+            }
+            .padding(.top, 10)
+            .overlay(alignment: .top) {
+                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
             }
 
             if let firstError = validationErrors.first {
@@ -355,7 +388,7 @@ public struct ProbeWorkspaceView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                HStack(spacing: 8) {
+                FlowButtonRow(spacing: 8, lineSpacing: 8) {
                     Button {
                         Task { await saveSettings(target: "bark") }
                     } label: {
@@ -406,8 +439,9 @@ public struct ProbeWorkspaceView: View {
     }
 
     @ViewBuilder
-    private var hostMatrixSection: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+    private func hostMatrixSection(isNarrow: Bool) -> some View {
+        let cols = isNarrow ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())]
+        LazyVGrid(columns: cols, spacing: 12) {
             // Codex Host
             PanelCard(title: "Codex Host", icon: .gitFork) {
                 let hookStatus = status?.hookStatus
@@ -431,7 +465,7 @@ public struct ProbeWorkspaceView: View {
                         MetricCard(label: "Codex Hook", value: probeStateLabel(hookStatus), tone: managed ? .success : .warning)
                         MetricCard(label: "实际命令", value: "\(actualCount) 条")
                     }
-                    HStack(spacing: 8) {
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
                         Button(managed ? "重新写入 Hook" : "写入通知 Hook") {
                             pendingHookDialog = ("codex", "Codex", "install", status?.codexHooksPath ?? "")
                         }
@@ -507,7 +541,7 @@ public struct ProbeWorkspaceView: View {
                         MetricCard(label: "Hook 状态", value: installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
                         MetricCard(label: "托管条目", value: "\(count) 条")
                     }
-                    HStack(spacing: 8) {
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
                         Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
                             pendingHookDialog = (provider, name, "install", st?.configPath ?? "")
                         }
@@ -590,21 +624,29 @@ public struct ProbeWorkspaceView: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(events) { ev in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(ev.title ?? ev.kind ?? ev.id)
+                        let bark = ProbeFormatting.barkBadge(ev)
+                        let dedupe = ProbeFormatting.dedupeBadge(ev)
+                        let kindLabel = ProbeFormatting.eventKindLabel(ev.kind)
+                        let headline = (ev.title?.isEmpty == false ? ev.title! : kindLabel)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(headline == kindLabel ? headline : "\(kindLabel) · \(headline)")
                                     .font(DesignFonts.body(13, weight: .semibold))
                                     .foregroundStyle(palette.textPrimary.color)
-                                Spacer()
-                                if let bark = ev.barkStatus {
-                                    StatusChip(bark, tone: bark == "sent" ? .success : .neutral)
+                                Spacer(minLength: 8)
+                                FlowButtonRow(spacing: 6, lineSpacing: 4) {
+                                    StatusChip(bark.label, tone: bark.tone)
+                                    if let dedupe {
+                                        StatusChip(dedupe.label, tone: dedupe.tone)
+                                    }
                                 }
                             }
-                            if let summary = ev.summary, !summary.isEmpty {
+                            if let summary = ev.summary ?? ev.message, !summary.isEmpty {
                                 Text(summary)
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textSecondary.color)
-                                    .lineLimit(2)
+                                    .lineLimit(3)
                             }
                         }
                         .padding(10)

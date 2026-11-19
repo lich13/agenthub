@@ -1,83 +1,376 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "milestone": "M4",
   "requiredSourceTestFileCount": 73,
+  "totalBaselineWebUICases": 641,
   "retiredPreviewOnlyFiles": [
     "webui/src/lib/domain/demoCore.test.ts"
   ],
   "mappedUnitTestFiles": {
-    "webui/src/App.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/chat/DesktopGoal.test.tsx": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/DesktopReferenceInteractions.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/DesktopRequests.test.tsx": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/DesktopSettings.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/DesktopStatus.test.tsx": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/MessageStream.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/chat/NewDesktopThread.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/components/chat/SubagentActivity.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/chat/SubagentPanel.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/chat/SubagentSummary.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/claude/ClaudeProcessView.test.tsx": "GoldenVectorsAndDomainParityTests",
-    "webui/src/components/claude/ClaudeWorkspace.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/ExecutionGroupView.test.tsx": "GoldenVectorsAndDomainParityTests",
-    "webui/src/components/common/MarkdownContent.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/RenameableSession.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/SessionBatchControls.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/SessionSearch.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/TimelineRail.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/common/UserMessage.test.tsx": "GoldenVectorsAndDomainParityTests",
-    "webui/src/components/common/WorkspaceSplitShell.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/ops/CodexAccountScope.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/ops/OpsWorkspace.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/ops/UpdatePanel.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/probe/GithubCiCard.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/probe/ProbeWorkspace.test.tsx": "ProbeAndSettingsConsoleTests",
-    "webui/src/components/providers/ArchivableProviderWorkspace.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/components/providers/GrokBotWorkspace.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/hooks/useCodexDesktop.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/hooks/useCodexDesktopLifecycle.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/hooks/useDesktopAttachments.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/hooks/useDesktopReferenceCatalog.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/lib/api.test.ts": "RuntimeConnectionAndIsolationTests",
-    "webui/src/lib/api/claude.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/api/desktop.test.ts": "CodexDesktopAndIMETests",
-    "webui/src/lib/api/filePaths.test.ts": "LegacyMigrationAndNotificationTests",
-    "webui/src/lib/desktopIntent.test.ts": "RuntimeConnectionAndIsolationTests",
-    "webui/src/lib/desktopReferences.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/desktopRefresh.test.ts": "RuntimeConnectionAndIsolationTests",
-    "webui/src/lib/domain/claudeProcessGroups.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/contractRegistry.test.ts": "DesignSystemAndSRGBTests",
-    "webui/src/lib/domain/executionGroups.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/fileLinks.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/historyCursor.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/planExport.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/processGroups.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/runtimeViewModel.test.ts": "RuntimeConnectionAndIsolationTests",
-    "webui/src/lib/domain/searchHistoryReveal.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/domain/sessionSelection.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/sessionStorage.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/subagentCapabilities.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/domain/subagentPolling.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/domain/timelineViewModel.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/userContext.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/userMessageViewModel.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/domain/visibleMarkdown.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/probeUi.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/attachments.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/query/claude.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/query/hiddenScan.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/historyWindows.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/query/jobs.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/ops.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/probe.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/probeStatus.test.ts": "ProbeAndSettingsConsoleTests",
-    "webui/src/lib/query/sessions.test.tsx": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/query/subagents.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/query/threads.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/query/usePagedHistory.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/runtime.test.ts": "RuntimeConnectionAndIsolationTests",
-    "webui/src/lib/threadMessageStore.test.ts": "GoldenVectorsAndDomainParityTests",
-    "webui/src/lib/useHistoryScroll.test.ts": "ReaderAnchorMenuAndSnapshotTests",
-    "webui/src/lib/useTimelineWindow.test.tsx": "ReaderAnchorMenuAndSnapshotTests"
+    "webui/src/App.test.ts": {
+      "webuiCases": 18,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_appShellWindowAndModals"]
+    },
+    "webui/src/components/chat/DesktopGoal.test.tsx": {
+      "webuiCases": 2,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopGoal"]
+    },
+    "webui/src/components/chat/DesktopReferenceInteractions.test.ts": {
+      "webuiCases": 20,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopReferenceInteractions"]
+    },
+    "webui/src/components/chat/DesktopRequests.test.tsx": {
+      "webuiCases": 10,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopRequests"]
+    },
+    "webui/src/components/chat/DesktopSettings.test.ts": {
+      "webuiCases": 8,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopSettings"]
+    },
+    "webui/src/components/chat/DesktopStatus.test.tsx": {
+      "webuiCases": 8,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopStatus"]
+    },
+    "webui/src/components/chat/MessageStream.test.tsx": {
+      "webuiCases": 10,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_messageStream"]
+    },
+    "webui/src/components/chat/NewDesktopThread.test.ts": {
+      "webuiCases": 2,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_newDesktopThread"]
+    },
+    "webui/src/components/chat/SubagentActivity.test.tsx": {
+      "webuiCases": 8,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentActivity"]
+    },
+    "webui/src/components/chat/SubagentPanel.test.tsx": {
+      "webuiCases": 16,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentPanel"]
+    },
+    "webui/src/components/chat/SubagentSummary.test.tsx": {
+      "webuiCases": 5,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentSummary"]
+    },
+    "webui/src/components/claude/ClaudeProcessView.test.tsx": {
+      "webuiCases": 9,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_claudeProcessView"]
+    },
+    "webui/src/components/claude/ClaudeWorkspace.test.tsx": {
+      "webuiCases": 4,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_claudeWorkspace"]
+    },
+    "webui/src/components/common/ExecutionGroupView.test.tsx": {
+      "webuiCases": 11,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_executionGroupView"]
+    },
+    "webui/src/components/common/MarkdownContent.test.tsx": {
+      "webuiCases": 9,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_markdownContent"]
+    },
+    "webui/src/components/common/RenameableSession.test.tsx": {
+      "webuiCases": 18,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_renameableSession"]
+    },
+    "webui/src/components/common/SessionBatchControls.test.tsx": {
+      "webuiCases": 2,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_sessionBatchControls"]
+    },
+    "webui/src/components/common/SessionSearch.test.tsx": {
+      "webuiCases": 3,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_sessionSearch"]
+    },
+    "webui/src/components/common/TimelineRail.test.tsx": {
+      "webuiCases": 4,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_timelineRail"]
+    },
+    "webui/src/components/common/UserMessage.test.tsx": {
+      "webuiCases": 12,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_userMessageView"]
+    },
+    "webui/src/components/common/WorkspaceSplitShell.test.tsx": {
+      "webuiCases": 1,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_workspaceSplitShell"]
+    },
+    "webui/src/components/ops/CodexAccountScope.test.tsx": {
+      "webuiCases": 4,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_codexAccountScope"]
+    },
+    "webui/src/components/ops/OpsWorkspace.test.tsx": {
+      "webuiCases": 4,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_opsWorkspace"]
+    },
+    "webui/src/components/ops/UpdatePanel.test.tsx": {
+      "webuiCases": 4,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_updatePanel"]
+    },
+    "webui/src/components/probe/GithubCiCard.test.tsx": {
+      "webuiCases": 5,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_githubCiCard"]
+    },
+    "webui/src/components/probe/ProbeWorkspace.test.tsx": {
+      "webuiCases": 1,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_probeWorkspace"]
+    },
+    "webui/src/components/providers/ArchivableProviderWorkspace.test.tsx": {
+      "webuiCases": 5,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_archivableProviderWorkspace"]
+    },
+    "webui/src/components/providers/GrokBotWorkspace.test.tsx": {
+      "webuiCases": 3,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_grokBotWorkspace"]
+    },
+    "webui/src/hooks/useCodexDesktop.test.ts": {
+      "webuiCases": 1,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_useCodexDesktop"]
+    },
+    "webui/src/hooks/useCodexDesktopLifecycle.test.ts": {
+      "webuiCases": 16,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_useCodexDesktopLifecycle"]
+    },
+    "webui/src/hooks/useDesktopAttachments.test.ts": {
+      "webuiCases": 18,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_useDesktopAttachments"]
+    },
+    "webui/src/hooks/useDesktopReferenceCatalog.test.ts": {
+      "webuiCases": 11,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_useDesktopReferenceCatalog"]
+    },
+    "webui/src/lib/api.test.ts": {
+      "webuiCases": 51,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_apiContractRouting"]
+    },
+    "webui/src/lib/api/claude.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_claudeApi"]
+    },
+    "webui/src/lib/api/desktop.test.ts": {
+      "webuiCases": 14,
+      "swiftTestSuite": "CodexDesktopParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopApi"]
+    },
+    "webui/src/lib/api/filePaths.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_filePathsApi"]
+    },
+    "webui/src/lib/desktopIntent.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopIntent"]
+    },
+    "webui/src/lib/desktopReferences.test.ts": {
+      "webuiCases": 15,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopReferences"]
+    },
+    "webui/src/lib/desktopRefresh.test.ts": {
+      "webuiCases": 2,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_desktopRefresh"]
+    },
+    "webui/src/lib/domain/claudeProcessGroups.test.ts": {
+      "webuiCases": 7,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_claudeProcessGroups"]
+    },
+    "webui/src/lib/domain/contractRegistry.test.ts": {
+      "webuiCases": 6,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_contractRegistry"]
+    },
+    "webui/src/lib/domain/executionGroups.test.ts": {
+      "webuiCases": 11,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_executionGroups"]
+    },
+    "webui/src/lib/domain/fileLinks.test.ts": {
+      "webuiCases": 5,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_fileLinks"]
+    },
+    "webui/src/lib/domain/historyCursor.test.ts": {
+      "webuiCases": 6,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_historyCursor"]
+    },
+    "webui/src/lib/domain/planExport.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_planExport"]
+    },
+    "webui/src/lib/domain/processGroups.test.ts": {
+      "webuiCases": 7,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_processGroups"]
+    },
+    "webui/src/lib/domain/runtimeViewModel.test.ts": {
+      "webuiCases": 5,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_runtimeViewModel"]
+    },
+    "webui/src/lib/domain/searchHistoryReveal.test.ts": {
+      "webuiCases": 1,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_searchHistoryReveal"]
+    },
+    "webui/src/lib/domain/sessionSelection.test.ts": {
+      "webuiCases": 9,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_sessionSelection"]
+    },
+    "webui/src/lib/domain/sessionStorage.test.ts": {
+      "webuiCases": 8,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_sessionStorage"]
+    },
+    "webui/src/lib/domain/subagentCapabilities.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentCapabilities"]
+    },
+    "webui/src/lib/domain/subagentPolling.test.ts": {
+      "webuiCases": 5,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentPolling"]
+    },
+    "webui/src/lib/domain/timelineViewModel.test.ts": {
+      "webuiCases": 8,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_timelineViewModel"]
+    },
+    "webui/src/lib/domain/userContext.test.ts": {
+      "webuiCases": 13,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_userContext"]
+    },
+    "webui/src/lib/domain/userMessageViewModel.test.ts": {
+      "webuiCases": 7,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_userMessageViewModel"]
+    },
+    "webui/src/lib/domain/visibleMarkdown.test.ts": {
+      "webuiCases": 14,
+      "swiftTestSuite": "DomainAndMarkdownParitySuiteTests",
+      "swiftMethods": ["testPorted_visibleMarkdown"]
+    },
+    "webui/src/lib/probeUi.test.ts": {
+      "webuiCases": 27,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_probeUi"]
+    },
+    "webui/src/lib/query/attachments.test.ts": {
+      "webuiCases": 5,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_attachmentsQuery"]
+    },
+    "webui/src/lib/query/claude.test.ts": {
+      "webuiCases": 1,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_claudeQuery"]
+    },
+    "webui/src/lib/query/hiddenScan.test.ts": {
+      "webuiCases": 6,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_hiddenScan"]
+    },
+    "webui/src/lib/query/historyWindows.test.ts": {
+      "webuiCases": 9,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_historyWindows"]
+    },
+    "webui/src/lib/query/jobs.test.ts": {
+      "webuiCases": 1,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_jobsQuery"]
+    },
+    "webui/src/lib/query/ops.test.ts": {
+      "webuiCases": 3,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_opsQuery"]
+    },
+    "webui/src/lib/query/probe.test.ts": {
+      "webuiCases": 1,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_probeQuery"]
+    },
+    "webui/src/lib/query/probeStatus.test.ts": {
+      "webuiCases": 4,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_probeStatusQuery"]
+    },
+    "webui/src/lib/query/sessions.test.tsx": {
+      "webuiCases": 21,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_sessionsQuery"]
+    },
+    "webui/src/lib/query/subagents.test.ts": {
+      "webuiCases": 15,
+      "swiftTestSuite": "ReaderSubagentAndSessionParitySuiteTests",
+      "swiftMethods": ["testPorted_subagentsQuery"]
+    },
+    "webui/src/lib/query/threads.test.ts": {
+      "webuiCases": 5,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_threadsQuery"]
+    },
+    "webui/src/lib/query/usePagedHistory.test.ts": {
+      "webuiCases": 20,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_usePagedHistory"]
+    },
+    "webui/src/lib/runtime.test.ts": {
+      "webuiCases": 15,
+      "swiftTestSuite": "RuntimeProbeAndOpsParitySuiteTests",
+      "swiftMethods": ["testPorted_runtimeStreamAndEpochs"]
+    },
+    "webui/src/lib/threadMessageStore.test.ts": {
+      "webuiCases": 29,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_threadMessageStore"]
+    },
+    "webui/src/lib/useHistoryScroll.test.ts": {
+      "webuiCases": 11,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_useHistoryScroll"]
+    },
+    "webui/src/lib/useTimelineWindow.test.tsx": {
+      "webuiCases": 7,
+      "swiftTestSuite": "HistoryAndTimelineParitySuiteTests",
+      "swiftMethods": ["testPorted_useTimelineWindow"]
+    }
   }
 }

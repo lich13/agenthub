@@ -9,29 +9,39 @@ public struct SettingsWorkspaceView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Settings Header & Tabs
-                HStack(spacing: 16) {
-                    Text("设置")
-                        .font(DesignFonts.body(18, weight: .semibold))
-                        .foregroundStyle(palette.textPrimary.color)
+        GeometryReader { geo in
+            let isNarrow = geo.size.width <= LayoutMetrics.mobileBreakpoint
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    // Settings Header & .settings-tabs Underline Tab Bar (styles.css:544-549)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("设置")
+                            .font(DesignFonts.body(20, weight: .bold))
+                            .foregroundStyle(palette.textPrimary.color)
 
-                    HStack(spacing: 4) {
-                        tabButton(title: "更新与维护", section: .maintenance)
-                        tabButton(title: "远程连接", section: .remote)
+                        HStack(spacing: 20) {
+                            tabButton(title: "更新与维护", section: .maintenance)
+                            tabButton(title: "远程连接", section: .remote)
+                            Spacer()
+                        }
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(palette.borderSubtle.color)
+                                .frame(height: 1)
+                        }
                     }
-                    Spacer()
-                }
-                .padding(.bottom, 4)
 
-                if store.settingsSection == .remote {
-                    RemoteConnectionSettingsView(store: store)
-                } else {
-                    MaintenanceOpsView(store: store)
+                    if store.settingsSection == .remote {
+                        RemoteConnectionSettingsView(store: store)
+                    } else {
+                        MaintenanceOpsView(store: store, isNarrow: isNarrow)
+                    }
                 }
+                .frame(maxWidth: 1060, alignment: .leading)
+                .padding(.vertical, isNarrow ? 18 : 28)
+                .padding(.horizontal, isNarrow ? 14 : 32)
+                .frame(maxWidth: .infinity)
             }
-            .padding(24)
         }
     }
 
@@ -43,12 +53,15 @@ public struct SettingsWorkspaceView: View {
             Text(title)
                 .font(DesignFonts.body(13, weight: active ? .semibold : .medium))
                 .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(active ? palette.selected.color : Color.clear)
-                )
+                .padding(.horizontal, 2)
+                .padding(.vertical, 10)
+                .overlay(alignment: .bottom) {
+                    if active {
+                        Rectangle()
+                            .fill(palette.accent.color)
+                            .frame(height: 2)
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(PlainHitButtonStyle())
@@ -58,6 +71,7 @@ public struct SettingsWorkspaceView: View {
 public struct MaintenanceOpsView: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
+    public var isNarrow: Bool
 
     @State private var updateStatus: UpdateStatus?
     @State private var updateLoading: Bool = false
@@ -65,8 +79,9 @@ public struct MaintenanceOpsView: View {
     @State private var lastUpdateAction: UnifiedUpdateActionKind?
     @State private var activeUpdateJobId: String?
 
-    public init(store: RuntimeConnectionStore) {
+    public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
+        self.isNarrow = isNarrow
     }
 
     private var updateJob: JobRecord? {
@@ -82,32 +97,12 @@ public struct MaintenanceOpsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Ops Header
-            HStack {
-                HStack(spacing: 8) {
-                    LucideIcon(.slidersHorizontal, size: 18)
-                        .foregroundStyle(palette.textMuted.color)
-                    Text("设置与维护")
-                        .font(DesignFonts.body(16, weight: .semibold))
-                        .foregroundStyle(palette.textPrimary.color)
-                }
-                Spacer()
-                Button {
-                    Task { await fetchUpdateStatus() }
-                } label: {
-                    LucideIcon(.refreshCw, size: 17)
-                }
-                .buttonStyle(IconButtonStyle(dimension: 32))
-                .disabled(updateLoading)
-                .help("刷新版本与状态")
-            }
-
             // Appearance Segmented Radio Group
             VStack(alignment: .leading, spacing: 8) {
                 Text("外观")
-                    .font(DesignFonts.body(13, weight: .semibold))
+                    .font(DesignFonts.body(14, weight: .semibold))
                     .foregroundStyle(palette.textPrimary.color)
-                HStack(spacing: 6) {
+                FlowButtonRow(spacing: 6, lineSpacing: 6) {
                     ForEach(ThemeMode.allCases, id: \.self) { option in
                         let active = (store.themeMode == option)
                         let icon: LucideIconName = switch option {
@@ -121,14 +116,14 @@ public struct MaintenanceOpsView: View {
                             HStack(spacing: 6) {
                                 LucideIcon(icon, size: 15)
                                 Text(option.label)
-                                    .font(DesignFonts.body(13, weight: .medium))
+                                    .font(DesignFonts.body(13, weight: active ? .semibold : .medium))
                             }
                             .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
                             .padding(.horizontal, 14)
                             .frame(height: LayoutMetrics.formControlHeight)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill((active ? palette.elevated : palette.surface).color)
+                                    .fill((active ? palette.hover : palette.surface).color)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -145,7 +140,7 @@ public struct MaintenanceOpsView: View {
 
             // Unified 6-Scope Cleanup + Hidden Scan
             if store.capabilities.threadCleanup {
-                UnifiedThreadCleanupSection(store: store)
+                UnifiedThreadCleanupSection(store: store, isNarrow: isNarrow)
             }
 
             // Codex Account Scope
@@ -170,22 +165,29 @@ public struct MaintenanceOpsView: View {
 
     @ViewBuilder
     private var updatePanelSection: some View {
-        let title = store.capabilities.updateServiceLabels ? "服务更新" : "更新与维护"
+        let title = UpdateActionViewItem.panelTitle(capabilities: store.capabilities)
         let working = updateBusy || updateStatus?.state == "checking" || updateStatus?.state == "installing"
         let failure = updateError ?? (updateJob?.status == "failed" ? (updateJob?.error ?? "更新操作失败") : nil)
+        let versionLabel: String = if let st = updateStatus {
+            UpdateVersionFormatter.displayWithVPrefix(st.currentVersion)
+        } else if updateLoading {
+            "读取中…"
+        } else {
+            UpdateVersionFormatter.displayWithVPrefix(LayoutMetrics.fallbackAppVersion)
+        }
 
         PanelCard(title: title, icon: .refreshCw) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
+                HStack(spacing: 16) {
                     MetricCard(
                         label: "当前版本",
-                        value: updateStatus?.currentVersion ?? (updateLoading ? "读取中…" : LayoutMetrics.fallbackAppVersion)
+                        value: versionLabel
                     )
-                    if updateStatus?.updateAvailable == true, let latest = updateStatus?.latestVersion {
-                        MetricCard(label: "可用版本", value: latest, tone: .info)
-                    }
-                    Spacer()
-                    HStack(spacing: 8) {
+                    .frame(maxWidth: 200)
+
+                    Spacer(minLength: 8)
+
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
                         ForEach(UpdateActionViewItem.actions(status: updateError == nil ? updateStatus : nil, capabilities: store.capabilities)) { item in
                             let icon: LucideIconName = switch item.action {
                             case .check: .refreshCw
@@ -280,18 +282,20 @@ public struct MaintenanceOpsView: View {
 public struct UnifiedThreadCleanupSection: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
+    public var isNarrow: Bool
 
-    private static let scopesMeta: [(scope: String, label: String, brand: AgentBrandId)] = [
-        ("codex_archived", "Codex 归档线程", .codex),
-        ("codex_hidden", "Codex 隐藏线程", .codex),
-        ("claude_inactive", "Claude 历史清理", .claude),
-        ("grok_inactive", "Grok 历史清理", .grok),
-        ("antigravity_archived", "Antigravity 归档", .antigravity),
-        ("dsh_archived", "DeepSeek Harness 归档", .dsh),
+    public static let scopesMeta: [(scope: String, legacyAlias: String?, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
+        ("codex_archived", nil, "Codex", "已归档线程", "Codex 已归档线程", .codex, .codex),
+        ("codex_hidden", nil, "Codex", "隐藏线程", "Codex 隐藏线程", .codex, .codex),
+        ("antigravity_archived", nil, "Antigravity", "已归档线程", "Antigravity 已归档线程", .antigravity, .antigravity),
+        ("dsh_archived", nil, "DeepSeek Harness", "已归档线程", "DeepSeek Harness 已归档线程", .dsh, .dsh),
+        ("claude_empty", "claude_inactive", "Claude Code", "空残余会话", "Claude Code 空残余会话", .claude, .claude),
+        ("grok_empty", "grok_inactive", "Grok Build", "空残余会话", "Grok Build 空残余会话", .grok, .grok),
     ]
 
     @State private var plan: UnifiedCleanupPlan?
     @State private var hiddenScan: HiddenScanProgress?
+    @State private var hiddenScanStopped: Bool = false
     @State private var result: UnifiedCleanupResult?
     @State private var selectedScopes: Set<String> = []
     @State private var armed: Bool = false
@@ -303,11 +307,16 @@ public struct UnifiedThreadCleanupSection: View {
     @State private var errorMessage: String?
     @State private var hiddenScanTask: Task<Void, Never>?
 
-    public init(store: RuntimeConnectionStore) {
+    public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
+        self.isNarrow = isNarrow
     }
 
     private var busy: Bool { scanning || executing }
+
+    private func lookupScopePlan(_ meta: (scope: String, legacyAlias: String?, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)) -> UnifiedCleanupScopePlan? {
+        plan?.scopes.first(where: { $0.scope == meta.scope || (meta.legacyAlias != nil && $0.scope == meta.legacyAlias) })
+    }
 
     private var activeSelectedScopes: [String] {
         guard let plan else { return [] }
@@ -335,13 +344,14 @@ public struct UnifiedThreadCleanupSection: View {
             title: "全平台线程清理",
             icon: .sparkles,
             headerAction: {
-                let stageText: String = executing ? "正在清理" : scanning ? "正在扫描" : armed ? "等待确认" : (plan != nil ? "已预览" : "待扫描")
-                let tone: StatusChipTone = executing || scanning ? .warning : armed ? .danger : (plan != nil ? .info : .neutral)
+                let stageText: String = executing ? "执行中" : scanning ? "扫描中" : armed ? "等待确认" : hiddenScanStopped ? "已停止" : (plan != nil ? (selectedDeletableCount > 0 ? "可清理" : "无可清理") : "待扫描")
+                let tone: StatusChipTone = executing || scanning ? .warning : armed ? .danger : (plan != nil ? (selectedDeletableCount > 0 ? .warning : .success) : .neutral)
                 StatusChip(stageText, tone: tone)
             }
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
+                let metricCols = isNarrow ? [GridItem(.flexible()), GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: metricCols, spacing: 10) {
                     MetricCard(
                         label: "可清理会话",
                         value: plan.map { "\(selectedDeletableCount) / \($0.totalDeletable)" } ?? "待扫描预览",
@@ -357,45 +367,132 @@ public struct UnifiedThreadCleanupSection: View {
                     )
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                let scopeCols = isNarrow ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: scopeCols, spacing: 10) {
                     ForEach(Self.scopesMeta, id: \.scope) { meta in
-                        let sp = plan?.scopes.first(where: { $0.scope == meta.scope })
+                        let sp = lookupScopePlan(meta)
+                        let resolvedKey = sp?.scope ?? meta.scope
+                        let scopePalette = DesignPalette.resolve(scheme: palette.scheme, workspace: meta.workspace)
                         let canSelect = (sp?.supported == true && sp?.scanned == true && (sp?.deletableCount ?? 0) > 0)
-                        let isSelected = activeSelectedScopes.contains(meta.scope)
-                        HStack(spacing: 10) {
-                            AgentBrandIcon(meta.brand, size: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(meta.label)
-                                    .font(DesignFonts.body(13, weight: .semibold))
-                                    .foregroundStyle(palette.textPrimary.color)
-                                Text(scopeSummary(meta.scope, scopePlan: sp))
-                                    .font(DesignFonts.body(11))
-                                    .foregroundStyle(palette.textMuted.color)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            if let sp, sp.candidateCount > 0 {
-                                Button(expandedScope == meta.scope ? "收起" : "详情") {
-                                    candidatePage = 0
-                                    expandedScope = (expandedScope == meta.scope) ? nil : meta.scope
-                                }
-                                .buttonStyle(SecondaryButtonStyle())
-                            }
-                            CapsuleSwitch(
-                                isOn: Binding(
-                                    get: { isSelected },
-                                    set: { val in
-                                        armed = false
-                                        if val { selectedScopes.insert(meta.scope) } else { selectedScopes.remove(meta.scope) }
+                        let isSelected = activeSelectedScopes.contains(resolvedKey)
+                        let totalEst = max(Int64(1), plan?.totalEstimatedBytes ?? 0)
+                        let ratioPct: CGFloat = (sp?.scanned == true && (sp?.deletableCount ?? 0) > 0 && (plan?.totalEstimatedBytes ?? 0) > 0)
+                            ? max(0.06, min(1.0, CGFloat(sp?.estimatedBytes ?? 0) / CGFloat(totalEst)))
+                            : 0
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top, spacing: 10) {
+                                AgentBrandIcon(meta.brand, size: 17)
+                                    .frame(width: 24, height: 24)
+                                    .background(RoundedRectangle(cornerRadius: 7).fill(scopePalette.accentSoft.color))
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Text(meta.agentTitle)
+                                            .font(DesignFonts.body(13, weight: .semibold))
+                                            .foregroundStyle(palette.textPrimary.color)
+                                        Text(meta.scopeBadge)
+                                            .font(DesignFonts.body(11, weight: .medium))
+                                            .foregroundStyle(palette.textSecondary.color)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 1)
+                                            .background(Capsule().fill(palette.surface.color))
+                                            .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
                                     }
-                                ),
-                                label: meta.label
-                            )
-                            .disabled(!canSelect || busy)
+                                    Text(scopeSummary(meta.scope, scopePlan: sp))
+                                        .font(DesignFonts.body(11))
+                                        .foregroundStyle(((sp?.deletableCount ?? 0) > 0 ? palette.warnFg : palette.textMuted).color)
+                                        .lineLimit(2)
+                                }
+
+                                Spacer(minLength: 4)
+
+                                // 17x17pt Checkbox (styles.css:631)
+                                Button {
+                                    armed = false
+                                    if isSelected {
+                                        selectedScopes.remove(resolvedKey)
+                                    } else if canSelect {
+                                        selectedScopes.insert(resolvedKey)
+                                    }
+                                } label: {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill((isSelected ? scopePalette.accent : palette.elevated).color)
+                                            .frame(width: 17, height: 17)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                    .strokeBorder((isSelected ? scopePalette.accent : palette.borderStrong).color, lineWidth: 1)
+                                            )
+                                        if isSelected {
+                                            LucideIcon(.check, size: 11)
+                                                .foregroundStyle(palette.buttonFg.color)
+                                        }
+                                    }
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(PlainHitButtonStyle())
+                                .disabled(!canSelect || busy)
+                                .accessibilityLabel("选择 \(meta.label)")
+                            }
+
+                            // 5pt .unified-scope-bar usage ratio bar (styles.css:634-637)
+                            if ratioPct > 0 {
+                                GeometryReader { barGeo in
+                                    ZStack(alignment: .leading) {
+                                        Capsule()
+                                            .fill(palette.hover.color)
+                                            .frame(height: 5)
+                                        Capsule()
+                                            .fill(scopePalette.accent.color)
+                                            .frame(width: max(8, barGeo.size.width * ratioPct), height: 5)
+                                    }
+                                }
+                                .frame(height: 5)
+                            }
+
+                            if let sp, !sp.candidates.isEmpty {
+                                HStack {
+                                    Text("共 \(sp.candidates.count) 条候选")
+                                        .font(DesignFonts.body(11))
+                                        .foregroundStyle(palette.textMuted.color)
+                                    Spacer()
+                                    Button(expandedScope == resolvedKey ? "收起" : "详情") {
+                                        candidatePage = 0
+                                        expandedScope = (expandedScope == resolvedKey) ? nil : resolvedKey
+                                    }
+                                    .font(DesignFonts.body(11, weight: .medium))
+                                    .foregroundStyle(palette.textSecondary.color)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(palette.surface.color))
+                                    .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                                    .buttonStyle(PlainHitButtonStyle())
+                                }
+                                .padding(.top, 4)
+                                .overlay(alignment: .top) {
+                                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                                }
+                            }
                         }
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill((sp?.supported == false ? palette.surface : palette.elevated).color)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder((isSelected ? scopePalette.accentBorder : palette.borderStrong).color, lineWidth: 1)
+                        )
+                        // 2.5pt --a top accent border when checked (styles.css:627-628)
+                        .overlay(alignment: .top) {
+                            if isSelected {
+                                UnevenTopAccentBar(color: scopePalette.accent.color, height: 2.5, cornerRadius: 12)
+                            }
+                        }
+                        .opacity(sp?.supported == false ? 0.78 : 1.0)
                     }
                 }
 
@@ -450,7 +547,7 @@ public struct UnifiedThreadCleanupSection: View {
                         .foregroundStyle(palette.errFg.color)
                 }
 
-                HStack(spacing: 8) {
+                FlowButtonRow(spacing: 8, lineSpacing: 8) {
                     Button {
                         runPreview(includeUnified: true)
                     } label: {
@@ -509,7 +606,18 @@ public struct UnifiedThreadCleanupSection: View {
             return plan == nil ? "点击下方全平台扫描预览" : "未扫描"
         }
         if !sp.supported { return sp.unavailableReason ?? "当前环境不支持" }
-        if !sp.scanned { return scope == "codex_hidden" && scanning ? "正在深度扫描隐藏线程…" : "未深度扫描" }
+        if !sp.scanned {
+            if scope == "codex_hidden" {
+                if scanning {
+                    let scanned = hiddenScan?.scannedFiles ?? sp.candidates.count
+                    return scanned > 0 ? "正在深度扫描隐藏线程（已扫 \(scanned) 个文件）…" : "正在深度扫描隐藏线程…"
+                }
+                if hiddenScanStopped && !sp.candidates.isEmpty {
+                    return "已停止扫描 · 已保留 \(sp.candidates.count) 条已扫候选（需完整扫描后方可清理）"
+                }
+            }
+            return "未深度扫描"
+        }
         return sp.deletableCount > 0
             ? "\(sp.deletableCount) 项可清理 · \(CleanupFormatting.formatBytes(sp.estimatedBytes))"
             : "无可清理项"
@@ -523,11 +631,11 @@ public struct UnifiedThreadCleanupSection: View {
 
     private func paginationBar(page: Binding<Int>, totalCount: Int) -> some View {
         let pages = max(1, Int(ceil(Double(totalCount) / 100.0)))
-        return HStack(spacing: 8) {
+        return FlowButtonRow(spacing: 8, lineSpacing: 6) {
             Button("上一页") { page.wrappedValue = max(0, page.wrappedValue - 1) }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(page.wrappedValue == 0)
-            Text("\(page.wrappedValue + 1) / \(pages)")
+            Text("第 \(page.wrappedValue + 1) / \(pages) 页")
                 .font(DesignFonts.body(12))
                 .foregroundStyle(palette.textMuted.color)
             Button("下一页") { page.wrappedValue = min(pages - 1, page.wrappedValue + 1) }
@@ -536,10 +644,46 @@ public struct UnifiedThreadCleanupSection: View {
         }
     }
 
+    public static func mergeHiddenPageIntoPlan(
+        existing: UnifiedCleanupPlan?,
+        pagePlan: HiddenThreadDeletePlan,
+        accumulated: [UnifiedCleanupCandidate],
+        completed: Bool
+    ) -> UnifiedCleanupPlan {
+        let hiddenScope = UnifiedCleanupScopePlan(
+            scope: "codex_hidden",
+            supported: true,
+            scanned: completed,
+            unavailableReason: nil,
+            candidateCount: max(accumulated.count, pagePlan.candidateCount),
+            deletableCount: completed ? pagePlan.deletableCount : accumulated.filter(\.deletable).count,
+            estimatedBytes: completed ? pagePlan.estimatedBytes : accumulated.reduce(Int64(0)) { $0 + $1.estimatedBytes },
+            candidates: accumulated
+        )
+        if var cur = existing {
+            if cur.scopes.contains(where: { $0.scope == "codex_hidden" }) {
+                cur.scopes = cur.scopes.map { $0.scope == "codex_hidden" ? hiddenScope : $0 }
+            } else {
+                cur.scopes.append(hiddenScope)
+            }
+            cur.totalCandidates = cur.scopes.reduce(0) { $0 + $1.candidateCount }
+            cur.totalDeletable = cur.scopes.filter(\.scanned).reduce(0) { $0 + $1.deletableCount }
+            cur.totalEstimatedBytes = cur.scopes.filter(\.scanned).reduce(Int64(0)) { $0 + $1.estimatedBytes }
+            return cur
+        }
+        return UnifiedCleanupPlan(
+            totalCandidates: hiddenScope.candidateCount,
+            totalDeletable: completed ? hiddenScope.deletableCount : 0,
+            totalEstimatedBytes: completed ? hiddenScope.estimatedBytes : 0,
+            scopes: [hiddenScope]
+        )
+    }
+
     private func runPreview(includeUnified: Bool) {
         armed = false
         result = nil
         errorMessage = nil
+        hiddenScanStopped = false
         candidatePage = 0
         resultPage = 0
         hiddenScanTask?.cancel()
@@ -554,6 +698,15 @@ public struct UnifiedThreadCleanupSection: View {
                     let unified: UnifiedCleanupPlan = try await store.rpc("cleanup.unifiedDryRun")
                     plan = unified
                     selectedScopes = Set(unified.scopes.filter { $0.supported && $0.scanned && $0.deletableCount > 0 }.map(\.scope))
+                } else if var cur = plan {
+                    // Fresh hidden rescan clears old partial hidden candidates first (DESIGN.md:87)
+                    cur.scopes = cur.scopes.map {
+                        $0.scope == "codex_hidden"
+                            ? UnifiedCleanupScopePlan(scope: "codex_hidden", supported: true, scanned: false, unavailableReason: nil, candidateCount: 0, deletableCount: 0, estimatedBytes: 0, candidates: [])
+                            : $0
+                    }
+                    selectedScopes.remove("codex_hidden")
+                    plan = cur
                 }
                 if store.capabilities.hiddenCleanupScan {
                     try await runPaginatedHiddenScan()
@@ -584,40 +737,33 @@ public struct UnifiedThreadCleanupSection: View {
                 "cleanup.hiddenDryRun",
                 args: ["request": .object(reqObj)]
             )
-            accumulated.append(contentsOf: pagePlan.candidates)
+            accumulated = pagePlan.candidates.count >= accumulated.count
+                ? pagePlan.candidates
+                : (accumulated + pagePlan.candidates.filter { item in !accumulated.contains(where: { $0.targetId == item.targetId }) })
             hiddenScan = pagePlan.scan
 
-            if let prog = pagePlan.scan, prog.status != "completed", let next = prog.nextCursor {
+            let isComplete = (pagePlan.scan?.status == "complete" || pagePlan.scan?.status == "completed")
+                && pagePlan.scan?.nextCursor == nil
+            plan = Self.mergeHiddenPageIntoPlan(
+                existing: plan,
+                pagePlan: pagePlan,
+                accumulated: accumulated,
+                completed: isComplete
+            )
+            if expandedScope == nil && !accumulated.isEmpty {
+                expandedScope = "codex_hidden"
+            }
+
+            if !isComplete, let prog = pagePlan.scan, let next = prog.nextCursor {
+                selectedScopes.remove("codex_hidden")
                 mode = "poll"
                 scanId = prog.scanId
                 cursor = next
             } else {
-                let hiddenScope = UnifiedCleanupScopePlan(
-                    scope: "codex_hidden",
-                    supported: true,
-                    scanned: true,
-                    unavailableReason: nil,
-                    candidateCount: pagePlan.candidateCount,
-                    deletableCount: pagePlan.deletableCount,
-                    estimatedBytes: pagePlan.estimatedBytes,
-                    candidates: accumulated
-                )
-                if var existing = plan {
-                    existing.scopes = existing.scopes.map { $0.scope == "codex_hidden" ? hiddenScope : $0 }
-                    existing.totalCandidates = existing.scopes.reduce(0) { $0 + $1.candidateCount }
-                    existing.totalDeletable = existing.scopes.reduce(0) { $0 + $1.deletableCount }
-                    existing.totalEstimatedBytes = existing.scopes.reduce(0) { $0 + $1.estimatedBytes }
-                    plan = existing
-                } else {
-                    plan = UnifiedCleanupPlan(
-                        totalCandidates: hiddenScope.candidateCount,
-                        totalDeletable: hiddenScope.deletableCount,
-                        totalEstimatedBytes: hiddenScope.estimatedBytes,
-                        scopes: [hiddenScope]
-                    )
-                }
-                if hiddenScope.deletableCount > 0 {
+                if isComplete && pagePlan.deletableCount > 0 {
                     selectedScopes.insert("codex_hidden")
+                } else {
+                    selectedScopes.remove("codex_hidden")
                 }
                 break
             }
@@ -625,10 +771,28 @@ public struct UnifiedThreadCleanupSection: View {
     }
 
     private func cancelHiddenScan() {
+        let wasRunning = (hiddenScanTask != nil || scanning)
         let scanId = hiddenScan?.scanId
         hiddenScanTask?.cancel()
         hiddenScanTask = nil
         scanning = false
+        if wasRunning {
+            hiddenScanStopped = true
+            armed = false
+            // Keep already-fetched partial hiddenItems visible in `plan`, but disable cleanup on incomplete scan!
+            selectedScopes.remove("codex_hidden")
+            if var cur = plan {
+                cur.scopes = cur.scopes.map { sp in
+                    guard sp.scope == "codex_hidden" else { return sp }
+                    var copy = sp
+                    copy.scanned = false
+                    return copy
+                }
+                cur.totalDeletable = cur.scopes.filter(\.scanned).reduce(0) { $0 + $1.deletableCount }
+                cur.totalEstimatedBytes = cur.scopes.filter(\.scanned).reduce(Int64(0)) { $0 + $1.estimatedBytes }
+                plan = cur
+            }
+        }
         if let scanId {
             Task {
                 let _: HiddenThreadDeletePlan? = try? await store.rpc(
@@ -757,6 +921,20 @@ public struct CodexAccountScopeSection: View {
                                     .foregroundStyle(palette.textSecondary.color)
                             }
                         }
+                        if result.items.count > 100 {
+                            let pages = max(1, Int(ceil(Double(result.items.count) / 100.0)))
+                            FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                                Button("上一页") { page = max(0, page - 1) }
+                                    .buttonStyle(SecondaryButtonStyle())
+                                    .disabled(page == 0)
+                                Text("第 \(page + 1) / \(pages) 页")
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textMuted.color)
+                                Button("下一页") { page = min(pages - 1, page + 1) }
+                                    .buttonStyle(SecondaryButtonStyle())
+                                    .disabled(page + 1 >= pages)
+                            }
+                        }
                     }
                 }
 
@@ -766,7 +944,7 @@ public struct CodexAccountScopeSection: View {
                         .foregroundStyle(palette.errFg.color)
                 }
 
-                HStack(spacing: 8) {
+                FlowButtonRow(spacing: 8, lineSpacing: 8) {
                     Button {
                         Task { await runCheck() }
                     } label: {

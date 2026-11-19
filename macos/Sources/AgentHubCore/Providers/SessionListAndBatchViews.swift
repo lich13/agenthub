@@ -241,6 +241,34 @@ public enum ProviderMenuMatrixBuilder {
         guard modifierFlags.intersection(disallowed).isEmpty else { return false }
         return keyCode == 120 || charactersIgnoringModifiers == "\u{F705}"
     }
+
+    @MainActor
+    public static func buildNSMenu(actions: [SessionMenuAction]) -> NSMenu {
+        let menu = NSMenu(title: "线程操作")
+        menu.autoenablesItems = false
+        for act in actions {
+            let item = NSMenuItem(title: act.label, action: #selector(SessionMenuActionBox.invoke(_:)), keyEquivalent: "")
+            let box = SessionMenuActionBox(action: act.run)
+            item.target = box
+            item.representedObject = box
+            item.isEnabled = !act.disabled
+            menu.addItem(item)
+        }
+        return menu
+    }
+}
+
+@MainActor
+private final class SessionMenuActionBox: NSObject {
+    let action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc func invoke(_ sender: Any?) {
+        action()
+    }
 }
 
 public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
@@ -351,27 +379,54 @@ public struct SessionStorageBadgeView: View {
         self.size = size
     }
 
+    public static func resolvedColor(for size: SessionStorageSize?, palette: DesignPalette) -> RGBAColor {
+        let formatted = SessionStorageFormatter.format(size)
+        switch formatted.tone {
+        case "danger": return palette.errFg
+        case "warning": return palette.warnFg
+        case "success": return palette.okFg
+        default: return palette.textMuted
+        }
+    }
+
     public var body: some View {
         let formatted = SessionStorageFormatter.format(size)
-        let fg: RGBAColor = switch formatted.tone {
-        case "danger": palette.errFg
-        case "warning": palette.warnFg
-        case "success": palette.okFg
-        default: palette.textMuted
-        }
-        let bg: RGBAColor = switch formatted.tone {
-        case "danger": palette.errBg
-        case "warning": palette.warnBg
-        case "success": palette.okBg
-        default: palette.surface
-        }
+        let fg = Self.resolvedColor(for: size, palette: palette)
         Text(formatted.label)
-            .font(DesignFonts.body(10, weight: .medium))
+            .font(DesignFonts.tabularBody(11))
             .foregroundStyle(fg.color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(bg.color))
+            .multilineTextAlignment(.trailing)
+            .lineLimit(1)
+            .frame(minWidth: 42, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
             .help(formatted.title)
+    }
+}
+
+public struct DeletePathCodeBlockView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let path: String
+
+    public init(_ path: String) {
+        self.path = path
+    }
+
+    public var body: some View {
+        Text(path)
+            .font(DesignFonts.mono(12))
+            .foregroundStyle(palette.textPrimary.color)
+            .textSelection(.enabled)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(palette.codeBg.color)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+            )
     }
 }
 
@@ -405,6 +460,9 @@ public struct RenameableSessionRowView: View {
     public var body: some View {
         let useBatchMenu = multiSelected && !batchMenuActions.isEmpty
         let suppressSingleEllipsis = (selecting && !useBatchMenu) || multiSelected
+        let contextActions: [SessionMenuAction] = useBatchMenu
+            ? batchMenuActions
+            : (!selecting ? rowMenuActions : [])
 
         VStack(alignment: .leading, spacing: 4) {
             if editing {
@@ -422,16 +480,18 @@ public struct RenameableSessionRowView: View {
                         onBlur: { Task { await saveRename(restoreFocus: false) } }
                     )
                     .frame(height: 30)
-                    .padding(.horizontal, 8)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.elevated.color))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                    .padding(.horizontal, 10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(palette.background.color))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
 
                     Text(saving ? "正在保存…" : "Enter 保存 · Esc 取消")
                         .font(DesignFonts.body(10))
                         .foregroundStyle(palette.textMuted.color)
                 }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(palette.selected.color))
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.accentBorder.color, lineWidth: 1))
             } else {
                 HStack(spacing: 8) {
                     if selecting {
@@ -456,64 +516,71 @@ public struct RenameableSessionRowView: View {
                     }
 
                     Button {
-                        let flags = NSApp.currentEvent?.modifierFlags ?? []
+                        let currentEvent = NSApp.currentEvent
+                        let flags = currentEvent?.modifierFlags ?? []
                         let click = SessionClick(
-                            detail: max(1, NSApp.currentEvent?.clickCount ?? 1),
+                            detail: max(1, currentEvent?.clickCount ?? 1),
                             metaKey: flags.contains(.command),
                             shiftKey: flags.contains(.shift),
                             ctrlKey: flags.contains(.control)
                         )
-                        if click.detail >= 2 && !click.metaKey && !click.shiftKey && !click.ctrlKey {
+                        if click.ctrlKey {
+                            // Ctrl+Click opens native NSMenu at pointer without mutating selection or opening detail.
+                            onRowClick(click)
+                            if !contextActions.isEmpty {
+                                let menu = ProviderMenuMatrixBuilder.buildNSMenu(actions: contextActions)
+                                menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+                            }
+                        } else if click.detail >= 2 && !click.metaKey && !click.shiftKey {
                             beginRename()
                         } else {
                             onRowClick(click)
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                if running {
-                                    Circle()
-                                        .fill(palette.accent.color)
-                                        .frame(width: 6, height: 6)
-                                }
-                                Text(title)
-                                    .font(DesignFonts.body(13, weight: selected ? .semibold : .medium))
-                                    .foregroundStyle(palette.textPrimary.color)
-                                    .lineLimit(1)
-                                Spacer(minLength: 4)
-                                SessionStorageBadgeView(size: storageSize)
-                            }
-                            HStack(spacing: 6) {
-                                Text(statusText)
+                            Text(title)
+                                .font(DesignFonts.body(13, weight: .medium))
+                                .foregroundStyle(palette.textPrimary.color)
+                                .lineSpacing(2.6)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+
+                            if !subtitle.isEmpty {
+                                Text(subtitle)
                                     .font(DesignFonts.body(11))
                                     .foregroundStyle(palette.textMuted.color)
                                     .lineLimit(1)
-                                if !subtitle.isEmpty {
-                                    Text("· \(subtitle)")
+                            }
+
+                            HStack(spacing: 6) {
+                                if running {
+                                    RunningIndicator(size: 13)
+                                } else {
+                                    Text(statusText)
                                         .font(DesignFonts.body(11))
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
                                 }
+                                Spacer(minLength: 6)
+                                SessionStorageBadgeView(size: storageSize)
                             }
                         }
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 8)
+                        .padding(.vertical, 9)
+                        .padding(.leading, 11)
+                        .padding(.trailing, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(FullWidthRowButtonStyle(selected: selected || multiSelected))
+                    .buttonStyle(FullWidthRowButtonStyle(
+                        selected: selected && !multiSelected,
+                        multiSelected: multiSelected,
+                        cornerRadius: 10
+                    ))
                     .disabled(disabled)
                     .contextMenu {
-                        if useBatchMenu {
-                            ForEach(batchMenuActions) { act in
-                                Button(act.label, action: act.run)
-                                    .disabled(act.disabled)
-                            }
-                        } else if !selecting {
-                            ForEach(rowMenuActions) { act in
-                                Button(act.label, action: act.run)
-                                    .disabled(act.disabled)
-                            }
+                        ForEach(contextActions) { act in
+                            Button(act.label, action: act.run)
+                                .disabled(act.disabled)
                         }
                     }
 
@@ -540,7 +607,8 @@ public struct RenameableSessionRowView: View {
                 Text(errorText)
                     .font(DesignFonts.body(11))
                     .foregroundStyle(palette.errFg.color)
-                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 10)
             }
         }
         .onChange(of: selecting) { isSel in
@@ -604,6 +672,8 @@ public struct SessionBatchBarAndDialogView: View {
     public let operations: [SessionOperation]
     public let busy: Bool
     public let notice: String?
+    public var prepareError: String? = nil
+    public var executeError: String? = nil
     public let preview: SessionBatchPreview?
     public let result: SessionBatchResult?
     public let onSelectAll: () -> Void
@@ -625,7 +695,7 @@ public struct SessionBatchBarAndDialogView: View {
                             .background(Capsule().fill(palette.selected.color))
 
                         Button("全选", action: onSelectAll)
-                            .font(DesignFonts.body(12, weight: .medium))
+                            .font(DesignFonts.body(12, weight: .semibold))
                             .foregroundStyle(palette.accent.color)
                             .buttonStyle(PlainHitButtonStyle())
                             .disabled(busy)
@@ -640,7 +710,7 @@ public struct SessionBatchBarAndDialogView: View {
                         .accessibilityLabel("取消多选")
                     }
 
-                    HStack(spacing: 6) {
+                    FlowButtonRow(spacing: 6, lineSpacing: 6) {
                         ForEach(operations, id: \.rawValue) { op in
                             if op == .delete {
                                 Button("\(op.label)所选线程") {
@@ -669,12 +739,49 @@ public struct SessionBatchBarAndDialogView: View {
                     .foregroundStyle(palette.errFg.color)
             }
 
+            if let prepareError, !prepareError.isEmpty {
+                Text(prepareError)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+
+            if let executeError, !executeError.isEmpty {
+                Text("\(executeError)。请刷新并重新预览。")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+
             if let result {
                 let okCount = result.items.filter { $0.status == "succeeded" }.count
-                let failCount = result.items.count - okCount
-                Text("已完成 \(okCount) 项，未完成 \(failCount) 项")
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle((failCount == 0 ? palette.okFg : palette.warnFg).color)
+                let failedItems = result.items.filter { $0.status != "succeeded" }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("已完成 \(okCount) 项，未完成 \(failedItems.count) 项")
+                        .font(DesignFonts.body(12, weight: .medium))
+                        .foregroundStyle(palette.textPrimary.color)
+
+                    if !failedItems.isEmpty {
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(failedItems, id: \.sessionKey) { item in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("\(item.sessionKey)：\(item.message ?? "操作失败")")
+                                            .font(DesignFonts.body(12))
+                                            .foregroundStyle(palette.errFg.color)
+                                        if let deletedIds = item.deletedIds, !deletedIds.isEmpty {
+                                            Text("已删除 \(deletedIds.count) 个线程")
+                                                .font(DesignFonts.body(11))
+                                                .foregroundStyle(palette.errFg.color)
+                                        }
+                                        ForEach(item.residuals ?? [], id: \.self) { residual in
+                                            DeletePathCodeBlockView(residual)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 160)
+                    }
+                }
             }
         }
     }
@@ -695,9 +802,14 @@ public struct ModalConfirmDialogView<Content: View>: View {
     public var body: some View {
         GeometryReader { geo in
             ZStack {
+                ModalScopePresenceView()
+                    .frame(width: 0, height: 0)
+
                 // Backdrop rgba(0,0,0,.55) — explicitly does NOT close on backdrop click!
                 Color.black.opacity(0.55)
                     .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {}
 
                 VStack(alignment: .leading, spacing: 14) {
                     content()
@@ -717,6 +829,209 @@ public struct ModalConfirmDialogView<Content: View>: View {
         }
         .onExitCommand {
             if !busy { onCancel() }
+        }
+    }
+}
+
+// MARK: - Itemized Batch Preview & Single-Session Delete Confirm Dialog Content
+
+public struct SessionBatchPreviewDialogContentView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let preview: SessionBatchPreview
+    public let busy: Bool
+    public let onCancel: () -> Void
+    public let onConfirm: () -> Void
+
+    public init(
+        preview: SessionBatchPreview,
+        busy: Bool,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping () -> Void
+    ) {
+        self.preview = preview
+        self.busy = busy
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+    }
+
+    public var body: some View {
+        let allowed = preview.allowedCount
+        let blocked = preview.blockedCount
+        let formattedTotalBytes = SessionStorageFormatter.formatThousands(preview.totalBytes)
+
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(preview.operation.label)所选线程")
+                .font(DesignFonts.body(16, weight: .semibold))
+                .foregroundStyle(palette.textPrimary.color)
+
+            Text(
+                "已定位 \(allowed) 项，定位失败 \(blocked) 项"
+                    + (preview.descendantCount > 0 ? "，含 \(preview.descendantCount) 个后代线程" : "")
+                    + "，共 \(preview.fileCount) 个文件 · \(formattedTotalBytes) 字节。"
+                    + (preview.operation == .delete
+                        ? "仅删除下列会话数据，工作目录和配置保留。"
+                        : "确认后更新所选线程的归档状态。")
+            )
+            .font(DesignFonts.body(13))
+            .foregroundStyle(palette.textSecondary.color)
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(preview.items, id: \.sessionKey) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title)
+                                .font(DesignFonts.body(13, weight: .semibold))
+                                .foregroundStyle(palette.textPrimary.color)
+                            Text(item.id)
+                                .font(DesignFonts.mono(11))
+                                .foregroundStyle(palette.textMuted.color)
+
+                            if let descendants = item.descendants, !descendants.isEmpty {
+                                Text("同时删除 \(descendants.count) 个后代线程")
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textSecondary.color)
+                                ForEach(descendants, id: \.self) { descId in
+                                    Text(descId)
+                                        .font(DesignFonts.mono(11))
+                                        .foregroundStyle(palette.textMuted.color)
+                                }
+                            }
+
+                            ForEach(item.paths, id: \.self) { path in
+                                DeletePathCodeBlockView(path)
+                            }
+
+                            Text("\(SessionStorageFormatter.formatThousands(item.bytes)) 字节")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textMuted.color)
+
+                            ForEach(item.warnings ?? [], id: \.self) { warning in
+                                Text(warning)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.errFg.color)
+                            }
+
+                            if !item.allowed {
+                                Text(item.reason ?? "定位失败")
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.errFg.color)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("取消", action: onCancel)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(busy)
+
+                if preview.operation == .delete {
+                    Button(busy ? "正在处理…" : "确认\(preview.operation.label) \(allowed) 项", action: onConfirm)
+                        .buttonStyle(DangerButtonStyle())
+                        .disabled(allowed == 0 || busy)
+                } else {
+                    Button(busy ? "正在处理…" : "确认\(preview.operation.label) \(allowed) 项", action: onConfirm)
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(allowed == 0 || busy)
+                }
+            }
+        }
+    }
+}
+
+public struct SingleSessionDeleteConfirmContentView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let title: String
+    public let paths: [String]
+    public let summaryText: String
+    public let busy: Bool
+    public let errorText: String?
+    public let warnings: [String]
+    public let residuals: [String]
+    public let onCancel: () -> Void
+    public let onConfirm: () -> Void
+
+    public init(
+        title: String,
+        paths: [String],
+        summaryText: String,
+        busy: Bool,
+        errorText: String? = nil,
+        warnings: [String] = [],
+        residuals: [String] = [],
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping () -> Void
+    ) {
+        self.title = title
+        self.paths = paths
+        self.summaryText = summaryText
+        self.busy = busy
+        self.errorText = errorText
+        self.warnings = warnings
+        self.residuals = residuals
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("删除任务文件")
+                .font(DesignFonts.body(16, weight: .semibold))
+                .foregroundStyle(palette.textPrimary.color)
+
+            Text(title)
+                .font(DesignFonts.body(13, weight: .semibold))
+                .foregroundStyle(palette.textPrimary.color)
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(paths, id: \.self) { path in
+                        DeletePathCodeBlockView(path)
+                    }
+                }
+            }
+            .frame(maxHeight: 160)
+
+            Text(summaryText)
+                .font(DesignFonts.body(13))
+                .foregroundStyle(palette.textSecondary.color)
+
+            if let errorText, !errorText.isEmpty {
+                Text(errorText)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+
+            ForEach(warnings, id: \.self) { warning in
+                Text(warning)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+
+            ForEach(residuals, id: \.self) { residual in
+                DeletePathCodeBlockView(residual)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("取消", action: onCancel)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(busy)
+
+                Button(action: onConfirm) {
+                    HStack(spacing: 6) {
+                        LucideIcon(.trash2, size: 16)
+                        Text(busy ? "正在删除..." : "确认删除任务文件")
+                    }
+                }
+                .buttonStyle(DangerButtonStyle())
+                .disabled(busy)
+            }
         }
     }
 }

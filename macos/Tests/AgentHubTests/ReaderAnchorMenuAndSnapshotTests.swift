@@ -125,8 +125,8 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 sessionProvider: .codex,
                 sessionKey: "s1"
             )
-            .frame(width: 960, height: 640)
         )
+        hostView.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
             styleMask: [.titled, .resizable],
@@ -296,9 +296,17 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 let selected: [UInt8]
                 let accent: [UInt8]
             }
+            struct SessionRowColors: Decodable {
+                let multiSelectedFill: [UInt8]
+                let storageSuccess: [UInt8]
+                let storageWarning: [UInt8]
+                let storageDanger: [UInt8]
+            }
             let maxRegionalPixelDriftRatio: Double
             let desktopRegions: [Region]
             let mobileRegions: [Region]
+            let floatingComposerRegions: [Region]
+            let sessionRowColors: [String: SessionRowColors]
             let providerExpectedSelectedNavColors: [String: [String: NavAccent]]
         }
         let baselineURL = URL(fileURLWithPath: #filePath)
@@ -379,6 +387,289 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 }
             }
         }
+
+        // 3) Offscreen Light & Dark Snapshots for Floating 768pt Composer, Side-Hover Copy Button & Session Row Badges (Item #16)
+        for (schemeKey, scheme, schemeKind, appearance) in [
+            ("light", ThemeMode.light, ColorSchemeKind.light, NSAppearance.Name.aqua),
+            ("dark", ThemeMode.dark, ColorSchemeKind.dark, NSAppearance.Name.darkAqua),
+        ] {
+            store.setTheme(scheme)
+            store.activeWorkspace = .codex
+            let palette = DesignPalette.resolve(scheme: schemeKind, workspace: .codex)
+
+            // 3a. Floating 768pt 24pt-radius composer over 1000x180 `--bg` stage (left & right margins remain pure `--bg`!)
+            let composerStage = ZStack(alignment: .bottom) {
+                palette.background.color
+                DesktopCollaborationFooterView(
+                    connection: store,
+                    threadId: "th-snap",
+                    availableWidth: 1000,
+                    viewportHeight: 820
+                )
+            }
+            .environment(\.agentHubPalette, palette)
+            let composerPixels = try renderOffscreenView(
+                composerStage,
+                size: NSSize(width: 1000, height: 180),
+                appearance: appearance,
+                pngName: pngOutDir.map { "\($0)/composer-floating-\(schemeKey)-1000x180.png" }
+            )
+            for reg in baseline.floatingComposerRegions {
+                let ratio = regionBackgroundMatchRatio(
+                    pixels: composerPixels,
+                    imageWidth: 1000,
+                    region: (reg.x, reg.y, reg.width, reg.height),
+                    expected: (palette.background.r, palette.background.g, palette.background.b)
+                )
+                XCTAssertGreaterThan(ratio, 0.95, "\(schemeKey) \(reg.name) must remain stage `--bg` outside floating 768pt card")
+            }
+            XCTAssertTrue(
+                regionContainsColor(
+                    pixels: composerPixels,
+                    imageWidth: 1000,
+                    region: (200, 20, 600, 120),
+                    target: (palette.surface.r, palette.surface.g, palette.surface.b),
+                    tolerance: 2
+                ),
+                "\(schemeKey) floating composer card must render `--s` surface in center 768pt column"
+            )
+            let composerRepeat = try renderOffscreenView(composerStage, size: NSSize(width: 1000, height: 180), appearance: appearance, pngName: nil)
+            XCTAssertLessThanOrEqual(pixelDifferenceRatio(composerPixels, composerRepeat), baseline.maxRegionalPixelDriftRatio)
+
+            // 3b. Assistant reply with hovered floating side-copy button in right margin (`x = 76 + 768 + 6 = 850`, 0.0pt height overhead)
+            let coord = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())
+            coord.scheme = schemeKind
+            coord.workspace = .codex
+            let replyItem = ConversationRowItem(
+                id: "snap-reply",
+                timelineId: "snap-reply",
+                kind: .assistant(markdown: "Verified floating side-hover copy button in right margin.", foldInstructions: false)
+            )
+            let rowHeight = coord.measureRowHeight(replyItem, width: 768)
+            let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("SnapReply"))
+            cell.frame = NSRect(x: 0, y: 0, width: 920, height: max(48, rowHeight))
+            cell.configure(item: replyItem, leadingInset: 76, trailingInset: 76, contentWidth: 768, highlighted: false, coordinator: coord)
+            cell.setSimulatedHoverForTesting(true)
+            let cellPixels = try renderOffscreenNSView(
+                cell,
+                bg: palette.background,
+                size: NSSize(width: 920, height: max(48, ceil(rowHeight))),
+                appearance: appearance,
+                pngName: pngOutDir.map { "\($0)/assistant-side-copy-\(schemeKey).png" }
+            )
+            let rightMarginInk = countRegionInkPixels(
+                pixels: cellPixels,
+                imageWidth: 920,
+                region: (844, 0, 44, Int(max(48, ceil(rowHeight)))),
+                bg: (palette.background.r, palette.background.g, palette.background.b)
+            )
+            XCTAssertGreaterThan(rightMarginInk, 8, "\(schemeKey) hovered side-copy icon button must render visible glyph pixels in right margin")
+
+            // 3c. Session rows: `.multi-selected` (`--as` fill) & row-2 plain tabular storage badges (`<100M`, `100..300M`, `>=300M`)
+            let rowExpected = try XCTUnwrap(baseline.sessionRowColors[schemeKey])
+            let mib: Int64 = 1024 * 1024
+            let rowsStack = VStack(spacing: 4) {
+                RenameableSessionRowView(
+                    sessionKey: "r-ok", title: "Small session", subtitle: "", statusText: "近期", running: true,
+                    storageSize: SessionStorageSize(bytes: 24 * mib, scope: "file", status: "complete"),
+                    selected: false, selecting: true, multiSelected: true, disabled: false,
+                    canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
+                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                )
+                RenameableSessionRowView(
+                    sessionKey: "r-warn", title: "Medium session", subtitle: "", statusText: "近期", running: false,
+                    storageSize: SessionStorageSize(bytes: 150 * mib, scope: "file", status: "complete"),
+                    selected: true, selecting: false, multiSelected: false, disabled: false,
+                    canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
+                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                )
+                RenameableSessionRowView(
+                    sessionKey: "r-err", title: "Large session", subtitle: "", statusText: "近期", running: false,
+                    storageSize: SessionStorageSize(bytes: 340 * mib, scope: "file", status: "complete"),
+                    selected: false, selecting: false, multiSelected: false, disabled: false,
+                    canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
+                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                )
+            }
+            .padding(8)
+            .background(palette.surface.color)
+            .environment(\.agentHubPalette, palette)
+
+            let rowsPixels = try renderOffscreenView(
+                rowsStack,
+                size: NSSize(width: 296, height: 210),
+                appearance: appearance,
+                pngName: pngOutDir.map { "\($0)/session-rows-badges-\(schemeKey)-296x210.png" }
+            )
+            XCTAssertTrue(
+                regionContainsColor(
+                    pixels: rowsPixels,
+                    imageWidth: 296,
+                    region: (4, 120, 288, 86),
+                    target: (rowExpected.multiSelectedFill[0], rowExpected.multiSelectedFill[1], rowExpected.multiSelectedFill[2]),
+                    tolerance: 2
+                ),
+                "\(schemeKey) multi-selected row missing `--as` accentSoft fill"
+            )
+            XCTAssertTrue(
+                regionContainsColor(
+                    pixels: rowsPixels,
+                    imageWidth: 296,
+                    region: (180, 0, 112, 210),
+                    target: (rowExpected.storageWarning[0], rowExpected.storageWarning[1], rowExpected.storageWarning[2]),
+                    tolerance: 18
+                ),
+                "\(schemeKey) row-2 storage badge missing `--w` warning text ink"
+            )
+            XCTAssertTrue(
+                regionContainsColor(
+                    pixels: rowsPixels,
+                    imageWidth: 296,
+                    region: (180, 0, 112, 210),
+                    target: (rowExpected.storageDanger[0], rowExpected.storageDanger[1], rowExpected.storageDanger[2]),
+                    tolerance: 18
+                ),
+                "\(schemeKey) row-2 storage badge missing `--er` danger text ink"
+            )
+        }
+    }
+
+    @MainActor
+    private func renderOffscreenView<V: View>(
+        _ rootView: V,
+        size: NSSize,
+        appearance: NSAppearance.Name,
+        pngName: String? = nil
+    ) throws -> [UInt8] {
+        let host = NSHostingView(rootView: rootView.frame(width: size.width, height: size.height))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: appearance)
+        host.frame = NSRect(origin: .zero, size: size)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        return try rasterizeNSView(host, size: size, pngName: pngName)
+    }
+
+    @MainActor
+    private func renderOffscreenNSView(
+        _ view: NSView,
+        bg: RGBAColor,
+        size: NSSize,
+        appearance: NSAppearance.Name,
+        pngName: String? = nil
+    ) throws -> [UInt8] {
+        let wrapper = NSView(frame: NSRect(origin: .zero, size: size))
+        wrapper.wantsLayer = true
+        wrapper.layer?.backgroundColor = bg.nsColor.cgColor
+        view.frame = NSRect(origin: .zero, size: size)
+        wrapper.addSubview(view)
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: appearance)
+        window.contentView = wrapper
+        wrapper.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+
+        guard let rep = wrapper.bitmapImageRepForCachingDisplay(in: wrapper.bounds) else {
+            return try rasterizeNSView(wrapper, size: size, pngName: pngName)
+        }
+        wrapper.cacheDisplay(in: wrapper.bounds, to: rep)
+        guard let cgImg = rep.cgImage,
+              let cs = CGColorSpace(name: CGColorSpace.sRGB)
+        else {
+            return try rasterizeNSView(wrapper, size: size, pngName: pngName)
+        }
+        let w = Int(size.width)
+        let h = Int(size.height)
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buffer.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(
+                      data: base, width: w, height: h,
+                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  )
+            else { return false }
+            ctx.setFillColor(bg.nsColor.cgColor)
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        XCTAssertTrue(ok)
+        if let pngPath = pngName {
+            let outURL = URL(fileURLWithPath: pngPath)
+            try? FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let pngData = rep.representation(using: .png, properties: [:]) {
+                try? pngData.write(to: outURL)
+            }
+        }
+        return buffer
+    }
+
+    @MainActor
+    private func rasterizeNSView(_ targetView: NSView, size: NSSize, pngName: String?) throws -> [UInt8] {
+        let w = Int(size.width)
+        let h = Int(size.height)
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw NSError(domain: "SnapshotTest", code: 1)
+        }
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        var renderedImage: CGImage?
+        let rendered = buffer.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(
+                      data: base, width: w, height: h,
+                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  )
+            else { return false }
+            targetView.wantsLayer = true
+            targetView.layer?.render(in: ctx)
+            if pngName != nil {
+                renderedImage = ctx.makeImage()
+            }
+            return true
+        }
+        XCTAssertTrue(rendered)
+        if let pngPath = pngName, let cgImg = renderedImage {
+            let outURL = URL(fileURLWithPath: pngPath)
+            try? FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let rep = NSBitmapImageRep(cgImage: cgImg)
+            if let pngData = rep.representation(using: .png, properties: [:]) {
+                try? pngData.write(to: outURL)
+            }
+        }
+        return buffer
+    }
+
+    private func countRegionInkPixels(
+        pixels: [UInt8],
+        imageWidth: Int,
+        region: (x: Int, y: Int, w: Int, h: Int),
+        bg: (UInt8, UInt8, UInt8)
+    ) -> Int {
+        var ink = 0
+        for py in region.y ..< (region.y + region.h) {
+            for px in region.x ..< (region.x + region.w) {
+                let idx = (py * imageWidth + px) * 4
+                if abs(Int(pixels[idx]) - Int(bg.0)) > 18
+                    || abs(Int(pixels[idx + 1]) - Int(bg.1)) > 18
+                    || abs(Int(pixels[idx + 2]) - Int(bg.2)) > 18
+                {
+                    ink += 1
+                }
+            }
+        }
+        return ink
     }
 
     @MainActor

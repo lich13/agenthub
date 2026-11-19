@@ -86,6 +86,35 @@ public struct ClaudeDeletePreview: Codable, Equatable, Sendable {
     public var fileCount: Int
     public var bytes: Int64
     public var warnings: [String]?
+
+    public init(
+        sessionKey: String,
+        id: String,
+        title: String,
+        path: String,
+        paths: [String]? = nil,
+        fingerprint: String,
+        fileCount: Int,
+        bytes: Int64,
+        warnings: [String]? = nil
+    ) {
+        self.sessionKey = sessionKey
+        self.id = id
+        self.title = title
+        self.path = path
+        self.paths = paths
+        self.fingerprint = fingerprint
+        self.fileCount = fileCount
+        self.bytes = bytes
+        self.warnings = warnings
+    }
+
+    public var resolvedPaths: [String] {
+        if let paths, !paths.isEmpty {
+            return paths
+        }
+        return path.isEmpty ? [] : [path]
+    }
 }
 
 public struct ClaudeDeleteResult: Codable, Equatable, Sendable {
@@ -177,6 +206,22 @@ public struct GrokDeletePreview: Codable, Equatable, Sendable {
     public var fingerprint: String
     public var fileCount: Int
     public var bytes: Int64
+
+    public init(
+        id: String,
+        title: String,
+        path: String,
+        fingerprint: String,
+        fileCount: Int,
+        bytes: Int64
+    ) {
+        self.id = id
+        self.title = title
+        self.path = path
+        self.fingerprint = fingerprint
+        self.fileCount = fileCount
+        self.bytes = bytes
+    }
 }
 
 public struct GrokDeleteResult: Codable, Equatable, Sendable {
@@ -325,12 +370,62 @@ public struct SessionBatchItem: Codable, Equatable, Sendable {
     public var fingerprint: String?
     public var descendants: [String]?
     public var warnings: [String]?
+
+    public init(
+        sessionKey: String,
+        id: String,
+        title: String,
+        paths: [String],
+        bytes: Int64,
+        allowed: Bool,
+        reason: String? = nil,
+        fingerprint: String? = nil,
+        descendants: [String]? = nil,
+        warnings: [String]? = nil
+    ) {
+        self.sessionKey = sessionKey
+        self.id = id
+        self.title = title
+        self.paths = paths
+        self.bytes = bytes
+        self.allowed = allowed
+        self.reason = reason
+        self.fingerprint = fingerprint
+        self.descendants = descendants
+        self.warnings = warnings
+    }
 }
 
 public struct SessionBatchPreview: Codable, Equatable, Sendable {
     public var provider: SessionProvider
     public var operation: SessionOperation
     public var items: [SessionBatchItem]
+
+    public init(provider: SessionProvider, operation: SessionOperation, items: [SessionBatchItem]) {
+        self.provider = provider
+        self.operation = operation
+        self.items = items
+    }
+
+    public var allowedCount: Int {
+        items.filter(\.allowed).count
+    }
+
+    public var blockedCount: Int {
+        items.count - allowedCount
+    }
+
+    public var descendantCount: Int {
+        items.reduce(0) { $0 + ($1.descendants?.count ?? 0) }
+    }
+
+    public var fileCount: Int {
+        items.reduce(0) { $0 + $1.paths.count }
+    }
+
+    public var totalBytes: Int64 {
+        items.reduce(0) { $0 + $1.bytes }
+    }
 }
 
 public struct SessionBatchExecuteItem: Codable, Equatable, Sendable {
@@ -373,6 +468,20 @@ public struct SessionBatchItemResult: Codable, Equatable, Sendable {
     public var message: String?
     public var deletedIds: [String]?
     public var residuals: [String]?
+
+    public init(
+        sessionKey: String,
+        status: String,
+        message: String? = nil,
+        deletedIds: [String]? = nil,
+        residuals: [String]? = nil
+    ) {
+        self.sessionKey = sessionKey
+        self.status = status
+        self.message = message
+        self.deletedIds = deletedIds
+        self.residuals = residuals
+    }
 }
 
 public struct SessionBatchResult: Codable, Equatable, Sendable {

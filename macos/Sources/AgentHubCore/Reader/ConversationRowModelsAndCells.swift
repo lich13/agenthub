@@ -336,6 +336,8 @@ public final class AttachmentViewportManager {
 
 public final class ReaderSelectableTextView: NSTextView {
     public var onLinkActivated: ((String) -> Bool)?
+    public var quoteBackgroundColor: NSColor?
+    public var quoteAccentColor: NSColor?
 
     public convenience init() {
         self.init(frame: .zero)
@@ -349,6 +351,42 @@ public final class ReaderSelectableTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         isVerticallyResizable = true
         isHorizontallyResizable = false
+    }
+
+    override public func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let storage = textStorage,
+              storage.length > 0,
+              let manager = layoutManager,
+              let container = textContainer
+        else { return }
+
+        let origin = textContainerOrigin
+        storage.enumerateAttribute(
+            .agentHubBlockQuote,
+            in: NSRange(location: 0, length: storage.length),
+            options: []
+        ) { value, charRange, _ in
+            guard (value as? Bool) == true, charRange.length > 0 else { return }
+            let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            let bbox = manager.boundingRect(forGlyphRange: glyphRange, in: container)
+            guard bbox.height > 0 else { return }
+            let bgRect = NSRect(
+                x: origin.x,
+                y: origin.y + bbox.minY - 2,
+                width: max(20, bounds.width - origin.x),
+                height: bbox.height + 4
+            )
+            if let fill = quoteBackgroundColor {
+                fill.setFill()
+                NSBezierPath(roundedRect: bgRect, xRadius: 6, yRadius: 6).fill()
+            }
+            if let accent = quoteAccentColor {
+                accent.setFill()
+                let barRect = NSRect(x: bgRect.minX, y: bgRect.minY, width: 3, height: bgRect.height)
+                NSBezierPath(roundedRect: barRect, xRadius: 1.5, yRadius: 1.5).fill()
+            }
+        }
     }
 
     override public func clicked(onLink link: Any, at charIndex: Int) {

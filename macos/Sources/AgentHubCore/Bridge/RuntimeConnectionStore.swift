@@ -42,6 +42,8 @@ public final class RuntimeConnectionStore: ObservableObject {
     @Published public var themeMode: ThemeMode
     @Published public private(set) var isWindowVisible: Bool = true
     @Published public private(set) var isWindowFocused: Bool = true
+    @Published public private(set) var isInlineModalPresented: Bool = false
+    private var explicitModalKeys: Set<String> = []
 
     public typealias BeforeMachineChangeCleanup = @Sendable @MainActor () async -> Void
 
@@ -107,6 +109,19 @@ public final class RuntimeConnectionStore: ObservableObject {
         isWindowVisible = visible
         isWindowFocused = focused
         transport.setMainWindowState(visible: visible, focused: focused)
+    }
+
+    public func setInlineModalPresented(_ key: String, presented: Bool) {
+        if presented {
+            explicitModalKeys.insert(key)
+        } else {
+            explicitModalKeys.remove(key)
+        }
+        isInlineModalPresented = !explicitModalKeys.isEmpty
+    }
+
+    public var hasAnyActiveModal: Bool {
+        isInlineModalPresented || ModalPresentationRegistry.shared.hasActiveModal
     }
 
     public func registerBeforeMachineChange(_ cleanup: @escaping BeforeMachineChangeCleanup) -> UUID {

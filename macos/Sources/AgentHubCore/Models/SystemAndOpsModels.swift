@@ -378,6 +378,43 @@ public enum UnifiedUpdateActionKind: String, Sendable {
     case prune
 }
 
+public enum UpdateVersionFormatter {
+    public static func bareVersion(_ raw: String?) -> String {
+        guard let raw else { return "" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if (trimmed.hasPrefix("v") || trimmed.hasPrefix("V")),
+           let second = trimmed.dropFirst().first,
+           second.isNumber
+        {
+            return String(trimmed.dropFirst())
+        }
+        return trimmed
+    }
+
+    public static func displayWithVPrefix(_ raw: String?) -> String {
+        let bare = bareVersion(raw)
+        guard !bare.isEmpty else { return "未知" }
+        return bare.first?.isNumber == true ? "v\(bare)" : bare
+    }
+
+    public static func isValidSemver(_ raw: String?) -> Bool {
+        let bare = bareVersion(raw)
+        guard !bare.isEmpty else { return false }
+        return bare.range(of: #"^\d+\.\d+\.\d+(?:[-+].*)?$"#, options: .regularExpression) != nil
+    }
+
+    public static func canStartUpdateInstall(_ status: UpdateStatus?) -> Bool {
+        guard let status,
+              status.updateAvailable == true,
+              status.state != "failed",
+              status.state != "unsupported",
+              isValidSemver(status.latestVersion)
+        else { return false }
+        return bareVersion(status.latestVersion) != bareVersion(status.currentVersion)
+    }
+}
+
 public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
     public var id: String { action.rawValue }
     public let action: UnifiedUpdateActionKind
@@ -385,20 +422,24 @@ public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
     public let tone: String
     public let disabled: Bool
 
+    public static func panelTitle(capabilities: RuntimeCapabilityMatrix) -> String {
+        capabilities.updateServiceLabels ? "远程服务更新" : "本机 App 更新"
+    }
+
     public static func actions(status: UpdateStatus?, capabilities: RuntimeCapabilityMatrix) -> [UpdateActionViewItem] {
         var out: [UpdateActionViewItem] = [
             UpdateActionViewItem(
                 action: .check,
-                label: capabilities.updateServiceLabels ? "检查服务更新" : "检查更新",
+                label: "检查更新",
                 tone: "secondary",
                 disabled: false
             ),
         ]
-        if status?.updateAvailable == true {
+        if UpdateVersionFormatter.canStartUpdateInstall(status) {
             out.append(
                 UpdateActionViewItem(
                     action: .install,
-                    label: capabilities.updateServiceLabels ? "执行服务更新" : "下载并更新",
+                    label: "更新至 \(UpdateVersionFormatter.displayWithVPrefix(status?.latestVersion))",
                     tone: "primary",
                     disabled: false
                 )

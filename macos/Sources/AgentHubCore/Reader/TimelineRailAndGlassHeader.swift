@@ -2,68 +2,124 @@ import AppKit
 import CoreImage
 import SwiftUI
 
-// MARK: - Left 22pt Timeline Rail with Virtualized 12pt Ticks & min(288pt, 60vw) Hover Preview
+// MARK: - Left 22pt Timeline Rail with Virtualized 12pt Ticks & min(288pt, 60vw) Hover/Focus Preview
 
 public struct TimelineRailView: View {
     @Environment(\.agentHubPalette) private var palette
     public let entries: [TimelineEntry]
     public let activeId: String?
     public let availableWidth: CGFloat
+    public var loadOlder: (() -> Void)?
+    public var loadingOlder: Bool = false
     public let onSelectEntry: (TimelineEntry) -> Void
 
-    @State private var hoveredEntry: TimelineEntry?
+    @State private var hoveredIndex: Int?
+    @State private var focusedIndex: Int?
 
     public init(
         entries: [TimelineEntry],
         activeId: String?,
         availableWidth: CGFloat,
+        loadOlder: (() -> Void)? = nil,
+        loadingOlder: Bool = false,
         onSelectEntry: @escaping (TimelineEntry) -> Void
     ) {
         self.entries = entries
         self.activeId = activeId
         self.availableWidth = availableWidth
+        self.loadOlder = loadOlder
+        self.loadingOlder = loadingOlder
         self.onSelectEntry = onSelectEntry
     }
 
     public var body: some View {
         GeometryReader { geo in
-            let usableHeight = max(24, geo.size.height - 40)
+            let olderOffset: CGFloat = (loadOlder != nil) ? 18 : 0
+            let topPadding: CGFloat = 20 + olderOffset
+            let usableHeight = max(24, geo.size.height - topPadding - 20)
             let maxTicks = max(1, Int(floor(usableHeight / 12.0)))
             let sampled = Self.sampleEntries(entries, maxCount: maxTicks)
+            let previewIdx = hoveredIndex ?? focusedIndex
+            let previewEntry: TimelineEntry? = if let idx = previewIdx, sampled.indices.contains(idx) {
+                sampled[idx]
+            } else {
+                nil
+            }
 
             ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    ForEach(sampled) { entry in
-                        let isActive = (entry.id == activeId)
-                        let isHovered = (hoveredEntry?.id == entry.id)
-                        Button {
-                            onSelectEntry(entry)
-                        } label: {
-                            HStack(spacing: 0) {
-                                Capsule()
-                                    .fill((isActive ? palette.accent : palette.trackOff).color)
-                                    .frame(width: isActive ? 14 : (isHovered ? 12 : 8), height: isActive ? 3 : 2)
-                                Spacer(minLength: 0)
-                            }
-                            .frame(width: LayoutMetrics.timelineRailWidth, height: 12)
+                if let loadOlder {
+                    Button(action: loadOlder) {
+                        Text("↑")
+                            .font(DesignFonts.body(11, weight: .semibold))
+                            .foregroundStyle(palette.textMuted.color)
+                            .frame(width: LayoutMetrics.timelineRailWidth, height: 18)
                             .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainHitButtonStyle())
-                        .onHover { hovering in
-                            if hovering {
-                                hoveredEntry = entry
-                            } else if hoveredEntry?.id == entry.id {
-                                hoveredEntry = nil
+                    }
+                    .buttonStyle(PlainHitButtonStyle())
+                    .disabled(loadingOlder)
+                    .padding(.top, 2)
+                    .padding(.leading, LayoutMetrics.timelineRailLeft)
+                    .accessibilityLabel("加载更早的时间线记录")
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(Array(sampled.enumerated()), id: \.element.id) { index, entry in
+                        let isActive = (entry.id == activeId)
+                        let isHighlighted = (hoveredIndex == index) || (focusedIndex == index)
+                        TimelineRailTickRow(
+                            index: index,
+                            totalCount: sampled.count,
+                            title: entry.title,
+                            isActive: isActive,
+                            isHighlighted: isHighlighted,
+                            isFocused: focusedIndex == index,
+                            activeColor: palette.accent,
+                            inactiveColor: palette.trackOff,
+                            onHoverChanged: { hovering in
+                                if hovering {
+                                    hoveredIndex = index
+                                } else if hoveredIndex == index {
+                                    hoveredIndex = nil
+                                }
+                            },
+                            onFocusChanged: { focused in
+                                if focused {
+                                    focusedIndex = index
+                                } else if focusedIndex == index {
+                                    focusedIndex = nil
+                                }
+                            },
+                            onNavigateKey: { keyCode in
+                                if let next = Self.nextKeyboardFocusIndex(
+                                    currentIndex: index,
+                                    count: sampled.count,
+                                    keyCode: keyCode
+                                ) {
+                                    focusedIndex = next
+                                    return true
+                                }
+                                return false
+                            },
+                            onActivate: {
+                                onSelectEntry(entry)
                             }
-                        }
-                        .accessibilityLabel(entry.title)
+                        )
                     }
                 }
-                .padding(.top, 20)
+                .padding(.top, topPadding)
                 .padding(.leading, LayoutMetrics.timelineRailLeft)
 
-                if let hovered = hoveredEntry {
+                if let hovered = previewEntry, let idx = previewIdx {
                     let previewMax = min(LayoutMetrics.timelinePreviewMaxWidth, max(160, availableWidth * 0.60))
+                    let centerY = Self.previewTopY(
+                        forTickIndex: idx,
+                        topPadding: topPadding,
+                        tickHeight: 12,
+                        railHeight: geo.size.height
+                    )
+                    let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
+                    let cardTopY = max(6, min(max(6, geo.size.height - estimatedHalfHeight * 2 - 6), centerY - estimatedHalfHeight))
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text(hovered.title)
                             .font(DesignFonts.body(12, weight: .semibold))
@@ -76,7 +132,9 @@ public struct TimelineRailView: View {
                                 .lineLimit(3)
                         }
                     }
-                    .padding(10)
+                    .padding(.vertical, 8)
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
                     .frame(maxWidth: previewMax, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -86,13 +144,51 @@ public struct TimelineRailView: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(palette.borderStrong.color, lineWidth: 1)
                     )
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(palette.accent.color)
+                            .frame(width: 3)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .shadow(color: Color.black.opacity(0.14), radius: 8, x: 0, y: 2)
-                    .offset(x: 28, y: 20)
+                    .offset(x: 28, y: cardTopY)
                     .allowsHitTesting(false)
                 }
             }
         }
         .frame(width: 34)
+        .onChange(of: entries) { _ in
+            hoveredIndex = nil
+            focusedIndex = nil
+        }
+    }
+
+    public static func previewTopY(
+        forTickIndex index: Int,
+        topPadding: CGFloat = 20,
+        tickHeight: CGFloat = 12,
+        railHeight: CGFloat
+    ) -> CGFloat {
+        let rawCenter = topPadding + CGFloat(max(0, index)) * tickHeight + tickHeight * 0.5
+        return max(12, min(max(12, railHeight - 12), rawCenter))
+    }
+
+    /// Maps macOS keyCode (`126` Up, `125` Down, `115` Home, `119` End) to next tick index.
+    public static func nextKeyboardFocusIndex(currentIndex: Int, count: Int, keyCode: UInt16) -> Int? {
+        guard count > 0 else { return nil }
+        switch keyCode {
+        case 126: // ArrowUp
+            return max(0, currentIndex - 1)
+        case 125: // ArrowDown
+            return min(count - 1, currentIndex + 1)
+        case 115: // Home
+            return 0
+        case 119: // End
+            return count - 1
+        default:
+            return nil
+        }
     }
 
     public static func sampleEntries(_ entries: [TimelineEntry], maxCount: Int) -> [TimelineEntry] {
@@ -106,6 +202,232 @@ public struct TimelineRailView: View {
             }
         }
         return out
+    }
+}
+
+private struct TimelineRailTickRow: NSViewRepresentable {
+    let index: Int
+    let totalCount: Int
+    let title: String
+    let isActive: Bool
+    let isHighlighted: Bool
+    let isFocused: Bool
+    let activeColor: RGBAColor
+    let inactiveColor: RGBAColor
+    let onHoverChanged: (Bool) -> Void
+    let onFocusChanged: (Bool) -> Void
+    let onNavigateKey: (UInt16) -> Bool
+    let onActivate: () -> Void
+
+    func makeNSView(context: Context) -> TimelineTickNSButton {
+        let v = TimelineTickNSButton()
+        v.apply(self)
+        return v
+    }
+
+    func updateNSView(_ nsView: TimelineTickNSButton, context: Context) {
+        nsView.apply(self)
+    }
+}
+
+private final class TimelineTickNSButton: NSView {
+    private var spec: TimelineRailTickRow?
+    private var tracking: NSTrackingArea?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: LayoutMetrics.timelineRailWidth, height: 12)
+    }
+
+    func apply(_ next: TimelineRailTickRow) {
+        let becameFocused = next.isFocused && !(spec?.isFocused ?? false)
+        spec = next
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("时间线：\(next.title)")
+        needsDisplay = true
+        if becameFocused, let win = window, win.firstResponder !== self {
+            DispatchQueue.main.async { [weak self, weak win] in
+                guard let self, let win, self.window === win else { return }
+                win.makeFirstResponder(self)
+            }
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        spec?.onHoverChanged(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        spec?.onHoverChanged(false)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        spec?.onActivate()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { spec?.onFocusChanged(true) }
+        needsDisplay = true
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { spec?.onFocusChanged(false) }
+        needsDisplay = true
+        return ok
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 { // Return / Enter / Space
+            spec?.onActivate()
+            return
+        }
+        if spec?.onNavigateKey(event.keyCode) == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let spec else { return }
+        let barW: CGFloat = spec.isActive ? 14 : (spec.isHighlighted ? 12 : 8)
+        let barH: CGFloat = spec.isActive ? 3 : 2
+        let rect = NSRect(x: 0, y: floor((bounds.height - barH) * 0.5), width: barW, height: barH)
+        let path = NSBezierPath(roundedRect: rect, xRadius: barH * 0.5, yRadius: barH * 0.5)
+        (spec.isActive ? spec.activeColor.nsColor : spec.inactiveColor.nsColor).setFill()
+        path.fill()
+    }
+}
+
+public struct HistoryLoadingBarView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let loading: Bool
+    public let error: String?
+    public let onRetry: () -> Void
+
+    public init(loading: Bool, error: String?, onRetry: @escaping () -> Void) {
+        self.loading = loading
+        self.error = error
+        self.onRetry = onRetry
+    }
+
+    public var body: some View {
+        if let error, !error.isEmpty {
+            HStack(spacing: 4) {
+                Spacer(minLength: 0)
+                Text("加载失败，")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+                Button(action: onRetry) {
+                    Text("重试")
+                        .underline()
+                }
+                .font(DesignFonts.body(12, weight: .medium))
+                .foregroundStyle(palette.accent.color)
+                .buttonStyle(PlainHitButtonStyle())
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 40)
+            .background(palette.background.color.opacity(0.92))
+        } else if loading {
+            HStack {
+                Spacer(minLength: 0)
+                Text("正在加载较早消息…")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.textMuted.color)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 40)
+            .background(palette.background.color.opacity(0.92))
+        }
+    }
+}
+
+public struct TimelineHistoryStatusView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let active: Bool
+    public let busy: Bool
+    public let error: String?
+    public let hasNewer: Bool
+    public let onLoadNewer: () -> Void
+    public let onReturnLatest: () -> Void
+
+    public init(
+        active: Bool,
+        busy: Bool,
+        error: String?,
+        hasNewer: Bool,
+        onLoadNewer: @escaping () -> Void,
+        onReturnLatest: @escaping () -> Void
+    ) {
+        self.active = active
+        self.busy = busy
+        self.error = error
+        self.hasNewer = hasNewer
+        self.onLoadNewer = onLoadNewer
+        self.onReturnLatest = onReturnLatest
+    }
+
+    public var body: some View {
+        if busy || (error?.isEmpty == false) || active {
+            VStack(spacing: 6) {
+                if busy {
+                    Text("正在定位历史…")
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.textMuted.color)
+                }
+                if let error, !error.isEmpty {
+                    Text(error)
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.errFg.color)
+                }
+                if active {
+                    HStack(spacing: 12) {
+                        if hasNewer {
+                            Button(action: onLoadNewer) {
+                                Text("加载较新记录")
+                                    .underline()
+                            }
+                            .font(DesignFonts.body(12, weight: .medium))
+                            .foregroundStyle(palette.accent.color)
+                            .buttonStyle(PlainHitButtonStyle())
+                            .disabled(busy)
+                        }
+                        Button(action: onReturnLatest) {
+                            Text("返回最新")
+                                .underline()
+                        }
+                        .font(DesignFonts.body(12, weight: .medium))
+                        .foregroundStyle(palette.accent.color)
+                        .buttonStyle(PlainHitButtonStyle())
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 14)
+                    .background(Capsule().fill(palette.elevated.color))
+                    .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+        }
     }
 }
 
@@ -466,6 +788,9 @@ public struct ImagePreviewModalView: View {
 
     public var body: some View {
         ZStack {
+            ModalScopePresenceView()
+                .frame(width: 0, height: 0)
+
             Color.black.opacity(0.55)
                 .ignoresSafeArea()
                 .onTapGesture(perform: onClose)

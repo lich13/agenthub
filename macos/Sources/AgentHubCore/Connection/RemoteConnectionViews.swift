@@ -145,19 +145,22 @@ public struct RemoteConnectionSettingsView: View {
                     PanelCard(title: "远程机器") {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(store.machines) { machine in
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(machine.name)
-                                            .font(DesignFonts.body(14, weight: .semibold))
-                                            .foregroundStyle(palette.textPrimary.color)
-                                        if machine.name != machine.sshHost {
-                                            Text(machine.sshHost)
-                                                .font(DesignFonts.mono(12))
-                                                .foregroundStyle(palette.textMuted.color)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(machine.name)
+                                                .font(DesignFonts.body(14, weight: .semibold))
+                                                .foregroundStyle(palette.textPrimary.color)
+                                            if machine.name != machine.sshHost {
+                                                Text(machine.sshHost)
+                                                    .font(DesignFonts.mono(12))
+                                                    .foregroundStyle(palette.textMuted.color)
+                                            }
                                         }
+                                        Spacer(minLength: 8)
                                     }
-                                    Spacer(minLength: 8)
-                                    HStack(spacing: 8) {
+
+                                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
                                         Button(
                                             store.target == .remote && store.activeMachineId == machine.id
                                                 ? "重新连接" : "连接"
@@ -295,7 +298,7 @@ public struct RemoteConnectionSettingsView: View {
                         }
                         .padding(.top, 8)
 
-                        HStack(spacing: 8) {
+                        FlowButtonRow(spacing: 8, lineSpacing: 8) {
                             Button("保存并连接") {
                                 submit(install: false)
                             }

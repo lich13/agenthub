@@ -107,13 +107,18 @@ public struct AppShellView: View {
                 Circle()
                     .fill(palette.accent.color)
                     .frame(width: 8, height: 8)
+                    .background(
+                        Circle()
+                            .fill(palette.accentSoft.color)
+                            .frame(width: 14, height: 14)
+                    )
                     .padding(.trailing, 8)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .frame(height: LayoutMetrics.mobileTopBarHeight)
             .background(palette.railBg.color)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                Rectangle().fill(palette.borderStrong.color).frame(height: 1)
             }
 
             errorBannerIfNeeded(palette: palette)
@@ -121,7 +126,7 @@ public struct AppShellView: View {
             workspaceStage(isCompactMobile: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // 58pt Mobile Bottom Tabs
+            // 58pt Mobile Bottom Tabs (active tab: --sl fill + 2pt --a top inset bar per styles.css:921)
             HStack(spacing: 0) {
                 ForEach(items, id: \.self) { id in
                     let active = (store.activeWorkspace == id)
@@ -132,12 +137,22 @@ public struct AppShellView: View {
                             workspaceIcon(id, size: 17)
                                 .foregroundStyle((active ? palette.accent : palette.textMuted).color)
                             Text(id.label)
-                                .font(DesignFonts.body(10, weight: active ? .semibold : .regular))
+                                .font(DesignFonts.body(10, weight: active ? .semibold : .medium))
                                 .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.75)
                         }
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(active ? palette.selected.color : Color.clear)
+                        .overlay(alignment: .top) {
+                            if active {
+                                Rectangle()
+                                    .fill(palette.accent.color)
+                                    .frame(height: 2)
+                            }
+                        }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainHitButtonStyle())
@@ -146,7 +161,7 @@ public struct AppShellView: View {
             .frame(height: LayoutMetrics.mobileBottomTabsHeight)
             .background(palette.railBg.color)
             .overlay(alignment: .top) {
-                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                Rectangle().fill(palette.borderStrong.color).frame(height: 1)
             }
         }
     }
@@ -185,14 +200,22 @@ public struct AppShellView: View {
                     workspace: store.activeWorkspace,
                     isCompactMobile: isCompactMobile,
                     scheme: effectiveScheme,
-                    codexNewThreadSlot: { onCreated in
-                        AnyView(NewDesktopThreadButton(connection: store, onCreated: onCreated))
+                    codexNewThreadSlot: { onCreated, onErrorChanged in
+                        AnyView(
+                            NewDesktopThreadButton(
+                                connection: store,
+                                onCreated: onCreated,
+                                onErrorChanged: onErrorChanged
+                            )
+                        )
                     },
-                    codexCollaborationFooterSlot: { threadId, _, onStreamUpdated in
+                    codexCollaborationFooterSlot: { threadId, _, availWidth, availHeight, onStreamUpdated in
                         AnyView(
                             DesktopCollaborationFooterView(
                                 connection: store,
                                 threadId: threadId,
+                                availableWidth: availWidth,
+                                viewportHeight: availHeight,
                                 onStreamUpdated: onStreamUpdated
                             )
                             .id("\(store.revision):\(threadId)")

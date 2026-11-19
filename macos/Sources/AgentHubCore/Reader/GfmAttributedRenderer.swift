@@ -1,6 +1,10 @@
 import AppKit
 import Foundation
 
+extension NSAttributedString.Key {
+    public static let agentHubBlockQuote = NSAttributedString.Key("AgentHubBlockQuote")
+}
+
 // MARK: - Rendered GFM Segment & Bounded 256-entry / 2 MiB Cache
 
 public enum GfmRenderedSegment {
@@ -196,28 +200,32 @@ public final class GfmLayoutCache {
                 }
 
             case let .blockQuote(quoteBlocks):
-                flushProse()
-                let quoteText = NSMutableAttributedString()
                 for (qIdx, qb) in quoteBlocks.enumerated() {
                     let qInlines = flattenItemBlocksToInlines([qb])
-                    let attr = renderInlines(
-                        qInlines,
-                        baseSize: 15,
-                        baseWeight: .regular,
-                        lineHeightMultiple: 1.68,
-                        paragraphSpacingBefore: 0,
-                        paragraphSpacingAfter: qIdx == quoteBlocks.count - 1 ? 0 : 8,
-                        headIndent: 0,
-                        textColor: palette.textSecondary.nsColor,
-                        palette: palette
+                    let isLastQuotePara = isLast && (qIdx == quoteBlocks.count - 1)
+                    let attr = NSMutableAttributedString(
+                        attributedString: renderInlines(
+                            qInlines,
+                            baseSize: 15,
+                            baseWeight: .regular,
+                            lineHeightMultiple: 1.68,
+                            paragraphSpacingBefore: (qIdx == 0 && !isFirst) ? 4 : 0,
+                            paragraphSpacingAfter: isLastQuotePara ? 0 : (qIdx == quoteBlocks.count - 1 ? 12 : 8),
+                            firstLineHeadIndent: 14,
+                            headIndent: 14,
+                            textColor: palette.textSecondary.nsColor,
+                            palette: palette
+                        )
                     )
-                    quoteText.append(attr)
-                    if qIdx < quoteBlocks.count - 1 {
-                        quoteText.append(NSAttributedString(string: "\n"))
+                    if attr.length > 0 {
+                        attr.addAttribute(
+                            .agentHubBlockQuote,
+                            value: true,
+                            range: NSRange(location: 0, length: attr.length)
+                        )
+                        proseBuffer.append(attr)
+                        proseBuffer.append(NSAttributedString(string: "\n"))
                     }
-                }
-                if quoteText.length > 0 {
-                    output.append(.prose(attributed: quoteText, isQuote: true))
                 }
 
             case let .codeBlock(language, code):
@@ -346,6 +354,7 @@ public final class GfmLayoutCache {
         lineHeightMultiple: CGFloat,
         paragraphSpacingBefore: CGFloat,
         paragraphSpacingAfter: CGFloat,
+        firstLineHeadIndent: CGFloat? = nil,
         headIndent: CGFloat,
         alignment: NSTextAlignment = .left,
         textColor: NSColor,
@@ -357,7 +366,7 @@ public final class GfmLayoutCache {
         para.maximumLineHeight = exactLineHeight
         para.paragraphSpacingBefore = paragraphSpacingBefore
         para.paragraphSpacing = paragraphSpacingAfter
-        para.firstLineHeadIndent = headIndent > 0 ? max(0, headIndent - 14) : 0
+        para.firstLineHeadIndent = firstLineHeadIndent ?? (headIndent > 0 ? max(0, headIndent - 14) : 0)
         para.headIndent = headIndent
         para.alignment = alignment
 
@@ -422,7 +431,7 @@ public final class GfmLayoutCache {
                     appendList(children, bold: bold, italic: italic, strike: strike, linkURL: safeRenderableHref(url))
 
                 case let .image(url, alt, _):
-                    let label = alt.isEmpty ? url : "🖼 \(alt)"
+                    let label = alt.isEmpty ? url : "[\(alt)]"
                     let attrs: [NSAttributedString.Key: Any] = [
                         .font: DesignFonts.nsBodyFont(size: 13, weight: .medium),
                         .foregroundColor: palette.accent.nsColor,

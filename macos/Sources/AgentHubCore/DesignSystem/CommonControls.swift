@@ -136,13 +136,22 @@ public struct IconButtonStyle: ButtonStyle {
 
 public struct FullWidthRowButtonStyle: ButtonStyle {
     public var selected: Bool
+    public var multiSelected: Bool
+    public var cornerRadius: CGFloat
 
-    public init(selected: Bool = false) {
+    public init(selected: Bool = false, multiSelected: Bool = false, cornerRadius: CGFloat = 8) {
         self.selected = selected
+        self.multiSelected = multiSelected
+        self.cornerRadius = cornerRadius
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        InnerBody(configuration: configuration, selected: selected)
+        InnerBody(
+            configuration: configuration,
+            selected: selected,
+            multiSelected: multiSelected,
+            cornerRadius: cornerRadius
+        )
     }
 
     private struct InnerBody: View {
@@ -150,20 +159,34 @@ public struct FullWidthRowButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var isEnabled
         let configuration: Configuration
         let selected: Bool
+        let multiSelected: Bool
+        let cornerRadius: CGFloat
 
         var body: some View {
+            let fillColor: Color = if multiSelected {
+                palette.accentSoft.color
+            } else if selected {
+                palette.selected.color
+            } else if configuration.isPressed {
+                palette.hover.color
+            } else {
+                Color.clear
+            }
+
             configuration.label
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(
-                            selected
-                                ? palette.selected.color
-                                : (configuration.isPressed ? palette.hover.color : Color.clear)
-                        )
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(fillColor)
                 )
+                .overlay {
+                    if multiSelected {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(palette.accent.color, lineWidth: 1.5)
+                    }
+                }
                 .overlay(alignment: .leading) {
-                    if selected {
+                    if selected && !multiSelected {
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(palette.accent.color)
                             .frame(width: 2.5)
@@ -370,27 +393,198 @@ public struct RunningIndicator: View {
     public var size: CGFloat
     public var reduceMotion: Bool
 
-    public init(size: CGFloat = 14, reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+    public init(size: CGFloat = 13, reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
         self.size = size
         self.reduceMotion = reduceMotion
     }
 
     public var body: some View {
-        Circle()
-            .trim(from: 0.12, to: 0.88)
-            .stroke(
-                palette.accent.color,
-                style: StrokeStyle(lineWidth: 2, lineCap: .round)
-            )
-            .frame(width: size, height: size)
-            .rotationEffect(.degrees(reduceMotion ? 0 : angle))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
-                    angle = 360
-                }
+        ZStack {
+            // 2pt --bs (borderStrong) full ring track underneath (styles.css:329-332)
+            Circle()
+                .stroke(palette.borderStrong.color, lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: 0.28)
+                .stroke(
+                    palette.accent.color,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .rotationEffect(.degrees(reduceMotion ? -90 : angle - 90))
+        }
+        .frame(width: size, height: size)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                angle = 360
             }
-            .accessibilityLabel("运行中")
+        }
+        .accessibilityLabel("运行中")
+    }
+}
+
+// MARK: - Inline Modal Presentation Registry (Blocks Underlying ⌘A Select-All Leak)
+
+@MainActor
+public final class ModalPresentationRegistry {
+    public static let shared = ModalPresentationRegistry()
+    private var activeTokens: Set<UUID> = []
+
+    public init() {}
+
+    public var hasActiveModal: Bool {
+        !activeTokens.isEmpty
+    }
+
+    public func register(_ token: UUID) {
+        activeTokens.insert(token)
+    }
+
+    public func unregister(_ token: UUID) {
+        activeTokens.remove(token)
+    }
+
+    public func resetForTesting() {
+        activeTokens.removeAll()
+    }
+}
+
+public struct ModalScopePresenceView: NSViewRepresentable {
+    public init() {}
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    public func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.activate()
+        return view
+    }
+
+    public func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.activate()
+    }
+
+    public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.deactivate()
+    }
+
+    @MainActor
+    public final class Coordinator {
+        let token = UUID()
+        var active = false
+
+        func activate() {
+            guard !active else { return }
+            active = true
+            ModalPresentationRegistry.shared.register(token)
+        }
+
+        func deactivate() {
+            guard active else { return }
+            active = false
+            ModalPresentationRegistry.shared.unregister(token)
+        }
+    }
+}
+
+// MARK: - Natural Width Wrapping Action Button Row (DESIGN.md:154)
+
+@available(macOS 13.0, *)
+private struct NaturalWrappingRowLayout: Layout {
+    var horizontalSpacing: CGFloat
+    var verticalSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? .greatestFiniteMagnitude
+        var currentX: CGFloat = 0
+        var currentRowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var maxUsedWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > 0 && currentX + size.width > maxW {
+                totalHeight += currentRowHeight + verticalSpacing
+                maxUsedWidth = max(maxUsedWidth, currentX - horizontalSpacing)
+                currentX = 0
+                currentRowHeight = 0
+            }
+            currentX += size.width + horizontalSpacing
+            currentRowHeight = max(currentRowHeight, size.height)
+        }
+        if currentRowHeight > 0 {
+            totalHeight += currentRowHeight
+            maxUsedWidth = max(maxUsedWidth, max(0, currentX - horizontalSpacing))
+        }
+        return CGSize(
+            width: proposal.width != nil ? min(maxUsedWidth, maxW) : maxUsedWidth,
+            height: totalHeight
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxW = max(1, bounds.width)
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        var rowItems: [(LayoutSubviews.Element, CGSize)] = []
+
+        func flushRow() {
+            guard !rowItems.isEmpty else { return }
+            var cx = bounds.minX
+            for (item, size) in rowItems {
+                let centeredY = y + floor((rowHeight - size.height) / 2.0)
+                item.place(
+                    at: CGPoint(x: cx, y: centeredY),
+                    proposal: ProposedViewSize(width: min(size.width, maxW), height: size.height)
+                )
+                cx += min(size.width, maxW) + horizontalSpacing
+            }
+            y += rowHeight + verticalSpacing
+            x = bounds.minX
+            rowHeight = 0
+            rowItems.removeAll(keepingCapacity: true)
+        }
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if !rowItems.isEmpty && (x - bounds.minX) + size.width > maxW {
+                flushRow()
+            }
+            rowItems.append((subview, size))
+            x += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        flushRow()
+    }
+}
+
+public struct FlowButtonRow<Content: View>: View {
+    public var spacing: CGFloat
+    public var lineSpacing: CGFloat
+    @ViewBuilder public let content: () -> Content
+
+    public init(
+        spacing: CGFloat = 8,
+        lineSpacing: CGFloat = 8,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.spacing = spacing
+        self.lineSpacing = lineSpacing
+        self.content = content
+    }
+
+    public var body: some View {
+        if #available(macOS 13.0, *) {
+            NaturalWrappingRowLayout(horizontalSpacing: spacing, verticalSpacing: lineSpacing) {
+                content()
+            }
+        } else {
+            HStack(spacing: spacing) {
+                content()
+            }
+        }
     }
 }
 
@@ -417,6 +611,9 @@ public struct ConfirmDialogOverlay<Content: View>: View {
 
     public var body: some View {
         ZStack {
+            ModalScopePresenceView()
+                .frame(width: 0, height: 0)
+
             Color.black.opacity(0.55)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
@@ -453,6 +650,31 @@ public struct ConfirmDialogOverlay<Content: View>: View {
                 onCancel()
             }
         }
+    }
+}
+
+// MARK: - Top Accent Bar (clipped to container cornerRadius, macOS 12+ safe)
+
+public struct UnevenTopAccentBar: View {
+    public let color: Color
+    public var height: CGFloat
+    public var cornerRadius: CGFloat
+
+    public init(color: Color, height: CGFloat = 2.5, cornerRadius: CGFloat = 12) {
+        self.color = color
+        self.height = height
+        self.cornerRadius = cornerRadius
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(color)
+                .frame(height: height)
+            Spacer(minLength: 0)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .allowsHitTesting(false)
     }
 }
 

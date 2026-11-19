@@ -324,6 +324,10 @@ public enum DesignFonts {
         Font.system(size: size, weight: weight, design: .default).monospacedDigit()
     }
 
+    public static func tabularBody(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
+        body(size, weight: weight)
+    }
+
     public static func mono(_ size: CGFloat = 13, weight: Font.Weight = .regular) -> Font {
         Font.system(size: size, weight: weight, design: .monospaced)
     }

@@ -6,6 +6,9 @@ import SwiftUI
 public final class ComposerNSTextView: NSTextView {
     public static let minManualHeight: CGFloat = LayoutMetrics.composerMinHeight // 54pt
     public static let maxManualHeight: CGFloat = LayoutMetrics.composerMaxHeight // 160pt
+    public static let fontSize: CGFloat = 15
+    public static let lineHeightMultiple: CGFloat = 1.55
+    public static let exactLineHeight: CGFloat = 15.0 * 1.55 // 23.25pt
 
     public var placeholderText: String = "" {
         didSet { needsDisplay = true }
@@ -17,6 +20,7 @@ public final class ComposerNSTextView: NSTextView {
     /// Async paste hook returning `true` when disposition == "text" (fall back to `super.paste` preserving Undo).
     public var onInterceptPaste: ((@escaping (Bool) -> Void) -> Void)?
     public var onFilesDropped: (([String], NSPoint) -> Void)?
+    public var onFocusChanged: ((Bool) -> Void)?
 
     public enum InlineKeyAction: Equatable, Sendable {
         case arrowUp
@@ -40,20 +44,45 @@ public final class ComposerNSTextView: NSTextView {
         importsGraphics = false
         allowsUndo = true
         drawsBackground = false
-        font = DesignFonts.nsBodyFont(size: 14)
+        let bodyFont = DesignFonts.nsBodyFont(size: Self.fontSize)
+        font = bodyFont
+        let pStyle = NSMutableParagraphStyle()
+        pStyle.minimumLineHeight = Self.exactLineHeight
+        pStyle.maximumLineHeight = Self.exactLineHeight
+        defaultParagraphStyle = pStyle
+        typingAttributes = [
+            .font: bodyFont,
+            .paragraphStyle: pStyle,
+        ]
         textContainerInset = NSSize(width: 8, height: 8)
         textContainer?.lineFragmentPadding = 2
         registerForDraggedTypes([.fileURL])
     }
 
+    override public func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChanged?(true) }
+        return ok
+    }
+
+    override public func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusChanged?(false) }
+        return ok
+    }
+
     override public func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if string.isEmpty && !hasMarkedText() && !placeholderText.isEmpty {
+            let pStyle = NSMutableParagraphStyle()
+            pStyle.minimumLineHeight = Self.exactLineHeight
+            pStyle.maximumLineHeight = Self.exactLineHeight
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: font ?? DesignFonts.nsBodyFont(size: 14),
+                .font: font ?? DesignFonts.nsBodyFont(size: Self.fontSize),
                 .foregroundColor: NSColor.placeholderTextColor,
+                .paragraphStyle: pStyle,
             ]
-            let rect = NSRect(x: 10, y: 8, width: max(40, bounds.width - 20), height: max(20, bounds.height - 16))
+            let rect = NSRect(x: 10, y: 8, width: max(40, bounds.width - 20), height: max(24, bounds.height - 16))
             (placeholderText as NSString).draw(in: rect, withAttributes: attrs)
         }
     }
@@ -254,6 +283,7 @@ public struct ComposerTextEditorRepresentable: NSViewRepresentable {
     public let onInterceptPaste: (@escaping (Bool) -> Void) -> Void
     public let onFilesDropped: ([String], NSPoint) -> Void
     public var onWindowBoundsChanged: ((DesktopAttachmentBounds) -> Void)? = nil
+    public var onFocusChanged: ((Bool) -> Void)? = nil
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -297,10 +327,28 @@ public struct ComposerTextEditorRepresentable: NSViewRepresentable {
         tv.onInlineCompletionKey = onInlineCompletionKey
         tv.onInterceptPaste = onInterceptPaste
         tv.onFilesDropped = onFilesDropped
+        tv.onFocusChanged = onFocusChanged
+        if let pStyle = tv.defaultParagraphStyle {
+            tv.typingAttributes = [
+                .font: tv.font ?? DesignFonts.nsBodyFont(size: ComposerNSTextView.fontSize),
+                .foregroundColor: palette.textPrimary.nsColor,
+                .paragraphStyle: pStyle,
+            ]
+        }
 
         if !tv.hasMarkedText() && tv.string != text {
             coordinator.suppressCallbacks = true
             tv.string = text
+            if let storage = tv.textStorage, storage.length > 0, let pStyle = tv.defaultParagraphStyle {
+                storage.addAttributes(
+                    [
+                        .font: tv.font ?? DesignFonts.nsBodyFont(size: ComposerNSTextView.fontSize),
+                        .foregroundColor: palette.textPrimary.nsColor,
+                        .paragraphStyle: pStyle,
+                    ],
+                    range: NSRange(location: 0, length: storage.length)
+                )
+            }
             if let caret = caretOffset {
                 let clamped = max(0, min(caret, (text as NSString).length))
                 tv.setSelectedRange(NSRange(location: clamped, length: 0))
@@ -353,6 +401,7 @@ public struct ManualResizableComposerBox: View {
     public let onInterceptPaste: (@escaping (Bool) -> Void) -> Void
     public let onFilesDropped: ([String], NSPoint) -> Void
     public var onWindowBoundsChanged: ((DesktopAttachmentBounds) -> Void)? = nil
+    public var onFocusChanged: ((Bool) -> Void)? = nil
 
     @State private var manualHeight: CGFloat = ComposerNSTextView.minManualHeight // 54pt initial
     @State private var dragStartHeight: CGFloat?
@@ -370,7 +419,8 @@ public struct ManualResizableComposerBox: View {
                 onInlineCompletionKey: onInlineCompletionKey,
                 onInterceptPaste: onInterceptPaste,
                 onFilesDropped: onFilesDropped,
-                onWindowBoundsChanged: onWindowBoundsChanged
+                onWindowBoundsChanged: onWindowBoundsChanged,
+                onFocusChanged: onFocusChanged
             )
             .frame(height: manualHeight)
 

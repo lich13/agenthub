@@ -31,28 +31,62 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         win.delegate = self
     }
 
+    public static func maximizedInitialFrame(visibleFrame: NSRect) -> NSRect {
+        guard visibleFrame.width > 0, visibleFrame.height > 0 else {
+            return NSRect(
+                x: 0,
+                y: 0,
+                width: LayoutMetrics.windowDefaultWidth,
+                height: LayoutMetrics.windowDefaultHeight
+            )
+        }
+        return visibleFrame
+    }
+
+    public static func clampedFrameToVisibleScreen(_ frame: NSRect, visibleFrame: NSRect) -> NSRect {
+        guard visibleFrame.width > 0, visibleFrame.height > 0 else { return frame }
+        let w = min(max(frame.width, min(LayoutMetrics.windowMinWidth, visibleFrame.width)), visibleFrame.width)
+        let h = min(max(frame.height, min(LayoutMetrics.windowMinHeight, visibleFrame.height)), visibleFrame.height)
+        let x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - w)
+        let y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - h)
+        return NSRect(x: x, y: y, width: w, height: h)
+    }
+
     public static func clampedInitialFrame(
         desired: NSSize = NSSize(width: LayoutMetrics.windowDefaultWidth, height: LayoutMetrics.windowDefaultHeight),
         visibleFrame: NSRect
     ) -> NSRect {
-        let w = min(max(desired.width, LayoutMetrics.windowMinWidth), visibleFrame.width)
-        let h = min(max(desired.height, LayoutMetrics.windowMinHeight), visibleFrame.height)
-        let x = visibleFrame.origin.x + floor((visibleFrame.width - w) / 2.0)
-        let y = visibleFrame.origin.y + floor((visibleFrame.height - h) / 2.0)
+        guard visibleFrame.width > 0, visibleFrame.height > 0 else {
+            return NSRect(origin: .zero, size: desired)
+        }
+        let w = min(desired.width, visibleFrame.width)
+        let h = min(desired.height, visibleFrame.height)
+        let x = visibleFrame.minX + floor((visibleFrame.width - w) * 0.5)
+        let y = visibleFrame.minY + floor((visibleFrame.height - h) * 0.5)
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
-    public func alignOnceAndReveal() {
+    public func alignOnceAndReveal(overrideVisibleFrame: NSRect? = nil) {
         if !alignedInitialFrame {
             alignedInitialFrame = true
-            if let screen = window.screen ?? NSScreen.main {
-                let frame = Self.clampedInitialFrame(visibleFrame: screen.visibleFrame)
+            if let vf = overrideVisibleFrame ?? (window.screen ?? NSScreen.main)?.visibleFrame,
+               vf.width > 0, vf.height > 0
+            {
+                let frame = Self.maximizedInitialFrame(visibleFrame: vf)
                 window.setFrame(frame, display: false)
             } else {
-                window.center()
+                window.zoom(nil)
             }
         }
         revealWithoutResize()
+    }
+
+    public func windowDidChangeScreen(_ notification: Notification) {
+        guard alignedInitialFrame, let vf = window.screen?.visibleFrame else { return }
+        let clamped = Self.clampedFrameToVisibleScreen(window.frame, visibleFrame: vf)
+        if clamped != window.frame {
+            window.setFrame(clamped, display: true)
+        }
     }
 
     public func revealWithoutResize() {
@@ -188,26 +222,52 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    @objc private func handleMenuSelectAll(_ sender: Any?) {
-        guard let keyWin = NSApp.keyWindow else { return }
+    public enum SelectAllRouteOutcome: Equatable, Sendable {
+        case noWindow
+        case editableTextSelectedAll
+        case selectableTextExpanded
+        case blockedByModalOrOverlay
+        case postedListSelectAll
+    }
+
+    @discardableResult
+    public static func routeMenuSelectAll(
+        in keyWin: NSWindow?,
+        store: RuntimeConnectionStore?,
+        sender: Any? = nil
+    ) -> SelectAllRouteOutcome {
+        guard let keyWin else { return .noWindow }
         if keyWin.attachedSheet != nil || NSApp.modalWindow != nil {
-            return
+            return .blockedByModalOrOverlay
         }
+        // Editable text input (including inside inline SwiftUI modals like Search/Rename) retains its own Select All!
         if let textView = keyWin.firstResponder as? NSTextView {
             if textView.isEditable {
                 textView.selectAll(sender)
-                return
+                return .editableTextSelectedAll
             }
             if textView.isSelectable && textView.selectedRange().length > 0 {
                 textView.selectAll(sender)
-                return
+                return .selectableTextExpanded
             }
         }
+        // Block underlying session-list Select All when any inline modal, confirm dialog, lightbox, <960pt drawer or child popover is open!
+        let hasVisibleChildWindow = (keyWin.childWindows ?? []).contains { $0.isVisible }
+        if hasVisibleChildWindow || store?.hasAnyActiveModal == true || ModalPresentationRegistry.shared.hasActiveModal {
+            return .blockedByModalOrOverlay
+        }
         NotificationCenter.default.post(name: .agentHubSelectAllRequested, object: nil)
+        return .postedListSelectAll
+    }
+
+    @objc private func handleMenuSelectAll(_ sender: Any?) {
+        Self.routeMenuSelectAll(in: NSApp.keyWindow ?? windowManager?.window, store: store, sender: sender)
     }
 
     @objc private func handleMenuFind(_ sender: Any?) {
-        guard NSApp.modalWindow == nil else { return }
+        guard NSApp.modalWindow == nil,
+              (NSApp.keyWindow?.attachedSheet == nil)
+        else { return }
         NotificationCenter.default.post(name: .agentHubSearchRequested, object: nil)
     }
 }

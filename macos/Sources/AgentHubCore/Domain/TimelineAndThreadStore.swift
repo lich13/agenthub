@@ -464,7 +464,7 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         totalEvents: Int?,
         beforeCursor: String?,
         hasMore: Bool,
-        timeline: [TimelineEntry]?,
+        timeline: [TimelineEntry]? = nil,
         subagents: SubagentCollection? = nil
     ) -> PagedEventSlot<Event> {
         var current = slot(for: key)
@@ -574,5 +574,334 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
             }
             return out
         }
+    }
+}
+
+// MARK: - Bounded Timeline Window Jump Controller (j:/w:/n: Cursors, useTimelineWindow.ts)
+
+public struct TimelineWindowPage<Item: Sendable>: Sendable {
+    public var items: [Item]
+    public var before: String?
+    public var after: String?
+    public var hasMore: Bool
+    public var history: HistoryMetadata?
+
+    public init(
+        items: [Item],
+        before: String? = nil,
+        after: String? = nil,
+        hasMore: Bool = false,
+        history: HistoryMetadata? = nil
+    ) {
+        self.items = items
+        self.before = before
+        self.after = after
+        self.hasMore = hasMore
+        self.history = history
+    }
+
+    public static func from(threadDetail page: ThreadDetail) -> TimelineWindowPage<MessageBlock> {
+        let blocks = !page.blocks.isEmpty ? page.blocks : page.messages.enumerated().map { idx, m in
+            MessageBlock(id: "legacy-\(idx)", role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt)
+        }
+        let stableBefore = HistoryAndResumeHelpers.stableHistoryCursor(
+            history: page.history,
+            blocks: blocks,
+            beforeCursor: page.beforeCursor
+        )
+        return TimelineWindowPage<MessageBlock>(
+            items: blocks,
+            before: stableBefore,
+            after: page.afterCursor,
+            hasMore: page.hasMoreBlocks ?? false,
+            history: page.history
+        )
+    }
+
+    public static func from(claudeDetail page: ClaudeSessionDetail) -> TimelineWindowPage<ClaudeHistoryEvent> {
+        TimelineWindowPage<ClaudeHistoryEvent>(
+            items: page.events,
+            before: page.beforeCursor,
+            after: page.afterCursor,
+            hasMore: page.hasMore,
+            history: page.history
+        )
+    }
+
+    public static func from(grokDetail page: GrokSessionDetail) -> TimelineWindowPage<GrokHistoryEvent> {
+        TimelineWindowPage<GrokHistoryEvent>(
+            items: page.events,
+            before: page.beforeCursor,
+            after: page.afterCursor,
+            hasMore: page.hasMore ?? false,
+            history: page.history
+        )
+    }
+
+    public static func from(providerDetail page: ProviderSessionDetail) -> TimelineWindowPage<ProviderHistoryEvent> {
+        TimelineWindowPage<ProviderHistoryEvent>(
+            items: page.events,
+            before: page.beforeCursor,
+            after: page.afterCursor,
+            hasMore: page.hasMore,
+            history: page.history
+        )
+    }
+}
+
+@MainActor
+public final class TimelineWindowController<Item: Sendable>: ObservableObject {
+    @Published public private(set) var scope: String = ""
+    @Published public private(set) var pages: [TimelineWindowPage<Item>] = []
+    @Published public private(set) var windowHistory: HistoryMetadata?
+    @Published public private(set) var busy: Bool = false
+    @Published public private(set) var error: String?
+    @Published public private(set) var pendingTargetId: String?
+    @Published public private(set) var generation: Int = 0
+
+    private let idOf: (Item) -> String
+    private var sequence: Int = 0
+
+    public init(idOf: @escaping (Item) -> String) {
+        self.idOf = idOf
+    }
+
+    public var isActive: Bool {
+        !pages.isEmpty
+    }
+
+    public var beforeCursor: String? {
+        pages.first?.before
+    }
+
+    public var hasMoreOlder: Bool {
+        pages.first?.hasMore ?? false
+    }
+
+    public func hasNewer(latestTailId: String?) -> Bool {
+        guard let lastPage = pages.last else { return false }
+        if let after = lastPage.after, !after.isEmpty {
+            return true
+        }
+        if let lastItem = lastPage.items.last,
+           let latestTailId,
+           !latestTailId.isEmpty,
+           idOf(lastItem) != latestTailId
+        {
+            return true
+        }
+        return false
+    }
+
+    public var items: [Item]? {
+        guard isActive else { return nil }
+        var indexById: [String: Int] = [:]
+        var deduped: [Item] = []
+        for page in pages {
+            for item in page.items {
+                let itemId = idOf(item)
+                if let existingIdx = indexById[itemId] {
+                    deduped[existingIdx] = item
+                } else {
+                    indexById[itemId] = deduped.count
+                    deduped.append(item)
+                }
+            }
+        }
+        return deduped
+    }
+
+    public func syncScope(_ nextScope: String, currentHistory: HistoryMetadata?) {
+        let epochMismatch = (windowHistory != nil && currentHistory != nil && windowHistory?.epoch != currentHistory?.epoch)
+        if nextScope != scope || epochMismatch {
+            sequence += 1
+            scope = nextScope
+            pages = []
+            windowHistory = nil
+            busy = false
+            error = nil
+            pendingTargetId = nil
+        }
+    }
+
+    public func jump(
+        to targetId: String,
+        in expectedScope: String,
+        currentHistory: HistoryMetadata?,
+        matchesTarget: ((Item, String) -> Bool)? = nil,
+        read: @Sendable (String) async throws -> TimelineWindowPage<Item>
+    ) async {
+        syncScope(expectedScope, currentHistory: currentHistory)
+        sequence += 1
+        let token = sequence
+        busy = true
+        error = nil
+        defer {
+            if token == sequence { busy = false }
+        }
+        do {
+            let page = try await read("j:\(targetId)")
+            guard token == sequence, scope == expectedScope else { return }
+            let matcher = matchesTarget ?? { [idOf] item, id in
+                let raw = idOf(item)
+                return raw == id || raw.hasSuffix(":\(id)") || id.hasSuffix(":\(raw)")
+            }
+            guard page.items.contains(where: { matcher($0, targetId) }) else {
+                throw NSError(
+                    domain: "AgentHub.TimelineWindow",
+                    code: 404,
+                    userInfo: [NSLocalizedDescriptionKey: "历史位置已变化，请刷新会话"]
+                )
+            }
+            if let pageHistory = page.history, let currentHistory, pageHistory.epoch != currentHistory.epoch {
+                throw NSError(
+                    domain: "AgentHub.TimelineWindow",
+                    code: 409,
+                    userInfo: [NSLocalizedDescriptionKey: "会话来源已变化，请刷新后重试"]
+                )
+            }
+            pages = [page]
+            windowHistory = page.history ?? currentHistory
+            generation = token
+            pendingTargetId = targetId
+        } catch {
+            guard token == sequence else { return }
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func clearPendingTarget() {
+        pendingTargetId = nil
+    }
+
+    public func loadNewer(
+        latestTailId: String?,
+        read: @Sendable (String) async throws -> TimelineWindowPage<Item>
+    ) async {
+        guard isActive, !busy, let lastPage = pages.last else { return }
+        let lastId = lastPage.items.last.map(idOf)
+        let cursor: String? = if let after = lastPage.after, !after.isEmpty {
+            after
+        } else if let lastId, let latestTailId, lastId != latestTailId {
+            "n:\(lastId)"
+        } else {
+            nil
+        }
+        guard let cursor else { return }
+        sequence += 1
+        let token = sequence
+        busy = true
+        error = nil
+        defer {
+            if token == sequence { busy = false }
+        }
+        do {
+            let page = try await read(cursor)
+            guard token == sequence, isActive else { return }
+            if let oldH = windowHistory, let newH = page.history, oldH.epoch != newH.epoch {
+                throw NSError(
+                    domain: "AgentHub.TimelineWindow",
+                    code: 409,
+                    userInfo: [NSLocalizedDescriptionKey: "会话来源已变化，请重新定位"]
+                )
+            }
+            pages.append(page)
+            if let h = page.history { windowHistory = h }
+        } catch {
+            guard token == sequence else { return }
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func loadOlder(
+        read: @Sendable (String) async throws -> TimelineWindowPage<Item>
+    ) async {
+        guard isActive, !busy, hasMoreOlder, let cursor = beforeCursor else { return }
+        sequence += 1
+        let token = sequence
+        busy = true
+        error = nil
+        defer {
+            if token == sequence { busy = false }
+        }
+        do {
+            let page = try await read(cursor)
+            guard token == sequence, isActive else { return }
+            if let oldH = windowHistory, let newH = page.history, oldH.epoch != newH.epoch {
+                throw NSError(
+                    domain: "AgentHub.TimelineWindow",
+                    code: 409,
+                    userInfo: [NSLocalizedDescriptionKey: "会话来源已变化，请重新定位"]
+                )
+            }
+            pages.insert(page, at: 0)
+        } catch {
+            guard token == sequence else { return }
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func reconcilePollHistory(
+        incoming: HistoryMetadata?,
+        read: @Sendable (String) async throws -> TimelineWindowPage<Item>
+    ) async {
+        guard isActive, !busy, error == nil, let incoming else { return }
+        if incoming.revision == windowHistory?.revision { return }
+
+        let prevRev = windowHistory?.revision
+        let prevIdx = incoming.changes?.firstIndex(where: { $0.revision == prevRev }) ?? -1
+        let journalReset = prevIdx >= 0
+            && (incoming.changes?[(prevIdx + 1)...].contains(where: { $0.reset == true }) ?? false)
+        if incoming.reset == true || journalReset {
+            returnToLatest()
+            error = "历史已更新，请重新定位"
+            return
+        }
+
+        let changedIds: Set<String>? = {
+            guard prevRev != nil, let changes = incoming.changes, prevIdx >= 0 else { return nil }
+            var ids = Set<String>()
+            for change in changes[(prevIdx + 1)...] {
+                for id in change.changedIds {
+                    ids.insert(id)
+                }
+            }
+            return ids
+        }()
+
+        sequence += 1
+        let token = sequence
+        busy = true
+        defer {
+            if token == sequence { busy = false }
+        }
+        do {
+            var nextPages: [TimelineWindowPage<Item>] = []
+            for page in pages {
+                guard token == sequence, isActive else { return }
+                let affected = (changedIds == nil) || page.items.contains(where: { changedIds!.contains(idOf($0)) })
+                if affected, let first = page.items.first {
+                    let refreshed = try await read("w:\(idOf(first))")
+                    nextPages.append(refreshed)
+                } else {
+                    nextPages.append(page)
+                }
+            }
+            guard token == sequence, isActive else { return }
+            pages = nextPages
+            windowHistory = incoming
+        } catch {
+            guard token == sequence else { return }
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func returnToLatest() {
+        sequence += 1
+        pages = []
+        windowHistory = nil
+        busy = false
+        error = nil
+        pendingTargetId = nil
     }
 }

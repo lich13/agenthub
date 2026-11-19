@@ -1,50 +1,44 @@
 import AppKit
 import SwiftUI
 
-// MARK: - New Local Codex Thread Button (choose("project") -> create)
+// MARK: - New Local Codex Thread Button (28x28pt FolderPlus(16) in Sidebar Header, DesktopComposer.tsx:38)
 
 public struct NewDesktopThreadButton: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var connection: RuntimeConnectionStore
     public let onCreated: (String) -> Void
+    public var onErrorChanged: ((String?) -> Void)?
 
     @State private var busy: Bool = false
     @State private var uncertainOutcome: Bool = false
     @State private var pendingCreatedId: String?
-    @State private var errorText: String?
 
-    public init(connection: RuntimeConnectionStore, onCreated: @escaping (String) -> Void) {
+    public init(
+        connection: RuntimeConnectionStore,
+        onCreated: @escaping (String) -> Void,
+        onErrorChanged: ((String?) -> Void)? = nil
+    ) {
         self.connection = connection
         self.onCreated = onCreated
+        self.onErrorChanged = onErrorChanged
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                Task { await createThread() }
-            } label: {
-                HStack(spacing: 6) {
-                    LucideIcon(.folderPlus, size: 15)
-                    Text("新建 Codex 线程")
-                        .font(DesignFonts.body(12, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(busy || uncertainOutcome)
-
-            if let errorText {
-                Text(errorText)
-                    .font(DesignFonts.body(11))
-                    .foregroundStyle(palette.errFg.color)
-            }
+        Button {
+            Task { await createThread() }
+        } label: {
+            LucideIcon(.folderPlus, size: 16)
         }
+        .buttonStyle(IconButtonStyle(dimension: 28))
+        .disabled(busy || uncertainOutcome)
+        .help("新建 Codex 线程")
+        .accessibilityLabel("新建 Codex 线程")
     }
 
     private func createThread() async {
         guard !busy, !uncertainOutcome else { return }
         busy = true
-        errorText = nil
+        onErrorChanged?(nil)
         defer { busy = false }
         do {
             if pendingCreatedId == nil {
@@ -79,21 +73,25 @@ public struct NewDesktopThreadButton: View {
             if msg.contains("结果未确认") {
                 uncertainOutcome = true
             }
-            errorText = msg
+            onErrorChanged?(msg)
         }
     }
 }
 
-// MARK: - Complete Local Codex Collaboration Footer (Composer, Outbox, Requests & Settings)
+// MARK: - Complete Local Codex Collaboration Footer (Floating 768pt-Aligned 24pt Card)
 
 public struct DesktopCollaborationFooterView: View {
     @Environment(\.agentHubPalette) private var palette
     @StateObject private var desktop: CodexDesktopStore
+    public var availableWidth: CGFloat
+    public var viewportHeight: CGFloat
     public var onStreamUpdated: (@MainActor () -> Void)?
 
     @State private var draft = ReferenceDraft()
     @State private var caretStart: Int = 0
     @State private var caretEnd: Int = 0
+    @State private var composerFocused: Bool = false
+    @State private var goalExpanded: Bool = false
     @State private var targetCaretToRestore: Int?
     @State private var dismissedInlineKey: String = ""
     @State private var inlineItems: [DesktopCatalogItem] = []
@@ -124,10 +122,34 @@ public struct DesktopCollaborationFooterView: View {
     public init(
         connection: RuntimeConnectionStore,
         threadId: String,
+        availableWidth: CGFloat = 1000,
+        viewportHeight: CGFloat = 820,
         onStreamUpdated: (@MainActor () -> Void)? = nil
     ) {
         self._desktop = StateObject(wrappedValue: CodexDesktopStore(connection: connection, threadId: threadId))
+        self.availableWidth = availableWidth
+        self.viewportHeight = viewportHeight
         self.onStreamUpdated = onStreamUpdated
+    }
+
+    public static func floatingHorizontalMargin(for availableWidth: CGFloat) -> CGFloat {
+        max(20, floor((availableWidth - LayoutMetrics.readingColumnMaxWidth) * 0.5))
+    }
+
+    public static func requestsMaxHeight(for viewportHeight: CGFloat) -> CGFloat {
+        max(160, floor(viewportHeight * 0.32))
+    }
+
+    public static func goalStatusLabel(_ status: String) -> String {
+        switch status {
+        case "active": "进行中的目标"
+        case "paused": "目标已暂停"
+        case "blocked": "目标受阻"
+        case "usageLimited": "目标受用量限制"
+        case "budgetLimited": "目标受预算限制"
+        case "complete": "目标已完成"
+        default: "目标状态待确认"
+        }
     }
 
     private var writable: Bool {
@@ -136,6 +158,7 @@ public struct DesktopCollaborationFooterView: View {
 
     private var activeInlineQuery: InlineReferenceQuery? {
         guard writable,
+              composerFocused,
               catalogPickerKind.isEmpty,
               let q = DesktopReferencesEngine.inlineQuery(text: draft.text, start: caretStart, end: caretEnd),
               !draft.spans.contains(where: { $0.start <= caretStart && caretStart <= $0.end })
@@ -145,18 +168,35 @@ public struct DesktopCollaborationFooterView: View {
     }
 
     public var body: some View {
+        let sideMargin = Self.floatingHorizontalMargin(for: availableWidth)
+        let cardFill = (composerFocused ? palette.elevated : palette.surface).color
+        let cardBorder = (composerFocused ? palette.accent : palette.borderStrong).color
+
         VStack(alignment: .leading, spacing: 8) {
             // Heading Bar: Status + Copy Diagnostics
             HStack(spacing: 8) {
                 if let view = desktop.view, view.connected && view.writable {
+                    let waiting = !view.requests.isEmpty || view.runtime == "waiting"
+                    let active = view.runtime == "active" || view.activeTurnId != nil
+                    let dispatching = view.queue.contains { $0.status == "dispatching" }
+                    if !waiting && (active || dispatching) {
+                        RunningIndicator(size: 13)
+                    }
                     Text(collaborationStatusLabel(view))
-                        .font(DesignFonts.body(12, weight: .medium))
-                        .foregroundStyle(palette.textSecondary.color)
+                        .font(DesignFonts.body(11, weight: .medium))
+                        .foregroundStyle(palette.textMuted.color)
                     if !view.queue.isEmpty {
                         Text("· \(view.queue.count) 条待处理")
-                            .font(DesignFonts.body(12))
+                            .font(DesignFonts.body(11))
                             .foregroundStyle(palette.textMuted.color)
                     }
+                } else if let view = desktop.view,
+                          view.connectionPhase == "resyncing" || view.connectionPhase == "reconnecting"
+                {
+                    RunningIndicator(size: 13)
+                    Text(view.connectionPhase == "resyncing" ? "正在重新同步 Codex…" : "正在恢复 Codex 连接…")
+                        .font(DesignFonts.body(11))
+                        .foregroundStyle(palette.textMuted.color)
                 }
                 Spacer()
                 if copyDiagState == "copied" {
@@ -177,24 +217,71 @@ public struct DesktopCollaborationFooterView: View {
                 } label: {
                     LucideIcon(copyDiagState == "copied" ? .check : .copy, size: 14)
                 }
-                .buttonStyle(IconButtonStyle(dimension: 26))
+                .buttonStyle(IconButtonStyle(dimension: 28))
+                .disabled(copyDiagState == "copying")
+                .help("复制诊断")
                 .accessibilityLabel("复制诊断")
             }
 
-            // Goal Card
+            // Expandable Goal Card (maxHeight: 120pt vertical scroll when expanded, DESIGN.md:27)
             if let goal = desktop.view?.goal, desktop.view?.connected == true {
-                HStack(spacing: 8) {
-                    LucideIcon(.target, size: 15).foregroundStyle(palette.accent.color)
-                    Text("\(goal.objective) · \(goal.status)")
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .lineLimit(2)
-                    Spacer()
-                    Button("在 Codex 中打开") { Task { await desktop.openInCodexApp() } }
-                        .buttonStyle(SecondaryButtonStyle())
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 8) {
+                        LucideIcon(.target, size: 16).foregroundStyle(palette.accent.color)
+                        Button {
+                            goalExpanded.toggle()
+                        } label: {
+                            HStack(spacing: 6) {
+                                LucideIcon(goalExpanded ? .chevronDown : .chevronRight, size: 13)
+                                    .foregroundStyle(palette.textMuted.color)
+                                Text(Self.goalStatusLabel(goal.status))
+                                    .font(DesignFonts.body(12, weight: .semibold))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                if !goalExpanded {
+                                    Text(goal.objective)
+                                        .font(DesignFonts.body(12))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 4)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainHitButtonStyle())
+
+                        Button {
+                            Task { await desktop.openInCodexApp() }
+                        } label: {
+                            LucideIcon(.externalLink, size: 14)
+                        }
+                        .buttonStyle(IconButtonStyle(dimension: 28))
+                        .disabled(desktop.busy)
+                        .help("在 Codex 中管理目标")
+                        .accessibilityLabel("在 Codex 中管理目标")
+                    }
+
+                    if goalExpanded {
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(goal.objective)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textSecondary.color)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if goal.truncated == true {
+                                    Text("完整目标请在 Codex 中查看")
+                                        .font(DesignFonts.body(11))
+                                        .foregroundStyle(palette.textMuted.color)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 120)
+                    }
                 }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(palette.surface.color))
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
 
             // Outbox Queue (queued | dispatching | held | outcome_unknown)
@@ -209,13 +296,12 @@ public struct DesktopCollaborationFooterView: View {
             }
 
             if !writable {
-                // Connect / Owner Confirmation Row
-                HStack(spacing: 10) {
+                // Read-Only / Unavailability / Sync / Owner Confirmation Row (.desktop-connect-row)
+                FlowButtonRow(spacing: 8, lineSpacing: 6) {
                     Text(connectBannerLabel)
                         .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .lineLimit(2)
-                    Spacer()
+                        .foregroundStyle(((desktop.actionError ?? desktop.view?.error) != nil ? palette.errFg : palette.textSecondary).color)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button("在 Codex 中打开") { Task { await desktop.openInCodexApp() } }
                         .buttonStyle(SecondaryButtonStyle())
                         .disabled(desktop.busy)
@@ -224,13 +310,15 @@ public struct DesktopCollaborationFooterView: View {
                         .disabled(desktop.busy)
                 }
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface.color))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
             } else {
-                // Pending Approvals, Questions & Elicitations
+                // Pending Approvals, Questions & Elicitations (capped at 32% viewport height)
                 if let requests = desktop.view?.requests, !requests.isEmpty {
                     DesktopRequestsListView(
                         requests: requests,
                         busy: desktop.busy,
+                        maxStackHeight: Self.requestsMaxHeight(for: viewportHeight),
                         onAct: { act in Task { try? await desktop.act(act) } },
                         onOpenCodex: { Task { await desktop.openInCodexApp() } }
                     )
@@ -353,6 +441,9 @@ public struct DesktopCollaborationFooterView: View {
                     onWindowBoundsChanged: { bounds in
                         let handles = draft.references.map(\.handle)
                         Task { await desktop.updateAttachmentBoundsAndHandles(bounds: bounds, handles: handles) }
+                    },
+                    onFocusChanged: { focused in
+                        composerFocused = focused
                     }
                 )
 
@@ -444,18 +535,31 @@ public struct DesktopCollaborationFooterView: View {
                 }
             }
 
-            if let err = localError ?? desktop.actionError, !err.isEmpty {
+            if let err = localError ?? (writable ? desktop.actionError : nil), !err.isEmpty {
                 Text(err)
                     .font(DesignFonts.body(12))
                     .foregroundStyle(palette.errFg.color)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(palette.railBg.color)
-        .overlay(alignment: .top) {
-            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
-        }
+        .padding(.top, 10)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(cardFill)
+                .shadow(
+                    color: palette.shadow2.color.color,
+                    radius: palette.shadow2.radius,
+                    x: palette.shadow2.x,
+                    y: palette.shadow2.y
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(cardBorder, lineWidth: 1)
+        )
+        .padding(.horizontal, sideMargin)
+        .padding(.bottom, 18)
         .overlay {
             if let unknownId = discardMessageId {
                 ModalConfirmDialogView(busy: desktop.busy, onCancel: { discardMessageId = nil }) {
@@ -574,7 +678,9 @@ public struct DesktopCollaborationFooterView: View {
         case "reconnecting":
             "正在恢复 Codex 连接…"
         default:
-            desktop.actionError ?? (desktop.busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")
+            desktop.actionError
+                ?? desktop.view?.error
+                ?? (desktop.busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")
         }
     }
 
@@ -1046,6 +1152,7 @@ public struct DesktopRequestsListView: View {
     @Environment(\.agentHubPalette) private var palette
     public let requests: [DesktopPendingRequest]
     public let busy: Bool
+    public var maxStackHeight: CGFloat = 262
     public let onAct: (DesktopAction) -> Void
     public let onOpenCodex: () -> Void
 
@@ -1065,97 +1172,111 @@ public struct DesktopRequestsListView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(requests.enumerated()), id: \.element.key) { index, req in
-                let shown = (expandedKey == req.key) || (expandedKey == nil && index == 0)
-                VStack(alignment: .leading, spacing: 8) {
-                    Button {
-                        expandedKey = shown ? "" : req.key
-                    } label: {
-                        HStack {
-                            Text(req.title)
-                                .font(DesignFonts.body(13, weight: .semibold))
-                                .foregroundStyle(palette.textPrimary.color)
-                            Spacer()
-                            LucideIcon(shown ? .chevronDown : .chevronRight, size: 14)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(requests.enumerated()), id: \.element.key) { index, req in
+                    let shown = (expandedKey == req.key) || (expandedKey == nil && index == 0)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            expandedKey = shown ? "" : req.key
+                        } label: {
+                            HStack {
+                                Text(req.title)
+                                    .font(DesignFonts.body(13, weight: .semibold))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                Spacer()
+                                LucideIcon(shown ? .chevronDown : .chevronRight, size: 14)
+                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainHitButtonStyle())
+                        .buttonStyle(PlainHitButtonStyle())
 
-                    if shown {
-                        if let review = req.review {
-                            approvalReviewView(reqKey: req.key, review: review)
-                        } else if !req.body.isEmpty {
-                            Text(req.body).font(DesignFonts.mono(12))
-                        }
+                        if shown {
+                            if let review = req.review {
+                                approvalReviewView(reqKey: req.key, review: review)
+                            } else if !req.body.isEmpty {
+                                Text(req.body).font(DesignFonts.mono(12))
+                            }
 
-                        if req.canAccept && req.kind == "question" {
-                            ForEach(req.questions) { q in
-                                let compound = "\(req.key):\(q.id)"
-                                DesktopQuestionFieldView(
-                                    question: q,
+                            if req.canAccept && req.kind == "question" {
+                                ForEach(req.questions) { q in
+                                    let compound = "\(req.key):\(q.id)"
+                                    DesktopQuestionFieldView(
+                                        question: q,
+                                        busy: busy,
+                                        selectedChoice: questionChoices[compound] ?? "",
+                                        freeAnswer: questionFreeAnswers[compound] ?? "",
+                                        onSelectChoice: { label in
+                                            questionChoices[compound] = label
+                                            questionFreeAnswers[compound] = ""
+                                        },
+                                        onChangeFreeAnswer: { val in
+                                            questionFreeAnswers[compound] = String(val.prefix(4096))
+                                        }
+                                    )
+                                }
+                                FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                                    Button("提交回答") {
+                                        let payload = req.questions.map { q in
+                                            DesktopAnswer(questionId: q.id, answers: [resolvedQuestionAnswer(reqKey: req.key, questionId: q.id)])
+                                        }
+                                        onAct(.answer(requestKey: req.key, answers: payload))
+                                    }
+                                    .buttonStyle(PrimaryButtonStyle())
+                                    .disabled(busy || req.questions.contains { resolvedQuestionAnswer(reqKey: req.key, questionId: $0.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+
+                                    Button("在 Codex 中打开", action: onOpenCodex)
+                                        .buttonStyle(SecondaryButtonStyle())
+                                        .disabled(busy)
+                                }
+                            } else if req.canAccept && req.kind == "elicitation" {
+                                DesktopElicitationFormView(
+                                    request: req,
                                     busy: busy,
-                                    selectedChoice: questionChoices[compound] ?? "",
-                                    freeAnswer: questionFreeAnswers[compound] ?? "",
-                                    onSelectChoice: { label in
-                                        questionChoices[compound] = label
-                                        questionFreeAnswers[compound] = ""
-                                    },
-                                    onChangeFreeAnswer: { val in
-                                        questionFreeAnswers[compound] = String(val.prefix(4096))
-                                    }
+                                    onAct: onAct,
+                                    onOpenCodex: onOpenCodex
                                 )
-                            }
-                            Button("提交回答") {
-                                let payload = req.questions.map { q in
-                                    DesktopAnswer(questionId: q.id, answers: [resolvedQuestionAnswer(reqKey: req.key, questionId: q.id)])
-                                }
-                                onAct(.answer(requestKey: req.key, answers: payload))
-                            }
-                            .buttonStyle(PrimaryButtonStyle())
-                            .disabled(busy || req.questions.contains { resolvedQuestionAnswer(reqKey: req.key, questionId: $0.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-                        } else if req.canAccept && req.kind == "elicitation" {
-                            DesktopElicitationFormView(request: req, busy: busy, onAct: onAct)
-                        } else {
-                            HStack(spacing: 8) {
-                                if ["command", "file", "permissions"].contains(req.kind) {
-                                    Button("拒绝") { onAct(.decide(requestKey: req.key, allow: false, decision: nil)) }
-                                        .buttonStyle(DangerButtonStyle(soft: true))
-                                        .disabled(busy)
-                                    if req.canAccept {
-                                        Button("允许本次") { onAct(.decide(requestKey: req.key, allow: true, decision: nil)) }
-                                            .buttonStyle(PrimaryButtonStyle())
+                            } else {
+                                FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                                    if ["command", "file", "permissions"].contains(req.kind) {
+                                        Button("拒绝") { onAct(.decide(requestKey: req.key, allow: false, decision: nil)) }
+                                            .buttonStyle(DangerButtonStyle(soft: true))
+                                            .disabled(busy)
+                                        if req.canAccept {
+                                            Button("允许本次") { onAct(.decide(requestKey: req.key, allow: true, decision: nil)) }
+                                                .buttonStyle(PrimaryButtonStyle())
+                                                .disabled(busy)
+                                        }
+                                        if req.canAccept && ["command", "file"].contains(req.kind) && (req.supportedDecisions?.contains("acceptForSession") == true) {
+                                            Button("允许本次会话") { onAct(.decide(requestKey: req.key, allow: true, decision: "acceptForSession")) }
+                                                .buttonStyle(SecondaryButtonStyle())
+                                                .disabled(busy)
+                                        }
+                                    }
+                                    if req.kind == "elicitation" {
+                                        Button("拒绝") { onAct(.elicitation(requestKey: req.key, accept: false, content: nil)) }
+                                            .buttonStyle(DangerButtonStyle(soft: true))
                                             .disabled(busy)
                                     }
-                                    if req.canAccept && ["command", "file"].contains(req.kind) && (req.supportedDecisions?.contains("acceptForSession") == true) {
-                                        Button("允许本次会话") { onAct(.decide(requestKey: req.key, allow: true, decision: "acceptForSession")) }
-                                            .buttonStyle(SecondaryButtonStyle())
-                                            .disabled(busy)
+                                    if !req.canAccept {
+                                        Text("请在 Codex 中查看完整请求并处理。")
+                                            .font(DesignFonts.body(11))
+                                            .foregroundStyle(palette.textMuted.color)
                                     }
-                                }
-                                if req.kind == "elicitation" {
-                                    Button("拒绝") { onAct(.elicitation(requestKey: req.key, accept: false, content: nil)) }
-                                        .buttonStyle(DangerButtonStyle(soft: true))
+                                    Button("在 Codex 中打开", action: onOpenCodex)
+                                        .buttonStyle(SecondaryButtonStyle())
                                         .disabled(busy)
                                 }
-                                if !req.canAccept {
-                                    Text("请在 Codex 中查看完整请求并处理。")
-                                        .font(DesignFonts.body(11))
-                                        .foregroundStyle(palette.textMuted.color)
-                                }
-                                Button("在 Codex 中打开", action: onOpenCodex)
-                                    .buttonStyle(SecondaryButtonStyle())
-                                    .disabled(busy)
                             }
                         }
                     }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface.color))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
                 }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface.color))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
             }
         }
+        .frame(maxHeight: maxStackHeight)
     }
 
     @ViewBuilder
@@ -1267,10 +1388,17 @@ private struct DesktopQuestionFieldView: View {
                     localText = ""
                     onSelectChoice(opt.label)
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(isSelected ? palette.accent.color : palette.textMuted.color)
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .strokeBorder((isSelected ? palette.accent : palette.borderStrong).color, lineWidth: 1.5)
+                                .frame(width: 14, height: 14)
+                            if isSelected {
+                                Circle()
+                                    .fill(palette.accent.color)
+                                    .frame(width: 7, height: 7)
+                            }
+                        }
                         VStack(alignment: .leading, spacing: 1) {
                             Text(opt.label).font(DesignFonts.body(12, weight: .medium)).foregroundStyle(palette.textPrimary.color)
                             if !opt.description.isEmpty {
@@ -1316,6 +1444,7 @@ private struct DesktopElicitationFormView: View {
     let request: DesktopPendingRequest
     let busy: Bool
     let onAct: (DesktopAction) -> Void
+    let onOpenCodex: () -> Void
 
     @State private var rawValues: [String: String] = [:]
     @State private var formError: String?
@@ -1334,7 +1463,7 @@ private struct DesktopElicitationFormView: View {
             if let formError, !formError.isEmpty {
                 Text(formError).font(DesignFonts.body(12)).foregroundStyle(palette.errFg.color)
             }
-            HStack(spacing: 8) {
+            FlowButtonRow(spacing: 8, lineSpacing: 6) {
                 Button("拒绝") {
                     onAct(.elicitation(requestKey: request.key, accept: false, content: nil))
                 }
@@ -1352,6 +1481,10 @@ private struct DesktopElicitationFormView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(busy)
+
+                Button("在 Codex 中打开", action: onOpenCodex)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(busy)
             }
         }
     }

@@ -447,17 +447,170 @@ public struct ProbeEventItem: Codable, Equatable, Identifiable, Sendable {
     public var kind: String?
     public var provider: String?
     public var title: String?
+    public var message: String?
     public var summary: String?
     public var reason: String?
+    public var source: String?
+    public var threadId: String?
     public var barkStatus: String?
     public var dedupeStatus: String?
+    public var dedupeKey: String?
     public var createdAt: Int64?
+    public var payload: [String: JSONValue]?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, provider, title, summary, reason
+        case id, kind, provider, title, message, summary, reason, source, payload
+        case threadId = "thread_id"
         case barkStatus = "bark_status"
         case dedupeStatus = "dedupe_status"
+        case dedupeKey = "dedupe_key"
         case createdAt = "created_at"
+    }
+
+    public init(
+        id: String,
+        kind: String? = nil,
+        provider: String? = nil,
+        title: String? = nil,
+        message: String? = nil,
+        summary: String? = nil,
+        reason: String? = nil,
+        source: String? = nil,
+        threadId: String? = nil,
+        barkStatus: String? = nil,
+        dedupeStatus: String? = nil,
+        dedupeKey: String? = nil,
+        createdAt: Int64? = nil,
+        payload: [String: JSONValue]? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.provider = provider
+        self.title = title
+        self.message = message
+        self.summary = summary
+        self.reason = reason
+        self.source = source
+        self.threadId = threadId
+        self.barkStatus = barkStatus
+        self.dedupeStatus = dedupeStatus
+        self.dedupeKey = dedupeKey
+        self.createdAt = createdAt
+        self.payload = payload
+    }
+}
+
+public enum ProbeFormatting {
+    private static let safeBarkCategories: [String: String] = [
+        "dns": "域名解析失败",
+        "connection": "连接失败",
+        "tls": "TLS 连接失败",
+        "certificate_validation": "证书验证失败",
+        "timeout": "请求超时",
+        "response_decode": "响应无法确认",
+        "response_read": "响应读取失败",
+        "redirect_rejected": "重定向已拒绝",
+        "http_status": "HTTP 拒绝",
+        "bark_response_code": "服务拒绝",
+        "apns_permanent_rejection": "推送服务永久拒绝",
+        "invalid_server_url": "地址无效",
+        "network_unknown": "网络错误",
+        "request_error": "网络错误",
+    ]
+
+    private static let unknownReasons: Set<String> = [
+        "request_error", "network_unknown", "timeout",
+        "response_decode", "response_read", "delivery_interrupted_outcome_unknown",
+    ]
+
+    public static func eventKindLabel(_ raw: String?) -> String {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return "Probe 事件" }
+        return switch trimmed {
+        case "hook-stop", "hook_stop": "Stop Hook"
+        case "completion": "完成"
+        case "failure": "失败"
+        case "reply-needed", "reply_needed": "需回复"
+        case "recoverable": "异常/可恢复"
+        case "running": "运行中"
+        case "bark-test": "Bark 测试"
+        default: trimmed
+        }
+    }
+
+    public static func barkBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone) {
+        let barkObj: [String: JSONValue]? = {
+            if case let .object(o)? = event.payload?["bark"] { return o }
+            return nil
+        }()
+        func str(_ key: String) -> String? {
+            if case let .string(s)? = barkObj?[key] { return s }
+            return nil
+        }
+        func bool(_ key: String) -> Bool? {
+            if case let .bool(b)? = barkObj?[key] { return b }
+            return nil
+        }
+        func int(_ key: String) -> Int? {
+            if case let .number(n)? = barkObj?[key], n.isFinite { return Int(n) }
+            return nil
+        }
+
+        let status = (str("status") ?? event.barkStatus)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if barkObj == nil && (status == nil || status?.isEmpty == true) {
+            return ("Bark 未记录", .muted)
+        }
+        if bool("sent") == true || status == "sent" {
+            return ("Bark 已受理", .success)
+        }
+        if bool("skipped") == true || status == "skipped" {
+            return ("已跳过", .muted)
+        }
+        if status == "waiting_retry" {
+            if let nextMs = int("next_retry_ms"), nextMs > 0 {
+                let date = Date(timeIntervalSince1970: Double(nextMs) / 1000.0)
+                let df = DateFormatter()
+                df.dateFormat = "HH:mm:ss"
+                return ("等待重试 · \(df.string(from: date))", .warning)
+            }
+            return ("等待重试", .warning)
+        }
+        if status == "retrying" {
+            if let attempts = int("attempts"), attempts > 0 {
+                return ("重试中 · 第 \(attempts) 次", .warning)
+            }
+            return ("重试中", .warning)
+        }
+
+        let reason = str("reason") ?? event.reason ?? ""
+        let isUnknown = status == "unknown" || ((status == nil || status?.isEmpty == true) && unknownReasons.contains(reason))
+        let base = isUnknown ? "结果未确认" : "发送失败"
+        if let cat = safeBarkCategories[reason] {
+            return ("\(base) · \(cat)", .warning)
+        }
+        return (base, .warning)
+    }
+
+    public static func dedupeBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone)? {
+        if let payload = event.payload {
+            if case let .object(dedupe)? = payload["dedupe"] {
+                if case .bool(true)? = dedupe["duplicate"] { return ("重复事件", .warning) }
+                if case .bool(true)? = dedupe["claimed"] { return ("已认领", .success) }
+                if case let .string(st)? = dedupe["status"], !st.isEmpty {
+                    return (st, st.lowercased().contains("duplicate") ? .warning : .muted)
+                }
+            }
+            if case .bool(true)? = payload["duplicate"] { return ("重复事件", .warning) }
+        }
+        if let ds = event.dedupeStatus, !ds.isEmpty {
+            if ds == "duplicate" { return ("重复事件", .warning) }
+            if ds == "claimed" { return ("已认领", .success) }
+            return (ds, ds.lowercased().contains("duplicate") ? .warning : .muted)
+        }
+        if let dk = event.dedupeKey, !dk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return ("去重键已记录", .muted)
+        }
+        return nil
     }
 }
 
@@ -501,9 +654,11 @@ public struct GithubCiRun: Codable, Equatable, Identifiable, Sendable {
     public var id: UInt64
     public var repositoryId: UInt64
     public var repositoryName: String
+    public var name: String?
     public var workflowName: String
     public var displayTitle: String?
     public var headBranch: String?
+    public var headSha: String
     public var status: String
     public var conclusion: String?
     public var htmlUrl: String
@@ -512,12 +667,13 @@ public struct GithubCiRun: Codable, Equatable, Identifiable, Sendable {
     public var isBot: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id
+        case id, name
         case repositoryId = "repository_id"
         case repositoryName = "repository_name"
         case workflowName = "workflow_name"
         case displayTitle = "display_title"
         case headBranch = "head_branch"
+        case headSha = "head_sha"
         case status, conclusion
         case htmlUrl = "html_url"
         case updatedAt = "updated_at"
@@ -529,9 +685,11 @@ public struct GithubCiRun: Codable, Equatable, Identifiable, Sendable {
         id: UInt64,
         repositoryId: UInt64,
         repositoryName: String,
+        name: String? = nil,
         workflowName: String,
         displayTitle: String? = nil,
         headBranch: String? = nil,
+        headSha: String = "",
         status: String,
         conclusion: String? = nil,
         htmlUrl: String,
@@ -542,15 +700,35 @@ public struct GithubCiRun: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.repositoryId = repositoryId
         self.repositoryName = repositoryName
+        self.name = name
         self.workflowName = workflowName
         self.displayTitle = displayTitle
         self.headBranch = headBranch
+        self.headSha = headSha
         self.status = status
         self.conclusion = conclusion
         self.htmlUrl = htmlUrl
         self.updatedAt = updatedAt
         self.runAttempt = runAttempt
         self.isBot = isBot
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UInt64.self, forKey: .id)
+        repositoryId = (try? c.decode(UInt64.self, forKey: .repositoryId)) ?? 0
+        repositoryName = (try? c.decode(String.self, forKey: .repositoryName)) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        workflowName = (try? c.decode(String.self, forKey: .workflowName)) ?? (name ?? "工作流")
+        displayTitle = try c.decodeIfPresent(String.self, forKey: .displayTitle)
+        headBranch = try c.decodeIfPresent(String.self, forKey: .headBranch)
+        headSha = (try? c.decode(String.self, forKey: .headSha)) ?? ""
+        status = (try? c.decode(String.self, forKey: .status)) ?? "completed"
+        conclusion = try c.decodeIfPresent(String.self, forKey: .conclusion)
+        htmlUrl = (try? c.decode(String.self, forKey: .htmlUrl)) ?? ""
+        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+        runAttempt = try c.decodeIfPresent(UInt64.self, forKey: .runAttempt)
+        isBot = (try? c.decode(Bool.self, forKey: .isBot)) ?? false
     }
 }
 
@@ -625,7 +803,28 @@ public enum GithubCiDomain {
                 }
             )
         }
-        return Array(filtered.prefix(20))
+        let sorted = filtered.sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return false
+        }
+        return Array(sorted.prefix(20))
+    }
+
+    public static func formatRunUpdatedAt(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "—" }
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoPlain = ISO8601DateFormatter()
+        isoPlain.formatOptions = [.withInternetDateTime]
+        guard let date = isoFrac.date(from: trimmed) ?? isoPlain.date(from: trimmed) else {
+            return trimmed
+        }
+        let df = DateFormatter()
+        df.dateFormat = "MM-dd HH:mm"
+        return df.string(from: date)
     }
 
     public static func buildCatalog(

@@ -76,7 +76,7 @@ public struct GithubCiCardView: View {
             title: "GitHub CI",
             icon: .github,
             headerAction: {
-                HStack(spacing: 8) {
+                FlowButtonRow(spacing: 8, lineSpacing: 6) {
                     let accountText: String = if let login = snapshot?.account?.login {
                         "@\(login)"
                     } else if busy {
@@ -87,6 +87,7 @@ public struct GithubCiCardView: View {
                         "未登录"
                     }
                     StatusChip(accountText, tone: snapshot?.account != nil ? .info : .neutral)
+                        .help(snapshot?.account?.login ?? accountText)
                     StatusChip("\(visibleRuns.count) 次运行", tone: .neutral)
 
                     Button {
@@ -98,7 +99,7 @@ public struct GithubCiCardView: View {
                     .disabled(busy)
                     .help("刷新 GitHub CI")
 
-                    Button("保存") {
+                    Button(saving ? "保存中" : "保存") {
                         onSave()
                     }
                     .buttonStyle(PrimaryButtonStyle())
@@ -216,50 +217,107 @@ public struct GithubCiCardView: View {
                 }
 
                 if visibleRuns.isEmpty {
-                    Text(busy ? "正在读取 GitHub Actions 运行状态…" : "暂无匹配的 GitHub Actions 运行记录")
-                        .font(DesignFonts.body(12))
+                    Text(busy ? "正在读取 CI" : "暂无工作流运行")
+                        .font(DesignFonts.body(13))
                         .foregroundStyle(palette.textMuted.color)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 8)
                 } else {
-                    VStack(spacing: 6) {
-                        ForEach(visibleRuns) { run in
+                    VStack(spacing: 8) {
+                        ForEach(visibleRuns, id: \.id) { run in
                             let runState = GithubCiDomain.runStatus(run)
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(run.repositoryName) · \(run.workflowName)")
-                                        .font(DesignFonts.body(13, weight: .semibold))
-                                        .foregroundStyle(palette.textPrimary.color)
-                                        .lineLimit(1)
-                                    HStack(spacing: 8) {
-                                        if let branch = run.headBranch, !branch.isEmpty {
-                                            Text(branch)
-                                                .font(DesignFonts.mono(11))
-                                                .foregroundStyle(palette.textMuted.color)
+                            let workflowTitle = {
+                                let primary = (run.name ?? run.workflowName).trimmingCharacters(in: .whitespacesAndNewlines)
+                                return primary.isEmpty ? "工作流" : primary
+                            }()
+                            let shortSha = String(run.headSha.prefix(7))
+                            let formattedTime = GithubCiDomain.formatRunUpdatedAt(run.updatedAt)
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Circle()
+                                            .fill(statusDotColor(for: runState.tone))
+                                            .frame(width: 8, height: 8)
+                                            .padding(.top, 5)
+
+                                        if let url = URL(string: run.htmlUrl), !run.htmlUrl.isEmpty {
+                                            Button {
+                                                NSWorkspace.shared.open(url)
+                                            } label: {
+                                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                                    Text(workflowTitle)
+                                                        .font(DesignFonts.body(14, weight: .semibold))
+                                                        .foregroundStyle(palette.textPrimary.color)
+                                                        .multilineTextAlignment(.leading)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                    LucideIcon(.externalLink, size: 13)
+                                                        .foregroundStyle(palette.textMuted.color)
+                                                }
+                                            }
+                                            .buttonStyle(PlainHitButtonStyle())
+                                            .help(workflowTitle)
+                                        } else {
+                                            Text(workflowTitle)
+                                                .font(DesignFonts.body(14, weight: .semibold))
+                                                .foregroundStyle(palette.textPrimary.color)
+                                                .multilineTextAlignment(.leading)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                                .help(workflowTitle)
                                         }
-                                        if let title = run.displayTitle, !title.isEmpty {
-                                            Text(title)
-                                                .font(DesignFonts.body(12))
-                                                .foregroundStyle(palette.textSecondary.color)
-                                                .lineLimit(1)
+
+                                        if run.isBot {
+                                            StatusChip("Bot", tone: .neutral)
                                         }
                                     }
+                                    Spacer(minLength: 8)
+                                    StatusChip(runState.label, tone: runState.tone)
                                 }
-                                Spacer(minLength: 8)
-                                StatusChip(runState.label, tone: runState.tone)
-                                if let url = URL(string: run.htmlUrl) {
-                                    Button {
-                                        NSWorkspace.shared.open(url)
-                                    } label: {
-                                        LucideIcon(.externalLink, size: 14)
+
+                                HStack(spacing: 8) {
+                                    Text(run.repositoryName)
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(palette.textSecondary.color)
+                                        .lineLimit(1)
+                                        .help(run.repositoryName)
+
+                                    HStack(spacing: 4) {
+                                        LucideIcon(.gitBranch, size: 12)
+                                            .foregroundStyle(palette.textMuted.color)
+                                        Text(run.headBranch?.isEmpty == false ? run.headBranch! : "—")
+                                            .font(DesignFonts.body(12))
+                                            .foregroundStyle(palette.textSecondary.color)
+                                            .lineLimit(1)
                                     }
-                                    .buttonStyle(IconButtonStyle(dimension: 28))
-                                    .help("打开 GitHub Actions 运行")
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 1)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                                    .help(run.headBranch ?? "")
+
+                                    if !shortSha.isEmpty {
+                                        Text(shortSha)
+                                            .font(DesignFonts.mono(11))
+                                            .foregroundStyle(palette.textSecondary.color)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1)
+                                            .background(RoundedRectangle(cornerRadius: 6).fill(palette.codeBg.color))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                                            .help(run.headSha)
+                                    }
+
+                                    Spacer(minLength: 4)
+
+                                    Text(formattedTime)
+                                        .font(DesignFonts.body(12))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                        .help(run.updatedAt)
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
                         }
                     }
                 }
@@ -297,6 +355,15 @@ public struct GithubCiCardView: View {
                     await fetchStatus(forceRefresh: false)
                 }
             }
+        }
+    }
+
+    private func statusDotColor(for tone: StatusChipTone) -> Color {
+        switch tone {
+        case .success: palette.okFg.color
+        case .danger: palette.errFg.color
+        case .warning: palette.warnFg.color
+        default: palette.textMuted.color
         }
     }
 

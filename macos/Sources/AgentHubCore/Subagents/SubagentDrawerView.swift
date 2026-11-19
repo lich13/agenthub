@@ -1,6 +1,168 @@
 import AppKit
 import SwiftUI
 
+// MARK: - .subagent-summary Bar Directly Below Detail Glass Header (DESIGN.md:113, styles.css:790-794)
+
+public struct SubagentSummaryBarView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let provider: SessionProvider
+    public let collection: SubagentCollection?
+    public let isSupported: Bool
+    public let onTogglePanel: (NSResponder?) -> Void
+
+    @State private var triggerAnchorView: NSView?
+
+    public init(
+        provider: SessionProvider,
+        collection: SubagentCollection?,
+        isSupported: Bool = true,
+        onTogglePanel: @escaping (NSResponder?) -> Void
+    ) {
+        self.provider = provider
+        self.collection = collection
+        self.isSupported = isSupported
+        self.onTogglePanel = onTogglePanel
+    }
+
+    public static func shouldDisplay(
+        provider: SessionProvider,
+        collection: SubagentCollection?,
+        isSupported: Bool
+    ) -> Bool {
+        guard isSupported else {
+            return provider == .codex && collection == nil
+        }
+        guard let collection else {
+            return provider == .codex
+        }
+        if collection.agents.isEmpty && collection.complete {
+            return false
+        }
+        return !collection.agents.isEmpty || !collection.complete
+    }
+
+    public var body: some View {
+        if Self.shouldDisplay(provider: provider, collection: collection, isSupported: isSupported) {
+            if let collection {
+                let totalCount = collection.agents.count
+                let counts = collection.counts
+                let countFor: (String) -> Int = { key in
+                    counts[key] ?? collection.agents.filter { $0.status == key }.count
+                }
+                let runningCount = countFor("running")
+                let completedCount = countFor("completed")
+                let creatingCount = countFor("creating")
+                let failedCount = countFor("failed")
+                let interruptedCount = countFor("interrupted")
+                let unknownCount = countFor("unknown")
+                let unavailableCount = collection.agents.filter { !$0.available }.count
+
+                Button {
+                    let responder = triggerAnchorView?.window?.firstResponder ?? triggerAnchorView
+                    onTogglePanel(responder)
+                } label: {
+                    HStack(spacing: 8) {
+                        LucideIcon(.bot, size: 16)
+                            .foregroundStyle(palette.accent.color)
+
+                        Text("子代理 · \(totalCount)")
+                            .font(DesignFonts.body(12, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+
+                        if runningCount > 0 {
+                            HStack(spacing: 4) {
+                                RunningIndicator(size: 13)
+                                Text("\(runningCount) 个运行中")
+                                    .font(DesignFonts.tabularBody(12))
+                                    .foregroundStyle(palette.textSecondary.color)
+                            }
+                        }
+                        if completedCount > 0 {
+                            Text("\(completedCount) 已完成")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textSecondary.color)
+                        }
+                        if creatingCount > 0 {
+                            Text("\(creatingCount) 正在创建")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textSecondary.color)
+                        }
+                        if failedCount > 0 {
+                            Text("\(failedCount) 失败")
+                                .font(DesignFonts.tabularBody(12, weight: .medium))
+                                .foregroundStyle(palette.errFg.color)
+                        }
+                        if interruptedCount > 0 {
+                            Text("\(interruptedCount) 已中断")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textMuted.color)
+                        }
+                        if unknownCount > 0 {
+                            Text("\(unknownCount) 状态未知")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textMuted.color)
+                        }
+                        if unavailableCount > 0 {
+                            Text("\(unavailableCount) 不可用")
+                                .font(DesignFonts.tabularBody(12, weight: .medium))
+                                .foregroundStyle(palette.errFg.color)
+                        }
+
+                        Spacer(minLength: 6)
+
+                        LucideIcon(.chevronRight, size: 14)
+                            .foregroundStyle(palette.textMuted.color)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.surface.color)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                    }
+                    .background(
+                        SubagentResponderProbeView { v in
+                            triggerAnchorView = v
+                        }
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+                .accessibilityLabel("查看直属子智能体")
+            } else if provider == .codex {
+                HStack {
+                    Text("更新当前机器服务后可查看子智能体汇总。")
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.textMuted.color)
+                    Spacer()
+                }
+                .padding(.vertical, 7)
+                .padding(.horizontal, 20)
+                .background(palette.surface.color)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                }
+            }
+        }
+    }
+}
+
+private final class SubagentFocusAnchorNSView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
+private struct SubagentResponderProbeView: NSViewRepresentable {
+    let onAttach: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = SubagentFocusAnchorNSView(frame: .zero)
+        DispatchQueue.main.async { onAttach(v) }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 // MARK: - 420pt Subagent Docked / Overlay Drawer (Codex Nested Stack & Claude FlatrecordedOnly)
 
 public struct SubagentPanelView: View {
@@ -12,6 +174,8 @@ public struct SubagentPanelView: View {
     public let initialAgent: SubagentActivity?
     public let scheme: ColorSchemeKind
     public let workspace: WorkspaceId
+    public var isModalOverlay: Bool
+    public var restoreFocusResponder: NSResponder?
     public let onClose: () -> Void
 
     @StateObject private var subagentThreadStore = ThreadMessageStore()
@@ -39,6 +203,8 @@ public struct SubagentPanelView: View {
         initialAgent: SubagentActivity? = nil,
         scheme: ColorSchemeKind,
         workspace: WorkspaceId,
+        isModalOverlay: Bool = false,
+        restoreFocusResponder: NSResponder? = nil,
         onClose: @escaping () -> Void
     ) {
         self.store = store
@@ -48,6 +214,8 @@ public struct SubagentPanelView: View {
         self.initialAgent = initialAgent
         self.scheme = scheme
         self.workspace = workspace
+        self.isModalOverlay = isModalOverlay
+        self.restoreFocusResponder = restoreFocusResponder
         self.onClose = onClose
     }
 
@@ -219,11 +387,23 @@ public struct SubagentPanelView: View {
                 }
             }
         }
-        .frame(width: LayoutMetrics.subagentDrawerWidth)
+        .frame(maxWidth: LayoutMetrics.subagentDrawerWidth)
         .frame(maxHeight: .infinity)
         .background(palette.background.color)
         .overlay(alignment: .leading) {
             Rectangle().fill(palette.borderSubtle.color).frame(width: 1)
+        }
+        .background {
+            if isModalOverlay {
+                ZStack {
+                    ModalScopePresenceView()
+                    SubagentModalFocusTrapView(
+                        restoreFocusResponder: restoreFocusResponder,
+                        onEscape: onClose
+                    )
+                }
+                .frame(width: 0, height: 0)
+            }
         }
         .onExitCommand { onClose() }
         .onAppear {
@@ -459,6 +639,159 @@ public struct SubagentPanelView: View {
         case "failed": .danger
         case "interrupted": .warning
         default: .neutral
+        }
+    }
+}
+
+// MARK: - <960pt Overlay Subagent Panel Tab Focus Trap & Trigger Focus Restoration
+
+@MainActor
+public enum SubagentFocusTrapEngine {
+    public static func focusableViews(in root: NSView) -> [NSView] {
+        var result: [NSView] = []
+        func walk(_ view: NSView) {
+            guard !view.isHidden, view.alphaValue > 0.01 else { return }
+            if let control = view as? NSControl, !control.isEnabled {
+                return
+            }
+            if view.canBecomeKeyView || (view is NSButton) || (view is NSTextField) || (view is NSTextView) {
+                if view.bounds.width > 1 && view.bounds.height > 1 {
+                    result.append(view)
+                }
+            }
+            for child in view.subviews {
+                walk(child)
+            }
+        }
+        walk(root)
+        return result
+    }
+
+    public static func nextFocusTarget(in root: NSView, current: NSResponder?, backward: Bool) -> NSView? {
+        let candidates = focusableViews(in: root)
+        guard !candidates.isEmpty else { return nil }
+        guard let currentView = current as? NSView,
+              let idx = candidates.firstIndex(where: { $0 === currentView || currentView.isDescendant(of: $0) })
+        else {
+            return backward ? candidates.last : candidates.first
+        }
+        let nextIdx = backward
+            ? (idx - 1 + candidates.count) % candidates.count
+            : (idx + 1) % candidates.count
+        return candidates[nextIdx]
+    }
+}
+
+private struct SubagentModalFocusTrapView: NSViewRepresentable {
+    var restoreFocusResponder: NSResponder?
+    var onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(restoreFocusResponder: restoreFocusResponder, onEscape: onEscape)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        context.coordinator.attach(anchor: v)
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onEscape = onEscape
+        if let r = restoreFocusResponder, context.coordinator.savedResponder == nil {
+            context.coordinator.savedResponder = r
+        }
+        context.coordinator.attach(anchor: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detachAndRestoreFocus()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var savedResponder: NSResponder?
+        weak var savedWindow: NSWindow?
+        weak var anchorView: NSView?
+        var onEscape: () -> Void
+        private var keyMonitor: Any?
+        private var didInitialFocus: Bool = false
+
+        init(restoreFocusResponder: NSResponder?, onEscape: @escaping () -> Void) {
+            self.savedResponder = restoreFocusResponder
+            self.onEscape = onEscape
+        }
+
+        private func drawerContainerRoot() -> NSView? {
+            var cur = anchorView?.superview
+            var best: NSView?
+            while let v = cur {
+                if abs(v.bounds.width - LayoutMetrics.subagentDrawerWidth) <= 40 && v.bounds.height > 100 {
+                    best = v
+                }
+                cur = v.superview
+            }
+            return best ?? anchorView?.superview?.superview
+        }
+
+        func attach(anchor: NSView) {
+            anchorView = anchor
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let win = self.anchorView?.window else { return }
+                self.savedWindow = win
+                if self.savedResponder == nil {
+                    self.savedResponder = win.firstResponder
+                }
+                if !self.didInitialFocus, let root = self.drawerContainerRoot(),
+                   let firstTarget = SubagentFocusTrapEngine.nextFocusTarget(in: root, current: nil, backward: false)
+                {
+                    self.didInitialFocus = true
+                    win.makeFirstResponder(firstTarget)
+                }
+            }
+
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      let win = self.anchorView?.window,
+                      event.window === win
+                else { return event }
+
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if event.keyCode == 53 && flags.isEmpty {
+                    self.onEscape()
+                    return nil
+                }
+                if event.keyCode == 48 && flags.subtracting([.shift]).isEmpty {
+                    if let root = self.drawerContainerRoot(),
+                       let target = SubagentFocusTrapEngine.nextFocusTarget(
+                           in: root,
+                           current: win.firstResponder,
+                           backward: flags.contains(.shift)
+                       )
+                    {
+                        win.makeFirstResponder(target)
+                        return nil
+                    }
+                }
+                return event
+            }
+        }
+
+        func detachAndRestoreFocus() {
+            if let keyMonitor {
+                NSEvent.removeMonitor(keyMonitor)
+                self.keyMonitor = nil
+            }
+            let responder = savedResponder
+            let win = savedWindow ?? anchorView?.window ?? (responder as? NSView)?.window
+            DispatchQueue.main.async { [weak win, weak responder] in
+                guard let win, let responder else { return }
+                if let view = responder as? NSView, view.window !== win {
+                    return
+                }
+                win.makeFirstResponder(responder)
+            }
         }
     }
 }

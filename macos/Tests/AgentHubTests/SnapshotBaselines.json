@@ -10,6 +10,24 @@
     { "name": "mobileStage", "x": 120, "y": 240, "width": 520, "height": 360, "token": "surface" },
     { "name": "mobileBottomTabs", "x": 120, "y": 8, "width": 520, "height": 36, "token": "railBg" }
   ],
+  "floatingComposerRegions": [
+    { "name": "composerLeftMargin", "x": 12, "y": 30, "width": 84, "height": 90, "token": "background" },
+    { "name": "composerRightMargin", "x": 904, "y": 30, "width": 84, "height": 90, "token": "background" }
+  ],
+  "sessionRowColors": {
+    "light": {
+      "multiSelectedFill": [242, 242, 242],
+      "storageSuccess": [20, 83, 45],
+      "storageWarning": [124, 45, 18],
+      "storageDanger": [159, 18, 57]
+    },
+    "dark": {
+      "multiSelectedFill": [38, 38, 38],
+      "storageSuccess": [134, 239, 172],
+      "storageWarning": [252, 211, 77],
+      "storageDanger": [253, 164, 175]
+    }
+  },
   "providerExpectedSelectedNavColors": {
     "light": {
       "codex": { "selected": [228, 232, 239], "accent": [13, 13, 13] },

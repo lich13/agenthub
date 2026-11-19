@@ -17,17 +17,17 @@ final class GoldenVectorsAndDomainParityTests: XCTestCase {
         let manifestURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("ParityManifest.json")
-        struct Manifest: Decodable {
-            let requiredSourceTestFileCount: Int
-            let retiredPreviewOnlyFiles: [String]
-            let mappedUnitTestFiles: [String: String]
-        }
-        let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
+        let manifest = try JSONDecoder().decode(ParityManifestDocument.self, from: Data(contentsOf: manifestURL))
+        XCTAssertEqual(manifest.schemaVersion, 3)
         XCTAssertEqual(manifest.requiredSourceTestFileCount, 73)
         XCTAssertEqual(manifest.mappedUnitTestFiles.count, 73)
         XCTAssertEqual(manifest.retiredPreviewOnlyFiles, ["webui/src/lib/domain/demoCore.test.ts"])
 
-        // If webui/src still exists on disk (Stage A), verify exact 1-to-1 file set!
+        let sumWebUICases = manifest.mappedUnitTestFiles.values.reduce(0) { $0 + $1.webuiCases }
+        XCTAssertEqual(manifest.totalBaselineWebUICases, 641)
+        XCTAssertEqual(sumWebUICases, manifest.totalBaselineWebUICases, "Sum of per-file webuiCases must equal 641")
+
+        // If webui/src still exists on disk (Stage A), verify exact 1-to-1 file set AND exact static case count per file!
         let webuiSrc = repoRoot.appendingPathComponent("webui/src")
         if FileManager.default.fileExists(atPath: webuiSrc.path) {
             var discovered: [String] = []
@@ -42,15 +42,61 @@ final class GoldenVectorsAndDomainParityTests: XCTestCase {
             }
             let expectedAll = Set(manifest.mappedUnitTestFiles.keys).union(manifest.retiredPreviewOnlyFiles)
             XCTAssertEqual(Set(discovered), expectedAll, "Unmapped or missing WebUI test file in ParityManifest.json")
+
+            for (sourceFile, entry) in manifest.mappedUnitTestFiles {
+                let sourceURL = repoRoot.appendingPathComponent(sourceFile)
+                let content = try String(contentsOf: sourceURL, encoding: .utf8)
+                let actualCount = ParitySourceTestScanner.countStaticTestBlocks(in: content)
+                XCTAssertEqual(
+                    entry.webuiCases,
+                    actualCount,
+                    "Recorded webuiCases (\(entry.webuiCases)) for \(sourceFile) drifted from actual static test count (\(actualCount))"
+                )
+            }
         }
 
-        // Verify every mapped XCTest suite class resolves in this test bundle!
-        for (sourceFile, suiteName) in manifest.mappedUnitTestFiles {
-            XCTAssertNotNil(
-                NSClassFromString("AgentHubTests.\(suiteName)"),
-                "Mapped XCTest suite \(suiteName) for \(sourceFile) does not exist"
+        // Verify every mapped XCTest suite class & method exists, is 1:1 disjoint, and executes >= webuiCases!
+        var seenDisjointMethods = Set<String>()
+        var totalExecutedSwiftCases = 0
+        for (sourceFile, entry) in manifest.mappedUnitTestFiles.sorted(by: { $0.key < $1.key }) {
+            XCTAssertGreaterThan(entry.webuiCases, 0, "\(sourceFile) must have >= 1 webuiCases")
+            XCTAssertFalse(entry.swiftMethods.isEmpty, "\(sourceFile) must map to at least one XCTest method")
+
+            let anyCls: AnyClass? = NSClassFromString("AgentHubTests.\(entry.swiftTestSuite)")
+            let cls: AnyClass = try XCTUnwrap(anyCls, "Mapped XCTest suite \(entry.swiftTestSuite) for \(sourceFile) does not exist")
+            let executableSuite = try XCTUnwrap(
+                cls as? ParityExecutableSuite.Type,
+                "\(entry.swiftTestSuite) must conform to ParityExecutableSuite"
+            )
+            let runtimeMethods = ParitySourceTestScanner.discoverXCTestMethods(on: cls)
+
+            for method in entry.swiftMethods {
+                XCTAssertTrue(
+                    runtimeMethods.contains(method),
+                    "Mapped XCTest method \(entry.swiftTestSuite).\(method) for \(sourceFile) does not exist on class"
+                )
+                let globalKey = "\(entry.swiftTestSuite).\(method)"
+                XCTAssertTrue(
+                    seenDisjointMethods.insert(globalKey).inserted,
+                    "Swift test method \(globalKey) must not be shared across multiple WebUI files (\(sourceFile))"
+                )
+            }
+
+            if ParityCaseTracker.shared.count(for: sourceFile) < entry.webuiCases {
+                for method in entry.swiftMethods {
+                    try executableSuite.executeMappedMethod(method)
+                }
+            }
+
+            let executed = ParityCaseTracker.shared.count(for: sourceFile)
+            totalExecutedSwiftCases += executed
+            XCTAssertGreaterThanOrEqual(
+                executed,
+                entry.webuiCases,
+                "Executed Swift case count (\(executed)) for \(sourceFile) fell below WebUI baseline (\(entry.webuiCases))"
             )
         }
+        XCTAssertGreaterThanOrEqual(totalExecutedSwiftCases, manifest.totalBaselineWebUICases)
     }
 
     // MARK: - 2. Shared Golden Vector #1: visible_markdown.json
