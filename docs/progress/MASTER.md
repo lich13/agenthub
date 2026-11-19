@@ -4,7 +4,7 @@
 
 当前源码版本为 **2.1.28**：macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）与 Rust `agenthub-ffi` 静态库架构，彻底退役 `src-tauri/`、`webui/`、Node／pnpm 工具链及 Rust `objc2` 胶水；核心对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，保持六大平台阅读、探针通知、清理与本机 Codex 桌面协作体验一致。API 协议保持 2、数据库 schema 保持 3。
 
-最近已发布版本为 [**v2.1.27**](https://github.com/lich13/agenthub/releases/tag/v2.1.27)（提交 [`1ced96f`](https://github.com/lich13/agenthub/commit/1ced96ffff43573c8e7cd5e8fd8ed509317bb669)）；**v2.1.28** 已完成阶段 A 并排验收与阶段 B 旧端退役收口，进入标签发布、远端部署与本机覆盖安装闭环。
+最近正式版本为 [**v2.1.28**](https://github.com/lich13/agenthub/releases/tag/v2.1.28)，发布提交为 [`eafbcd4`](https://github.com/lich13/agenthub/commit/eafbcd4c31574f0ed4efe8b09af90fed85668c65)。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/44588237182) 的发布边界检查、后端与契约检查、macOS Swift 6 检查、两端打包签名及发布六项任务全部通过，已发布八项正式资产。服务端已通过部署脚本升级为 `agenthub-webd 2.1.28`，服务为 `active`、健康为 `ok`；Mac 使用同版正式 DMG（校验与签名通过）从 `2.1.27` 原地更新至 `2.1.28` 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面、会话阅读与通知实收待用户验收。
 
 ## v2.1.28 实现与验证
 
@@ -18,6 +18,14 @@
 - 统一 Cargo 工作区（`agenthub-core`、`agenthub-ffi`、`agenthub-webd`）全部单测与契约集成测试、`cargo fmt`、`cargo clippy --workspace --all-targets --locked -- -D warnings` 及 `security-audit.mjs cargo` 全部通过。
 - Swift Debug 与 Release `-O -whole-module-optimization` 编译及 `AGENTHUB_RENDER_TESTS=1 swift test --package-path macos` **106 项 XCTest 测试方法**全部通过：覆盖 5 组跨语言 Golden Vectors、`ParityManifest.json` 全部 73 组共 641 项基线用例映射、全六平台反向分页与 100 项分批操作、离屏几何／矩形热区／右侧悬浮复制 `0.0pt` 行高与反向分页像素锚点断言、浅／深色及五平台锁定快照（`SnapshotBaselines.json`）、全量业务消息 `ReaderSelectableTextView` 字形非空白墨迹断言，以及合成 `setMarkedText` 输入法组字零误送断言。
 - 契约、签名与隐私门禁：`check-wire-types.mjs`、`test-wire-types.mjs`、`check-parity-vectors.mjs`、`check-versions.py --tag v2.1.28`、`check-workspaces.py`、`test-install-script.sh`、`package-macos-swift-arm64.sh`、`codesign --verify --deep --strict` 与 `privacy-check.py`（`--payload` 及 `--git-objects`）全部通过。
+
+下表比较 v2.1.27 与 v2.1.28 对应标签 CI 生成并正式发布的同类资产（updater `.tar.gz` 体积减少 3.361%，DMG 因 UDZO 分块与原生二进制对齐略增 1.182%，不代表用户数据空间变化）：
+
+| 发布资产 | v2.1.27 字节 | v2.1.28 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG | 17,394,151 | 17,599,695 | +205,544（+1.182%） |
+| macOS updater | 16,814,579 | 16,249,420 | -565,159（-3.361%） |
+| Linux x86_64 webd | 7,515,316 | 7,514,808 | -508（-0.007%） |
 
 待用户验收：原地升级后的正式版 `/Applications/AgentHub.app`（`2.1.28`）与远端 `agenthub-webd 2.1.28` 连接、六大平台真实历史会话阅读与向上滚动、右键菜单、本机 Codex 桌面协作及 Bark／macOS 系统通知实收。
 
