@@ -1,0 +1,64 @@
+{
+  "suite": "visibleMarkdown",
+  "cleanCases": [
+    {
+      "name": "inline_and_multiline_memory_citations",
+      "input": "Before <oai-mem-citation><citation_entries>internal</citation_entries><rollout_ids>id</rollout_ids></oai-mem-citation> after.\n\n<citation_entries>internal\nsecond</citation_entries><rollout_ids>id</rollout_ids>",
+      "expected": "Before  after."
+    },
+    {
+      "name": "escaped_html_memory_citation",
+      "input": "Before &lt;oai-mem-citation&gt;internal&lt;/oai-mem-citation&gt; after.",
+      "expected": "Before  after."
+    },
+    {
+      "name": "literal_code_examples_preserved",
+      "input": "Read MEMORY.md for memory guidance.\n`<citation_entries>inline</citation_entries>`\n\n````xml\n```\n<oai-mem-citation>example</oai-mem-citation>\n````\n\n~~~json\n{\"memory_citation\": \"example\"}\n~~~",
+      "expected": "Read MEMORY.md for memory guidance.\n`<citation_entries>inline</citation_entries>`\n\n````xml\n```\n<oai-mem-citation>example</oai-mem-citation>\n````\n\n~~~json\n{\"memory_citation\": \"example\"}\n~~~"
+    },
+    {
+      "name": "standalone_json_envelope_removed",
+      "input": "{\"memory_citation\": {\"entries\": []}}",
+      "expected": ""
+    },
+    {
+      "name": "incomplete_streamed_citation_removed",
+      "input": "Visible.<oai-mem-citation>\n<citation_entries>unfinished",
+      "expected": "Visible."
+    },
+    {
+      "name": "external_codex_apps_open_page_removed",
+      "input": "Before <external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page> between\n<external_codex_apps_open_page>\n{\"page_id\":\"fixture-page\"}\n</external_codex_apps_open_page>\nAfter",
+      "expected": "Before  between\n\nAfter"
+    },
+    {
+      "name": "quoted_external_page_example_preserved",
+      "input": "> <external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>",
+      "expected": "> <external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>"
+    }
+  ],
+  "instructionActivityCases": [
+    { "inputs": ["AGENTS.md"], "expected": true },
+    { "inputs": ["Read /workspace/AGENTS.md"], "expected": true },
+    { "inputs": ["myAGENTS.md", "AGENTS.md.backup"], "expected": false }
+  ],
+  "instructionSegmentCases": [
+    {
+      "name": "heading_scoped_fold",
+      "input": "Intro\n\n## AGENTS.md\n规则\n### Checks\nRun tests.\n## Result\nDone.",
+      "expected": [
+        { "kind": "markdown", "id": "markdown:0", "text": "Intro\n\n", "lines": 1, "bytes": 7 },
+        { "kind": "instructions", "id": "instructions:7", "text": "## AGENTS.md\n规则\n### Checks\nRun tests.\n", "lines": 4, "bytes": 42 },
+        { "kind": "markdown", "id": "markdown:45", "text": "## Result\nDone.", "lines": 2, "bytes": 15 }
+      ]
+    },
+    {
+      "name": "native_instructions_envelope_adjacent_to_environment",
+      "input": "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Rules\nKeep checks.\n# Notes\n保留格式🙂\n</INSTRUCTIONS><environment_context>fixture</environment_context>\n\nWrite a short response.",
+      "expected": [
+        { "kind": "instructions", "id": "instructions:0", "text": "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Rules\nKeep checks.\n# Notes\n保留格式🙂\n</INSTRUCTIONS>", "lines": 8, "bytes": 102 },
+        { "kind": "markdown", "id": "markdown:92", "text": "<environment_context>fixture</environment_context>\n\nWrite a short response.", "lines": 3, "bytes": 75 }
+      ]
+    }
+  ]
+}

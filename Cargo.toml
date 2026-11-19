@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/agenthub-core",
+  "crates/agenthub-ffi",
   "crates/agenthub-webd",
 ]
 resolver = "2"

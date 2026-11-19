@@ -1,0 +1,38 @@
+{
+  "suite": "sessionSelection",
+  "visible": ["s1", "s2", "s3", "s4", "s5"],
+  "steps": [
+    {
+      "name": "cmd_click_seeds_active_and_clicked",
+      "initial": { "scope": "local:codex:active", "selecting": false, "keys": [], "anchor": null, "notice": null },
+      "activeKey": "s1",
+      "key": "s3",
+      "click": { "detail": 1, "metaKey": true, "shiftKey": false, "ctrlKey": false },
+      "expected": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3"], "anchor": "s3", "notice": null }
+    },
+    {
+      "name": "shift_click_extends_from_anchor",
+      "initial": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3"], "anchor": "s3", "notice": null },
+      "activeKey": "s1",
+      "key": "s5",
+      "click": { "detail": 1, "metaKey": false, "shiftKey": true, "ctrlKey": false },
+      "expected": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3", "s4", "s5"], "anchor": "s3", "notice": null }
+    },
+    {
+      "name": "ctrl_click_on_mac_preserves_multi_selection_for_context_menu",
+      "initial": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3"], "anchor": "s3", "notice": null },
+      "activeKey": "s1",
+      "key": "s3",
+      "click": { "detail": 1, "metaKey": false, "shiftKey": false, "ctrlKey": true },
+      "expected": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3"], "anchor": "s3", "notice": null }
+    },
+    {
+      "name": "plain_click_clears_selection_and_exits_selecting_mode",
+      "initial": { "scope": "local:codex:active", "selecting": true, "keys": ["s1", "s3"], "anchor": "s3", "notice": null },
+      "activeKey": "s1",
+      "key": "s2",
+      "click": { "detail": 1, "metaKey": false, "shiftKey": false, "ctrlKey": false },
+      "expected": { "scope": "local:codex:active", "selecting": false, "keys": [], "anchor": "s2", "notice": null }
+    }
+  ]
+}

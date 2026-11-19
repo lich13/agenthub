@@ -1,0 +1,45 @@
+{
+  "suite": "sessionStorage",
+  "cases": [
+    {
+      "name": "null_or_missing",
+      "input": null,
+      "expected": { "label": "—", "tone": "muted", "title": "会话大小暂不可用" }
+    },
+    {
+      "name": "pending_directory",
+      "input": { "bytes": null, "scope": "directory", "status": "pending" },
+      "expected": { "label": "—", "tone": "muted", "title": "会话目录 · 正在统计" }
+    },
+    {
+      "name": "zero_bytes_complete",
+      "input": { "bytes": 0, "scope": "file", "status": "complete" },
+      "expected": { "label": "0K", "tone": "success", "title": "会话文件 · 0 字节" }
+    },
+    {
+      "name": "sub_kilobyte_complete",
+      "input": { "bytes": 512, "scope": "file", "status": "complete" },
+      "expected": { "label": "<1K", "tone": "success", "title": "会话文件 · 512 字节" }
+    },
+    {
+      "name": "sub_kilobyte_partial",
+      "input": { "bytes": 512, "scope": "directory", "status": "partial" },
+      "expected": { "label": "≥0K", "tone": "success", "title": "会话目录 · 至少 512 字节（统计不完整）" }
+    },
+    {
+      "name": "warning_threshold_100_mib",
+      "input": { "bytes": 104857600, "scope": "file", "status": "complete" },
+      "expected": { "label": "100M", "tone": "warning", "title": "会话文件 · 104,857,600 字节" }
+    },
+    {
+      "name": "danger_threshold_300_mib_truncated_decimal",
+      "input": { "bytes": 330301439, "scope": "directory", "status": "partial" },
+      "expected": { "label": "≥314.9M", "tone": "danger", "title": "会话目录 · 至少 330,301,439 字节（统计不完整）" }
+    },
+    {
+      "name": "gigabyte_unit_truncation",
+      "input": { "bytes": 1717986918, "scope": "directory", "status": "complete" },
+      "expected": { "label": "1.5G", "tone": "danger", "title": "会话目录 · 1,717,986,918 字节" }
+    }
+  ]
+}

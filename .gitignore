@@ -1,7 +1,14 @@
 /target/
 /dist/
+/.build/
+/macos/.build/
+/.swiftpm/
+/macos/.swiftpm/
+DerivedData/
+xcuserdata/
 /webui/dist/
 /webui/node_modules/
+/webui/.vitest/
 /webui/*.tsbuildinfo
 /webui/src/**/*.tsbuildinfo
 *.log
