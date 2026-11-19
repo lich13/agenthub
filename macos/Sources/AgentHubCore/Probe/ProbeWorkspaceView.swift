@@ -109,7 +109,7 @@ public struct ProbeWorkspaceView: View {
                         // 7. Execution History (default collapsed)
                         JobHistorySectionView(store: store, title: "执行记录")
                     }
-                    .frame(maxWidth: 1060, alignment: .leading)
+                    .frame(maxWidth: LayoutMetrics.consolePageMaxWidth, alignment: .leading)
                     .padding(.vertical, isNarrow ? 18 : 28)
                     .padding(.horizontal, isNarrow ? 14 : 32)
                     .frame(maxWidth: .infinity)

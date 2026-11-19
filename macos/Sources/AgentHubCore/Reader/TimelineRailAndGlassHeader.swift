@@ -15,6 +15,8 @@ public struct TimelineRailView: View {
 
     @State private var hoveredIndex: Int?
     @State private var focusedIndex: Int?
+    @State private var windowStart: Int = 0
+    @State private var railHeightState: CGFloat = 600
 
     public init(
         entries: [TimelineEntry],
@@ -33,19 +35,21 @@ public struct TimelineRailView: View {
     }
 
     public var body: some View {
-        GeometryReader { geo in
-            let olderOffset: CGFloat = (loadOlder != nil) ? 18 : 0
-            let topPadding: CGFloat = 20 + olderOffset
-            let usableHeight = max(24, geo.size.height - topPadding - 20)
-            let maxTicks = max(1, Int(floor(usableHeight / 12.0)))
-            let sampled = Self.sampleEntries(entries, maxCount: maxTicks)
-            let previewIdx = hoveredIndex ?? focusedIndex
-            let previewEntry: TimelineEntry? = if let idx = previewIdx, sampled.indices.contains(idx) {
-                sampled[idx]
-            } else {
-                nil
-            }
+        let olderOffset: CGFloat = (loadOlder != nil) ? 18 : 0
+        let topPadding: CGFloat = 20 + olderOffset
+        let usableHeight = max(24, railHeightState - topPadding - 20)
+        let windowCapacity = Self.virtualWindowCapacity(usableHeight: usableHeight)
+        let first = min(windowStart, max(0, entries.count - 1))
+        let last = min(entries.count, first + windowCapacity)
+        let visibleSlice: ArraySlice<TimelineEntry> = (first < last) ? entries[first ..< last] : []
+        let previewIdx = hoveredIndex ?? focusedIndex
+        let previewEntry: TimelineEntry? = if let idx = previewIdx, entries.indices.contains(idx) {
+            entries[idx]
+        } else {
+            nil
+        }
 
+        GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 if let loadOlder {
                     Button(action: loadOlder) {
@@ -62,106 +66,135 @@ public struct TimelineRailView: View {
                     .accessibilityLabel("加载更早的时间线记录")
                 }
 
-                VStack(spacing: 0) {
-                    ForEach(Array(sampled.enumerated()), id: \.element.id) { index, entry in
-                        let isActive = (entry.id == activeId)
-                        let isHighlighted = (hoveredIndex == index) || (focusedIndex == index)
-                        TimelineRailTickRow(
-                            index: index,
-                            totalCount: sampled.count,
-                            title: entry.title,
-                            isActive: isActive,
-                            isHighlighted: isHighlighted,
-                            isFocused: focusedIndex == index,
-                            activeColor: palette.accent,
-                            inactiveColor: palette.trackOff,
-                            onHoverChanged: { hovering in
-                                if hovering {
-                                    hoveredIndex = index
-                                } else if hoveredIndex == index {
-                                    hoveredIndex = nil
-                                }
-                            },
-                            onFocusChanged: { focused in
-                                if focused {
-                                    focusedIndex = index
-                                } else if focusedIndex == index {
-                                    focusedIndex = nil
-                                }
-                            },
-                            onNavigateKey: { keyCode in
-                                if let next = Self.nextKeyboardFocusIndex(
-                                    currentIndex: index,
-                                    count: sampled.count,
-                                    keyCode: keyCode
-                                ) {
-                                    focusedIndex = next
-                                    return true
-                                }
-                                return false
-                            },
-                            onActivate: {
-                                onSelectEntry(entry)
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if first > 0 {
+                                Color.clear
+                                    .frame(width: LayoutMetrics.timelineRailWidth, height: CGFloat(first) * 12)
                             }
-                        )
-                    }
-                }
-                .padding(.top, topPadding)
-                .padding(.leading, LayoutMetrics.timelineRailLeft)
 
-                if let hovered = previewEntry, let idx = previewIdx {
-                    let previewMax = min(LayoutMetrics.timelinePreviewMaxWidth, max(160, availableWidth * 0.60))
-                    let centerY = Self.previewTopY(
-                        forTickIndex: idx,
-                        topPadding: topPadding,
-                        tickHeight: 12,
-                        railHeight: geo.size.height
-                    )
-                    let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
-                    let cardTopY = max(6, min(max(6, geo.size.height - estimatedHalfHeight * 2 - 6), centerY - estimatedHalfHeight))
+                            ForEach(Array(visibleSlice.enumerated()), id: \.element.id) { offset, entry in
+                                let globalIndex = first + offset
+                                let isActive = (entry.id == activeId)
+                                let isHighlighted = (hoveredIndex == globalIndex) || (focusedIndex == globalIndex)
+                                TimelineRailTickRow(
+                                    index: globalIndex,
+                                    totalCount: entries.count,
+                                    title: entry.title,
+                                    isActive: isActive,
+                                    isHighlighted: isHighlighted,
+                                    isFocused: focusedIndex == globalIndex,
+                                    activeColor: palette.accent,
+                                    inactiveColor: palette.trackOff,
+                                    onHoverChanged: { hovering in
+                                        if hovering {
+                                            hoveredIndex = globalIndex
+                                        } else if hoveredIndex == globalIndex {
+                                            hoveredIndex = nil
+                                        }
+                                    },
+                                    onFocusChanged: { focused in
+                                        if focused {
+                                            focusedIndex = globalIndex
+                                        } else if focusedIndex == globalIndex {
+                                            focusedIndex = nil
+                                        }
+                                    },
+                                    onNavigateKey: { keyCode in
+                                        if let next = Self.nextKeyboardFocusIndex(
+                                            currentIndex: globalIndex,
+                                            count: entries.count,
+                                            keyCode: keyCode
+                                        ) {
+                                            if next < first || next >= last {
+                                                windowStart = max(0, min(max(0, entries.count - windowCapacity), next - windowCapacity / 2))
+                                            }
+                                            focusedIndex = next
+                                            if entries.indices.contains(next) {
+                                                scrollProxy.scrollTo(entries[next].id, anchor: .center)
+                                            }
+                                            return true
+                                        }
+                                        return false
+                                    },
+                                    onActivate: {
+                                        onSelectEntry(entry)
+                                    }
+                                )
+                                .id(entry.id)
+                            }
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(hovered.title)
-                            .font(DesignFonts.body(12, weight: .semibold))
-                            .foregroundStyle(palette.textPrimary.color)
-                            .lineLimit(1)
-                        if let preview = hovered.preview, !preview.isEmpty {
-                            Text(preview)
-                                .font(DesignFonts.body(11))
-                                .foregroundStyle(palette.textSecondary.color)
-                                .lineLimit(3)
+                            if last < entries.count {
+                                Color.clear
+                                    .frame(width: LayoutMetrics.timelineRailWidth, height: CGFloat(entries.count - last) * 12)
+                            }
                         }
                     }
-                    .padding(.vertical, 8)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 10)
-                    .frame(maxWidth: previewMax, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(palette.elevated.color)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(palette.borderStrong.color, lineWidth: 1)
-                    )
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(palette.accent.color)
-                            .frame(width: 3)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .frame(width: LayoutMetrics.timelineRailWidth, height: max(24, geo.size.height - topPadding - 20))
+                    .padding(.top, topPadding)
+                    .padding(.leading, LayoutMetrics.timelineRailLeft)
+                    .onChange(of: activeId) { nextActiveId in
+                        guard hoveredIndex == nil, focusedIndex == nil,
+                              let nextActiveId,
+                              let activeIdx = entries.firstIndex(where: { $0.id == nextActiveId })
+                        else { return }
+                        if activeIdx < first || activeIdx >= last {
+                            windowStart = max(0, min(max(0, entries.count - windowCapacity), activeIdx - windowCapacity / 2))
+                        }
+                        scrollProxy.scrollTo(nextActiveId, anchor: .center)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .shadow(color: Color.black.opacity(0.14), radius: 8, x: 0, y: 2)
-                    .offset(x: 28, y: cardTopY)
-                    .allowsHitTesting(false)
+                }
+            }
+            .onAppear {
+                if geo.size.height > 1, abs(railHeightState - geo.size.height) > 0.5 {
+                    let h = geo.size.height
+                    DispatchQueue.main.async { railHeightState = h }
+                }
+            }
+            .onChange(of: geo.size.height) { nextH in
+                if nextH > 1, abs(railHeightState - nextH) > 0.5 {
+                    DispatchQueue.main.async { railHeightState = nextH }
                 }
             }
         }
         .frame(width: 34)
+        // Render hover/focus preview OUTSIDE the 34pt GeometryReader so width sizes naturally up to min(288pt, 60vw)!
+        .overlay(alignment: .topLeading) {
+            if let hovered = previewEntry, let idx = previewIdx {
+                let previewMax = Self.previewMaxWidth(for: availableWidth)
+                let visibleOffset = max(0, idx - first)
+                let centerY = Self.previewTopY(
+                    forTickIndex: visibleOffset,
+                    topPadding: topPadding,
+                    tickHeight: 12,
+                    railHeight: railHeightState
+                )
+                let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
+                let cardTopY = max(6, min(max(6, railHeightState - estimatedHalfHeight * 2 - 6), centerY - estimatedHalfHeight))
+
+                Color.clear
+                    .frame(width: previewMax, height: max(48, railHeightState), alignment: .topLeading)
+                    .overlay(alignment: .topLeading) {
+                        TimelinePreviewCardView(entry: hovered, maxWidth: previewMax)
+                            .offset(x: 28, y: cardTopY)
+                    }
+                    .allowsHitTesting(false)
+            }
+        }
         .onChange(of: entries) { _ in
             hoveredIndex = nil
             focusedIndex = nil
+            windowStart = 0
         }
+    }
+
+    public static func previewMaxWidth(for availableWidth: CGFloat) -> CGFloat {
+        min(LayoutMetrics.timelinePreviewMaxWidth, max(160, availableWidth * 0.60))
+    }
+
+    public static func virtualWindowCapacity(usableHeight: CGFloat) -> Int {
+        max(100, Int(ceil(max(24, usableHeight) / 12.0)) + 20)
     }
 
     public static func previewTopY(
@@ -202,6 +235,52 @@ public struct TimelineRailView: View {
             }
         }
         return out
+    }
+}
+
+public struct TimelinePreviewCardView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let entry: TimelineEntry
+    public let maxWidth: CGFloat
+
+    public init(entry: TimelineEntry, maxWidth: CGFloat) {
+        self.entry = entry
+        self.maxWidth = maxWidth
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(entry.title)
+                .font(DesignFonts.body(12, weight: .semibold))
+                .foregroundStyle(palette.textPrimary.color)
+                .lineLimit(1)
+            if let preview = entry.preview, !preview.isEmpty {
+                Text(preview)
+                    .font(DesignFonts.body(11))
+                    .foregroundStyle(palette.textSecondary.color)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 10)
+        .frame(maxWidth: maxWidth, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(palette.elevated.color)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(palette.accent.color)
+                .frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .shadow(color: Color.black.opacity(0.14), radius: 8, x: 0, y: 2)
     }
 }
 

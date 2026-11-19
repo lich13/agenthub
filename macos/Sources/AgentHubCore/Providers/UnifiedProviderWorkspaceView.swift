@@ -17,6 +17,8 @@ public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
     public var canArchive: Bool
     public var canDelete: Bool
     public var storageSize: SessionStorageSize?
+    public var readError: String?
+    public var readWarning: String?
 
     public var id: String { sessionKey }
 }
@@ -82,6 +84,11 @@ public struct UnifiedProviderWorkspaceView: View {
     @State private var grokDeleteResiduals: [String] = []
 
     @State private var headerInlineRename: Bool = false
+    @State private var readWarningExpanded: Bool = false
+    @State private var claudeOwnershipKey: String?
+    @State private var claudeOwnershipData: ClaudeOwnershipDiagnostics?
+    @State private var claudeOwnershipError: String?
+    @State private var claudeOwnershipLoading: Bool = false
     @State private var searchModalOpen: Bool = false
     @State private var subagentDrawerOpen: Bool = false
     @State private var subagentTriggerResponder: NSResponder?
@@ -257,7 +264,7 @@ public struct UnifiedProviderWorkspaceView: View {
         }
         .background(
             WorkspaceKeyboardShortcutMonitorView(
-                isModalOpen: store.hasAnyActiveModal || searchModalOpen || batchPreview != nil || claudeDeletePreview != nil || grokDeletePreview != nil || previewImageItem != nil,
+                isModalOpen: store.hasAnyActiveModal || ModalPresentationRegistry.shared.hasActiveModal || searchModalOpen || batchPreview != nil || claudeDeletePreview != nil || grokDeletePreview != nil || previewImageItem != nil,
                 onRenameSelected: {
                     guard provider != .grokbot, !currentSelectionState.selecting, let item = selectedItem else { return false }
                     renameRequestSeqByKey[item.sessionKey, default: 0] += 1
@@ -292,6 +299,7 @@ public struct UnifiedProviderWorkspaceView: View {
             guard provider != .grokbot,
                   !batchBusy,
                   !store.hasAnyActiveModal,
+                  !ModalPresentationRegistry.shared.hasActiveModal,
                   !searchModalOpen,
                   batchPreview == nil,
                   claudeDeletePreview == nil,
@@ -316,6 +324,10 @@ public struct UnifiedProviderWorkspaceView: View {
             pendingJumpPositionKey = nil
             loadOlderError = nil
             detailLoadedForKey = nil
+            readWarningExpanded = false
+            claudeOwnershipKey = nil
+            claudeOwnershipData = nil
+            claudeOwnershipError = nil
             batchPreview = nil
             batchResult = nil
             batchPrepareError = nil
@@ -335,6 +347,7 @@ public struct UnifiedProviderWorkspaceView: View {
         .onChange(of: selectedItem?.sessionKey) { _ in
             revealedPositionKey = nil
             loadOlderError = nil
+            readWarningExpanded = false
             timelineWindow.returnToLatest()
         }
         // 5s Session List Polling Clock (paused when window hidden)
@@ -671,6 +684,107 @@ public struct UnifiedProviderWorkspaceView: View {
                                 .padding(.vertical, 4)
                         }
 
+                        if let rErr = item.readError, !rErr.isEmpty {
+                            Text(rErr)
+                                .font(DesignFonts.body(12))
+                                .foregroundStyle(palette.errFg.color)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(palette.errBg.color)
+                        }
+
+                        if let rWarn = item.readWarning, !rWarn.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Button {
+                                    readWarningExpanded.toggle()
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        LucideIcon(readWarningExpanded ? .chevronDown : .chevronRight, size: 14)
+                                        Text("读取提示")
+                                            .font(DesignFonts.body(12, weight: .medium))
+                                        Spacer()
+                                    }
+                                    .foregroundStyle(palette.textSecondary.color)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(PlainHitButtonStyle())
+
+                                if readWarningExpanded {
+                                    Text(rWarn)
+                                        .font(DesignFonts.body(12))
+                                        .foregroundStyle(palette.textSecondary.color)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 6)
+                            .background(palette.surface.color)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                            }
+                        }
+
+                        if provider == .claudeCode,
+                           item.readError == nil,
+                           let blockReason = item.renameBlockReason,
+                           !blockReason.isEmpty
+                        {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    Text(blockReason)
+                                        .font(DesignFonts.body(12))
+                                        .foregroundStyle(palette.textSecondary.color)
+                                    Spacer()
+                                    if store.target == .local {
+                                        Button("查看占用详情") {
+                                            Task { await fetchClaudeOwnershipDiagnostics(sessionKey: item.sessionKey) }
+                                        }
+                                        .buttonStyle(SecondaryButtonStyle())
+                                        .disabled(claudeOwnershipLoading)
+                                    }
+                                }
+
+                                if store.target == .local, claudeOwnershipKey == item.sessionKey {
+                                    if let diagErr = claudeOwnershipError {
+                                        Text(diagErr)
+                                            .font(DesignFonts.body(12))
+                                            .foregroundStyle(palette.errFg.color)
+                                    }
+                                    if let diag = claudeOwnershipData {
+                                        let summaryText = switch diag.ownership {
+                                        case "inactive": "未发现关联的活跃会话进程"
+                                        case "open": "存在活跃会话或文件占用"
+                                        default: "归属尚未确认"
+                                        }
+                                        Text(summaryText)
+                                            .font(DesignFonts.body(12, weight: .medium))
+                                            .foregroundStyle(palette.textPrimary.color)
+                                        ForEach(Array(diag.processes.enumerated()), id: \.offset) { _, proc in
+                                            let roleLabel = switch proc.role {
+                                            case "session": "会话"
+                                            case "daemon": "后台服务"
+                                            case "pty_host": "终端宿主"
+                                            case "unknown": "未核验进程"
+                                            default: proc.role
+                                            }
+                                            let mismatch = proc.mismatchedFields.isEmpty
+                                                ? ""
+                                                : " · 不匹配字段：\(proc.mismatchedFields.joined(separator: "、"))"
+                                            Text("PID \(proc.pid) · \(roleLabel) · \(proc.registrationVerified ? "登记已核验" : "登记未核验")\(mismatch)")
+                                                .font(DesignFonts.mono(11))
+                                                .foregroundStyle(palette.textSecondary.color)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+                            .background(palette.surface.color)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                            }
+                        }
+
                         ZStack(alignment: .bottomTrailing) {
                             ZStack(alignment: .top) {
                                 ZStack(alignment: .leading) {
@@ -787,24 +901,28 @@ public struct UnifiedProviderWorkspaceView: View {
                     }
                 }
 
-                // <960pt Overlay Subagent Drawer with .34 Backdrop, Tab Focus Trap & Trigger Focus Restore
+                // <960pt Overlay Subagent Drawer with .34 Backdrop, Isolated Focus Root & Trigger Focus Restore
                 if subagentDrawerOpen && !canDockSubagents {
                     Color.black.opacity(0.34)
                         .ignoresSafeArea()
                         .onTapGesture { subagentDrawerOpen = false }
 
-                    SubagentPanelView(
-                        store: store,
-                        provider: provider,
-                        rootSessionKey: item.sessionKey,
-                        collection: subagents,
-                        initialAgent: selectedSubagent,
-                        scheme: scheme,
-                        workspace: workspace,
-                        isModalOverlay: true,
-                        restoreFocusResponder: subagentTriggerResponder,
-                        onClose: { subagentDrawerOpen = false }
-                    )
+                    SubagentOverlayFocusContainerView(palette: palette) {
+                        SubagentPanelView(
+                            store: store,
+                            provider: provider,
+                            rootSessionKey: item.sessionKey,
+                            collection: subagents,
+                            initialAgent: selectedSubagent,
+                            scheme: scheme,
+                            workspace: workspace,
+                            isModalOverlay: true,
+                            restoreFocusResponder: subagentTriggerResponder,
+                            onClose: { subagentDrawerOpen = false }
+                        )
+                    }
+                    .frame(width: min(LayoutMetrics.subagentDrawerWidth, availableWidth))
+                    .frame(maxHeight: .infinity)
                 }
             }
         } else {
@@ -959,13 +1077,22 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: ClaudeListArgs(q: query.isEmpty ? nil : query, limit: 100)
                 )
                 activeItems = list.map { item in
-                    UnifiedSessionSummaryItem(
+                    let stLabel = if item.status == "running" {
+                        "运行中"
+                    } else if item.status == "waiting" {
+                        "等待处理"
+                    } else if item.readError != nil {
+                        "异常"
+                    } else {
+                        "近期"
+                    }
+                    return UnifiedSessionSummaryItem(
                         sessionKey: item.sessionKey,
                         nativeId: item.id,
                         title: item.title.isEmpty ? item.id : item.title,
                         cwd: item.cwd,
                         path: item.path,
-                        statusText: item.status == "running" ? "运行中" : "近期",
+                        statusText: stLabel,
                         running: item.status == "running",
                         archived: false,
                         canRename: item.canRename,
@@ -973,7 +1100,9 @@ public struct UnifiedProviderWorkspaceView: View {
                         canArchive: false,
                         // Per DESIGN.md:75, Claude delete is never disabled by read/activity state.
                         canDelete: true,
-                        storageSize: item.storageSize
+                        storageSize: item.storageSize,
+                        readError: item.readError,
+                        readWarning: item.readWarning
                     )
                 }
 
@@ -1468,6 +1597,28 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private func fetchClaudeOwnershipDiagnostics(sessionKey: String) async {
+        guard store.target == .local, !claudeOwnershipLoading else { return }
+        let capturedRevision = store.revision
+        claudeOwnershipKey = sessionKey
+        claudeOwnershipError = nil
+        claudeOwnershipLoading = true
+        defer { claudeOwnershipLoading = false }
+        struct Args: Encodable { let sessionKey: String }
+        do {
+            let diag: ClaudeOwnershipDiagnostics = try await store.rpc(
+                "claude.ownershipDiagnostics",
+                args: Args(sessionKey: sessionKey),
+                localOnly: true
+            )
+            guard store.revision == capturedRevision else { return }
+            claudeOwnershipData = diag
+        } catch {
+            guard store.revision == capturedRevision else { return }
+            claudeOwnershipError = error.localizedDescription
+        }
+    }
+
     // Chunked 100-item archive/restore & single-batch delete with partial-failure preservation
     private func prepareBatch(
         operation: SessionOperation,
@@ -1475,6 +1626,7 @@ public struct UnifiedProviderWorkspaceView: View {
         partition: SessionSelectionPartition
     ) async {
         guard !keys.isEmpty, !batchBusy else { return }
+        let capturedRevision = store.revision
         batchTargetPartition = partition
         batchBusy = true
         batchPrepareError = nil
@@ -1486,20 +1638,24 @@ public struct UnifiedProviderWorkspaceView: View {
 
         let targetStore = store
         do {
-            batchPreview = try await SessionBatchChunkExecutor.preview(
+            let preview = try await SessionBatchChunkExecutor.preview(
                 provider: provider,
                 operation: operation,
                 sessionKeys: keys
             ) { req in
                 try await targetStore.rpc("sessions.bulkPreview", args: Wrap(request: req))
             }
+            guard store.revision == capturedRevision else { return }
+            batchPreview = preview
         } catch {
+            guard store.revision == capturedRevision else { return }
             batchPrepareError = error.localizedDescription
         }
     }
 
     private func executePreparedBatch() async {
         guard let preview = batchPreview, !batchBusy else { return }
+        let capturedRevision = store.revision
         let targetPartition = batchTargetPartition
         batchPreview = nil
         batchBusy = true
@@ -1511,6 +1667,7 @@ public struct UnifiedProviderWorkspaceView: View {
         let outcome = await SessionBatchChunkExecutor.execute(preview: preview) { req in
             try await targetStore.rpc("sessions.bulkExecute", args: Wrap(request: req))
         }
+        guard store.revision == capturedRevision else { return }
 
         if let res = outcome.result {
             batchResult = res

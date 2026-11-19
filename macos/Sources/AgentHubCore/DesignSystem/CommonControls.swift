@@ -424,10 +424,16 @@ public struct RunningIndicator: View {
 
 // MARK: - Inline Modal Presentation Registry (Blocks Underlying ⌘A Select-All Leak)
 
+private final class WeakNSViewRef {
+    weak var view: NSView?
+    init(_ view: NSView?) { self.view = view }
+}
+
 @MainActor
 public final class ModalPresentationRegistry {
     public static let shared = ModalPresentationRegistry()
     private var activeTokens: Set<UUID> = []
+    private var activeContainers: [UUID: WeakNSViewRef] = [:]
 
     public init() {}
 
@@ -435,21 +441,46 @@ public final class ModalPresentationRegistry {
         !activeTokens.isEmpty
     }
 
-    public func register(_ token: UUID) {
+    public func register(_ token: UUID, container: NSView? = nil) {
         activeTokens.insert(token)
+        if let container {
+            activeContainers[token] = WeakNSViewRef(container)
+        }
+    }
+
+    public func updateContainer(_ container: NSView?, for token: UUID) {
+        guard activeTokens.contains(token) else { return }
+        if let container {
+            activeContainers[token] = WeakNSViewRef(container)
+        }
     }
 
     public func unregister(_ token: UUID) {
         activeTokens.remove(token)
+        activeContainers.removeValue(forKey: token)
+    }
+
+    public func isInsideActiveModalContainer(_ responderView: NSView) -> Bool {
+        for box in activeContainers.values {
+            if let root = box.view, responderView === root || responderView.isDescendant(of: root) {
+                return true
+            }
+        }
+        return false
     }
 
     public func resetForTesting() {
         activeTokens.removeAll()
+        activeContainers.removeAll()
     }
 }
 
 public struct ModalScopePresenceView: NSViewRepresentable {
-    public init() {}
+    public var modalContainer: NSView?
+
+    public init(modalContainer: NSView? = nil) {
+        self.modalContainer = modalContainer
+    }
 
     public func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -457,12 +488,12 @@ public struct ModalScopePresenceView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        context.coordinator.activate()
+        context.coordinator.activate(container: modalContainer)
         return view
     }
 
     public func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.activate()
+        context.coordinator.activate(container: modalContainer)
     }
 
     public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -474,15 +505,91 @@ public struct ModalScopePresenceView: NSViewRepresentable {
         let token = UUID()
         var active = false
 
-        func activate() {
-            guard !active else { return }
-            active = true
-            ModalPresentationRegistry.shared.register(token)
+        func activate(container: NSView?) {
+            if !active {
+                active = true
+                ModalPresentationRegistry.shared.register(token, container: container)
+            } else if let container {
+                ModalPresentationRegistry.shared.updateContainer(container, for: token)
+            }
         }
 
         func deactivate() {
             guard active else { return }
             active = false
+            ModalPresentationRegistry.shared.unregister(token)
+        }
+    }
+}
+
+/// Mounts a full-window modal overlay onto `window.contentView` so inline footers/cards never clip modal dialogs.
+public struct WindowFullContentModal<ModalContent: View>: NSViewRepresentable {
+    public var isPresented: Bool
+    public let palette: DesignPalette
+    @ViewBuilder public let content: () -> ModalContent
+
+    public init(
+        isPresented: Bool,
+        palette: DesignPalette,
+        @ViewBuilder content: @escaping () -> ModalContent
+    ) {
+        self.isPresented = isPresented
+        self.palette = palette
+        self.content = content
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    public func makeNSView(context: Context) -> NSView {
+        let anchor = NSView(frame: .zero)
+        context.coordinator.sync(anchor: anchor, isPresented: isPresented, palette: palette, content: content)
+        return anchor
+    }
+
+    public func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.sync(anchor: nsView, isPresented: isPresented, palette: palette, content: content)
+    }
+
+    public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.teardown()
+    }
+
+    @MainActor
+    public final class Coordinator {
+        private let token = UUID()
+        private var overlayHost: NSHostingView<AnyView>?
+
+        func sync<C: View>(anchor: NSView, isPresented: Bool, palette: DesignPalette, content: @escaping () -> C) {
+            guard isPresented else {
+                teardown()
+                return
+            }
+            let wrapped = AnyView(content().environment(\.agentHubPalette, palette))
+            if let existing = overlayHost {
+                existing.rootView = wrapped
+                if let contentView = anchor.window?.contentView, existing.superview !== contentView {
+                    existing.frame = contentView.bounds
+                    contentView.addSubview(existing, positioned: .above, relativeTo: nil)
+                    ModalPresentationRegistry.shared.register(token, container: existing)
+                }
+                return
+            }
+            DispatchQueue.main.async { [weak self, weak anchor] in
+                guard let self, let anchor, let contentView = anchor.window?.contentView else { return }
+                let host = NSHostingView(rootView: wrapped)
+                host.frame = contentView.bounds
+                host.autoresizingMask = [.width, .height]
+                contentView.addSubview(host, positioned: .above, relativeTo: nil)
+                self.overlayHost = host
+                ModalPresentationRegistry.shared.register(self.token, container: host)
+            }
+        }
+
+        func teardown() {
+            overlayHost?.removeFromSuperview()
+            overlayHost = nil
             ModalPresentationRegistry.shared.unregister(token)
         }
     }

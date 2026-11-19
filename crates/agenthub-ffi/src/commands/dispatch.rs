@@ -198,8 +198,9 @@ pub const REGISTERED_COMMAND_ENTRIES: &[(&str, &str)] = &[
 ];
 
 #[derive(Deserialize)]
-struct WrappedRequest<T> {
-    request: T,
+#[serde(deny_unknown_fields)]
+pub(crate) struct WrappedRequest<T> {
+    pub(crate) request: T,
 }
 
 #[derive(Default, Deserialize)]

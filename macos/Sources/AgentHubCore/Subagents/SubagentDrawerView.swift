@@ -41,6 +41,10 @@ public struct SubagentSummaryBarView: View {
         return !collection.agents.isEmpty || !collection.complete
     }
 
+    public static func summaryHeaderTitle(provider: SessionProvider, totalCount: Int) -> String {
+        provider == .claudeCode ? "本会话子智能体" : "子代理 · \(totalCount)"
+    }
+
     public var body: some View {
         if Self.shouldDisplay(provider: provider, collection: collection, isSupported: isSupported) {
             if let collection {
@@ -65,47 +69,56 @@ public struct SubagentSummaryBarView: View {
                         LucideIcon(.bot, size: 16)
                             .foregroundStyle(palette.accent.color)
 
-                        Text("子代理 · \(totalCount)")
-                            .font(DesignFonts.body(12, weight: .semibold))
-                            .foregroundStyle(palette.textPrimary.color)
+                        if provider == .claudeCode {
+                            Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
+                                .font(DesignFonts.body(12, weight: .semibold))
+                                .foregroundStyle(palette.textPrimary.color)
+                            Text("\(totalCount)")
+                                .font(DesignFonts.tabularBody(12))
+                                .foregroundStyle(palette.textSecondary.color)
+                        } else {
+                            Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
+                                .font(DesignFonts.body(12, weight: .semibold))
+                                .foregroundStyle(palette.textPrimary.color)
 
-                        if runningCount > 0 {
-                            HStack(spacing: 4) {
-                                RunningIndicator(size: 13)
-                                Text("\(runningCount) 个运行中")
+                            if runningCount > 0 {
+                                HStack(spacing: 4) {
+                                    RunningIndicator(size: 13)
+                                    Text("\(runningCount) 个运行中")
+                                        .font(DesignFonts.tabularBody(12))
+                                        .foregroundStyle(palette.textSecondary.color)
+                                }
+                            }
+                            if completedCount > 0 {
+                                Text("\(completedCount) 已完成")
                                     .font(DesignFonts.tabularBody(12))
                                     .foregroundStyle(palette.textSecondary.color)
                             }
-                        }
-                        if completedCount > 0 {
-                            Text("\(completedCount) 已完成")
-                                .font(DesignFonts.tabularBody(12))
-                                .foregroundStyle(palette.textSecondary.color)
-                        }
-                        if creatingCount > 0 {
-                            Text("\(creatingCount) 正在创建")
-                                .font(DesignFonts.tabularBody(12))
-                                .foregroundStyle(palette.textSecondary.color)
-                        }
-                        if failedCount > 0 {
-                            Text("\(failedCount) 失败")
-                                .font(DesignFonts.tabularBody(12, weight: .medium))
-                                .foregroundStyle(palette.errFg.color)
-                        }
-                        if interruptedCount > 0 {
-                            Text("\(interruptedCount) 已中断")
-                                .font(DesignFonts.tabularBody(12))
-                                .foregroundStyle(palette.textMuted.color)
-                        }
-                        if unknownCount > 0 {
-                            Text("\(unknownCount) 状态未知")
-                                .font(DesignFonts.tabularBody(12))
-                                .foregroundStyle(palette.textMuted.color)
-                        }
-                        if unavailableCount > 0 {
-                            Text("\(unavailableCount) 不可用")
-                                .font(DesignFonts.tabularBody(12, weight: .medium))
-                                .foregroundStyle(palette.errFg.color)
+                            if creatingCount > 0 {
+                                Text("\(creatingCount) 正在创建")
+                                    .font(DesignFonts.tabularBody(12))
+                                    .foregroundStyle(palette.textSecondary.color)
+                            }
+                            if failedCount > 0 {
+                                Text("\(failedCount) 失败")
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(palette.errFg.color)
+                            }
+                            if interruptedCount > 0 {
+                                Text("\(interruptedCount) 已中断")
+                                    .font(DesignFonts.tabularBody(12))
+                                    .foregroundStyle(palette.textMuted.color)
+                            }
+                            if unknownCount > 0 {
+                                Text("\(unknownCount) 状态未知")
+                                    .font(DesignFonts.tabularBody(12))
+                                    .foregroundStyle(palette.textMuted.color)
+                            }
+                            if unavailableCount > 0 {
+                                Text("\(unavailableCount) 不可用")
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(palette.errFg.color)
+                            }
                         }
 
                         Spacer(minLength: 6)
@@ -128,7 +141,7 @@ public struct SubagentSummaryBarView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainHitButtonStyle())
-                .accessibilityLabel("查看直属子智能体")
+                .accessibilityLabel(provider == .claudeCode ? "本会话子智能体" : "查看直属子智能体")
             } else if provider == .codex {
                 HStack {
                     Text("更新当前机器服务后可查看子智能体汇总。")
@@ -181,9 +194,15 @@ public struct SubagentPanelView: View {
     @StateObject private var subagentThreadStore = ThreadMessageStore()
     @StateObject private var subagentClaudeStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
 
-    @State private var agentStack: [SubagentActivity] = []
+    public enum NavigationFrame: Equatable {
+        case list(parent: SubagentActivity?, collection: SubagentCollection?)
+        case detail(SubagentActivity)
+    }
+
+    @State private var frameStack: [NavigationFrame] = []
     @State private var scrollAnchorStack: [ConversationTableCoordinator.ScrollAnchorSnapshot?] = []
     @State private var pendingRestoreAnchor: ConversationTableCoordinator.ScrollAnchorSnapshot?
+    @State private var currentDetailSubagents: SubagentCollection?
     @State private var rows: [ConversationRowItem] = []
     @State private var timelineEntries: [TimelineEntry] = []
     @State private var activeTimelineId: String?
@@ -220,27 +239,38 @@ public struct SubagentPanelView: View {
     }
 
     public var currentAgent: SubagentActivity? {
-        agentStack.last
+        if case let .detail(agent)? = frameStack.last {
+            return agent
+        }
+        return nil
+    }
+
+    private var activeListCollection: SubagentCollection? {
+        if case let .list(_, nestedCollection)? = frameStack.last {
+            return nestedCollection ?? collection
+        }
+        return collection
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             // Drawer Header
             HStack(spacing: 8) {
-                if !agentStack.isEmpty {
+                if !frameStack.isEmpty {
                     Button {
                         popAgent()
                     } label: {
                         LucideIcon(.arrowLeft, size: 16)
                     }
                     .buttonStyle(IconButtonStyle(dimension: 30))
+                    .background(SubagentKeyTargetView(enabled: true, onActivate: { popAgent() }))
                     .accessibilityLabel("返回上一级")
                 }
 
                 LucideIcon(.bot, size: 16)
                     .foregroundStyle(palette.accent.color)
 
-                Text(currentAgent?.name ?? "子智能体 (\(collection?.agents.count ?? 0))")
+                Text(currentAgent?.name ?? (provider == .claudeCode ? "本会话子智能体 (\(activeListCollection?.agents.count ?? 0))" : "直属子智能体 (\(activeListCollection?.agents.count ?? 0))"))
                     .font(DesignFonts.body(13, weight: .semibold))
                     .foregroundStyle(palette.textPrimary.color)
                     .lineLimit(1)
@@ -255,6 +285,7 @@ public struct SubagentPanelView: View {
                     LucideIcon(.x, size: 16)
                 }
                 .buttonStyle(IconButtonStyle(dimension: 30))
+                .background(SubagentKeyTargetView(enabled: true, onActivate: onClose))
                 .accessibilityLabel("关闭子智能体面板")
             }
             .padding(.horizontal, 14)
@@ -265,6 +296,21 @@ public struct SubagentPanelView: View {
             }
 
             if let current = currentAgent {
+                // Child Codex subagent uses its OWN direct subagents collection (DESIGN.md:113, SubagentPanel.tsx:145)
+                if provider == .codex,
+                   let childCol = currentDetailSubagents,
+                   SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: childCol, isSupported: true)
+                {
+                    SubagentSummaryBarView(
+                        provider: .codex,
+                        collection: childCol,
+                        isSupported: true
+                    ) { _ in
+                        scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
+                        frameStack.append(.list(parent: current, collection: childCol))
+                    }
+                }
+
                 if let del = current.delegation, !del.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
@@ -280,6 +326,7 @@ public struct SubagentPanelView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainHitButtonStyle())
+                        .background(SubagentKeyTargetView(enabled: true, onActivate: { delegationExpanded.toggle() }))
 
                         if delegationExpanded {
                             Text(VisibleMarkdownEngine.visibleMarkdown(del))
@@ -333,7 +380,7 @@ public struct SubagentPanelView: View {
                 // Agent List (sorted by status priority; omits generic collection.warning per AGENTS.md:109)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        let agents = Self.sortByStatusPriority(collection?.agents ?? [])
+                        let agents = Self.sortByStatusPriority(activeListCollection?.agents ?? [])
                         if agents.isEmpty {
                             Text("暂无直属子智能体")
                                 .font(DesignFonts.body(13))
@@ -380,6 +427,11 @@ public struct SubagentPanelView: View {
                                 }
                                 .buttonStyle(PlainHitButtonStyle())
                                 .disabled(!agent.available)
+                                .background(
+                                    SubagentKeyTargetView(enabled: agent.available) {
+                                        pushAgent(agent)
+                                    }
+                                )
                             }
                         }
                     }
@@ -422,7 +474,7 @@ public struct SubagentPanelView: View {
                 }
                 coordinatorRef = c
             }
-            if let initialAgent, agentStack.isEmpty {
+            if let initialAgent, frameStack.isEmpty {
                 pushAgent(initialAgent)
             }
         }
@@ -432,14 +484,17 @@ public struct SubagentPanelView: View {
                 if store.isWindowVisible {
                     await fetchSubagentDetail(agent)
                 }
-                let pollNs: UInt64 = if provider == .claudeCode {
-                    5_000_000_000
-                } else {
-                    (agent.status == "running" || agent.status == "creating") ? 2_000_000_000 : 5_000_000_000
-                }
+                let pollNs = Self.pollingIntervalNanoseconds(provider: provider, status: agent.status)
                 try? await Task.sleep(nanoseconds: pollNs)
             }
         }
+    }
+
+    public static func pollingIntervalNanoseconds(provider: SessionProvider, status: String) -> UInt64 {
+        if provider == .claudeCode {
+            return 5_000_000_000
+        }
+        return (status == "running" || status == "creating") ? 2_000_000_000 : 5_000_000_000
     }
 
     public static func sortByStatusPriority(_ agents: [SubagentActivity]) -> [SubagentActivity] {
@@ -459,14 +514,18 @@ public struct SubagentPanelView: View {
 
     public func pushAgent(_ agent: SubagentActivity) {
         guard agent.available, let nextId = agent.agentId, !nextId.isEmpty,
-              !agentStack.contains(where: { $0.agentId == nextId })
+              !frameStack.contains(where: {
+                  if case let .detail(existing) = $0 { return existing.agentId == nextId }
+                  return false
+              })
         else { return }
-        if !agentStack.isEmpty {
+        if !frameStack.isEmpty {
             scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
         }
         pendingRestoreAnchor = nil
         delegationExpanded = false
-        agentStack.append(agent)
+        currentDetailSubagents = nil
+        frameStack.append(.detail(agent))
         rows = []
         timelineEntries = []
         beforeCursor = nil
@@ -475,9 +534,10 @@ public struct SubagentPanelView: View {
     }
 
     public func popAgent() {
-        guard !agentStack.isEmpty else { return }
-        agentStack.removeLast()
+        guard !frameStack.isEmpty else { return }
+        frameStack.removeLast()
         delegationExpanded = false
+        currentDetailSubagents = nil
         rows = []
         timelineEntries = []
         beforeCursor = nil
@@ -502,6 +562,7 @@ public struct SubagentPanelView: View {
                     throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                 }
                 let slot = subagentThreadStore.applyDetail(resp.detail)
+                currentDetailSubagents = slot.subagents ?? resp.detail.subagents
                 hasMoreOlder = slot.hasMoreBlocks
                 beforeCursor = slot.beforeCursor
                 let nextRows = ConversationRowBuilder.buildCodexRows(
@@ -534,6 +595,7 @@ public struct SubagentPanelView: View {
                     hasMore: detail.hasMore,
                     timeline: detail.timeline
                 )
+                currentDetailSubagents = nil
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
                 rows = ConversationRowBuilder.buildClaudeRows(
@@ -646,15 +708,113 @@ public struct SubagentPanelView: View {
 // MARK: - <960pt Overlay Subagent Panel Tab Focus Trap & Trigger Focus Restoration
 
 @MainActor
+public final class SubagentOverlayRootNSView: NSView {}
+
+@MainActor
+public final class SubagentKeyTargetNSView: NSView {
+    public var isTargetEnabled: Bool = true
+    public var onActivate: (() -> Void)?
+
+    override public var acceptsFirstResponder: Bool { isTargetEnabled }
+    override public var canBecomeKeyView: Bool { isTargetEnabled }
+
+    override public func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override public func keyDown(with event: NSEvent) {
+        if isTargetEnabled && (event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49) {
+            onActivate?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
+private struct SubagentKeyTargetView: NSViewRepresentable {
+    var enabled: Bool
+    var onActivate: () -> Void
+
+    func makeNSView(context: Context) -> SubagentKeyTargetNSView {
+        let v = SubagentKeyTargetNSView(frame: .zero)
+        v.isTargetEnabled = enabled
+        v.onActivate = onActivate
+        return v
+    }
+
+    func updateNSView(_ nsView: SubagentKeyTargetNSView, context: Context) {
+        nsView.isTargetEnabled = enabled
+        nsView.onActivate = onActivate
+    }
+}
+
+/// Dedicated AppKit container for `<960pt` modal SubagentPanelView so Tab focus never leaks into AppShellView.
+public struct SubagentOverlayFocusContainerView<Content: View>: NSViewRepresentable {
+    public let palette: DesignPalette
+    @ViewBuilder public let content: () -> Content
+
+    public init(palette: DesignPalette, @ViewBuilder content: @escaping () -> Content) {
+        self.palette = palette
+        self.content = content
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    public func makeNSView(context: Context) -> SubagentOverlayRootNSView {
+        let root = SubagentOverlayRootNSView(frame: .zero)
+        let host = NSHostingView(rootView: AnyView(content().environment(\.agentHubPalette, palette)))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            host.topAnchor.constraint(equalTo: root.topAnchor),
+            host.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        context.coordinator.hostingView = host
+        ModalPresentationRegistry.shared.register(context.coordinator.modalToken, container: root)
+        return root
+    }
+
+    public func updateNSView(_ nsView: SubagentOverlayRootNSView, context: Context) {
+        context.coordinator.hostingView?.rootView = AnyView(content().environment(\.agentHubPalette, palette))
+        ModalPresentationRegistry.shared.register(context.coordinator.modalToken, container: nsView)
+    }
+
+    public static func dismantleNSView(_ nsView: SubagentOverlayRootNSView, coordinator: Coordinator) {
+        ModalPresentationRegistry.shared.unregister(coordinator.modalToken)
+    }
+
+    @MainActor
+    public final class Coordinator {
+        let modalToken = UUID()
+        var hostingView: NSHostingView<AnyView>?
+    }
+}
+
+@MainActor
 public enum SubagentFocusTrapEngine {
     public static func focusableViews(in root: NSView) -> [NSView] {
         var result: [NSView] = []
         func walk(_ view: NSView) {
             guard !view.isHidden, view.alphaValue > 0.01 else { return }
+            if let keyTarget = view as? SubagentKeyTargetNSView {
+                if keyTarget.isTargetEnabled, keyTarget.bounds.width > 1, keyTarget.bounds.height > 1 {
+                    result.append(keyTarget)
+                }
+                return
+            }
             if let control = view as? NSControl, !control.isEnabled {
                 return
             }
-            if view.canBecomeKeyView || (view is NSButton) || (view is NSTextField) || (view is NSTextView) {
+            if !(view is NSScrollView),
+               !(view is NSClipView),
+               !(view is NSTableView),
+               !(view is SubagentOverlayRootNSView),
+               view.canBecomeKeyView || (view is NSButton) || (view is NSTextField) || (view is NSTextView)
+            {
                 if view.bounds.width > 1 && view.bounds.height > 1 {
                     result.append(view)
                 }
@@ -724,14 +884,17 @@ private struct SubagentModalFocusTrapView: NSViewRepresentable {
 
         private func drawerContainerRoot() -> NSView? {
             var cur = anchorView?.superview
-            var best: NSView?
+            var nearestHosting: NSView?
             while let v = cur {
-                if abs(v.bounds.width - LayoutMetrics.subagentDrawerWidth) <= 40 && v.bounds.height > 100 {
-                    best = v
+                if v is SubagentOverlayRootNSView {
+                    return v
+                }
+                if nearestHosting == nil, String(describing: type(of: v)).contains("HostingView") {
+                    nearestHosting = v
                 }
                 cur = v.superview
             }
-            return best ?? anchorView?.superview?.superview
+            return nearestHosting ?? anchorView?.superview
         }
 
         func attach(anchor: NSView) {

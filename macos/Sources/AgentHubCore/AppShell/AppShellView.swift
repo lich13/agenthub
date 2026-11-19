@@ -135,7 +135,7 @@ public struct AppShellView: View {
                     } label: {
                         VStack(spacing: 3) {
                             workspaceIcon(id, size: 17)
-                                .foregroundStyle((active ? palette.accent : palette.textMuted).color)
+                                .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
                             Text(id.label)
                                 .font(DesignFonts.body(10, weight: active ? .semibold : .medium))
                                 .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)

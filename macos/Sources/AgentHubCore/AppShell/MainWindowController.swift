@@ -240,8 +240,27 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
         if keyWin.attachedSheet != nil || NSApp.modalWindow != nil {
             return .blockedByModalOrOverlay
         }
-        // Editable text input (including inside inline SwiftUI modals like Search/Rename) retains its own Select All!
+        let hasVisibleChildWindow = (keyWin.childWindows ?? []).contains { $0.isVisible }
+        let hasModal = hasVisibleChildWindow || store?.hasAnyActiveModal == true || ModalPresentationRegistry.shared.hasActiveModal
+
         if let textView = keyWin.firstResponder as? NSTextView {
+            if hasModal {
+                // While a modal/overlay is presented, NEVER select text in underlying ComposerNSTextView
+                // or underlying conversation reader views; ONLY editable inputs inside modals (e.g. Search)
+                // or selectable views explicitly inside an active modal container may handle ⌘A!
+                let inChildWin = textView.window !== keyWin
+                let inModalContainer = ModalPresentationRegistry.shared.isInsideActiveModalContainer(textView)
+                if textView.isEditable && !(textView is ComposerNSTextView) {
+                    textView.selectAll(sender)
+                    return .editableTextSelectedAll
+                }
+                if textView.isSelectable && textView.selectedRange().length > 0 && (inChildWin || inModalContainer) {
+                    textView.selectAll(sender)
+                    return .selectableTextExpanded
+                }
+                return .blockedByModalOrOverlay
+            }
+
             if textView.isEditable {
                 textView.selectAll(sender)
                 return .editableTextSelectedAll
@@ -251,9 +270,9 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
                 return .selectableTextExpanded
             }
         }
+
         // Block underlying session-list Select All when any inline modal, confirm dialog, lightbox, <960pt drawer or child popover is open!
-        let hasVisibleChildWindow = (keyWin.childWindows ?? []).contains { $0.isVisible }
-        if hasVisibleChildWindow || store?.hasAnyActiveModal == true || ModalPresentationRegistry.shared.hasActiveModal {
+        if hasModal {
             return .blockedByModalOrOverlay
         }
         NotificationCenter.default.post(name: .agentHubSelectAllRequested, object: nil)

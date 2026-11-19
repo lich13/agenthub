@@ -173,16 +173,16 @@ public struct DesktopCollaborationFooterView: View {
         let cardBorder = (composerFocused ? palette.accent : palette.borderStrong).color
 
         VStack(alignment: .leading, spacing: 8) {
-            // Heading Bar: Status + Copy Diagnostics
+            // Heading Bar: Status + Copy Diagnostics (DesktopStatus.tsx: returns nil when !connected || !writable)
             HStack(spacing: 8) {
-                if let view = desktop.view, view.connected && view.writable {
+                if let view = desktop.view, let statusText = Self.collaborationStatusLabel(view) {
                     let waiting = !view.requests.isEmpty || view.runtime == "waiting"
                     let active = view.runtime == "active" || view.activeTurnId != nil
                     let dispatching = view.queue.contains { $0.status == "dispatching" }
                     if !waiting && (active || dispatching) {
                         RunningIndicator(size: 13)
                     }
-                    Text(collaborationStatusLabel(view))
+                    Text(statusText)
                         .font(DesignFonts.body(11, weight: .medium))
                         .foregroundStyle(palette.textMuted.color)
                     if !view.queue.isEmpty {
@@ -190,13 +190,6 @@ public struct DesktopCollaborationFooterView: View {
                             .font(DesignFonts.body(11))
                             .foregroundStyle(palette.textMuted.color)
                     }
-                } else if let view = desktop.view,
-                          view.connectionPhase == "resyncing" || view.connectionPhase == "reconnecting"
-                {
-                    RunningIndicator(size: 13)
-                    Text(view.connectionPhase == "resyncing" ? "正在重新同步 Codex…" : "正在恢复 Codex 连接…")
-                        .font(DesignFonts.body(11))
-                        .foregroundStyle(palette.textMuted.color)
                 }
                 Spacer()
                 if copyDiagState == "copied" {
@@ -324,35 +317,41 @@ public struct DesktopCollaborationFooterView: View {
                     )
                 }
 
-                // <=32 Pure Filename Reference Chips
+                // <=32 Pure Filename Reference Chips (.desktop-reference-chips: flex-wrap, --as fill, --ab border)
                 if !draft.references.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(draft.references) { ref in
-                                HStack(spacing: 4) {
-                                    LucideIcon(
-                                        ref.kind == "skill" ? .wandSparkles : ((ref.kind == "app" || ref.kind == "plugin") ? .atSign : .paperclip),
-                                        size: 12
-                                    )
-                                    Text(ref.name)
-                                        .font(DesignFonts.body(11, weight: .medium))
-                                        .lineLimit(1)
-                                    Button {
-                                        Task { await desktop.releaseAttachments(handles: [ref.handle]) }
-                                        draft = DesktopReferencesEngine.remove(draft, handle: ref.handle)
-                                    } label: {
-                                        LucideIcon(.x, size: 11)
-                                    }
-                                    .buttonStyle(PlainHitButtonStyle())
-                                    .disabled(desktop.busy)
+                    FlowButtonRow(spacing: 6, lineSpacing: 6) {
+                        ForEach(draft.references) { ref in
+                            HStack(spacing: 6) {
+                                LucideIcon(
+                                    ref.kind == "skill" ? .wandSparkles : ((ref.kind == "app" || ref.kind == "plugin") ? .atSign : .paperclip),
+                                    size: 13
+                                )
+                                Text(ref.name)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                    .lineLimit(1)
+                                Button {
+                                    Task { await desktop.releaseAttachments(handles: [ref.handle]) }
+                                    draft = DesktopReferencesEngine.remove(draft, handle: ref.handle)
+                                    localError = nil
+                                    desktop.actionError = nil
+                                } label: {
+                                    LucideIcon(.x, size: 12)
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .padding(2)
+                                        .contentShape(Rectangle())
                                 }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Capsule().fill(palette.surface.color))
-                                .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                                .buttonStyle(PlainHitButtonStyle())
+                                .disabled(desktop.busy)
+                                .accessibilityLabel("移除 \(ref.name)")
                             }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(palette.accentSoft.color))
+                            .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 // Inline $ / @ Completion List
@@ -516,17 +515,18 @@ public struct DesktopCollaborationFooterView: View {
                     }
 
                     // Layer 1 IME Guard: NO .keyboardShortcut(.return, modifiers: .command) here!
+                    let sendDisabled = desktop.busy || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.references.isEmpty)
                     Button {
                         Task { await sendDraft(steer: false) }
                     } label: {
                         LucideIcon(.arrowUp, size: 17)
-                            .foregroundStyle(palette.buttonFg.color)
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(palette.buttonBg.color))
+                            .foregroundStyle((sendDisabled ? palette.textMuted : palette.buttonFg).color)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill((sendDisabled ? palette.hover : palette.buttonBg).color))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainHitButtonStyle())
-                    .disabled(desktop.busy || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.references.isEmpty))
+                    .disabled(sendDisabled)
                     .accessibilityLabel(desktop.view?.activeTurnId != nil ? "排队发送" : "发送")
                 }
 
@@ -560,8 +560,8 @@ public struct DesktopCollaborationFooterView: View {
         )
         .padding(.horizontal, sideMargin)
         .padding(.bottom, 18)
-        .overlay {
-            if let unknownId = discardMessageId {
+        .background(
+            WindowFullContentModal(isPresented: discardMessageId != nil, palette: palette) {
                 ModalConfirmDialogView(busy: desktop.busy, onCancel: { discardMessageId = nil }) {
                     Text("已在 Codex 中核对发送结果？")
                         .font(DesignFonts.body(15, weight: .semibold))
@@ -572,6 +572,7 @@ public struct DesktopCollaborationFooterView: View {
                         Spacer()
                         Button("返回") { discardMessageId = nil }.buttonStyle(SecondaryButtonStyle())
                         Button("已核对，移除记录") {
+                            guard let unknownId = discardMessageId else { return }
                             Task {
                                 try? await desktop.act(.dismissUnknown(messageId: unknownId))
                                 discardMessageId = nil
@@ -582,7 +583,7 @@ public struct DesktopCollaborationFooterView: View {
                     }
                 }
             }
-        }
+        )
         .onAppear {
             desktop.onStreamViewUpdated = {
                 onStreamUpdated?()
@@ -670,7 +671,11 @@ public struct DesktopCollaborationFooterView: View {
     }
 
     private var connectBannerLabel: String {
-        switch desktop.view?.connectionPhase {
+        Self.connectBannerText(view: desktop.view, actionError: desktop.actionError, busy: desktop.busy)
+    }
+
+    public static func connectBannerText(view: DesktopView?, actionError: String?, busy: Bool) -> String {
+        switch view?.connectionPhase {
         case "owner_confirmation_required":
             "Codex owner 已变化，已恢复阅读；点击连接确认后继续协作"
         case "resyncing":
@@ -678,13 +683,14 @@ public struct DesktopCollaborationFooterView: View {
         case "reconnecting":
             "正在恢复 Codex 连接…"
         default:
-            desktop.actionError
-                ?? desktop.view?.error
-                ?? (desktop.busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")
+            actionError
+                ?? view?.error
+                ?? (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")
         }
     }
 
-    private func collaborationStatusLabel(_ view: DesktopView) -> String {
+    public static func collaborationStatusLabel(_ view: DesktopView?) -> String? {
+        guard let view, view.connected && view.writable else { return nil }
         let waiting = !view.requests.isEmpty || view.runtime == "waiting"
         let active = view.runtime == "active" || view.activeTurnId != nil
         let dispatching = view.queue.contains { $0.status == "dispatching" }
@@ -697,6 +703,16 @@ public struct DesktopCollaborationFooterView: View {
         if unknown { return "发送结果待核对" }
         if !view.queue.isEmpty { return "队列已暂停" }
         return "空闲"
+    }
+
+    public static func resolveModeChangeEffort(
+        currentEffort: String,
+        supportedEfforts: [String]
+    ) -> (effort: String?, notice: String?) {
+        if !currentEffort.isEmpty && supportedEfforts.contains(currentEffort) {
+            return (currentEffort, nil)
+        }
+        return (nil, currentEffort.isEmpty ? nil : "当前思考强度不可用，将继承原生默认")
     }
 
     private var settingsPopoverContent: some View {
@@ -801,15 +817,12 @@ public struct DesktopCollaborationFooterView: View {
                         let modeVal: DesktopMode = (modeItem.handle == "plan") ? .plan : .default
                         Button(modeItem.name) {
                             guard let selectedModel else { return }
-                            let validEffort: String?
-                            if !currentEffort.isEmpty && selectedModel.reasoningEfforts.contains(currentEffort) {
-                                validEffort = currentEffort
-                                settingsNotice = nil
-                            } else {
-                                validEffort = nil
-                                settingsNotice = currentEffort.isEmpty ? nil : "当前思考强度不可用，将继承原生默认"
-                            }
-                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: validEffort, mode: modeVal)
+                            let resolved = Self.resolveModeChangeEffort(
+                                currentEffort: currentEffort,
+                                supportedEfforts: selectedModel.reasoningEfforts
+                            )
+                            settingsNotice = resolved.notice
+                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: resolved.effort, mode: modeVal)
                         }
                         .buttonStyle(currentMode == modeVal ? AnyButtonStyle(PrimaryButtonStyle()) : AnyButtonStyle(SecondaryButtonStyle()))
                         .disabled(desktop.busy || settingsCatalogLoading || selectedModel == nil || availableModes.isEmpty)
@@ -1104,41 +1117,79 @@ public struct DesktopOutboxListView: View {
     public let onPromptDismissUnknown: (String) -> Void
     public let onResumeQueue: () -> Void
 
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("待发送 · \(queue.count)")
-                .font(DesignFonts.body(12, weight: .semibold))
-                .foregroundStyle(palette.textPrimary.color)
-            ForEach(queue) { item in
-                HStack(spacing: 8) {
-                    StatusChip(outboxStatusLabel(item), tone: item.status == "outcome_unknown" ? .warning : .neutral)
-                    Text(item.preview.isEmpty ? "引用内容" : item.preview)
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .lineLimit(1)
-                    Spacer()
-                    if item.status == "outcome_unknown" {
-                        Button("核对后移除") { onPromptDismissUnknown(item.id) }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .disabled(locked)
-                    } else if item.status == "queued" || item.status == "held" {
-                        Button("取消") { onCancelQueued(item.id) }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .disabled(locked)
-                    }
-                }
-            }
-            if queue.contains(where: { $0.status == "held" && $0.kind == "queue" }) {
-                Button("继续发送队列", action: onResumeQueue)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(locked)
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface.color))
+    @State private var manualOpen: Bool?
+
+    public static func defaultOpen(for queue: [DesktopQueuedMessage]) -> Bool {
+        queue.contains { $0.status != "queued" }
     }
 
-    private func outboxStatusLabel(_ item: DesktopQueuedMessage) -> String {
+    private var isExpanded: Bool {
+        manualOpen ?? Self.defaultOpen(for: queue)
+    }
+
+    public var body: some View {
+        let expanded = isExpanded
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                manualOpen = !expanded
+            } label: {
+                HStack(spacing: 6) {
+                    LucideIcon(expanded ? .chevronDown : .chevronRight, size: 13)
+                        .foregroundStyle(palette.textMuted.color)
+                    Text("待发送 · \(queue.count)")
+                        .font(DesignFonts.body(12, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainHitButtonStyle())
+
+            if expanded {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(queue) { item in
+                            HStack(spacing: 8) {
+                                StatusChip(Self.outboxStatusLabel(item), tone: item.status == "outcome_unknown" ? .warning : .neutral)
+                                Text(item.preview.isEmpty ? "引用内容" : item.preview)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textSecondary.color)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                if item.status == "outcome_unknown" {
+                                    Button("核对后移除") { onPromptDismissUnknown(item.id) }
+                                        .buttonStyle(SecondaryButtonStyle())
+                                        .disabled(locked)
+                                } else if item.status == "queued" || item.status == "held" {
+                                    Button("取消") { onCancelQueued(item.id) }
+                                        .buttonStyle(SecondaryButtonStyle())
+                                        .disabled(locked)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 120)
+
+                if queue.contains(where: { $0.status == "held" && $0.kind == "queue" }) {
+                    Button("继续发送队列", action: onResumeQueue)
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(locked)
+                }
+            }
+        }
+        .padding(.bottom, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+        }
+        .onChange(of: queue.contains { $0.status != "queued" }) { hasAttention in
+            if hasAttention {
+                manualOpen = true
+            }
+        }
+    }
+
+    public static func outboxStatusLabel(_ item: DesktopQueuedMessage) -> String {
         switch item.status {
         case "outcome_unknown": "结果待核对"
         case "held": item.kind == "steer" ? "补充未发送，请取消后重试" : "已暂停"

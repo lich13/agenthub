@@ -193,13 +193,36 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         guard let rowIdx = rows.firstIndex(where: { $0.matches(positionKey: positionKey) }) else {
             return false
         }
-        // Auto-open disclosure if jumping to a folded group/command
+        // Auto-open disclosure if jumping to a folded group, thinking row, or instruction/context fold (DESIGN.md:43, 140)
         let targetRow = rows[rowIdx]
-        if case let .executionGroup(group) = targetRow.kind {
+        var didMutateDisclosure = false
+        switch targetRow.kind {
+        case let .executionGroup(group):
             disclosureStore.setOpen(scope: sessionScopeKey, stateKey: group.id, isOpen: true)
             for cmd in group.commands where TimelineViewModel.matchesTimelinePosition(positionKey, id: cmd.id, aliases: cmd.sourceIds) {
                 disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, isOpen: true)
             }
+            didMutateDisclosure = true
+        case .thinking:
+            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: targetRow.id, isOpen: true)
+            didMutateDisclosure = true
+        case let .user(msg, rawText, _):
+            let proj = UserContextEngine.projectUserMessage(msg?.text ?? rawText, contextBlocks: msg?.contextBlocks)
+            let segs = UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks)
+            if !proj.contextBlocks.isEmpty && (segs.isEmpty || positionKey.contains("context") || positionKey.contains("instruction")) {
+                disclosureStore.setOpen(scope: sessionScopeKey, stateKey: "\(targetRow.timelineId):context", isOpen: true)
+                didMutateDisclosure = true
+            }
+        case let .assistant(markdown, foldInstructions) where foldInstructions:
+            let slices = VisibleMarkdownEngine.instructionSegments(VisibleMarkdownEngine.visibleMarkdown(markdown))
+            for s in slices where s.kind == "instructions" {
+                disclosureStore.setOpen(scope: sessionScopeKey, stateKey: "\(targetRow.id):\(s.id)", isOpen: true)
+                didMutateDisclosure = true
+            }
+        default:
+            break
+        }
+        if didMutateDisclosure {
             tableView.reloadData()
             tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: rowIdx))
             tableView.layoutSubtreeIfNeeded()
@@ -461,10 +484,10 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return 74 + measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: false, width: max(120, width - 35))
 
         case let .question(_, questions):
-            return CGFloat(56 + questions.count * 76)
+            return Self.measureQuestionsHeight(questions: questions, answers: nil, width: width)
 
         case let .questionResult(_, questions, answers):
-            return CGFloat(64 + questions.count * 52 + answers.count * 32)
+            return Self.measureQuestionsHeight(questions: questions, answers: answers, width: width)
 
         case let .subagent(sub, supported):
             let available = supported && sub.available && (sub.agentId?.isEmpty == false)
@@ -479,9 +502,47 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
+    public static func normalizeCodeBlockText(_ code: String) -> String {
+        if code.hasSuffix("\r\n") {
+            return String(code.dropLast(2))
+        }
+        if code.hasSuffix("\n") {
+            return String(code.dropLast())
+        }
+        return code
+    }
+
     public static func measureCodeBlockHeight(code: String) -> CGFloat {
-        let lines = max(1, code.components(separatedBy: "\n").count)
+        let normalized = normalizeCodeBlockText(code)
+        let lines = max(1, normalized.components(separatedBy: "\n").count)
         return ceil(CGFloat(lines) * 20.8) + 16
+    }
+
+    public static func measureCodeDocumentWidth(code: String, minWidth: CGFloat) -> CGFloat {
+        let normalized = normalizeCodeBlockText(code)
+        let attr = NSAttributedString(
+            string: normalized.isEmpty ? " " : normalized,
+            attributes: [.font: DesignFonts.nsMonoFont(size: 13)]
+        )
+        return max(minWidth, ceil(attr.size().width) + 24)
+    }
+
+    private static func measureQuestionsHeight(
+        questions: [UserInputQuestion],
+        answers: [UserInputAnswer]?,
+        width: CGFloat
+    ) -> CGFloat {
+        var total: CGFloat = 44
+        let qFont = DesignFonts.nsBodyFont(size: 14, weight: .semibold)
+        for q in questions {
+            let qAttr = NSAttributedString(string: q.question, attributes: [.font: qFont])
+            let qH = max(22, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: max(120, width)))
+            total += max(44, qH + 22) + CGFloat(q.options.count) * 26
+        }
+        if let answers, !answers.isEmpty {
+            total += CGFloat(answers.count) * 44
+        }
+        return max(84, total)
     }
 
     public static func measureMonospaceBoxHeight(text: String, width: CGFloat) -> CGFloat {
@@ -535,6 +596,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 public final class ConversationRowCellView: NSTableCellView {
     private let containerStack = NSStackView()
     public private(set) var floatingSideCopyButton: IconFeedbackActionButton?
+    public private(set) var questionReplyCopyButtons: [IconFeedbackActionButton] = []
     private var hoverTrackingArea: NSTrackingArea?
     public private(set) var isRowHovered: Bool = false {
         didSet { updateFloatingCopyVisibility() }
@@ -617,11 +679,18 @@ public final class ConversationRowCellView: NSTableCellView {
     }
 
     private func updateFloatingCopyVisibility() {
-        guard let btn = floatingSideCopyButton else { return }
         let narrowMobile = bounds.width > 0 && bounds.width <= LayoutMetrics.mobileBreakpoint
-        let focusedInside = (window?.firstResponder as? NSView).map { $0 === btn || $0.isDescendant(of: self) } ?? false
-        let visible = isRowHovered || btn.isShowingCopied || focusedInside || narrowMobile
-        btn.alphaValue = visible ? 1.0 : 0.0
+        let firstRespView = window?.firstResponder as? NSView
+        let focusedInside = firstRespView.map { $0 === self || $0.isDescendant(of: self) } ?? false
+
+        if let btn = floatingSideCopyButton {
+            let visible = isRowHovered || btn.isShowingCopied || focusedInside || narrowMobile
+            btn.alphaValue = visible ? 1.0 : 0.0
+        }
+        for qBtn in questionReplyCopyButtons {
+            let visible = isRowHovered || qBtn.isShowingCopied || focusedInside || narrowMobile
+            qBtn.alphaValue = visible ? 1.0 : 0.0
+        }
     }
 
     public func configure(
@@ -636,6 +705,7 @@ public final class ConversationRowCellView: NSTableCellView {
         configuredContentWidth = contentWidth
         floatingSideCopyButton?.removeFromSuperview()
         floatingSideCopyButton = nil
+        questionReplyCopyButtons.removeAll()
         isRowHovered = false
 
         containerStack.arrangedSubviews.forEach { v in
@@ -830,11 +900,16 @@ public final class ConversationRowCellView: NSTableCellView {
                     idleIcon: .copy,
                     palette: palette,
                     toolTipText: "复制回答"
-                ) { [weak coordinator] in
+                ) { [weak self, weak coordinator] in
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(a, forType: .string)
                     coordinator?.onCopyFeedback?("已复制回答")
+                    self?.updateFloatingCopyVisibility()
                 }
+                copyAnsBtn.onFeedbackStateChanged = { [weak self] in
+                    self?.updateFloatingCopyVisibility()
+                }
+                questionReplyCopyButtons.append(copyAnsBtn)
 
                 let bubble = makeUserBubbleContainer(palette: palette)
                 let innerStack = NSStackView()
@@ -1148,6 +1223,9 @@ public final class ConversationRowCellView: NSTableCellView {
             guard let self, let coordinator else { return false }
             return self.handleActivatedHref(href, coordinator: coordinator)
         }
+        tv.onFocusStateChanged = { [weak self] in
+            self?.updateFloatingCopyVisibility()
+        }
         return tv
     }
 
@@ -1158,6 +1236,7 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) -> NSView {
         let palette = coordinator.palette
+        let normalizedCode = ConversationTableCoordinator.normalizeCodeBlockText(code)
         let box = NSView()
         box.wantsLayer = true
         box.layer?.cornerRadius = 12
@@ -1179,7 +1258,7 @@ public final class ConversationRowCellView: NSTableCellView {
             toolTipText: "复制代码"
         ) { [weak coordinator] in
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(code, forType: .string)
+            NSPasteboard.general.setString(normalizedCode, forType: .string)
             coordinator?.onCopyFeedback?("已复制代码")
         }
         copyBtn.wantsLayer = true
@@ -1194,15 +1273,14 @@ public final class ConversationRowCellView: NSTableCellView {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let codeHeight = ConversationTableCoordinator.measureCodeBlockHeight(code: code)
-        let maxLineChars = code.components(separatedBy: "\n").map(\.count).max() ?? 1
-        let docWidth = max(width - 32, CGFloat(maxLineChars) * 8.2 + 24)
+        let codeHeight = ConversationTableCoordinator.measureCodeBlockHeight(code: normalizedCode)
+        let docWidth = ConversationTableCoordinator.measureCodeDocumentWidth(code: normalizedCode, minWidth: width - 32)
 
         let pStyle = NSMutableParagraphStyle()
         pStyle.minimumLineHeight = 20.8 // 13pt * 1.6
         pStyle.maximumLineHeight = 20.8
         let codeAttr = NSAttributedString(
-            string: code,
+            string: normalizedCode,
             attributes: [
                 .font: DesignFonts.nsMonoFont(size: 13),
                 .foregroundColor: palette.textPrimary.nsColor,
@@ -1893,6 +1971,25 @@ public final class IconFeedbackActionButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override public var acceptsFirstResponder: Bool { isEnabled }
+    override public var canBecomeKeyView: Bool { isEnabled }
+
+    override public func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFeedbackStateChanged?() }
+        return ok
+    }
+
+    override public func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok {
+            DispatchQueue.main.async { [weak self] in
+                self?.onFeedbackStateChanged?()
+            }
+        }
+        return ok
     }
 
     override public func updateTrackingAreas() {

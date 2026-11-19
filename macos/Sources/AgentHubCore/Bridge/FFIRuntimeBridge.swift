@@ -54,7 +54,7 @@ public final class StreamReceiverBox: @unchecked Sendable {
         self.onClosed = onClosed
     }
 
-    fileprivate func handleFrame(seq: UInt64, data: Data?, closed: Bool) {
+    public func handleFrame(seq: UInt64, data: Data?, closed: Bool) {
         var shouldDeliver: Data?
         var shouldClose = false
         lock.lock()
@@ -614,6 +614,11 @@ public final class MockRuntimeTransport: RuntimeTransport, @unchecked Sendable {
     public private(set) var recordedCalls: [(command: String, args: String)] = []
     public private(set) var windowState: (visible: Bool, focused: Bool) = (true, true)
 
+    private var desktopStreamFrameHandler: (@Sendable (Data) -> Void)?
+    private var desktopStreamClosedHandler: (@Sendable () -> Void)?
+    private var attachmentEventFrameHandler: (@Sendable (Data) -> Void)?
+    private var attachmentEventClosedHandler: (@Sendable () -> Void)?
+
     public init(handler: @escaping Handler) {
         self.handler = handler
     }
@@ -622,6 +627,29 @@ public final class MockRuntimeTransport: RuntimeTransport, @unchecked Sendable {
         lock.lock()
         handler = next
         lock.unlock()
+    }
+
+    public func emitDesktopStreamFrame(_ data: Data) {
+        lock.lock()
+        let cb = desktopStreamFrameHandler
+        lock.unlock()
+        cb?(data)
+    }
+
+    public func closeDesktopStream() {
+        lock.lock()
+        let cb = desktopStreamClosedHandler
+        desktopStreamFrameHandler = nil
+        desktopStreamClosedHandler = nil
+        lock.unlock()
+        cb?()
+    }
+
+    public func emitAttachmentEventFrame(_ data: Data) {
+        lock.lock()
+        let cb = attachmentEventFrameHandler
+        lock.unlock()
+        cb?(data)
     }
 
     private func recordAndFetchHandler(command: String, argsJSON: String) -> Handler {
@@ -636,12 +664,32 @@ public final class MockRuntimeTransport: RuntimeTransport, @unchecked Sendable {
         return try await currentHandler(command, argsJSON)
     }
 
+    private func storeDesktopStreamHandlers(
+        onFrame: @escaping @Sendable (Data) -> Void,
+        onClosed: (@Sendable () -> Void)?
+    ) {
+        lock.lock()
+        desktopStreamFrameHandler = onFrame
+        desktopStreamClosedHandler = onClosed
+        lock.unlock()
+    }
+
+    private func storeAttachmentEventHandlers(
+        onFrame: @escaping @Sendable (Data) -> Void,
+        onClosed: (@Sendable () -> Void)?
+    ) {
+        lock.lock()
+        attachmentEventFrameHandler = onFrame
+        attachmentEventClosedHandler = onClosed
+        lock.unlock()
+    }
+
     public func desktopAttach(
         requestJSON: String,
         onStreamFrame: @escaping @Sendable (Data) -> Void,
         onStreamClosed: (@Sendable () -> Void)? = nil
     ) async throws -> Data {
-        defer { onStreamClosed?() }
+        storeDesktopStreamHandlers(onFrame: onStreamFrame, onClosed: onStreamClosed)
         return try await invokeRawJSON(command: "codex.desktop.attach", argsJSON: requestJSON)
     }
 
@@ -650,7 +698,9 @@ public final class MockRuntimeTransport: RuntimeTransport, @unchecked Sendable {
         onEventFrame: (@Sendable (Data) -> Void)? = nil,
         onEventClosed: (@Sendable () -> Void)? = nil
     ) async throws -> Data {
-        defer { onEventClosed?() }
+        if let onEventFrame {
+            storeAttachmentEventHandlers(onFrame: onEventFrame, onClosed: onEventClosed)
+        }
         return try await invokeRawJSON(command: "codex.desktop.attachments", argsJSON: requestJSON)
     }
 

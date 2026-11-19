@@ -518,7 +518,32 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             errHost.layoutSubtreeIfNeeded()
             XCTAssertFalse(retried)
             ParityCaseTracker.shared.record(f, "history-error-retry-bar")
+
+            // Session switch with preferAutoFollowBottom=true scrolls back to bottom even if previously scrolled up
+            let clip = try XCTUnwrap(coord.scrollView?.contentView)
+            clip.setBoundsOrigin(NSPoint(x: 0, y: 80))
+            XCTAssertFalse(coord.isNearBottom())
+            coord.sessionScopeKey = "local:codex:switched-session"
+            coord.updateRowsPreservingAnchor(coord.rows, preferAutoFollowBottom: true, forceScrollToBottom: true)
+            XCTAssertTrue(coord.isNearBottom(), "Session switch forceScrollToBottom must restore bottom follow")
             ParityCaseTracker.shared.record(f, "session-switch-resets-bottom-follow")
+
+            // Disclosure toggle above viewport anchor preserves anchor row & deltaY within 0.5pt
+            let grouped = ExecutionGroupingEngine.groupCodexBlocks([
+                MessageBlock(id: "grp-top", role: "tool", kind: "command_execution", status: "completed", text: "cargo test\nline1\nline2\nline3", toolName: "bash"),
+            ])
+            guard case let .group(grpItem)? = grouped.first else {
+                XCTFail("Expected group")
+                return
+            }
+            let rowsWithGroup = [ConversationRowItem(id: grpItem.id, timelineId: grpItem.id, kind: .executionGroup(grpItem))] + coord.rows
+            coord.updateRowsPreservingAnchor(rowsWithGroup, preferAutoFollowBottom: false)
+            clip.setBoundsOrigin(NSPoint(x: 0, y: 320))
+            let preToggleAnchor = try XCTUnwrap(coord.captureScrollAnchor())
+            coord.toggleDisclosurePreservingAnchor(stateKey: grpItem.id, currentlyOpen: false)
+            let postToggleAnchor = try XCTUnwrap(coord.captureScrollAnchor())
+            XCTAssertEqual(preToggleAnchor.timelineId, postToggleAnchor.timelineId)
+            XCTAssertEqual(preToggleAnchor.deltaY, postToggleAnchor.deltaY, accuracy: 0.5)
             ParityCaseTracker.shared.record(f, "disclosure-toggle-preserves-anchor")
         }
     }
@@ -645,22 +670,30 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(yBottomClamp, 288)
             ParityCaseTracker.shared.record(f, "preview-y-tracks-active-tick-and-clamps")
 
-            // Keyboard navigation: ArrowUp (126), ArrowDown (125), Home (115), End (119)
-            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 2, count: 6, keyCode: 126), 1)
-            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 2, count: 6, keyCode: 125), 3)
-            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 4, count: 6, keyCode: 115), 0)
-            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 1, count: 6, keyCode: 119), 5)
+            // Keyboard navigation: ArrowUp (126), ArrowDown (125), Home (115), End (119) across all 200 entries without skipping
+            let many = (0 ..< 200).map { TimelineEntry(id: "t-\($0)", title: "Prompt \($0)", preview: "Body \($0)") }
+            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 2, count: many.count, keyCode: 126), 1)
+            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 2, count: many.count, keyCode: 125), 3)
+            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 150, count: many.count, keyCode: 115), 0)
+            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 1, count: many.count, keyCode: 119), 199)
+            XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 199, count: many.count, keyCode: 126), 198, "End then ArrowUp must reach entry 198 without lossy tick sampling")
             ParityCaseTracker.shared.record(f, "keyboard-up-down-home-end-navigation")
 
-            let many = (0 ..< 200).map { TimelineEntry(id: "t-\($0)", title: "Prompt \($0)", preview: "Body \($0)") }
-            let sampled = TimelineRailView.sampleEntries(many, maxCount: 30)
-            XCTAssertEqual(sampled.count, 30)
-            XCTAssertEqual(sampled.first?.id, "t-0")
-            XCTAssertEqual(sampled.last?.id, "t-199")
+            // Virtualized window capacity & preview max width (min(288pt, 60vw), never crushed to 34pt!)
+            XCTAssertGreaterThanOrEqual(TimelineRailView.virtualWindowCapacity(usableHeight: 400), 35)
+            XCTAssertEqual(TimelineRailView.previewMaxWidth(for: 800), 288)
+            XCTAssertEqual(TimelineRailView.previewMaxWidth(for: 400), 240)
+            let shortPreviewHost = NSHostingView(rootView: TimelinePreviewCardView(entry: TimelineEntry(id: "s", title: "Hi", preview: ""), maxWidth: 288))
+            shortPreviewHost.layoutSubtreeIfNeeded()
+            let longPreviewHost = NSHostingView(rootView: TimelinePreviewCardView(entry: TimelineEntry(id: "l", title: "这是一段非常完整的用户提问标题用于验证时间线预览浮层宽度不会被挤压成三十四点", preview: ""), maxWidth: 288))
+            longPreviewHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(longPreviewHost.fittingSize.width, 180, "Preview card must NEVER be crushed to 34pt rail width")
+            XCTAssertLessThanOrEqual(longPreviewHost.fittingSize.width, 288.5)
+            XCTAssertLessThan(shortPreviewHost.fittingSize.width, longPreviewHost.fittingSize.width)
             ParityCaseTracker.shared.record(f, "samples-dense-ticks-preserving-endpoints")
 
             let host = NSHostingView(
-                rootView: TimelineRailView(entries: Array(many.prefix(8)), activeId: "t-3", availableWidth: 800, onSelectEntry: { _ in })
+                rootView: TimelineRailView(entries: many, activeId: "t-120", availableWidth: 800, onSelectEntry: { _ in })
             )
             host.frame = NSRect(x: 0, y: 0, width: 34, height: 400)
             host.layoutSubtreeIfNeeded()

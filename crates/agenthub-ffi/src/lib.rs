@@ -391,11 +391,13 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_attach(
     let bridge = rt.bridge.clone();
     tokio_rt.spawn(async move {
         let parsed: Result<
-            agenthub_core::services::codex_desktop::DesktopThreadRequest,
+            commands::dispatch::WrappedRequest<
+                agenthub_core::services::codex_desktop::DesktopThreadRequest,
+            >,
             serde_json::Error,
         > = serde_json::from_str(&raw_req);
         let req = match parsed {
-            Ok(req) => req,
+            Ok(wrapped) => wrapped.request,
             Err(err) => {
                 stream_sink.close();
                 initial_sink.respond(Err(format!("invalid attach request: {err}")));
@@ -465,11 +467,13 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_attachments(
     let host = rt.host.clone();
     tokio_rt.spawn(async move {
         let parsed: Result<
-            agenthub_core::services::codex_desktop::DesktopAttachmentRequest,
+            commands::dispatch::WrappedRequest<
+                agenthub_core::services::codex_desktop::DesktopAttachmentRequest,
+            >,
             serde_json::Error,
         > = serde_json::from_str(&raw_req);
         let req = match parsed {
-            Ok(req) => req,
+            Ok(wrapped) => wrapped.request,
             Err(err) => {
                 if let Some(s) = &event_stream {
                     s.close();
@@ -559,8 +563,13 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_paste(
     let host = rt.host.clone();
     tokio_rt.spawn(async move {
         let req: agenthub_core::services::codex_desktop::DesktopAttachmentRequest =
-            match serde_json::from_str(&raw_req) {
-                Ok(r) => r,
+            match serde_json::from_str::<
+                commands::dispatch::WrappedRequest<
+                    agenthub_core::services::codex_desktop::DesktopAttachmentRequest,
+                >,
+            >(&raw_req)
+            {
+                Ok(wrapped) => wrapped.request,
                 Err(err) => {
                     result_sink.respond(Err(format!("invalid paste request: {err}")));
                     return;

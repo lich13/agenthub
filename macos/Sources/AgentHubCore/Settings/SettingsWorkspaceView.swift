@@ -37,7 +37,7 @@ public struct SettingsWorkspaceView: View {
                         MaintenanceOpsView(store: store, isNarrow: isNarrow)
                     }
                 }
-                .frame(maxWidth: 1060, alignment: .leading)
+                .frame(maxWidth: LayoutMetrics.consolePageMaxWidth, alignment: .leading)
                 .padding(.vertical, isNarrow ? 18 : 28)
                 .padding(.horizontal, isNarrow ? 14 : 32)
                 .frame(maxWidth: .infinity)
@@ -579,13 +579,17 @@ public struct UnifiedThreadCleanupSection: View {
                             armed = true
                         }
                         .buttonStyle(DangerButtonStyle(soft: true))
-                        .disabled(busy || selectedDeletableCount == 0)
+                        .disabled(Self.isCleanupExecuteDisabled(
+                            busy: busy,
+                            hiddenScanStopped: hiddenScanStopped,
+                            selectedDeletableCount: selectedDeletableCount
+                        ))
                     } else {
                         Button("确认清理所选") {
                             Task { await executeCleanup() }
                         }
                         .buttonStyle(DangerButtonStyle(soft: false))
-                        .disabled(busy)
+                        .disabled(busy || hiddenScanStopped)
 
                         Button("取消") {
                             armed = false
@@ -596,9 +600,30 @@ public struct UnifiedThreadCleanupSection: View {
                 }
             }
         }
+        .onChange(of: store.revision) { _ in
+            cancelHiddenScan()
+            plan = nil
+            hiddenScan = nil
+            hiddenScanStopped = false
+            result = nil
+            selectedScopes = []
+            armed = false
+            expandedScope = nil
+            candidatePage = 0
+            resultPage = 0
+            errorMessage = nil
+        }
         .onDisappear {
             cancelHiddenScan()
         }
+    }
+
+    public static func isCleanupExecuteDisabled(
+        busy: Bool,
+        hiddenScanStopped: Bool,
+        selectedDeletableCount: Int
+    ) -> Bool {
+        busy || hiddenScanStopped || selectedDeletableCount == 0
     }
 
     private func scopeSummary(_ scope: String, scopePlan: UnifiedCleanupScopePlan?) -> String {
@@ -680,6 +705,7 @@ public struct UnifiedThreadCleanupSection: View {
     }
 
     private func runPreview(includeUnified: Bool) {
+        let capturedRevision = store.revision
         armed = false
         result = nil
         errorMessage = nil
@@ -696,6 +722,7 @@ public struct UnifiedThreadCleanupSection: View {
             do {
                 if includeUnified {
                     let unified: UnifiedCleanupPlan = try await store.rpc("cleanup.unifiedDryRun")
+                    guard store.revision == capturedRevision else { return }
                     plan = unified
                     selectedScopes = Set(unified.scopes.filter { $0.supported && $0.scanned && $0.deletableCount > 0 }.map(\.scope))
                 } else if var cur = plan {
@@ -709,23 +736,23 @@ public struct UnifiedThreadCleanupSection: View {
                     plan = cur
                 }
                 if store.capabilities.hiddenCleanupScan {
-                    try await runPaginatedHiddenScan()
+                    try await runPaginatedHiddenScan(capturedRevision: capturedRevision)
                 }
             } catch {
-                if !Task.isCancelled {
+                if !Task.isCancelled, store.revision == capturedRevision {
                     errorMessage = error.localizedDescription
                 }
             }
         }
     }
 
-    private func runPaginatedHiddenScan() async throws {
+    private func runPaginatedHiddenScan(capturedRevision: UInt64) async throws {
         var mode = "start"
         var scanId: String?
         var cursor: String?
         var accumulated: [UnifiedCleanupCandidate] = []
 
-        while !Task.isCancelled {
+        while !Task.isCancelled && store.revision == capturedRevision {
             var reqObj: [String: JSONValue] = [
                 "mode": .string(mode),
                 "limit": .number(100),
@@ -737,6 +764,7 @@ public struct UnifiedThreadCleanupSection: View {
                 "cleanup.hiddenDryRun",
                 args: ["request": .object(reqObj)]
             )
+            guard !Task.isCancelled, store.revision == capturedRevision else { return }
             accumulated = pagePlan.candidates.count >= accumulated.count
                 ? pagePlan.candidates
                 : (accumulated + pagePlan.candidates.filter { item in !accumulated.contains(where: { $0.targetId == item.targetId }) })
@@ -989,6 +1017,11 @@ public struct CodexAccountScopeSection: View {
             }
         }
         .task(id: store.machineScope) {
+            scopedThreads = nil
+            result = nil
+            armed = false
+            page = 0
+            errorMessage = nil
             await loadHookAndAutoState()
         }
     }

@@ -336,6 +336,7 @@ public final class AttachmentViewportManager {
 
 public final class ReaderSelectableTextView: NSTextView {
     public var onLinkActivated: ((String) -> Bool)?
+    public var onFocusStateChanged: (() -> Void)?
     public var quoteBackgroundColor: NSColor?
     public var quoteAccentColor: NSColor?
 
@@ -353,40 +354,53 @@ public final class ReaderSelectableTextView: NSTextView {
         isHorizontallyResizable = false
     }
 
-    override public func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        guard let storage = textStorage,
-              storage.length > 0,
-              let manager = layoutManager,
-              let container = textContainer
-        else { return }
+    override public func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusStateChanged?() }
+        return ok
+    }
 
-        let origin = textContainerOrigin
-        storage.enumerateAttribute(
-            .agentHubBlockQuote,
-            in: NSRange(location: 0, length: storage.length),
-            options: []
-        ) { value, charRange, _ in
-            guard (value as? Bool) == true, charRange.length > 0 else { return }
-            let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
-            let bbox = manager.boundingRect(forGlyphRange: glyphRange, in: container)
-            guard bbox.height > 0 else { return }
-            let bgRect = NSRect(
-                x: origin.x,
-                y: origin.y + bbox.minY - 2,
-                width: max(20, bounds.width - origin.x),
-                height: bbox.height + 4
-            )
-            if let fill = quoteBackgroundColor {
-                fill.setFill()
-                NSBezierPath(roundedRect: bgRect, xRadius: 6, yRadius: 6).fill()
-            }
-            if let accent = quoteAccentColor {
-                accent.setFill()
-                let barRect = NSRect(x: bgRect.minX, y: bgRect.minY, width: 3, height: bgRect.height)
-                NSBezierPath(roundedRect: barRect, xRadius: 1.5, yRadius: 1.5).fill()
+    override public func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusStateChanged?() }
+        return ok
+    }
+
+    override public func drawBackground(in rect: NSRect) {
+        if let storage = textStorage,
+           storage.length > 0,
+           let manager = layoutManager,
+           let container = textContainer
+        {
+            let origin = textContainerOrigin
+            storage.enumerateAttribute(
+                .agentHubBlockQuote,
+                in: NSRange(location: 0, length: storage.length),
+                options: []
+            ) { value, charRange, _ in
+                guard (value as? Bool) == true, charRange.length > 0 else { return }
+                let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+                let bbox = manager.boundingRect(forGlyphRange: glyphRange, in: container)
+                guard bbox.height > 0 else { return }
+                let bgRect = NSRect(
+                    x: origin.x,
+                    y: origin.y + bbox.minY - 2,
+                    width: max(20, bounds.width - origin.x),
+                    height: bbox.height + 4
+                )
+                if let fill = quoteBackgroundColor {
+                    fill.setFill()
+                    NSBezierPath(roundedRect: bgRect, xRadius: 6, yRadius: 6).fill()
+                }
+                if let accent = quoteAccentColor {
+                    accent.setFill()
+                    let barRect = NSRect(x: bgRect.minX, y: bgRect.minY, width: 3, height: bgRect.height)
+                    NSBezierPath(roundedRect: barRect, xRadius: 1.5, yRadius: 1.5).fill()
+                }
             }
         }
+        // Draw selection highlight AFTER blockquote background so selected quote text stays clearly highlighted!
+        super.drawBackground(in: rect)
     }
 
     override public func clicked(onLink link: Any, at charIndex: Int) {

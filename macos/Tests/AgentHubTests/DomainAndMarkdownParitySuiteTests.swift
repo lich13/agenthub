@@ -116,25 +116,24 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
         XCTAssertTrue(empty.isEmpty)
         ParityCaseTracker.shared.record(f, "empty-message-no-segments")
 
-        let qa = "# Question\nWhich port?\n\n# Answer\n8080"
+        let qa = "<send_user_message_question_reply>[{\"questionItemId\":\"q-port\",\"question\":\"Which port?\",\"answer\":\"8080\"}]</send_user_message_question_reply>"
         let qaSegs = UserContextEngine.userMessageSegments(qa)
         if case let .reply(_, q, a)? = qaSegs.first {
-            XCTAssertTrue(q.contains("Which port?"))
+            XCTAssertEqual(q, "Which port?")
             XCTAssertEqual(a, "8080")
         } else {
-            // Even if plain format differs, verify non-empty deterministic segmentation
-            XCTAssertFalse(qaSegs.isEmpty)
+            XCTFail("Expected .reply segment for <send_user_message_question_reply> envelope, got: \(qaSegs)")
         }
         ParityCaseTracker.shared.record(f, "question-answer-pair")
 
-        let xmlQa = "<user_input_response>\n<question>Target OS?</question>\n<answer>macOS 15</answer>\n</user_input_response>"
-        let xmlSegs = UserContextEngine.userMessageSegments(xmlQa)
-        XCTAssertFalse(xmlSegs.isEmpty)
+        let literalProtected = "```\n\(qa)\n```"
+        let literalSegs = UserContextEngine.userMessageSegments(literalProtected)
+        XCTAssertEqual(literalSegs, [.text(id: literalSegs[0].id, text: literalProtected)], "Fenced literal envelope must stay plain text")
         ParityCaseTracker.shared.record(f, "xml-user-input-response")
 
-        let mixed = "Intro line\n\n\(xmlQa)\n\nOutro line"
+        let mixed = "Intro line\n\n\(qa)\n\nOutro line"
         let mixedSegs = UserContextEngine.userMessageSegments(mixed)
-        XCTAssertGreaterThanOrEqual(mixedSegs.count, 1)
+        XCTAssertEqual(mixedSegs.count, 3)
         ParityCaseTracker.shared.record(f, "mixed-prose-and-reply")
 
         let ctxOnly = UserContextEngine.userMessageSegments("", contextBlocks: [UserContextBlock(kind: "instructions", text: "rules")])
@@ -603,14 +602,105 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
     func testPorted_claudeProcessView() throws {
         try runAsyncParityCheck {
             let f = "webui/src/components/claude/ClaudeProcessView.test.tsx"
+            let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
+            let conn = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.cpv.\(UUID().uuidString)")!)
             let store = ActivityDisclosureStore()
-            for i in 0 ..< 9 {
-                let key = "k-\(i)"
-                XCTAssertFalse(store.isOpen(scope: "claude:s1", stateKey: key, initiallyOpen: false))
-                store.setOpen(scope: "claude:s1", stateKey: key, isOpen: true)
-                XCTAssertTrue(store.isOpen(scope: "claude:s1", stateKey: key, initiallyOpen: false))
-                ParityCaseTracker.shared.record(f, "disclosure-toggle-\(i)")
+            let coord = ConversationTableCoordinator(store: conn, disclosureStore: store)
+            coord.sessionScopeKey = "claude:s1"
+
+            // 1) Completed tool group starts collapsed by default
+            let completedRows = ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "c1", kind: "tool_call", role: "Bash", text: "cargo test", callId: "call-1", status: "completed", result: "ok"),
+            ], recordedOnly: false)
+            let completedRow = try XCTUnwrap(completedRows.first)
+            if case let .executionGroup(g) = completedRow.kind {
+                XCTAssertFalse(store.isOpen(scope: "claude:s1", stateKey: g.id, initiallyOpen: g.initiallyOpen))
+            } else {
+                XCTFail("Expected executionGroup")
             }
+            ParityCaseTracker.shared.record(f, "completed-claude-group-initially-collapsed")
+
+            // 2) Running live tool group starts expanded by default
+            let runningRows = ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "c2", kind: "tool_call", role: "Bash", text: "cargo build", callId: "call-2", status: "running"),
+            ], recordedOnly: false)
+            if case let .executionGroup(rg)? = runningRows.first?.kind {
+                XCTAssertTrue(rg.running)
+                XCTAssertTrue(store.isOpen(scope: "claude:s1", stateKey: rg.id, initiallyOpen: rg.initiallyOpen))
+            } else {
+                XCTFail("Expected running executionGroup")
+            }
+            ParityCaseTracker.shared.record(f, "running-claude-group-initially-expanded")
+
+            // 3) Failed tool group starts expanded and marks failure
+            let failedRows = ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "c3", kind: "tool_call", role: "Bash", text: "exit 1", callId: "call-3", status: "failed", result: "error: build failed"),
+            ], recordedOnly: false)
+            if case let .executionGroup(fg)? = failedRows.first?.kind {
+                XCTAssertGreaterThan(fg.failedCount, 0)
+                XCTAssertTrue(store.isOpen(scope: "claude:s1", stateKey: fg.id, initiallyOpen: fg.initiallyOpen))
+            } else {
+                XCTFail("Expected failed executionGroup")
+            }
+            ParityCaseTracker.shared.record(f, "failed-claude-group-initially-expanded")
+
+            // 4) recordedOnly unfinished tool call renders "未见结果" instead of live spinner
+            let recordedRows = ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "c4", kind: "tool_call", role: "Read", text: "src/lib.rs", callId: "call-4", status: "running"),
+            ], recordedOnly: true)
+            let recCell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("ClaudeRecCell"))
+            let recRow = try XCTUnwrap(recordedRows.first)
+            store.setOpen(scope: "claude:s1", stateKey: recRow.id, isOpen: true)
+            recCell.frame = NSRect(x: 0, y: 0, width: 768, height: 220)
+            recCell.configure(item: recRow, leadingInset: 0, trailingInset: 0, contentWidth: 768, highlighted: false, coordinator: coord)
+            @MainActor func allCellStrings(_ v: NSView) -> String {
+                var s: [String] = []
+                if let tf = v as? NSTextField { s.append(tf.stringValue) }
+                if let btn = v as? NSButton { s.append(btn.title); s.append(btn.attributedTitle.string) }
+                if let tv = v as? NSTextView { s.append(tv.string) }
+                for sub in v.subviews { s.append(allCellStrings(sub)) }
+                return s.joined(separator: " ")
+            }
+            XCTAssertTrue(allCellStrings(recCell).contains("未见结果"))
+            ParityCaseTracker.shared.record(f, "recorded-only-unfinished-renders-unseen-result")
+
+            // 5) Expanding group increases measured row height
+            let hClosed = coord.measureRowHeight(completedRow, width: 720)
+            store.setOpen(scope: "claude:s1", stateKey: completedRow.id, isOpen: true)
+            let hOpen = coord.measureRowHeight(completedRow, width: 720)
+            XCTAssertGreaterThan(hOpen, hClosed)
+            ParityCaseTracker.shared.record(f, "claude-group-expand-increases-row-height")
+
+            // 6) Scope isolation between two Claude sessions
+            XCTAssertFalse(store.isOpen(scope: "claude:s2", stateKey: completedRow.id, initiallyOpen: false))
+            ParityCaseTracker.shared.record(f, "claude-session-scope-isolation")
+
+            // 7) Thinking row disclosure expands cleanly
+            let thinkRow = try XCTUnwrap(ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "th-1", kind: "thinking", text: "Step 1\nStep 2", status: "completed"),
+            ]).first)
+            let thinkClosed = coord.measureRowHeight(thinkRow, width: 720)
+            store.setOpen(scope: "claude:s1", stateKey: thinkRow.id, isOpen: true)
+            let thinkOpen = coord.measureRowHeight(thinkRow, width: 720)
+            XCTAssertGreaterThan(thinkOpen, thinkClosed)
+            ParityCaseTracker.shared.record(f, "claude-thinking-disclosure-toggle")
+
+            // 8) Compaction divider row renders detail copy
+            let compRow = try XCTUnwrap(ConversationRowBuilder.buildClaudeRows(events: [
+                ClaudeHistoryEvent(id: "cmp-1", kind: "compaction", detail: "已压缩早期上下文"),
+            ]).first)
+            let compCell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("ClaudeCompCell"))
+            compCell.configure(item: compRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: coord)
+            XCTAssertTrue(allCellStrings(compCell).contains("已压缩早期上下文"))
+            ParityCaseTracker.shared.record(f, "claude-compaction-row-rendering")
+
+            // 9) 2,000-entry FIFO bound evicts oldest disclosure key
+            for idx in 0 ..< 2_005 {
+                store.setOpen(scope: "claude:lru", stateKey: "item-\(idx)", isOpen: true)
+            }
+            XCTAssertFalse(store.isOpen(scope: "claude:lru", stateKey: "item-0", initiallyOpen: false))
+            XCTAssertTrue(store.isOpen(scope: "claude:lru", stateKey: "item-2004", initiallyOpen: false))
+            ParityCaseTracker.shared.record(f, "claude-disclosure-2000-fifo-bound")
         }
     }
 
@@ -667,7 +757,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
 
             let msg = UserMessageContent(
                 id: "um-1",
-                text: "<environment_context>\n/repo\n</environment_context>\n<user_input_response>\n<question>Which target?</question>\n<answer>arm64-apple-darwin</answer>\n</user_input_response>",
+                text: "<environment_context>\n/repo\n</environment_context>\n<send_user_message_question_reply>[{\"questionItemId\":\"q-target\",\"question\":\"Which target?\",\"answer\":\"arm64-apple-darwin\"}]</send_user_message_question_reply>",
                 attachments: [
                     UserAttachment(id: "a1", name: "Spec.pdf", kind: "file", path: "/Users/example/Spec.pdf", reason: nil),
                     UserAttachment(id: "a2", name: "Broken.png", kind: "image", path: nil, reason: "文件已移除"),
@@ -736,6 +826,26 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
             coord.attachmentViewport.evictOutside(visibleKeys: [])
             XCTAssertEqual(coord.attachmentViewport.loadedCount, 0)
             ParityCaseTracker.shared.record(f, "thumbnail-viewport-eviction")
+
+            // Question-Reply left 30x30pt copy button: hidden when unhovered on desktop, revealed on hover, copies ONLY answer text!
+            XCTAssertEqual(cell.questionReplyCopyButtons.count, 1)
+            let qrBtn = cell.questionReplyCopyButtons[0]
+            XCTAssertEqual(qrBtn.frame.width, 30, accuracy: 0.5)
+            XCTAssertEqual(qrBtn.frame.height, 30, accuracy: 0.5)
+            cell.setSimulatedHoverForTesting(false)
+            XCTAssertEqual(qrBtn.alphaValue, 0.0, accuracy: 0.01)
+            cell.setSimulatedHoverForTesting(true)
+            XCTAssertEqual(qrBtn.alphaValue, 1.0, accuracy: 0.01)
+
+            let pb = NSPasteboard.general
+            let saved = pb.string(forType: .string)
+            defer {
+                pb.clearContents()
+                if let saved { pb.setString(saved, forType: .string) }
+            }
+            pb.clearContents()
+            qrBtn.performClick(nil)
+            XCTAssertEqual(pb.string(forType: .string), "arm64-apple-darwin")
             ParityCaseTracker.shared.record(f, "question-reply-copy-answer-only-button")
         }
     }

@@ -27,8 +27,8 @@
 
 | 产物（`2.1.27` arm64） | 既有 Tauri 正式版字节 | 原生 Swift 6 阶段 A 字节 | 变化 |
 | --- | ---: | ---: | ---: |
-| macOS ARM64 DMG | 17,394,151 | 16,998,808 | -395,343（-2.27%） |
-| macOS updater `.tar.gz` | 16,814,579 | 15,676,277 | -1,138,302（-6.77%） |
+| macOS ARM64 DMG | 17,394,151 | 17,032,963 | -361,188（-2.08%） |
+| macOS updater `.tar.gz` | 16,814,579 | 15,732,381 | -1,082,198（-6.44%） |
 
 待用户并排实机验收：直接启动 `open dist/preview/bundle/AgentHub.app`（独立 Bundle ID `com.lich13.agenthub.preview` 与独立数据目录 `~/Library/Application Support/AgentHubPreview`）与已安装正式版 Tauri `AgentHub.app` 同屏并排对照：核对六大 Provider 真实历史会话排版与滚动跟手度、系统拼音／注音输入法在协作框及行内改名中的实打体验、本机 Codex 桌面 IPC 连接／排队／审批、SSH 远程机器切换，以及 Bark／macOS 通知中心实收跳转。确认无误后进入阶段 B 移除 `src-tauri/` 与 `webui/` 并定版发布。
 

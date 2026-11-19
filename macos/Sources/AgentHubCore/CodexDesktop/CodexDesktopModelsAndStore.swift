@@ -256,6 +256,8 @@ public final class CodexDesktopStore: ObservableObject {
     @Published public var actionError: String?
     @Published public private(set) var attachmentBindingId: String?
     public private(set) var lastAttachmentBounds = DesktopAttachmentBounds(x: 0, y: 0, width: 640, height: 160)
+    private var attachGeneration: UInt64 = 0
+    private var lastStreamFrameGeneration: UInt64 = 0
 
     public var onItemsAttached: (([DesktopChosenItem]) -> Void)?
     public var onAttachmentError: ((String) -> Void)?
@@ -305,12 +307,19 @@ public final class CodexDesktopStore: ObservableObject {
         else { return }
 
         do {
+            attachGeneration &+= 1
+            let currentAttachGen = attachGeneration
             let initialData = try await connection.transport.desktopAttach(
                 requestJSON: reqJSON,
                 onStreamFrame: { [weak self] frameData in
                     guard let decoded = try? JSONDecoder().decode(DesktopView.self, from: frameData) else { return }
                     Task { @MainActor [weak self] in
-                        guard let self, self.connection.revision == rev, decoded.threadId == tid else { return }
+                        guard let self,
+                              self.connection.revision == rev,
+                              decoded.threadId == tid,
+                              self.attachGeneration == currentAttachGen
+                        else { return }
+                        self.lastStreamFrameGeneration = currentAttachGen
                         self.view = decoded
                         self.onStreamViewUpdated?()
                     }
@@ -318,8 +327,12 @@ public final class CodexDesktopStore: ObservableObject {
                 onStreamClosed: nil
             )
             let initialView = try JSONDecoder().decode(DesktopView.self, from: initialData)
-            if connection.revision == rev && initialView.threadId == tid {
-                view = view ?? initialView
+            if connection.revision == rev
+                && initialView.threadId == tid
+                && attachGeneration == currentAttachGen
+                && lastStreamFrameGeneration != currentAttachGen
+            {
+                view = initialView
             }
         } catch {
             actionError = error.localizedDescription

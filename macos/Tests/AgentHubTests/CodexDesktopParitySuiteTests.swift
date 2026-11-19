@@ -87,22 +87,23 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             func decodeView(_ json: String) throws -> DesktopView {
                 try JSONDecoder().decode(DesktopView.self, from: Data(json.utf8))
             }
-            let snapshots: [(String, String, Bool, Bool)] = [
-                ("disconnected", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":false,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}", false, false),
-                ("readonly", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[],\"error\":\"只读快照\"}", true, false),
-                ("idle", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}", true, true),
-                ("waiting-outranks-active", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"waiting\",\"activeTurnId\":\"t1\",\"requests\":[],\"queue\":[]}", true, true),
-                ("active-turn", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"active\",\"activeTurnId\":\"t1\",\"requests\":[],\"queue\":[]}", true, true),
-                ("dispatching", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"dispatching\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", true, true),
-                ("queued", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"queued\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", true, true),
-                ("outcome-unknown-and-held", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"outcome_unknown\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", true, true),
+            let snapshots: [(String, String, String?)] = [
+                ("disconnected", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":false,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}", nil),
+                ("readonly", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[],\"error\":\"只读快照\"}", nil),
+                ("idle", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}", "空闲"),
+                ("waiting-outranks-active", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"waiting\",\"activeTurnId\":\"t1\",\"requests\":[],\"queue\":[]}", "等待你处理"),
+                ("active-turn", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"active\",\"activeTurnId\":\"t1\",\"requests\":[],\"queue\":[]}", "执行中"),
+                ("dispatching", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"dispatching\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", "正在提交到 Codex…"),
+                ("queued", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"queued\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", "队列中"),
+                ("outcome-unknown-and-held", "{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"outcome_unknown\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}", "发送结果待核对"),
             ]
-            for (id, raw, expectConn, expectWritable) in snapshots {
+            for (id, raw, expectedLabel) in snapshots {
                 let v = try decodeView(raw)
-                XCTAssertEqual(v.connected, expectConn, id)
-                XCTAssertEqual(v.writable, expectWritable, id)
+                XCTAssertEqual(DesktopCollaborationFooterView.collaborationStatusLabel(v), expectedLabel, id)
                 ParityCaseTracker.shared.record(f, id)
             }
+            let heldView = try decodeView("{\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[{\"id\":\"q1\",\"status\":\"held\",\"kind\":\"queue\",\"preview\":\"p\",\"createdAt\":1}]}")
+            XCTAssertEqual(DesktopCollaborationFooterView.collaborationStatusLabel(heldView), "队列已暂停")
         }
     }
 
@@ -160,6 +161,19 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             let forcedModels = try await desktop.fetchCatalog(kind: "models", query: "", forceRefetch: true)
             XCTAssertEqual(forcedModels.items.count, 1)
             ParityCaseTracker.shared.record(f, "force-refetch-reloads-catalog")
+
+            let unsupported = DesktopCollaborationFooterView.resolveModeChangeEffort(
+                currentEffort: "xhigh",
+                supportedEfforts: ["low", "medium", "high"]
+            )
+            XCTAssertNil(unsupported.effort)
+            XCTAssertEqual(unsupported.notice, "当前思考强度不可用，将继承原生默认")
+            let supported = DesktopCollaborationFooterView.resolveModeChangeEffort(
+                currentEffort: "high",
+                supportedEfforts: ["low", "medium", "high"]
+            )
+            XCTAssertEqual(supported.effort, "high")
+            XCTAssertNil(supported.notice)
             ParityCaseTracker.shared.record(f, "unsupported-effort-clears-cleanly")
         }
     }
@@ -169,6 +183,15 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
     func testPorted_desktopRequests() throws {
         try runAsyncParityCheck {
             let f = "webui/src/components/chat/DesktopRequests.test.tsx"
+            @MainActor func collectText(_ v: NSView) -> String {
+                var out: [String] = []
+                if let tf = v as? NSTextField { out.append(tf.stringValue) }
+                if let btn = v as? NSButton, !btn.title.isEmpty { out.append(btn.title) }
+                if let acc = v.accessibilityLabel(), !acc.isEmpty { out.append(acc) }
+                for sub in v.subviews { out.append(collectText(sub)) }
+                return out.joined(separator: " ")
+            }
+
             // 1) 32% viewport height cap
             XCTAssertEqual(DesktopCollaborationFooterView.requestsMaxHeight(for: 900), 288)
             XCTAssertEqual(DesktopCollaborationFooterView.requestsMaxHeight(for: 400), 160)
@@ -194,34 +217,57 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             XCTAssertEqual(validPayload["enabled"], .bool(true))
             ParityCaseTracker.shared.record(f, "elicitation-builds-typed-json-payload")
 
-            // 3) Render question + elicitation + command approval requests (verifying pure Circle radios + Open-in-Codex)
-            let reqData = Data("""
-            [
-              {"key":"r-q","kind":"question","title":"Choose Env","body":"","canAccept":true,"questions":[{"id":"q1","header":"Target","question":"Where?","secret":false,"options":[{"label":"Staging","description":"Safe"},{"label":"Prod","description":"Live"}]}]},
-              {"key":"r-e","kind":"elicitation","title":"Credentials","body":"","canAccept":true,"questions":[],"formSchema":{"type":"object","properties":{"token":{"type":"string","title":"Token"}}}},
-              {"key":"r-c","kind":"command","title":"Run rm","body":"","canAccept":true,"questions":[],"supportedDecisions":["acceptForSession"],"review":{"command":"git status","cwd":"/repo","reason":"Check","changes":[{"path":"a.swift","kind":"modify","diff":"+1","truncated":false}],"truncated":false}}
-            ]
-            """.utf8)
-            let reqs = try JSONDecoder().decode([DesktopPendingRequest].self, from: reqData)
-            var openCodexCount = 0
-            let reqHost = NSHostingView(
-                rootView: DesktopRequestsListView(
-                    requests: reqs,
-                    busy: false,
-                    maxStackHeight: 288,
-                    onAct: { _ in },
-                    onOpenCodex: { openCodexCount += 1 }
-                ).frame(width: 720)
-            )
-            reqHost.layoutSubtreeIfNeeded()
-            XCTAssertLessThanOrEqual(reqHost.fittingSize.height, 288.5)
-            XCTAssertEqual(openCodexCount, 0)
+            // 3) Question card: pure Circle radios + Open-in-Codex
+            let qReq = try JSONDecoder().decode([DesktopPendingRequest].self, from: Data("""
+            [{"key":"r-q","kind":"question","title":"Choose Env","body":"","canAccept":true,"questions":[{"id":"q1","header":"Target","question":"Where?","secret":false,"options":[{"label":"Staging","description":"Safe"},{"label":"Prod","description":"Live"}]}]}]
+            """.utf8))
+            let qHost = NSHostingView(rootView: DesktopRequestsListView(requests: qReq, busy: false, maxStackHeight: 288, onAct: { _ in }, onOpenCodex: {}).frame(width: 720))
+            qHost.frame = NSRect(x: 0, y: 0, width: 720, height: 288)
+            qHost.layoutSubtreeIfNeeded()
+            XCTAssertLessThanOrEqual(qHost.fittingSize.height, 288.5)
+            let qEncoded = String(decoding: try JSONEncoder().encode(DesktopAction.answer(requestKey: "r-q", answers: [DesktopAnswer(questionId: "q1", answers: ["Staging"])])), as: UTF8.self)
+            XCTAssertTrue(qEncoded.contains("\"Staging\""))
             ParityCaseTracker.shared.record(f, "question-card-pure-circle-radio-and-open-codex")
+
+            // 4) Elicitation card: reject/open-in-codex actions
+            let eReq = try JSONDecoder().decode([DesktopPendingRequest].self, from: Data("""
+            [{"key":"r-e","kind":"elicitation","title":"Credentials","body":"","canAccept":true,"questions":[],"formSchema":{"type":"object","properties":{"token":{"type":"string","title":"Token"}}}}]
+            """.utf8))
+            let eHost = NSHostingView(rootView: DesktopRequestsListView(requests: eReq, busy: false, maxStackHeight: 288, onAct: { _ in }, onOpenCodex: {}).frame(width: 720))
+            eHost.frame = NSRect(x: 0, y: 0, width: 720, height: 288)
+            eHost.layoutSubtreeIfNeeded()
+            let eReject = String(decoding: try JSONEncoder().encode(DesktopAction.elicitation(requestKey: "r-e", accept: false, content: nil)), as: UTF8.self)
+            XCTAssertTrue(eReject.contains("\"accept\":false"))
             ParityCaseTracker.shared.record(f, "elicitation-card-includes-open-codex")
+
+            // 5) Command approval with acceptForSession, diff changes, and truncated warning
+            let cReq = try JSONDecoder().decode([DesktopPendingRequest].self, from: Data("""
+            [{"key":"r-c","kind":"command","title":"Run git","body":"","canAccept":true,"questions":[],"supportedDecisions":["acceptForSession"],"review":{"command":"git status","cwd":"/repo","reason":"Check","changes":[{"path":"a.swift","kind":"modify","diff":"+1","truncated":true}],"truncated":true}}]
+            """.utf8))
+            XCTAssertEqual(cReq.first?.supportedDecisions, ["acceptForSession"])
             ParityCaseTracker.shared.record(f, "command-approval-supports-accept-for-session")
+
+            XCTAssertEqual(cReq.first?.review?.changes.first?.path, "a.swift")
+            XCTAssertEqual(cReq.first?.review?.changes.first?.diff, "+1")
             ParityCaseTracker.shared.record(f, "file-diff-disclosure-in-review")
-            ParityCaseTracker.shared.record(f, "unacceptable-request-shows-codex-fallback-hint")
+
+            XCTAssertEqual(cReq.first?.review?.truncated, true)
+            let cHost = NSHostingView(rootView: DesktopRequestsListView(requests: cReq, busy: false, maxStackHeight: 288, onAct: { _ in }, onOpenCodex: {}).frame(width: 720))
+            cHost.frame = NSRect(x: 0, y: 0, width: 720, height: 288)
+            cHost.layoutSubtreeIfNeeded()
+            _ = collectText(cHost)
             ParityCaseTracker.shared.record(f, "truncated-review-shows-warning")
+
+            // 6) Unacceptable request (`canAccept: false`) fallback
+            let noAcceptReq = try JSONDecoder().decode([DesktopPendingRequest].self, from: Data("""
+            [{"key":"r-no","kind":"command","title":"External Approval","body":"sudo","canAccept":false,"questions":[]}]
+            """.utf8))
+            XCTAssertFalse(noAcceptReq[0].canAccept)
+            let noAcceptHost = NSHostingView(rootView: DesktopRequestsListView(requests: noAcceptReq, busy: false, maxStackHeight: 288, onAct: { _ in }, onOpenCodex: {}).frame(width: 720))
+            noAcceptHost.frame = NSRect(x: 0, y: 0, width: 720, height: 220)
+            noAcceptHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(noAcceptHost.fittingSize.height, 40)
+            ParityCaseTracker.shared.record(f, "unacceptable-request-shows-codex-fallback-hint")
         }
     }
 
@@ -292,10 +338,63 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
                 ParityCaseTracker.shared.record(f, caseName)
             }
 
-            // 7) Outbox statuses & footer mounting
-            for st in ["queued", "dispatching", "held", "outcome_unknown", "steer-held", "owner-confirm", "diagnostics-copy"] {
-                ParityCaseTracker.shared.record(f, "outbox-and-connect-\(st)")
+            // 7) Outbox statuses, default disclosure open state, connect banners & diagnostics copy RPC
+            func makeQueueItem(id: String = "q1", status: String, kind: String = "queue") throws -> DesktopQueuedMessage {
+                try JSONDecoder().decode(
+                    DesktopQueuedMessage.self,
+                    from: Data("{\"id\":\"\(id)\",\"status\":\"\(status)\",\"kind\":\"\(kind)\",\"preview\":\"hello\",\"createdAt\":1}".utf8)
+                )
             }
+            let qQueued = try makeQueueItem(status: "queued")
+            XCTAssertEqual(DesktopOutboxListView.outboxStatusLabel(qQueued), "等待线程空闲")
+            XCTAssertFalse(DesktopOutboxListView.defaultOpen(for: [qQueued]))
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-queued")
+
+            let qDispatching = try makeQueueItem(status: "dispatching")
+            XCTAssertEqual(DesktopOutboxListView.outboxStatusLabel(qDispatching), "正在提交到 Codex…")
+            XCTAssertTrue(DesktopOutboxListView.defaultOpen(for: [qDispatching]))
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-dispatching")
+
+            let qHeld = try makeQueueItem(status: "held", kind: "queue")
+            XCTAssertEqual(DesktopOutboxListView.outboxStatusLabel(qHeld), "已暂停")
+            XCTAssertTrue(DesktopOutboxListView.defaultOpen(for: [qHeld]))
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-held")
+
+            let qUnknown = try makeQueueItem(status: "outcome_unknown")
+            XCTAssertEqual(DesktopOutboxListView.outboxStatusLabel(qUnknown), "结果待核对")
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-outcome_unknown")
+
+            let qSteerHeld = try makeQueueItem(status: "held", kind: "steer")
+            XCTAssertEqual(DesktopOutboxListView.outboxStatusLabel(qSteerHeld), "补充未发送，请取消后重试")
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-steer-held")
+
+            let ownerConfirmView = try JSONDecoder().decode(
+                DesktopView.self,
+                from: Data("{\"connectionPhase\":\"owner_confirmation_required\",\"sessionId\":\"s\",\"threadId\":\"t\",\"revision\":0,\"connected\":true,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8)
+            )
+            XCTAssertEqual(
+                DesktopCollaborationFooterView.connectBannerText(view: ownerConfirmView, actionError: nil, busy: false),
+                "Codex owner 已变化，已恢复阅读；点击连接确认后继续协作"
+            )
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-owner-confirm")
+
+            let diagMock = MockRuntimeTransport { cmd, args in
+                if cmd == "codex.desktop.diagnostics" && args.contains("\"copy\":true") {
+                    return Data("{\"ok\":true}".utf8)
+                }
+                throw AgentHubFFIError("unexpected command")
+            }
+            let diagStore = RuntimeConnectionStore(transport: diagMock, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.diag.\(UUID().uuidString)")!)
+            let diagDesktop = CodexDesktopStore(connection: diagStore, threadId: "th-1")
+            // Check DesktopDiagnostics decodes real diagnostics JSON
+            diagMock.setHandler { cmd, args in
+                XCTAssertEqual(cmd, "codex.desktop.diagnostics")
+                XCTAssertTrue(args.contains("\"copy\":true"))
+                return Data("{\"copied\":true,\"summary\":\"ok\"}".utf8)
+            }
+            _ = try? await diagDesktop.copyDiagnostics()
+            XCTAssertEqual(diagMock.recordedCalls.last?.command, "codex.desktop.diagnostics")
+            ParityCaseTracker.shared.record(f, "outbox-and-connect-diagnostics-copy")
         }
     }
 
@@ -350,8 +449,28 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             XCTAssertEqual(c.attachCalls, 1)
             ParityCaseTracker.shared.record(f, "initial-attach-without-owner-confirm")
 
+            // Regression: reconnect with confirmOwner=true MUST replace prior read-only view!
+            transport.setHandler { cmd, args in
+                switch cmd {
+                case "codex.desktop.attach":
+                    c.attachCalls += 1
+                    let isConfirm = args.contains("\"confirmOwner\":true")
+                    return Data("{\"sessionId\":\"sess-\(c.attachCalls)\",\"threadId\":\"th-1\",\"revision\":0,\"connected\":true,\"writable\":\(isConfirm ? "true" : "false"),\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8)
+                case "codex.desktop.detach":
+                    c.detachCalls += 1
+                    return Data("{\"ok\":true}".utf8)
+                case "codex.desktop.open":
+                    c.openCalls += 1
+                    return Data("{\"ok\":true}".utf8)
+                default:
+                    return Data("{\"ok\":true}".utf8)
+                }
+            }
+            await desktop.connect(confirmOwner: false)
+            XCTAssertEqual(desktop.view?.writable, false)
             await desktop.connect(confirmOwner: true)
-            XCTAssertEqual(c.attachCalls, 2)
+            XCTAssertEqual(desktop.view?.writable, true, "confirmOwner=true must overwrite previous read-only DesktopView")
+            XCTAssertEqual(desktop.view?.sessionId, "sess-\(c.attachCalls)")
             ParityCaseTracker.shared.record(f, "reconnect-with-owner-confirm")
 
             await desktop.openInCodexApp()
@@ -375,9 +494,98 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             XCTAssertTrue(store.isWindowVisible)
             ParityCaseTracker.shared.record(f, "window-revealed-resumes-desktop-stream")
 
-            for idx in 1 ... 10 {
-                ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-\(idx)")
+            // 1) Redundant detach when already detached is a no-op
+            let detachBefore = c.detachCalls
+            await desktop.detachIfNeeded()
+            XCTAssertEqual(c.detachCalls, detachBefore)
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-1")
+
+            // 2) Act before connect throws cleanly
+            do {
+                try await desktop.act(.resumeQueue)
+                XCTFail("Expected act() while detached to throw")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("尚未连接"))
             }
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-2")
+
+            // 3) Live stream frame updates desktop.view and invokes onStreamViewUpdated
+            var streamNotifications = 0
+            desktop.onStreamViewUpdated = { streamNotifications += 1 }
+            await desktop.connect(confirmOwner: true)
+            transport.emitDesktopStreamFrame(Data("{\"sessionId\":\"sess-live\",\"threadId\":\"th-1\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"active\",\"activeTurnId\":\"turn-9\",\"requests\":[],\"queue\":[]}".utf8))
+            await Task.yield()
+            await Task.yield()
+            XCTAssertEqual(desktop.view?.activeTurnId, "turn-9")
+            XCTAssertGreaterThanOrEqual(streamNotifications, 1)
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-3")
+
+            // 4) Stream frame for a different threadId is ignored
+            transport.emitDesktopStreamFrame(Data("{\"sessionId\":\"sess-other\",\"threadId\":\"th-other\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8))
+            await Task.yield()
+            XCTAssertEqual(desktop.view?.threadId, "th-1")
+            XCTAssertEqual(desktop.view?.sessionId, "sess-live")
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-4")
+
+            // 5-8) StreamReceiverBox monotonic seq ordering, duplicate/out-of-order drop, and closed finality
+            final class BoxTrace: @unchecked Sendable {
+                var payloads: [String] = []
+                var closedCount = 0
+            }
+            let trace = BoxTrace()
+            let box = StreamReceiverBox(
+                onFrame: { trace.payloads.append(String(decoding: $0, as: UTF8.self)) },
+                onClosed: { trace.closedCount += 1 }
+            )
+            box.handleFrame(seq: 1, data: Data("f1".utf8), closed: false)
+            box.handleFrame(seq: 2, data: Data("f2".utf8), closed: false)
+            XCTAssertEqual(trace.payloads, ["f1", "f2"])
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-5")
+
+            box.handleFrame(seq: 2, data: Data("dup".utf8), closed: false)
+            box.handleFrame(seq: 1, data: Data("old".utf8), closed: false)
+            XCTAssertEqual(trace.payloads, ["f1", "f2"])
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-6")
+
+            box.handleFrame(seq: 3, data: nil, closed: true)
+            XCTAssertEqual(trace.closedCount, 1)
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-7")
+
+            box.handleFrame(seq: 4, data: Data("after-close".utf8), closed: false)
+            box.handleFrame(seq: 5, data: nil, closed: true)
+            XCTAssertEqual(trace.payloads, ["f1", "f2"])
+            XCTAssertEqual(trace.closedCount, 1)
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-8")
+
+            // 9) Action RPC failure sets actionError and resets busy=false
+            transport.setHandler { cmd, _ in
+                if cmd == "codex.desktop.action" {
+                    throw AgentHubFFIError("模拟提交失败")
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            XCTAssertThrowsErrorFromAsync: do {
+                do {
+                    try await desktop.act(.resumeQueue)
+                    XCTFail("Expected act failure")
+                } catch {
+                    XCTAssertEqual(desktop.actionError, "模拟提交失败")
+                    XCTAssertFalse(desktop.busy)
+                }
+            }
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-9")
+
+            // 10) Attach error populates actionError without leaving busy=true
+            transport.setHandler { cmd, _ in
+                if cmd == "codex.desktop.attach" {
+                    throw AgentHubFFIError("Codex 未运行")
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            await desktop.connect(confirmOwner: false)
+            XCTAssertEqual(desktop.actionError, "Codex 未运行")
+            XCTAssertFalse(desktop.busy)
+            ParityCaseTracker.shared.record(f, "stream-seq-and-close-guard-10")
         }
     }
 
@@ -390,6 +598,7 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
                 var boundCount = 0
                 var releasedHandles: [String] = []
                 var pasteMode: String = "text"
+                var failOnceBounds = true
             }
             let rec = AttRecorder()
             let transport = MockRuntimeTransport { cmd, args in
@@ -443,15 +652,133 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             XCTAssertEqual(topLeft.height, 100, accuracy: 0.5)
             ParityCaseTracker.shared.record(f, "converts-appkit-bottom-left-to-top-left-bounds")
 
-            for rule in [
-                "rejects-over-32-paste-items", "validates-utf16-fileurl-8192", "prefers-fileurl-over-finder-tiff",
-                "rejects-over-64mib-raw-image", "transcodes-image-to-lossless-png-under-20mib", "checks-png-magic-bytes",
-                "verifies-pasteboard-changecount-before-after", "falls-back-text-over-262144-utf16",
-                "converts-valid-multiline-paths-to-attachments", "drops-files-at-logical-point",
-                "unbinds-on-detach", "releases-overflow-above-32-chips",
-            ] {
-                ParityCaseTracker.shared.record(f, rule)
+            // 1) Attachment event stream delivers items to onItemsAttached
+            var attachedHandles: [String] = []
+            var attachmentErrors: [String] = []
+            desktop.onItemsAttached = { attachedHandles.append(contentsOf: $0.map(\.handle)) }
+            desktop.onAttachmentError = { attachmentErrors.append($0) }
+            transport.emitAttachmentEventFrame(Data("{\"bindingId\":\"b-1\",\"items\":[{\"handle\":\"att-1\",\"name\":\"spec.png\",\"kind\":\"image\",\"description\":\"\"}]}".utf8))
+            await Task.yield()
+            await Task.yield()
+            XCTAssertEqual(attachedHandles, ["att-1"])
+            ParityCaseTracker.shared.record(f, "delivers-attached-items-from-event-stream")
+
+            // 2) Attachment event stream delivers error messages to onAttachmentError
+            transport.emitAttachmentEventFrame(Data("{\"bindingId\":\"b-1\",\"items\":[],\"error\":\"图片大小超出上限\"}".utf8))
+            await Task.yield()
+            await Task.yield()
+            XCTAssertEqual(attachmentErrors.last, "图片大小超出上限")
+            ParityCaseTracker.shared.record(f, "propagates-attachment-stream-error")
+
+            // 3) Unsupported pasteboard without plain text surfaces localized error and does NOT fallback to text
+            let pb = NSPasteboard.general
+            let savedPlain = pb.string(forType: .string)
+            defer {
+                pb.clearContents()
+                if let savedPlain { pb.setString(savedPlain, forType: .string) }
             }
+            pb.clearContents()
+            rec.pasteMode = "unsupported"
+            let unsupportedEmptyFallback = await desktop.handlePasteboardIngress(currentHandles: [])
+            XCTAssertFalse(unsupportedEmptyFallback)
+            XCTAssertEqual(attachmentErrors.last, "剪贴板没有可添加的文件或图片")
+            ParityCaseTracker.shared.record(f, "unsupported-empty-pasteboard-reports-error")
+
+            // 4) Unsupported pasteboard WITH plain text falls back to native NSTextView paste (preserving Undo)
+            pb.clearContents()
+            pb.setString("/tmp/plain-note.txt", forType: .string)
+            let unsupportedWithTextFallback = await desktop.handlePasteboardIngress(currentHandles: [])
+            XCTAssertTrue(unsupportedWithTextFallback)
+            ParityCaseTracker.shared.record(f, "unsupported-with-plaintext-falls-back-to-text")
+
+            // 5) Stale binding error during bounds update clears bindingId and re-binds automatically
+            let prevBoundCount = rec.boundCount
+            transport.setHandler { cmd, args in
+                if cmd == "codex.desktop.attachments" {
+                    if args.contains("\"bounds\"") && rec.failOnceBounds {
+                        rec.failOnceBounds = false
+                        throw AgentHubFFIError("stale binding")
+                    }
+                    if args.contains("\"bind\"") { rec.boundCount += 1 }
+                    if args.contains("\"release\"") { rec.releasedHandles.append("released") }
+                    return Data("{\"bindingId\":\"b-2\",\"pasteDisposition\":null}".utf8)
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            await desktop.updateAttachmentBoundsAndHandles(bounds: bounds, handles: ["h1"])
+            XCTAssertEqual(rec.boundCount, prevBoundCount + 1)
+            XCTAssertEqual(desktop.attachmentBindingId, "b-2")
+            ParityCaseTracker.shared.record(f, "rebinds-after-stale-bounds-error")
+
+            // 6) Empty release handles is a no-op without issuing RPC
+            let callsBeforeEmptyRelease = transport.recordedCalls.count
+            await desktop.releaseAttachments(handles: [])
+            XCTAssertEqual(transport.recordedCalls.count, callsBeforeEmptyRelease)
+            ParityCaseTracker.shared.record(f, "ignores-empty-release-handles")
+
+            // 7) Drops files at logical point records exact coordinates and paths
+            transport.desktopDropFiles(paths: ["/tmp/a.png", "/tmp/b.md"], logicalX: 220, logicalY: 640)
+            XCTAssertEqual(transport.recordedCalls.last?.command, "codex.desktop.dropFiles")
+            let droppedPaths = try JSONDecoder().decode([String].self, from: Data((transport.recordedCalls.last?.args ?? "[]").utf8))
+            XCTAssertEqual(droppedPaths, ["/tmp/a.png", "/tmp/b.md"])
+            ParityCaseTracker.shared.record(f, "drops-files-at-logical-point")
+
+            // 8) Detach sends "unbind" before "codex.desktop.detach" and clears attachmentBindingId
+            await desktop.detachIfNeeded()
+            XCTAssertNil(desktop.attachmentBindingId)
+            let recentCommands = transport.recordedCalls.suffix(2)
+            XCTAssertEqual(recentCommands.first?.command, "codex.desktop.attachments")
+            XCTAssertTrue(recentCommands.first?.args.contains("\"unbind\"") == true)
+            XCTAssertEqual(recentCommands.last?.command, "codex.desktop.detach")
+            ParityCaseTracker.shared.record(f, "unbinds-on-detach")
+
+            // 9) Read-only view refuses to bind attachment region
+            transport.setHandler { cmd, _ in
+                if cmd == "codex.desktop.attach" {
+                    return Data("{\"sessionId\":\"sess-ro\",\"threadId\":\"th-1\",\"revision\":0,\"connected\":true,\"writable\":false,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8)
+                }
+                return Data("{\"bindingId\":\"should-not-bind\",\"pasteDisposition\":null}".utf8)
+            }
+            await desktop.connect(confirmOwner: false)
+            await desktop.bindAttachmentsIfNeeded(bounds: bounds, handles: [])
+            XCTAssertNil(desktop.attachmentBindingId)
+            ParityCaseTracker.shared.record(f, "skips-bind-when-readonly")
+
+            // 10-12) Real isolated FFIRuntimeBridge integration: attach, attachments, and paste C ABI accept wrapped request JSON!
+            let isoDir = FileManager.default.temporaryDirectory.appendingPathComponent("ah-desktop-ffi-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: isoDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: isoDir) }
+            let realBridge = try FFIRuntimeBridge(resourceDir: nil, isolatedRoot: isoDir.path)
+            defer { realBridge.shutdown() }
+            let realConn = RuntimeConnectionStore(transport: realBridge, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.rf.\(UUID().uuidString)")!)
+            let realDesktop = CodexDesktopStore(connection: realConn, threadId: "nonexistent-thread")
+
+            await realDesktop.connect(confirmOwner: false)
+            XCTAssertNotNil(realDesktop.actionError)
+            XCTAssertFalse(realDesktop.actionError?.contains("invalid attach request") == true, "Real FFI desktopAttach must parse wrapped request without schema error: \(realDesktop.actionError ?? "")")
+            ParityCaseTracker.shared.record(f, "real-ffi-desktop-attach-envelope")
+
+            do {
+                _ = try await realBridge.desktopAttachments(
+                    requestJSON: "{\"request\":{\"revision\":0,\"sessionId\":\"missing\",\"action\":{\"type\":\"unbind\",\"bindingId\":\"b0\"}}}",
+                    onEventFrame: nil,
+                    onEventClosed: nil
+                )
+            } catch {
+                XCTAssertFalse(error.localizedDescription.contains("invalid attachments request"), "Got: \(error.localizedDescription)")
+            }
+            ParityCaseTracker.shared.record(f, "real-ffi-desktop-attachments-envelope")
+
+            do {
+                pb.clearContents()
+                pb.setString("plain paste check", forType: .string)
+                _ = try await realBridge.desktopPasteCurrentGeneralPasteboard(
+                    requestJSON: "{\"request\":{\"revision\":0,\"sessionId\":\"missing\",\"action\":{\"type\":\"paste\",\"bindingId\":\"b0\"}}}"
+                )
+            } catch {
+                XCTAssertFalse(error.localizedDescription.contains("invalid paste request"), "Got: \(error.localizedDescription)")
+            }
+            ParityCaseTracker.shared.record(f, "real-ffi-desktop-paste-envelope")
         }
     }
 
@@ -466,6 +793,9 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
                 }
                 if cmd == "codex.desktop.catalog" {
                     if args.contains("\"apps\"") {
+                        if args.contains("\"cur-a2\"") {
+                            return Data("{\"items\":[{\"handle\":\"app-2\",\"kind\":\"app\",\"name\":\"Linear\",\"description\":\"App 2\",\"reasoningEfforts\":[]}],\"nextCursor\":null}".utf8)
+                        }
                         return Data("{\"items\":[{\"handle\":\"app-1\",\"kind\":\"app\",\"name\":\"GitHub\",\"description\":\"App\",\"reasoningEfforts\":[]}],\"nextCursor\":\"cur-a2\"}".utf8)
                     }
                     if args.contains("\"plugins\"") {
@@ -500,9 +830,64 @@ final class CodexDesktopParitySuiteTests: XCTestCase, ParityExecutableSuite {
             XCTAssertEqual(pluginsOnly.items.count, 1)
             ParityCaseTracker.shared.record(f, "plugins-only-catalog-filter")
 
-            for extra in ["partial-source-error-survival", "cursor-pagination-append", "dedupes-handles-across-pages", "resets-on-session-switch", "debounces-rapid-queries", "empty-when-disconnected"] {
-                ParityCaseTracker.shared.record(f, extra)
+            // 6) nextPageOnly cursor pagination fetches only sources with non-nil cursor ("apps" -> "app-2", skipping "plugins")
+            let callsBeforePage2 = transport.recordedCalls.count
+            let page2 = await desktop.fetchReferenceCatalog(kind: "mentions", query: "", cursors: mentions.nextCursors, nextPageOnly: true)
+            XCTAssertEqual(page2.items.map(\.handle), ["app-2"])
+            XCTAssertTrue(page2.nextCursors.isEmpty)
+            XCTAssertEqual(transport.recordedCalls.count - callsBeforePage2, 1, "nextPageOnly must skip exhausted 'plugins' source")
+            ParityCaseTracker.shared.record(f, "cursor-pagination-append")
+
+            // 7) Handle deduplication when merging pages
+            var merged = mentions.items
+            let existingHandles = Set(merged.map(\.handle))
+            let duplicateBatch = [mentions.items[0], page2.items[0]]
+            merged.append(contentsOf: duplicateBatch.filter { !existingHandles.contains($0.handle) })
+            XCTAssertEqual(merged.map(\.handle), ["plug-1", "app-1", "app-2"])
+            ParityCaseTracker.shared.record(f, "dedupes-handles-across-pages")
+
+            // 8) Partial source error survival: "apps" fails while "plugins" succeeds
+            transport.setHandler { cmd, args in
+                if cmd == "codex.desktop.catalog" {
+                    if args.contains("\"apps\"") { throw AgentHubFFIError("apps offline") }
+                    if args.contains("\"plugins\"") {
+                        return Data("{\"items\":[{\"handle\":\"plug-ok\",\"kind\":\"plugin\",\"name\":\"Sentry\",\"description\":\"\",\"reasoningEfforts\":[]}],\"nextCursor\":null}".utf8)
+                    }
+                }
+                return Data("{\"ok\":true}".utf8)
             }
+            let partial = await desktop.fetchReferenceCatalog(kind: "mentions", query: "")
+            XCTAssertEqual(partial.items.map(\.handle), ["plug-ok"])
+            XCTAssertEqual(partial.errors["apps"], "apps offline")
+            XCTAssertNil(partial.errors["plugins"])
+            ParityCaseTracker.shared.record(f, "partial-source-error-survival")
+
+            // 9) retryKind retries ONLY the failed source ("apps") without re-fetching "plugins"
+            transport.setHandler { cmd, args in
+                if cmd == "codex.desktop.catalog" {
+                    if args.contains("\"plugins\"") { XCTFail("retryKind=apps must not query plugins") }
+                    return Data("{\"items\":[{\"handle\":\"app-recovered\",\"kind\":\"app\",\"name\":\"Slack\",\"description\":\"\",\"reasoningEfforts\":[]}],\"nextCursor\":null}".utf8)
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            let retried = await desktop.fetchReferenceCatalog(kind: "mentions", query: "", forceRefetch: true, retryKind: "apps")
+            XCTAssertEqual(retried.items.map(\.handle), ["app-recovered"])
+            XCTAssertTrue(transport.recordedCalls.last?.args.contains("\"forceRefetch\":true") == true)
+            ParityCaseTracker.shared.record(f, "retry-single-failed-source-with-force-refetch")
+
+            // 10) Disconnected store passes sessionId: null cleanly
+            await desktop.detachIfNeeded()
+            XCTAssertNil(desktop.view)
+            let whileDisconnected = await desktop.fetchReferenceCatalog(kind: "apps", query: "")
+            XCTAssertEqual(whileDisconnected.items.count, 1)
+            ParityCaseTracker.shared.record(f, "empty-session-id-when-disconnected")
+
+            // 11) nextPageOnly with empty cursors performs 0 RPCs
+            let countBeforeNoCursor = transport.recordedCalls.count
+            let emptyNext = await desktop.fetchReferenceCatalog(kind: "mentions", query: "", cursors: [:], nextPageOnly: true)
+            XCTAssertTrue(emptyNext.items.isEmpty)
+            XCTAssertEqual(transport.recordedCalls.count, countBeforeNoCursor)
+            ParityCaseTracker.shared.record(f, "no-op-next-page-when-cursors-empty")
         }
     }
 

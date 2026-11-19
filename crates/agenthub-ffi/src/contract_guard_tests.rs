@@ -166,5 +166,51 @@ fn c_abi_isolated_init_invoke_capabilities_and_shutdown_roundtrip() {
     assert!(!empty_gfm.is_null());
     unsafe { agenthub_ffi_string_free(empty_gfm) };
 
+    // Verify dedicated desktop C ABI entrypoints accept {"request": ...} envelope matching dispatch.rs & CodexDesktopStore.
+    let attach_req = CString::new(
+        r#"{"request":{"revision":0,"threadId":"missing-thread-id","confirmOwner":false}}"#,
+    )
+    .unwrap();
+    unsafe {
+        agenthub_ffi_desktop_attach(
+            rt_ptr,
+            attach_req.as_ptr(),
+            43,
+            Some(on_rpc),
+            &tx as *const _ as *mut std::ffi::c_void,
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+    let (attach_id, attach_ok, attach_err) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(attach_id, 43);
+    assert!(!attach_ok);
+    assert!(
+        !attach_err.contains("invalid attach request"),
+        "Wrapped request envelope must deserialize cleanly, got: {attach_err}"
+    );
+
+    let att_req = CString::new(
+        r#"{"request":{"revision":0,"sessionId":"missing-sess","action":{"type":"unbind","bindingId":"b1"}}}"#,
+    )
+    .unwrap();
+    unsafe {
+        agenthub_ffi_desktop_attachments(
+            rt_ptr,
+            att_req.as_ptr(),
+            44,
+            Some(on_rpc),
+            &tx as *const _ as *mut std::ffi::c_void,
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+    let (att_id, _att_ok, att_body) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(att_id, 44);
+    assert!(
+        !att_body.contains("invalid attachments request"),
+        "Wrapped attachments request envelope must deserialize cleanly, got: {att_body}"
+    );
+
     unsafe { agenthub_ffi_shutdown(rt_ptr) };
 }

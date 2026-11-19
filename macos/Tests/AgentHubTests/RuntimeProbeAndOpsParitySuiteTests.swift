@@ -100,8 +100,27 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 ParityCaseTracker.shared.record(f, "cmd-a-blocked-by-\(modalKey)")
             }
 
-            // WHILE modal is open, an editable NSTextView inside the modal MUST STILL select its own text!
+            // WHILE modal is open, underlying ComposerNSTextView or non-modal ReaderSelectableTextView MUST BE BLOCKED from selectAll!
+            let underlyingComposer = ComposerNSTextView(frame: NSRect(x: 10, y: 50, width: 300, height: 60))
+            underlyingComposer.string = "draft behind modal"
+            underlyingComposer.setSelectedRange(NSRange(location: 0, length: 0))
+            testWin.contentView?.addSubview(underlyingComposer)
+            _ = testWin.makeFirstResponder(underlyingComposer)
             store.setInlineModalPresented("searchModal", presented: true)
+            XCTAssertEqual(AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store), .blockedByModalOrOverlay)
+            XCTAssertEqual(underlyingComposer.selectedRange().length, 0, "Underlying ComposerNSTextView must NOT select all while modal is open")
+
+            let underlyingReader = ReaderSelectableTextView(frame: NSRect(x: 10, y: 120, width: 300, height: 40))
+            underlyingReader.isEditable = false
+            underlyingReader.isSelectable = true
+            underlyingReader.string = "assistant reply behind modal"
+            underlyingReader.setSelectedRange(NSRange(location: 0, length: 0))
+            testWin.contentView?.addSubview(underlyingReader)
+            _ = testWin.makeFirstResponder(underlyingReader)
+            XCTAssertEqual(AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store), .blockedByModalOrOverlay)
+            XCTAssertEqual(underlyingReader.selectedRange().length, 0, "Underlying ReaderSelectableTextView must NOT select all while modal is open")
+
+            // WHILE modal is open, an editable NSTextView inside the modal MUST STILL select its own text!
             let modalInput = NSTextView(frame: NSRect(x: 10, y: 10, width: 200, height: 30))
             modalInput.isEditable = true
             modalInput.string = "search query text"
@@ -150,41 +169,68 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
         }
     }
 
-    // MARK: - 3. api.test.ts (51 cases) — Comprehensive Command Routing, LocalOnly Guards & Wire Envelopes
+    // MARK: - 3. api.test.ts (51 cases) — Comprehensive Real Contract Registry Routing, Remote.Invoke & LocalOnly Guards
 
     func testPorted_apiContractRouting() throws {
         try runAsyncParityCheck {
             let f = "webui/src/lib/api.test.ts"
+            let contractURL = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("contracts/agenthub-contract.json")
+            let rawContract = try Data(contentsOf: contractURL)
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: rawContract) as? [String: Any])
+            let actions = try XCTUnwrap(root["actions"] as? [[String: Any]])
+            // Every action in agenthub-contract.json that has a tauriCommand (excluding dedicated stream attach)
+            let invokeActions: [String] = actions.compactMap { entry in
+                guard let id = entry["id"] as? String,
+                      let tauriCmd = entry["tauriCommand"] as? String,
+                      !tauriCmd.isEmpty,
+                      id != "codex.desktop.attach"
+                else { return nil }
+                return id
+            }
+            XCTAssertGreaterThanOrEqual(invokeActions.count, 51, "Contract registry must supply >=51 real invoke actions")
+
+            final class RouteModeBox: @unchecked Sendable { var bootstrapRemote = false }
+            let routeMode = RouteModeBox()
             let transport = MockRuntimeTransport { cmd, args in
-                if cmd == "remote.rpc" {
+                if routeMode.bootstrapRemote && cmd == "remote.get" {
+                    return Data("{\"target\":\"remote\",\"revision\":2,\"sshHost\":\"prod-1\",\"configured\":true,\"activeMachineId\":\"m1\",\"activeMachineName\":\"Prod\",\"machines\":[{\"id\":\"m1\",\"name\":\"Prod\",\"sshHost\":\"prod-1\",\"useSudo\":false}]}".utf8)
+                }
+                if cmd == "remote.invoke" {
                     return Data("{\"ok\":true,\"forwarded\":true}".utf8)
                 }
                 return Data("{\"ok\":true,\"cmd\":\"\(cmd)\",\"len\":\(args.count)}".utf8)
             }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.api.\(UUID().uuidString)")!)
 
-            let localCommands = [
-                "system.capabilities", "system.info", "system.overview", "system.resources",
-                "threads.list", "threads.detail", "threads.blocks", "threads.subagentDetail",
-                "threads.rename", "threads.archive", "threads.restore",
-                "claude.list", "claude.detail", "claude.rename", "claude.deletePreview", "claude.deleteExecute",
-                "claude.ownershipDiagnostics", "claude.hooks",
-                "grok.list", "grok.detail", "grok.rename", "grok.deletePreview", "grok.deleteExecute",
-                "antigravity.list", "antigravity.detail", "antigravity.rename", "antigravity.archive", "antigravity.restore",
-                "dsh.list", "dsh.detail", "dsh.rename", "dsh.archive", "dsh.restore",
-                "grokbot.list", "grokbot.detail",
-                "sessions.bulkPreview", "sessions.bulkExecute", "sessions.attachmentRead", "sessions.search",
-                "plans.save", "probe.status", "probe.settings.get", "probe.settings.save",
-                "probe.barkTest", "probe.installHooks", "probe.removeHooks",
-                "github.ci.status", "github.ci.refresh",
-                "updates.status", "updates.check", "updates.install",
-            ]
-            struct Ack: Decodable { let ok: Bool }
-            for (idx, cmd) in localCommands.enumerated() {
-                let ack: Ack = try await store.rpc(cmd, args: ["probe": idx], localOnly: cmd == "plans.save" || cmd.hasPrefix("grokbot."))
+            struct Ack: Decodable {
+                let ok: Bool
+                let forwarded: Bool?
+            }
+            for (idx, cmd) in invokeActions.enumerated() {
+                let isLocalOnly = cmd == "plans.save" || cmd.hasPrefix("grokbot.") || cmd.hasPrefix("codex.desktop.") || cmd.hasPrefix("remote.")
+                let ack: Ack = try await store.rpc(cmd, args: ["probe": idx], localOnly: isLocalOnly)
                 XCTAssertTrue(ack.ok, cmd)
                 ParityCaseTracker.shared.record(f, "rpc-\(cmd)")
             }
+
+            // Switch to remote target and verify remote.invoke forwarding vs localOnly rejection!
+            routeMode.bootstrapRemote = true
+            await store.bootstrap()
+            XCTAssertEqual(store.target, .remote)
+            let forwardedAck: Ack = try await store.rpc("threads.list", args: ["includeArchived": false])
+            XCTAssertEqual(forwardedAck.forwarded, true)
+            ParityCaseTracker.shared.record(f, "remote-target-forwards-via-remote-invoke")
+
+            let localBypassAck: Ack = try await store.rpc("plans.save", args: ["title": "t"], localOnly: true)
+            XCTAssertTrue(localBypassAck.ok)
+            XCTAssertNil(localBypassAck.forwarded, "localOnly RPC must invoke local backend directly without remote.invoke forwarding")
+            XCTAssertEqual(transport.recordedCalls.last?.command, "plans.save")
+            ParityCaseTracker.shared.record(f, "remote-target-bypasses-forwarding-for-local-only-rpc")
         }
     }
 
@@ -193,9 +239,20 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
     func testPorted_runtimeStreamAndEpochs() throws {
         try runAsyncParityCheck {
             let f = "webui/src/lib/runtime.test.ts"
+            final class OrderLog: @unchecked Sendable {
+                var events: [String] = []
+            }
+            let log = OrderLog()
             let transport = MockRuntimeTransport { cmd, _ in
-                if cmd == "remote.status" {
-                    return Data("{\"connected\":false,\"machines\":[]}".utf8)
+                log.events.append("rpc:\(cmd)")
+                if cmd == "remote.get" {
+                    return Data("{\"target\":\"local\",\"revision\":0,\"sshHost\":null,\"configured\":false,\"activeMachineId\":null,\"activeMachineName\":null,\"machines\":[]}".utf8)
+                }
+                if cmd == "remote.select" {
+                    return Data("{\"target\":\"local\",\"revision\":7,\"sshHost\":null,\"configured\":true,\"activeMachineId\":null,\"activeMachineName\":null,\"machines\":[]}".utf8)
+                }
+                if cmd == "system.capabilities" {
+                    return Data("{\"ok\":true,\"api_version\":2,\"host_surface\":\"desktop_embedded_tauri\",\"capabilities\":{\"threads\":true,\"jobs\":true,\"probe\":true,\"settings\":true,\"job_history\":true,\"app_updater\":true,\"thread_cleanup\":true,\"thread_archive_actions\":true,\"systemd\":false,\"linux_update_job\":false,\"prune_backups\":false,\"grokbot_sessions\":true}}".utf8)
                 }
                 if cmd == "jobs.detail" {
                     return Data("{\"available\":true,\"data\":{\"id\":\"job-1\",\"kind\":\"update_check\",\"status\":\"succeeded\",\"title\":\"Check\",\"started_at\":1700000000}}".utf8)
@@ -236,9 +293,53 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertFalse(store.isBusyForSwitch)
             ParityCaseTracker.shared.record(f, "completed-jobs-clear-busy")
 
-            for extra in ["drops-stale-revision-response", "runs-before-machine-change-hooks", "syncs-window-focus-atomic"] {
-                ParityCaseTracker.shared.record(f, extra)
+            // 1) Runs beforeMachineChange hooks BEFORE remote.select RPC executes
+            log.events.removeAll()
+            let hookToken = store.registerBeforeMachineChange {
+                log.events.append("before-hook")
             }
+            try await store.selectMachine(target: .remote, machineId: "m1")
+            store.unregisterBeforeMachineChange(hookToken)
+            let hookIdx = try XCTUnwrap(log.events.firstIndex(of: "before-hook"))
+            let selectIdx = try XCTUnwrap(log.events.firstIndex(of: "rpc:remote.select"))
+            XCTAssertLessThan(hookIdx, selectIdx, "beforeMachineChange hook must run before remote.select")
+            XCTAssertEqual(store.revision, 7)
+            ParityCaseTracker.shared.record(f, "runs-before-machine-change-hooks")
+
+            // 2) Stale revision response is dropped/rejected when revision advances mid-RPC
+            transport.setHandler { cmd, _ in
+                if cmd == "threads.list" {
+                    try await Task.sleep(nanoseconds: 120_000_000)
+                    return Data("{\"ok\":true}".utf8)
+                }
+                if cmd == "remote.select" {
+                    return Data("{\"target\":\"remote\",\"revision\":8,\"sshHost\":\"prod-1\",\"configured\":true,\"activeMachineId\":\"m1\",\"activeMachineName\":\"Prod\",\"machines\":[{\"id\":\"m1\",\"name\":\"Prod\",\"sshHost\":\"prod-1\",\"useSudo\":false}]}".utf8)
+                }
+                if cmd == "remote.invoke" || cmd == "system.capabilities" {
+                    return Data("{\"ok\":true,\"api_version\":2,\"host_surface\":\"linux_server_api\",\"capabilities\":{\"threads\":true}}".utf8)
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            struct SimpleAck: Decodable { let ok: Bool }
+            async let inFlightRead: SimpleAck = store.rpc("threads.list", args: [String: String]())
+            try await Task.sleep(nanoseconds: 15_000_000)
+            try await store.selectMachine(target: .remote, machineId: "m1")
+            do {
+                _ = try await inFlightRead
+                XCTFail("Stale revision RPC must throw when revision changed mid-flight")
+            } catch {
+                XCTAssertEqual(store.revision, 8)
+            }
+            ParityCaseTracker.shared.record(f, "drops-stale-revision-response")
+
+            // 3) Window state sync updates transport atomically
+            store.updateWindowState(visible: false, focused: false)
+            XCTAssertEqual(transport.windowState.visible, false)
+            XCTAssertEqual(transport.windowState.focused, false)
+            store.updateWindowState(visible: true, focused: false)
+            XCTAssertEqual(transport.windowState.visible, true)
+            XCTAssertEqual(transport.windowState.focused, false)
+            ParityCaseTracker.shared.record(f, "syncs-window-focus-atomic")
         }
     }
 
@@ -383,6 +484,12 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             cardHost.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(cardHost.fittingSize.height, 40)
             ParityCaseTracker.shared.record(f, "mounts-github-ci-card-with-wrapping-titles")
+
+            // Bot badge & 7-char SHA verification on visible runs
+            let newest = try XCTUnwrap(visible.first)
+            XCTAssertTrue(newest.isBot)
+            XCTAssertEqual(String(newest.headSha.prefix(7)), "0000018")
+            XCTAssertEqual(newest.conclusion, "failure")
             ParityCaseTracker.shared.record(f, "bot-badge-and-hover-tooltips")
         }
     }
@@ -442,7 +549,20 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 XCTAssertEqual(host.frame.width, 1100)
                 ParityCaseTracker.shared.record(f, "settings-underline-tab-\(sec.rawValue)")
             }
+            XCTAssertEqual(LayoutMetrics.consolePageMaxWidth, 1060)
             ParityCaseTracker.shared.record(f, "settings-1060pt-centered-container")
+
+            @MainActor func collectTexts(_ v: NSView) -> [String] {
+                var res: [String] = []
+                if let tf = v as? NSTextField, !tf.stringValue.isEmpty { res.append(tf.stringValue) }
+                for sub in v.subviews { res.append(contentsOf: collectTexts(sub)) }
+                return res
+            }
+            let checkHost = NSHostingView(rootView: SettingsWorkspaceView(store: store))
+            checkHost.frame = NSRect(x: 0, y: 0, width: 1100, height: 760)
+            checkHost.layoutSubtreeIfNeeded()
+            let labels = collectTexts(checkHost)
+            XCTAssertLessThanOrEqual(labels.filter { $0 == "设置" }.count, 1, "SettingsWorkspaceView must NOT render duplicate '设置' subheader")
             ParityCaseTracker.shared.record(f, "settings-no-duplicate-subheader")
         }
     }
@@ -520,6 +640,23 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(hiddenScopePartial.candidates.count, 2, "Partial hidden items MUST remain visible after cancelHiddenScan")
             XCTAssertFalse(hiddenScopePartial.scanned, "Incomplete stopped scan MUST keep scanned == false so cleanup execution stays disabled")
             ParityCaseTracker.shared.record(f, "partial-hidden-items-retained-on-stop")
+
+            // Regression (DESIGN.md:87): Even when claude_empty/grok_empty have 3 deletable items, stopped hidden scan MUST disable cleanup execution!
+            XCTAssertTrue(
+                UnifiedThreadCleanupSection.isCleanupExecuteDisabled(
+                    busy: false,
+                    hiddenScanStopped: true,
+                    selectedDeletableCount: 3
+                ),
+                "Stopped hidden scan must disable cleanup execution even if other scopes have deletable items"
+            )
+            XCTAssertFalse(
+                UnifiedThreadCleanupSection.isCleanupExecuteDisabled(
+                    busy: false,
+                    hiddenScanStopped: false,
+                    selectedDeletableCount: 3
+                )
+            )
             ParityCaseTracker.shared.record(f, "stopped-scan-disables-cleanup-execution")
 
             // Completed scan marks scanned = true and unlocks execution

@@ -336,6 +336,7 @@ public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
 
         private func handleKeyDown(_ event: NSEvent) -> Bool {
             guard !parent.isModalOpen,
+                  !ModalPresentationRegistry.shared.hasActiveModal,
                   let win = hostView?.window,
                   event.window === win,
                   win.attachedSheet == nil,

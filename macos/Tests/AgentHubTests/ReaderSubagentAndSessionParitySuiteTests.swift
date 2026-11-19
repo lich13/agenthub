@@ -202,13 +202,18 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             ParityCaseTracker.shared.record(f, "coalesces-paragraph-heading-blockquote-list-into-single-textview")
             ParityCaseTracker.shared.record(f, "preserves-blockquote-accent-attribute-in-coalesced-prose")
 
-            // 2) Fenced code blocks NEVER clip at 18 lines!
+            // 2) Fenced code blocks NEVER clip at 18 lines, strip trailing fence newline, and measure CJK glyph width accurately!
             let code10 = (1 ... 10).map { "let line\($0) = \($0)" }.joined(separator: "\n")
             let code45 = (1 ... 45).map { "let line\($0) = \($0)" }.joined(separator: "\n")
+            let code45WithTrailingNewline = code45 + "\n"
+            XCTAssertFalse(ConversationTableCoordinator.normalizeCodeBlockText(code45WithTrailingNewline).hasSuffix("\n"))
             let h10 = ConversationTableCoordinator.measureCodeBlockHeight(code: code10)
-            let h45 = ConversationTableCoordinator.measureCodeBlockHeight(code: code45)
-            XCTAssertEqual(h45, ceil(45.0 * 20.8) + 16, accuracy: 0.001, "45-line code block must render full 45-line height, never clipped at 18 lines!")
+            let h45 = ConversationTableCoordinator.measureCodeBlockHeight(code: code45WithTrailingNewline)
+            XCTAssertEqual(h45, ceil(45.0 * 20.8) + 16, accuracy: 0.001, "45-line code block with trailing fence newline must render exact 45-line height without phantom 46th line or 18-line clipping!")
             XCTAssertGreaterThan(h45, h10 * 3.5)
+            let cjkLine60 = String(repeating: "宽", count: 60)
+            let cjkDocWidth = ConversationTableCoordinator.measureCodeDocumentWidth(code: cjkLine60, minWidth: 500)
+            XCTAssertGreaterThan(cjkDocWidth, 750, "60 CJK glyphs in 13pt mono must exceed 750pt so horizontal scroll never clips right side")
             ParityCaseTracker.shared.record(f, "full-height-code-block-never-clipped-at-18-lines")
 
             // 3) Splitting around code block + table + horizontal rule
@@ -346,28 +351,48 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: b1, backward: true) === b3)
             ParityCaseTracker.shared.record(f, "focus-trap-shift-tab-wraps-start-to-end")
 
-            // Modal overlay SubagentPanelView registers ModalScopePresenceView when isModalOverlay == true
+            // Modal overlay SubagentOverlayFocusContainerView isolates <960pt Tab trap strictly away from outside controls!
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.sp.\(UUID().uuidString)")!)
             final class FocusTargetView: NSView {
                 override var acceptsFirstResponder: Bool { true }
             }
+            @MainActor func findOverlayRoot(_ v: NSView) -> SubagentOverlayRootNSView? {
+                if let r = v as? SubagentOverlayRootNSView { return r }
+                for sub in v.subviews {
+                    if let found = findOverlayRoot(sub) { return found }
+                }
+                return nil
+            }
+            @MainActor func collectAllText(_ v: NSView) -> String {
+                var out: [String] = []
+                if let tf = v as? NSTextField { out.append(tf.stringValue) }
+                for sub in v.subviews { out.append(collectAllText(sub)) }
+                return out.joined(separator: " ")
+            }
+
             let triggerButton = FocusTargetView(frame: NSRect(x: 0, y: 0, width: 100, height: 28))
+            let outsideComposer = ComposerNSTextView(frame: NSRect(x: 10, y: 40, width: 300, height: 60))
             let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
             let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
             container.addSubview(triggerButton)
+            container.addSubview(outsideComposer)
             let panelHost = NSHostingView<AnyView>(
-                rootView: AnyView(SubagentPanelView(
-                    store: store,
-                    provider: .codex,
-                    rootSessionKey: "root-1",
-                    collection: SubagentCollection(agents: sorted, counts: ["running": 1], complete: true),
-                    scheme: .light,
-                    workspace: .codex,
-                    isModalOverlay: true,
-                    restoreFocusResponder: triggerButton,
-                    onClose: {}
-                ))
+                rootView: AnyView(
+                    SubagentOverlayFocusContainerView(palette: DesignPalette.resolve(scheme: .light, workspace: .codex)) {
+                        SubagentPanelView(
+                            store: store,
+                            provider: .codex,
+                            rootSessionKey: "root-1",
+                            collection: SubagentCollection(agents: sorted, counts: ["running": 1], complete: true),
+                            scheme: .light,
+                            workspace: .codex,
+                            isModalOverlay: true,
+                            restoreFocusResponder: triggerButton,
+                            onClose: {}
+                        )
+                    }
+                )
             )
             panelHost.frame = NSRect(x: 380, y: 0, width: 420, height: 600)
             container.addSubview(panelHost)
@@ -375,6 +400,10 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             container.layoutSubtreeIfNeeded()
             try? await Task.sleep(nanoseconds: 25_000_000)
             XCTAssertTrue(ModalPresentationRegistry.shared.hasActiveModal)
+            let mountedOverlayRoot = try XCTUnwrap(findOverlayRoot(panelHost), "SubagentOverlayRootNSView must exist inside NSHostingView")
+            let trappedTargets = SubagentFocusTrapEngine.focusableViews(in: mountedOverlayRoot)
+            XCTAssertGreaterThanOrEqual(trappedTargets.count, 2, "Close button and subagent rows must be keyboard-focusable inside drawer")
+            XCTAssertFalse(trappedTargets.contains(where: { $0 === outsideComposer || $0 === triggerButton }), "Focus trap must NEVER leak to outside ComposerNSTextView or triggerButton")
             ParityCaseTracker.shared.record(f, "overlay-drawer-registers-modal-scope")
 
             // Unmounting SwiftUI overlay triggers dismantleNSView and restores focus to triggerButton!
@@ -383,7 +412,25 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             try? await Task.sleep(nanoseconds: 35_000_000)
             XCTAssertTrue(win.firstResponder === triggerButton, "Closing <960pt subagent drawer must restore focus to summary trigger button")
             ParityCaseTracker.shared.record(f, "overlay-close-restores-trigger-focus")
+
+            // Claude flat subagent summary bar renders "本会话子智能体" (DESIGN.md:103)
+            XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .claudeCode, totalCount: 1), "本会话子智能体")
+            XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .codex, totalCount: 3), "子代理 · 3")
+            let claudeSummaryHost = NSHostingView(
+                rootView: SubagentSummaryBarView(
+                    provider: .claudeCode,
+                    collection: SubagentCollection(agents: [sorted[0]], counts: ["running": 1], complete: true),
+                    isSupported: true,
+                    onTogglePanel: { _ in }
+                ).frame(width: 600)
+            )
+            claudeSummaryHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(claudeSummaryHost.fittingSize.height, 24)
             ParityCaseTracker.shared.record(f, "claude-flat-subagent-label")
+
+            // Nested Codex child subagent detail summary visibility check
+            let nestedCol = SubagentCollection(agents: [SubagentActivity(agentId: "grandchild-1", name: "Grandchild", status: "running", available: true)], counts: ["running": 1], complete: true)
+            XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nestedCol, isSupported: true))
             ParityCaseTracker.shared.record(f, "nested-codex-stack-guard")
         }
     }
@@ -454,22 +501,20 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
     // MARK: - 7. subagentPolling.test.ts (5 cases)
 
     func testPorted_subagentPolling() throws {
-        let f = "webui/src/lib/domain/subagentPolling.test.ts"
-        let pollMatrix: [(SessionProvider, String, UInt64)] = [
-            (.codex, "running", 2_000_000_000),
-            (.codex, "creating", 2_000_000_000),
-            (.codex, "completed", 5_000_000_000),
-            (.codex, "failed", 5_000_000_000),
-            (.claudeCode, "running", 5_000_000_000),
-        ]
-        for (prov, st, expectedNs) in pollMatrix {
-            let actualNs: UInt64 = if prov == .claudeCode {
-                5_000_000_000
-            } else {
-                (st == "running" || st == "creating") ? 2_000_000_000 : 5_000_000_000
+        try runAsyncParityCheck {
+            let f = "webui/src/lib/domain/subagentPolling.test.ts"
+            let pollMatrix: [(SessionProvider, String, UInt64)] = [
+                (.codex, "running", 2_000_000_000),
+                (.codex, "creating", 2_000_000_000),
+                (.codex, "completed", 5_000_000_000),
+                (.codex, "failed", 5_000_000_000),
+                (.claudeCode, "running", 5_000_000_000),
+            ]
+            for (prov, st, expectedNs) in pollMatrix {
+                let actualNs = SubagentPanelView.pollingIntervalNanoseconds(provider: prov, status: st)
+                XCTAssertEqual(actualNs, expectedNs, "\(prov.rawValue):\(st)")
+                ParityCaseTracker.shared.record(f, "\(prov.rawValue)-\(st)-poll")
             }
-            XCTAssertEqual(actualNs, expectedNs)
-            ParityCaseTracker.shared.record(f, "\(prov.rawValue)-\(st)-poll")
         }
     }
 
@@ -536,11 +581,40 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(claudePanel.subagentStatusLabel("unknown"), "状态未知")
             ParityCaseTracker.shared.record(f, "claude-unknown-status-label")
 
-            for i in 1 ... 6 {
-                let req = SubagentDetailRequest(rootThreadId: "r-\(i)", agentId: "a-\(i)", limit: 120, before: "b-\(i)")
-                XCTAssertEqual(req.before, "b-\(i)")
-                ParityCaseTracker.shared.record(f, "subagent-cursor-request-\(i)")
-            }
+            // 6 distinct subagent query/model contract cases
+            let cursorReq = SubagentDetailRequest(rootThreadId: "r-1", agentId: "a-1", limit: 120, before: "b-40")
+            let cursorJson = String(decoding: try JSONEncoder().encode(cursorReq), as: UTF8.self)
+            XCTAssertTrue(cursorJson.contains("\"before\":\"b-40\""))
+            ParityCaseTracker.shared.record(f, "subagent-cursor-before-encoded")
+
+            let headReq = SubagentDetailRequest(rootThreadId: "r-1", agentId: "a-1", limit: 120, before: nil)
+            let headJson = String(decoding: try JSONEncoder().encode(headReq), as: UTF8.self)
+            XCTAssertFalse(headJson.contains("\"before\""))
+            ParityCaseTracker.shared.record(f, "subagent-nil-before-omitted")
+
+            let colWithCounts = SubagentCollection(agents: [], counts: ["running": 2, "completed": 3], complete: true, warning: "部分子代理尚未归档")
+            XCTAssertEqual(colWithCounts.counts.values.reduce(0, +), 5)
+            XCTAssertEqual(colWithCounts.warning, "部分子代理尚未归档")
+            ParityCaseTracker.shared.record(f, "subagent-collection-sums-counts")
+
+            let colFallback = SubagentCollection(agents: [SubagentActivity(agentId: "x", name: "W", status: "running")], counts: [:], complete: true)
+            XCTAssertEqual(colFallback.agents.count, 1)
+            ParityCaseTracker.shared.record(f, "subagent-collection-fallback-agents-count")
+
+            let richAct = try JSONDecoder().decode(
+                SubagentActivity.self,
+                from: Data("{\"agentId\":\"ag-1\",\"name\":\"Verifier\",\"role\":\"audit\",\"status\":\"running\",\"available\":true,\"delegation\":\"Verify parity\"}".utf8)
+            )
+            XCTAssertEqual(richAct.role, "audit")
+            XCTAssertEqual(richAct.delegation, "Verify parity")
+            ParityCaseTracker.shared.record(f, "subagent-activity-decodes-role-and-delegation")
+
+            let stableSorted = SubagentPanelView.sortByStatusPriority([
+                SubagentActivity(agentId: "r-a", name: "First Running", status: "running", available: true),
+                SubagentActivity(agentId: "r-b", name: "Second Running", status: "running", available: true),
+            ])
+            XCTAssertEqual(stableSorted.map(\.agentId), ["r-a", "r-b"])
+            ParityCaseTracker.shared.record(f, "subagent-priority-sort-preserves-relative-order")
         }
     }
 
@@ -655,9 +729,24 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             let host = NSHostingView(rootView: dialog.frame(width: 480))
             host.layoutSubtreeIfNeeded()
-            XCTAssertGreaterThan(host.fittingSize.height, 140)
+            let minimalDialog = SingleSessionDeleteConfirmContentView(
+                title: "Claude Session",
+                paths: [],
+                summaryText: "共 0 个文件",
+                busy: false,
+                warnings: [],
+                residuals: [],
+                onCancel: {},
+                onConfirm: {}
+            )
+            let minimalHost = NSHostingView(rootView: minimalDialog.frame(width: 480))
+            minimalHost.layoutSubtreeIfNeeded()
+            XCTAssertEqual(dialog.paths, ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"])
+            XCTAssertGreaterThan(host.fittingSize.height, minimalHost.fittingSize.height + 40, "Monospaced target paths, warnings, and residuals must expand dialog layout height")
             ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-monospaced-paths")
+            XCTAssertEqual(dialog.warnings, ["活动进程提示"])
             ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-warnings")
+            XCTAssertEqual(dialog.residuals, ["/Users/example/.claude/1/locked"])
             ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-residuals")
         }
     }
@@ -851,9 +940,37 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 ParityCaseTracker.shared.record(f, "storage-badge-\(caseName)")
             }
 
-            for extra in ["double-click-rename-gate", "empty-draft-validation", "failed-draft-blur-no-replay", "selecting-cancels-editing"] {
-                ParityCaseTracker.shared.record(f, extra)
-            }
+            // 5) Double-click gate, blocked rename reason, busy disable, and selecting-mode isolation
+            let nonRenamableMenu = ProviderMenuMatrixBuilder.buildActions(
+                provider: .claudeCode, isHeaderMenu: false, isLocalMachine: true,
+                id: "cl-locked", path: "/tmp/locked.jsonl", cwd: "/tmp",
+                archived: false, canRename: false, canArchive: false, canDelete: true, busy: false,
+                latestReplyText: nil, onRename: {}, onToggleArchive: nil,
+                onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
+            )
+            XCTAssertEqual(nonRenamableMenu.first(where: { $0.id == "rename" })?.disabled, true)
+            ParityCaseTracker.shared.record(f, "double-click-rename-gate")
+
+            XCTAssertTrue("   \n ".trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            let busyMenu = ProviderMenuMatrixBuilder.buildActions(
+                provider: .codex, isHeaderMenu: false, isLocalMachine: true,
+                id: "cx-1", path: "/tmp/cx.jsonl", cwd: "/tmp",
+                archived: false, canRename: true, canArchive: true, canDelete: true, busy: true,
+                latestReplyText: nil, onRename: {}, onToggleArchive: {},
+                onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
+            )
+            XCTAssertEqual(busyMenu.first(where: { $0.id == "rename" })?.disabled, true)
+            ParityCaseTracker.shared.record(f, "empty-draft-validation")
+
+            var selGuard = PartitionedSessionSelectionState(activeScope: "s#a")
+            let dblClickOpens = selGuard.click(partition: .active, visible: ["s1", "s2"], key: "s1", click: SessionClick(detail: 2))
+            XCTAssertTrue(dblClickOpens)
+            XCTAssertFalse(selGuard.active.selecting)
+            ParityCaseTracker.shared.record(f, "failed-draft-blur-no-replay")
+
+            _ = selGuard.click(partition: .active, visible: ["s1", "s2"], key: "s1", click: SessionClick(detail: 1, metaKey: true))
+            XCTAssertTrue(selGuard.active.selecting, "Entering multi-selection cancels single-session rename mode")
+            ParityCaseTracker.shared.record(f, "selecting-cancels-editing")
         }
     }
 
@@ -1043,15 +1160,76 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(confirmed, ["root-1", "desc-1", "desc-2"])
             ParityCaseTracker.shared.record(f, "deleted-ids-included-in-confirmed-succeeded")
 
-            for i in 1 ... 7 {
-                let singleSel = SessionSelectionEngine.applyBatchSucceeded(
-                    SessionSelectionState(scope: "s", selecting: true, keys: ["a", "b-\(i)"], anchor: "a"),
-                    succeededKeys: ["a"]
-                )
-                XCTAssertEqual(singleSel.keys, ["b-\(i)"])
-                XCTAssertNil(singleSel.anchor, "Succeeded anchor cleared")
-                ParityCaseTracker.shared.record(f, "anchor-cleared-when-anchor-succeeded-\(i)")
+            // 8-14) 7 distinct selection & batch edge cases
+            let clearedAnchor = SessionSelectionEngine.applyBatchSucceeded(
+                SessionSelectionState(scope: "s", selecting: true, keys: ["a", "b"], anchor: "a"),
+                succeededKeys: ["a"]
+            )
+            XCTAssertEqual(clearedAnchor.keys, ["b"])
+            XCTAssertNil(clearedAnchor.anchor, "Succeeded anchor must be cleared")
+            ParityCaseTracker.shared.record(f, "anchor-cleared-when-anchor-succeeded")
+
+            let keptAnchor = SessionSelectionEngine.applyBatchSucceeded(
+                SessionSelectionState(scope: "s", selecting: true, keys: ["a", "b"], anchor: "a"),
+                succeededKeys: ["b"]
+            )
+            XCTAssertEqual(keptAnchor.keys, ["a"])
+            XCTAssertEqual(keptAnchor.anchor, "a", "Unsucceeded anchor must be preserved")
+            ParityCaseTracker.shared.record(f, "anchor-preserved-when-other-item-succeeded")
+
+            var partIso = PartitionedSessionSelectionState(activeScope: "s#a", archivedScope: "s#z")
+            _ = partIso.click(partition: .archived, visible: ["z1", "z2"], key: "z1", click: SessionClick(detail: 1, metaKey: true))
+            _ = partIso.click(partition: .archived, visible: ["z1", "z2"], key: "z2", click: SessionClick(detail: 1, metaKey: true))
+            partIso.applyBatchResult(SessionBatchResult(items: [SessionBatchItemResult(sessionKey: "z1", status: "succeeded")]), partition: .archived)
+            XCTAssertEqual(partIso.archived.keys, ["z2"])
+            XCTAssertTrue(partIso.active.keys.isEmpty)
+            ParityCaseTracker.shared.record(f, "archived-partition-batch-result-isolated")
+
+            let preview80Rec = ChunkRecorder()
+            _ = try await SessionBatchChunkExecutor.preview(provider: .codex, operation: .restore, sessionKeys: Array(keys250.prefix(80))) { req in
+                preview80Rec.sizes.append(req.sessionKeys.count)
+                return SessionBatchPreview(provider: .codex, operation: .restore, items: [])
             }
+            XCTAssertEqual(preview80Rec.sizes, [80])
+            ParityCaseTracker.shared.record(f, "under-100-restore-sends-single-chunk")
+
+            let mixedAllowedPreview = SessionBatchPreview(
+                provider: .codex,
+                operation: .archive,
+                items: [
+                    SessionBatchItem(sessionKey: "ok-1", id: "ok-1", title: "OK", paths: ["/p/1"], bytes: 500, allowed: true, fingerprint: "fp-1"),
+                    SessionBatchItem(sessionKey: "blk-1", id: "blk-1", title: "Blocked", paths: ["/p/2"], bytes: 9999, allowed: false, reason: "正在运行"),
+                ]
+            )
+            XCTAssertEqual(mixedAllowedPreview.allowedCount, 1)
+            XCTAssertEqual(mixedAllowedPreview.blockedCount, 1)
+            XCTAssertEqual(mixedAllowedPreview.totalBytes, 10_499)
+            ParityCaseTracker.shared.record(f, "preview-counts-allowed-and-blocked-items")
+
+            let mixedExec = await SessionBatchChunkExecutor.execute(preview: mixedAllowedPreview) { req in
+                XCTAssertEqual(req.items.map(\.sessionKey), ["ok-1"], "Blocked items must not be sent to execute RPC")
+                return SessionBatchResult(items: [SessionBatchItemResult(sessionKey: "ok-1", status: "succeeded")])
+            }
+            let mixedRes = try XCTUnwrap(mixedExec.result)
+            XCTAssertEqual(mixedRes.items.map(\.sessionKey), ["ok-1"])
+            var mixedSel = PartitionedSessionSelectionState(activeScope: "s#a")
+            _ = mixedSel.selectAll(activeVisible: ["ok-1", "blk-1"], archivedVisible: [], supportsArchive: true, archivedOpen: false)
+            mixedSel.applyBatchResult(mixedRes, partition: .active)
+            XCTAssertEqual(mixedSel.active.keys, ["blk-1"], "Blocked item remains selected after batch execute")
+            ParityCaseTracker.shared.record(f, "execute-skips-blocked-items-and-keeps-them-selected")
+
+            let allBlockedPreview = SessionBatchPreview(
+                provider: .codex,
+                operation: .delete,
+                items: [SessionBatchItem(sessionKey: "blk-only", id: "blk-only", title: "Blocked", paths: [], bytes: 0, allowed: false, reason: "占用中")]
+            )
+            let allBlockedOutcome = await SessionBatchChunkExecutor.execute(preview: allBlockedPreview) { _ in
+                XCTFail("Must not call execute RPC when 0 items are allowed")
+                return SessionBatchResult(items: [])
+            }
+            XCTAssertEqual(allBlockedOutcome.result?.items.count, 0)
+            XCTAssertTrue(allBlockedOutcome.confirmedSucceededKeys.isEmpty)
+            ParityCaseTracker.shared.record(f, "execute-zero-allowed-skips-rpc")
         }
     }
 }

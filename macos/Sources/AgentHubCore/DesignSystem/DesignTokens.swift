@@ -281,6 +281,7 @@ public enum LayoutMetrics {
     public static let sideNavCollapsedWidth: CGFloat = 48
     public static let sessionListWidth: CGFloat = 296
     public static let readingColumnMaxWidth: CGFloat = 768
+    public static let consolePageMaxWidth: CGFloat = 1060
     public static let subagentDrawerWidth: CGFloat = 420
     public static let subagentDockThreshold: CGFloat = 960
 
