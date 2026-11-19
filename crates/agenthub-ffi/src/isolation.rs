@@ -87,6 +87,12 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
     platform.config_file = config_file;
     platform.log_dir = log_dir;
 
+    let env_file = isolated_root.join("env");
+    if !env_file.exists() {
+        let key = agenthub_core::crypto::SecretBox::random_key_material();
+        write_atomic_0600(&env_file, format!("AGENTHUB_SECRET_KEY={key}\n").as_bytes())?;
+    }
+
     let mut config = Config::load_runtime(&platform.config_file)?;
     config.paths.data_dir = isolated_root.to_path_buf();
     config.paths.db_path = isolated_root.join("agenthub.sqlite");

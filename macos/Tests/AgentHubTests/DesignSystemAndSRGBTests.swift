@@ -183,30 +183,7 @@ final class DesignSystemAndSRGBTests: XCTestCase {
 
     @MainActor
     private func renderSwiftUIViewPixels<V: View>(_ view: V, size: NSSize, appearanceName: NSAppearance.Name) throws -> [UInt8] {
-        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
-        let win = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
-        win.appearance = NSAppearance(named: appearanceName)
-        win.contentView = host
-        host.layoutSubtreeIfNeeded()
-
-        let w = Int(size.width)
-        let h = Int(size.height)
-        let cs = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
-        var pixels = [UInt8](repeating: 0, count: w * h * 4)
-        let ok = pixels.withUnsafeMutableBytes { raw -> Bool in
-            guard let base = raw.baseAddress,
-                  let ctx = CGContext(
-                      data: base, width: w, height: h,
-                      bitsPerComponent: 8, bytesPerRow: w * 4,
-                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  )
-            else { return false }
-            host.wantsLayer = true
-            host.layer?.render(in: ctx)
-            return true
-        }
-        XCTAssertTrue(ok)
-        return pixels
+        try OffscreenRenderHelper.renderSwiftUIView(view, size: size, appearance: appearanceName)
     }
 
     private func containsSRGBPixel(_ pixels: [UInt8], matching target: (r: UInt8, g: UInt8, b: UInt8), tolerance: Int) -> Bool {

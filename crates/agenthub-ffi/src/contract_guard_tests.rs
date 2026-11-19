@@ -119,7 +119,18 @@ fn c_abi_isolated_init_invoke_capabilities_and_shutdown_roundtrip() {
             &mut err_ptr,
         )
     };
-    assert_eq!(rc, 0);
+    if rc != 0 {
+        let msg = if err_ptr.is_null() {
+            "unknown init error".to_owned()
+        } else {
+            let s = unsafe { CStr::from_ptr(err_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { agenthub_ffi_string_free(err_ptr) };
+            s
+        };
+        panic!("agenthub_ffi_init failed (rc={rc}): {msg}");
+    }
     assert!(!rt_ptr.is_null());
     assert!(err_ptr.is_null());
     assert!(temp.path().join("config.toml").is_file());

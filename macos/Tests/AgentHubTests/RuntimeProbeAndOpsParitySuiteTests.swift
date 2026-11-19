@@ -47,16 +47,27 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(win.minSize, NSSize(width: 1000, height: 680))
             ParityCaseTracker.shared.record(f, "window-hidden-creation-with-1000x680-min-size")
 
-            let fakeScreenFrame = NSRect(x: 0, y: 25, width: 1728, height: 1055)
-            wc.alignOnceAndReveal(overrideVisibleFrame: fakeScreenFrame)
-            XCTAssertEqual(win.frame, fakeScreenFrame, "First reveal must maximize window to fill screen.visibleFrame")
+            let arbitraryScreen = NSRect(x: 0, y: 25, width: 1728, height: 1055)
+            XCTAssertEqual(AgentHubWindowManager.maximizedInitialFrame(visibleFrame: arbitraryScreen), arbitraryScreen)
+
+            let liveScreenVF = (win.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 25, width: 1024, height: 681)
+            wc.alignOnceAndReveal(overrideVisibleFrame: liveScreenVF)
+            XCTAssertEqual(win.frame, liveScreenVF, "First reveal must maximize window to fill screen.visibleFrame")
             ParityCaseTracker.shared.record(f, "window-one-time-maximize-to-visible-frame")
 
-            // User manually resizes window -> subsequent alignOnceAndReveal MUST NOT resize it again!
-            let userFrame = NSRect(x: 120, y: 80, width: 1200, height: 760)
+            // User manually resizes window within screen visibleFrame -> subsequent alignOnceAndReveal MUST NOT resize it again!
+            let customW = min(max(1000, liveScreenVF.width - 24), 1200)
+            let customH = min(max(680, liveScreenVF.height - 20), 760)
+            let userFrame = NSRect(
+                x: liveScreenVF.minX + floor((liveScreenVF.width - customW) * 0.5),
+                y: liveScreenVF.minY,
+                width: customW,
+                height: customH
+            )
             win.setFrame(userFrame, display: false)
-            wc.alignOnceAndReveal(overrideVisibleFrame: fakeScreenFrame)
-            XCTAssertEqual(win.frame, userFrame, "alignOnceAndReveal must NEVER resize window after initial show")
+            let expectedAfterManual = win.frame
+            wc.alignOnceAndReveal(overrideVisibleFrame: liveScreenVF)
+            XCTAssertEqual(win.frame, expectedAfterManual, "alignOnceAndReveal must NEVER resize window after initial show")
             ParityCaseTracker.shared.record(f, "window-subsequent-reveal-never-resizes")
 
             // Screen resolution clamp keeps window inside smaller display

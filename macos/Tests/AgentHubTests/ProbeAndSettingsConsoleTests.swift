@@ -214,31 +214,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
 
     @MainActor
     private func renderShellPixels(store: RuntimeConnectionStore, size: NSSize) throws -> [UInt8] {
-        let win = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
-        win.appearance = NSAppearance(named: .aqua)
-        let hosting = NSHostingView(rootView: AppShellView(store: store).frame(width: size.width, height: size.height))
-        hosting.frame = NSRect(origin: .zero, size: size)
-        win.contentView = hosting
-        hosting.layoutSubtreeIfNeeded()
-
-        let w = Int(size.width)
-        let h = Int(size.height)
-        let cs = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
-        var pixels = [UInt8](repeating: 0, count: w * h * 4)
-        let ok = pixels.withUnsafeMutableBytes { raw -> Bool in
-            guard let base = raw.baseAddress,
-                  let ctx = CGContext(
-                      data: base, width: w, height: h,
-                      bitsPerComponent: 8, bytesPerRow: w * 4,
-                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  )
-            else { return false }
-            hosting.wantsLayer = true
-            hosting.layer?.render(in: ctx)
-            return true
-        }
-        XCTAssertTrue(ok)
-        return pixels
+        try OffscreenRenderHelper.renderSwiftUIView(AppShellView(store: store), size: size, appearance: .aqua)
     }
 
     private func assertPixelNear(
