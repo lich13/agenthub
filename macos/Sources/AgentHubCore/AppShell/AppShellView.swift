@@ -175,7 +175,12 @@ public struct AppShellView: View {
             if let builder = providerContentBuilder {
                 builder(store.activeWorkspace, store, isCompactMobile)
             } else {
-                DefaultProviderPlaceholderView(workspace: store.activeWorkspace, isCompactMobile: isCompactMobile)
+                UnifiedProviderWorkspaceView(
+                    store: store,
+                    workspace: store.activeWorkspace,
+                    isCompactMobile: isCompactMobile,
+                    scheme: effectiveScheme
+                )
             }
         }
     }

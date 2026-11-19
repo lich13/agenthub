@@ -212,6 +212,17 @@ public final class RuntimeConnectionStore: ObservableObject {
         return try JSONDecoder().decode(Res.self, from: data)
     }
 
+    public func rpc<Req: Encodable, Res: Decodable>(
+        _ command: String,
+        args: Req,
+        localOnly: Bool = false
+    ) async throws -> Res {
+        let encoded = try JSONEncoder().encode(args)
+        let argsObj = (try? JSONDecoder().decode([String: JSONValue].self, from: encoded)) ?? [:]
+        let data = try await rpcRaw(command, argsObject: argsObj, localOnly: localOnly)
+        return try JSONDecoder().decode(Res.self, from: data)
+    }
+
     private func runBeforeMachineChangeCleanups(_ cleanups: [BeforeMachineChangeCleanup]) async {
         for fn in cleanups {
             await fn()
