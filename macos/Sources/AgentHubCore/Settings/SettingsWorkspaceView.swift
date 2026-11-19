@@ -58,7 +58,7 @@ public struct SettingsWorkspaceView: View {
                 .overlay(alignment: .bottom) {
                     if active {
                         Rectangle()
-                            .fill(palette.accent.color)
+                            .fill(palette.textPrimary.color)
                             .frame(height: 2)
                     }
                 }
@@ -97,12 +97,34 @@ public struct MaintenanceOpsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Appearance Segmented Radio Group
-            VStack(alignment: .leading, spacing: 8) {
+            // .ops-header ("设置与维护" + Refresh, OpsWorkspace.tsx:67-85)
+            HStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    LucideIcon(.slidersHorizontal, size: 18)
+                        .foregroundStyle(palette.accent.color)
+                    Text("设置与维护")
+                        .font(DesignFonts.body(22, weight: .bold))
+                        .foregroundStyle(palette.textPrimary.color)
+                }
+                Spacer()
+                Button {
+                    Task { await fetchUpdateStatus() }
+                } label: {
+                    LucideIcon(.refreshCw, size: 17)
+                }
+                .buttonStyle(IconButtonStyle(dimension: 32))
+                .disabled(updateLoading)
+                .help("刷新版本与状态")
+                .accessibilityLabel("刷新版本与状态")
+            }
+
+            // 3-Column .appearance-segmented Radio Group (styles.css:551-562)
+            VStack(alignment: .leading, spacing: 10) {
                 Text("外观")
                     .font(DesignFonts.body(14, weight: .semibold))
                     .foregroundStyle(palette.textPrimary.color)
-                FlowButtonRow(spacing: 6, lineSpacing: 6) {
+
+                HStack(spacing: 4) {
                     ForEach(ThemeMode.allCases, id: \.self) { option in
                         let active = (store.themeMode == option)
                         let icon: LucideIconName = switch option {
@@ -113,26 +135,32 @@ public struct MaintenanceOpsView: View {
                         Button {
                             store.setTheme(option)
                         } label: {
-                            HStack(spacing: 6) {
-                                LucideIcon(icon, size: 15)
+                            HStack(spacing: 8) {
+                                LucideIcon(icon, size: 16)
                                 Text(option.label)
                                     .font(DesignFonts.body(13, weight: active ? .semibold : .medium))
                             }
                             .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
-                            .padding(.horizontal, 14)
-                            .frame(height: LayoutMetrics.formControlHeight)
+                            .frame(maxWidth: .infinity, minHeight: 36)
                             .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill((active ? palette.hover : palette.surface).color)
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill((active ? palette.hover.color : Color.clear))
                             )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder((active ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
-                            )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainHitButtonStyle())
                     }
                 }
+                .padding(4)
+                .frame(maxWidth: 520)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(palette.surface.color)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+                )
             }
 
             // Update Panel
@@ -169,25 +197,42 @@ public struct MaintenanceOpsView: View {
         let working = updateBusy || updateStatus?.state == "checking" || updateStatus?.state == "installing"
         let failure = updateError ?? (updateJob?.status == "failed" ? (updateJob?.error ?? "更新操作失败") : nil)
         let versionLabel: String = if let st = updateStatus {
-            UpdateVersionFormatter.displayWithVPrefix(st.currentVersion)
+            UpdateVersionFormatter.displayVersion(st.currentVersion)
         } else if updateLoading {
             "读取中…"
         } else {
-            UpdateVersionFormatter.displayWithVPrefix(LayoutMetrics.fallbackAppVersion)
+            UpdateVersionFormatter.displayVersion(LayoutMetrics.fallbackAppVersion)
         }
 
         PanelCard(title: title, icon: .refreshCw) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 16) {
-                    MetricCard(
-                        label: "当前版本",
-                        value: versionLabel
-                    )
-                    .frame(maxWidth: 200)
+            VStack(alignment: .leading, spacing: 12) {
+                FlowButtonRow(spacing: 28, lineSpacing: 14) {
+                    HStack(spacing: 8) {
+                        Text("当前版本")
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle(palette.textMuted.color)
+                        Text(versionLabel)
+                            .font(DesignFonts.tabularBody(14, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                    }
+                    .frame(minWidth: 120, alignment: .leading)
 
-                    Spacer(minLength: 8)
+                    if updateStatus?.updateAvailable == true,
+                       let latest = updateStatus?.latestVersion,
+                       !latest.isEmpty
+                    {
+                        HStack(spacing: 8) {
+                            Text("可用版本")
+                                .font(DesignFonts.body(12))
+                                .foregroundStyle(palette.textMuted.color)
+                            Text(UpdateVersionFormatter.displayVersion(latest))
+                                .font(DesignFonts.tabularBody(14, weight: .semibold))
+                                .foregroundStyle(palette.accent.color)
+                        }
+                        .frame(minWidth: 120, alignment: .leading)
+                    }
 
-                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                    HStack(spacing: 8) {
                         ForEach(UpdateActionViewItem.actions(status: updateError == nil ? updateStatus : nil, capabilities: store.capabilities)) { item in
                             let icon: LucideIconName = switch item.action {
                             case .check: .refreshCw
@@ -197,8 +242,8 @@ public struct MaintenanceOpsView: View {
                             Button {
                                 Task { await triggerUpdateAction(item.action) }
                             } label: {
-                                HStack(spacing: 6) {
-                                    LucideIcon(icon, size: 16)
+                                HStack(spacing: 8) {
+                                    LucideIcon(icon, size: 17)
                                     Text(item.label)
                                 }
                             }

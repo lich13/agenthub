@@ -105,6 +105,7 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case threads
+        case codexSessions = "codex_sessions"
         case threadSubagents = "thread_subagents"
         case claudeSubagents = "claude_subagents"
         case codexDesktop = "codex_desktop"
@@ -128,6 +129,62 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
     }
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.threads = try c.decodeIfPresent(Bool.self, forKey: .threads)
+            ?? c.decodeIfPresent(Bool.self, forKey: .codexSessions)
+            ?? true
+        self.threadSubagents = try c.decodeIfPresent(Bool.self, forKey: .threadSubagents)
+        self.claudeSubagents = try c.decodeIfPresent(Bool.self, forKey: .claudeSubagents)
+        self.codexDesktop = try c.decodeIfPresent(Bool.self, forKey: .codexDesktop)
+        self.jobs = try c.decodeIfPresent(Bool.self, forKey: .jobs) ?? true
+        self.probe = try c.decodeIfPresent(Bool.self, forKey: .probe) ?? true
+        self.settings = try c.decodeIfPresent(Bool.self, forKey: .settings) ?? true
+        self.jobHistory = try c.decodeIfPresent(Bool.self, forKey: .jobHistory) ?? true
+        self.appUpdater = try c.decodeIfPresent(Bool.self, forKey: .appUpdater) ?? false
+        self.threadCleanup = try c.decodeIfPresent(Bool.self, forKey: .threadCleanup) ?? true
+        self.hiddenCleanupScan = try c.decodeIfPresent(Bool.self, forKey: .hiddenCleanupScan)
+        self.codexAccountScope = try c.decodeIfPresent(Bool.self, forKey: .codexAccountScope)
+        self.threadArchiveActions = try c.decodeIfPresent(Bool.self, forKey: .threadArchiveActions) ?? true
+        self.systemd = try c.decodeIfPresent(Bool.self, forKey: .systemd) ?? false
+        self.linuxUpdateJob = try c.decodeIfPresent(Bool.self, forKey: .linuxUpdateJob) ?? false
+        self.pruneBackups = try c.decodeIfPresent(Bool.self, forKey: .pruneBackups) ?? false
+        self.antigravitySessions = try c.decodeIfPresent(Bool.self, forKey: .antigravitySessions)
+        self.antigravityNotifications = try c.decodeIfPresent(Bool.self, forKey: .antigravityNotifications)
+        self.dshSessions = try c.decodeIfPresent(Bool.self, forKey: .dshSessions)
+        self.dshNotifications = try c.decodeIfPresent(Bool.self, forKey: .dshNotifications)
+        self.grokbotSessions = try c.decodeIfPresent(Bool.self, forKey: .grokbotSessions)
+        self.grokbotNotifications = try c.decodeIfPresent(Bool.self, forKey: .grokbotNotifications)
+        self.githubCi = try c.decodeIfPresent(Bool.self, forKey: .githubCi)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(threads, forKey: .threads)
+        try c.encodeIfPresent(threadSubagents, forKey: .threadSubagents)
+        try c.encodeIfPresent(claudeSubagents, forKey: .claudeSubagents)
+        try c.encodeIfPresent(codexDesktop, forKey: .codexDesktop)
+        try c.encode(jobs, forKey: .jobs)
+        try c.encode(probe, forKey: .probe)
+        try c.encode(settings, forKey: .settings)
+        try c.encode(jobHistory, forKey: .jobHistory)
+        try c.encode(appUpdater, forKey: .appUpdater)
+        try c.encode(threadCleanup, forKey: .threadCleanup)
+        try c.encodeIfPresent(hiddenCleanupScan, forKey: .hiddenCleanupScan)
+        try c.encodeIfPresent(codexAccountScope, forKey: .codexAccountScope)
+        try c.encode(threadArchiveActions, forKey: .threadArchiveActions)
+        try c.encode(systemd, forKey: .systemd)
+        try c.encode(linuxUpdateJob, forKey: .linuxUpdateJob)
+        try c.encode(pruneBackups, forKey: .pruneBackups)
+        try c.encodeIfPresent(antigravitySessions, forKey: .antigravitySessions)
+        try c.encodeIfPresent(antigravityNotifications, forKey: .antigravityNotifications)
+        try c.encodeIfPresent(dshSessions, forKey: .dshSessions)
+        try c.encodeIfPresent(dshNotifications, forKey: .dshNotifications)
+        try c.encodeIfPresent(grokbotSessions, forKey: .grokbotSessions)
+        try c.encodeIfPresent(grokbotNotifications, forKey: .grokbotNotifications)
+        try c.encodeIfPresent(githubCi, forKey: .githubCi)
+    }
 }
 
 public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
@@ -137,7 +194,9 @@ public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case apiVersion = "api_version"
+        case protocolVersion = "protocol_version"
         case hostSurface = "host_surface"
+        case serviceMode = "service_mode"
         case capabilities
     }
 
@@ -145,6 +204,25 @@ public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
         self.apiVersion = apiVersion
         self.hostSurface = hostSurface
         self.capabilities = capabilities
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.apiVersion = try c.decodeIfPresent(Int.self, forKey: .apiVersion)
+            ?? c.decodeIfPresent(Int.self, forKey: .protocolVersion)
+            ?? 2
+        self.hostSurface = try c.decodeIfPresent(String.self, forKey: .hostSurface)
+            ?? c.decodeIfPresent(String.self, forKey: .serviceMode)
+            ?? "desktop_embedded_tauri"
+        self.capabilities = try c.decodeIfPresent(SystemCapabilitiesCore.self, forKey: .capabilities)
+            ?? SystemCapabilitiesCore()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(apiVersion, forKey: .apiVersion)
+        try c.encode(hostSurface, forKey: .hostSurface)
+        try c.encode(capabilities, forKey: .capabilities)
     }
 }
 
@@ -392,6 +470,11 @@ public enum UpdateVersionFormatter {
         return trimmed
     }
 
+    public static func displayVersion(_ raw: String?) -> String {
+        let bare = bareVersion(raw)
+        return bare.isEmpty ? "未知" : bare
+    }
+
     public static func displayWithVPrefix(_ raw: String?) -> String {
         let bare = bareVersion(raw)
         guard !bare.isEmpty else { return "未知" }
@@ -439,7 +522,7 @@ public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
             out.append(
                 UpdateActionViewItem(
                     action: .install,
-                    label: "更新至 \(UpdateVersionFormatter.displayWithVPrefix(status?.latestVersion))",
+                    label: "更新至 \(UpdateVersionFormatter.displayVersion(status?.latestVersion))",
                     tone: "primary",
                     disabled: false
                 )

@@ -99,8 +99,13 @@ public struct GithubCiCardView: View {
                     .disabled(busy)
                     .help("刷新 GitHub CI")
 
-                    Button(saving ? "保存中" : "保存") {
+                    Button {
                         onSave()
+                    } label: {
+                        HStack(spacing: 6) {
+                            LucideIcon(.check, size: 15)
+                            Text(saving ? "保存中" : "保存")
+                        }
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(draft == nil || saving)
@@ -109,100 +114,132 @@ public struct GithubCiCardView: View {
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    HStack {
-                        LucideIcon(.bell, size: 15)
-                            .foregroundStyle(palette.textMuted.color)
-                        Text("CI 监控与通知")
-                            .font(DesignFonts.body(13, weight: .medium))
+                    HStack(spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill((notifyCiToggle ? palette.accentSoft : palette.surface).color)
+                                .frame(width: 28, height: 28)
+                            LucideIcon(.bell, size: 15)
+                                .foregroundStyle((notifyCiToggle ? palette.accent : palette.textMuted).color)
+                        }
+                        Text("CI 监控通知")
+                            .font(DesignFonts.body(13, weight: .semibold))
                             .foregroundStyle(palette.textPrimary.color)
-                        Spacer()
-                        CapsuleSwitch(isOn: $notifyCiToggle, label: "CI 监控与通知")
+                        Spacer(minLength: 6)
+                        StatusChip(notifyCiToggle ? "已开启" : "已关闭", tone: notifyCiToggle ? .info : .neutral)
+                        CapsuleSwitch(isOn: $notifyCiToggle, label: "CI 监控通知")
                             .disabled(draft == nil || saving)
                     }
                     .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder((notifyCiToggle ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
+                    )
 
-                    HStack {
-                        LucideIcon(.bot, size: 15)
-                            .foregroundStyle(palette.textMuted.color)
-                        Text("过滤 Bot 运行")
-                            .font(DesignFonts.body(13, weight: .medium))
+                    HStack(spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill((filterBotsToggle ? palette.accentSoft : palette.surface).color)
+                                .frame(width: 28, height: 28)
+                            LucideIcon(.bot, size: 15)
+                                .foregroundStyle((filterBotsToggle ? palette.accent : palette.textMuted).color)
+                        }
+                        Text("过滤 Bot")
+                            .font(DesignFonts.body(13, weight: .semibold))
                             .foregroundStyle(palette.textPrimary.color)
-                        Spacer()
-                        CapsuleSwitch(isOn: $filterBotsToggle, label: "过滤 Bot 运行")
+                        Spacer(minLength: 6)
+                        StatusChip(filterBotsToggle ? "已开启" : "已关闭", tone: filterBotsToggle ? .info : .neutral)
+                        CapsuleSwitch(isOn: $filterBotsToggle, label: "过滤 Bot")
                             .disabled(draft == nil || saving)
                     }
                     .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder((filterBotsToggle ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
+                    )
                 }
 
-                // Repository filter & multi-select chips (max-height: 156pt)
-                VStack(alignment: .leading, spacing: 8) {
+                // Repository scope card matching WebUI .ci-repo-card
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
+                        LucideIcon(.folderGit2, size: 14)
+                            .foregroundStyle(palette.accent.color)
+                        Text("监控仓库范围")
+                            .font(DesignFonts.body(13, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                        StatusChip(
+                            configuredRepos.isEmpty ? "监控全部仓库" : "已选 \(configuredRepos.count) 个仓库",
+                            tone: configuredRepos.isEmpty ? .neutral : .info
+                        )
+                        Spacer(minLength: 8)
+
                         HStack(spacing: 6) {
-                            LucideIcon(.search, size: 14)
+                            LucideIcon(.search, size: 13)
                                 .foregroundStyle(palette.textMuted.color)
-                            TextField("搜索或输入 owner/repo 筛选监控仓库（留空监控全部）", text: $repoQuery)
+                            TextField("搜索或输入 owner/repo", text: $repoQuery)
                                 .textFieldStyle(.plain)
-                                .font(DesignFonts.body(13))
+                                .font(DesignFonts.body(12))
                                 .foregroundStyle(palette.textPrimary.color)
                                 .onSubmit { addQueryRepo() }
                         }
                         .padding(.horizontal, 10)
-                        .frame(height: LayoutMetrics.formControlHeight)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
-
-                        Button {
-                            addQueryRepo()
-                        } label: {
-                            HStack(spacing: 4) {
-                                LucideIcon(.plus, size: 14)
-                                Text("添加")
-                            }
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(repoQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft == nil)
+                        .frame(width: 230, height: 32)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(palette.surface.color))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
                     }
 
-                    if !filteredCatalog.isEmpty {
-                        ScrollView {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 6)], spacing: 6) {
-                                ForEach(filteredCatalog) { option in
-                                    let selected = GithubCiDomain.isSelected(option, configured: configuredRepos)
-                                    Button {
-                                        if var current = draft {
-                                            current.githubCiRepositories = GithubCiDomain.toggleSelection(option, configured: configuredRepos)
-                                            draft = current
-                                        }
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            LucideIcon(.folderGit2, size: 13)
-                                                .foregroundStyle((selected ? palette.accent : palette.textMuted).color)
-                                            Text(option.fullName)
-                                                .font(DesignFonts.body(12, weight: .medium))
-                                                .foregroundStyle((selected ? palette.accent : palette.textPrimary).color)
-                                                .lineLimit(1)
-                                            Spacer(minLength: 0)
-                                        }
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            Capsule().fill((selected ? palette.accentSoft : palette.elevated).color)
-                                        )
-                                        .overlay(
-                                            Capsule().strokeBorder((selected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(PlainHitButtonStyle())
-                                }
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                        let allSelected = configuredRepos.isEmpty
+                        Button {
+                            if var current = draft {
+                                current.githubCiRepositories = []
+                                draft = current
                             }
+                        } label: {
+                            HStack(spacing: 5) {
+                                LucideIcon(.check, size: 12)
+                                    .foregroundStyle((allSelected ? palette.accent : palette.textMuted).color)
+                                Text("全部仓库")
+                                    .font(DesignFonts.body(12, weight: .medium))
+                                    .foregroundStyle((allSelected ? palette.accent : palette.textSecondary).color)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill((allSelected ? palette.accentSoft : palette.surface).color))
+                            .overlay(Capsule().strokeBorder((allSelected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
                         }
-                        .frame(maxHeight: 156)
+                        .buttonStyle(PlainHitButtonStyle())
+
+                        ForEach(filteredCatalog) { option in
+                            let selected = GithubCiDomain.isSelected(option, configured: configuredRepos)
+                            Button {
+                                if var current = draft {
+                                    current.githubCiRepositories = GithubCiDomain.toggleSelection(option, configured: configuredRepos)
+                                    draft = current
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    LucideIcon(selected ? .check : .plus, size: 12)
+                                        .foregroundStyle((selected ? palette.accent : palette.textMuted).color)
+                                    Text(option.fullName)
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle((selected ? palette.accent : palette.textPrimary).color)
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill((selected ? palette.accentSoft : palette.surface).color))
+                                .overlay(Capsule().strokeBorder((selected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
+                            }
+                            .buttonStyle(PlainHitButtonStyle())
+                        }
                     }
                 }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
 
                 if let err = errorMessage ?? snapshot?.error, !err.isEmpty {
                     Text(err)

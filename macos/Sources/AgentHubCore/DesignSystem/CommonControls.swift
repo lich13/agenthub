@@ -813,3 +813,173 @@ public struct GlassHeaderSurface: NSViewRepresentable {
         }
     }
 }
+
+// MARK: - Capsule Pill Button Style (.desktop-composer-toolbar / .desktop-connect-row / .desktop-request-actions)
+
+public struct CapsuleOutlineButtonStyle: ButtonStyle {
+    public var danger: Bool
+    public var primary: Bool
+
+    public init(primary: Bool = false, danger: Bool = false) {
+        self.primary = primary
+        self.danger = danger
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        InnerBody(configuration: configuration, primary: primary, danger: danger)
+    }
+
+    private struct InnerBody: View {
+        @Environment(\.agentHubPalette) private var palette
+        @Environment(\.isEnabled) private var isEnabled
+        let configuration: Configuration
+        let primary: Bool
+        let danger: Bool
+
+        var body: some View {
+            let fg: RGBAColor = danger ? palette.errFg : (primary ? palette.buttonFg : palette.textPrimary)
+            let bg: RGBAColor = danger
+                ? palette.errBg
+                : (primary ? (configuration.isPressed ? palette.buttonHover : palette.buttonBg)
+                    : (configuration.isPressed ? palette.hover : palette.elevated))
+            let border: RGBAColor = danger ? palette.errBorder : (primary ? palette.buttonBg : palette.borderStrong)
+
+            return configuration.label
+                .font(DesignFonts.body(12, weight: .medium))
+                .foregroundStyle(fg.color)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .frame(minHeight: 32)
+                .background(Capsule(style: .continuous).fill(bg.color))
+                .overlay(Capsule(style: .continuous).strokeBorder(border.color, lineWidth: 1))
+                .contentShape(Rectangle())
+                .opacity(isEnabled ? 1.0 : 0.45)
+        }
+    }
+}
+
+// MARK: - Custom-Styled Button Popping Up Native NSMenu Without NSPopUpButton '⌄' Chevron Hijack
+
+public struct NativeMenuEntry: Identifiable {
+    public let id: String
+    public let title: String
+    public var disabled: Bool
+    public var isSeparator: Bool
+    public var action: () -> Void
+
+    public init(id: String, title: String, disabled: Bool = false, action: @escaping () -> Void) {
+        self.id = id
+        self.title = title
+        self.disabled = disabled
+        self.isSeparator = false
+        self.action = action
+    }
+
+    public init(title: String, enabled: Bool = true, action: @escaping () -> Void) {
+        self.id = UUID().uuidString
+        self.title = title
+        self.disabled = !enabled
+        self.isSeparator = false
+        self.action = action
+    }
+
+    public static func separator(_ id: String = UUID().uuidString) -> NativeMenuEntry {
+        NativeMenuEntry(id: id, title: "", disabled: true, isSeparator: true, action: {})
+    }
+
+    private init(id: String, title: String, disabled: Bool, isSeparator: Bool, action: @escaping () -> Void) {
+        self.id = id
+        self.title = title
+        self.disabled = disabled
+        self.isSeparator = isSeparator
+        self.action = action
+    }
+}
+
+@MainActor
+private final class MenuTargetRelay: NSObject {
+    let entries: [NativeMenuEntry]
+
+    init(entries: [NativeMenuEntry]) {
+        self.entries = entries
+    }
+
+    @objc func invokeEntry(_ sender: NSMenuItem) {
+        guard entries.indices.contains(sender.tag) else { return }
+        entries[sender.tag].action()
+    }
+}
+
+private struct MenuAnchorProbeNSView: NSViewRepresentable {
+    let onResolve: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        DispatchQueue.main.async { onResolve(v) }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView) }
+    }
+}
+
+public struct AnchoredMenuButton<Label: View>: View {
+    public let entries: [NativeMenuEntry]
+    public var alignRight: Bool
+    public var accessibilityLabel: String?
+    @ViewBuilder public let label: () -> Label
+
+    @State private var anchorView: NSView?
+    @State private var activeRelay: MenuTargetRelay?
+
+    public init(
+        entries: [NativeMenuEntry],
+        alignRight: Bool = false,
+        accessibilityLabel: String? = nil,
+        @ViewBuilder label: @escaping () -> Label
+    ) {
+        self.entries = entries
+        self.alignRight = alignRight
+        self.accessibilityLabel = accessibilityLabel
+        self.label = label
+    }
+
+    public var body: some View {
+        Button {
+            popMenu()
+        } label: {
+            label()
+                .background(MenuAnchorProbeNSView { anchorView = $0 })
+        }
+        .buttonStyle(PlainHitButtonStyle())
+        .accessibilityLabel(accessibilityLabel ?? "菜单")
+    }
+
+    @MainActor
+    private func popMenu() {
+        guard !entries.isEmpty else { return }
+        let relay = MenuTargetRelay(entries: entries)
+        activeRelay = relay
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (idx, item) in entries.enumerated() {
+            if item.isSeparator {
+                menu.addItem(.separator())
+                continue
+            }
+            let mi = NSMenuItem(title: item.title, action: #selector(MenuTargetRelay.invokeEntry(_:)), keyEquivalent: "")
+            mi.target = relay
+            mi.tag = idx
+            mi.isEnabled = !item.disabled
+            menu.addItem(mi)
+        }
+        if let anchorView, anchorView.window != nil {
+            let y: CGFloat = anchorView.isFlipped ? anchorView.bounds.maxY + 4 : -4
+            let x: CGFloat = alignRight ? max(0, anchorView.bounds.maxX - menu.size.width) : 0
+            menu.popUp(positioning: nil, at: NSPoint(x: x, y: y), in: anchorView)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+}

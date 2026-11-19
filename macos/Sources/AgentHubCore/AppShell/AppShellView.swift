@@ -250,11 +250,11 @@ public struct SideNavigationRailView: View {
 
     public var body: some View {
         let items = store.capabilities.visibleWorkspaces
-        VStack(alignment: collapsed ? .center : .leading, spacing: 10) {
-            // Brand Row
+        VStack(alignment: collapsed ? .center : .leading, spacing: 6) {
+            // Brand Row (.nav-brand: min-height 34px, padding 2px 4px 6px, logo 22x22px)
             HStack(spacing: 8) {
                 if !collapsed {
-                    AgentHubLogoView(size: 24)
+                    AgentHubLogoView(size: 22)
                     Text("AgentHub")
                         .font(DesignFonts.body(14, weight: .semibold))
                         .foregroundStyle(palette.textPrimary.color)
@@ -264,15 +264,21 @@ public struct SideNavigationRailView: View {
                 Button(action: onToggleCollapse) {
                     LucideIcon(collapsed ? .panelLeftOpen : .panelLeftClose, size: 17)
                 }
-                .buttonStyle(IconButtonStyle(dimension: 30))
+                .buttonStyle(IconButtonStyle(dimension: 32))
                 .help(collapsed ? "展开导航" : "折叠导航")
             }
+            .padding(.horizontal, collapsed ? 0 : 4)
+            .padding(.top, 2)
+            .padding(.bottom, 6)
+            .frame(minHeight: 34)
 
             MachineButtonView(
                 store: store,
                 collapsed: collapsed,
                 onConfigure: onConfigureRemote
             )
+            .padding(.horizontal, collapsed ? 0 : 2)
+            .padding(.bottom, 6)
 
             VStack(spacing: 3) {
                 ForEach(items, id: \.self) { item in
@@ -281,28 +287,17 @@ public struct SideNavigationRailView: View {
                             .fill(palette.borderSubtle.color)
                             .frame(height: 1)
                             .padding(.vertical, 4)
+                            .padding(.horizontal, 6)
                     }
                     let active = (store.activeWorkspace == item)
-                    Button {
+                    SideNavRowButton(
+                        item: item,
+                        active: active,
+                        collapsed: collapsed,
+                        palette: palette
+                    ) {
                         store.activeWorkspace = item
-                    } label: {
-                        HStack(spacing: 8) {
-                            navIcon(item)
-                                .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
-                            if !collapsed {
-                                Text(item.label)
-                                    .font(DesignFonts.body(13, weight: .medium))
-                                    .foregroundStyle((active ? palette.textPrimary : palette.textMuted).color)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.horizontal, collapsed ? 0 : 10)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
                     }
-                    .buttonStyle(FullWidthRowButtonStyle(selected: active))
-                    .help(item.label)
-                    .accessibilityLabel(item.label)
                 }
             }
 
@@ -311,19 +306,92 @@ public struct SideNavigationRailView: View {
         .padding(.horizontal, collapsed ? 6 : 10)
         .padding(.vertical, 12)
     }
+}
+
+private struct SideNavRowButton: View {
+    let item: WorkspaceId
+    let active: Bool
+    let collapsed: Bool
+    let palette: DesignPalette
+    let action: () -> Void
+
+    @State private var hovered: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                // .nav-icon-badge: 24x24pt rounded-8, background --as, color --a (styles.css:222-225)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.accentSoft.color)
+                        .frame(width: 24, height: 24)
+                    navBadgeIcon(item)
+                        .foregroundStyle(palette.accent.color)
+                }
+                .frame(width: 24, height: 24)
+
+                if !collapsed {
+                    Text(item.label)
+                        .font(DesignFonts.body(13, weight: active ? .semibold : .medium))
+                        .foregroundStyle((active || hovered ? palette.textPrimary : palette.textMuted).color)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, collapsed ? 0 : 9)
+            .padding(.vertical, 6)
+            .frame(maxWidth: collapsed ? 36 : .infinity, minHeight: 36, alignment: collapsed ? .center : .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(active ? palette.selected.color : (hovered ? palette.hover.color : Color.clear))
+            )
+            .overlay(alignment: .leading) {
+                if active {
+                    UnevenLeadingAccentBar(color: palette.accent.color, width: 2.5, cornerRadius: 8)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainHitButtonStyle())
+        .onHover { hovered = $0 }
+        .help(item.label)
+        .accessibilityLabel(item.label)
+    }
 
     @ViewBuilder
-    private func navIcon(_ id: WorkspaceId) -> some View {
+    private func navBadgeIcon(_ id: WorkspaceId) -> some View {
         switch id {
-        case .codex: AgentBrandIcon(.codex, size: 17)
-        case .claude: AgentBrandIcon(.claude, size: 17)
-        case .grok: AgentBrandIcon(.grok, size: 17)
-        case .grokbot: AgentBrandIcon(.grokbot, size: 17)
-        case .antigravity: AgentBrandIcon(.antigravity, size: 17)
-        case .dsh: AgentBrandIcon(.dsh, size: 17)
-        case .probe: LucideIcon(.activity, size: 17)
-        case .ops: LucideIcon(.slidersHorizontal, size: 17)
+        case .codex: AgentBrandIcon(.codex, size: 16)
+        case .claude: AgentBrandIcon(.claude, size: 16)
+        case .grok: AgentBrandIcon(.grok, size: 16)
+        case .grokbot: AgentBrandIcon(.grokbot, size: 16)
+        case .antigravity: AgentBrandIcon(.antigravity, size: 16)
+        case .dsh: AgentBrandIcon(.dsh, size: 16)
+        case .probe: LucideIcon(.activity, size: 16)
+        case .ops: LucideIcon(.slidersHorizontal, size: 16)
         }
+    }
+}
+
+public struct UnevenLeadingAccentBar: View {
+    public let color: Color
+    public var width: CGFloat
+    public var cornerRadius: CGFloat
+
+    public init(color: Color, width: CGFloat = 2.5, cornerRadius: CGFloat = 8) {
+        self.color = color
+        self.width = width
+        self.cornerRadius = cornerRadius
+    }
+
+    public var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(color)
+                .frame(width: width)
+            Spacer(minLength: 0)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .allowsHitTesting(false)
     }
 }
 

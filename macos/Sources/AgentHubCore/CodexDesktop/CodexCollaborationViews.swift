@@ -1,6 +1,25 @@
 import AppKit
 import SwiftUI
 
+// MARK: - One-Shot Open Intent Matching desktopIntent.ts
+
+@MainActor
+public enum DesktopOpenIntentRegistry {
+    private static var requestedThreadIds = Set<String>()
+
+    public static func request(threadId: String) {
+        requestedThreadIds.insert(threadId)
+    }
+
+    public static func consume(threadId: String) -> Bool {
+        requestedThreadIds.remove(threadId) != nil
+    }
+
+    public static func clearAll() {
+        requestedThreadIds.removeAll()
+    }
+}
+
 // MARK: - New Local Codex Thread Button (28x28pt FolderPlus(16) in Sidebar Header, DesktopComposer.tsx:38)
 
 public struct NewDesktopThreadButton: View {
@@ -65,6 +84,7 @@ public struct NewDesktopThreadButton: View {
                 pendingCreatedId = created.threadId
             }
             if let id = pendingCreatedId {
+                DesktopOpenIntentRegistry.request(threadId: id)
                 onCreated(id)
                 pendingCreatedId = nil
             }
@@ -216,7 +236,7 @@ public struct DesktopCollaborationFooterView: View {
                 .accessibilityLabel("复制诊断")
             }
 
-            // Expandable Goal Card (maxHeight: 120pt vertical scroll when expanded, DESIGN.md:27)
+            // Expandable Goal Row (.desktop-native-goal: unboxed with 1pt --bd bottom divider, styles.css:143, 257)
             if let goal = desktop.view?.goal, desktop.view?.connected == true {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .center, spacing: 8) {
@@ -225,8 +245,6 @@ public struct DesktopCollaborationFooterView: View {
                             goalExpanded.toggle()
                         } label: {
                             HStack(spacing: 6) {
-                                LucideIcon(goalExpanded ? .chevronDown : .chevronRight, size: 13)
-                                    .foregroundStyle(palette.textMuted.color)
                                 Text(Self.goalStatusLabel(goal.status))
                                     .font(DesignFonts.body(12, weight: .semibold))
                                     .foregroundStyle(palette.textPrimary.color)
@@ -236,6 +254,8 @@ public struct DesktopCollaborationFooterView: View {
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
                                 }
+                                LucideIcon(goalExpanded ? .chevronDown : .chevronRight, size: 13)
+                                    .foregroundStyle(palette.textMuted.color)
                                 Spacer(minLength: 4)
                             }
                             .contentShape(Rectangle())
@@ -271,10 +291,10 @@ public struct DesktopCollaborationFooterView: View {
                         .frame(maxHeight: 120)
                     }
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 10)
-                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
+                .padding(.bottom, 8)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                }
             }
 
             // Outbox Queue (queued | dispatching | held | outcome_unknown)
@@ -289,22 +309,21 @@ public struct DesktopCollaborationFooterView: View {
             }
 
             if !writable {
-                // Read-Only / Unavailability / Sync / Owner Confirmation Row (.desktop-connect-row)
-                FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                // Read-Only / Unavailability / Sync / Owner Confirmation Row (.desktop-connect-row, styles.css:191, 318, 348)
+                HStack(spacing: 6) {
                     Text(connectBannerLabel)
                         .font(DesignFonts.body(12))
-                        .foregroundStyle(((desktop.actionError ?? desktop.view?.error) != nil ? palette.errFg : palette.textSecondary).color)
+                        .foregroundStyle(((desktop.actionError ?? desktop.view?.error) != nil ? palette.errFg : palette.textMuted).color)
                         .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
                     Button("在 Codex 中打开") { Task { await desktop.openInCodexApp() } }
-                        .buttonStyle(SecondaryButtonStyle())
+                        .buttonStyle(CapsuleOutlineButtonStyle())
                         .disabled(desktop.busy)
                     Button("连接") { Task { await desktop.connect(confirmOwner: true) } }
-                        .buttonStyle(PrimaryButtonStyle())
+                        .buttonStyle(CapsuleOutlineButtonStyle())
                         .disabled(desktop.busy)
                 }
-                .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
             } else {
                 // Pending Approvals, Questions & Elicitations (capped at 32% viewport height)
                 if let requests = desktop.view?.requests, !requests.isEmpty {
@@ -447,52 +466,59 @@ public struct DesktopCollaborationFooterView: View {
                 )
 
                 // Composer Bottom Toolbar (NEVER binds .keyboardShortcut for ⌘+Return!)
-                HStack(spacing: 8) {
-                    Menu {
-                        Button("文件或图片") { Task { await chooseAndAttachFile() } }
-                            .disabled(desktop.busy || draft.references.count >= 32)
-                        Button("技能 ($)") { openCatalogPicker("skills") }
-                            .disabled(desktop.busy || draft.references.count >= 32)
-                        Button("插件与应用 (@)") { openCatalogPicker("mentions") }
-                            .disabled(desktop.busy || draft.references.count >= 32)
-                        Button("在 Codex 中管理目标") { Task { await desktop.openInCodexApp() } }
-                            .disabled(desktop.busy)
-                    } label: {
-                        LucideIcon(.plus, size: 17)
-                            .frame(width: 30, height: 30)
-                            .contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    let addEntries: [NativeMenuEntry] = [
+                        NativeMenuEntry(title: "文件或图片", enabled: !desktop.busy && draft.references.count < 32) {
+                            Task { await chooseAndAttachFile() }
+                        },
+                        NativeMenuEntry(title: "技能 ($)", enabled: !desktop.busy && draft.references.count < 32) {
+                            openCatalogPicker("skills")
+                        },
+                        NativeMenuEntry(title: "插件与应用 (@)", enabled: !desktop.busy && draft.references.count < 32) {
+                            openCatalogPicker("mentions")
+                        },
+                        NativeMenuEntry(title: "在 Codex 中管理目标", enabled: !desktop.busy) {
+                            Task { await desktop.openInCodexApp() }
+                        },
+                    ]
+                    AnchoredMenuButton(entries: addEntries, accessibilityLabel: "添加引用或附件") {
+                        LucideIcon(.plus, size: 18)
+                            .foregroundStyle(palette.textPrimary.color)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(palette.elevated.color))
+                            .overlay(Circle().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                            .contentShape(Circle())
                     }
-                    .menuStyle(.borderlessButton)
-                    .frame(width: 30, height: 30)
-                    .accessibilityLabel("添加引用或附件")
 
                     Spacer()
 
-                    // Model / Reasoning Effort / Mode Selector
+                    // Model / Reasoning Effort / Mode Selector Pill
                     Button {
                         settingsPopoverOpen.toggle()
                         if settingsPopoverOpen {
                             Task { await loadSettingsCatalogs() }
                         }
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             let selectedModelName = modelCatalog.first(where: { $0.handle == desktop.view?.model })?.name
                             Text(selectedModelName ?? desktop.view?.model ?? "模型设置")
-                                .font(DesignFonts.body(12, weight: .medium))
+                                .font(DesignFonts.body(13))
+                                .foregroundStyle(palette.textPrimary.color)
                             if let eff = desktop.view?.reasoningEffort, !eff.isEmpty {
-                                Text(eff).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
+                                Text(eff)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.textMuted.color)
                             }
                             if desktop.view?.mode == .plan {
-                                Text("Plan").font(DesignFonts.body(11, weight: .semibold)).foregroundStyle(palette.accent.color)
+                                Text("Plan")
+                                    .font(DesignFonts.body(12, weight: .medium))
+                                    .foregroundStyle(palette.textMuted.color)
                             }
-                            LucideIcon(.chevronDown, size: 12)
+                            LucideIcon(.chevronDown, size: 13)
+                                .foregroundStyle(palette.textMuted.color)
                         }
-                        .padding(.horizontal, 8)
-                        .frame(height: 28)
-                        .background(Capsule().fill(palette.surface.color))
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainHitButtonStyle())
+                    .buttonStyle(CapsuleOutlineButtonStyle())
                     .popover(isPresented: $settingsPopoverOpen) {
                         settingsPopoverContent
                     }
@@ -501,15 +527,20 @@ public struct DesktopCollaborationFooterView: View {
                         Button("补充") {
                             Task { await sendDraft(steer: true) }
                         }
-                        .buttonStyle(SecondaryButtonStyle())
+                        .buttonStyle(CapsuleOutlineButtonStyle())
                         .disabled(desktop.busy || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.references.isEmpty))
 
                         Button {
                             Task { try? await desktop.act(.stop(turnId: turnId)) }
                         } label: {
                             LucideIcon(.square, size: 14)
+                                .foregroundStyle(palette.textMuted.color)
+                                .frame(width: 32, height: 32)
+                                .background(Circle().fill(palette.elevated.color))
+                                .overlay(Circle().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                                .contentShape(Circle())
                         }
-                        .buttonStyle(IconButtonStyle(dimension: 30))
+                        .buttonStyle(PlainHitButtonStyle())
                         .disabled(desktop.busy)
                         .accessibilityLabel("停止当前回合并暂停队列")
                     }
@@ -519,11 +550,11 @@ public struct DesktopCollaborationFooterView: View {
                     Button {
                         Task { await sendDraft(steer: false) }
                     } label: {
-                        LucideIcon(.arrowUp, size: 17)
+                        LucideIcon(.arrowUp, size: 18)
                             .foregroundStyle((sendDisabled ? palette.textMuted : palette.buttonFg).color)
                             .frame(width: 34, height: 34)
                             .background(Circle().fill((sendDisabled ? palette.hover : palette.buttonBg).color))
-                            .contentShape(Rectangle())
+                            .contentShape(Circle())
                     }
                     .buttonStyle(PlainHitButtonStyle())
                     .disabled(sendDisabled)
@@ -603,12 +634,14 @@ public struct DesktopCollaborationFooterView: View {
             cleanupToken = desktop.connection.registerBeforeMachineChange {
                 await storeRef.detachIfNeeded()
             }
-            Task {
-                await desktop.connect(confirmOwner: false)
-                await desktop.bindAttachmentsIfNeeded(
-                    bounds: desktop.lastAttachmentBounds,
-                    handles: draft.references.map(\.handle)
-                )
+            if DesktopOpenIntentRegistry.consume(threadId: desktop.threadId) {
+                Task {
+                    await desktop.connect(confirmOwner: true)
+                    await desktop.bindAttachmentsIfNeeded(
+                        bounds: desktop.lastAttachmentBounds,
+                        handles: draft.references.map(\.handle)
+                    )
+                }
             }
         }
         .onDisappear {
@@ -621,12 +654,6 @@ public struct DesktopCollaborationFooterView: View {
         .onChange(of: desktop.connection.isWindowVisible) { visible in
             if !visible {
                 Task { await desktop.detachIfNeeded() }
-            } else if desktop.view == nil {
-                let handles = draft.references.map(\.handle)
-                Task {
-                    await desktop.connect(confirmOwner: false)
-                    await desktop.bindAttachmentsIfNeeded(bounds: desktop.lastAttachmentBounds, handles: handles)
-                }
             }
         }
         .onChange(of: draft.references.map(\.handle)) { handles in
@@ -1158,11 +1185,11 @@ public struct DesktopOutboxListView: View {
                                 Spacer()
                                 if item.status == "outcome_unknown" {
                                     Button("核对后移除") { onPromptDismissUnknown(item.id) }
-                                        .buttonStyle(SecondaryButtonStyle())
+                                        .buttonStyle(CapsuleOutlineButtonStyle())
                                         .disabled(locked)
                                 } else if item.status == "queued" || item.status == "held" {
                                     Button("取消") { onCancelQueued(item.id) }
-                                        .buttonStyle(SecondaryButtonStyle())
+                                        .buttonStyle(CapsuleOutlineButtonStyle())
                                         .disabled(locked)
                                 }
                             }
@@ -1173,7 +1200,7 @@ public struct DesktopOutboxListView: View {
 
                 if queue.contains(where: { $0.status == "held" && $0.kind == "queue" }) {
                     Button("继续发送队列", action: onResumeQueue)
-                        .buttonStyle(PrimaryButtonStyle())
+                        .buttonStyle(CapsuleOutlineButtonStyle())
                         .disabled(locked)
                 }
             }
@@ -1266,18 +1293,18 @@ public struct DesktopRequestsListView: View {
                                         }
                                     )
                                 }
-                                FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                                FlowButtonRow(spacing: 6, lineSpacing: 6) {
                                     Button("提交回答") {
                                         let payload = req.questions.map { q in
                                             DesktopAnswer(questionId: q.id, answers: [resolvedQuestionAnswer(reqKey: req.key, questionId: q.id)])
                                         }
                                         onAct(.answer(requestKey: req.key, answers: payload))
                                     }
-                                    .buttonStyle(PrimaryButtonStyle())
+                                    .buttonStyle(CapsuleOutlineButtonStyle())
                                     .disabled(busy || req.questions.contains { resolvedQuestionAnswer(reqKey: req.key, questionId: $0.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
 
                                     Button("在 Codex 中打开", action: onOpenCodex)
-                                        .buttonStyle(SecondaryButtonStyle())
+                                        .buttonStyle(CapsuleOutlineButtonStyle())
                                         .disabled(busy)
                                 }
                             } else if req.canAccept && req.kind == "elicitation" {
@@ -1288,25 +1315,25 @@ public struct DesktopRequestsListView: View {
                                     onOpenCodex: onOpenCodex
                                 )
                             } else {
-                                FlowButtonRow(spacing: 8, lineSpacing: 6) {
+                                FlowButtonRow(spacing: 6, lineSpacing: 6) {
                                     if ["command", "file", "permissions"].contains(req.kind) {
                                         Button("拒绝") { onAct(.decide(requestKey: req.key, allow: false, decision: nil)) }
-                                            .buttonStyle(DangerButtonStyle(soft: true))
+                                            .buttonStyle(CapsuleOutlineButtonStyle())
                                             .disabled(busy)
                                         if req.canAccept {
                                             Button("允许本次") { onAct(.decide(requestKey: req.key, allow: true, decision: nil)) }
-                                                .buttonStyle(PrimaryButtonStyle())
+                                                .buttonStyle(CapsuleOutlineButtonStyle())
                                                 .disabled(busy)
                                         }
                                         if req.canAccept && ["command", "file"].contains(req.kind) && (req.supportedDecisions?.contains("acceptForSession") == true) {
                                             Button("允许本次会话") { onAct(.decide(requestKey: req.key, allow: true, decision: "acceptForSession")) }
-                                                .buttonStyle(SecondaryButtonStyle())
+                                                .buttonStyle(CapsuleOutlineButtonStyle())
                                                 .disabled(busy)
                                         }
                                     }
                                     if req.kind == "elicitation" {
                                         Button("拒绝") { onAct(.elicitation(requestKey: req.key, accept: false, content: nil)) }
-                                            .buttonStyle(DangerButtonStyle(soft: true))
+                                            .buttonStyle(CapsuleOutlineButtonStyle())
                                             .disabled(busy)
                                     }
                                     if !req.canAccept {
@@ -1315,7 +1342,7 @@ public struct DesktopRequestsListView: View {
                                             .foregroundStyle(palette.textMuted.color)
                                     }
                                     Button("在 Codex 中打开", action: onOpenCodex)
-                                        .buttonStyle(SecondaryButtonStyle())
+                                        .buttonStyle(CapsuleOutlineButtonStyle())
                                         .disabled(busy)
                                 }
                             }

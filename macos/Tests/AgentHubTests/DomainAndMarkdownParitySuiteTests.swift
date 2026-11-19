@@ -685,11 +685,15 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
             XCTAssertGreaterThan(thinkOpen, thinkClosed)
             ParityCaseTracker.shared.record(f, "claude-thinking-disclosure-toggle")
 
-            // 8) Compaction divider row renders detail copy
+            // 8) Compaction event folds into ClaudeMetadataGroup ("压缩摘要") collapsed by default, and renders detail when expanded
             let compRow = try XCTUnwrap(ConversationRowBuilder.buildClaudeRows(events: [
-                ClaudeHistoryEvent(id: "cmp-1", kind: "compaction", detail: "已压缩早期上下文"),
+                ClaudeHistoryEvent(id: "cmp-1", kind: "compaction", text: "上下文已压缩", detail: "已压缩早期上下文"),
             ]).first)
             let compCell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("ClaudeCompCell"))
+            compCell.configure(item: compRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: coord)
+            XCTAssertTrue(allCellStrings(compCell).contains("压缩摘要"))
+            store.setOpen(scope: coord.sessionScopeKey, stateKey: compRow.id, isOpen: true)
+            store.setOpen(scope: coord.sessionScopeKey, stateKey: "cmp-1", isOpen: true)
             compCell.configure(item: compRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: coord)
             XCTAssertTrue(allCellStrings(compCell).contains("已压缩早期上下文"))
             ParityCaseTracker.shared.record(f, "claude-compaction-row-rendering")
@@ -795,7 +799,9 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
             ParityCaseTracker.shared.record(f, "renders-file-attachment-name")
             XCTAssertTrue(allText.contains("图片不可用"))
             ParityCaseTracker.shared.record(f, "renders-unavailable-image-label")
-            XCTAssertTrue(allText.contains("▸ 上下文   展开"))
+            XCTAssertTrue(allText.contains("上下文"))
+            XCTAssertFalse(allText.contains("▸"), "Must use Lucide ChevronRight icon, never ASCII triangle")
+            XCTAssertFalse(allText.contains("展开"), "Must not append invented '展开' suffix")
             XCTAssertFalse(allText.contains("上下文 ("))
             ParityCaseTracker.shared.record(f, "context-fold-label-exact")
             XCTAssertTrue(radii.contains(20), "User bubble must use 20pt cornerRadius")

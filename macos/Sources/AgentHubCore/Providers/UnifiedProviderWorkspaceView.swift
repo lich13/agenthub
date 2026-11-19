@@ -9,7 +9,10 @@ public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
     public var title: String
     public var cwd: String
     public var path: String
+    public var previewText: String = ""
     public var statusText: String
+    public var statusChipBadge: String? = nil
+    public var statusChipTone: StatusChipTone = .neutral
     public var running: Bool
     public var archived: Bool
     public var canRename: Bool
@@ -385,42 +388,68 @@ public struct UnifiedProviderWorkspaceView: View {
 
     // MARK: - Sidebar List Column
 
+    private var searchPlaceholderText: String {
+        switch provider {
+        case .codex: "搜索标题或 ID"
+        case .claudeCode: "搜索标题、ID 或工作目录"
+        case .grok: "搜索任务"
+        default: "搜索标题、ID 或工作目录"
+        }
+    }
+
     private var sidebarColumn: some View {
         let activePart = activeSelectionPartition
         let activeSel = partitionedSelection.state(for: activePart)
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                AgentBrandIcon(brandId, size: 17)
+            HStack(spacing: 9) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.accentSoft.color)
+                        .frame(width: 24, height: 24)
+                    AgentBrandIcon(brandId, size: 16)
+                }
+
                 Text(workspace.label)
-                    .font(DesignFonts.body(14, weight: .semibold))
+                    .font(DesignFonts.body(15, weight: .bold))
                     .foregroundStyle(palette.textPrimary.color)
+                    .lineLimit(1)
+
                 Text("\(activeItems.count)")
-                    .font(DesignFonts.body(11, weight: .medium))
-                    .foregroundStyle(palette.textMuted.color)
-                Spacer()
+                    .font(DesignFonts.tabularBody(11, weight: .medium))
+                    .foregroundStyle(palette.accent.color)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 1)
+                    .frame(minWidth: 22)
+                    .background(Capsule().fill(palette.accentSoft.color))
+                    .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
 
-                if workspace == .codex, store.target == .local, store.capabilities.codexDesktop,
-                   let slot = codexNewThreadSlot
-                {
-                    slot({ newId in
-                        query = ""
-                        selectedKey = newId
-                        mobileDetailOpen = true
+                Spacer(minLength: 4)
+
+                HStack(spacing: 4) {
+                    if workspace == .codex, store.target == .local, store.capabilities.codexDesktop,
+                       let slot = codexNewThreadSlot
+                    {
+                        slot({ newId in
+                            query = ""
+                            selectedKey = newId
+                            mobileDetailOpen = true
+                            Task { await fetchSessionList() }
+                        }, { createErr in
+                            codexCreateError = createErr
+                        })
+                    }
+
+                    Button {
                         Task { await fetchSessionList() }
-                    }, { createErr in
-                        codexCreateError = createErr
-                    })
+                    } label: {
+                        LucideIcon(.refreshCw, size: 15)
+                    }
+                    .buttonStyle(IconButtonStyle(dimension: 28))
+                    .accessibilityLabel("刷新列表")
                 }
-
-                Button {
-                    Task { await fetchSessionList() }
-                } label: {
-                    LucideIcon(.refreshCw, size: 15)
-                }
-                .buttonStyle(IconButtonStyle(dimension: 28))
-                .accessibilityLabel("刷新列表")
             }
+            .padding(.horizontal, 4)
 
             if let createErr = codexCreateError, !createErr.isEmpty {
                 Text(createErr)
@@ -433,10 +462,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
 
-            HStack(spacing: 6) {
-                LucideIcon(.search, size: 14)
+            HStack(spacing: 8) {
+                LucideIcon(.search, size: 15)
                     .foregroundStyle(palette.textMuted.color)
-                TextField("搜索标题、ID 或目录", text: $query)
+                TextField(searchPlaceholderText, text: $query)
                     .textFieldStyle(.plain)
                     .font(DesignFonts.body(13))
                 if !query.isEmpty {
@@ -457,44 +486,34 @@ public struct UnifiedProviderWorkspaceView: View {
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(activeItems) { item in
                         sessionRowView(item, partition: .active)
                     }
 
-                    if supportsArchive {
-                        Button {
-                            archivedOpen.toggle()
-                        } label: {
-                            HStack(spacing: 6) {
-                                LucideIcon(archivedOpen ? .chevronDown : .chevronRight, size: 14)
-                                    .foregroundStyle((archivedOpen ? palette.accent : palette.textMuted).color)
-                                Text("已归档")
-                                    .font(DesignFonts.body(12, weight: .medium))
-                                    .foregroundStyle(palette.textMuted.color)
-                                Spacer()
-                                if archivedOpen {
-                                    Text("\(archivedItems.count)")
-                                        .font(DesignFonts.tabularBody(11, weight: .medium))
-                                        .foregroundStyle(palette.textMuted.color)
-                                        .padding(.horizontal, 7)
-                                        .padding(.vertical, 1)
-                                        .background(Capsule().fill(palette.elevated.color))
-                                }
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: 32)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainHitButtonStyle())
-
-                        if archivedOpen {
+                    if supportsArchive && archivedOpen {
+                        VStack(alignment: .leading, spacing: 4) {
+                            archivedToggleButton
                             ForEach(archivedItems) { item in
                                 sessionRowView(item, partition: .archived)
                             }
                         }
+                        .padding(.top, 8)
+                        .overlay(alignment: .top) {
+                            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+                        }
                     }
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+            if supportsArchive && !archivedOpen {
+                VStack(alignment: .leading, spacing: 0) {
+                    archivedToggleButton
+                }
+                .padding(.top, 8)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
                 }
             }
 
@@ -524,7 +543,37 @@ public struct UnifiedProviderWorkspaceView: View {
                 )
             }
         }
-        .padding(12)
+        .padding(.top, 14)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private var archivedToggleButton: some View {
+        Button {
+            archivedOpen.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                LucideIcon(archivedOpen ? .chevronDown : .chevronRight, size: 14)
+                    .foregroundStyle((archivedOpen ? palette.accent : palette.textMuted).color)
+                Text("已归档")
+                    .font(DesignFonts.body(12, weight: .medium))
+                    .foregroundStyle(palette.textMuted.color)
+                Spacer()
+                if archivedOpen {
+                    Text("\(archivedItems.count)")
+                        .font(DesignFonts.tabularBody(11, weight: .medium))
+                        .foregroundStyle(palette.textMuted.color)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(palette.elevated.color))
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainHitButtonStyle())
     }
 
     private func sessionRowView(_ item: UnifiedSessionSummaryItem, partition: SessionSelectionPartition) -> some View {
@@ -551,7 +600,10 @@ public struct UnifiedProviderWorkspaceView: View {
         return RenameableSessionRowView(
             sessionKey: item.sessionKey,
             title: item.title,
-            subtitle: item.cwd,
+            idLine: (provider == .claudeCode && item.title != item.nativeId) ? item.nativeId : nil,
+            subtitle: provider == .codex ? "" : item.cwd,
+            inlinePreview: item.previewText,
+            isCodexCompactRow: provider == .codex,
             statusText: item.statusText,
             running: item.running,
             storageSize: item.storageSize,
@@ -636,8 +688,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     VStack(spacing: 0) {
                         WorkspaceStageHeaderView(
                             title: item.title,
-                            statusBadge: item.statusText,
-                            statusTone: item.running ? .info : .neutral,
+                            subtitle: (provider == .codex || item.cwd.isEmpty) ? nil : item.cwd,
+                            statusBadge: item.statusChipBadge,
+                            statusTone: item.statusChipTone,
+                            availableWidth: mainColumnWidth,
                             isCompactMobile: isCompactMobile,
                             onBack: { mobileDetailOpen = false },
                             inlineRenameActive: headerInlineRename,
@@ -649,19 +703,19 @@ public struct UnifiedProviderWorkspaceView: View {
                             onCancelInlineRename: { headerInlineRename = false }
                         ) {
                             let headerActions = buildMenuActionsForItem(item, isHeaderMenu: true)
-                            Menu {
-                                ForEach(headerActions) { act in
-                                    Button(act.label, action: act.run)
-                                        .disabled(act.disabled)
-                                }
-                            } label: {
+                            let entries = headerActions.map { act in
+                                NativeMenuEntry(
+                                    title: act.label,
+                                    enabled: !act.disabled,
+                                    action: act.run
+                                )
+                            }
+                            AnchoredMenuButton(entries: entries, accessibilityLabel: "会话菜单") {
                                 LucideIcon(.moreHorizontal, size: 17)
+                                    .foregroundStyle(palette.textMuted.color)
                                     .frame(width: 32, height: 32)
                                     .contentShape(Rectangle())
                             }
-                            .menuStyle(.borderlessButton)
-                            .frame(width: 32, height: 32)
-                            .accessibilityLabel("会话菜单")
                         }
 
                         // .subagent-summary bar directly below glass header (DESIGN.md:113, styles.css:790-794)
@@ -979,7 +1033,9 @@ public struct UnifiedProviderWorkspaceView: View {
             feedbackMessage = text
         }
         c.onActiveTimelineChanged = { id in
-            if activeTimelineId != id { activeTimelineId = id }
+            DispatchQueue.main.async {
+                if activeTimelineId != id { activeTimelineId = id }
+            }
         }
         coordinatorRef = c
     }
@@ -1077,14 +1133,15 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: ClaudeListArgs(q: query.isEmpty ? nil : query, limit: 100)
                 )
                 activeItems = list.map { item in
-                    let stLabel = if item.status == "running" {
-                        "运行中"
+                    let stLabel = Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
+                    let chip: (String?, StatusChipTone) = if item.status == "running" {
+                        ("运行中", .info)
                     } else if item.status == "waiting" {
-                        "等待处理"
+                        ("等待处理", .warning)
                     } else if item.readError != nil {
-                        "异常"
+                        ("异常", .danger)
                     } else {
-                        "近期"
+                        (nil, .neutral)
                     }
                     return UnifiedSessionSummaryItem(
                         sessionKey: item.sessionKey,
@@ -1093,12 +1150,13 @@ public struct UnifiedProviderWorkspaceView: View {
                         cwd: item.cwd,
                         path: item.path,
                         statusText: stLabel,
+                        statusChipBadge: chip.0,
+                        statusChipTone: chip.1,
                         running: item.status == "running",
                         archived: false,
                         canRename: item.canRename,
                         renameBlockReason: item.renameBlockReason,
                         canArchive: false,
-                        // Per DESIGN.md:75, Claude delete is never disabled by read/activity state.
                         canDelete: true,
                         storageSize: item.storageSize,
                         readError: item.readError,
@@ -1119,13 +1177,14 @@ public struct UnifiedProviderWorkspaceView: View {
                         title: item.title.isEmpty ? item.id : item.title,
                         cwd: item.cwd,
                         path: HistoryAndResumeHelpers.grokHandoffPath(item),
-                        statusText: item.status == "running" ? "运行中" : "近期",
+                        statusText: Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
+                        statusChipBadge: item.status == "running" ? "运行中" : nil,
+                        statusChipTone: .info,
                         running: item.status == "running",
                         archived: false,
                         canRename: true,
                         renameBlockReason: nil,
                         canArchive: false,
-                        // Per DESIGN.md:85, Grok delete is unconditionally enabled regardless of legacy eligibility.
                         canDelete: true,
                         storageSize: item.storageSize
                     )
@@ -1171,6 +1230,8 @@ public struct UnifiedProviderWorkspaceView: View {
                         cwd: item.cwd,
                         path: item.path,
                         statusText: st,
+                        statusChipBadge: "只读",
+                        statusChipTone: .neutral,
                         running: false,
                         archived: false,
                         canRename: false,
@@ -1888,28 +1949,65 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private static func providerSessionStatusText(status: String, updatedAt: String?, archived: Bool) -> String {
+        if status == "running" { return "运行中" }
+        if status == "waiting" { return "等待处理" }
+        if archived { return "已归档" }
+        if status == "unknown" { return "状态未知" }
+        if let updatedAt, !updatedAt.isEmpty {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let fallbackIso = ISO8601DateFormatter()
+            if let date = iso.date(from: updatedAt) ?? fallbackIso.date(from: updatedAt) {
+                let df = DateFormatter()
+                df.dateFormat = "yyyy/M/d HH:mm:ss"
+                return df.string(from: date)
+            }
+        }
+        return "最近"
+    }
+
     private func mapCodexSummary(_ s: ThreadSummary, archived: Bool) -> UnifiedSessionSummaryItem {
         let displayTitle = threadStore.effectiveTitle(
             threadId: s.id,
             serverTitle: s.title.isEmpty ? (s.firstUserMessage ?? s.id) : s.title
         )
         let running = (s.status == "Running" || s.activeTurnId != nil)
+        let isArchived = archived || s.status == "Archived"
         let stText: String = switch s.status {
         case "Running": "运行中"
         case "ReplyNeeded": "待回复"
         case "Recoverable": "可恢复"
         case "Archived": "已归档"
-        default: archived ? "已归档" : "近期"
+        default: isArchived ? "已归档" : "最近"
         }
+        let chipTone: StatusChipTone = if isArchived {
+            .neutral
+        } else if running {
+            .info
+        } else {
+            switch s.status {
+            case "ReplyNeeded": .warning
+            case "Recoverable": .danger
+            default: .success
+            }
+        }
+        let rawPreview = VisibleMarkdownEngine.visibleMarkdown(s.latestMessage ?? "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = (rawPreview == displayTitle) ? "" : rawPreview
         return UnifiedSessionSummaryItem(
             sessionKey: s.id,
             nativeId: s.id,
             title: displayTitle,
             cwd: s.cwd ?? "",
             path: s.rolloutPath ?? "",
+            previewText: preview,
             statusText: stText,
+            statusChipBadge: stText,
+            statusChipTone: chipTone,
             running: running,
-            archived: archived || s.status == "Archived",
+            archived: isArchived,
             canRename: true,
             renameBlockReason: nil,
             canArchive: store.capabilities.threadArchiveActions,
@@ -1919,13 +2017,22 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func mapProviderSummary(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
-        UnifiedSessionSummaryItem(
+        let chip: (String?, StatusChipTone) = if s.archived {
+            ("已归档", .neutral)
+        } else if s.status == "running" {
+            ("运行中", .info)
+        } else {
+            (nil, .neutral)
+        }
+        return UnifiedSessionSummaryItem(
             sessionKey: s.sessionKey,
             nativeId: s.id,
             title: s.title.isEmpty ? s.id : s.title,
             cwd: s.cwd,
             path: s.path,
-            statusText: s.archived ? "已归档" : (s.status == "running" ? "运行中" : "近期"),
+            statusText: Self.providerSessionStatusText(status: s.status, updatedAt: s.updatedAt, archived: s.archived),
+            statusChipBadge: chip.0,
+            statusChipTone: chip.1,
             running: s.status == "running",
             archived: s.archived,
             canRename: s.canRename,

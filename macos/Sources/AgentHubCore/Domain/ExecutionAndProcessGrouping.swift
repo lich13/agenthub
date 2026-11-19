@@ -664,6 +664,491 @@ public enum ExecutionGroupingEngine {
     }
 }
 
+// MARK: - Unified Process Folding (processGroups.ts)
+
+public enum ProcessStep: Equatable, Sendable {
+    case thinking(id: String, sourceIds: [String], text: String, running: Bool, turnId: String?)
+    case execution(group: ExecutionGroup, turnId: String?)
+    case detail(id: String, sourceIds: [String], title: String, detail: String, running: Bool, failed: Bool, turnId: String?)
+
+    public var anchorId: String {
+        switch self {
+        case let .thinking(id, _, _, _, _): id
+        case let .execution(group, _): group.id
+        case let .detail(id, _, _, _, _, _, _): id
+        }
+    }
+
+    public var stepTurnId: String? {
+        switch self {
+        case let .thinking(_, _, _, _, turnId): turnId
+        case let .execution(group, turnId): turnId ?? group.turnId
+        case let .detail(_, _, _, _, _, _, turnId): turnId
+        }
+    }
+}
+
+public struct UnifiedProcessGroup: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var stateKey: String
+    public var stateAliases: [String]
+    public var timelineAliases: [String]
+    public var sourceIds: [String]
+    public var steps: [ProcessStep]
+    public var thoughtCount: Int
+    public var toolCount: Int
+    public var failedCount: Int
+    public var running: Bool
+
+    public var summaryText: (primary: String, meta: String?) {
+        ProcessGroupingEngine.processGroupSummaryText(self)
+    }
+
+    public var iconName: LucideIconName {
+        thoughtCount > 0 ? (toolCount > 0 ? .sparkles : .brain) : .terminal
+    }
+}
+
+public enum ProcessFoldItem<T: Equatable & Sendable>: Equatable, Sendable {
+    case passthrough(T)
+    case execution(ExecutionGroup)
+    case process(UnifiedProcessGroup)
+}
+
+public enum ProcessClassifyResult: Equatable, Sendable {
+    case step(ProcessStep)
+    case skip
+    case passthrough
+}
+
+public enum ProcessGroupingEngine {
+    public static func uniqueStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for value in values where !value.isEmpty && seen.insert(value).inserted {
+            out.append(value)
+        }
+        return out
+    }
+
+    public static func buildUnifiedProcessGroup(prefix: String, steps: [ProcessStep]) -> UnifiedProcessGroup {
+        var thoughtCount = 0
+        var toolCount = 0
+        var failedCount = 0
+        var running = false
+        var rawSourceIds: [String] = []
+        var rawTimelineAliases: [String] = []
+        var rawStateAliases: [String] = []
+
+        for step in steps {
+            switch step {
+            case let .thinking(id, sourceIds, _, stepRunning, _):
+                thoughtCount += 1
+                if stepRunning { running = true }
+                rawSourceIds.append(id)
+                rawSourceIds.append(contentsOf: sourceIds)
+                rawTimelineAliases.append(id)
+                rawTimelineAliases.append(contentsOf: sourceIds)
+                rawStateAliases.append(id)
+            case let .execution(group, _):
+                toolCount += group.commands.count
+                failedCount += group.failedCount
+                if group.running { running = true }
+                rawStateAliases.append(group.id)
+                rawStateAliases.append(contentsOf: group.commands.map { "group:\($0.id)" })
+                rawTimelineAliases.append(group.id)
+                rawTimelineAliases.append(contentsOf: group.commands.map { "group:\($0.id)" })
+                for cmd in group.commands {
+                    rawSourceIds.append(cmd.id)
+                    rawSourceIds.append(contentsOf: cmd.sourceIds)
+                    rawTimelineAliases.append(cmd.id)
+                    rawTimelineAliases.append(contentsOf: cmd.sourceIds)
+                }
+            case let .detail(id, sourceIds, _, _, stepRunning, stepFailed, _):
+                toolCount += 1
+                if stepFailed { failedCount += 1 }
+                if stepRunning { running = true }
+                rawSourceIds.append(id)
+                rawSourceIds.append(contentsOf: sourceIds)
+                rawTimelineAliases.append(id)
+                rawTimelineAliases.append(contentsOf: sourceIds)
+                rawStateAliases.append(id)
+            }
+        }
+
+        let anchorId = steps.first?.anchorId ?? "empty"
+        let id = "\(prefix):process:\(anchorId)"
+        return UnifiedProcessGroup(
+            id: id,
+            stateKey: id,
+            stateAliases: uniqueStrings(rawStateAliases),
+            timelineAliases: uniqueStrings(rawTimelineAliases),
+            sourceIds: uniqueStrings(rawSourceIds),
+            steps: steps,
+            thoughtCount: thoughtCount,
+            toolCount: toolCount,
+            failedCount: failedCount,
+            running: running
+        )
+    }
+
+    public static func foldProcessSequence<T: Equatable & Sendable>(
+        prefix: String,
+        items: [T],
+        classify: (T) -> ProcessClassifyResult
+    ) -> [ProcessFoldItem<T>] {
+        var output: [ProcessFoldItem<T>] = []
+        var pending: [ProcessStep] = []
+        var activeTurnId: String?
+
+        let flush = {
+            guard !pending.isEmpty else { return }
+            if pending.count == 1, case let .execution(group, _) = pending[0] {
+                output.append(.execution(group))
+            } else {
+                output.append(.process(buildUnifiedProcessGroup(prefix: prefix, steps: pending)))
+            }
+            pending = []
+            activeTurnId = nil
+        }
+
+        for item in items {
+            switch classify(item) {
+            case .skip:
+                continue
+            case let .step(step):
+                let stepTurnId = step.stepTurnId
+                if let stepTurnId, !stepTurnId.isEmpty, let activeTurnId, !activeTurnId.isEmpty, stepTurnId != activeTurnId {
+                    flush()
+                }
+                if let stepTurnId, !stepTurnId.isEmpty {
+                    activeTurnId = stepTurnId
+                }
+                pending.append(step)
+            case .passthrough:
+                flush()
+                output.append(.passthrough(item))
+            }
+        }
+        flush()
+        return output
+    }
+
+    public static func thinkingStepFromText(
+        id: String,
+        sourceIds: [String],
+        rawText: String?,
+        running: Bool = false,
+        turnId: String? = nil
+    ) -> ProcessClassifyResult {
+        let cleaned = VisibleMarkdownEngine.visibleMarkdown(rawText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return .skip }
+        return .step(.thinking(
+            id: id,
+            sourceIds: uniqueStrings([id] + sourceIds),
+            text: rawText ?? "",
+            running: running,
+            turnId: turnId
+        ))
+    }
+
+    public static func processGroupSummaryText(_ group: UnifiedProcessGroup) -> (primary: String, meta: String?) {
+        if group.running {
+            if group.thoughtCount > 0 && group.toolCount > 0 {
+                return ("正在思考与执行", "\(group.toolCount) 项操作")
+            }
+            if group.thoughtCount > 0 {
+                return ("正在思考…", group.thoughtCount > 1 ? "\(group.thoughtCount) 段推理" : nil)
+            }
+            return ("正在执行", "\(group.toolCount) 项操作")
+        }
+        if group.thoughtCount > 0 && group.toolCount > 0 {
+            return ("已思考", "\(group.toolCount) 项操作")
+        }
+        if group.thoughtCount > 0 {
+            return ("已思考", group.thoughtCount > 1 ? "\(group.thoughtCount) 段推理" : nil)
+        }
+        return ("已执行操作", "\(group.toolCount) 项操作")
+    }
+}
+
+// MARK: - Claude Turn & Metadata Process Grouping (claudeProcessGroups.ts)
+
+public struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var sourceIds: [String]
+    public var label: String
+    public var entries: [ExecutionRenderItem<ClaudeHistoryEvent>]
+}
+
+public enum ClaudeEventRenderItem: Equatable, Sendable {
+    case item(item: ClaudeHistoryEvent, key: String, sourceIds: [String])
+    case group(ExecutionGroup)
+    case metadata(ClaudeMetadataGroup)
+}
+
+public struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var stateKey: String
+    public var turnId: String
+    public var sourceIds: [String]
+    public var entries: [ClaudeEventRenderItem]
+    public var segmentCount: Int
+    public var toolCount: Int
+    public var failedCount: Int
+    public var running: Bool
+    public var completed: Bool
+    public var recordedOnly: Bool
+    public var needsReply: Bool
+    public var needsPermission: Bool
+    public var hasPermission: Bool
+
+    public var iconName: LucideIconName {
+        segmentCount > 0 && toolCount > 0 ? .sparkles : .brain
+    }
+
+    public var labelText: String {
+        if recordedOnly { return "工作记录" }
+        if running {
+            if segmentCount > 0 && toolCount > 0 { return "正在思考与执行" }
+            if segmentCount > 0 { return "正在思考…" }
+            return "正在执行"
+        }
+        return segmentCount > 0 ? "已思考" : "过程"
+    }
+
+    public var metaText: String? {
+        if toolCount > 0 { return "\(toolCount) 项工具" }
+        if segmentCount > 1 { return "\(segmentCount) 段" }
+        return nil
+    }
+}
+
+public enum ClaudeRenderItem: Equatable, Sendable {
+    case item(item: ClaudeHistoryEvent, key: String, sourceIds: [String])
+    case group(ExecutionGroup)
+    case metadata(ClaudeMetadataGroup)
+    case process(ClaudeProcessGroup)
+}
+
+public enum ClaudeProcessGroupingEngine {
+    private static let metadataKinds: Set<String> = [
+        "file-history-snapshot", "file-history-delta", "queue-operation",
+        "cost-state", "atis-latch", "attachment", "compaction", "branch_summary",
+    ]
+    private static let automaticRoles: Set<String> = [
+        "native_context", "local_command", "task_notification",
+        "turn_duration", "away_summary", "stop_hook_summary",
+    ]
+    private static let processKinds: Set<String> = [
+        "thinking", "tool_call", "tool_result", "tool_reference",
+        "failure", "permission_request", "permission_response",
+        "file-history-snapshot", "file-history-delta", "queue-operation",
+        "cost-state", "atis-latch", "attachment",
+    ]
+
+    public static func isAutomatic(_ event: ClaudeHistoryEvent) -> Bool {
+        metadataKinds.contains(event.kind) || (event.kind == "system" && automaticRoles.contains(event.role ?? ""))
+    }
+
+    public static func isProcess(_ event: ClaudeHistoryEvent) -> Bool {
+        processKinds.contains(event.kind)
+            || (event.kind == "system" && (automaticRoles.contains(event.role ?? "") || event.role == "api_error"))
+    }
+
+    public static func foldAutomatic(_ entries: [ExecutionRenderItem<ClaudeHistoryEvent>]) -> [ClaudeEventRenderItem] {
+        var result: [ClaudeEventRenderItem] = []
+        var pending: [(item: ClaudeHistoryEvent, key: String, sourceIds: [String])] = []
+
+        let flush = {
+            guard !pending.isEmpty else { return }
+            let sourceIds = pending.flatMap(\.sourceIds)
+            let label: String = if pending.allSatisfy({ $0.item.kind == "compaction" || $0.item.kind == "branch_summary" }) {
+                "压缩摘要"
+            } else if pending.allSatisfy({ $0.item.role == "native_context" }) {
+                "上下文"
+            } else {
+                "系统活动"
+            }
+            let firstId = sourceIds.first ?? "meta"
+            let wrapped = pending.map { ExecutionRenderItem.item(item: $0.item, key: $0.key, sourceIds: $0.sourceIds) }
+            result.append(.metadata(ClaudeMetadataGroup(
+                id: "claude-metadata:\(firstId)",
+                sourceIds: sourceIds,
+                label: label,
+                entries: wrapped
+            )))
+            pending = []
+        }
+
+        for entry in entries {
+            if case let .item(item, key, sourceIds) = entry, isAutomatic(item) {
+                pending.append((item, key, sourceIds))
+                continue
+            }
+            if case let .group(group) = entry,
+               !pending.isEmpty,
+               pending.allSatisfy({ $0.item.kind != "compaction" && $0.item.kind != "branch_summary" }),
+               case var .group(prevGroup) = result.last,
+               (prevGroup.turnId == nil || group.turnId == nil || prevGroup.turnId == group.turnId)
+            {
+                prevGroup.commands.append(contentsOf: group.commands)
+                prevGroup.mergedIds.append(group.id)
+                prevGroup.mergedIds.append(contentsOf: group.mergedIds)
+                if group.kind == "tool" { prevGroup.kind = "tool" }
+                if prevGroup.turnId == nil { prevGroup.turnId = group.turnId }
+                prevGroup.running = prevGroup.commands.contains { $0.status == .running }
+                prevGroup.failedCount = prevGroup.commands.filter { $0.status == .failed }.count
+                result[result.count - 1] = .group(prevGroup)
+                continue
+            }
+            flush()
+            switch entry {
+            case let .item(item, key, sourceIds):
+                result.append(.item(item: item, key: key, sourceIds: sourceIds))
+            case let .group(group):
+                result.append(.group(group))
+            }
+        }
+        flush()
+        return result
+    }
+
+    private static func promote(_ items: [ClaudeEventRenderItem]) -> [ClaudeRenderItem] {
+        items.map { entry in
+            switch entry {
+            case let .item(item, key, sourceIds): .item(item: item, key: key, sourceIds: sourceIds)
+            case let .group(group): .group(group)
+            case let .metadata(meta): .metadata(meta)
+            }
+        }
+    }
+
+    private static func groupTurn(
+        _ events: [ClaudeHistoryEvent],
+        turnId: String,
+        ended: Bool,
+        recordedOnly: Bool
+    ) -> [ClaudeRenderItem] {
+        let entries = ExecutionGroupingEngine.groupClaudeEvents(events, recordedOnly: recordedOnly)
+        let questionIds = Set(events.filter { $0.role == "AskUserQuestion" }.map(\.id))
+        var output: [ClaudeRenderItem] = []
+        var finalIndex = -1
+        for (idx, entry) in entries.enumerated() {
+            if case let .item(item, _, _) = entry, item.assistantPhase == "final" {
+                finalIndex = idx
+            }
+        }
+
+        var pending: [ExecutionRenderItem<ClaudeHistoryEvent>] = []
+        let flush = { (completed: Bool) in
+            guard !pending.isEmpty else { return }
+            let segment = pending
+            pending = []
+            if segment.allSatisfy({
+                if case let .item(item, _, _) = $0 { return isAutomatic(item) }
+                return false
+            }) {
+                output.append(contentsOf: promote(foldAutomatic(segment)))
+                return
+            }
+            let commands = segment.flatMap { entry -> [ExecutionCommand] in
+                if case let .group(g) = entry { return g.commands }
+                return []
+            }
+            let processEvents = segment.compactMap { entry -> ClaudeHistoryEvent? in
+                if case let .item(item, _, _) = entry { return item }
+                return nil
+            }
+            let sourceIds = segment.flatMap { entry -> [String] in
+                switch entry {
+                case let .item(_, _, sids): sids
+                case let .group(g): g.commands.flatMap(\.sourceIds)
+                }
+            }
+            let closed = ended || completed || processEvents.contains { $0.kind == "failure" }
+            let pendingEvent = { (ev: ClaudeHistoryEvent) -> Bool in
+                !recordedOnly && !closed && ExecutionGroupingEngine.executionStatus(ev.status) == .running
+            }
+            let needsReply = !closed && commands.contains { cmd in
+                cmd.status == .running && cmd.sourceIds.contains { questionIds.contains($0) }
+            }
+            let needsPermission = processEvents.contains { $0.kind == "permission_request" && pendingEvent($0) }
+            let firstSid = sourceIds.first ?? "0"
+            let stateKey = "claude-process:\(turnId):\(firstSid)"
+            let failedCount = commands.filter { $0.status == .failed }.count
+                + processEvents.filter { ExecutionGroupingEngine.executionStatus($0.status) == .failed }.count
+            let isRunning = !closed && !needsReply && !needsPermission
+                && (commands.contains { $0.status == .running } || processEvents.contains(where: pendingEvent))
+            output.append(.process(ClaudeProcessGroup(
+                id: "claude-process[\(turnId)][\(firstSid)]",
+                stateKey: stateKey,
+                turnId: turnId,
+                sourceIds: sourceIds,
+                entries: foldAutomatic(segment),
+                segmentCount: processEvents.count,
+                toolCount: commands.count,
+                failedCount: failedCount,
+                running: isRunning,
+                completed: !recordedOnly && completed,
+                recordedOnly: recordedOnly,
+                needsReply: needsReply,
+                needsPermission: needsPermission,
+                hasPermission: processEvents.contains { $0.kind == "permission_request" }
+            )))
+        }
+
+        for (index, entry) in entries.enumerated() {
+            switch entry {
+            case .group:
+                pending.append(entry)
+            case let .item(item, _, _):
+                if isProcess(item) {
+                    pending.append(entry)
+                } else {
+                    flush(finalIndex >= index)
+                    output.append(contentsOf: promote(foldAutomatic([entry])))
+                }
+            }
+        }
+        flush(false)
+        return output
+    }
+
+    public static func groupClaudeProcesses(_ events: [ClaudeHistoryEvent], recordedOnly: Bool = false) -> [ClaudeRenderItem] {
+        var output: [ClaudeRenderItem] = []
+        var turn: String?
+        var hasTurn = false
+        var pending: [ClaudeHistoryEvent] = []
+
+        let flush = { (ended: Bool) in
+            guard !pending.isEmpty else { return }
+            if let turn, !turn.isEmpty {
+                output.append(contentsOf: groupTurn(pending, turnId: turn, ended: ended, recordedOnly: recordedOnly))
+            } else {
+                output.append(contentsOf: promote(foldAutomatic(ExecutionGroupingEngine.groupClaudeEvents(pending, recordedOnly: recordedOnly))))
+            }
+            pending = []
+        }
+
+        for event in events {
+            if !hasTurn || event.turnId != turn {
+                if hasTurn { flush(true) }
+                turn = event.turnId
+                hasTurn = true
+            }
+            if event.kind == "user_message" || event.kind == "compaction" || event.kind == "branch_summary" {
+                flush(true)
+                output.append(contentsOf: promote(foldAutomatic(ExecutionGroupingEngine.groupClaudeEvents([event], recordedOnly: recordedOnly))))
+            } else {
+                pending.append(event)
+            }
+        }
+        flush(false)
+        return output
+    }
+}
+
 // MARK: - Pure In-Memory FIFO 2000-Key Activity Disclosure Store (Cleared on Relaunch)
 
 @MainActor

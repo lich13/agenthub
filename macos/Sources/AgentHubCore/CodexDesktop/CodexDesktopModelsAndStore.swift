@@ -107,11 +107,45 @@ public struct DesktopQueuedMessage: Codable, Equatable, Sendable, Identifiable {
     public var kind: String // "queue" | "steer"
     public var preview: String
     public var createdAt: Int64
+
+    public init(
+        id: String,
+        status: String = "queued",
+        kind: String = "queue",
+        preview: String = "",
+        createdAt: Int64 = 0
+    ) {
+        self.id = id
+        self.status = status
+        self.kind = kind
+        self.preview = preview
+        self.createdAt = createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "queued"
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "queue"
+        preview = try c.decodeIfPresent(String.self, forKey: .preview) ?? ""
+        createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
+    }
 }
 
 public struct DesktopQuestionOption: Codable, Equatable, Sendable {
     public var label: String
     public var description: String
+
+    public init(label: String, description: String = "") {
+        self.label = label
+        self.description = description
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decode(String.self, forKey: .label)
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+    }
 }
 
 public struct DesktopQuestion: Codable, Equatable, Sendable, Identifiable {
@@ -120,6 +154,29 @@ public struct DesktopQuestion: Codable, Equatable, Sendable, Identifiable {
     public var question: String
     public var secret: Bool
     public var options: [DesktopQuestionOption]
+
+    public init(
+        id: String,
+        header: String = "",
+        question: String,
+        secret: Bool = false,
+        options: [DesktopQuestionOption] = []
+    ) {
+        self.id = id
+        self.header = header
+        self.question = question
+        self.secret = secret
+        self.options = options
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        header = try c.decodeIfPresent(String.self, forKey: .header) ?? ""
+        question = try c.decodeIfPresent(String.self, forKey: .question) ?? ""
+        secret = try c.decodeIfPresent(Bool.self, forKey: .secret) ?? false
+        options = try c.decodeIfPresent([DesktopQuestionOption].self, forKey: .options) ?? []
+    }
 }
 
 public struct DesktopFileReview: Codable, Equatable, Sendable {
@@ -127,11 +184,31 @@ public struct DesktopFileReview: Codable, Equatable, Sendable {
     public var kind: String
     public var diff: String
     public var truncated: Bool
+
+    public init(path: String, kind: String = "update", diff: String = "", truncated: Bool = false) {
+        self.path = path
+        self.kind = kind
+        self.diff = diff
+        self.truncated = truncated
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "update"
+        diff = try c.decodeIfPresent(String.self, forKey: .diff) ?? ""
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+    }
 }
 
 public struct DesktopPermissionsReview: Codable, Equatable, Sendable {
     public var network: String?
     public var fileSystem: String?
+
+    public init(network: String? = nil, fileSystem: String? = nil) {
+        self.network = network
+        self.fileSystem = fileSystem
+    }
 }
 
 public struct DesktopReview: Codable, Equatable, Sendable {
@@ -142,6 +219,35 @@ public struct DesktopReview: Codable, Equatable, Sendable {
     public var permissions: DesktopPermissionsReview?
     public var extra: String?
     public var truncated: Bool
+
+    public init(
+        command: String? = nil,
+        cwd: String? = nil,
+        reason: String? = nil,
+        changes: [DesktopFileReview] = [],
+        permissions: DesktopPermissionsReview? = nil,
+        extra: String? = nil,
+        truncated: Bool = false
+    ) {
+        self.command = command
+        self.cwd = cwd
+        self.reason = reason
+        self.changes = changes
+        self.permissions = permissions
+        self.extra = extra
+        self.truncated = truncated
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        changes = try c.decodeIfPresent([DesktopFileReview].self, forKey: .changes) ?? []
+        permissions = try c.decodeIfPresent(DesktopPermissionsReview.self, forKey: .permissions)
+        extra = try c.decodeIfPresent(String.self, forKey: .extra)
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+    }
 }
 
 public struct DesktopPendingRequest: Codable, Equatable, Sendable, Identifiable {
@@ -156,12 +262,60 @@ public struct DesktopPendingRequest: Codable, Equatable, Sendable, Identifiable 
     public var review: DesktopReview?
 
     public var id: String { key }
+
+    public init(
+        key: String,
+        kind: String,
+        title: String,
+        body: String = "",
+        questions: [DesktopQuestion] = [],
+        formSchema: JSONValue? = nil,
+        canAccept: Bool = false,
+        supportedDecisions: [String]? = nil,
+        review: DesktopReview? = nil
+    ) {
+        self.key = key
+        self.kind = kind
+        self.title = title
+        self.body = body
+        self.questions = questions
+        self.formSchema = formSchema
+        self.canAccept = canAccept
+        self.supportedDecisions = supportedDecisions
+        self.review = review
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(String.self, forKey: .key)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "command"
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+        questions = try c.decodeIfPresent([DesktopQuestion].self, forKey: .questions) ?? []
+        formSchema = try c.decodeIfPresent(JSONValue.self, forKey: .formSchema)
+        canAccept = try c.decodeIfPresent(Bool.self, forKey: .canAccept) ?? false
+        supportedDecisions = try c.decodeIfPresent([String].self, forKey: .supportedDecisions)
+        review = try c.decodeIfPresent(DesktopReview.self, forKey: .review)
+    }
 }
 
 public struct DesktopGoal: Codable, Equatable, Sendable {
     public var objective: String
     public var status: String
     public var truncated: Bool
+
+    public init(objective: String, status: String = "active", truncated: Bool = false) {
+        self.objective = objective
+        self.status = status
+        self.truncated = truncated
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        objective = try c.decodeIfPresent(String.self, forKey: .objective) ?? ""
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "active"
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+    }
 }
 
 public struct DesktopView: Codable, Equatable, Sendable {
@@ -181,6 +335,62 @@ public struct DesktopView: Codable, Equatable, Sendable {
     public var requests: [DesktopPendingRequest]
     public var queue: [DesktopQueuedMessage]
     public var error: String?
+
+    public init(
+        connectionPhase: String? = nil,
+        desktopBuild: String? = nil,
+        goal: DesktopGoal? = nil,
+        sessionId: String,
+        threadId: String,
+        revision: UInt64 = 0,
+        connected: Bool = false,
+        writable: Bool = false,
+        runtime: String = "idle",
+        activeTurnId: String? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil,
+        mode: DesktopMode? = nil,
+        requests: [DesktopPendingRequest] = [],
+        queue: [DesktopQueuedMessage] = [],
+        error: String? = nil
+    ) {
+        self.connectionPhase = connectionPhase
+        self.desktopBuild = desktopBuild
+        self.goal = goal
+        self.sessionId = sessionId
+        self.threadId = threadId
+        self.revision = revision
+        self.connected = connected
+        self.writable = writable
+        self.runtime = runtime
+        self.activeTurnId = activeTurnId
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.mode = mode
+        self.requests = requests
+        self.queue = queue
+        self.error = error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        connectionPhase = try c.decodeIfPresent(String.self, forKey: .connectionPhase)
+        desktopBuild = try c.decodeIfPresent(String.self, forKey: .desktopBuild)
+        goal = try c.decodeIfPresent(DesktopGoal.self, forKey: .goal)
+        sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId) ?? ""
+        threadId = try c.decodeIfPresent(String.self, forKey: .threadId) ?? ""
+        revision = try c.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
+        connected = try c.decodeIfPresent(Bool.self, forKey: .connected) ?? false
+        writable = try c.decodeIfPresent(Bool.self, forKey: .writable) ?? false
+        runtime = try c.decodeIfPresent(String.self, forKey: .runtime) ?? "idle"
+        activeTurnId = try c.decodeIfPresent(String.self, forKey: .activeTurnId)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        reasoningEffort = try c.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        mode = try c.decodeIfPresent(DesktopMode.self, forKey: .mode)
+        requests = try c.decodeIfPresent([DesktopPendingRequest].self, forKey: .requests) ?? []
+        queue = try c.decodeIfPresent([DesktopQueuedMessage].self, forKey: .queue) ?? []
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
 }
 
 public struct DesktopCatalogItem: Codable, Equatable, Sendable, Identifiable {

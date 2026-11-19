@@ -3,6 +3,7 @@ import Foundation
 
 extension NSAttributedString.Key {
     public static let agentHubBlockQuote = NSAttributedString.Key("AgentHubBlockQuote")
+    public static let agentHubInlineCode = NSAttributedString.Key("AgentHubInlineCode")
 }
 
 // MARK: - Rendered GFM Segment & Bounded 256-entry / 2 MiB Cache
@@ -406,7 +407,7 @@ public final class GfmLayoutCache {
                     var attrs: [NSAttributedString.Key: Any] = [
                         .font: DesignFonts.nsMonoFont(size: max(12, baseSize - 2), weight: .regular),
                         .foregroundColor: linkURL != nil ? palette.accent.nsColor : palette.textPrimary.nsColor,
-                        .backgroundColor: palette.hover.nsColor,
+                        .agentHubInlineCode: palette.hover.nsColor,
                         .paragraphStyle: para,
                     ]
                     if strike {
@@ -416,7 +417,7 @@ public final class GfmLayoutCache {
                         attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
                         attrs[.link] = linkURL
                     }
-                    result.append(NSAttributedString(string: " \(codeStr) ", attributes: attrs))
+                    result.append(NSAttributedString(string: "\u{202F}\(codeStr)\u{202F}", attributes: attrs))
 
                 case let .strong(children):
                     appendList(children, bold: true, italic: italic, strike: strike, linkURL: linkURL)
@@ -428,7 +429,27 @@ public final class GfmLayoutCache {
                     appendList(children, bold: bold, italic: italic, strike: true, linkURL: linkURL)
 
                 case let .link(url, _, children):
-                    appendList(children, bold: bold, italic: italic, strike: strike, linkURL: safeRenderableHref(url))
+                    let safeHref = safeRenderableHref(url)
+                    appendList(children, bold: bold, italic: italic, strike: strike, linkURL: safeHref)
+                    if let safeHref, FileLinksAndPlanExport.fileLinkTarget(safeHref) != nil {
+                        result.append(NSAttributedString(string: "\u{202F}", attributes: [
+                            .font: DesignFonts.nsBodyFont(size: baseSize, weight: baseWeight),
+                            .paragraphStyle: para,
+                        ]))
+                        let attachment = NSTextAttachment()
+                        attachment.image = LucideVectorCatalog.nsImage(
+                            for: .copy,
+                            size: 13,
+                            color: palette.textMuted.nsColor
+                        )
+                        attachment.bounds = NSRect(x: 0, y: -2, width: 13, height: 13)
+                        let iconStr = NSMutableAttributedString(attachment: attachment)
+                        iconStr.addAttributes([
+                            .link: "agenthub-copy-file:\(safeHref)",
+                            .paragraphStyle: para,
+                        ], range: NSRange(location: 0, length: iconStr.length))
+                        result.append(iconStr)
+                    }
 
                 case let .image(url, alt, _):
                     let label = alt.isEmpty ? url : "[\(alt)]"

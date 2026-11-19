@@ -407,7 +407,7 @@ public struct ManualResizableComposerBox: View {
     @State private var dragStartHeight: CGFloat?
 
     public var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottomTrailing) {
             ComposerTextEditorRepresentable(
                 text: text,
                 caretOffset: caretOffset,
@@ -423,17 +423,22 @@ public struct ManualResizableComposerBox: View {
                 onFocusChanged: onFocusChanged
             )
             .frame(height: manualHeight)
+            .padding(.horizontal, 2)
+            .padding(.vertical, 2)
 
-            // Explicit bottom resize grip (manual vertical resize ONLY between 54pt and 160pt)
-            HStack {
-                Spacer()
-                Capsule()
-                    .fill(palette.borderStrong.color)
-                    .frame(width: 32, height: 4)
-                    .padding(.vertical, 3)
-                Spacer()
+            // Subtle bottom-right diagonal resize grip (manual vertical resize ONLY between 54pt and 160pt)
+            Canvas { ctx, size in
+                let c = palette.borderStrong.color
+                var p1 = Path()
+                p1.move(to: CGPoint(x: size.width - 9, y: size.height - 2))
+                p1.addLine(to: CGPoint(x: size.width - 2, y: size.height - 9))
+                ctx.stroke(p1, with: .color(c), lineWidth: 1.2)
+                var p2 = Path()
+                p2.move(to: CGPoint(x: size.width - 5, y: size.height - 2))
+                p2.addLine(to: CGPoint(x: size.width - 2, y: size.height - 5))
+                ctx.stroke(p2, with: .color(c), lineWidth: 1.2)
             }
-            .frame(height: 10)
+            .frame(width: 14, height: 14)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1)
@@ -448,7 +453,5 @@ public struct ManualResizableComposerBox: View {
             )
             .accessibilityLabel("调整输入框高度")
         }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.elevated.color))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(palette.borderStrong.color, lineWidth: 1))
     }
 }

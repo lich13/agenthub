@@ -74,9 +74,12 @@ public struct TimelineRailView: View {
                                     .frame(width: LayoutMetrics.timelineRailWidth, height: CGFloat(first) * 12)
                             }
 
+                            let effectiveActiveId = (activeId != nil && entries.contains(where: { $0.id == activeId }))
+                                ? activeId
+                                : entries.last?.id
                             ForEach(Array(visibleSlice.enumerated()), id: \.element.id) { offset, entry in
                                 let globalIndex = first + offset
-                                let isActive = (entry.id == activeId)
+                                let isActive = (entry.id == effectiveActiveId)
                                 let isHighlighted = (hoveredIndex == globalIndex) || (focusedIndex == globalIndex)
                                 TimelineRailTickRow(
                                     index: globalIndex,
@@ -536,8 +539,10 @@ public struct BackdropGaussianBlurView: NSViewRepresentable {
 public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     @Environment(\.agentHubPalette) private var palette
     public let title: String
+    public let subtitle: String?
     public let statusBadge: String?
     public let statusTone: StatusChipTone
+    public let availableWidth: CGFloat
     public let isCompactMobile: Bool
     public let onBack: (() -> Void)?
     public let inlineRenameActive: Bool
@@ -552,8 +557,10 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
 
     public init(
         title: String,
+        subtitle: String? = nil,
         statusBadge: String? = nil,
         statusTone: StatusChipTone = .neutral,
+        availableWidth: CGFloat = 1200,
         isCompactMobile: Bool = false,
         onBack: (() -> Void)? = nil,
         inlineRenameActive: Bool = false,
@@ -563,8 +570,10 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
         @ViewBuilder trailing: @escaping () -> TrailingContent
     ) {
         self.title = title
+        self.subtitle = subtitle
         self.statusBadge = statusBadge
         self.statusTone = statusTone
+        self.availableWidth = availableWidth
         self.isCompactMobile = isCompactMobile
         self.onBack = onBack
         self.inlineRenameActive = inlineRenameActive
@@ -575,30 +584,43 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     }
 
     public var body: some View {
+        let isNarrowHeader = isCompactMobile || availableWidth <= 520
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 if isCompactMobile, let onBack {
                     Button(action: onBack) {
-                        LucideIcon(.arrowLeft, size: 17)
+                        LucideIcon(.chevronLeft, size: 18)
                     }
                     .buttonStyle(IconButtonStyle(dimension: 32))
                     .accessibilityLabel("返回列表")
                 }
 
-                Text(title)
-                    .font(DesignFonts.body(14, weight: .semibold))
-                    .foregroundStyle(palette.textPrimary.color)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(DesignFonts.body(15, weight: .bold))
+                        .foregroundStyle(palette.textPrimary.color)
+                        .lineLimit(1)
 
-                if let statusBadge, !statusBadge.isEmpty {
-                    StatusChip(statusBadge, tone: statusTone)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(DesignFonts.mono(12))
+                            .foregroundStyle(palette.textMuted.color)
+                            .lineLimit(1)
+                            .help(subtitle)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 8)
-                trailing()
+                HStack(spacing: 8) {
+                    if !isNarrowHeader, let statusBadge, !statusBadge.isEmpty {
+                        StatusChip(statusBadge, tone: statusTone)
+                    }
+                    trailing()
+                }
             }
-            .padding(.horizontal, 20)
-            .frame(height: 52)
+            .padding(.horizontal, isCompactMobile ? 12 : (isNarrowHeader ? 16 : 24))
+            .padding(.vertical, 10)
+            .frame(minHeight: isCompactMobile ? 58 : 54)
             .background(
                 ZStack {
                     BackdropGaussianBlurView(radius: 10)

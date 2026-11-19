@@ -42,8 +42,11 @@ public struct SubagentSummaryBarView: View {
     }
 
     public static func summaryHeaderTitle(provider: SessionProvider, totalCount: Int) -> String {
-        provider == .claudeCode ? "本会话子智能体" : "子代理 · \(totalCount)"
+        _ = totalCount
+        return provider == .claudeCode ? "本会话子智能体" : "子智能体"
     }
+
+    @State private var isHovered: Bool = false
 
     public var body: some View {
         if Self.shouldDisplay(provider: provider, collection: collection, isSupported: isSupported) {
@@ -60,6 +63,7 @@ public struct SubagentSummaryBarView: View {
                 let interruptedCount = countFor("interrupted")
                 let unknownCount = countFor("unknown")
                 let unavailableCount = collection.agents.filter { !$0.available }.count
+                let baseFg = (isHovered ? palette.textPrimary : palette.textMuted).color
 
                 Button {
                     let responder = triggerAnchorView?.window?.firstResponder ?? triggerAnchorView
@@ -67,37 +71,37 @@ public struct SubagentSummaryBarView: View {
                 } label: {
                     HStack(spacing: 8) {
                         LucideIcon(.bot, size: 16)
-                            .foregroundStyle(palette.accent.color)
+                            .foregroundStyle(baseFg)
 
                         if provider == .claudeCode {
                             Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
-                                .font(DesignFonts.body(12, weight: .semibold))
-                                .foregroundStyle(palette.textPrimary.color)
+                                .font(DesignFonts.body(12, weight: .medium))
+                                .foregroundStyle(baseFg)
                             Text("\(totalCount)")
-                                .font(DesignFonts.tabularBody(12))
-                                .foregroundStyle(palette.textSecondary.color)
+                                .font(DesignFonts.tabularBody(12, weight: .medium))
+                                .foregroundStyle(baseFg)
                         } else {
                             Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
-                                .font(DesignFonts.body(12, weight: .semibold))
-                                .foregroundStyle(palette.textPrimary.color)
+                                .font(DesignFonts.body(12, weight: .medium))
+                                .foregroundStyle(baseFg)
 
                             if runningCount > 0 {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 6) {
                                     RunningIndicator(size: 13)
                                     Text("\(runningCount) 个运行中")
-                                        .font(DesignFonts.tabularBody(12))
-                                        .foregroundStyle(palette.textSecondary.color)
+                                        .font(DesignFonts.tabularBody(12, weight: .semibold))
+                                        .foregroundStyle(palette.accent.color)
                                 }
                             }
                             if completedCount > 0 {
                                 Text("\(completedCount) 已完成")
-                                    .font(DesignFonts.tabularBody(12))
-                                    .foregroundStyle(palette.textSecondary.color)
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
                             }
                             if creatingCount > 0 {
                                 Text("\(creatingCount) 正在创建")
-                                    .font(DesignFonts.tabularBody(12))
-                                    .foregroundStyle(palette.textSecondary.color)
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
                             }
                             if failedCount > 0 {
                                 Text("\(failedCount) 失败")
@@ -106,28 +110,28 @@ public struct SubagentSummaryBarView: View {
                             }
                             if interruptedCount > 0 {
                                 Text("\(interruptedCount) 已中断")
-                                    .font(DesignFonts.tabularBody(12))
-                                    .foregroundStyle(palette.textMuted.color)
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
                             }
                             if unknownCount > 0 {
                                 Text("\(unknownCount) 状态未知")
-                                    .font(DesignFonts.tabularBody(12))
-                                    .foregroundStyle(palette.textMuted.color)
+                                    .font(DesignFonts.tabularBody(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
                             }
                             if unavailableCount > 0 {
                                 Text("\(unavailableCount) 不可用")
                                     .font(DesignFonts.tabularBody(12, weight: .medium))
                                     .foregroundStyle(palette.errFg.color)
                             }
+                            LucideIcon(.chevronRight, size: 14)
+                                .foregroundStyle(baseFg)
                         }
 
-                        Spacer(minLength: 6)
-
-                        LucideIcon(.chevronRight, size: 14)
-                            .foregroundStyle(palette.textMuted.color)
+                        Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 20)
+                    .frame(minHeight: 28)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 18)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(palette.surface.color)
                     .overlay(alignment: .bottom) {
@@ -141,6 +145,7 @@ public struct SubagentSummaryBarView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainHitButtonStyle())
+                .onHover { isHovered = $0 }
                 .accessibilityLabel(provider == .claudeCode ? "本会话子智能体" : "查看直属子智能体")
             } else if provider == .codex {
                 HStack {

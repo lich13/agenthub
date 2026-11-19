@@ -122,8 +122,8 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 return res
             }
             let planButtons = findButtons(planCell)
-            let dlBtn = try XCTUnwrap(planButtons.first(where: { $0.toolTip == "下载计划 Markdown" }))
-            (dlBtn as? ActionButton)?.onTap?()
+            let dlBtn = try XCTUnwrap(planButtons.first(where: { $0.toolTip == "下载计划 Markdown" }) as? IconFeedbackActionButton)
+            dlBtn.handleClick()
             try await Task.sleep(nanoseconds: 30_000_000)
             XCTAssertEqual(savedPlanFilename.value, "Migration Plan.md")
             XCTAssertEqual(lastToast, "已保存到下载文件夹")
@@ -156,7 +156,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 timelineId: "hc-1",
                 kind: .historyCollapse(eyebrow: "Earlier messages", label: "42 messages folded", expanded: false)
             )
-            XCTAssertEqual(coord.measureRowHeight(hcRow, width: 768), 52)
+            XCTAssertEqual(coord.measureRowHeight(hcRow, width: 768), 64)
             ParityCaseTracker.shared.record(f, "history-collapse-row-height")
         }
     }
@@ -413,9 +413,9 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertTrue(win.firstResponder === triggerButton, "Closing <960pt subagent drawer must restore focus to summary trigger button")
             ParityCaseTracker.shared.record(f, "overlay-close-restores-trigger-focus")
 
-            // Claude flat subagent summary bar renders "本会话子智能体" (DESIGN.md:103)
+            // Claude flat subagent summary bar renders "本会话子智能体" (DESIGN.md:103); Codex renders "子智能体" (SubagentSummary.tsx:76)
             XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .claudeCode, totalCount: 1), "本会话子智能体")
-            XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .codex, totalCount: 3), "子代理 · 3")
+            XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .codex, totalCount: 3), "子智能体")
             let claudeSummaryHost = NSHostingView(
                 rootView: SubagentSummaryBarView(
                     provider: .claudeCode,

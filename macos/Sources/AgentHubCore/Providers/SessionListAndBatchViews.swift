@@ -394,7 +394,7 @@ public struct SessionStorageBadgeView: View {
         let formatted = SessionStorageFormatter.format(size)
         let fg = Self.resolvedColor(for: size, palette: palette)
         Text(formatted.label)
-            .font(DesignFonts.tabularBody(11))
+            .font(DesignFonts.tabularBody(11, weight: .medium))
             .foregroundStyle(fg.color)
             .multilineTextAlignment(.trailing)
             .lineLimit(1)
@@ -435,7 +435,10 @@ public struct RenameableSessionRowView: View {
     @Environment(\.agentHubPalette) private var palette
     public let sessionKey: String
     public let title: String
+    public var idLine: String? = nil
     public let subtitle: String
+    public var inlinePreview: String = ""
+    public var isCodexCompactRow: Bool = false
     public let statusText: String
     public let running: Bool
     public let storageSize: SessionStorageSize?
@@ -457,6 +460,7 @@ public struct RenameableSessionRowView: View {
     @State private var saving: Bool = false
     @State private var errorText: String?
     @State private var failedDraft: String?
+    @State private var isRowHovered: Bool = false
 
     public var body: some View {
         let useBatchMenu = multiSelected && !batchMenuActions.isEmpty
@@ -516,91 +520,127 @@ public struct RenameableSessionRowView: View {
                         .buttonStyle(PlainHitButtonStyle())
                     }
 
-                    Button {
-                        let currentEvent = NSApp.currentEvent
-                        let flags = currentEvent?.modifierFlags ?? []
-                        let click = SessionClick(
-                            detail: max(1, currentEvent?.clickCount ?? 1),
-                            metaKey: flags.contains(.command),
-                            shiftKey: flags.contains(.shift),
-                            ctrlKey: flags.contains(.control)
-                        )
-                        if click.ctrlKey {
-                            // Ctrl+Click opens native NSMenu at pointer without mutating selection or opening detail.
-                            onRowClick(click)
-                            if !contextActions.isEmpty {
-                                let menu = ProviderMenuMatrixBuilder.buildNSMenu(actions: contextActions)
-                                menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-                            }
-                        } else if click.detail >= 2 && !click.metaKey && !click.shiftKey {
-                            beginRename()
-                        } else {
-                            onRowClick(click)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(title)
-                                .font(DesignFonts.body(13, weight: .medium))
-                                .foregroundStyle(palette.textPrimary.color)
-                                .lineSpacing(2.6)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-
-                            if !subtitle.isEmpty {
-                                Text(subtitle)
-                                    .font(DesignFonts.body(11))
-                                    .foregroundStyle(palette.textMuted.color)
-                                    .lineLimit(1)
-                            }
-
-                            HStack(spacing: 6) {
-                                if running {
-                                    RunningIndicator(size: 13)
-                                } else {
-                                    Text(statusText)
-                                        .font(DesignFonts.body(11))
-                                        .foregroundStyle(palette.textMuted.color)
-                                        .lineLimit(1)
+                    ZStack(alignment: .topTrailing) {
+                        Button {
+                            let currentEvent = NSApp.currentEvent
+                            let flags = currentEvent?.modifierFlags ?? []
+                            let click = SessionClick(
+                                detail: max(1, currentEvent?.clickCount ?? 1),
+                                metaKey: flags.contains(.command),
+                                shiftKey: flags.contains(.shift),
+                                ctrlKey: flags.contains(.control)
+                            )
+                            if click.ctrlKey {
+                                onRowClick(click)
+                                if !contextActions.isEmpty {
+                                    let menu = ProviderMenuMatrixBuilder.buildNSMenu(actions: contextActions)
+                                    menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
                                 }
-                                Spacer(minLength: 6)
-                                SessionStorageBadgeView(size: storageSize)
+                            } else if click.detail >= 2 && !click.metaKey && !click.shiftKey {
+                                beginRename()
+                            } else {
+                                onRowClick(click)
                             }
-                        }
-                        .padding(.vertical, 9)
-                        .padding(.leading, 11)
-                        .padding(.trailing, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(FullWidthRowButtonStyle(
-                        selected: selected && !multiSelected,
-                        multiSelected: multiSelected,
-                        cornerRadius: 10
-                    ))
-                    .disabled(disabled)
-                    .contextMenu {
-                        ForEach(contextActions) { act in
-                            Button(act.label, action: act.run)
-                                .disabled(act.disabled)
-                        }
-                    }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(title)
+                                    .font(DesignFonts.body(13, weight: .medium))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                    .lineSpacing(2.6)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
 
-                    if !suppressSingleEllipsis && !disabled && !rowMenuActions.isEmpty {
-                        Menu {
-                            ForEach(rowMenuActions) { act in
+                                if isCodexCompactRow {
+                                    HStack(spacing: 6) {
+                                        if running {
+                                            RunningIndicator(size: 13)
+                                        } else {
+                                            Text(statusText)
+                                                .font(DesignFonts.body(11))
+                                                .foregroundStyle(palette.textMuted.color)
+                                                .lineLimit(1)
+                                                .fixedSize(horizontal: true, vertical: false)
+                                        }
+                                        if !inlinePreview.isEmpty {
+                                            Text(inlinePreview)
+                                                .font(DesignFonts.body(12))
+                                                .foregroundStyle(palette.textMuted.color)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer(minLength: 4)
+                                        SessionStorageBadgeView(size: storageSize)
+                                    }
+                                } else {
+                                    if let idLine, !idLine.isEmpty {
+                                        Text(idLine)
+                                            .font(DesignFonts.body(12))
+                                            .foregroundStyle(palette.textMuted.color)
+                                            .lineLimit(1)
+                                    }
+                                    if !subtitle.isEmpty {
+                                        Text(subtitle)
+                                            .font(DesignFonts.mono(12))
+                                            .foregroundStyle(palette.textMuted.color)
+                                            .lineLimit(1)
+                                    }
+                                    HStack(spacing: 6) {
+                                        if running {
+                                            RunningIndicator(size: 13)
+                                        } else {
+                                            Text(statusText)
+                                                .font(DesignFonts.body(12))
+                                                .foregroundStyle(palette.textMuted.color)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer(minLength: 4)
+                                        SessionStorageBadgeView(size: storageSize)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 9)
+                            .padding(.leading, 11)
+                            .padding(.trailing, suppressSingleEllipsis ? 11 : 34)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(FullWidthRowButtonStyle(
+                            selected: selected && !multiSelected,
+                            multiSelected: multiSelected,
+                            cornerRadius: 10
+                        ))
+                        .disabled(disabled)
+                        .contextMenu {
+                            ForEach(contextActions) { act in
                                 Button(act.label, action: act.run)
                                     .disabled(act.disabled)
                             }
-                        } label: {
-                            LucideIcon(.moreHorizontal, size: 16)
-                                .foregroundStyle(palette.textMuted.color)
-                                .frame(width: 28, height: 28)
-                                .contentShape(Rectangle())
                         }
-                        .menuStyle(.borderlessButton)
-                        .frame(width: 28, height: 28)
-                        .accessibilityLabel("线程操作")
+
+                        if !suppressSingleEllipsis && !disabled && !rowMenuActions.isEmpty {
+                            let nativeEntries = rowMenuActions.map { act in
+                                NativeMenuEntry(
+                                    title: act.label,
+                                    enabled: !act.disabled,
+                                    action: act.run
+                                )
+                            }
+                            AnchoredMenuButton(entries: nativeEntries, accessibilityLabel: "线程操作") {
+                                LucideIcon(.moreHorizontal, size: 16)
+                                    .foregroundStyle(palette.textMuted.color)
+                                    .frame(width: 28, height: 28)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(palette.hover.color.opacity(isRowHovered ? 0.6 : 0))
+                                    )
+                                    .contentShape(Rectangle())
+                            }
+                            .padding(.top, 8)
+                            .padding(.trailing, 6)
+                            .opacity(isRowHovered ? 1.0 : 0.0)
+                            .allowsHitTesting(isRowHovered)
+                        }
                     }
+                    .onHover { isRowHovered = $0 }
                 }
             }
 

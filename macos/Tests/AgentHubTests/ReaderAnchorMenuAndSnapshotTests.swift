@@ -798,4 +798,138 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         }
         return Double(diffPixels) / Double(pixelCount)
     }
+
+    // MARK: - 5. Populated Thread Detail Glyph-Ink Gate (Prevents TextKit 2->1 Blank-Glyph Regression)
+
+    @MainActor
+    func testPopulatedThreadDetailRendersVisibleGlyphInkAcrossAllTextViews() throws {
+        let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
+        let suiteName = "com.lich13.agenthub.tests.ink.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        let disclosures = ActivityDisclosureStore()
+        let scope = "local:codex:ink-thread"
+        disclosures.setOpen(scope: scope, stateKey: "u-1:context", isOpen: true)
+        disclosures.setOpen(scope: scope, stateKey: "exec-grp-1", isOpen: true)
+        disclosures.setOpen(scope: scope, stateKey: "exec-cmd-1", isOpen: true)
+
+        let coordinator = ConversationTableCoordinator(store: store, disclosureStore: disclosures)
+        coordinator.sessionScopeKey = scope
+        let populatedRows: [ConversationRowItem] = [
+            ConversationRowItem(
+                id: "u-1",
+                timelineId: "u-1",
+                kind: .user(
+                    message: UserMessageContent(
+                        id: "u-1",
+                        text: "检查纯文本用户气泡渲染",
+                        attachments: [],
+                        contextBlocks: [UserContextBlock(kind: "environment_context", text: "<cwd>/workspace/AgentHub</cwd>")]
+                    ),
+                    rawText: "检查纯文本用户气泡渲染",
+                    attachmentsAsNamesOnly: false
+                )
+            ),
+            ConversationRowItem(
+                id: "exec-grp-1",
+                timelineId: "exec-grp-1",
+                kind: .executionGroup(ExecutionGroup(
+                    id: "exec-grp-1",
+                    mergedIds: ["exec-grp-1"],
+                    commands: [
+                        ExecutionCommand(
+                            id: "exec-cmd-1",
+                            sourceIds: ["exec-cmd-1"],
+                            title: "read_file",
+                            preview: "DESIGN.md",
+                            status: .completed,
+                            instructionFile: false,
+                            sections: [ExecutionSection(label: "Output", text: "Read 180 lines")]
+                        ),
+                    ],
+                    kind: "command",
+                    provider: "codex",
+                    running: false,
+                    recordedOnly: false,
+                    failedCount: 0
+                ))
+            ),
+            ConversationRowItem(
+                id: "asst-1",
+                timelineId: "asst-1",
+                kind: .assistant(
+                    markdown: "纯文本段落与 `inline_code` 混排。\n\n| 模块 | 状态 |\n| :--- | :--- |\n| 纯文本单元格 | `通过` |",
+                    foldInstructions: false
+                )
+            ),
+        ]
+
+        let readerView = ConversationReaderTableView(
+            coordinator: coordinator,
+            rows: populatedRows,
+            scheme: .light,
+            workspace: .codex,
+            sessionScopeKey: scope,
+            sessionProvider: .codex,
+            sessionKey: "codex:ink-thread"
+        )
+        let host = NSHostingView(rootView: readerView.frame(width: 900, height: 900))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 900)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        window.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func collectTextViews(in view: NSView) -> [ReaderSelectableTextView] {
+            var out: [ReaderSelectableTextView] = []
+            if let tv = view as? ReaderSelectableTextView, (tv.textStorage?.length ?? 0) > 0 {
+                out.append(tv)
+            }
+            for sub in view.subviews {
+                out.append(contentsOf: collectTextViews(in: sub))
+            }
+            return out
+        }
+
+        let textViews = collectTextViews(in: host)
+        XCTAssertGreaterThanOrEqual(textViews.count, 7, "Expected User bubble, Context, Command output, Prose, and 4 Table cells")
+        for tv in textViews {
+            tv.layoutSubtreeIfNeeded()
+            guard let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) else {
+                XCTFail("Failed to allocate bitmap rep for \(tv.string)")
+                continue
+            }
+            tv.cacheDisplay(in: tv.bounds, to: rep)
+            let w = rep.pixelsWide
+            let h = rep.pixelsHigh
+            guard let src = rep.bitmapData else {
+                XCTFail("Missing bitmapData for \(tv.string)")
+                continue
+            }
+            var nonTransparentInk = 0
+            for y in 0 ..< h {
+                let rowPtr = src.advanced(by: y * rep.bytesPerRow)
+                for x in 0 ..< w {
+                    let alpha = rowPtr[x * 4 + 3]
+                    if alpha > 24 {
+                        nonTransparentInk += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(
+                nonTransparentInk,
+                20,
+                "ReaderSelectableTextView rendered blank glyphs for text: \(tv.string)"
+            )
+        }
+    }
 }

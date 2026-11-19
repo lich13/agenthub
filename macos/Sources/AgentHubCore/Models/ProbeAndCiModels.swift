@@ -746,7 +746,54 @@ public struct GithubCiSnapshot: Codable, Equatable, Sendable {
         case enabled, refreshing
         case filterBots = "filter_bots"
         case monitoredRepositories = "monitored_repositories"
+        case selectedRepositories = "selected_repositories"
         case account, repositories, runs, error
+    }
+
+    public init(
+        enabled: Bool = false,
+        refreshing: Bool = false,
+        filterBots: Bool = true,
+        monitoredRepositories: [String] = [],
+        account: GithubCiAccount? = nil,
+        repositories: [GithubCiRepository] = [],
+        runs: [GithubCiRun] = [],
+        error: String? = nil
+    ) {
+        self.enabled = enabled
+        self.refreshing = refreshing
+        self.filterBots = filterBots
+        self.monitoredRepositories = monitoredRepositories
+        self.account = account
+        self.repositories = repositories
+        self.runs = runs
+        self.error = error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        refreshing = try c.decodeIfPresent(Bool.self, forKey: .refreshing) ?? false
+        filterBots = try c.decodeIfPresent(Bool.self, forKey: .filterBots) ?? true
+        monitoredRepositories = try c.decodeIfPresent([String].self, forKey: .monitoredRepositories)
+            ?? (try c.decodeIfPresent([String].self, forKey: .selectedRepositories))
+            ?? []
+        account = try c.decodeIfPresent(GithubCiAccount.self, forKey: .account)
+        repositories = try c.decodeIfPresent([GithubCiRepository].self, forKey: .repositories) ?? []
+        runs = try c.decodeIfPresent([GithubCiRun].self, forKey: .runs) ?? []
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(refreshing, forKey: .refreshing)
+        try c.encode(filterBots, forKey: .filterBots)
+        try c.encode(monitoredRepositories, forKey: .monitoredRepositories)
+        try c.encodeIfPresent(account, forKey: .account)
+        try c.encode(repositories, forKey: .repositories)
+        try c.encode(runs, forKey: .runs)
+        try c.encodeIfPresent(error, forKey: .error)
     }
 }
 

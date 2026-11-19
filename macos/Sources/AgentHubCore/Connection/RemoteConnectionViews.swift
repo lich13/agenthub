@@ -8,6 +8,7 @@ public struct MachineButtonView: View {
     public let onConfigure: () -> Void
 
     @State private var localError: String?
+    @State private var hovered: Bool = false
 
     public init(store: RuntimeConnectionStore, collapsed: Bool = false, onConfigure: @escaping () -> Void) {
         self.store = store
@@ -15,55 +16,61 @@ public struct MachineButtonView: View {
         self.onConfigure = onConfigure
     }
 
+    private var menuEntries: [NativeMenuEntry] {
+        var entries: [NativeMenuEntry] = [
+            NativeMenuEntry(id: "local", title: "本机") { selectTarget(id: "local") },
+        ]
+        if !store.machines.isEmpty {
+            entries.append(.separator("sep-machines"))
+            for machine in store.machines {
+                entries.append(NativeMenuEntry(id: machine.id, title: machine.name) {
+                    selectTarget(id: machine.id)
+                })
+            }
+        }
+        entries.append(.separator("sep-config"))
+        entries.append(NativeMenuEntry(id: "config", title: "管理远程机器…") { onConfigure() })
+        return entries
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Menu {
-                    Button("本机") {
-                        selectTarget(id: "local")
-                    }
-                    if !store.machines.isEmpty {
-                        Divider()
-                        ForEach(store.machines) { machine in
-                            Button(machine.name) {
-                                selectTarget(id: machine.id)
-                            }
-                        }
-                    }
-                    Divider()
-                    Button("管理远程机器…") {
-                        onConfigure()
-                    }
-                } label: {
+            HStack(spacing: 4) {
+                AnchoredMenuButton(entries: menuEntries, accessibilityLabel: "当前机器") {
                     HStack(spacing: 8) {
-                        LucideIcon(store.target == .local ? .monitor : .cloud, size: 16)
-                            .foregroundStyle(palette.textPrimary.color)
+                        LucideIcon(store.target == .local ? .monitor : .cloud, size: 15)
+                            .foregroundStyle(palette.accent.color)
                         if !collapsed {
                             Text(store.machineDisplayLabel)
-                                .font(DesignFonts.body(13, weight: .medium))
+                                .font(DesignFonts.body(12, weight: .medium))
                                 .foregroundStyle(palette.textPrimary.color)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                            Circle()
+                                .fill((store.target == .local ? palette.okFg : palette.accent).color)
+                                .frame(width: 7.5, height: 7.5)
+                            LucideIcon(.chevronDown, size: 13)
+                                .foregroundStyle(palette.textMuted.color)
                         }
                     }
                     .padding(.horizontal, collapsed ? 0 : 10)
                     .frame(
                         maxWidth: collapsed ? 36 : .infinity,
-                        minHeight: collapsed ? 34 : LayoutMetrics.formControlHeight,
-                        maxHeight: collapsed ? 34 : LayoutMetrics.formControlHeight
+                        minHeight: 34,
+                        maxHeight: 34
                     )
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(palette.elevated.color)
+                            .fill((hovered ? palette.hover : palette.elevated).color)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+                            .strokeBorder((hovered ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1)
                     )
                     .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
+                .buttonStyle(PlainHitButtonStyle())
+                .onHover { hovered = $0 }
                 .disabled(store.isBusyForSwitch)
                 .help(store.machineDisplayLabel)
                 .accessibilityLabel("当前机器")

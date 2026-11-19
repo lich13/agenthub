@@ -584,7 +584,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             from: Data("{\"current_version\":\"2.1.27\",\"latest_version\":\"2.1.28\",\"update_available\":true,\"state\":\"available\"}".utf8)
         )
         let actionsAvail = UpdateActionViewItem.actions(status: available, capabilities: localCaps)
-        XCTAssertEqual(actionsAvail.map(\.label), ["检查更新", "更新至 v2.1.28"])
+        XCTAssertEqual(actionsAvail.map(\.label), ["检查更新", "更新至 2.1.28"])
         ParityCaseTracker.shared.record(f, "local-available-shows-install-v-button")
 
         var remoteCaps = RuntimeCapabilityMatrix.from(nil)
