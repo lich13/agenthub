@@ -1,4 +1,4 @@
-"""Regression tests for workspace MSRV and shared dependency resolution checks."""
+"""Regression tests for unified Cargo + Swift 6 workspace checks."""
 import importlib.util
 from pathlib import Path
 import sys
@@ -6,7 +6,6 @@ import tempfile
 import unittest
 
 
-# Dynamic source imports must not persist interpreter paths in repository bytecode.
 sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("check_workspaces", Path(__file__).with_name("check-workspaces.py"))
@@ -18,13 +17,12 @@ SHARED_VERSIONS = {
     "anyhow": "1.0.102",
     "chrono": "0.4.45",
     "dirs": "5.0.1",
-    "reqwest": "0.12.28",
+    "reqwest": "0.13.4",
     "serde": "1.0.228",
     "serde_json": "1.0.150",
     "tokio": "1.52.3",
     "toml": "0.8.23",
 }
-DESKTOP_VERSIONS = dict(SHARED_VERSIONS)
 
 
 def write(path, content):
@@ -41,81 +39,58 @@ def package_entry(name, version, dependencies=(), local=False):
     return "\n".join(lines)
 
 
-def local_dependency_entries(versions):
-    return [f"{name} {version}" for name, version in sorted(versions.items())]
-
-
-def make_fixture(root, desktop_versions=None, extra_desktop_packages=()):
-    write(root / "rust-toolchain.toml", '[toolchain]\nchannel = "stable"\n')
-    desktop_versions = desktop_versions or DESKTOP_VERSIONS
-    names = sorted(SHARED_VERSIONS)
-    requirements = {
-        "anyhow": '"1.0"',
-        "chrono": '"0.4"',
-        "dirs": '"5.0"',
-        "reqwest": '"0.12"',
-        "serde": '"1.0"',
-        "serde_json": '"1.0"',
-        "tokio": '"1.37"',
-        "toml": '"0.8"',
-    }
-    workspace_deps = "\n".join(f"{name} = {requirements[name]}" for name in names)
-    desktop_deps = "\n".join(
-        f"{name} = {{ version = {requirements[name]}, default-features = false }}" if name == "reqwest"
-        else f"{name} = {{ version = {requirements[name]} }}" if name == "serde"
-        else f"{name} = {requirements[name]}"
-        for name in names
-    )
-    write(root / "Cargo.toml", f'''\
+def make_fixture(root, ffi_anyhow_version=None):
+    ffi_anyhow = ffi_anyhow_version or SHARED_VERSIONS["anyhow"]
+    write(root / "Cargo.toml", '''\
 [workspace]
-members = ["crates/agenthub-core", "crates/agenthub-webd"]
+members = ["crates/agenthub-core", "crates/agenthub-ffi", "crates/agenthub-webd"]
 
 [workspace.package]
+version = "2.1.28"
+edition = "2021"
 rust-version = "1.99"
-
-[workspace.dependencies]
-{workspace_deps}
 ''')
-    write(root / "src-tauri/Cargo.toml", f'''\
+    for rel, name in (
+        ("crates/agenthub-core/Cargo.toml", "agenthub-core"),
+        ("crates/agenthub-ffi/Cargo.toml", "agenthub-ffi"),
+        ("crates/agenthub-webd/Cargo.toml", "agenthub-webd"),
+    ):
+        deps = "\n".join(f"{dep} = {{ workspace = true }}" for dep in sorted(SHARED_VERSIONS))
+        if name != "agenthub-core":
+            deps += '\nagenthub-core = { path = "../agenthub-core" }'
+        write(root / rel, f'''\
 [package]
-name = "agenthub-desktop"
-rust-version = "1.99"
+name = "{name}"
+version = {{ workspace = true }}
+edition = {{ workspace = true }}
+rust-version = {{ workspace = true }}
 
 [dependencies]
-{desktop_deps}
-agenthub-core = {{ path = "../crates/agenthub-core" }}
+{deps}
 ''')
-    core_names = [name for name in names if name != "reqwest"]
-    core_deps = "\n".join(f"{name} = {{ workspace = true }}" for name in core_names)
-    write(root / "crates/agenthub-core/Cargo.toml", f'''\
-[package]
-name = "agenthub-core"
-
-[dependencies]
-{core_deps}
-''')
-    write(root / "crates/agenthub-webd/Cargo.toml", '''\
-[package]
-name = "agenthub-webd"
-
-[dependencies]
-reqwest = { workspace = true }
+    write(root / "macos/Package.swift", '''\
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(
+    name: "AgentHub",
+    platforms: [.macOS(.v12)]
+)
 ''')
 
-    core_entries = [
-        package_entry("agenthub-core", "1.2.21", local_dependency_entries({name: SHARED_VERSIONS[name] for name in core_names}), local=True),
-        package_entry("agenthub-webd", "1.2.21", [f'reqwest {SHARED_VERSIONS["reqwest"]}'], local=True),
+    core_edges = [f"{k} {v}" for k, v in sorted(SHARED_VERSIONS.items())]
+    ffi_map = dict(SHARED_VERSIONS, anyhow=ffi_anyhow)
+    ffi_edges = ["agenthub-core 2.1.28", *(f"{k} {v}" for k, v in sorted(ffi_map.items()))]
+    webd_edges = ["agenthub-core 2.1.28", *core_edges]
+
+    entries = [
+        package_entry("agenthub-core", "2.1.28", core_edges, local=True),
+        package_entry("agenthub-ffi", "2.1.28", ffi_edges, local=True),
+        package_entry("agenthub-webd", "2.1.28", webd_edges, local=True),
     ]
-    core_entries.extend(package_entry(name, version) for name, version in SHARED_VERSIONS.items())
-    write(root / "Cargo.lock", "version = 4\n\n" + "\n\n".join(core_entries) + "\n")
-
-    desktop_entries = [
-        package_entry("agenthub-core", "1.2.21", local_dependency_entries({name: desktop_versions[name] for name in core_names}), local=True),
-        package_entry("agenthub-desktop", "1.2.21", local_dependency_entries(desktop_versions), local=True),
-    ]
-    desktop_entries.extend(package_entry(name, version) for name, version in desktop_versions.items())
-    desktop_entries.extend(package_entry(name, version) for name, version in extra_desktop_packages)
-    write(root / "src-tauri/Cargo.lock", "version = 4\n\n" + "\n\n".join(desktop_entries) + "\n")
+    entries.extend(package_entry(k, v) for k, v in sorted(SHARED_VERSIONS.items()))
+    if ffi_anyhow != SHARED_VERSIONS["anyhow"]:
+        entries.append(package_entry("anyhow", ffi_anyhow))
+    write(root / "Cargo.lock", "version = 4\n\n" + "\n\n".join(entries) + "\n")
 
 
 class WorkspaceCheckTests(unittest.TestCase):
@@ -125,39 +100,34 @@ class WorkspaceCheckTests(unittest.TestCase):
         self.root = Path(temporary.name)
         make_fixture(self.root)
 
-    def test_matching_shared_dependency_edges_pass(self):
+    def test_unified_workspace_and_swift6_manifest_pass(self):
         self.assertEqual(check_workspaces.check(self.root), 8)
 
-    def test_unrelated_tauri_lock_versions_do_not_change_direct_resolutions(self):
-        make_fixture(self.root, extra_desktop_packages=[
-            ("dirs", "6.0.0"),
-            ("reqwest", "0.13.4"),
-            ("toml", "0.9.12"),
-            ("toml", "1.1.2+spec-1.1.0"),
-        ])
-        self.assertEqual(check_workspaces.check(self.root), 8)
-
-    def test_msrv_must_match_between_workspace_and_tauri(self):
-        manifest = self.root / "src-tauri/Cargo.toml"
-        manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.99"', 'rust-version = "1.98"'), encoding="utf-8")
+    def test_retired_tauri_or_webui_directory_fails(self):
+        write(self.root / "src-tauri/Cargo.toml", "[package]\nname = \"retired\"\n")
         with self.assertRaises(ValueError):
             check_workspaces.check(self.root)
 
-    def test_matching_older_minimum_does_not_restore_another_toolchain(self):
-        for relative in ("Cargo.toml", "src-tauri/Cargo.toml"):
-            manifest = self.root / relative
-            manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.99"', 'rust-version = "1.98"'), encoding="utf-8")
-        self.assertEqual(check_workspaces.check(self.root), 8)
-
-    def test_shared_dependency_requirements_must_match(self):
-        manifest = self.root / "src-tauri/Cargo.toml"
-        manifest.write_text(manifest.read_text(encoding="utf-8").replace('anyhow = "1.0"', 'anyhow = "1.1"'), encoding="utf-8")
+    def test_member_must_inherit_workspace_msrv(self):
+        manifest = self.root / "crates/agenthub-ffi/Cargo.toml"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "rust-version = { workspace = true }",
+                'rust-version = "1.98"',
+            ),
+            encoding="utf-8",
+        )
         with self.assertRaises(ValueError):
             check_workspaces.check(self.root)
 
-    def test_unapproved_direct_lock_resolution_difference_is_rejected(self):
-        mismatched = {**DESKTOP_VERSIONS, "anyhow": "1.0.103"}
-        make_fixture(self.root, desktop_versions=mismatched)
+    def test_divergent_shared_dependency_resolution_is_rejected(self):
+        make_fixture(self.root, ffi_anyhow_version="1.0.103")
+        with self.assertRaises(ValueError):
+            check_workspaces.check(self.root)
+
+    def test_swift_package_tools_version_and_macos12_target_are_enforced(self):
+        swift_pkg = self.root / "macos/Package.swift"
+        swift_pkg.write_text("// swift-tools-version: 5.9\n", encoding="utf-8")
         with self.assertRaises(ValueError):
             check_workspaces.check(self.root)
 

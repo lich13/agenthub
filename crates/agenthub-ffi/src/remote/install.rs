@@ -4,15 +4,15 @@ pub async fn run(alias: &str, sudo: bool) -> Result<(), String> {
     command.arg(if sudo { "sudo -n bash -s" } else { "bash -s" });
     let mut child = command.spawn().map_err(|_| "无法启动 SSH 安装")?;
     let mut input = child.stdin.take().ok_or("无法写入安装脚本")?;
-    let script = include_str!("../../../deploy/agenthub-webd/bootstrap.sh")
+    let script = include_str!("../../../../deploy/agenthub-webd/bootstrap.sh")
         .replace("@VERSION@", env!("CARGO_PKG_VERSION"))
         .replace(
             "@PUBLIC_KEY@",
-            include_str!("../../../deploy/agenthub-webd/updater.pub").trim(),
+            include_str!("../../../../deploy/agenthub-webd/updater.pub").trim(),
         )
         .replace(
             "@VALIDATOR@",
-            include_str!("../../../deploy/agenthub-webd/install-safety.py"),
+            include_str!("../../../../deploy/agenthub-webd/install-safety.py"),
         );
     input
         .write_all(script.as_bytes())

@@ -27,10 +27,8 @@ use std::{
 use tokio::sync::Mutex;
 
 pub(crate) mod attachments;
-#[path = "../../../src-tauri/src/codex_desktop/catalogs.rs"]
 mod catalogs;
 pub mod clipboard;
-#[path = "../../../src-tauri/src/codex_desktop/diagnostics.rs"]
 mod diagnostics;
 mod selection;
 use selection::{GrantValue, Grants};
@@ -723,5 +721,4 @@ pub async fn catalog(
 }
 
 #[cfg(test)]
-#[path = "../../../src-tauri/src/codex_desktop/connection_tests.rs"]
 mod connection_tests;

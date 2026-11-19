@@ -12,7 +12,6 @@ use anyhow::Result;
 
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 
-#[path = "../../../../../src-tauri/src/services/threads/types.rs"]
 mod types;
 
 pub(crate) use types::{

@@ -571,18 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_tauri_events_cannot_be_subscribed_from_the_webview() {
-        let cap_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src-tauri/capabilities/default.json");
-        if cap_path.is_file() {
-            let raw = std::fs::read_to_string(cap_path).unwrap();
-            let capabilities: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            assert!(capabilities["permissions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "core:event:deny-listen"));
-        }
+    fn untyped_event_listen_actions_are_rejected_by_attachment_contract() {
         assert!(serde_json::from_value::<DesktopAttachmentRequest>(
             serde_json::json!({"revision":1,"sessionId":"fixture","action":{"type":"listen"}})
         )

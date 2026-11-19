@@ -1,12 +1,7 @@
-#[path = "../../../../src-tauri/src/services/actions.rs"]
 pub(crate) mod actions;
-#[path = "../../../../src-tauri/src/services/jobs.rs"]
 pub(crate) mod jobs;
-#[path = "../../../../src-tauri/src/services/probe.rs"]
 pub(crate) mod probe;
-#[path = "../../../../src-tauri/src/services/settings.rs"]
 pub(crate) mod settings;
-#[path = "../../../../src-tauri/src/services/system.rs"]
 pub(crate) mod system;
 pub(crate) mod threads;
 pub(crate) mod updates;

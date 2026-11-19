@@ -1,10 +1,7 @@
 #![allow(non_snake_case)]
 
-#[path = "../../../src-tauri/src/remote/install.rs"]
 mod install;
-#[path = "../../../src-tauri/src/remote/ssh.rs"]
 mod ssh;
-#[path = "../../../src-tauri/src/remote/ssh_config.rs"]
 mod ssh_config;
 
 use agenthub_core::services::{

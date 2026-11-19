@@ -5,7 +5,6 @@ pub mod gfm_markdown;
 pub mod host;
 pub mod isolation;
 pub mod legacy_prefs;
-#[path = "../../../src-tauri/src/overview.rs"]
 pub mod overview;
 pub mod remote;
 #[path = "resources_wrapper.rs"]

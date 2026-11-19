@@ -8,7 +8,7 @@
 
 ## Architecture
 
-- Shared actions flow through `AgentHubUseCases` and the contract registry, then typed WebUI query/domain code and thin Linux/Tauri adapters.
+- Shared actions flow through `AgentHubUseCases` and the contract registry, then typed Swift 6 models/stores (`macos/Sources/AgentHubCore/`) and thin Linux (`agenthub-webd`)/FFI (`agenthub-ffi`) adapters.
 - Codex, Claude Code, Grok, Antigravity and DSH provide session reading and explicit management actions. Local Codex main threads additionally support collaboration through a verified native desktop owner. Claude rename retains native identity, version, ownership and fingerprint validation. Archive/restore retain their existing rules. Codex, Claude and Grok direct deletion is independent of content reading and activity; Antigravity and DSH retain their native running/lock checks. Unified cleanup retains its preview fingerprint and allowlist checks. Resolve targets from the selected machine, Provider, native ID or project-relative filename key; unlink directory symlinks themselves and only remove matching records from shared files. Never install Claude or infer permission waits from generic pending tools.
 - The AgentHub Goal feature and automatic recovery chain are retired. Unknown RPC names are rejected by the current positive allowlist; no retired-name table remains. Codex native logs are retained as read-only error-monitor input; no Goal scheduler, recovery retry or Goal database table remains. The separate desktop outgoing queue stores only user-submitted messages and never runs models or edits the native queue.
 - Probe keeps error detection, persistent cursors, dedupe, retention and encrypted Bark delivery. Provider identities and terminal evidence are validated independently. Codex ordinary feedback requests are classified locally only after a verified terminal turn. Native asynchronous questions remain pending across tool acknowledgements and normal completion; all notification entrances use the shared question tracker, identity recheck and persistent per-call delivery claim. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without blocking management; fatal parse, identity, path, permission or uncertain ownership errors still guard rename and collaboration. Only fatal parse or identity errors suppress notification scanning. Claude hooks are explicit local-only settings operations; App installation never enables them. Hooks and local polling share verified native prompt identities and one claim per prompt/category; this rule never changes Codex per-question claims. Retain completed Claude turns on the current branch across later prompts. Check Claude failure freshness before first delivery and every retry; a new prompt, resumed execution, success or cancellation obsoletes the old failure and clears its queued payload. Main-turn completion does not wait for independent background shells or monitors, but a turn that ends while native agents or workflows are still pending (`turn_duration` pending counts, the Stop hook `background_tasks` list, or a verified owner reporting `busy`) is not the thread's completion. A native wake-up record with its own `origin` and `promptId` starts a separate notification turn without becoming a user message, title or timeline marker. Stop and StopFailure hooks carrying `agent_id` belong to a subagent and never notify for the session. A permission notice for a pending native question is claimed as that question. Claude running state comes from the verified session registration (`busy`/`waiting`/`idle`); native installations run under a version-named process that is admitted only after executable verification, and a session keeps its owner across recorded working-directory changes. New Bark events are one plain-text summary (four lines, 300 Unicode characters); preserve encrypted legacy chunks and their acknowledgements. Redact the full input before formatting; stop once truncation is established and remove only complete valid Markdown images, preserving ordinary exclamation/bracket text. Partial answers never change the original dedupe identity. Never replay questions older than the asynchronous enablement baseline.
@@ -21,13 +21,13 @@ Grok activity display uses one native-process snapshot per list and bounded incr
 
 ## 本机 Codex 桌面协作
 
-- `codex.desktop.*` 只注册到 macOS Tauri，不进入 Linux RPC 或远程 allowlist；API 协议保持 2。使用固定原生 IPC 方法和版本，逐次核验本机 owner、线程、当前回合及审批请求。身份、状态修订或协议不明立即停止写入；有界恢复取得新 snapshot 后仍须核验 owner，owner 改变仅恢复阅读，显式连接确认才能写入。不能回退到独立 CLI 执行或整表覆盖原生队列。
-- 独立短生命周期 helper 只使用固定目录读取及创建空线程；对话执行始终交给已打开线程的原生桌面。删除直接操作原生存储，不调用 helper、不启动回合或终止原生进程。文件和目录由 Rust 原生选择器授予不透明 handle，目录引用来自原生 catalog；不接受 WebUI 文件路径。队列中的文件引用发送前重验身份。
+- `codex.desktop.*` 只注册到 macOS FFI（`crates/agenthub-ffi`），不进入 Linux RPC 或远程 allowlist；API 协议保持 2。使用固定原生 IPC 方法和版本，逐次核验本机 owner、线程、当前回合及审批请求。身份、状态修订或协议不明立即停止写入；有界恢复取得新 snapshot 后仍须核验 owner，owner 改变仅恢复阅读，显式连接确认才能写入。不能回退到独立 CLI 执行或整表覆盖原生队列。
+- 独立短生命周期 helper 只使用固定目录读取及创建空线程；对话执行始终交给已打开线程的原生桌面。删除直接操作原生存储，不调用 helper、不启动回合或终止原生进程。文件和目录由 Rust 经原生选择器授予不透明 handle，目录引用来自原生 catalog；不接受客户端文件路径。队列中的文件引用发送前重验身份。
 - 应用目录使用无线程请求、同一 helper 完成分页；五种目录独立失败和重试，设置成员由原生目录验证。诊断只保存有界内存中的白名单字段，不能保留或输出原生自由文本。只有已核验的执行前拒绝可判定未发送，其他提交异常保持结果不明。
 - AgentHub 自有队列使用专属 Keychain 密钥加密，并持有跨进程唯一 worker 锁。发送前持久化认领，收到确认后清除正文；断线/重启保留暂停项，结果不明不得自动重发。停止先暂停本线程队列；补充绑定当前回合，失败补充不能转成下一回合。
-- 内联引用的 UTF-8 区间和名称必须由 Rust 对已授权 handle 校验，WebUI 不提供原生 path 或 wire 对象；新引用按已核验的原生链接序列化，保留空 text_elements 和旧队列正文逐字节兼容。协议方法与版本集中在固定白名单，仅以核验后的桌面证据扩展。
+- 内联引用的 UTF-8 区间和名称必须由 Rust 对已授权 handle 校验，Swift 界面层不提供原生 path 或 wire 对象；新引用按已核验的原生链接序列化，保留空 text_elements 和旧队列正文逐字节兼容。协议方法与版本集中在固定白名单，仅以核验后的桌面证据扩展。
 - 兼容性以实际方法版本、状态与 owner 校验为准，build 只作诊断，不设 build 白名单或试探未知写入版本。新选择的小文件可用有界内容摘要确认单纯 ctime 变化，规范路径、设备/inode、大小、mtime、所有者、权限及内容必须保持；旧引用和大文件继续严格核验。
-- 原生拖放和显式文件/图片粘贴只在 Rust 接收；WebUI 不传路径或字节，通用 Tauri event listen 保持禁止。Finder 文件和完整路径文本仅从系统剪贴板授权，整批验证后附加，文本回退保留原始内容；不读取 HTML 图片地址或执行路径中的 shell 语法。私有图片目录/文件权限为 0700/0600，生命周期索引专属密钥加密；发送前持久化保留标记，队列终结或取消不自动删除可能被原生历史引用的图片。只清理可证实归属的未提交草稿，缺失密钥/损坏索引/未知文件保留并停止。
+- 原生拖放和显式文件/图片粘贴全部经 FFI 交由 Rust 验界与转码；界面层只传递原始快照或经过授权的回调，不向 JSON 命令注入路径或字节，未类型化通用事件订阅保持禁止。Finder 文件和完整路径文本仅从系统剪贴板授权，整批验证后附加，文本回退保留原始内容；不读取 HTML 图片地址或执行路径中的 shell 语法。私有图片目录/文件权限为 0700/0600，生命周期索引专属密钥加密；发送前持久化保留标记，队列终结或取消不自动删除可能被原生历史引用的图片。只清理可证实归属的未提交草稿，缺失密钥/损坏索引/未知文件保留并停止。
 - 原生 Goal 仅从已有快照同步目标与状态，操作通过既有“在 Codex 中打开”入口完成；不恢复退役 Goal 调度器，不新增未经核验的 follower Goal 写入方法。
 - 审批和问答以完整原生请求及文件 diff 身份绑定。未完整显示或不支持的表单留在 Codex 中处理，不默认批准；仅声明支持的命令/文件审批可使用已核验会话决策，权限仍限本回合。机器切换、隐藏窗口和离开页面释放界面订阅，已授权的本机队列仍只属于原来源。
 
@@ -45,8 +45,8 @@ Grok activity display uses one native-process snapshot per list and bounded incr
 
 ## Release matrix
 
-- CI keeps frontend, backend and macOS Tauri checks. Linux Tauri packaging, AppImage/deb/rpm artifacts and xvfb desktop smoke are retired.
-- Release keeps the macOS ARM64 app/updater and Linux webd stages. The eight assets are the DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and webd tarball/checksum/signature. Verify Linux archives with the preinstalled Minisign validator and trusted public key before extraction; never fall back to checksum-only updates.
+- CI keeps `Backend & contract checks` (`ubuntu-24.04`) and `macOS Swift 6 checks` (`macos-15`). Tauri, WebView, Node/pnpm frontend builds, Playwright browser smoke, and Linux desktop packages are retired.
+- Release keeps the macOS ARM64 app/updater (`scripts/package-macos-swift-arm64.sh`) and Linux webd (`scripts/package-webd-linux-x86_64.sh`) stages. The eight assets are the DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and webd tarball/checksum/signature. Verify archives with the preinstalled Minisign validator and trusted public key before extraction; never fall back to checksum-only updates.
 - Cloud deployment remains manual and explicit through `scripts/deploy-cloud.sh`; production configuration is never committed.
 
 ## Required gates
@@ -79,7 +79,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - Codex 子智能体只通过原生调用身份、精确任务路径和父子关联读取，不按显示名称猜测。只使用子线程自己的回合证据判断运行状态。
 - `threads.subagentDetail` 和带主线程上下文的子线程附件必须校验可见主线程、唯一父链、深度、循环、文件身份与指纹。无任意路径、执行控制或子线程管理能力。
 - 子智能体能力缺失时按不支持处理，API 协议保持 2；机器切换关闭面板、隔离缓存并丢弃迟到响应。
-- Hook 集成测试必须启动本次 Cargo 构建的 CLI；不得跳过测试或借用已安装的正式服务。浏览器、Tauri 与真实入口验收分别记录。
+- Hook 集成测试必须启动本次 Cargo 构建的 CLI；不得跳过测试或借用已安装的正式服务。自动化离屏渲染与真实 App 入口验收分别记录。
 
 ## SSH 恢复与配置管理
 
@@ -137,8 +137,8 @@ Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，�
 - 读取使用有界后台执行与不可变快照；Codex／Claude／Grok 沿用增量缓存。Codex 活动扫描与 Grok 摘要缓存的条目上限为 2,000，字节预算保持 8MiB／2MiB，先到者生效。Antigravity／DSH 复用未变化历史及时间线，正文缓存合计最多 32MiB／64 项，DSH 摘要最多 8MiB／2000 项，超预算正常读取但不缓存。Antigravity 在线列表合并磁盘索引中原生服务尚未加载的根会话（在线条目优先，子代理与原生存储已不存在的索引行不列出）；在线复用仅限原生身份、摘要与终态未变化且完整的会话，运行中继续读取；文件替换、截断或修改立即失效，附件按请求刷新。不得把历史快照复用写成完整增量解析。
 - 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。Antigravity／DSH 快照依据实际内容计算 revision，时间线随快照生成并按实际容量计重；继续保守重读旧页，历史工具、问题与子智能体状态仍需更新。
 - K／M／G 只表示单位，颜色按实际字节在 100MiB、300MiB 分界；未知或待统计为灰色，部分结果按已确认下限分色并保留 ≥ 与不完整提示。
-- 常规受影响检查在本机运行，完整回归和跨平台构建交由现有三项 CI。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。
-- Playwright 功能回归及 macOS 有头性能记录默认在现有 GitHub Actions 运行；交互耗时仅作诊断，不以固定毫秒阈值阻断 CI，功能断言继续生效。除非用户另行明确要求，本机不安装或启动验收浏览器。CI 先构建前端、安装 Chromium 与 WebKit，只使用 Playwright 管理的浏览器缓存；禁止渠道、本机可执行路径和外部浏览器连接覆盖。全局启动守卫必须保留，不依赖或启动系统 Google Chrome。内置 Google Chrome for Testing 按真实路径确认来源，不以窗口名称判断。
+- 常规受影响检查在本机运行，完整回归和跨平台构建交由现有两项 CI（`Backend & contract checks` 与 `macOS Swift 6 checks`）。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。
+- 原生界面与排版回归由 `AGENTHUB_RENDER_TESTS=1 swift test --package-path macos` 在本机与 GitHub Actions `macos-15` 执行，覆盖浅／深色真实视图离屏光栅化、字形非空白墨迹、布局热区、输入法组字与反向分页像素锚点断言。
 
 Claude native command envelopes render as the slash command and exact arguments. Classify isMeta, isCompactSummary and complete automatic envelopes before mutating prompt state; automatic records never start a human turn or clear pending tools. Adjacent metadata stays in place in closed system/context groups, including the preamble. Preserve native anchors, disclosure aliases, literal examples and instruction search; compaction remains searchable and closed by default.
 
@@ -155,7 +155,7 @@ Claude native command envelopes render as the slash command and exact arguments.
 - 扫描中的刷新由本轮结果满足，保留启停与基线变化检查。限流时间仅在 Monitor 内存保留，限流刷新须结束 refreshing 并保留错误反馈；旧状态仍可读取。App／Hook 后台启动条件包含 CI 开关；关闭 CI 时仅返回缓存，不请求扫描或持续显示 refreshing；桌面不另持有 Monitor。账号与 gh 凭据按 60 秒节奏核对；快速轮询复用内存凭据及解析后的精简 ETag 摘要，未变结果不额外写库。
 - 首次／重新启用及账号变化建立基线，已有完成记录不补发，在途运行结束正常通知。账号、仓库、run ID、attempt 共同去重；关闭、切号或新 attempt 淘汰旧待发通知。Monitor 直接返回可投递事件，已处理项批量确认一次，失败项保留；沿用过期过滤、首发校验、加密 Bark 队列与重试复核，链接使用 GitHub 返回的 html_url，兼容旧队列。
 
-- CI 系统通知在 macOS App 运行期间每 5 秒串行读取当前机器缓存，不依赖 WebUI 可见性；`cached_only` 不触发扫描，`baseline_ms` 沿用既有监控基线。使用来源机器的仓库／Bot 筛选和已成功扫描仓库集合；新增或重新加入的仓库独立建立基线，空仓库后续新运行照常通知。首次观察、换机、切号、重新启用不补发旧结果；仅成功、失败、超时，点击打开对应运行。复用原生 UserNotifications 和已有 SSH 通道，观察去重只在内存；Bark 的持久化、确认与重试独立保留。
+- CI 系统通知在 macOS App 运行期间每 5 秒串行读取当前机器缓存，不依赖页面可见性；`cached_only` 不触发扫描，`baseline_ms` 沿用既有监控基线。使用来源机器的仓库／Bot 筛选和已成功扫描仓库集合；新增或重新加入的仓库独立建立基线，空仓库后续新运行照常通知。首次观察、换机、切号、重新启用不补发旧结果；仅成功、失败、超时，点击打开对应运行。复用原生 UserNotifications 和已有 SSH 通道，观察去重只在内存；Bark 的持久化、确认与重试独立保留。
 - 隐藏清理扫描只接受 start/poll/cancel，复用同一连接中的线程行与父子关系；保留两种父 ID 字段及 spawn edges、固定候选、分页和取消。通知保留期维护不提供 dry-run 统计，标记批量删除保留保护集合；Probe 配置通过共同原子写入入口替换实际文件并保留权限。
 
 - 关闭的 Provider／错误监控只在状态或统计变化时写库，启用时保留扫描时间；Claude Hook 配置只为启用的 Claude 读取。Probe 聚合沿用受限阻塞读取任务。Mac CI 有待发事件才请求授权，由原生回调发送该批事件，观察循环不等待；消费前校验来源，已接受通知按原机器名发送，稳定事件身份不包含连接修订；不增加授权重试状态。

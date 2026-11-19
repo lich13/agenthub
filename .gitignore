@@ -6,10 +6,7 @@
 /macos/.swiftpm/
 DerivedData/
 xcuserdata/
-/webui/dist/
-/webui/node_modules/
-/webui/.vitest/
-/webui/*.tsbuildinfo
-/webui/src/**/*.tsbuildinfo
+__pycache__/
+*.pyc
 *.log
 .DS_Store

@@ -131,5 +131,5 @@ pub(super) async fn choose(host: &HostBridge, directory: bool) -> Result<Option<
 }
 
 #[cfg(test)]
-#[path = "../../../../src-tauri/src/codex_desktop/selection_tests.rs"]
+#[path = "selection_tests.rs"]
 mod tests;

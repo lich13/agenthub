@@ -11,7 +11,6 @@ const medium = 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N';
 const low = 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N';
 const advisory = (cvss, extra = {}) => ({ advisory: { id: 'RUSTSEC-2099-0001', package: 'fixture', cvss, ...extra } });
 const cargo = (list = [], warnings = {}) => ({ settings: { ignore: [], severity: null }, database: { 'advisory-count': 10 }, lockfile: { 'dependency-count': 1 }, vulnerabilities: { found: list.length > 0, count: list.length, list }, warnings });
-const pnpm = (severity) => ({ advisories: severity ? { 1: { id: 1, severity } } : {}, metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, ...(severity ? { [severity]: 1 } : {}) } } });
 
 test('CVSS base scores cover low, medium, high, critical and changed scope', () => {
   assert.equal(baseScore(low), 3.7);
@@ -31,24 +30,15 @@ test('cargo active high and unscored advisories block, maintenance is informatio
   assert.equal(assessReport('cargo', cargo([advisory(null, { withdrawn: '2099-01-01' })]), 0).blocking.length, 0);
 });
 
-test('pnpm high, critical and unknown severities block; lower severities remain visible', () => {
-  for (const severity of ['high', 'critical', 'unknown']) assert.equal(assessReport('pnpm', pnpm(severity), 1).blocking.length, 1);
-  for (const severity of ['info', 'low', 'moderate']) assert.equal(assessReport('pnpm', pnpm(severity), 1).notices.length, 1);
-  assert.deepEqual(assessReport('pnpm', pnpm(), 0), { blocking: [], notices: [], maintenance: 0 });
-});
-
-test('missing/invalid reports, inconsistent counts and tool failures cannot pass', () => {
-  for (const kind of ['cargo', 'pnpm']) {
-    for (const value of [null, {}, [], { error: 'fixture' }]) assert.throws(() => assessReport(kind, value, 0));
-    const report = kind === 'cargo' ? cargo() : pnpm();
-    for (const status of [null, 1, 2, 127]) assert.throws(() => assessReport(kind, report, status));
-  }
+test('missing/invalid reports, unsupported kinds, inconsistent counts and tool failures cannot pass', () => {
+  assert.throws(() => assessReport('unsupported', cargo(), 0));
+  for (const value of [null, {}, [], { error: 'fixture' }]) assert.throws(() => assessReport('cargo', value, 0));
+  const report = cargo();
+  for (const status of [null, 1, 2, 127]) assert.throws(() => assessReport('cargo', report, status));
   const ignored = cargo(); ignored.settings.ignore = ['RUSTSEC-2099-0001'];
   assert.throws(() => assessReport('cargo', ignored, 0));
   const incomplete = cargo(); incomplete.database['advisory-count'] = 0;
   assert.throws(() => assessReport('cargo', incomplete, 0));
-  const mismatch = pnpm('high'); mismatch.metadata.vulnerabilities.high = 0;
-  assert.throws(() => assessReport('pnpm', mismatch, 0));
 });
 
 test('scanner errors are blocking and raw diagnostic text never reaches logs or artifacts', () => {

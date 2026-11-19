@@ -51,7 +51,7 @@ fn source_files() -> Vec<PathBuf> {
     [
         "crates/agenthub-core/src",
         "crates/agenthub-webd/src/api",
-        "src-tauri/src",
+        "crates/agenthub-ffi/src",
     ]
     .into_iter()
     .flat_map(|directory| walkdir::WalkDir::new(root().join(directory)))
@@ -218,33 +218,62 @@ fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
 }
 
 #[derive(Default)]
-struct RegisteredCommands(Vec<String>);
-impl<'a> Visit<'a> for RegisteredCommands {
-    fn visit_macro(&mut self, mac: &'a syn::Macro) {
-        use syn::parse::Parser;
-        if mac
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "generate_handler")
-        {
-            let paths = syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
-                .parse2(mac.tokens.clone())
-                .unwrap();
-            self.0.extend(paths.iter().map(|p| {
-                p.segments
-                    .iter()
-                    .map(|s| s.ident.to_string())
-                    .collect::<Vec<_>>()
-                    .join("::")
-            }));
+struct DispatchRegistryVisitor {
+    entries: BTreeMap<String, String>,
+    in_dispatch: bool,
+    arms: Vec<String>,
+}
+impl<'a> Visit<'a> for DispatchRegistryVisitor {
+    fn visit_item_const(&mut self, item: &'a syn::ItemConst) {
+        if item.ident == "REGISTERED_COMMAND_ENTRIES" {
+            if let syn::Expr::Reference(expr_ref) = &*item.expr {
+                if let syn::Expr::Array(arr) = &*expr_ref.expr {
+                    for elem in &arr.elems {
+                        if let syn::Expr::Tuple(tuple) = elem {
+                            if tuple.elems.len() == 2 {
+                                if let (
+                                    syn::Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(id),
+                                        ..
+                                    }),
+                                    syn::Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(adapter),
+                                        ..
+                                    }),
+                                ) = (&tuple.elems[0], &tuple.elems[1])
+                                {
+                                    self.entries.insert(id.value(), adapter.value());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-}
-struct FunctionNames(Vec<String>);
-impl<'a> Visit<'a> for FunctionNames {
     fn visit_item_fn(&mut self, f: &'a syn::ItemFn) {
-        self.0.push(f.sig.ident.to_string());
+        if f.sig.ident == "dispatch" {
+            self.in_dispatch = true;
+            syn::visit::visit_item_fn(self, f);
+            self.in_dispatch = false;
+        }
+    }
+    fn visit_expr_match(&mut self, node: &'a syn::ExprMatch) {
+        if self.in_dispatch {
+            if let syn::Expr::Path(p) = &*node.expr {
+                if p.path.is_ident("command") {
+                    for arm in &node.arms {
+                        if let syn::Pat::Lit(pat_lit) = &arm.pat {
+                            if let syn::Lit::Str(s) = &pat_lit.lit {
+                                self.arms.push(s.value());
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        syn::visit::visit_expr_match(self, node);
     }
 }
 #[test]
@@ -280,26 +309,25 @@ fn registry_maps_to_real_types_and_registered_adapter_functions() {
             );
         }
     }
-    let mut registered = RegisteredCommands::default();
-    registered.visit_file(
-        &syn::parse_file(&std::fs::read_to_string(root().join("src-tauri/src/lib.rs")).unwrap())
-            .unwrap(),
+    let mut dispatch = DispatchRegistryVisitor::default();
+    dispatch.visit_file(
+        &syn::parse_file(
+            &std::fs::read_to_string(root().join("crates/agenthub-ffi/src/commands/dispatch.rs"))
+                .unwrap(),
+        )
+        .unwrap(),
     );
     for action in registry["actions"].as_array().unwrap() {
         if let Some(adapter) = action["tauriCommand"].as_str() {
-            let (module, function) = adapter.rsplit_once("::").unwrap();
-            let path = format!("src-tauri/src/{}.rs", module.replace("::", "/"));
-            let source =
-                syn::parse_file(&std::fs::read_to_string(root().join(&path)).unwrap()).unwrap();
-            let mut names = FunctionNames(vec![]);
-            names.visit_file(&source);
-            assert!(
-                names.0.iter().any(|s| s == function),
-                "missing actual Tauri function: {adapter}"
+            let id = action["id"].as_str().unwrap();
+            assert_eq!(
+                dispatch.entries.get(id).map(String::as_str),
+                Some(adapter),
+                "unregistered FFI command mapping for {id}: expected {adapter}"
             );
             assert!(
-                registered.0.iter().any(|name| name == adapter),
-                "unregistered Tauri function: {adapter}"
+                dispatch.arms.iter().any(|arm| arm == id),
+                "missing FFI dispatch match arm for {id}"
             );
         }
     }

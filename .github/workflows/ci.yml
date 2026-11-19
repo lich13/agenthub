@@ -14,57 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        with:
-          version: latest
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: node
-          check-latest: true
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-
-      - run: pnpm --dir webui install --frozen-lockfile
-      - run: node scripts/check-wire-types.mjs
-      - run: node --test scripts/test-wire-types.mjs
-      - run: node --test scripts/test-playwright-browser.mjs
-      - run: pnpm --dir webui typecheck
-      - run: pnpm --dir webui test
-      - run: pnpm --dir webui build:tauri
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('webui/pnpm-lock.yaml') }}
-      - run: pnpm --dir webui exec playwright install --with-deps chromium webkit
-      - run: pnpm --dir webui exec playwright test --grep-invert @desktop-performance
-        env:
-          AGENTHUB_BROWSER_PREVIEW: "1"
-          AGENTHUB_TEST_OUTPUT: ${{ runner.temp }}/agenthub-browser
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: failure()
-        with:
-          name: frontend-browser-failures
-          path: ${{ runner.temp }}/agenthub-browser
-
-      - name: Enforce pnpm advisory policy
-        run: node scripts/security-audit.mjs pnpm "${RUNNER_TEMP}/pnpm-audit.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: pnpm-audit
-          path: ${{ runner.temp }}/pnpm-audit.json
-          if-no-files-found: ignore
-
   backend:
-    name: Backend checks
+    name: Backend & contract checks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -72,19 +23,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
           toolchain: stable
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        with:
-          version: latest
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: node
           check-latest: true
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-
-      - run: pnpm --dir webui install --frozen-lockfile
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -104,17 +46,12 @@ jobs:
         id: cargo-audit-cache
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-audit-0.22.2-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-audit-0.22.2-${{ hashFiles('Cargo.lock') }}
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked --force
       - name: Enforce Rust advisory policy
-        shell: bash
-        run: |
-          status=0
-          node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-core.json" Cargo.lock || status=1
-          node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-desktop.json" src-tauri/Cargo.lock || status=1
-          exit "${status}"
+        run: node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-workspace.json" Cargo.lock
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -122,68 +59,40 @@ jobs:
           path: ${{ runner.temp }}/cargo-audit-*.json
           if-no-files-found: ignore
 
-  tauri:
-    name: macOS Tauri checks
+  macos:
+    name: macOS Swift 6 checks
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
           toolchain: stable
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        with:
-          version: latest
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: node
-          check-latest: true
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/Library/pnpm/store
-          key: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-current-pnpm-latest-
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-            src-tauri/target
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-agenthub-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-stable-agenthub-cargo-tauri-
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: pnpm --dir webui install --frozen-lockfile
-      - run: pnpm --dir webui test
-      - run: pnpm --dir webui build:tauri
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/Library/Caches/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('webui/pnpm-lock.yaml') }}
-      - run: pnpm --dir webui exec playwright install chromium webkit
-      - name: Record desktop interaction timings on macOS production build
-        # Keep functional assertions; timing measurements are diagnostic only.
-        # Use visible windows to avoid headless frame-scheduler distortion.
-        run: pnpm --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
-        env:
-          AGENTHUB_BROWSER_PREVIEW: "1"
-          AGENTHUB_TEST_OUTPUT: ${{ runner.temp }}/agenthub-desktop-performance
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: failure()
-        with:
-          name: desktop-performance-failures
-          path: ${{ runner.temp }}/agenthub-desktop-performance
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-      - name: Build Rust FFI static archive for macOS Swift 6 host
+            macos/.build
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-swift6-agenthub-macos-${{ hashFiles('Cargo.lock', 'macos/Package.swift') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-swift6-agenthub-macos-
+      - name: Verify Swift 6 toolchain
+        run: swift --version
+      - name: Build Rust FFI static archive & run macOS FFI tests
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
-        run: cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
+        run: |
+          cargo test -p agenthub-ffi --locked
+          cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
       - name: Build native Swift 6 app (Debug & Release WMO)
+        env:
+          AGENTHUB_FFI_LIB_DIR: ${{ github.workspace }}/target/aarch64-apple-darwin/release
         run: |
           swift build --package-path macos -c debug
           swift build --package-path macos -c release -Xswiftc -O -Xswiftc -whole-module-optimization
       - name: Run native Swift 6 parity & offscreen render tests
         env:
+          AGENTHUB_FFI_LIB_DIR: ${{ github.workspace }}/target/aarch64-apple-darwin/release
           AGENTHUB_RENDER_TESTS: "1"
         run: swift test --package-path macos

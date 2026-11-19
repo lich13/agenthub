@@ -7,10 +7,10 @@ AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined read
 ## Layout and interaction
 
 - Navigation contains Codex, Claude Code, Grok Build, Antigravity, DeepSeek Harness, Probe and settings.
-- Desktop uses a `196px` navigation rail (collapsible to `48px`), a `296px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a single-row mobile tab bar sized to the available providers, with ellipsis-safe labels.
+- Desktop uses a `196pt` navigation rail (collapsible to `48pt`), a `296pt` task list and a centered message column up to `768pt`.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
-- Running Codex, Claude Code and Grok sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
+- Running Codex, Claude Code and Grok sessions use the same spinner, accessibility label and reduced-motion behavior. Unknown state remains text.
+- Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native borderless disclosure rows: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
 - Visible assistant replies in all three providers expose a compact copy button that copies Markdown after structured memory metadata is removed. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only. After a failed save, blurring with the unchanged draft closes the editor without resubmitting; Enter retries.
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
@@ -54,7 +54,7 @@ Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus i
 
 ## Verification
 
-Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, Plan export and provider empty states. The installed Tauri App is the reference desktop surface; remote checks use the same App through SSH and explicit deployment inputs.
+Automated Swift 6 offscreen render & parity checks (`AGENTHUB_RENDER_TESTS=1 swift test --package-path macos`) cover Light and Dark themes, workspace accent sRGB accuracy, `1280×820` layout geometry, full-data `ReaderSelectableTextView` glyph ink presence, process/tool/context disclosures, reverse-pagination pixel anchor locking, custom context menus, Plan export and provider empty states. The installed native macOS `AgentHub.app` is the desktop surface; remote checks use the same App through SSH and explicit deployment inputs.
 
 ## Machine scope
 
@@ -70,7 +70,7 @@ Claude Code keeps a fixed navigation entry on both machine targets. Missing nati
 
 线程项右键立即在指针处打开共享操作菜单，不改变当前详情。省略号、Shift+F10 和菜单键使用同一动作列表；Escape、外部点击和列表滚动关闭，菜单在视口边缘自动避让。复制、改名、归档和永久删除都有明确目标，批量模式不混入右键操作。
 
-五个 Provider 通过共享选择逻辑处理行点击：⌘ 进入多选并切换目标，普通点击在多选中切换，否则打开；Shift 按可见顺序追加连续区间，连续 Shift 保留锚点，无有效锚点仅选当前项。键盘生成的点击忽略修饰键，Ctrl 点击仍打开菜单。点击行显式聚焦，⌘/Ctrl+A 与 macOS Edit → Select All 共用当前列表或选择操作栏的全选动作，仅覆盖已加载的筛选结果；归档范围独立，输入控件和弹窗保留自身文字操作。保留全部已有选择；归档、恢复按 100 项分批执行；机器、Provider、筛选和退出多选清除选择及锚点，轮询不自动选择新项。
+五个 Provider 通过共享选择逻辑处理行点击：⌘ 进入多选并切换目标，普通点击退出多选并仅打开当前项；Shift 按可见顺序追加连续区间，连续 Shift 保留锚点，无有效锚点仅选当前项。键盘生成的点击忽略修饰键，Ctrl 点击仍打开菜单。点击行显式聚焦，⌘/Ctrl+A 与 macOS Edit → Select All 共用当前列表或选择操作栏的全选动作，仅覆盖已加载的筛选结果；归档范围独立，输入控件和弹窗保留自身文字操作。保留全部已有选择；归档、恢复按 100 项分批执行；机器、Provider、筛选和退出多选清除选择及锚点，轮询不自动选择新项。
 
 Codex 列表菜单不提供重复的“复制答复”，会话头部保留。Claude 菜单统一提供改名、复制线程 ID、复制文件路径、复制恢复命令、在 Finder 中显示和删除；改名理由独立显示，删除不按读取或活动状态禁用。远端 Finder 明确显示不可用原因，恢复命令仅复制，Claude 不提供归档。Antigravity 与 DeepSeek Harness 提供列表底部“已归档”抽屉、搜索、大小徽标与多选批量归档／恢复／永久删除；列表行右键／省略号菜单与会话头部菜单均提供改名、归档／恢复（取消归档）、复制 ID、复制路径和永久删除（头部另含复制答复），均不提供“复制恢复命令”。连接尚未升级的远端服务时，展示升级提示而非协议报错。
 

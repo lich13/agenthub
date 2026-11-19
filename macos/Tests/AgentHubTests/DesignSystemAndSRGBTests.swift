@@ -88,21 +88,6 @@ final class DesignSystemAndSRGBTests: XCTestCase {
             .dsh: ("#7d95ff", "#1a2342"),
         ]
 
-        // Stage A cross-check: verify our ground-truth hex table matches webui/src/styles.css verbatim!
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let cssURL = repoRoot.appendingPathComponent("webui/src/styles.css")
-        if FileManager.default.fileExists(atPath: cssURL.path) {
-            let cssText = try String(contentsOf: cssURL, encoding: .utf8)
-            for (token, hex) in lightRootHex {
-                XCTAssertTrue(cssText.contains("\(token): \(hex)"), "styles.css light token \(token): \(hex) drifted")
-            }
-            for (token, hex) in darkRootHex {
-                XCTAssertTrue(cssText.contains("\(token): \(hex)"), "styles.css dark token \(token): \(hex) drifted")
-            }
-        }
-
         guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
             return
         }

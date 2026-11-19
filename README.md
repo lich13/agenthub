@@ -2,11 +2,11 @@
 
 **中文** | [English](README.en.md)
 
-AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
+AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的原生 Swift 6（SwiftUI + AppKit）多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
 
-v2.1.27 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
+v2.1.28 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。
 
-v2.1.27 新增「Codex 账号隔离」检查与解除：切换 Codex 账号后被隐藏的会话重新出现在 Codex 的历史与 resume 列表，并可选在回合结束后自动解除。同时修复已压缩线程的归档／恢复、远程机器不可达时的启动空白及安装 Hook 丢失 Codex 配置注释，减少线程列表、归档执行、Claude 定位和重复通知的读取开销。
+v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）与 Rust 静态库（`agenthub-ffi`）架构，彻底退役 Tauri、WKWebView、前端 Node／pnpm 依赖与 Rust 中的 `objc2` 胶水；核心对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，支持增量行高缓存、代码块与宽表格纵向滚轮穿透、距顶 `200pt` 反向分页像素锚点锁定及自绘右键操作菜单，无缝沿用既有配置、数据库、系统钥匙串与更新签名体系。
 
 ## 特色亮点
 
@@ -103,29 +103,26 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 
 ## 发布资产
 
-当前源码版本为 **2.1.27**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.28**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
-- `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
+- `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（macOS 应用内更新归档与 Minisign 签名）；
 - 仅包含 `darwin-aarch64` 平台映射的 `latest.json`；
 - `agenthub-webd-linux-x86_64.tar.gz`、`.tar.gz.sha256` 与 `.tar.gz.sig`。
 
 ## 开发
 
 ```bash
-pnpm --dir webui install --frozen-lockfile
-node scripts/check-wire-types.mjs
-node --test scripts/test-wire-types.mjs
-node --test scripts/test-playwright-browser.mjs
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-pnpm --dir webui typecheck
-pnpm --dir webui test
-pnpm --dir webui build:tauri
+MACOSX_DEPLOYMENT_TARGET=12.0 cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
+swift build --package-path macos -c debug
+swift build --package-path macos -c release -Xswiftc -O -Xswiftc -whole-module-optimization
+AGENTHUB_RENDER_TESTS=1 swift test --package-path macos
+node scripts/check-wire-types.mjs
+node --test scripts/test-wire-types.mjs
+node scripts/check-parity-vectors.mjs
 bash scripts/test-install-script.sh
 python3 scripts/check-versions.py
 python3 scripts/check-workspaces.py
@@ -134,13 +131,12 @@ python3 scripts/test-install-signatures.py
 python3 scripts/test-privacy-check.py
 python3 scripts/test-check-versions.py
 python3 scripts/test-check-workspaces.py
-python3 scripts/test-tauri-build-config.py
 node --test scripts/test-security-audit.mjs
 python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-所有单元与集成测试均在独立的临时沙箱目录（`TempDir`）中运行，绝不读写或删除宿主机真实用户会话。Playwright 跨引擎（Chromium／WebKit）端到端功能回归与 macOS 有头交互耗时记录默认由 GitHub Actions CI 执行；耗时仅作诊断，不以固定毫秒阈值阻断 CI。
+所有单元、集成与离屏视图渲染测试均在独立的临时沙箱目录（`TempDir`）中运行，绝不读写或删除宿主机真实用户会话。GitHub Actions CI 覆盖 Linux 后端与契约检查、Cargo 安全审计及 macOS Swift 6 编译与离屏渲染回归。
 
 ## 当前文档
 

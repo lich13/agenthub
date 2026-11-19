@@ -1,6 +1,6 @@
 use std::path::Path;
 
-#[path = "../../../src-tauri/src/resources.rs"]
+#[path = "resources_inner.rs"]
 mod inner;
 
 pub(crate) fn sync_agenthub_webd_helper_from_resource(resource_dir: &Path) -> Result<bool, String> {

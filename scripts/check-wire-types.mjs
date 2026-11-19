@@ -1,17 +1,94 @@
-/** Development-only AST contract. Reuses the locked TypeScript compiler API. */
-import { API } from "../webui/node_modules/typescript/dist/api/sync/api.js";
-import * as ts from "../webui/node_modules/typescript/dist/ast/index.js";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+#!/usr/bin/env node
+/** Zero-dependency contract & Swift/Rust wire-type guard. */
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const fixturePath = resolve(root, "contracts/wire-types.json");
-const tokens = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*|\s+|./gs;
-export function normalized(text) {
-  return (text.match(tokens) ?? []).filter(token => !/^\s+$|^\/\*|^\/\//.test(token)).join("");
+const tokenPattern = /"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|\/\*[\s\S]*?\*\/|\/\/[^\n]*|\s+|[A-Za-z_][A-Za-z0-9_]*|[{}();=?:,.<>[\]]|./gs;
+
+export function tokenize(text) {
+  return (text.match(tokenPattern) ?? []).filter(token => !/^\s+$|^\/\*|^\/\//.test(token));
 }
+
+export function normalized(text) {
+  return tokenize(text).join("");
+}
+
+/** Extract top-level Swift struct/enum/typealias declarations and RPC command calls. */
+export function parseSwiftSource(text) {
+  const toks = tokenize(text);
+  const types = {};
+  const calls = [];
+  let depth = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const tok = toks[i];
+    if (tok === "{") {
+      depth++;
+      continue;
+    }
+    if (tok === "}") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth === 0 && (tok === "struct" || tok === "enum")) {
+      const name = toks[i + 1];
+      if (name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        let j = i + 2;
+        while (j < toks.length && toks[j] !== "{") j++;
+        if (j < toks.length) {
+          let inner = 1;
+          let k = j + 1;
+          while (k < toks.length && inner > 0) {
+            if (toks[k] === "{") inner++;
+            else if (toks[k] === "}") inner--;
+            k++;
+          }
+          types[name] = toks.slice(i, k).join("");
+        }
+      }
+    } else if (depth === 0 && tok === "typealias") {
+      const name = toks[i + 1];
+      if (name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && toks[i + 2] === "=") {
+        let k = i + 3;
+        let angle = 0;
+        let bracket = 0;
+        let paren = 0;
+        while (k < toks.length) {
+          const t = toks[k];
+          if (t === "<") angle++;
+          else if (t === ">") angle = Math.max(0, angle - 1);
+          else if (t === "[") bracket++;
+          else if (t === "]") bracket = Math.max(0, bracket - 1);
+          else if (t === "(") paren++;
+          else if (t === ")") paren = Math.max(0, paren - 1);
+          else if (angle === 0 && bracket === 0 && paren === 0 && (t === "public" || t === "internal" || t === "private" || t === "struct" || t === "enum" || t === "final" || t === "actor" || t === "func" || t === "typealias")) {
+            break;
+          }
+          k++;
+        }
+        types[name] = toks.slice(i, k).join("");
+      }
+    }
+    if (
+      ["invoke", "invokeJSON", "invokeVoid", "invokeCommand", "invokeRemoteOrLocal"].includes(tok) &&
+      toks[i + 1] === "("
+    ) {
+      let paren = 1;
+      let k = i + 2;
+      while (k < toks.length && paren > 0) {
+        if (toks[k] === "(") paren++;
+        else if (toks[k] === ")") paren--;
+        k++;
+      }
+      calls.push(toks.slice(i, k).join(""));
+    }
+  }
+  return { types, calls };
+}
+
 /** Validate only the checked-in schema vocabulary; unknown keywords fail closed. */
 export function assertRegistrySchema(value, schema, document = schema, path = "$root") {
   const supported = new Set(["$schema", "$id", "$defs", "$ref", "title", "type", "const", "enum", "required", "properties", "additionalProperties", "items", "uniqueItems", "minItems", "minLength", "minProperties"]);
@@ -45,54 +122,45 @@ export function assertRegistrySchema(value, schema, document = schema, path = "$
     }
   }
 }
+
 export function assertCatalog(fixture, registry, actual) {
   assert.deepEqual(Object.keys(fixture.catalog).sort(), Object.keys(registry.dtoCatalog).sort(), "actual-type mapping missing for a registry DTO");
   for (const [name, mapping] of Object.entries(fixture.catalog)) {
-    if (mapping.ts) {
-      const [file, type] = mapping.ts.split("#");
-      assert.ok(actual[file]?.types[type], `${name}: actual TypeScript type missing`);
-    } else assert.ok(mapping.inlineTs?.trim(), `${name}: unclassified inline TypeScript payload`);
+    if (mapping.swift) {
+      const [file, type] = mapping.swift.split("#");
+      assert.ok(actual[file]?.types[type], `${name}: actual Swift type missing (${mapping.swift})`);
+    } else {
+      assert.ok(mapping.inlineSwift?.trim(), `${name}: unclassified inline Swift payload`);
+    }
     assert.ok(mapping.rust || mapping.freeJson?.trim(), `${name}: unclassified Rust payload`);
   }
 }
+
 export function current(fixture) {
-  const api = new API({ cwd: resolve(root,"webui") });
-  let snapshot;
-  try {
-    const config=resolve(root,"webui/tsconfig.app.json");
-    snapshot=api.updateSnapshot({openProjects:[config]});
-    const project=snapshot.getProject(config);
-    assert.ok(project);
-    const files = new Set([...fixture.typescriptFiles,
-      ...readdirSync(resolve(root,"webui/src/lib/api")).filter(name=>name.endsWith(".ts")&&!name.endsWith(".test.ts")&&name!=="demo.ts").map(name=>`webui/src/lib/api/${name}`)]);
-    const output={};
-    for (const file of [...files].sort()) {
-      const source=project.program.getSourceFile(resolve(root,file));
-      assert.ok(source,`TypeScript source missing: ${file}`);
-      const types={},calls=[];
-      const visit=node=>{
-        if (ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) {
-          types[node.name.text]=normalized(node.getText(source));
-        }
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ["callCommand","invokeNative","runtimeRpc","changeConnection","startProbeCommand","runTypedUpdateCommand"].includes(node.expression.text)) {
-          calls.push(normalized(node.getText(source)));
-        }
-        node.forEachChild(visit);
-      };
-      visit(source);
-      output[file]={types,calls};
-    }
-    return output;
-  } finally { try {snapshot?.dispose();} finally {api.close();} }
+  const output = {};
+  for (const file of [...fixture.swiftFiles].sort()) {
+    const text = readFileSync(resolve(root, file), "utf8");
+    output[file] = parseSwiftSource(text);
+  }
+  return output;
 }
-export function check({update=false}={}) {
-  const fixture=JSON.parse(readFileSync(fixturePath,"utf8"));
-  const actual=current(fixture);
-  const registry=JSON.parse(readFileSync(resolve(root,"contracts/agenthub-contract.json"),"utf8"));
-  assertRegistrySchema(registry,JSON.parse(readFileSync(resolve(root,"contracts/agenthub-contract.schema.json"),"utf8")));
-  assertCatalog(fixture,registry,actual);
-  if (update) {fixture.typescript=actual;writeFileSync(fixturePath,JSON.stringify(fixture,null,2)+"\n");}
-  assert.deepEqual(actual,fixture.typescript,"actual TypeScript DTO, optional/null, enum, or wrapper shape drift; follow Shared changes");
-  console.log(`Wire TypeScript fields and RPC wrappers: ${Object.keys(actual).length} files checked`);
+
+export function check({ update = false } = {}) {
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const actual = current(fixture);
+  const registry = JSON.parse(readFileSync(resolve(root, "contracts/agenthub-contract.json"), "utf8"));
+  assertRegistrySchema(registry, JSON.parse(readFileSync(resolve(root, "contracts/agenthub-contract.schema.json"), "utf8")));
+  assertCatalog(fixture, registry, actual);
+  if (update) {
+    fixture.swift = actual;
+    delete fixture.typescript;
+    delete fixture.typescriptFiles;
+    writeFileSync(fixturePath, JSON.stringify(fixture, null, 2) + "\n");
+  }
+  assert.deepEqual(actual, fixture.swift, "actual Swift DTO, optionality, enum, or RPC call shape drift; follow Shared changes");
+  console.log(`Wire Swift 6 DTOs and RPC calls: ${Object.keys(actual).length} files checked`);
 }
-if (process.argv[1] && relative(resolve(root),resolve(process.argv[1]))==="scripts/check-wire-types.mjs") check({update:process.argv.includes("--update")});
+
+if (process.argv[1] && relative(resolve(root), resolve(process.argv[1])) === "scripts/check-wire-types.mjs") {
+  check({ update: process.argv.includes("--update") });
+}

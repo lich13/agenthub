@@ -50,16 +50,6 @@ public protocol ParityExecutableSuite: XCTestCase {
 }
 
 public enum ParitySourceTestScanner {
-    /// Counts static `it(...)`, `test(...)`, `it.each(...)`, `test.each(...)`, `test.for(...)` blocks in a WebUI test file.
-    public static func countStaticTestBlocks(in content: String) -> Int {
-        let pattern = #"(?:^|[\s;(])(?:it|test)(?:\.(?:each|for)\s*\([\s\S]*?\))?\s*\("#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
-            return 0
-        }
-        let ns = content as NSString
-        return regex.numberOfMatches(in: content, options: [], range: NSRange(location: 0, length: ns.length))
-    }
-
     public static func discoverXCTestMethods(on cls: AnyClass) -> Set<String> {
         var count: UInt32 = 0
         guard let list = class_copyMethodList(cls, &count) else { return [] }

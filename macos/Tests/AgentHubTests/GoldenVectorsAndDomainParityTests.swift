@@ -27,34 +27,6 @@ final class GoldenVectorsAndDomainParityTests: XCTestCase {
         XCTAssertEqual(manifest.totalBaselineWebUICases, 641)
         XCTAssertEqual(sumWebUICases, manifest.totalBaselineWebUICases, "Sum of per-file webuiCases must equal 641")
 
-        // If webui/src still exists on disk (Stage A), verify exact 1-to-1 file set AND exact static case count per file!
-        let webuiSrc = repoRoot.appendingPathComponent("webui/src")
-        if FileManager.default.fileExists(atPath: webuiSrc.path) {
-            var discovered: [String] = []
-            if let enumerator = FileManager.default.enumerator(at: webuiSrc, includingPropertiesForKeys: nil) {
-                for case let fileURL as URL in enumerator {
-                    let name = fileURL.lastPathComponent
-                    if name.hasSuffix(".test.ts") || name.hasSuffix(".test.tsx") {
-                        let rel = String(fileURL.path.dropFirst(repoRoot.path.count + 1))
-                        discovered.append(rel)
-                    }
-                }
-            }
-            let expectedAll = Set(manifest.mappedUnitTestFiles.keys).union(manifest.retiredPreviewOnlyFiles)
-            XCTAssertEqual(Set(discovered), expectedAll, "Unmapped or missing WebUI test file in ParityManifest.json")
-
-            for (sourceFile, entry) in manifest.mappedUnitTestFiles {
-                let sourceURL = repoRoot.appendingPathComponent(sourceFile)
-                let content = try String(contentsOf: sourceURL, encoding: .utf8)
-                let actualCount = ParitySourceTestScanner.countStaticTestBlocks(in: content)
-                XCTAssertEqual(
-                    entry.webuiCases,
-                    actualCount,
-                    "Recorded webuiCases (\(entry.webuiCases)) for \(sourceFile) drifted from actual static test count (\(actualCount))"
-                )
-            }
-        }
-
         // Verify every mapped XCTest suite class & method exists, is 1:1 disjoint, and executes >= webuiCases!
         var seenDisjointMethods = Set<String>()
         var totalExecutedSwiftCases = 0

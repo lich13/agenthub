@@ -59,10 +59,13 @@ if [[ "${CHECK_ONLY}" -eq 1 ]]; then
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/deploy/provider-session-write-paths.py"
 fi
 
-TAURI_CLI="${TAURI_CLI:-${ROOT}/webui/node_modules/.bin/tauri}"
-[[ -x "${TAURI_CLI}" && -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]] || die "release signing tool and key are required"
+command -v minisign >/dev/null 2>&1 || die "minisign is required for release archive signing"
+[[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]] || die "release signing key is required"
 VERSION="$(python3 -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"])')"
-"${TAURI_CLI}" signer sign --app-version "${VERSION}" "${DIST}/${ASSET}" >/dev/null
+python3 "${ROOT}/scripts/sign-minisign-archive.py" \
+  --archive "${DIST}/${ASSET}" \
+  --version "${VERSION}" \
+  --public-key "${ROOT}/deploy/agenthub-webd/updater.pub" >/dev/null
 python3 "${ROOT}/deploy/agenthub-webd/install-safety.py" verify "${DIST}/${ASSET}" "${DIST}/${ASSET}.sha256" "${DIST}/${ASSET}.sig" "${ROOT}/deploy/agenthub-webd/updater.pub" "${VERSION}" >/dev/null
 
 echo "${DIST}/${ASSET}"

@@ -7,9 +7,12 @@ cd "${ROOT}"
 required=(
   deploy/agenthub-webd/install.sh
   deploy/agenthub-webd/update.sh
-  scripts/package-darwin-arm64.sh
+  scripts/package-macos-swift-arm64.sh
   scripts/package-webd-linux-x86_64.sh
+  scripts/sign-minisign-archive.py
   scripts/deploy-cloud.sh
+  macos/Package.swift
+  macos/Resources/icon.icns
   contracts/agenthub-contract.json
   contracts/agenthub-contract.schema.json
   docs/ARCHITECTURE.md
@@ -21,18 +24,23 @@ for path in "${required[@]}"; do
 done
 python3 - "${ROOT}" <<'PY'
 from pathlib import Path
-import json, re, subprocess, sys
+import re, subprocess, sys, tomllib
+
 root = Path(sys.argv[1])
-version = json.loads((root / "package.json").read_text())["version"]
+version = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-    raise SystemExit("package version is not semantic versioning")
-for name in ["webui/package.json", "src-tauri/tauri.conf.json"]:
-    if json.loads((root / name).read_text())["version"] != version:
-        raise SystemExit(f"{name} version mismatch")
-if f'version = "{version}"' not in (root / "Cargo.toml").read_text():
-    raise SystemExit("Cargo workspace version mismatch")
-config = json.loads((root / "src-tauri/tauri.conf.json").read_text())
-unit = (root / "deploy/agenthub-webd/systemd.service").read_text()
+    raise SystemExit("Cargo workspace version is not semantic versioning")
+
+swift_tokens = (root / "macos/Sources/AgentHubCore/DesignSystem/DesignTokens.swift").read_text(encoding="utf-8")
+if re.findall(r'\bfallbackAppVersion(?:\s*:\s*String)?\s*=\s*"([^"]+)"', swift_tokens) != [version]:
+    raise SystemExit("Swift fallbackAppVersion mismatch")
+
+pkg_script = (root / "scripts/package-macos-swift-arm64.sh").read_text(encoding="utf-8")
+for marker in ["com.lich13.agenthub", "AgentHub-${VERSION}-darwin-arm64.dmg", "agenthub-darwin-arm64.tar.gz"]:
+    if marker not in pkg_script:
+        raise SystemExit(f"macOS packaging script missing marker: {marker}")
+
+unit = (root / "deploy/agenthub-webd/systemd.service").read_text(encoding="utf-8")
 for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/agenthub-webd/grok-leader.sock", "ProtectHome=read-only", "ProtectSystem=full", "PrivateTmp=true"]:
     if boundary not in unit:
         raise SystemExit("native Grok runtime isolation boundary missing")
@@ -42,7 +50,6 @@ for provider in (".grok", ".claude"):
     if f"-/root/{provider} " not in write_paths:
         raise SystemExit("provider data root must support atomic shared-index replacement")
 import importlib.util
-import sys
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/agenthub-webd/provider-session-write-paths.py")
 provider_paths = importlib.util.module_from_spec(spec)
@@ -57,17 +64,13 @@ if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
     raise SystemExit("default Claude root must use optional unit entry")
 if ".pi" in unit or provider_paths.custom_session_roots({"PI_CODING_AGENT_DIR": "/srv/fixture-pi", "PI_CODING_AGENT_SESSION_DIR": "/srv/fixture-pi-sessions"}):
     raise SystemExit("retired provider must not gain writable session paths")
-if config["bundle"]["targets"] != ["dmg", "app"]:
-    raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 
-update = (root / "deploy/agenthub-webd/update.sh").read_text()
+update = (root / "deploy/agenthub-webd/update.sh").read_text(encoding="utf-8")
 for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "--no-enable", "systemctl restart agenthub-webd"]:
     if marker not in update:
         raise SystemExit(f"server updater missing isolated restart marker: {marker}")
 
-
-contract = json.loads((root / "contracts/agenthub-contract.json").read_text())
-if "pub const API_VERSION: u32 = 2;" not in (root / "crates/agenthub-core/src/services/system.rs").read_text():
+if "pub const API_VERSION: u32 = 2;" not in (root / "crates/agenthub-core/src/services/system.rs").read_text(encoding="utf-8"):
     raise SystemExit("preview-bound cleanup requires API protocol 2")
 notes = subprocess.check_output([sys.executable, str(root / "scripts/release-notes.py"), version], text=True)
 for title in ["版本概览", "兼容性与迁移", "支持平台与资产", "升级提示"]:
@@ -82,11 +85,14 @@ if unregistered.returncode == 0:
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
 
-shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh scripts/deploy-cloud.sh
+shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh scripts/deploy-cloud.sh scripts/package-macos-swift-arm64.sh scripts/package-webd-linux-x86_64.sh
 python3 scripts/test-install-safety.py
 python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py
 node --test scripts/test-security-audit.mjs
+node scripts/check-wire-types.mjs
+node --test scripts/test-wire-types.mjs
+node scripts/check-parity-vectors.mjs
 python3 scripts/check-workspaces.py
 python3 scripts/test-check-workspaces.py
 python3 scripts/check-versions.py

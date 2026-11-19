@@ -2,11 +2,11 @@
 
 [中文](README.md) | **English**
 
-AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a macOS-native workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
+AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a native macOS Swift 6 (`SwiftUI` + `AppKit`) workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
 
-v2.1.27 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
+v2.1.28 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first; databases older than schema 3 must pass through v2.0.10. API protocol remains 2 and database schema remains 3.
 
-v2.1.27 adds Codex account-scope checking and clearing: sessions hidden after switching Codex accounts reappear in Codex's own history and resume lists, with an optional automatic clear when a turn ends. It also fixes archive/restore for natively compressed threads, the blank window at startup when a remote machine is unreachable, and Codex configuration comments lost when installing hooks, and reduces repeated reads for thread lists, archive execution, Claude lookup and skipped notifications.
+v2.1.28 replaces the macOS desktop host with a 100% native Swift 6 (`SwiftUI` + `AppKit`) UI backed by the Rust `agenthub-ffi` static archive, retiring Tauri, `WKWebView`, the Node/pnpm frontend toolchain, and `objc2` Rust glue. The conversation reader uses a native `AppKit` table and explicit TextKit 1 text stack with carried-over row height caching, vertical scroll pass-through across code blocks and wide tables, `200pt` top reverse-pagination pixel anchor locking, and custom-drawn context menus while preserving existing data directories, Keychain items, and Minisign-verified updates.
 
 ## Highlights
 
@@ -99,29 +99,26 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.27**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.28**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
-- `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (Tauri updater archive and Minisign signature);
+- `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (macOS in-app updater archive and Minisign signature);
 - `latest.json` containing the `darwin-aarch64` updater mapping;
 - `agenthub-webd-linux-x86_64.tar.gz`, `.tar.gz.sha256`, and `.tar.gz.sig`.
 
 ## Development
 
 ```bash
-pnpm --dir webui install --frozen-lockfile
-node scripts/check-wire-types.mjs
-node --test scripts/test-wire-types.mjs
-node --test scripts/test-playwright-browser.mjs
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-pnpm --dir webui typecheck
-pnpm --dir webui test
-pnpm --dir webui build:tauri
+MACOSX_DEPLOYMENT_TARGET=12.0 cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
+swift build --package-path macos -c debug
+swift build --package-path macos -c release -Xswiftc -O -Xswiftc -whole-module-optimization
+AGENTHUB_RENDER_TESTS=1 swift test --package-path macos
+node scripts/check-wire-types.mjs
+node --test scripts/test-wire-types.mjs
+node scripts/check-parity-vectors.mjs
 bash scripts/test-install-script.sh
 python3 scripts/check-versions.py
 python3 scripts/check-workspaces.py
@@ -130,13 +127,12 @@ python3 scripts/test-install-signatures.py
 python3 scripts/test-privacy-check.py
 python3 scripts/test-check-versions.py
 python3 scripts/test-check-workspaces.py
-python3 scripts/test-tauri-build-config.py
 node --test scripts/test-security-audit.mjs
 python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-All unit and integration tests run inside isolated temporary sandboxes (`TempDir`) and never touch real user sessions on the host. Cross-engine Playwright (Chromium/WebKit) functional regression and macOS headed interaction timing measurements run in GitHub Actions CI. Timings are diagnostic only; fixed millisecond thresholds do not block CI.
+All unit, integration, and offscreen view-rendering tests run inside isolated temporary sandboxes (`TempDir`) and never touch real user sessions on the host. GitHub Actions CI covers Linux backend & contract checks, Cargo advisory audits, and macOS Swift 6 builds and offscreen render suites.
 
 ## Documentation
 

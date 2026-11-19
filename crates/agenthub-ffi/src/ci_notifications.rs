@@ -215,5 +215,5 @@ pub(crate) fn start(
 }
 
 #[cfg(test)]
-#[path = "../../../src-tauri/src/ci_notifications/tests.rs"]
+#[path = "ci_notifications_tests.rs"]
 mod tests;

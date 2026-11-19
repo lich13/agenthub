@@ -4,7 +4,7 @@
 
 ## GitHub CI 通知
 
-`github.ci.status` 通过 AgentHubUseCases 及薄 Tauri／SSH RPC 适配返回账号与运行摘要；`github_ci` 为可选能力，旧服务不显示面板。配置沿用 `probe.settings.get/save` 的 `notifications.notify_github_ci`，默认 false，监控还受 Probe 主开关控制。Bark 的启停独立控制实际投递。
+`github.ci.status` 通过 AgentHubUseCases 及薄 FFI／SSH RPC 适配返回账号与运行摘要；`github_ci` 为可选能力，旧服务不显示面板。配置沿用 `probe.settings.get/save` 的 `notifications.notify_github_ci`，默认 false，监控还受 Probe 主开关控制。Bark 的启停独立控制实际投递。
 
 现有 serve／monitor 启动独立扫描循环，App 与 Hook 的后台启动判断均包含 CI 开关。关闭 CI 时只读取现有缓存，首次读取与手动刷新均不请求扫描，refreshing 为 false；DesktopState 不再持有独立 Monitor。`gh auth token --hostname github.com` 只在来源机器的当前服务用户下执行，凭据仅驻留后端内存，按 60 秒核对账号和凭据，5 秒扫描复用已有 token。ETag 缓存仅保存解析后的账号、仓库和运行摘要，Bot 身份在 200 响应时计算，304 不重复解析完整响应。扫描按到期时间调度，未变快照不新增写入。扫描直接使用 GitHub REST Actions API，复用 HTTP 连接、ETag 及同源校验；账号名下公开／私有／fork 仓库目录每 10 分钟分页刷新，并淘汰已消失仓库的运行缓存。有符合来源筛选条件的未结束运行时每 5 秒、空闲时每 60 秒仅查询该仓库首页 `per_page=10`，不翻运行历史或追查窗口外旧运行／旧重跑。前端先筛选仓库，再按现有更新时间最多展示 20 条，展示上限不限制通知判断。运行日志和产物通过 GitHub 查看。
 
@@ -22,9 +22,9 @@ CI 比对以本轮临时索引查找新旧运行及待发事件，排序、attem
 
 ## 运行架构与模块
 
-Codex `list_threads` 统一负责列表筛选、排序和截取，Linux／Tauri 适配直接返回共享加载结果；归档条件仍在正文补充前筛选。
+Codex `list_threads` 统一负责列表筛选、排序和截取，Linux／FFI 适配直接返回共享加载结果；归档条件仍在正文补充前筛选。
 
-`desktop_embedded_tauri` 是唯一 React UI 宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。组件依次调用 query/domain、类型化 transport 和 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，SSH RPC/Tauri 只做薄适配。
+macOS 原生 Swift 6 桌面宿主（协议面标识保持 `desktop_embedded_tauri` 以保持兼容）是唯一图形界面宿主；`linux_server_api` 只提供管理 API 与健康检查，不提供网页、登录或静态资源。SwiftUI／AppKit 视图依次调用类型化 Swift Store、`agenthub-ffi` C ABI 与 `AgentHubUseCases`；Provider 读取与受控写操作位于共享核心，SSH RPC／FFI 只做薄适配。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -35,27 +35,27 @@ Codex `list_threads` 统一负责列表筛选、排序和截取，Linux／Tauri 
 | DeepSeek Harness | `workspace.json` v2 与明文／多帧 Zstandard 会话读取、`session.lock` 并发保护改名，以及要求退出运行中 DSH 后的归档恢复与永久删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
 | AgentHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
-| WebUI | 展示契约、查询状态、执行分组、搜索、附件、Plan 导出及本机 Codex 协作输入区 |
-| 打包 | macOS ARM64 Tauri App/updater 与 Linux x86_64 无界面 webd |
+| `macos/`（Swift 6）+ `agenthub-ffi` | 三栏 SwiftUI 外壳、AppKit 阅读表格与显式 TextKit 1 文本视图、执行分组、搜索、附件、Plan 导出、本机 Codex 协作输入区及无死锁 C ABI 桥接 |
+| 打包 | macOS ARM64 原生 Swift 6 App/updater（`package-macos-swift-arm64.sh`）与 Linux x86_64 无界面 webd（`package-webd-linux-x86_64.sh`） |
 
-主窗口由 `desktop_boot` 隐藏创建，只在初始化时最大化一次或使用工作区回退，Ready 显示；Reopen 只显示、恢复和聚焦，不重新设置几何尺寸。
+主窗口由 `MainWindowController` 隐藏创建，只在初始化时最大化一次或使用工作区回退，首屏就绪显示；Reopen 只显示、恢复和聚焦，不重新设置几何尺寸。
 
 ## 共享契约与修改流程（Shared changes）
 
 API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力矩阵。产品版本、协议版本和契约文件的 `schemaVersion` 是不同概念，不互相替代。
 
 1. 同步 `contracts/agenthub-contract.json` 及其 schema，明确 action、DTO 归属和宿主能力。
-2. 同步 Rust 核心 DTO/use case 与 Linux/Tauri 适配层。
-3. 同步 WebUI 的类型、query/domain 和对应测试。
-4. 执行契约、Rust、WebUI、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
+2. 同步 Rust 核心 DTO/use case 与 Linux（`agenthub-webd`）／FFI（`agenthub-ffi`）适配层。
+3. 同步 Swift 6（`macos/Sources/AgentHubCore/`）的模型、领域状态和对应测试，并更新 `contracts/wire-types.json`。
+4. 执行契约、Rust、Swift 6、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
 
 共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*`、`grokbot.list/detail` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
 
-`contracts/wire-types.json` 是测试用映射及审阅后的源结构清单：Rust 用已有 syn/quote 开发依赖读取实际类型、serde 属性、枚举、适配签名及动态 JSON 表达式；TypeScript 用锁定编译器 API 读取实际声明及调用包装。自由 JSON 与内联请求必须明确归类；代表性真实序列化测试验证缺省、null 和枚举拼写。仅名称标记不能通过实际类型/注册函数检查，负面 fixture 覆盖缺字段、缺映射和缺适配入口。更新清单必须同时审阅线上 wire shape，不能用重新生成清单代替兼容性判断。
+`contracts/wire-types.json` 是测试用映射及审阅后的源结构清单：Rust 用已有 syn/quote 开发依赖读取 `agenthub-core`、`agenthub-webd` 与 `agenthub-ffi` 的实际类型、serde 属性、枚举及 `dispatch.rs` 派发分支；Node 契约脚本无第三方依赖直接解析 Swift 6 模型声明与 RPC 调用。自由 JSON 与内联请求必须明确归类；代表性真实序列化测试验证缺省、null 和枚举拼写。仅名称标记不能通过实际类型/注册函数检查，负面 fixture 覆盖缺字段、缺映射和缺适配入口。更新清单必须同时审阅线上 wire shape，不能用重新生成清单代替兼容性判断。
 
 ## 本机 Codex 桌面协作
 
-`codex_desktop` 能力仅属于 macOS 的 `desktop_embedded_tauri`。九个 `codex.desktop.*` 桌面命令经类型化 query/API 和 Tauri 适配进入 `codex::desktop`；Linux dispatcher、远程 allowlist、原有 RPC 与 API 协议 2 保持原边界。旧服务没有该可选能力时继续阅读。归档、不可核验、远程来源和子线程不能执行。
+`codex_desktop` 能力仅属于 macOS 桌面端（协议标识 `desktop_embedded_tauri`）。九个 `codex.desktop.*` 桌面命令经类型化 Swift Store 和 `agenthub-ffi` 进入 `codex::desktop`；Linux dispatcher、远程 allowlist、原有 RPC 与 API 协议 2 保持原边界。旧服务没有该可选能力时继续阅读。归档、不可核验、远程来源和子线程不能执行。
 
 IPC 通过私有 Unix socket 连接原生桌面，校验同 UID、文件身份、权限和 peer；逐次发现 owner，跟随精确本机线程。长度前缀帧上限 64MiB，连接及普通请求等待 10 秒，start 为 90 秒、steer 为 30 秒；原生 timeoutMs 与本地期限一致，等待时继续处理状态补丁。状态快照与补丁严格检查修订号、路径和预算，失步暂停写入。每个 App 最多四个会话 worker；只按需释放无队列的空闲 worker。独立的短生命周期 bundled helper 只读取模型/模式/技能/应用/插件目录或创建空线程，不执行 turn、resume 或队列；helper 串行许可最多等待 60 秒，繁忙与原生读取超时分别提示。取得许可后，同一个 helper 完成一个目录的全部分页：应用整体 60 秒，其他目录整体 20 秒；分页不重启进程。应用请求固定 threadId:null，不 resume 原线程，可用性按全局配置评估，线程级门控【未核实】。退出或取消时仅回收自有 helper。
 
@@ -65,17 +65,17 @@ IPC 通过私有 Unix socket 连接原生桌面，校验同 UID、文件身份�
 
 单条加密正文最多 1MiB，总密文 32MiB，最多 1,000 个未结项、每线程 50 项，已结束身份保留 1,000 项；限制覆盖保留内容，不代表进程 RSS 上界。目录投影缓存最多八个快照/8MiB、每快照 20,000 项，60 秒失效，每页 100 项；选择授权最多 256 个、30 分钟，绑定连接 revision 与线程。缓存锁不跨越 helper I/O，同来源、线程和目录种类的并发读取合并；失败只共享给当轮等待者，不缓存。models、modes、skills、plugins、apps 独立读取、缓存、失败和重试。可选 forceRefetch 只允许首页使用，绕过对应缓存；仅 skills/plugin/app 已核验方法携带原生刷新参数。模型及 effort 由 model/list 校验，模式由 collaborationMode/list 与当前 default/plan 支持集取交集；core 只限制设置字符串非空、128 字节且无控制字符。模式变化保留合法 effort，不合法则 null 继承并提示；设置失败显示原生 view 的真实值。失效 cursor 不能继续使用，界面重试会从首页开始；前端先发起已安装插件请求，应用与插件分别发布结果和重试；缓存命中不等待另一种目录的 I/O，原生 helper 仍串行。单个来源失败或慢读不丢弃另一个成功来源，每次最多挂载 100 项。
 
-WebUI 仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段，包含 handle 与用户文本中的 UTF-8 半开区间。输入 `$` / `@` 后可用上下键、Enter/Tab 选取技能或应用/插件，Escape 关闭；输入法组合时不选择或发送。编辑占位文本会撤销相应绑定，删除标签会同时移除其占位文本。Rust 从授权引用推导占位文字，校验身份、名称、字符边界、非重叠和最多 32 个区间，新提交按已核验的原生 composer 序列化为 Markdown 引用链接，同时保留结构化 skill / mention 和 `text_elements: []`；旧队列继续按原 `text_elements[].byteRange` / `placeholder` 构造。技能与应用链接标签为 `$name`，插件为 `@name`；界面仍使用 `$` 搜索技能、`@` 搜索插件和应用。链接由 Rust 授权引用生成并转义，WebUI 不接收路径。插件使用原生 canonical name 插入，友好标题保留为目录说明，避免显示名与原生引用不一致。
+Swift 界面仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段，包含 handle 与用户文本中的 UTF-8 半开区间。输入 `$` / `@` 后可用上下键、Enter/Tab 选取技能或应用/插件，Escape 关闭；输入法组合时不选择或发送。编辑占位文本会撤销相应绑定，删除标签会同时移除其占位文本。Rust 从授权引用推导占位文字，校验身份、名称、字符边界、非重叠和最多 32 个区间，新提交按已核验的原生 composer 序列化为 Markdown 引用链接，同时保留结构化 skill / mention 和 `text_elements: []`；旧队列继续按原 `text_elements[].byteRange` / `placeholder` 构造。技能与应用链接标签为 `$name`，插件为 `@name`；界面仍使用 `$` 搜索技能、`@` 搜索插件和应用。链接由 Rust 授权引用生成并转义，界面不接收路径。插件使用原生 canonical name 插入，友好标题保留为目录说明，避免显示名与原生引用不一致。
 
 原生选择器路径和原生目录引用仅在 Rust 解析；选中文件及队列发送前核验规范路径、dev/inode、大小与修改身份。新选择的图片与不超过 20MiB 的普通文件在授权阶段以 64KiB 流式缓冲记录 SHA-256、uid/gid 和 mode；这些信息仅作为加密 FileIdentity 的可选 content_proof 保存。只有规范路径、dev/inode、大小、mtime、所有者与权限都相同，且重新读取的摘要一致时，才允许单纯 ctime 变化。读取前后重验描述符与路径身份；替换、改写、权限变化、符号链接替换或读取失败仍拒绝。大文件及没有摘要的旧引用保持严格规则，旧读者可忽略新增嵌套字段，不重写已有队列。图片限 20MiB，仍使用 `localImage` 和既有附件字段；Mention 使用 `app://id` 和 `plugin://name@marketplace`，仅展示原生可访问应用与已安装启用插件。普通文件暂保留 `# Files mentioned by the user:` 兼容前缀；旧队列同时有内联引用时统一平移区间。start 的附件元数据放在原生处理器实际读取的 turnStart.context.attachments，不能放入 app-server request。
 
-`codex.desktop.attachments` 只处理本机主窗口的接收区绑定、坐标更新、明确粘贴、草稿引用释放和解绑；请求只含 revision、session/binding、矩形与 handle，不含路径、URL、图片字节或原生方法名。Rust 接收 OS 拖放，核对窗口可见/聚焦、区域、当前来源和可写线程后复用文件选择核验，整批超限或含无效文件时整批拒绝。单窗口和多 WebView 的原生拖放路由分别处理；禁用通用前端 event listen 权限，防止 Tauri 默认拖放事件把原生路径送入 JS，只用专用 Channel 返回名称、种类和 handle。发送或选择文件期间暂停接收；失焦、隐藏、切换与解绑后停止被动更新并丢弃迟到导入，重新聚焦重建接收区。前端只在 handle 值变化时更新授权集合；主动粘贴仍保留原有聚焦和身份检查，普通文本粘贴保持原行为。
+`codex.desktop.attachments` 只处理本机主窗口的接收区绑定、坐标更新、明确粘贴、草稿引用释放和解绑；请求只含 revision、session/binding、矩形与 handle，不含路径、URL、图片字节或原生方法名。Swift 将原生拖放与剪贴板原始快照交给 Rust `agenthub-ffi`，核对窗口可见/聚焦、区域、当前来源和可写线程后复用文件选择核验，整批超限或含无效文件时整批拒绝。只通过带单调 `seq` 与单次 `closed` 保证的专用 `StreamSink` 返回名称、种类和 handle。发送或选择文件期间暂停接收；失焦、隐藏、切换与解绑后停止被动更新并丢弃迟到导入，重新聚焦重建接收区。前端只在 handle 值变化时更新授权集合；主动粘贴仍保留原有聚焦和身份检查，普通文本粘贴保持原行为。
 
 明确粘贴时优先读取 Finder 的本机文件 URL 列表，再读取系统 PNG/JPEG/TIFF，最后识别完整路径文本；不读取 HTML 或抓取网络图片。文本每行一个绝对路径、`~/` 路径或本机 file URL，允许空格与成对引号；单段最多 32×8192 字节、32 个文件，单路径最多 8192 字节，不解释变量、命令替换或 shell。只在整段均为有效普通文件时去重并整批附加，目录、远程 file URL 和无效项不获得授权；文本识别失败时通过可选 pasteDisposition=text 回退浏览器原文，旧响应缺少该字段仍按原 Channel 处理。
 
 图片单次捕获最多 64MiB，解码前按尺寸预留每像素 16 字节、共 128MiB 工作预算；只接受单图且深度不超过 16 位，输出 PNG 最多 20MiB，不缩放或降低质量。PNG 原样保留，TIFF/JPEG 由系统框架转换；WebKit 未提供 image MIME 时仍可通过明确粘贴读取原生图片。读取、转换和导入后核对 clipboard changeCount，同一接收区的重复粘贴不重复导入；移除附件后允许重新选择。绑定请求合并，恢复焦点后的主动粘贴最多等待接收区五秒；线程、窗口或会话变化丢弃迟到结果。普通文本保持默认编辑路径，异步文本回退使用原生 insertText，光标或草稿已变时不覆盖。导入串行，预算不代表系统剪贴板服务或进程 RSS 的硬上界。
 
-附件命令的 onEvent 始终使用同一回调标识；Tauri 入口只解析标识，仅 bind 创建并持有 Channel，其他操作复用已有接收区。不能在每次 bounds、paste 或 release 调用中重建 Channel：临时实例释放会发送结束帧，提前关闭仍在使用的附件通知通道。解绑与切换会话仍关闭原通道，迟到事件不得恢复旧附件。
+附件命令始终绑定对应的 `StreamSink`：仅 `bind` 通过 `agenthub_ffi_desktop_attachments` 创建并持有流通道，其他操作复用已有接收区。不能在每次 bounds、paste 或 release 调用中重建流通道，以免临时实例释放发送结束帧提前关闭仍在使用的附件通知通道。解绑与切换会话仍关闭原通道，迟到事件不得恢复旧附件。
 
 粘贴图片写入 AgentHub 数据库旁的私有附件目录（目录 0700、文件 0600、随机名、独占创建），写完并同步后捕获原有 `NativeReference::File` 身份，之后不改名或改写。图片为原生 owner 可读取的明文私有文件；归属和生命周期索引使用现有专属 Keychain 密钥加密，索引上限 1MiB，图片总量最多 512MiB/256 项。沿用跨进程 worker 锁，初始化/恢复后台工作取消也不提前释放锁。未提交草稿可显式释放或在 30 分钟后清理；隐藏/重连在授权有效期内保留草稿。发送前先原子持久化并同步保留标记，再交给原有队列，成功、失败、取消或结果不明均不自动删除这些图片，避免破坏原生历史。容量满时拒绝新粘贴，可继续使用文件选择器。启动只清理有完整归属证据的过期草稿，`Released` 标记允许接续草稿删除；密钥缺失、损坏/缺失索引、未知遗留文件或身份变化时保留文件并停止操作，不猜测崩溃后的归属，不新增数据库表或旧队列格式。
 
@@ -85,7 +85,7 @@ WebUI 仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段�
 
 协作状态直接取当前 `DesktopView`：等待请求优先于执行、发送、排队、结果不明/暂停和空闲；同一行显示待处理数，运行复用 `RunningIndicator`。断连、只读、隐藏或 detach 后不显示旧状态，提交中显示“正在提交到 Codex…”，不添加 IPC 方法或未知进度字段。
 
-Tauri 频道最多每秒十次投影视图，初值取自同一订阅；前端丢弃旧修订、旧连接或旧线程结果。仅当前协作线程通过 350ms 合并事件刷新详情；慢读取不被反复取消，期间的新事件在完成后触发一次尾刷新，包含审批完成和回合终态。原有阅读轮询保持，未添加全局高频轮询。隐藏/离开页面释放界面订阅和待刷新计时器，已提交的本机队列继续归原 worker；原有 monitor 和通知仍独立读取原生证据。
+FFI `StreamSink` 最多每秒十次投影视图，初值取自同一订阅；Swift 端按单调 `seq`、连接修订与线程身份丢弃乱序、旧连接或旧线程结果。仅当前协作线程通过 350ms 合并事件刷新详情；慢读取不被反复取消，期间的新事件在完成后触发一次尾刷新，包含审批完成和回合终态。原有阅读轮询保持，未添加全局高频轮询。隐藏/离开页面释放界面订阅和待刷新计时器，已提交的本机队列继续归原 worker；原有 monitor 和通知仍独立读取原生证据。
 
 诊断只保存在进程内 50 条环形缓冲中；`codex.desktop.diagnostics` 只供 macOS 本机读取，连接失败也可使用。记录时间、来源、白名单方法/版本、数值 code、固定错误分类及最多 200 字符的安全提示；原生自由文本使用占位，不保留正文、路径、URL、邮箱或凭据。复制操作由用户触发，不落盘、不上传。桌面 build 与 bundled CLI 版本只读获取，失败返回未知；版本仅保留在诊断中，实际方法版本不符才阻断该操作，不尝试其他版本。
 
@@ -95,7 +95,7 @@ Tauri 频道最多每秒十次投影视图，初值取自同一订阅；前端�
 
 原生 `request-timeout` 与旧 `timeout` 同属超时，提交结果仍按未知处理且不重发。原生 `request-version-mismatch`、`no-handler-for-request` 与旧名称映射为协议不支持；`no-client-found` 属于 owner 不可用。这些已核验的执行前拒绝可标记未发送。任意 handler 异常不能证明没有执行，start/steer 仍为结果不明，不重发。Settings、Stop、审批、问答和 elicitation 的明确拒绝保留 Rejected 且不断流；身份/传输故障不能伪装成业务拒绝。空线程创建提交后出错或返回身份不完整也保持结果不明，界面不重复创建。
 
-失步先暂停队列，再自动重建一次订阅并获取完整 snapshot；断线按 1、2、4、8、16 秒最多五次尝试，每次重新校验 socket、UID、线程与 owner。同 owner 可恢复协作；owner 变化只恢复阅读，明确点击“连接”确认后才能发送、设置和审批，队列仍需手动继续；只读期间仍显示暂停与结果待核对项，禁用队列操作。只有 snapshot 的精确 client message ID 可核对 unknown。恢复旋转会话代际、重置修订比较；Tauri Channel 在恢复期间保持订阅，旧动作和附件结果被拒绝。可选 confirmOwner 区分明确连接意图与隐藏后重新订阅；旧请求不自动确认已有 worker 的新 owner。点击“在 Codex 中打开”或新建后自动连接，owner 等待总计 20 秒；普通浏览不自动连接。新建后保留已知身份，打开或后续选中失败只能重试打开/连接。线程连接 I/O 使用按线程的准入锁，不持有跨线程 worker 注册锁。
+失步先暂停队列，再自动重建一次订阅并获取完整 snapshot；断线按 1、2、4、8、16 秒最多五次尝试，每次重新校验 socket、UID、线程与 owner。同 owner 可恢复协作；owner 变化只恢复阅读，明确点击“连接”确认后才能发送、设置和审批，队列仍需手动继续；只读期间仍显示暂停与结果待核对项，禁用队列操作。只有 snapshot 的精确 client message ID 可核对 unknown。恢复旋转会话代际、重置修订比较；FFI `StreamSink` 在恢复期间保持订阅，旧动作和附件结果被拒绝。可选 confirmOwner 区分明确连接意图与隐藏后重新订阅；旧请求不自动确认已有 worker 的新 owner。点击“在 Codex 中打开”或新建后自动连接，owner 等待总计 20 秒；普通浏览不自动连接。新建后保留已知身份，打开或后续选中失败只能重试打开/连接。线程连接 I/O 使用按线程的准入锁，不持有跨线程 worker 注册锁。
 
 ### 证据与未核实项
 
@@ -145,7 +145,7 @@ Codex Hook Stop 与 completion 正文选择共用逐行读取，不保留整份�
 
 ### Claude Code
 
-`claude.detail` 的可选 `agentId` 始终配合父 `sessionKey`，Tauri 手工转发、Linux 接类型化请求，共用 core；独立 `claude_subagents` 能力缺省为 false，旧服务不发送该参数。主详情每次独立枚举同名目录的 subagents，子正文只在打开时读取。Claude Code 2.1.323 脱敏原生 fixture 保留原生 sessionId、agentId、isSidechain 和 parentUuid；后者仅用于记录分支，目录仅证明父会话归属，不建立子代理之间的父链。名称只取父 Agent 工具及结果精确配对的 agentId/description，否则显示文件名 ID。
+`claude.detail` 的可选 `agentId` 始终配合父 `sessionKey`，FFI 与 Linux 均接收类型化请求并共用 core；独立 `claude_subagents` 能力缺省为 false，旧服务不发送该参数。主详情每次独立枚举同名目录的 subagents，子正文只在打开时读取。Claude Code 2.1.323 脱敏原生 fixture 保留原生 sessionId、agentId、isSidechain 和 parentUuid；后者仅用于记录分支，目录仅证明父会话归属，不建立子代理之间的父链。名称只取父 Agent 工具及结果精确配对的 agentId/description，否则显示文件名 ID。
 
 子读取核验父文件名身份、授权项目根和逐级目录，拒绝符号链接；沿用 O_NOFOLLOW 与读前后源身份检查。子文件不注册主定位键，不参与主列表或管理。主／子解析模式共享原缓存预算、隔离快照；只有已验证子模式接受 sidechain。事件和游标绑定父键、agentId 及源身份，历史 epoch 同时区分父源；保留原文本脱敏、工具配对、分支和分页。子状态为 unknown，不从父运行、mtime、追加或工具结果推断终态。Hook 关闭也可浏览，原子代理 Stop 通知过滤保持。子附件不读取字节。
 
@@ -173,7 +173,7 @@ Probe 复用原生轮询、启用基线、消息游标、加密队列与有限�
 
 Antigravity 当前回合遍历完整相关子代理树，沿用循环去重；每个子代理提取待处理任务、子代理 ID 与时间锚点后释放原始 steps，逆序评估时共享最终状态表，保留较晚发现后代的最新时间，不为优化新增深度或数量限制。
 
-`antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、Tauri 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
+`antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、FFI 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
 
 Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；该服务只报告本次运行已加载的会话，列表因此合并 `conversation_summaries.db` 中尚未加载的根会话（在线条目优先，时间统一为 RFC 3339）；自动探测未命中、分页网络不可达、没有可见消息或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
 
@@ -187,13 +187,13 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 新旧 `My request:` / `My request for Codex:` 附件包装均可识别；按原生身份去重并优先已有嵌入图片，失效临时文件不隐藏请求。消息按附件、一个默认收起的“上下文”、正文排列；上下文展开才挂载，纯上下文不产生空气泡或时间线刻度。展开原文按原顺序保留，全部清理仅用于展示，不回写会话。
 
-`visibleMarkdown` 在解析前按源范围去除结构化 memory 与完整 `external_codex_apps_open_page`/page_id 元数据，并有渲染保护；CommonMark 代码、引用和普通示例不被误删。显示、复制、预览、Plan 内容和文件名共用清理结果。指令分段与 Markdown 渲染缓存按原文复用已构建的元素树，不保存路径解析结果或折叠状态；链接安全处理在构建时完成，文件链接的路径范围与代码块复制状态在 React 渲染时取得。
+`visibleMarkdown` 在解析前按源范围去除结构化 memory 与完整 `external_codex_apps_open_page`/page_id 元数据，并有渲染保护；CommonMark 代码、引用和普通示例不被误删。显示、复制、预览、Plan 内容和文件名共用清理结果。指令分段、GFM AST 解析（Rust `pulldown-cmark`）与 `NSAttributedString` 排版按原文复用有界缓存，不保存路径解析结果或折叠状态；文件链接的路径范围与代码块复制在原生视图渲染时取得。
 
 `sessions.search` 是当前机器内的只读动作，输入 Provider、线程/Provider 范围、opaque key、query、cursor 和 limit，不接受文件路径。搜索摘要与有界正文页，返回稳定 block/event position key；达到现有 200 条上限立即停止后续历史读取，保持原顺序和分页规则。当前线程按选中身份直接读取，不扫描最近 200 条列表。用户搜索取实际正文、问题/回答、附件名和指令块，自动字段不重复命中。AGENTS.md 命中仍能展开上下文。Plan、工具、助手回复保留搜索锚点，但不成为用户时间线刻度。
 
-`usePagedHistory` 分离最新窗口轮询与历史取页；静态页不重复请求，只刷新变化的已加载身份，快速追加时补齐中间窗口。`historyScrollCoordinator` 统一首次底部定位、上滚、搜索分页、请求互斥和可见锚点补偿；失败或游标不前进停止自动重试。`historyWindows` 保留最早游标；`useTimelineWindow` 直接取定位窗口，复用最新变更记录，无需下载中间全部历史。
+Swift `PagedHistoryStore` 分离最新窗口轮询与历史取页；静态页不重复请求，只刷新变化的已加载身份，快速追加时补齐中间窗口。`HistoryScrollAnchorCoordinator` 统一首次底部定位、向上滚动意图门控、搜索分页、请求互斥和可见消息＋合并别名像素偏移恢复；失败或游标不前进停止自动重试。时间轴窗口直接请求定位游标，复用最新变更记录，无需下载中间全部历史。
 
-搜索通过 `DisclosureRevealContext` 挂载命中折叠内容后定位，优先精确原生 ID，其次最深别名节点；Codex 压缩只豁免当前机器/线程最近命中的一个块，不展开整段历史。时间线位置只在布局变化时重测，刻度有界挂载且键盘可达全部记录。工作区按需加载，隐藏窗口暂停界面轮询，后台 monitor 独立运行。
+搜索命中折叠内容后自动展开并定位，优先精确原生 ID，其次最深别名节点；Codex 压缩只豁免当前机器/线程最近命中的一个块，不展开整段历史。时间线位置由独立 `TimelineActiveTracker` 局部订阅，刻度有界挂载且键盘可达全部记录。工作区按需加载，隐藏窗口暂停界面轮询，后台 monitor 独立运行。
 
 普通与归档会话选择通过同一选择入口互斥，点击、快捷键、原生菜单和浮动栏均清除另一范围。归档按钮展开时全选已加载归档项，收起时消费全选而不选中普通列表；输入框与弹窗继续独立处理。
 
@@ -203,7 +203,7 @@ Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按
 
 `sessions.attachmentRead` 经共享 use case、身份校验和薄适配读取；只接受 Provider、session/message/attachment ID，以及子线程必要的根线程上下文。重新解析来源及文件身份，PNG/JPEG/WebP/GIF 单张预览限 20MiB。视口附近才读取图片，前端缓存按机器隔离并在切换时清除；轮询只携描述，不含图片，不抓取仅有远程引用的附件。
 
-文件链接在浏览器解析 URL 前从原始 Markdown target 提取，剥离行列后缀并按线程 cwd 解析相对路径。远程只复制，本机 macOS 通过 Tauri opener 在 Finder 定位。`plans.save` 始终是本地 Downloads 导出，校验有界 Markdown 文件名/正文并独占创建，不覆盖既有下载、不经过远程 RPC。
+文件链接在解析 URL 前从原始 Markdown target 提取，剥离行列后缀并按线程 cwd 解析相对路径。远程只复制，本机 macOS 通过 `NSWorkspace.shared.activateFileViewerSelecting` 在 Finder 定位。`plans.save` 始终是本地保存导出，校验有界 Markdown 文件名/正文并独占创建，不覆盖既有下载、不经过远程 RPC。
 
 ## 管理与隐藏扫描
 
@@ -223,13 +223,13 @@ Codex 账号隔离：Codex 0.168 起在新会话 rollout 首行写入 `account_s
 
 cleanup.hiddenDryRun 保留 start/poll/cancel、扫描 ID 与游标和旧完整响应。只扫描元数据及原生父子关系，不核验正文或指纹；每页最多 100 项，候选总数没有业务上限。同源最多一个活动扫描，进程最多两个上下文；五分钟无请求释放。界面加载完整确认范围后允许执行，停止结果不能执行，切换机器隔离迟到响应。
 
-DSH 归档清理纳入统一 CleanupUseCases、Linux RPC 与 Tauri 入口，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。独立会话入口另由 dsh_sessions 能力声明。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
+DSH 归档清理纳入统一 CleanupUseCases、Linux RPC 与 FFI 入口，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。独立会话入口另由 dsh_sessions 能力声明。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
 
 Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；缺少 cwd 或版本不产生读取失败。Grok 优先读取 updates.jsonl，缺失时读取 chat_history.jsonl，映射用户、助手和工具调用／结果，复用分页、增量缓存、搜索和时间线。系统提示、system_reminder 和加密推理不作为普通对话展示。
 
 ## 远程连接与认证
 
-React 只向原生 IPC 传命令、参数及连接 revision。桌面读取用户 OpenSSH 配置及 Include 中的明确 Host 别名，实际连接交给系统 ssh，复用密钥、ssh-agent、钥匙串和跳板设置。桌面仅保存 Host、显示名称与 useSudo；需要交互认证时先在终端完成。原生层沿用命令 allowlist、协议 2 和能力验证。
+Swift 界面只向 `agenthub-ffi` 传命令、参数及连接 revision。桌面读取用户 OpenSSH 配置及 Include 中的明确 Host 别名，实际连接交给系统 ssh，复用密钥、ssh-agent、钥匙串和跳板设置。桌面仅保存 Host、显示名称与 useSudo；需要交互认证时先在终端完成。原生层沿用命令 allowlist、协议 2 和能力验证。
 
 当前机器保持一条自有 SSH 通道，固定执行 `/usr/local/bin/agenthub-webd rpc-stdio`，useSudo 时加 `sudo -n`。代理只转发至 `/run/agenthub-webd/rpc.sock`，不打开数据库或启动扫描器。常驻服务继续承担通知、缓存和后台任务；systemd RuntimeDirectory 为 0700，套接字为 0600。请求使用带 ID 的 JSON 帧与四字节长度前缀，并发响应按 ID 配对，沿用 32MiB 响应限制。
 
@@ -249,13 +249,13 @@ Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应�
 
 ## 通知与监测
 
-设置读取、Probe 新鲜状态及被动扫描复用 config/env 元数据指纹缓存，原子替换或内容变化后刷新内存，读取失败明确报错。Linux 服务及 CLI 使用实际启动配置路径，设置保存、Hook 作业、状态检查与生成的 Hook 命令保持该路径。probe.status 的可选 refresh 参数用于手动刷新、保存完成及 Hook 作业终结，当前机器的查询缓存接收新鲜结果，普通轮询保持原快照和频率；Tauri 状态始终读取新鲜配置。Hook 写回沿用原子替换并保留权限，原有等待每两秒比较文件指纹，扫描与等待周期使用相同配置。
+设置读取、Probe 新鲜状态及被动扫描复用 config/env 元数据指纹缓存，原子替换或内容变化后刷新内存，读取失败明确报错。Linux 服务及 CLI 使用实际启动配置路径，设置保存、Hook 作业、状态检查与生成的 Hook 命令保持该路径。probe.status 的可选 refresh 参数用于手动刷新、保存完成及 Hook 作业终结，当前机器的查询缓存接收新鲜结果，普通轮询保持原快照和频率；桌面 FFI 状态始终读取新鲜配置。Hook 写回沿用原子替换并保留权限，原有等待每两秒比较文件指纹，扫描与等待周期使用相同配置。
 
 Probe 关闭时普通 Bark 待发项结束并清除加密正文，重新启用推进已有通道基线；显式测试只受 Bark 通知开关控制。错误监控的有效关闭／开启重置已有游标，首次扫描建立末尾基线，重新开启到首次扫描之间的错误也不补发；其待发项服从错误监控开关。Codex 普通反馈与异步问题基线随有效开关在保存事务内同步，监控／Hook 同步在同一事务内读取配置，来源复核只读基线，不用旧配置改写。
 
 Codex 通知先按当前配置与旧去重记录判断通道关闭、事件开关关闭和重复事件，命中即返回原跳过结果；确定入队后才对 rollout 计算内容摘要并写入候选，重试前的来源复核保持。错误监控每轮读取上限为扫描函数已有的 1,000 行。安装／移除 Codex Hook 用 toml_edit 就地编辑 `config.toml`：只改 `features.hooks` 的值并移除 `hooks.json` 对应的过期状态表，其余注释、键顺序与文本逐字节保留；缺少 `[features]` 时追加到文件末尾，响应只在实际复制了备份时返回备份路径。
 
-Antigravity 与 DSH 的通知仅在本机运行，会话阅读及管理是独立能力。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS Tauri 声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
+Antigravity 与 DSH 的通知仅在本机运行，会话阅读及管理是独立能力。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS 桌面声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
 
 Antigravity 通知扫描从已运行且同用户的原生 language server 读取摘要、轨迹及执行段元数据，使用固定方法，请求限回环并禁止代理和重定向；凭据只保留在本机内存。完成须核验主执行终态及已关联子代理、后台任务收敛；失败须是当前执行的明确错误终态。原生等待、requestedInteraction、提问及审批记录按既有解析器配对并去重；普通工具、中间错误、取消和自动继续不推断失败。服务未运行、身份不明或读取失败在 Probe 来源状态显示异常。
 
@@ -303,7 +303,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 Antigravity／DSH 列表在筛选、排序与截取后才请求大小；详情与最终删除确认继续按需统计。DSH 附件读取、Antigravity 删除预览摘要及清理允许集、Claude／Antigravity／DSH 失败预览摘要不再统计大小。五个平台摘要的可选 `storageSize` 使用 bytes/scope/status，未知不等于零。普通追加可复用身份缓存；截断、替换和归属改变立即失效。后台扫描收尾按同一规则复核，扫描期间的追加保留本次结果，替换或截断不发布。K/M/G 按 1024 换算，颜色按准确字节：小于 100MiB 绿色，100MiB 至不足 300MiB 琥珀色，至少 300MiB 红色。未知灰色，部分结果按确认下限分色并保留 ≥，提示准确字节和不完整状态。
 
-固定预算由 Rust `resource_limits` 和 WebUI `resourceBudgets` 命名管理，不是设置项。每个 JSONL/普通读取缓存默认最多 64 个来源，Codex 活动扫描与 Grok 摘要为 2,000 个来源；以下字节数独立计重，条目与字节上限先到者生效：
+固定预算由 Rust `resource_limits` 与 Swift 缓存常量命名管理，不是设置项。每个 JSONL/普通读取缓存默认最多 64 个来源，Codex 活动扫描与 Grok 摘要为 2,000 个来源；以下字节数独立计重，条目与字节上限先到者生效：
 
 | 缓存或工作 | 当前预算 |
 | --- | --- |
@@ -319,13 +319,13 @@ Antigravity／DSH 列表在筛选、排序与截取后才请求大小；详情�
 | 大小缓存 / 队列 / worker | 512 项 / 128 项 / 2 个；TTL 30 秒 |
 | 单次目录统计 | 10,000 项、16 层、250ms |
 | 阻塞读取 / 凭据工作 | 按可用并行度限制为 2–4 个 / 1 个 |
-| WebView 指令切片 / 上下文投影 / Markdown 元素树 | 各 512 项、各 8MiB，分别计重；Markdown 按原文字符计重 |
+| Swift 阅读器已挂载行视图缓存 | 最多 128 个已渲染单元格，配合增量行高表与 Lucide 图标光栅缓存 |
 
 Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入现有缓存预算；revision 在快照生成时按实际内容计算，不新增增量变更日志，保留保守旧页重读。Antigravity 在线缓存修订只依据会话 ID 与摘要，终态判断复用来源层结果，身份、解析或提前空页错误明确返回且不进入缓存。分页以首批总数为目标，末页允许因原生追加超出目标，不设 50,000 步硬上限；仅服务不可达或无在线内容时回退离线。
 
 Claude 摘要与 Codex 问答、子线程状态及创建任务名缓存接入既有 5 分钟空闲释放入口，不新增定时器；释放缓存引用后再次读取按原数据重建。
 
-DSH／Grok 通知派生条目只在内容变化时计重并维护总量，Grok JSONL 缓存使用共享不可变数组。扩大 DSH 缓存覆盖可能增加驻留内存。上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、已渲染的 Markdown 元素、DOM 与并发请求有额外内存；App、helper、远程服务和 WebView 又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
+DSH／Grok 通知派生条目只在内容变化时计重并维护总量，Grok JSONL 缓存使用共享不可变数组。扩大 DSH 缓存覆盖可能增加驻留内存。上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、已渲染的 `NSAttributedString`、AppKit 视图与并发请求有额外内存；App、helper 和远程服务又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
 
 ## 兼容与自有数据迁移
 
@@ -350,16 +350,16 @@ Claude reader 一次性升级查询已删除，通知基线仅首次建立或启
 
 ## 构建、CI 与发布
 
-根 Cargo workspace 构建共享核心和 Linux webd；`src-tauri` 独立 workspace 避免服务端构建引入桌面平台依赖，路径依赖共享核心。两份锁文件独立解析，Tauri 自身允许额外主版本；共享依赖约束、实际选择和最低 Rust 要求需一起检查。开发与 CI 使用 rust-toolchain.toml 声明的 stable 工具链；两个 workspace 保留一致的最低 Rust 声明，允许工具链独立更新。`check-workspaces.py` 核对两侧最低声明，并精确比较共同直接依赖的声明与锁定结果；两侧的 `toml` 0.8 当前均解析为 0.8.23。Tauri 额外的 dirs、reqwest、toml 主版本属于独立依赖链，不能据此强行统一。
+单一根 Cargo workspace 统一纳管 `agenthub-core`、`agenthub-ffi` 与 `agenthub-webd`，共用一份 `Cargo.lock` 与一致的 `edition`／`rust-version`；`macos/Package.swift` 声明 Swift 6（`swift-tools-version: 6.0`、`.macOS(.v12)`、零第三方依赖）并链接 `libagenthub_ffi.a`。开发与 CI 使用 `rust-toolchain.toml` 声明的 stable 工具链；`check-workspaces.py` 核对三成员继承声明、共同外部依赖解析一致性及 Swift 6 包清单；`check-versions.py` 核对 Cargo workspace、`Cargo.lock` 本地包与 `DesignTokens.swift` 回退版本号一致。
 
-升级共享依赖时先确认两侧 manifest、feature 和实际依赖链，再定向更新两份锁文件、运行两侧 Rust 检查和三项 CI；不得为消除合法多版本而全量更新。产品版本以根 Cargo workspace 为准，JSON/Tauri manifest 和两份 lock 的自身 package 必须精确一致；契约 schemaVersion 与 API 协议单独校验。
+升级依赖时先确认 manifest、feature 和实际依赖链，再定向更新 `Cargo.lock`、运行 Rust 与 Swift 检查及两项 CI；不得自动全量升级。契约 `schemaVersion` 与 API 协议单独校验。
 
-CI 保留 Frontend checks、Backend checks、macOS Tauri checks。第三方 Action 固定 SHA，权限按作业收敛；Frontend/Backend/Tauri 超时为 30/45/60 分钟。Cargo test、clippy 和正式构建均使用 --locked，包括 Tauri 传递的 Cargo 参数。缓存区分平台、架构、工具版本、锁文件与构建参数，覆盖 Cargo、pnpm、固定版本 cargo-audit 和 Playwright 浏览器；Linux 浏览器系统依赖仍正常安装。cargo audit/pnpm audit 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。定向修复必须审阅两份锁文件，不自动批量升级。交互耗时记录使用生产构建、可见 macOS 窗口、串行 Chromium/WebKit 和关闭 trace 的命令；既有 `@desktop-performance` 测试输出 JSON 测量结果，耗时仅作诊断，不以固定毫秒阈值阻断 CI，展开内容、分页数量及会话切换等功能断言继续生效。
+CI 保留 `Backend & contract checks`（`ubuntu-24.04`）与 `macOS Swift 6 checks`（`macos-15`）。第三方 Action 固定 SHA，权限按作业收敛，超时均为 45 分钟。Cargo test、clippy 和正式构建均使用 `--locked`；缓存区分平台、架构、工具版本与锁文件，覆盖 Cargo、`macos/.build` 与固定版本 `cargo-audit`。`cargo audit` 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。`macos-15` 同时验证 Debug 编译、Release `-O -whole-module-optimization` 编译、`agenthub-ffi` 测试与开启 `AGENTHUB_RENDER_TESTS=1` 的全部 Swift XCTest（含离屏真实视图光栅化断言）。
 
-Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`agenthub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
+Release guard 核对 tag/版本、契约、隐私、发布说明和同提交两项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`agenthub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
 
-macOS App 在 Tauri 生成 DMG 和 updater 归档前完成代码签名，默认 ad-hoc；原有 `MACOS_CODESIGN_IDENTITY` 覆盖传入打包配置，Tauri 的 `APPLE_SIGNING_IDENTITY` 优先级保持。打包检查完整 App 的 deep/strict 签名，不能仅重签临时归档副本。代码签名与 updater Minisign 独立，ad-hoc 不代表 Developer ID 或 Apple 公证。桌面 updater 只启用 rustls，macOS tar.gz 支持由其平台依赖保留，不引入未发布的 Windows ZIP 更新特性。
+`scripts/package-macos-swift-arm64.sh` 通过 `--remap-path-prefix`、`-file-prefix-map` 与 `-no-serialize-debugging-options` 剥离本机路径，在生成 DMG 和无 `./` 前缀顶层 `AgentHub.app` updater 归档前完成代码签名（默认 ad-hoc，支持 `MACOS_CODESIGN_IDENTITY` 覆盖），并检查完整 App 的 deep/strict 签名与 `--payload` 隐私门禁。代码签名与 updater Minisign 独立，ad-hoc 不代表 Developer ID 或 Apple 公证。桌面端更新在 Rust `agenthub-ffi` 内使用 `minisign-verify` 校验 `"ED"` 签名、安全解包并原子替换安装。
 
-正式安装复用同提交成品，先远程服务后 App；部署输入不进入仓库。Linux 归档用现有 Tauri 签名工具生成带版本 trusted comment 的分离签名，私钥仅从 GitHub Secrets 环境提供。在线下载先校验发布 SHA-256，再用预装 Minisign 与固定公钥验签，失败不解包；指定版本需与已签名版本相同，解包后核对布局、ELF x86_64 平台及程序版本。旧 updater 首次升级由可信客户端先验签；显式本地 --archive/--binary 运维方式保留。部署另比对本地与远端文件 SHA-256。解包拒绝路径穿越、链接、特殊文件及重复成员；目录与可执行文件统一 0755，普通文件 0644，不继承特殊位或可写权限。程序与部署文件通过同文件系统临时文件原子替换，普通安装失败恢复本轮替换项，不回滚业务数据库或原生会话；在线更新仍使用既有异步重启，成功调度不等于新进程已启动，也不提供崩溃自动恢复。安装成功/启动检查与用户功能验收分开报告。维护六份当前文档并使用普通增量提交，历史由 Git 和 Release 保留。
+正式安装复用同提交成品，先远程服务后 App；部署输入不进入仓库。两端归档统一通过 `scripts/sign-minisign-archive.py` 调用 `minisign` 生成带版本 trusted comment 的 Base64 分离签名，私钥仅从 GitHub Secrets 环境提供。在线下载先校验发布 SHA-256，再用预装 Minisign 与固定公钥验签，失败不解包；指定版本需与已签名版本相同，解包后核对布局、ELF x86_64 平台及程序版本。显式本地 `--archive`/`--binary` 运维方式保留。部署另比对本地与远端文件 SHA-256。解包拒绝路径穿越、链接、特殊文件及重复成员；目录与可执行文件统一 0755，普通文件 0644，不继承特殊位或可写权限。程序与部署文件通过同文件系统临时文件原子替换，普通安装失败恢复本轮替换项，不回滚业务数据库或原生会话；在线更新仍使用既有异步重启，成功调度不等于新进程已启动，也不提供崩溃自动恢复。安装成功/启动检查与用户功能验收分开报告。维护当前文档并使用普通增量提交，历史由 Git 和 Release 保留。
 
 Claude 删除按批次建立不读取正文的文件元数据索引，项目文件及索引按实际结果处理；同 ID 的其他副本保留或失败时不删除全局文件、历史、登记和原生后台作业。统一清理执行重验 Inactive，普通删除沿用显式选择规则。Grok Bot 当前交互先按小时续期终态去重标记再维护保留期，来源读取失败时保留其标记；附件通知只显示名称，通用摘要完整移除括号或尖括号包裹的链接目标。Antigravity 检查当前回合相关子代理图，不按数量截断，保留身份去重、循环检测及完整轨迹检查。

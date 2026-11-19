@@ -24,7 +24,7 @@ BUNDLE_ID="${AGENTHUB_BUNDLE_ID:-com.lich13.agenthub}"
 CODESIGN_ID="${MACOS_CODESIGN_IDENTITY:--}"
 DIST="${DIST_DIR:-${ROOT}/dist}"
 CARGO_TARGET="${CARGO_TARGET_DIR:-${ROOT}/target}"
-ICON_SRC="${ROOT}/src-tauri/icons/icon.icns"
+ICON_SRC="${ROOT}/macos/Resources/icon.icns"
 
 [[ -f "${ICON_SRC}" ]] || die "missing app icon at ${ICON_SRC}"
 

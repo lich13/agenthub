@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directories: ['/', '/src-tauri']
+    directory: /
     schedule:
       interval: weekly
       day: monday
@@ -16,38 +16,12 @@ updates:
     ignore:
       - dependency-name: '*'
         update-types: ['version-update:semver-major']
-      - dependency-name: 'tauri*'
-        update-types: ['version-update:semver-minor']
     groups:
       rust-compatible:
         applies-to: version-updates
         patterns: ['*']
         update-types: ['minor', 'patch']
       rust-security:
-        applies-to: security-updates
-        patterns: ['*']
-
-  - package-ecosystem: npm
-    directory: /webui
-    schedule:
-      interval: weekly
-      day: monday
-      time: '09:00'
-      timezone: Asia/Taipei
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 1
-    allow:
-      - dependency-type: all
-    ignore:
-      - dependency-name: '*'
-        update-types: ['version-update:semver-major']
-    groups:
-      frontend-compatible:
-        applies-to: version-updates
-        patterns: ['*']
-        update-types: ['minor', 'patch']
-      frontend-security:
         applies-to: security-updates
         patterns: ['*']
 

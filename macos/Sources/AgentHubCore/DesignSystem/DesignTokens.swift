@@ -296,7 +296,7 @@ public enum LayoutMetrics {
 
     public static let composerMinHeight: CGFloat = 54
     public static let composerMaxHeight: CGFloat = 160
-    public static let fallbackAppVersion: String = "2.1.27"
+    public static let fallbackAppVersion: String = "2.1.28"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,

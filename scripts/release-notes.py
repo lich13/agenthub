@@ -8,6 +8,21 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.28": {
+        "summary": [
+            "macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）架构，退役 Tauri 与 WebView 依赖，保持六大平台阅读、探针通知、清理与本机 Codex 桌面协作体验一致"
+        ],
+        "features": [
+            "macOS 桌面端全面替换为原生 Swift 6（SwiftUI + AppKit）与 Rust 静态库（agenthub-ffi）架构，移除 Tauri、WKWebView、前端 Node／pnpm 工具链及 Rust 中的 objc2 桥接依赖；保留浅暗三层表面配色、各平台品牌色、窗口尺寸规则与菜单快捷键。",
+            "对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，支持增量行高缓存、代码块与宽表格纵向滚轮穿透、距顶 200pt 反向分页像素锚点锁定、跨段自由选词复制，以及线程列表与顶栏自绘操作菜单。",
+            "系统通知（UserNotifications）、剪贴板与文件拖放、原生选档与保存面板、输入法组合态守卫及旧版偏好只读迁移切换至原生 Swift 实现；应用内更新沿用既有 latest.json、tar.gz 布局与 Minisign 签名校验。",
+        ],
+        "migration": [
+            "API 协议保持 2、数据库 schema 保持 3；Bundle ID（com.lich13.agenthub）、本机 Application Support 数据目录、系统钥匙串（含 Codex 发送队列密钥）与八项发布资产名称保持不变，旧版桌面端主题与侧栏折叠偏好首次启动自动迁移，先升级服务再安装 App。",
+            "Grok Bot 消息完成不代表整轮终结，不保证同轮只通知一次。",
+            "支持新安装及已由 v2.1.0 完成迁移的配置；更早版本先升级至 v2.1.0，早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.27": {
         "summary": ["新增 Codex 账号隔离解除，修复压缩线程归档与启动空白，减少列表、归档和通知的重复读取"],
         "features": [
