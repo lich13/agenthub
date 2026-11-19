@@ -540,6 +540,12 @@ public final class ReaderSelectableTextView: NSTextView {
         needsDisplay = true
     }
 
+    public func measuredUsedHeight() -> CGFloat {
+        guard let manager = layoutManager, let container = textContainer else { return 22 }
+        manager.ensureLayout(for: container)
+        return ceil(manager.usedRect(for: container).height)
+    }
+
     private func configureReaderTextView() {
         minSize = .zero
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)

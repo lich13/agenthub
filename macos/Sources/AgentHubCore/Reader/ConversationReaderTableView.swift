@@ -33,13 +33,44 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     private var highlightedTimelineId: String?
     public var isLoadOlderBlockedByError: Bool = false
+    public var canLoadOlder: Bool = true
+    public var isLoadingOlder: Bool = false
     private var highlightClearTask: Task<Void, Never>?
     private var isRestoringScroll = false
     private var lastLaidOutWidth: CGFloat = 0
+    private var lastClipOriginY: CGFloat = .greatestFiniteMagnitude
+    private var upwardScrollIntent: Bool = false
+    private var lastReportedActiveTimelineId: String? = "__uninitialized__"
+    private var userAnchorRowIndices: [Int] = []
+    private var hasAnyUserImageAttachments: Bool = false
+
+    private var cachedRowHeights: [CGFloat?] = []
+    private var heightCacheWidthKey: Int = 0
+    private var heightCacheDisclosureRev: UInt64 = 0
+    private var heightCacheScheme: ColorSchemeKind = .light
+    private var heightCacheWorkspace: WorkspaceId = .codex
+
+    private static let maxCachedCells = 128
+    private var cellCacheByRowId: [String: ConversationRowCellView] = [:]
+    private var cellCacheOrder: [String] = []
 
     public struct ScrollAnchorSnapshot: Equatable, Sendable {
         public let timelineId: String
         public let deltaY: CGFloat
+        public var savedScrollTop: CGFloat
+        public var savedContentHeight: CGFloat
+
+        public init(
+            timelineId: String,
+            deltaY: CGFloat,
+            savedScrollTop: CGFloat = 0,
+            savedContentHeight: CGFloat = 0
+        ) {
+            self.timelineId = timelineId
+            self.deltaY = deltaY
+            self.savedScrollTop = savedScrollTop
+            self.savedContentHeight = savedContentHeight
+        }
     }
 
     public init(
@@ -81,11 +112,56 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             if rect.maxY > viewportTop {
                 return ScrollAnchorSnapshot(
                     timelineId: rows[idx].timelineId,
-                    deltaY: rect.minY - viewportTop
+                    deltaY: rect.minY - viewportTop,
+                    savedScrollTop: viewportTop,
+                    savedContentHeight: tableView.frame.height
                 )
             }
         }
         return nil
+    }
+
+    private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) {
+        let canCarry = (currentWidthKey > 0
+            && currentWidthKey == heightCacheWidthKey
+            && disclosureStore.revision == heightCacheDisclosureRev
+            && scheme == heightCacheScheme
+            && workspace == heightCacheWorkspace
+            && cachedRowHeights.count == rows.count)
+
+        var previousById: [String: (item: ConversationRowItem, height: CGFloat)] = [:]
+        if canCarry {
+            previousById.reserveCapacity(rows.count)
+            for (idx, oldRow) in rows.enumerated() {
+                if let h = cachedRowHeights[idx] {
+                    previousById[oldRow.id] = (oldRow, h)
+                }
+            }
+        }
+
+        var nextHeights = Array<CGFloat?>(repeating: nil, count: nextRows.count)
+        var nextUserIndices: [Int] = []
+        var anyImages = false
+
+        for (idx, r) in nextRows.enumerated() {
+            if canCarry, let prev = previousById[r.id], prev.item == r {
+                nextHeights[idx] = prev.height
+            }
+            if case let .user(msg, _, namesOnly) = r.kind {
+                nextUserIndices.append(idx)
+                if !namesOnly, let atts = msg?.attachments, atts.contains(where: { $0.kind == "image" && $0.reason == nil }) {
+                    anyImages = true
+                }
+            }
+        }
+
+        cachedRowHeights = nextHeights
+        heightCacheWidthKey = currentWidthKey
+        heightCacheDisclosureRev = disclosureStore.revision
+        heightCacheScheme = scheme
+        heightCacheWorkspace = workspace
+        userAnchorRowIndices = nextUserIndices
+        hasAnyUserImageAttachments = anyImages
     }
 
     public func isNearBottom(threshold: CGFloat = 96) -> Bool {
@@ -98,17 +174,33 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         )
     }
 
+    private func findAnchorRowIndex(for timelineId: String, in list: [ConversationRowItem]) -> Int? {
+        if let exact = list.firstIndex(where: { $0.timelineId == timelineId }) {
+            return exact
+        }
+        return list.firstIndex(where: { $0.timelineAliases.contains(timelineId) })
+    }
+
     public func updateRowsPreservingAnchor(
         _ nextRows: [ConversationRowItem],
         preferAutoFollowBottom: Bool = false,
         forceScrollToBottom: Bool = false
     ) {
+        let totalW = max(320, scrollView?.bounds.width ?? tableView?.bounds.width ?? 0)
+        let widthKey = totalW > 0 ? Int((contentColumnWidth(for: totalW) * 2).rounded()) : 0
+        rebuildRowIndexesAndCarryHeightCache(nextRows: nextRows, currentWidthKey: widthKey)
+
         guard let tableView, let clipView = scrollView?.contentView else {
             rows = nextRows
             return
         }
         let wasEmpty = rows.isEmpty
-        let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && (wasEmpty || isNearBottom()))
+        if forceScrollToBottom {
+            upwardScrollIntent = false
+            cellCacheByRowId.removeAll()
+            cellCacheOrder.removeAll()
+        }
+        let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && !upwardScrollIntent && (wasEmpty || isNearBottom()))
         let anchor = shouldFollow ? nil : captureScrollAnchor()
 
         isRestoringScroll = true
@@ -126,14 +218,19 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 let targetY = max(minY, tableView.frame.height - clipView.bounds.height)
                 clipView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
                 self.scrollView?.reflectScrolledClipView(clipView)
-            } else if let anchor,
-                      let newIdx = nextRows.firstIndex(where: { $0.timelineId == anchor.timelineId })
-            {
-                let newRect = tableView.rect(ofRow: newIdx)
-                let restoredY = max(minY, newRect.minY - anchor.deltaY)
-                clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
-                self.scrollView?.reflectScrolledClipView(clipView)
+            } else if let anchor {
+                if let newIdx = self.findAnchorRowIndex(for: anchor.timelineId, in: nextRows) {
+                    let newRect = tableView.rect(ofRow: newIdx)
+                    let restoredY = max(minY, newRect.minY - anchor.deltaY)
+                    clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
+                    self.scrollView?.reflectScrolledClipView(clipView)
+                } else if anchor.savedContentHeight > 0 && abs(tableView.frame.height - anchor.savedContentHeight) > 0.5 {
+                    let restoredY = max(minY, anchor.savedScrollTop + (tableView.frame.height - anchor.savedContentHeight))
+                    clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
+                    self.scrollView?.reflectScrolledClipView(clipView)
+                }
             }
+            self.lastClipOriginY = clipView.bounds.origin.y
         }
         isRestoringScroll = false
         refreshViewportAttachmentsAndTimeline()
@@ -141,7 +238,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public func restoreExplicitAnchor(_ anchor: ScrollAnchorSnapshot) {
         guard let tableView, let clipView = scrollView?.contentView,
-              let idx = rows.firstIndex(where: { $0.timelineId == anchor.timelineId })
+              let idx = findAnchorRowIndex(for: anchor.timelineId, in: rows)
         else { return }
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { ctx in
@@ -153,6 +250,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             let newRect = tableView.rect(ofRow: idx)
             clipView.setBoundsOrigin(NSPoint(x: 0, y: max(minY, newRect.minY - anchor.deltaY)))
             self.scrollView?.reflectScrolledClipView(clipView)
+            self.lastClipOriginY = clipView.bounds.origin.y
         }
         isRestoringScroll = false
         refreshViewportAttachmentsAndTimeline()
@@ -165,6 +263,8 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             context.duration = 0
             context.allowsImplicitAnimation = false
             self.disclosureStore.setOpen(scope: self.sessionScopeKey, stateKey: stateKey, isOpen: !currentlyOpen)
+            self.cachedRowHeights = Array<CGFloat?>(repeating: nil, count: self.rows.count)
+            self.heightCacheDisclosureRev = self.disclosureStore.revision
             if let tableView = self.tableView {
                 tableView.reloadData()
                 tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< self.rows.count))
@@ -173,12 +273,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 let minY = -(self.scrollView?.contentInsets.top ?? 0)
                 if let anchor,
                    let clipView = self.scrollView?.contentView,
-                   let idx = self.rows.firstIndex(where: { $0.timelineId == anchor.timelineId })
+                   let idx = self.findAnchorRowIndex(for: anchor.timelineId, in: self.rows)
                 {
                     let newRect = tableView.rect(ofRow: idx)
                     let restoredY = max(minY, newRect.minY - anchor.deltaY)
                     clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
                     self.scrollView?.reflectScrolledClipView(clipView)
+                    self.lastClipOriginY = restoredY
                 }
             }
         }
@@ -315,7 +416,21 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     @objc public func clipViewBoundsDidChange(_ notification: Notification) {
         guard !isRestoringScroll, let clipView = scrollView?.contentView else { return }
-        if clipView.bounds.origin.y <= 200 && !isLoadOlderBlockedByError {
+        let originY = clipView.bounds.origin.y
+        let movedUp = (lastClipOriginY == .greatestFiniteMagnitude) || (originY < lastClipOriginY - 0.5)
+        if movedUp {
+            upwardScrollIntent = true
+        } else if originY > lastClipOriginY + 0.5 {
+            upwardScrollIntent = false
+        }
+        lastClipOriginY = originY
+
+        if upwardScrollIntent
+            && originY <= 200
+            && canLoadOlder
+            && !isLoadingOlder
+            && !isLoadOlderBlockedByError
+        {
             onLoadOlderRequested?()
         }
         refreshViewportAttachmentsAndTimeline()
@@ -323,48 +438,58 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public func refreshViewportAttachmentsAndTimeline() {
         guard let tableView, let clipView = scrollView?.contentView else { return }
-        let expandedBounds = clipView.bounds.insetBy(dx: 0, dy: -AttachmentViewportManager.viewportMargin)
-        let expandedRange = tableView.rows(in: expandedBounds)
-        var inViewportAttachmentKeys = Set<String>()
 
-        if expandedRange.length > 0 {
-            for idx in expandedRange.location ..< min(rows.count, expandedRange.location + expandedRange.length) {
-                let row = rows[idx]
-                if case let .user(msg, _, namesOnly) = row.kind, !namesOnly, let attachments = msg?.attachments {
-                    for att in attachments where att.kind == "image" && att.reason == nil {
-                        let key = "\(sessionScopeKey):\(msg?.id ?? row.id):\(att.id)"
-                        inViewportAttachmentKeys.insert(key)
-                        if !sessionKey.isEmpty {
-                            attachmentViewport.ensureLoaded(
-                                key: key,
-                                request: SessionAttachmentRequest(
-                                    provider: sessionProvider,
-                                    sessionKey: sessionKey,
-                                    messageId: msg?.id ?? row.id,
-                                    attachmentId: att.id,
-                                    rootThreadId: rootThreadId
-                                ),
-                                store: store
-                            )
+        if hasAnyUserImageAttachments || attachmentViewport.loadedCount > 0 {
+            let expandedBounds = clipView.bounds.insetBy(dx: 0, dy: -AttachmentViewportManager.viewportMargin)
+            let expandedRange = tableView.rows(in: expandedBounds)
+            var inViewportAttachmentKeys = Set<String>()
+
+            if expandedRange.length > 0 {
+                for idx in expandedRange.location ..< min(rows.count, expandedRange.location + expandedRange.length) {
+                    let row = rows[idx]
+                    if case let .user(msg, _, namesOnly) = row.kind, !namesOnly, let attachments = msg?.attachments {
+                        for att in attachments where att.kind == "image" && att.reason == nil {
+                            let key = "\(sessionScopeKey):\(msg?.id ?? row.id):\(att.id)"
+                            inViewportAttachmentKeys.insert(key)
+                            if !sessionKey.isEmpty {
+                                attachmentViewport.ensureLoaded(
+                                    key: key,
+                                    request: SessionAttachmentRequest(
+                                        provider: sessionProvider,
+                                        sessionKey: sessionKey,
+                                        messageId: msg?.id ?? row.id,
+                                        attachmentId: att.id,
+                                        rootThreadId: rootThreadId
+                                    ),
+                                    store: store
+                                )
+                            }
                         }
                     }
                 }
             }
+            attachmentViewport.evictOutside(visibleKeys: inViewportAttachmentKeys)
         }
-        attachmentViewport.evictOutside(visibleKeys: inViewportAttachmentKeys)
 
-        // Compute active user timeline entry at viewport top
-        var userAnchors: [(id: String, top: CGFloat)] = []
-        for (idx, row) in rows.enumerated() {
-            if case .user = row.kind {
-                userAnchors.append((id: row.timelineId, top: tableView.rect(ofRow: idx).minY))
+        // Compute active user timeline entry using precomputed user row indices
+        if !userAnchorRowIndices.isEmpty {
+            var userAnchors: [(id: String, top: CGFloat)] = []
+            userAnchors.reserveCapacity(userAnchorRowIndices.count)
+            for idx in userAnchorRowIndices where idx < rows.count {
+                userAnchors.append((id: rows[idx].timelineId, top: tableView.rect(ofRow: idx).minY))
             }
+            let activeId = TimelineViewModel.activeUserTimelineId(
+                anchors: userAnchors,
+                viewportTop: clipView.bounds.origin.y + 28
+            )
+            if activeId != lastReportedActiveTimelineId {
+                lastReportedActiveTimelineId = activeId
+                onActiveTimelineChanged?(activeId)
+            }
+        } else if lastReportedActiveTimelineId != nil {
+            lastReportedActiveTimelineId = nil
+            onActiveTimelineChanged?(nil)
         }
-        let activeId = TimelineViewModel.activeUserTimelineId(
-            anchors: userAnchors,
-            viewportTop: clipView.bounds.origin.y + 28
-        )
-        onActiveTimelineChanged?(activeId)
     }
 
     // MARK: - NSTableViewDataSource & Delegate
@@ -376,7 +501,28 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         guard row >= 0, row < rows.count else { return 44 }
         let colWidth = contentColumnWidth(for: max(320, scrollView?.bounds.width ?? tableView.bounds.width))
-        return max(32, ceil(measureRowHeight(rows[row], width: colWidth)))
+        let widthKey = Int((colWidth * 2).rounded())
+        let discRev = disclosureStore.revision
+
+        if widthKey != heightCacheWidthKey
+            || discRev != heightCacheDisclosureRev
+            || scheme != heightCacheScheme
+            || workspace != heightCacheWorkspace
+            || cachedRowHeights.count != rows.count
+        {
+            cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
+            heightCacheWidthKey = widthKey
+            heightCacheDisclosureRev = discRev
+            heightCacheScheme = scheme
+            heightCacheWorkspace = workspace
+        }
+
+        if let cached = cachedRowHeights[row] {
+            return cached
+        }
+        let computed = max(32, ceil(measureRowHeight(rows[row], width: colWidth)))
+        cachedRowHeights[row] = computed
+        return computed
     }
 
     public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
@@ -385,16 +531,30 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row >= 0, row < rows.count else { return nil }
+        let item = rows[row]
         let identifier = NSUserInterfaceItemIdentifier("ConversationRowCell")
-        let cell = (tableView.makeView(withIdentifier: identifier, owner: nil) as? ConversationRowCellView)
-            ?? ConversationRowCellView(identifier: identifier)
+        let cell: ConversationRowCellView
+        if let cached = cellCacheByRowId[item.id], cached.superview == nil {
+            cell = cached
+        } else {
+            let created = (tableView.makeView(withIdentifier: identifier, owner: nil) as? ConversationRowCellView)
+                ?? ConversationRowCellView(identifier: identifier)
+            if cellCacheByRowId[item.id] == nil {
+                if cellCacheOrder.count >= Self.maxCachedCells, let oldest = cellCacheOrder.first {
+                    cellCacheOrder.removeFirst()
+                    cellCacheByRowId.removeValue(forKey: oldest)
+                }
+                cellCacheOrder.append(item.id)
+            }
+            cellCacheByRowId[item.id] = created
+            cell = created
+        }
         let totalWidth = max(320, scrollView?.bounds.width ?? tableView.bounds.width)
         let insets = LayoutMetrics.readingHorizontalInsets(
             availableWidth: totalWidth,
             hasTimelineRail: hasTimelineRail,
             isSubagent: isSubagent
         )
-        let item = rows[row]
         cell.configure(
             item: item,
             leadingInset: insets.leading,
@@ -831,6 +991,18 @@ public final class ConversationRowCellView: NSTableCellView {
     private var configuredContentWidth: CGFloat = 0
     private var stackConstraints: [NSLayoutConstraint] = []
 
+    private struct CellConfigSignature: Equatable {
+        let item: ConversationRowItem
+        let leadingInset: CGFloat
+        let contentWidth: CGFloat
+        let highlighted: Bool
+        let scheme: ColorSchemeKind
+        let workspace: WorkspaceId
+        let disclosureRev: UInt64
+    }
+
+    private var lastConfiguredSignature: CellConfigSignature?
+
     public init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
@@ -930,6 +1102,21 @@ public final class ConversationRowCellView: NSTableCellView {
         highlighted: Bool,
         coordinator: ConversationTableCoordinator
     ) {
+        let nextSig = CellConfigSignature(
+            item: item,
+            leadingInset: leadingInset,
+            contentWidth: contentWidth,
+            highlighted: highlighted,
+            scheme: coordinator.scheme,
+            workspace: coordinator.workspace,
+            disclosureRev: coordinator.disclosureStore.revision
+        )
+        if lastConfiguredSignature == nextSig, !containerStack.arrangedSubviews.isEmpty {
+            positionFloatingCopyButton()
+            return
+        }
+        lastConfiguredSignature = nextSig
+
         configuredLeadingInset = leadingInset
         configuredContentWidth = contentWidth
         floatingSideCopyButton?.removeFromSuperview()
@@ -1354,7 +1541,7 @@ public final class ConversationRowCellView: NSTableCellView {
         let measuredH = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: innerW))
         let bodyBoxH = min(300, max(32, measuredH + 20))
 
-        let scroll = NSScrollView()
+        let scroll = PassthroughInnerScrollView(allowsVerticalScroll: true)
         scroll.hasVerticalScroller = measuredH + 20 > bodyBoxH
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
@@ -1691,11 +1878,12 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) -> ReaderSelectableTextView {
         let palette = coordinator.palette
-        let h = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width))
-        let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: width, height: h))
+        let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: width, height: 24))
         tv.quoteBackgroundColor = palette.surface.nsColor
         tv.quoteAccentColor = palette.accent.nsColor
         tv.applyAttributedText(attr, width: width)
+        let h = max(22, tv.measuredUsedHeight())
+        tv.setFrameSize(NSSize(width: width, height: h))
         tv.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             tv.widthAnchor.constraint(equalToConstant: width),
@@ -1741,7 +1929,7 @@ public final class ConversationRowCellView: NSTableCellView {
             coordinator?.onCopyFeedback?("已复制代码")
         }
 
-        let scroll = NSScrollView()
+        let scroll = PassthroughInnerScrollView(allowsVerticalScroll: false)
         scroll.hasHorizontalScroller = true
         scroll.hasVerticalScroller = false
         scroll.autohidesScrollers = true
@@ -1805,7 +1993,7 @@ public final class ConversationRowCellView: NSTableCellView {
         let layout = ConversationTableCoordinator.measureTableLayout(headers: headers, rows: rows, maxWidth: width)
         let visibleW = min(width, layout.totalWidth)
 
-        let scroll = NSScrollView()
+        let scroll = PassthroughInnerScrollView(allowsVerticalScroll: false)
         scroll.hasHorizontalScroller = layout.totalWidth > visibleW
         scroll.hasVerticalScroller = false
         scroll.autohidesScrollers = true
@@ -3081,7 +3269,7 @@ public final class ConversationRowCellView: NSTableCellView {
         let contentH = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: innerW))
         let boxH = min(240, max(46, contentH + 22))
 
-        let scroll = NSScrollView()
+        let scroll = PassthroughInnerScrollView(allowsVerticalScroll: true)
         scroll.hasVerticalScroller = contentH + 22 > boxH
         scroll.autohidesScrollers = true
         scroll.drawsBackground = true
@@ -3387,6 +3575,50 @@ private final class AppKitRunningRingView: NSView {
     }
 }
 
+@MainActor
+private final class PassthroughInnerScrollView: NSScrollView {
+    let allowsVerticalScroll: Bool
+
+    init(allowsVerticalScroll: Bool) {
+        self.allowsVerticalScroll = allowsVerticalScroll
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if !allowsVerticalScroll {
+            // Horizontal-only code blocks & tables must NEVER trap vertical conversation scrolling!
+            if !hasHorizontalScroller || abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+                nextResponder?.scrollWheel(with: event)
+                return
+            }
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let docH = documentView?.frame.height ?? 0
+        let clipH = contentView.bounds.height
+        let maxScroll = max(0, docH - clipH)
+        // Forward momentum scrolls or at-boundary vertical scrolls to the outer conversation NSScrollView
+        if !hasVerticalScroller || maxScroll <= 0.5 || event.momentumPhase != [] {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        let originY = contentView.bounds.origin.y
+        if (event.scrollingDeltaY > 0 && originY <= 0.5)
+            || (event.scrollingDeltaY < 0 && originY >= maxScroll - 0.5)
+        {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+}
+
 // MARK: - SwiftUI Representable Wrapping NSScrollView + Headerless View-Based NSTableView
 
 public struct ConversationReaderTableView: NSViewRepresentable {
@@ -3401,6 +3633,8 @@ public struct ConversationReaderTableView: NSViewRepresentable {
     public let cwd: String?
     public let hasTimelineRail: Bool
     public let isSubagent: Bool
+    public var canLoadOlder: Bool
+    public var isLoadingOlder: Bool
     public var isLoadOlderBlockedByError: Bool
 
     public init(
@@ -3415,6 +3649,8 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         cwd: String? = nil,
         hasTimelineRail: Bool = true,
         isSubagent: Bool = false,
+        canLoadOlder: Bool = true,
+        isLoadingOlder: Bool = false,
         isLoadOlderBlockedByError: Bool = false
     ) {
         self.coordinator = coordinator
@@ -3428,6 +3664,8 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         self.cwd = cwd
         self.hasTimelineRail = hasTimelineRail
         self.isSubagent = isSubagent
+        self.canLoadOlder = canLoadOlder
+        self.isLoadingOlder = isLoadingOlder
         self.isLoadOlderBlockedByError = isLoadOlderBlockedByError
     }
 
@@ -3437,6 +3675,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
+        scroll.wantsLayer = true
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
@@ -3474,6 +3713,8 @@ public struct ConversationReaderTableView: NSViewRepresentable {
             object: scroll.contentView
         )
 
+        coordinator.canLoadOlder = canLoadOlder
+        coordinator.isLoadingOlder = isLoadingOlder
         coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
         coordinator.scrollView = scroll
         coordinator.tableView = table
@@ -3484,6 +3725,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
         let sessionChanged = (coordinator.sessionScopeKey != sessionScopeKey)
+        let themeOrWorkspaceChanged = (coordinator.scheme != scheme || coordinator.workspace != workspace)
         coordinator.scheme = scheme
         coordinator.workspace = workspace
         coordinator.sessionScopeKey = sessionScopeKey
@@ -3493,13 +3735,15 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         coordinator.cwd = cwd
         coordinator.hasTimelineRail = hasTimelineRail
         coordinator.isSubagent = isSubagent
+        coordinator.canLoadOlder = canLoadOlder
+        coordinator.isLoadingOlder = isLoadingOlder
         coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
         nsView.backgroundColor = coordinator.palette.background.nsColor
 
-        if coordinator.rows != rows || sessionChanged {
+        if sessionChanged || themeOrWorkspaceChanged || coordinator.rows != rows {
             coordinator.updateRowsPreservingAnchor(
                 rows,
-                preferAutoFollowBottom: true,
+                preferAutoFollowBottom: !themeOrWorkspaceChanged,
                 forceScrollToBottom: sessionChanged
             )
         }

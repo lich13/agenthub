@@ -177,39 +177,78 @@ public enum LucideVectorCatalog {
         }
     }
 
+    private static let pathCacheLock = NSLock()
+    nonisolated(unsafe) private static var pathCache: [LucideIconName: [CGPath]] = [:]
+    nonisolated(unsafe) private static let imageCache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 512
+        return c
+    }()
+
+    public static func cachedCGPaths(for icon: LucideIconName) -> [CGPath] {
+        pathCacheLock.lock()
+        if let existing = pathCache[icon] {
+            pathCacheLock.unlock()
+            return existing
+        }
+        pathCacheLock.unlock()
+
+        let built: [CGPath] = Self.shapes(for: icon).map { shape in
+            switch shape {
+            case let .path(d):
+                SVGPathParser.parse(d)
+            case let .circle(cx, cy, r):
+                CGPath(ellipseIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2), transform: nil)
+            case let .ellipse(cx, cy, rx, ry):
+                CGPath(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2), transform: nil)
+            case let .rect(x, y, width, height, rx, ry):
+                CGPath(roundedRect: CGRect(x: x, y: y, width: width, height: height), cornerWidth: rx, cornerHeight: ry, transform: nil)
+            case let .line(x1, y1, x2, y2):
+                {
+                    let p = CGMutablePath()
+                    p.move(to: CGPoint(x: x1, y: y1))
+                    p.addLine(to: CGPoint(x: x2, y: y2))
+                    return p
+                }()
+            }
+        }
+        pathCacheLock.lock()
+        pathCache[icon] = built
+        pathCacheLock.unlock()
+        return built
+    }
+
     public static func nsImage(
         for icon: LucideIconName,
         size: CGFloat,
         color: NSColor,
         strokeWidth: CGFloat = 2.0
     ) -> NSImage {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        let key = String(
+            format: "%@:%.1f:%.1f:%.3f:%.3f:%.3f:%.3f",
+            icon.rawValue,
+            size,
+            strokeWidth,
+            srgb.redComponent,
+            srgb.greenComponent,
+            srgb.blueComponent,
+            srgb.alphaComponent
+        ) as NSString
+        if let cached = imageCache.object(forKey: key) {
+            return cached
+        }
+        let paths = Self.cachedCGPaths(for: icon)
         let img = NSImage(size: NSSize(width: size, height: size), flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             let scale = min(rect.width, rect.height) / 24.0
             var transform = CGAffineTransform(scaleX: scale, y: scale)
             ctx.saveGState()
-            ctx.setStrokeColor(color.cgColor)
+            ctx.setStrokeColor(srgb.cgColor)
             ctx.setLineWidth(strokeWidth * scale)
             ctx.setLineCap(.round)
             ctx.setLineJoin(.round)
-            for shape in Self.shapes(for: icon) {
-                let rawPath: CGPath = switch shape {
-                case let .path(d):
-                    SVGPathParser.parse(d)
-                case let .circle(cx, cy, r):
-                    CGPath(ellipseIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2), transform: nil)
-                case let .ellipse(cx, cy, rx, ry):
-                    CGPath(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2), transform: nil)
-                case let .rect(x, y, width, height, rx, ry):
-                    CGPath(roundedRect: CGRect(x: x, y: y, width: width, height: height), cornerWidth: rx, cornerHeight: ry, transform: nil)
-                case let .line(x1, y1, x2, y2):
-                    {
-                        let p = CGMutablePath()
-                        p.move(to: CGPoint(x: x1, y: y1))
-                        p.addLine(to: CGPoint(x: x2, y: y2))
-                        return p
-                    }()
-                }
+            for rawPath in paths {
                 if let scaled = rawPath.copy(using: &transform) {
                     ctx.addPath(scaled)
                     ctx.strokePath()
@@ -219,6 +258,7 @@ public enum LucideVectorCatalog {
             return true
         }
         img.isTemplate = false
+        imageCache.setObject(img, forKey: key)
         return img
     }
 }
@@ -239,24 +279,7 @@ public struct LucideIcon: View {
             let scale = min(canvasSize.width, canvasSize.height) / 24.0
             var transform = CGAffineTransform(scaleX: scale, y: scale)
             let style = StrokeStyle(lineWidth: strokeWidth * scale, lineCap: .round, lineJoin: .round)
-            for shape in LucideVectorCatalog.shapes(for: name) {
-                let rawPath: CGPath = switch shape {
-                case let .path(d):
-                    SVGPathParser.parse(d)
-                case let .circle(cx, cy, r):
-                    CGPath(ellipseIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2), transform: nil)
-                case let .ellipse(cx, cy, rx, ry):
-                    CGPath(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2), transform: nil)
-                case let .rect(x, y, width, height, rx, ry):
-                    CGPath(roundedRect: CGRect(x: x, y: y, width: width, height: height), cornerWidth: rx, cornerHeight: ry, transform: nil)
-                case let .line(x1, y1, x2, y2):
-                    {
-                        let p = CGMutablePath()
-                        p.move(to: CGPoint(x: x1, y: y1))
-                        p.addLine(to: CGPoint(x: x2, y: y2))
-                        return p
-                    }()
-                }
+            for rawPath in LucideVectorCatalog.cachedCGPaths(for: name) {
                 if let scaled = rawPath.copy(using: &transform) {
                     context.stroke(Path(scaled), with: .foreground, style: style)
                 }

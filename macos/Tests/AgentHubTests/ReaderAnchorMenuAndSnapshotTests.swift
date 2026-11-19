@@ -28,7 +28,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             latestReplyText: "Reply", onRename: noop, onToggleArchive: noop,
             onCopy: copyNoop, onRevealInFinder: revealNoop, onDelete: noop
         )
-        XCTAssertEqual(codexHeader.map(\.label), ["复制答复", "改名", "取消归档", "复制 ID", "复制路径", "复制恢复命令", "在 Finder 中显示", "永久删除"])
+        XCTAssertEqual(codexHeader.map(\.label), ["改名", "取消归档", "复制答复", "复制 ID", "复制路径", "复制恢复命令", "在 Finder 中显示", "永久删除"])
 
         // Claude uses 删除任务文件 and 复制文件路径 + 复制恢复命令
         let claudeRow = ProviderMenuMatrixBuilder.buildActions(
@@ -931,5 +931,118 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 "ReaderSelectableTextView rendered blank glyphs for text: \(tv.string)"
             )
         }
+    }
+
+    // MARK: - 6. TaskMenu Popover & Upward Scroll Anchor Alias / Load-Older Gating
+
+    @MainActor
+    func testTaskMenuPopoverAndUpwardScrollAnchorAliasAndLoadGating() throws {
+        let palette = DesignPalette.resolve(scheme: .light, workspace: .codex)
+        let hostWin = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 900, height: 700),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        hostWin.orderBack(nil)
+
+        let menuActions = ProviderMenuMatrixBuilder.buildActions(
+            provider: .codex,
+            isHeaderMenu: false,
+            isLocalMachine: false,
+            id: "th-ctx-1",
+            path: "/remote/.codex/sessions/1.jsonl",
+            cwd: "/remote/repo",
+            archived: true,
+            canRename: false,
+            canArchive: true,
+            canDelete: true,
+            busy: false,
+            latestReplyText: nil,
+            onRename: {},
+            onToggleArchive: {},
+            onCopy: { _, _ in },
+            onRevealInFinder: { _ in },
+            onDelete: {}
+        )
+        XCTAssertEqual(menuActions.first(where: { $0.id == "rename" })?.reason, "已归档线程不可改名")
+        XCTAssertEqual(menuActions.first(where: { $0.id == "reveal" })?.reason, "仅可在本机 Finder 中显示本机会话")
+        XCTAssertEqual(menuActions.first(where: { $0.id == "copy-resume" })?.icon, .copy)
+
+        AgentHubTaskMenuPresenter.shared.presentAtScreenTopLeft(
+            NSPoint(x: 240, y: 500),
+            in: hostWin,
+            actions: menuActions,
+            palette: palette
+        )
+        XCTAssertTrue(AgentHubTaskMenuPresenter.shared.isPresented)
+        AgentHubTaskMenuPresenter.shared.dismiss()
+        XCTAssertFalse(AgentHubTaskMenuPresenter.shared.isPresented)
+
+        // Upward scroll: verify alias-merged anchor restoration + canLoadOlder gating
+        let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
+        let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.up.\(UUID().uuidString)")!
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        let coordinator = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())
+
+        var loadOlderTriggerCount = 0
+        coordinator.onLoadOlderRequested = { loadOlderTriggerCount += 1 }
+        coordinator.canLoadOlder = false
+
+        let initialRows: [ConversationRowItem] = (10 ..< 30).map { i in
+            ConversationRowItem(
+                id: "r-\(i)",
+                timelineId: "tl-\(i)",
+                kind: .assistant(markdown: "Paragraph \(i)\n\nDetail line \(i)", foldInstructions: false)
+            )
+        }
+        let reader = ConversationReaderTableView(
+            coordinator: coordinator,
+            rows: initialRows,
+            scheme: .light,
+            workspace: .codex,
+            sessionScopeKey: "local:codex:up-1",
+            sessionProvider: .codex,
+            sessionKey: "up-1",
+            canLoadOlder: false,
+            isLoadingOlder: false
+        )
+        let host = NSHostingView(rootView: reader.frame(width: 860, height: 500))
+        host.frame = NSRect(x: 0, y: 0, width: 860, height: 500)
+        hostWin.contentView = host
+        host.layoutSubtreeIfNeeded()
+
+        let clip = try XCTUnwrap(coordinator.scrollView?.contentView)
+        clip.setBoundsOrigin(NSPoint(x: 0, y: 300))
+        coordinator.scrollView?.reflectScrolledClipView(clip)
+        clip.setBoundsOrigin(NSPoint(x: 0, y: 120))
+        coordinator.scrollView?.reflectScrolledClipView(clip)
+        XCTAssertEqual(loadOlderTriggerCount, 0, "canLoadOlder == false must NEVER spawn load-older tasks on upward scroll")
+
+        // Prepend 10 older rows AND merge the anchor row's primary timelineId into timelineAliases:
+        let anchorBefore = try XCTUnwrap(coordinator.captureScrollAnchor())
+        var prepended: [ConversationRowItem] = (0 ..< 10).map { i in
+            ConversationRowItem(
+                id: "older-\(i)",
+                timelineId: "older-tl-\(i)",
+                kind: .assistant(markdown: "Older \(i)\n\nMore text \(i)", foldInstructions: false)
+            )
+        }
+        for r in initialRows {
+            if r.timelineId == anchorBefore.timelineId {
+                prepended.append(ConversationRowItem(
+                    id: "merged-\(r.id)",
+                    timelineId: "merged-group-id",
+                    timelineAliases: [r.timelineId],
+                    kind: r.kind
+                ))
+            } else {
+                prepended.append(r)
+            }
+        }
+        coordinator.updateRowsPreservingAnchor(prepended, preferAutoFollowBottom: false)
+        let anchorAfter = try XCTUnwrap(coordinator.captureScrollAnchor())
+        XCTAssertEqual(anchorAfter.timelineId, "merged-group-id")
+        XCTAssertEqual(anchorAfter.deltaY, anchorBefore.deltaY, accuracy: 0.0, "Merged alias row must preserve 0.0pt scroll offset on prepend!")
     }
 }

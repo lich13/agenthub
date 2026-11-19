@@ -58,7 +58,7 @@ public struct UnifiedProviderWorkspaceView: View {
     @State private var detailLoading: Bool = false
     @State private var detailLoadedForKey: String?
     @State private var timelineEntries: [TimelineEntry] = []
-    @State private var activeTimelineId: String?
+    @StateObject private var timelineTracker = TimelineActiveTracker()
     @State private var subagents: SubagentCollection?
     @State private var beforeCursor: String?
     @State private var hasMoreOlder: Bool = false
@@ -578,24 +578,8 @@ public struct UnifiedProviderWorkspaceView: View {
 
     private func sessionRowView(_ item: UnifiedSessionSummaryItem, partition: SessionSelectionPartition) -> some View {
         let partState = partitionedSelection.state(for: partition)
-        let partVisibleKeys = (partition == .archived ? archivedItems : activeItems).map(\.sessionKey)
-        let partOps = batchOperations(for: partition)
         let isSelected = (selectedItem?.sessionKey == item.sessionKey)
         let isMulti = partState.keys.contains(item.sessionKey)
-        let batchMenu = ProviderMenuMatrixBuilder.buildBatchContextMenuActions(
-            selectedCount: partState.keys.count,
-            operations: partOps,
-            busy: batchBusy,
-            onPrepare: { op in Task { await prepareBatch(operation: op, keys: partState.keys, partition: partition) } },
-            onClear: {
-                partitionedSelection.clear(partition: partition)
-                batchPreview = nil
-                batchResult = nil
-                batchPrepareError = nil
-                batchExecuteError = nil
-            }
-        )
-        let rowActions = buildMenuActionsForItem(item, isHeaderMenu: false)
 
         return RenameableSessionRowView(
             sessionKey: item.sessionKey,
@@ -614,8 +598,29 @@ public struct UnifiedProviderWorkspaceView: View {
             canRename: item.canRename,
             renameBlockReason: item.renameBlockReason,
             externalRenameRequestId: renameRequestSeqByKey[item.sessionKey, default: 0],
-            rowMenuActions: rowActions,
-            batchMenuActions: batchMenu,
+            hasRowMenu: true,
+            batchSelectedCount: partState.keys.count,
+            makeRowMenuActions: {
+                buildMenuActionsForItem(item, isHeaderMenu: false)
+            },
+            makeBatchMenuActions: {
+                let currentState = partitionedSelection.state(for: partition)
+                return ProviderMenuMatrixBuilder.buildBatchContextMenuActions(
+                    selectedCount: currentState.keys.count,
+                    operations: batchOperations(for: partition),
+                    busy: batchBusy,
+                    onPrepare: { op in
+                        Task { await prepareBatch(operation: op, keys: currentState.keys, partition: partition) }
+                    },
+                    onClear: {
+                        partitionedSelection.clear(partition: partition)
+                        batchPreview = nil
+                        batchResult = nil
+                        batchPrepareError = nil
+                        batchExecuteError = nil
+                    }
+                )
+            },
             onRowClick: { click in
                 if provider == .grokbot {
                     if !(click.ctrlKey && click.detail != 0) {
@@ -625,6 +630,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     return
                 }
                 guard !batchBusy else { return }
+                let partVisibleKeys = (partition == .archived ? archivedItems : activeItems).map(\.sessionKey)
                 let shouldOpen = partitionedSelection.click(
                     partition: partition,
                     visible: partVisibleKeys,
@@ -646,6 +652,7 @@ public struct UnifiedProviderWorkspaceView: View {
             },
             onToggleCheckbox: {
                 guard !batchBusy else { return }
+                let partVisibleKeys = (partition == .archived ? archivedItems : activeItems).map(\.sessionKey)
                 _ = partitionedSelection.click(
                     partition: partition,
                     visible: partVisibleKeys,
@@ -702,16 +709,12 @@ public struct UnifiedProviderWorkspaceView: View {
                             },
                             onCancelInlineRename: { headerInlineRename = false }
                         ) {
-                            let headerActions = buildMenuActionsForItem(item, isHeaderMenu: true)
-                            let entries = headerActions.map { act in
-                                NativeMenuEntry(
-                                    title: act.label,
-                                    enabled: !act.disabled,
-                                    action: act.run
-                                )
-                            }
-                            AnchoredMenuButton(entries: entries, accessibilityLabel: "会话菜单") {
-                                LucideIcon(.moreHorizontal, size: 17)
+                            TaskMenuTriggerButton(
+                                rightAligned: true,
+                                accessibilityLabel: "会话菜单",
+                                makeActions: { buildMenuActionsForItem(item, isHeaderMenu: true) }
+                            ) {
+                                LucideIcon(.moreHorizontal, size: 18)
                                     .foregroundStyle(palette.textMuted.color)
                                     .frame(width: 32, height: 32)
                                     .contentShape(Rectangle())
@@ -854,6 +857,8 @@ public struct UnifiedProviderWorkspaceView: View {
                                             cwd: item.cwd,
                                             hasTimelineRail: !timelineEntries.isEmpty,
                                             isSubagent: false,
+                                            canLoadOlder: timelineWindow.isActive ? timelineWindow.hasMoreOlder : (hasMoreOlder && beforeCursor != nil),
+                                            isLoadingOlder: loadingOlder || timelineWindow.busy,
                                             isLoadOlderBlockedByError: loadOlderError != nil
                                         )
                                     }
@@ -871,9 +876,9 @@ public struct UnifiedProviderWorkspaceView: View {
                                     }
 
                                     if !timelineEntries.isEmpty {
-                                        TimelineRailView(
+                                        TimelineRailObserverView(
+                                            tracker: timelineTracker,
                                             entries: timelineEntries,
-                                            activeId: activeTimelineId,
                                             availableWidth: mainColumnWidth,
                                             loadOlder: (timelineWindow.isActive ? timelineWindow.hasMoreOlder : hasMoreOlder) ? {
                                                 Task {
@@ -1032,9 +1037,11 @@ public struct UnifiedProviderWorkspaceView: View {
         c.onCopyFeedback = { text in
             feedbackMessage = text
         }
-        c.onActiveTimelineChanged = { id in
+        c.onActiveTimelineChanged = { [weak timelineTracker] id in
             DispatchQueue.main.async {
-                if activeTimelineId != id { activeTimelineId = id }
+                if timelineTracker?.activeId != id {
+                    timelineTracker?.activeId = id
+                }
             }
         }
         coordinatorRef = c
@@ -1074,6 +1081,7 @@ public struct UnifiedProviderWorkspaceView: View {
             cwd: item.cwd,
             archived: item.archived,
             canRename: item.canRename,
+            renameBlockReason: item.renameBlockReason,
             canArchive: item.canArchive,
             canDelete: item.canDelete,
             busy: batchBusy,
@@ -1086,7 +1094,19 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             },
             onToggleArchive: supportsArchive ? {
-                Task { await toggleSingleArchive(item) }
+                if provider == .codex && !isHeaderMenu {
+                    // Codex sidebar row menu uses prepareSingle preview confirmation (ChatWorkspace.tsx:318)
+                    let targetPartition: SessionSelectionPartition = item.archived ? .archived : .active
+                    Task {
+                        await prepareBatch(
+                            operation: item.archived ? .restore : .archive,
+                            keys: [item.sessionKey],
+                            partition: targetPartition
+                        )
+                    }
+                } else {
+                    Task { await toggleSingleArchive(item) }
+                }
             } : nil,
             onCopy: { text, msg in
                 NSPasteboard.general.clearContents()
@@ -1095,7 +1115,11 @@ public struct UnifiedProviderWorkspaceView: View {
             },
             onRevealInFinder: { path in
                 Task {
-                    try? await FileOpenerService.revealPaths([path])
+                    do {
+                        try await FileOpenerService.revealPaths([path])
+                    } catch {
+                        feedbackMessage = "无法在 Finder 中显示，请检查文件是否仍存在"
+                    }
                 }
             },
             onDelete: provider == .grokbot ? nil : {
@@ -1279,24 +1303,27 @@ public struct UnifiedProviderWorkspaceView: View {
                 ) else { return }
                 let slot = threadStore.applyDetail(detail)
                 incomingHistory = detail.history
-                subagents = slot.subagents
-                hasMoreOlder = slot.hasMoreBlocks
-                beforeCursor = slot.beforeCursor
-                rows = ConversationRowBuilder.buildCodexRows(
+                if subagents != slot.subagents { subagents = slot.subagents }
+                if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let nextRows = ConversationRowBuilder.buildCodexRows(
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
                     planFallbackTitle: item.title,
                     subagentsSupported: store.capabilities.threadSubagents,
                     revealedBlockId: revealedPositionKey
                 )
-                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .codex,
                     sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                latestReplyText = rows.reversed().compactMap { r -> String? in
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                let nextReply = nextRows.reversed().compactMap { r -> String? in
                     if case let .assistant(md, _) = r.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }
                     return nil
                 }.first
+                if latestReplyText != nextReply { latestReplyText = nextReply }
 
             case .claudeCode:
                 struct Req: Encodable { let sessionKey: String; let limit: Int }
@@ -1315,15 +1342,18 @@ public struct UnifiedProviderWorkspaceView: View {
                     subagents: detail.subagents
                 )
                 incomingHistory = detail.history
-                subagents = slot.subagents
-                hasMoreOlder = slot.hasMore
-                beforeCursor = slot.beforeCursor
-                rows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
-                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                if subagents != slot.subagents { subagents = slot.subagents }
+                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let nextRows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .claudeCode,
                     sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if latestReplyText != nextReply { latestReplyText = nextReply }
 
             case .grok:
                 struct Req: Encodable { let id: String; let limit: Int }
@@ -1341,17 +1371,20 @@ public struct UnifiedProviderWorkspaceView: View {
                     timeline: detail.timeline
                 )
                 incomingHistory = detail.history
-                subagents = nil
-                hasMoreOlder = slot.hasMore
-                beforeCursor = slot.beforeCursor
-                rows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
-                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                if subagents != nil { subagents = nil }
+                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let nextRows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .grok,
                     sources: slot.events.enumerated().map { idx, ev in
                         TimelineSourceItem(id: ev.id ?? ev.userMessage?.id ?? "grok-\(idx)", role: nil, kind: ev.kind, text: ev.text, userMessage: ev.userMessage)
                     }
                 )
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if latestReplyText != nextReply { latestReplyText = nextReply }
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
@@ -1374,15 +1407,18 @@ public struct UnifiedProviderWorkspaceView: View {
                     timeline: detail.timeline
                 )
                 incomingHistory = detail.history
-                subagents = nil
-                hasMoreOlder = slot.hasMore
-                beforeCursor = slot.beforeCursor
-                rows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
-                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                if subagents != nil { subagents = nil }
+                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let nextRows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: provider,
                     sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                latestReplyText = rows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
+                if latestReplyText != nextReply { latestReplyText = nextReply }
             }
 
             currentDetailHistory = incomingHistory
@@ -1555,6 +1591,13 @@ public struct UnifiedProviderWorkspaceView: View {
 
     private func toggleSingleArchive(_ item: UnifiedSessionSummaryItem) async {
         do {
+            let nextFallbackKey: String? = {
+                guard !item.archived, selectedKey == item.sessionKey, !archivedOpen else { return nil }
+                guard let idx = activeItems.firstIndex(where: { $0.sessionKey == item.sessionKey }) else { return nil }
+                if idx + 1 < activeItems.count { return activeItems[idx + 1].sessionKey }
+                if idx > 0 { return activeItems[idx - 1].sessionKey }
+                return nil
+            }()
             if provider == .codex {
                 struct Args: Encodable { let threadId: String }
                 struct Ack: Decodable { let jobId: String? }
@@ -1571,6 +1614,10 @@ public struct UnifiedProviderWorkspaceView: View {
                 let _: ProviderSessionSummary = try await store.rpc("\(prefix).\(action)", args: Wrap(request: .init(sessionKey: item.sessionKey)))
             }
             feedbackMessage = item.archived ? "已恢复线程" : "已归档线程"
+            if !item.archived && selectedKey == item.sessionKey && !archivedOpen {
+                selectedKey = nextFallbackKey
+                headerInlineRename = false
+            }
             await fetchSessionList()
         } catch {
             errorMessage = error.localizedDescription
@@ -2040,6 +2087,31 @@ public struct UnifiedProviderWorkspaceView: View {
             canArchive: s.canArchive,
             canDelete: s.canDelete,
             storageSize: s.storageSize
+        )
+    }
+}
+
+@MainActor
+private final class TimelineActiveTracker: ObservableObject {
+    @Published var activeId: String? = nil
+}
+
+private struct TimelineRailObserverView: View {
+    @ObservedObject var tracker: TimelineActiveTracker
+    let entries: [TimelineEntry]
+    let availableWidth: CGFloat
+    let loadOlder: (() -> Void)?
+    let loadingOlder: Bool
+    let onSelectEntry: (TimelineEntry) -> Void
+
+    var body: some View {
+        TimelineRailView(
+            entries: entries,
+            activeId: tracker.activeId,
+            availableWidth: availableWidth,
+            loadOlder: loadOlder,
+            loadingOlder: loadingOlder,
+            onSelectEntry: onSelectEntry
         )
     }
 }

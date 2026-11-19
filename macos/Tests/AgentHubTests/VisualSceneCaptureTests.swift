@@ -112,6 +112,39 @@ final class VisualSceneCaptureTests: XCTestCase {
         store.activeWorkspace = .ops
         try await pumpMainRunLoop(ms: 450)
         try captureWindow(window, host: host, to: "\(outDir)/swift-08-settings-light.png")
+
+        // Scene 9: Right-Click ContextTaskMenu Card (.task-menu-items)
+        let menuActions = ProviderMenuMatrixBuilder.buildActions(
+            provider: .codex,
+            isHeaderMenu: false,
+            isLocalMachine: true,
+            id: "th-visual-1",
+            path: "/workspace/.codex/sessions/rollout-1.jsonl",
+            cwd: "/workspace/AgentHub",
+            archived: false,
+            canRename: true,
+            canArchive: true,
+            canDelete: true,
+            busy: false,
+            latestReplyText: nil,
+            onRename: {},
+            onToggleArchive: {},
+            onCopy: { _, _ in },
+            onRevealInFinder: { _ in },
+            onDelete: {}
+        )
+        let menuPalette = DesignPalette.resolve(scheme: .light, workspace: .codex)
+        AgentHubTaskMenuPresenter.shared.presentAtScreenTopLeft(
+            NSPoint(x: 240, y: 760),
+            in: window,
+            actions: menuActions,
+            palette: menuPalette
+        )
+        try await pumpMainRunLoop(ms: 80)
+        if let panel = window.childWindows?.first, let menuView = panel.contentView {
+            try captureWindow(panel, host: menuView, to: "\(outDir)/swift-09-codex-context-menu.png")
+        }
+        AgentHubTaskMenuPresenter.shared.dismiss()
     }
 
     private final class WritableModeBox: @unchecked Sendable {

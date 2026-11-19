@@ -9,6 +9,7 @@ public struct SessionMenuAction: Identifiable {
     public let icon: LucideIconName
     public let danger: Bool
     public let disabled: Bool
+    public let reason: String?
     public let run: () -> Void
 
     public init(
@@ -17,6 +18,7 @@ public struct SessionMenuAction: Identifiable {
         icon: LucideIconName,
         danger: Bool = false,
         disabled: Bool = false,
+        reason: String? = nil,
         run: @escaping () -> Void
     ) {
         self.id = id
@@ -24,6 +26,7 @@ public struct SessionMenuAction: Identifiable {
         self.icon = icon
         self.danger = danger
         self.disabled = disabled
+        self.reason = reason
         self.run = run
     }
 }
@@ -38,8 +41,11 @@ public enum ProviderMenuMatrixBuilder {
         cwd: String,
         archived: Bool,
         canRename: Bool,
+        renameBlockReason: String? = nil,
         canArchive: Bool,
+        archiveBlockReason: String? = nil,
         canDelete: Bool,
+        deleteBlockReason: String? = nil,
         busy: Bool,
         latestReplyText: String?,
         onRename: (() -> Void)?,
@@ -49,29 +55,45 @@ public enum ProviderMenuMatrixBuilder {
         onDelete: (() -> Void)?
     ) -> [SessionMenuAction] {
         var list: [SessionMenuAction] = []
+        let resolvedRenameReason: String? = !canRename
+            ? (renameBlockReason ?? (archived ? "已归档线程不可改名" : "当前线程不可改名"))
+            : nil
+        let revealReason: String? = !isLocalMachine
+            ? "仅可在本机 Finder 中显示本机会话"
+            : (path.isEmpty ? "当前会话暂无本地文件路径" : nil)
 
-        if isHeaderMenu, let onCopyReply = latestReplyText {
-            list.append(SessionMenuAction(
-                id: "copy-reply",
-                label: "复制答复",
-                icon: .copy,
-                disabled: onCopyReply.isEmpty,
-                run: { onCopy(onCopyReply, "已复制答复") }
-            ))
-        } else if isHeaderMenu {
-            list.append(SessionMenuAction(
-                id: "copy-reply",
-                label: "复制答复",
-                icon: .copy,
-                disabled: true,
-                run: {}
-            ))
+        func appendHeaderCopyReplyIfNeeded() {
+            guard isHeaderMenu else { return }
+            if let reply = latestReplyText, !reply.isEmpty {
+                list.append(SessionMenuAction(
+                    id: "copy-reply",
+                    label: "复制答复",
+                    icon: .copy,
+                    run: { onCopy(reply, "已复制答复") }
+                ))
+            } else {
+                list.append(SessionMenuAction(
+                    id: "copy-reply",
+                    label: "复制答复",
+                    icon: .copy,
+                    disabled: true,
+                    reason: "当前会话暂无可复制的助手答复",
+                    run: {}
+                ))
+            }
         }
 
         switch provider {
         case .codex:
             if let onRename {
-                list.append(SessionMenuAction(id: "rename", label: "改名", icon: .pencil, disabled: !canRename || busy, run: onRename))
+                list.append(SessionMenuAction(
+                    id: "rename",
+                    label: "改名",
+                    icon: .pencil,
+                    disabled: !canRename || busy,
+                    reason: resolvedRenameReason,
+                    run: onRename
+                ))
             }
             if let onToggleArchive {
                 let archiveLabel = archived ? (isHeaderMenu ? "取消归档" : "恢复") : "归档"
@@ -80,48 +102,83 @@ public enum ProviderMenuMatrixBuilder {
                     label: archiveLabel,
                     icon: archived ? .archiveRestore : .archive,
                     disabled: !canArchive || busy,
+                    reason: !canArchive ? archiveBlockReason : nil,
                     run: onToggleArchive
                 ))
             }
-            list.append(SessionMenuAction(id: "copy-id", label: "复制 ID", icon: .copy, run: { onCopy(id, "已复制 ID") }))
-            list.append(SessionMenuAction(id: "copy-path", label: "复制路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制路径") }))
+            appendHeaderCopyReplyIfNeeded()
+            list.append(SessionMenuAction(id: "copy-id", label: "复制 ID", icon: .copy, run: { onCopy(id, "已复制") }))
+            list.append(SessionMenuAction(id: "copy-path", label: "复制路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制") }))
             if let cmd = HistoryAndResumeHelpers.threadResumeCommand(id) {
-                list.append(SessionMenuAction(id: "copy-resume", label: "复制恢复命令", icon: .terminal, run: { onCopy(cmd, "已复制恢复命令") }))
+                list.append(SessionMenuAction(id: "copy-resume", label: "复制恢复命令", icon: .copy, run: { onCopy(cmd, "已复制") }))
             }
             list.append(SessionMenuAction(
                 id: "reveal",
                 label: "在 Finder 中显示",
                 icon: .folderOpen,
                 disabled: !isLocalMachine || path.isEmpty,
+                reason: revealReason,
                 run: { onRevealInFinder(path) }
             ))
             if let onDelete {
-                list.append(SessionMenuAction(id: "delete", label: "永久删除", icon: .trash2, danger: true, disabled: !canDelete || busy, run: onDelete))
+                list.append(SessionMenuAction(
+                    id: "delete",
+                    label: "永久删除",
+                    icon: .trash2,
+                    danger: true,
+                    disabled: !canDelete || busy,
+                    reason: !canDelete ? deleteBlockReason : nil,
+                    run: onDelete
+                ))
             }
 
         case .claudeCode:
             if let onRename {
-                list.append(SessionMenuAction(id: "rename", label: "改名", icon: .pencil, disabled: !canRename || busy, run: onRename))
+                list.append(SessionMenuAction(
+                    id: "rename",
+                    label: "改名",
+                    icon: .pencil,
+                    disabled: !canRename || busy,
+                    reason: resolvedRenameReason,
+                    run: onRename
+                ))
             }
-            list.append(SessionMenuAction(id: "copy-id", label: "复制线程 ID", icon: .copy, run: { onCopy(id, "已复制线程 ID") }))
-            list.append(SessionMenuAction(id: "copy-path", label: "复制文件路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制文件路径") }))
+            appendHeaderCopyReplyIfNeeded()
+            list.append(SessionMenuAction(id: "copy-id", label: "复制线程 ID", icon: .copy, run: { onCopy(id, "已复制") }))
+            list.append(SessionMenuAction(id: "copy-path", label: "复制文件路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制") }))
             let cmd = HistoryAndResumeHelpers.claudeResumeCommand(cwd: cwd, id: id)
-            list.append(SessionMenuAction(id: "copy-resume", label: "复制恢复命令", icon: .terminal, run: { onCopy(cmd, "已复制恢复命令") }))
+            list.append(SessionMenuAction(id: "copy-resume", label: "复制恢复命令", icon: .terminal, run: { onCopy(cmd, "已复制") }))
             list.append(SessionMenuAction(
                 id: "reveal",
                 label: "在 Finder 中显示",
                 icon: .folderOpen,
                 disabled: !isLocalMachine || path.isEmpty,
+                reason: revealReason,
                 run: { onRevealInFinder(path) }
             ))
             if let onDelete {
-                list.append(SessionMenuAction(id: "delete", label: "删除任务文件", icon: .trash2, danger: true, disabled: !canDelete || busy, run: onDelete))
+                list.append(SessionMenuAction(
+                    id: "delete",
+                    label: "删除任务文件",
+                    icon: .trash2,
+                    danger: true,
+                    disabled: !canDelete || busy,
+                    run: onDelete
+                ))
             }
 
         case .grok:
             if let onRename {
-                list.append(SessionMenuAction(id: "rename", label: "改名", icon: .pencil, disabled: !canRename || busy, run: onRename))
+                list.append(SessionMenuAction(
+                    id: "rename",
+                    label: "改名",
+                    icon: .pencil,
+                    disabled: !canRename || busy,
+                    reason: resolvedRenameReason,
+                    run: onRename
+                ))
             }
+            appendHeaderCopyReplyIfNeeded()
             list.append(SessionMenuAction(id: "copy-id", label: "复制线程 ID", icon: .copy, run: { onCopy(id, "已复制线程 ID") }))
             list.append(SessionMenuAction(id: "copy-path", label: "复制路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制路径") }))
             let cmd = HistoryAndResumeHelpers.grokResumeCommand(cwd: cwd, id: id)
@@ -131,15 +188,30 @@ public enum ProviderMenuMatrixBuilder {
                 label: "在 Finder 中显示",
                 icon: .folderOpen,
                 disabled: !isLocalMachine || path.isEmpty,
+                reason: revealReason,
                 run: { onRevealInFinder(path) }
             ))
             if let onDelete {
-                list.append(SessionMenuAction(id: "delete", label: "删除任务文件", icon: .trash2, danger: true, disabled: !canDelete || busy, run: onDelete))
+                list.append(SessionMenuAction(
+                    id: "delete",
+                    label: "删除任务文件",
+                    icon: .trash2,
+                    danger: true,
+                    disabled: !canDelete || busy,
+                    run: onDelete
+                ))
             }
 
         case .antigravity, .dsh:
             if let onRename {
-                list.append(SessionMenuAction(id: "rename", label: "改名", icon: .pencil, disabled: !canRename || busy, run: onRename))
+                list.append(SessionMenuAction(
+                    id: "rename",
+                    label: "改名",
+                    icon: .pencil,
+                    disabled: !canRename || busy,
+                    reason: resolvedRenameReason,
+                    run: onRename
+                ))
             }
             if let onToggleArchive {
                 let archiveLabel = archived ? (isHeaderMenu ? "取消归档" : "恢复") : "归档"
@@ -148,9 +220,11 @@ public enum ProviderMenuMatrixBuilder {
                     label: archiveLabel,
                     icon: archived ? .archiveRestore : .archive,
                     disabled: !canArchive || busy,
+                    reason: !canArchive ? archiveBlockReason : nil,
                     run: onToggleArchive
                 ))
             }
+            appendHeaderCopyReplyIfNeeded()
             list.append(SessionMenuAction(id: "copy-id", label: "复制 ID", icon: .copy, run: { onCopy(id, "已复制 ID") }))
             list.append(SessionMenuAction(id: "copy-path", label: "复制路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制路径") }))
             // Antigravity & DSH explicitly omit 复制恢复命令
@@ -159,13 +233,23 @@ public enum ProviderMenuMatrixBuilder {
                 label: "在 Finder 中显示",
                 icon: .folderOpen,
                 disabled: !isLocalMachine || path.isEmpty,
+                reason: revealReason,
                 run: { onRevealInFinder(path) }
             ))
             if let onDelete {
-                list.append(SessionMenuAction(id: "delete", label: "永久删除", icon: .trash2, danger: true, disabled: !canDelete || busy, run: onDelete))
+                list.append(SessionMenuAction(
+                    id: "delete",
+                    label: "永久删除",
+                    icon: .trash2,
+                    danger: true,
+                    disabled: !canDelete || busy,
+                    reason: !canDelete ? deleteBlockReason : nil,
+                    run: onDelete
+                ))
             }
 
         case .grokbot:
+            appendHeaderCopyReplyIfNeeded()
             list.append(SessionMenuAction(id: "copy-id", label: "复制 ID", icon: .copy, run: { onCopy(id, "已复制 ID") }))
             list.append(SessionMenuAction(id: "copy-path", label: "复制路径", icon: .copy, disabled: path.isEmpty, run: { onCopy(path, "已复制路径") }))
             list.append(SessionMenuAction(
@@ -173,6 +257,7 @@ public enum ProviderMenuMatrixBuilder {
                 label: "在 Finder 中显示",
                 icon: .folderOpen,
                 disabled: !isLocalMachine || path.isEmpty,
+                reason: revealReason,
                 run: { onRevealInFinder(path) }
             ))
         }
@@ -431,6 +516,477 @@ public struct DeletePathCodeBlockView: View {
     }
 }
 
+// MARK: - Custom WebUI-Parity TaskMenu Popover (.task-menu-items / .context-task-menu)
+
+@MainActor
+public final class AgentHubTaskMenuPresenter {
+    public static let shared = AgentHubTaskMenuPresenter()
+
+    private var activePanel: NSPanel?
+    private weak var parentWindow: NSWindow?
+    private weak var activeAnchorView: NSView?
+    private weak var suppressedToggleAnchorView: NSView?
+    private var suppressedToggleUntil: TimeInterval = 0
+    private weak var returnFocusResponder: NSResponder?
+    private var itemViews: [TaskMenuItemRowView] = []
+    private var focusedIndex: Int = -1
+    private var mouseDownMonitor: Any?
+    private var scrollMonitor: Any?
+    private var keyMonitor: Any?
+    private var windowObservers: [NSObjectProtocol] = []
+
+    private init() {}
+
+    public var isPresented: Bool { activePanel != nil }
+
+    public func dismiss(restoreFocus: Bool = false) {
+        if let m = mouseDownMonitor { NSEvent.removeMonitor(m); mouseDownMonitor = nil }
+        if let s = scrollMonitor { NSEvent.removeMonitor(s); scrollMonitor = nil }
+        if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
+        for obs in windowObservers { NotificationCenter.default.removeObserver(obs) }
+        windowObservers.removeAll()
+
+        if let panel = activePanel {
+            parentWindow?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+        activePanel = nil
+        itemViews.removeAll()
+        focusedIndex = -1
+
+        if restoreFocus, let win = parentWindow, let resp = returnFocusResponder {
+            win.makeFirstResponder(resp)
+        }
+        activeAnchorView = nil
+        parentWindow = nil
+        returnFocusResponder = nil
+    }
+
+    public func presentAtScreenTopLeft(
+        _ topLeftScreenPoint: NSPoint,
+        in hostWindow: NSWindow?,
+        returnFocus: NSResponder? = nil,
+        actions: [SessionMenuAction],
+        palette: DesignPalette
+    ) {
+        guard !actions.isEmpty else { return }
+        dismiss(restoreFocus: false)
+
+        let targetWin = hostWindow ?? NSApp.keyWindow ?? NSApp.mainWindow
+        self.parentWindow = targetWin
+        self.returnFocusResponder = returnFocus ?? targetWin?.firstResponder
+
+        let (cardView, rows, size) = buildMenuCard(actions: actions, palette: palette)
+        self.itemViews = rows
+
+        let screenFrame = (targetWin?.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let clampBounds = targetWin?.frame.intersection(screenFrame) ?? screenFrame
+        let effectiveBounds = (clampBounds.width >= size.width + 16 && clampBounds.height >= size.height + 16)
+            ? clampBounds
+            : screenFrame
+
+        let minX = effectiveBounds.minX + 8
+        let maxX = max(minX, effectiveBounds.maxX - size.width - 8)
+        let clampedX = min(max(topLeftScreenPoint.x, minX), maxX)
+
+        let desiredOriginY = topLeftScreenPoint.y - size.height
+        let minY = effectiveBounds.minY + 8
+        let maxY = max(minY, effectiveBounds.maxY - size.height - 8)
+        let clampedY = min(max(desiredOriginY, minY), maxY)
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: clampedX, y: clampedY, width: size.width, height: size.height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.hidesOnDeactivate = true
+        panel.contentView = cardView
+
+        if let firstEnabled = rows.firstIndex(where: { !$0.menuAction.disabled }) {
+            setFocusedIndex(firstEnabled)
+        }
+
+        if let targetWin {
+            targetWin.addChildWindow(panel, ordered: .above)
+            let resignObs = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification,
+                object: targetWin,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.dismiss(restoreFocus: false) }
+            }
+            let resizeObs = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification,
+                object: targetWin,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.dismiss(restoreFocus: false) }
+            }
+            windowObservers = [resignObs, resizeObs]
+        }
+        panel.orderFront(nil)
+        activePanel = panel
+        installEventMonitors()
+    }
+
+    public func presentBelowAnchorView(
+        _ anchorView: NSView,
+        rightAligned: Bool,
+        actions: [SessionMenuAction],
+        palette: DesignPalette
+    ) {
+        if suppressedToggleAnchorView === anchorView,
+           ProcessInfo.processInfo.systemUptime < suppressedToggleUntil
+        {
+            suppressedToggleAnchorView = nil
+            return
+        }
+        if activePanel != nil, activeAnchorView === anchorView {
+            dismiss(restoreFocus: true)
+            return
+        }
+        guard let win = anchorView.window, !actions.isEmpty else { return }
+        let rectInWin = anchorView.convert(anchorView.bounds, to: nil)
+        let rectOnScreen = win.convertToScreen(rectInWin)
+        let (_, _, size) = buildMenuCard(actions: actions, palette: palette)
+        let topLeftX = rightAligned ? (rectOnScreen.maxX - size.width) : rectOnScreen.minX
+        let topLeftY = rectOnScreen.minY - 4
+        presentAtScreenTopLeft(
+            NSPoint(x: topLeftX, y: topLeftY),
+            in: win,
+            returnFocus: anchorView,
+            actions: actions,
+            palette: palette
+        )
+        activeAnchorView = anchorView
+    }
+
+    private func setFocusedIndex(_ next: Int) {
+        focusedIndex = next
+        for (idx, v) in itemViews.enumerated() {
+            v.isKeyboardFocused = (idx == next)
+        }
+    }
+
+    private func installEventMonitors() {
+        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self, let panel = self.activePanel else { return event }
+            if event.window === panel {
+                return event
+            }
+            if event.type == .leftMouseDown,
+               let anchor = self.activeAnchorView,
+               let win = anchor.window,
+               event.window === win
+            {
+                let ptInAnchor = anchor.convert(event.locationInWindow, from: nil)
+                if anchor.bounds.insetBy(dx: -4, dy: -4).contains(ptInAnchor) {
+                    self.suppressedToggleAnchorView = anchor
+                    self.suppressedToggleUntil = ProcessInfo.processInfo.systemUptime + 0.35
+                }
+            }
+            // Outside click / right-click: close immediately AND pass event through in 1 click!
+            self.dismiss(restoreFocus: false)
+            return event
+        }
+
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            guard let self, let panel = self.activePanel else { return event }
+            if event.window === panel {
+                return event
+            }
+            self.dismiss(restoreFocus: false)
+            return event
+        }
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self, self.activePanel != nil else { return event }
+            let enabledIndices = self.itemViews.enumerated().compactMap { $0.element.menuAction.disabled ? nil : $0.offset }
+            switch event.keyCode {
+            case 53: // Escape
+                self.dismiss(restoreFocus: true)
+                return nil
+            case 48: // Tab
+                self.dismiss(restoreFocus: true)
+                return nil
+            case 125: // ArrowDown
+                guard !enabledIndices.isEmpty else { return nil }
+                if let pos = enabledIndices.firstIndex(of: self.focusedIndex) {
+                    self.setFocusedIndex(enabledIndices[(pos + 1) % enabledIndices.count])
+                } else {
+                    self.setFocusedIndex(enabledIndices[0])
+                }
+                return nil
+            case 126: // ArrowUp
+                guard !enabledIndices.isEmpty else { return nil }
+                if let pos = enabledIndices.firstIndex(of: self.focusedIndex) {
+                    self.setFocusedIndex(enabledIndices[(pos + enabledIndices.count - 1) % enabledIndices.count])
+                } else if let last = enabledIndices.last {
+                    self.setFocusedIndex(last)
+                }
+                return nil
+            case 115: // Home
+                if let first = enabledIndices.first { self.setFocusedIndex(first) }
+                return nil
+            case 119: // End
+                if let last = enabledIndices.last { self.setFocusedIndex(last) }
+                return nil
+            case 36, 76, 49: // Return, Enter, Space
+                if self.focusedIndex >= 0,
+                   self.focusedIndex < self.itemViews.count,
+                   !self.itemViews[self.focusedIndex].menuAction.disabled
+                {
+                    let run = self.itemViews[self.focusedIndex].menuAction.run
+                    self.dismiss(restoreFocus: true)
+                    run()
+                }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func buildMenuCard(
+        actions: [SessionMenuAction],
+        palette: DesignPalette
+    ) -> (NSView, [TaskMenuItemRowView], NSSize) {
+        let font = DesignFonts.nsBodyFont(size: 13, weight: .medium)
+        var maxTextW: CGFloat = 136
+        for act in actions {
+            let w = ceil((act.label as NSString).size(withAttributes: [.font: font]).width)
+            maxTextW = max(maxTextW, w)
+        }
+        let cardWidth = min(280, max(200, maxTextW + 58))
+        let itemWidth = cardWidth - 12
+        let rowHeight: CGFloat = 34
+        let cardHeight = CGFloat(actions.count) * rowHeight + CGFloat(max(0, actions.count - 1)) * 2 + 12
+
+        let card = NSView(frame: NSRect(x: 0, y: 0, width: cardWidth, height: cardHeight))
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 12
+        card.layer?.masksToBounds = true
+        card.layer?.backgroundColor = palette.elevated.nsColor.cgColor
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = palette.borderStrong.nsColor.cgColor
+
+        var rows: [TaskMenuItemRowView] = []
+        var yTop = cardHeight - 6
+        for act in actions {
+            yTop -= rowHeight
+            let row = TaskMenuItemRowView(
+                frame: NSRect(x: 6, y: yTop, width: itemWidth, height: rowHeight),
+                action: act,
+                palette: palette
+            ) { [weak self] in
+                self?.dismiss(restoreFocus: true)
+                act.run()
+            }
+            card.addSubview(row)
+            rows.append(row)
+            yTop -= 2
+        }
+        return (card, rows, NSSize(width: cardWidth, height: cardHeight))
+    }
+}
+
+@MainActor
+private final class TaskMenuItemRowView: NSView {
+    let menuAction: SessionMenuAction
+    private let palette: DesignPalette
+    private let onInvoke: () -> Void
+    private var isHovered: Bool = false { didSet { refreshBackground() } }
+    var isKeyboardFocused: Bool = false { didSet { refreshBackground() } }
+    private var tracking: NSTrackingArea?
+
+    init(
+        frame: NSRect,
+        action: SessionMenuAction,
+        palette: DesignPalette,
+        onInvoke: @escaping () -> Void
+    ) {
+        self.menuAction = action
+        self.palette = palette
+        self.onInvoke = onInvoke
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        alphaValue = action.disabled ? 0.48 : 1.0
+        toolTip = action.reason
+
+        let fgColor = (action.danger ? palette.errFg : palette.textPrimary).nsColor
+        let iconColor = (action.danger ? palette.errFg : palette.textMuted).nsColor
+
+        let iconView = NSImageView(
+            image: LucideVectorCatalog.nsImage(for: action.icon, size: 15, color: iconColor)
+        )
+        iconView.frame = NSRect(x: 10, y: floor((frame.height - 15) * 0.5), width: 15, height: 15)
+        addSubview(iconView)
+
+        let lbl = NSTextField(labelWithString: action.label)
+        lbl.font = DesignFonts.nsBodyFont(size: 13, weight: .medium)
+        lbl.textColor = fgColor
+        lbl.lineBreakMode = .byTruncatingTail
+        let textH = ceil(lbl.fittingSize.height)
+        lbl.frame = NSRect(
+            x: 35,
+            y: floor((frame.height - textH) * 0.5),
+            width: max(40, frame.width - 45),
+            height: textH
+        )
+        addSubview(lbl)
+        refreshBackground()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func refreshBackground() {
+        guard !menuAction.disabled, (isHovered || isKeyboardFocused) else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            return
+        }
+        layer?.backgroundColor = (menuAction.danger ? palette.errBg : palette.hover).nsColor.cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if !menuAction.disabled { isHovered = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
+    override func resetCursorRects() {
+        if !menuAction.disabled {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard !menuAction.disabled else { return }
+        onInvoke()
+    }
+}
+
+public struct TaskMenuTriggerButton<Label: View>: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let rightAligned: Bool
+    public let accessibilityLabel: String
+    public let makeActions: () -> [SessionMenuAction]
+    @ViewBuilder public let label: () -> Label
+    @State private var anchorView: NSView?
+
+    public init(
+        rightAligned: Bool = false,
+        accessibilityLabel: String,
+        makeActions: @escaping () -> [SessionMenuAction],
+        @ViewBuilder label: @escaping () -> Label
+    ) {
+        self.rightAligned = rightAligned
+        self.accessibilityLabel = accessibilityLabel
+        self.makeActions = makeActions
+        self.label = label
+    }
+
+    public var body: some View {
+        Button {
+            guard let anchorView else { return }
+            AgentHubTaskMenuPresenter.shared.presentBelowAnchorView(
+                anchorView,
+                rightAligned: rightAligned,
+                actions: makeActions(),
+                palette: palette
+            )
+        } label: {
+            label()
+                .background(TaskMenuAnchorCaptureView(capturedView: $anchorView))
+        }
+        .buttonStyle(PlainHitButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct TaskMenuAnchorCaptureView: NSViewRepresentable {
+    @Binding var capturedView: NSView?
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        DispatchQueue.main.async { capturedView = v.superview ?? v }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if capturedView == nil {
+            DispatchQueue.main.async { capturedView = nsView.superview ?? nsView }
+        }
+    }
+}
+
+private struct SessionRowRightClickCaptureRepresentable: NSViewRepresentable {
+    var onSecondaryTrigger: (NSPoint, NSView) -> Void
+
+    func makeNSView(context: Context) -> SessionRowRightClickCaptureNSView {
+        let v = SessionRowRightClickCaptureNSView()
+        v.onSecondaryTrigger = onSecondaryTrigger
+        return v
+    }
+
+    func updateNSView(_ nsView: SessionRowRightClickCaptureNSView, context: Context) {
+        nsView.onSecondaryTrigger = onSecondaryTrigger
+    }
+}
+
+private final class SessionRowRightClickCaptureNSView: NSView {
+    var onSecondaryTrigger: ((NSPoint, NSView) -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point), let ev = NSApp.currentEvent else { return nil }
+        if ev.type == .rightMouseDown || ev.type == .rightMouseUp {
+            return self
+        }
+        if (ev.type == .leftMouseDown || ev.type == .leftMouseUp) && ev.modifierFlags.contains(.control) {
+            return self
+        }
+        return nil
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onSecondaryTrigger?(NSEvent.mouseLocation, self)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) {
+            onSecondaryTrigger?(NSEvent.mouseLocation, self)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 public struct RenameableSessionRowView: View {
     @Environment(\.agentHubPalette) private var palette
     public let sessionKey: String
@@ -449,10 +1005,14 @@ public struct RenameableSessionRowView: View {
     public let canRename: Bool
     public let renameBlockReason: String?
     public var externalRenameRequestId: Int = 0
-    public let rowMenuActions: [SessionMenuAction]
-    public let batchMenuActions: [SessionMenuAction]
+    public var rowMenuActions: [SessionMenuAction] = []
+    public var batchMenuActions: [SessionMenuAction] = []
+    public var hasRowMenu: Bool = true
+    public var batchSelectedCount: Int = 0
+    public var makeRowMenuActions: (() -> [SessionMenuAction])? = nil
+    public var makeBatchMenuActions: (() -> [SessionMenuAction])? = nil
     public let onRowClick: (SessionClick) -> Void
-    public let onToggleCheckbox: () -> Void
+    public var onToggleCheckbox: () -> Void = {}
     public let onRename: ((String) async throws -> Void)?
 
     @State private var editing: Bool = false
@@ -462,12 +1022,19 @@ public struct RenameableSessionRowView: View {
     @State private var failedDraft: String?
     @State private var isRowHovered: Bool = false
 
+    private func resolvedRowActions() -> [SessionMenuAction] {
+        makeRowMenuActions?() ?? rowMenuActions
+    }
+
+    private func resolvedBatchActions() -> [SessionMenuAction] {
+        makeBatchMenuActions?() ?? batchMenuActions
+    }
+
     public var body: some View {
-        let useBatchMenu = multiSelected && !batchMenuActions.isEmpty
+        let effectiveBatchAvailable = makeBatchMenuActions != nil ? (batchSelectedCount >= 2) : !batchMenuActions.isEmpty
+        let useBatchMenu = multiSelected && effectiveBatchAvailable
         let suppressSingleEllipsis = (selecting && !useBatchMenu) || multiSelected
-        let contextActions: [SessionMenuAction] = useBatchMenu
-            ? batchMenuActions
-            : (!selecting ? rowMenuActions : [])
+        let showRowEllipsis = !suppressSingleEllipsis && !disabled && (makeRowMenuActions != nil ? hasRowMenu : !rowMenuActions.isEmpty)
 
         VStack(alignment: .leading, spacing: 4) {
             if editing {
@@ -498,149 +1065,130 @@ public struct RenameableSessionRowView: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.accentBorder.color, lineWidth: 1))
             } else {
-                HStack(spacing: 8) {
-                    if selecting {
-                        Button(action: onToggleCheckbox) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill((multiSelected ? palette.accent : palette.elevated).color)
-                                    .frame(width: 16, height: 16)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .strokeBorder(palette.borderStrong.color, lineWidth: 1)
-                                    )
-                                if multiSelected {
-                                    LucideIcon(.check, size: 11)
-                                        .foregroundStyle(palette.buttonFg.color)
-                                }
-                            }
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
+                ZStack(alignment: .topTrailing) {
+                    Button {
+                        let currentEvent = NSApp.currentEvent
+                        let flags = currentEvent?.modifierFlags ?? []
+                        let click = SessionClick(
+                            detail: max(1, currentEvent?.clickCount ?? 1),
+                            metaKey: flags.contains(.command),
+                            shiftKey: flags.contains(.shift),
+                            ctrlKey: flags.contains(.control)
+                        )
+                        if click.ctrlKey {
+                            return
+                        } else if !selecting && click.detail >= 2 && !click.metaKey && !click.shiftKey {
+                            beginRename()
+                        } else {
+                            onRowClick(click)
                         }
-                        .buttonStyle(PlainHitButtonStyle())
-                    }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(DesignFonts.body(13, weight: .medium))
+                                .foregroundStyle(palette.textPrimary.color)
+                                .lineSpacing(2.6)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
 
-                    ZStack(alignment: .topTrailing) {
-                        Button {
-                            let currentEvent = NSApp.currentEvent
-                            let flags = currentEvent?.modifierFlags ?? []
-                            let click = SessionClick(
-                                detail: max(1, currentEvent?.clickCount ?? 1),
-                                metaKey: flags.contains(.command),
-                                shiftKey: flags.contains(.shift),
-                                ctrlKey: flags.contains(.control)
-                            )
-                            if click.ctrlKey {
-                                onRowClick(click)
-                                if !contextActions.isEmpty {
-                                    let menu = ProviderMenuMatrixBuilder.buildNSMenu(actions: contextActions)
-                                    menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-                                }
-                            } else if click.detail >= 2 && !click.metaKey && !click.shiftKey {
-                                beginRename()
-                            } else {
-                                onRowClick(click)
-                            }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(title)
-                                    .font(DesignFonts.body(13, weight: .medium))
-                                    .foregroundStyle(palette.textPrimary.color)
-                                    .lineSpacing(2.6)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-
-                                if isCodexCompactRow {
-                                    HStack(spacing: 6) {
-                                        if running {
-                                            RunningIndicator(size: 13)
-                                        } else {
-                                            Text(statusText)
-                                                .font(DesignFonts.body(11))
-                                                .foregroundStyle(palette.textMuted.color)
-                                                .lineLimit(1)
-                                                .fixedSize(horizontal: true, vertical: false)
-                                        }
-                                        if !inlinePreview.isEmpty {
-                                            Text(inlinePreview)
-                                                .font(DesignFonts.body(12))
-                                                .foregroundStyle(palette.textMuted.color)
-                                                .lineLimit(1)
-                                        }
-                                        Spacer(minLength: 4)
-                                        SessionStorageBadgeView(size: storageSize)
+                            if isCodexCompactRow {
+                                HStack(spacing: 6) {
+                                    if running {
+                                        RunningIndicator(size: 13)
+                                    } else {
+                                        Text(statusText)
+                                            .font(DesignFonts.body(11))
+                                            .foregroundStyle(palette.textMuted.color)
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
                                     }
-                                } else {
-                                    if let idLine, !idLine.isEmpty {
-                                        Text(idLine)
+                                    if !inlinePreview.isEmpty {
+                                        Text(inlinePreview)
                                             .font(DesignFonts.body(12))
                                             .foregroundStyle(palette.textMuted.color)
                                             .lineLimit(1)
                                     }
-                                    if !subtitle.isEmpty {
-                                        Text(subtitle)
-                                            .font(DesignFonts.mono(12))
+                                    Spacer(minLength: 4)
+                                    SessionStorageBadgeView(size: storageSize)
+                                }
+                            } else {
+                                if let idLine, !idLine.isEmpty {
+                                    Text(idLine)
+                                        .font(DesignFonts.body(12))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                }
+                                if !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(DesignFonts.mono(12))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                }
+                                HStack(spacing: 6) {
+                                    if running {
+                                        RunningIndicator(size: 13)
+                                    } else {
+                                        Text(statusText)
+                                            .font(DesignFonts.body(12))
                                             .foregroundStyle(palette.textMuted.color)
                                             .lineLimit(1)
                                     }
-                                    HStack(spacing: 6) {
-                                        if running {
-                                            RunningIndicator(size: 13)
-                                        } else {
-                                            Text(statusText)
-                                                .font(DesignFonts.body(12))
-                                                .foregroundStyle(palette.textMuted.color)
-                                                .lineLimit(1)
-                                        }
-                                        Spacer(minLength: 4)
-                                        SessionStorageBadgeView(size: storageSize)
-                                    }
+                                    Spacer(minLength: 4)
+                                    SessionStorageBadgeView(size: storageSize)
                                 }
                             }
-                            .padding(.vertical, 9)
-                            .padding(.leading, 11)
-                            .padding(.trailing, suppressSingleEllipsis ? 11 : 34)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(FullWidthRowButtonStyle(
-                            selected: selected && !multiSelected,
-                            multiSelected: multiSelected,
-                            cornerRadius: 10
-                        ))
-                        .disabled(disabled)
-                        .contextMenu {
-                            ForEach(contextActions) { act in
-                                Button(act.label, action: act.run)
-                                    .disabled(act.disabled)
-                            }
-                        }
-
-                        if !suppressSingleEllipsis && !disabled && !rowMenuActions.isEmpty {
-                            let nativeEntries = rowMenuActions.map { act in
-                                NativeMenuEntry(
-                                    title: act.label,
-                                    enabled: !act.disabled,
-                                    action: act.run
-                                )
-                            }
-                            AnchoredMenuButton(entries: nativeEntries, accessibilityLabel: "线程操作") {
-                                LucideIcon(.moreHorizontal, size: 16)
-                                    .foregroundStyle(palette.textMuted.color)
-                                    .frame(width: 28, height: 28)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(palette.hover.color.opacity(isRowHovered ? 0.6 : 0))
-                                    )
-                                    .contentShape(Rectangle())
-                            }
-                            .padding(.top, 8)
-                            .padding(.trailing, 6)
-                            .opacity(isRowHovered ? 1.0 : 0.0)
-                            .allowsHitTesting(isRowHovered)
-                        }
+                        .padding(.vertical, 9)
+                        .padding(.leading, 11)
+                        .padding(.trailing, suppressSingleEllipsis ? 11 : 34)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .onHover { isRowHovered = $0 }
+                    .buttonStyle(FullWidthRowButtonStyle(
+                        selected: selected && !multiSelected,
+                        multiSelected: multiSelected,
+                        cornerRadius: 10
+                    ))
+                    .disabled(disabled)
+                    .overlay(
+                        SessionRowRightClickCaptureRepresentable { screenPoint, view in
+                            guard !disabled else { return }
+                            if selecting && !useBatchMenu { return }
+                            let actions = useBatchMenu ? resolvedBatchActions() : resolvedRowActions()
+                            guard !actions.isEmpty else { return }
+                            AgentHubTaskMenuPresenter.shared.presentAtScreenTopLeft(
+                                screenPoint,
+                                in: view.window,
+                                returnFocus: view,
+                                actions: actions,
+                                palette: palette
+                            )
+                        }
+                    )
+
+                    if showRowEllipsis {
+                        TaskMenuTriggerButton(
+                            rightAligned: false,
+                            accessibilityLabel: "线程操作",
+                            makeActions: { resolvedRowActions() }
+                        ) {
+                            LucideIcon(.moreHorizontal, size: 17)
+                                .foregroundStyle(palette.textMuted.color)
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(palette.hover.color.opacity(isRowHovered ? 0.65 : 0))
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .padding(.top, 8)
+                        .padding(.trailing, 6)
+                        .opacity(isRowHovered ? 1.0 : 0.0)
+                        .allowsHitTesting(isRowHovered)
+                    }
+                }
+                .onHover { hovered in
+                    if isRowHovered != hovered { isRowHovered = hovered }
                 }
             }
 
@@ -653,7 +1201,14 @@ public struct RenameableSessionRowView: View {
             }
         }
         .onChange(of: selecting) { isSel in
-            if isSel { editing = false; errorText = nil }
+            if isSel {
+                editing = false
+                errorText = nil
+                if !useBatchMenu { AgentHubTaskMenuPresenter.shared.dismiss() }
+            }
+        }
+        .onChange(of: multiSelected) { isMulti in
+            if isMulti { editing = false; errorText = nil }
         }
         .onChange(of: externalRenameRequestId) { reqId in
             if reqId > 0 {

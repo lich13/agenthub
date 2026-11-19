@@ -366,7 +366,9 @@ public struct SubagentPanelView: View {
                             sessionKey: current.agentId ?? rootSessionKey,
                             rootThreadId: provider == .codex ? rootSessionKey : nil,
                             hasTimelineRail: !timelineEntries.isEmpty,
-                            isSubagent: true
+                            isSubagent: true,
+                            canLoadOlder: hasMoreOlder && beforeCursor != nil,
+                            isLoadingOlder: loadingOlder
                         )
                         if !timelineEntries.isEmpty {
                             TimelineRailView(
@@ -475,7 +477,9 @@ public struct SubagentPanelView: View {
                     Task { await loadOlderSubagentPageIfNeeded() }
                 }
                 c.onActiveTimelineChanged = { id in
-                    if activeTimelineId != id { activeTimelineId = id }
+                    DispatchQueue.main.async {
+                        if activeTimelineId != id { activeTimelineId = id }
+                    }
                 }
                 coordinatorRef = c
             }
@@ -553,8 +557,8 @@ public struct SubagentPanelView: View {
 
     private func fetchSubagentDetail(_ agent: SubagentActivity) async {
         guard let agentId = agent.agentId, !agentId.isEmpty else { return }
-        loading = true
-        defer { loading = false }
+        if rows.isEmpty { loading = true }
+        defer { if loading { loading = false } }
         let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
         do {
             if provider == .codex {
@@ -567,20 +571,22 @@ public struct SubagentPanelView: View {
                     throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                 }
                 let slot = subagentThreadStore.applyDetail(resp.detail)
-                currentDetailSubagents = slot.subagents ?? resp.detail.subagents
-                hasMoreOlder = slot.hasMoreBlocks
-                beforeCursor = slot.beforeCursor
+                let nextSubs = slot.subagents ?? resp.detail.subagents
+                if currentDetailSubagents != nextSubs { currentDetailSubagents = nextSubs }
+                if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildCodexRows(
                     blocks: slot.blocks,
                     showAllHistory: true,
                     planFallbackTitle: resp.agent.name,
                     subagentsSupported: true
                 )
-                rows = nextRows
-                timelineEntries = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .codex,
                     sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
             } else if provider == .claudeCode {
                 struct ClaudeSubReq: Encodable {
                     let sessionKey: String
@@ -600,15 +606,16 @@ public struct SubagentPanelView: View {
                     hasMore: detail.hasMore,
                     timeline: detail.timeline
                 )
-                currentDetailSubagents = nil
-                hasMoreOlder = slot.hasMore
-                beforeCursor = slot.beforeCursor
-                rows = ConversationRowBuilder.buildClaudeRows(
+                if currentDetailSubagents != nil { currentDetailSubagents = nil }
+                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let nextRows = ConversationRowBuilder.buildClaudeRows(
                     events: slot.events,
                     recordedOnly: true,
                     attachmentsAsNamesOnly: true
                 )
-                timelineEntries = []
+                if rows != nextRows { rows = nextRows }
+                if !timelineEntries.isEmpty { timelineEntries = [] }
             }
             if let restore = pendingRestoreAnchor {
                 pendingRestoreAnchor = nil
