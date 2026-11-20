@@ -2,7 +2,14 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.29**。修复全平台清理的预览及确认、隐藏线程分页和切机后的数据隔离。原生工作区同时修复搜索定位、子智能体分页、Probe 活动、账号隔离、作业输出与计划导出。API 协议 2，数据库 schema 3。
+当前源码版本为 **2.1.31**。API 协议 2，数据库 schema 3。设置与通知由 App 或服务启动时转换为绑定记录身份的密文，本机协作在取得钥匙串密钥及工作租约后转换发送队列与附件索引。开始写入新格式后，二进制回退使用 **v2.1.30**，保留原有密钥和数据。
+
+- **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
+- **v2.1.30** 已发布八项资产，具备两种密文格式的读取能力，继续写旧格式。Linux 服务在该版部署后状态为 `active`，健康检查 `ok`。Mac App 已由 2.1.29 原地更新并启动。[提交 3fb2cdf](https://github.com/lich13/agenthub/commit/3fb2cdf361a5f62198bfd168bcd13132c4c57aec) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.30) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44777552143)
+
+## v2.1.29 实现与验证
+
+v2.1.29 修复全平台清理的预览及确认、隐藏线程分页和切机后的数据隔离。原生工作区同时修复搜索定位、子智能体分页、Probe 活动、账号隔离、作业输出与计划导出。API 协议 2，数据库 schema 3。
 
 [v2.1.29](https://github.com/lich13/agenthub/releases/tag/v2.1.29) 已发布八项资产，对应提交 [`733bfeb`](https://github.com/lich13/agenthub/commit/733bfebf54e0845b4cc394b5fe33a8d516192585)。[Release CI](https://github.com/lich13/agenthub/actions/runs/44668220771) 通过。Linux 服务为 `agenthub-webd 2.1.29`，状态 `active`，健康检查 `ok`。Mac App 已用同版产物原地更新并启动。
 
