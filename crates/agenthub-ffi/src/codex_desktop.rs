@@ -152,9 +152,9 @@ impl CodexDesktopBridge {
                 let entry = keyring::Entry::new(key_service, KEY_ACCOUNT)
                     .map_err(|_| "无法访问发送队列钥匙串")?;
                 let material = match entry.get_password() {
-                    Ok(value) => value,
+                    Ok(value) => zeroize::Zeroizing::new(value),
                     Err(keyring::Error::NoEntry) if !existing => {
-                        let value = SecretBox::random_key_material();
+                        let value = zeroize::Zeroizing::new(SecretBox::random_key_material());
                         entry
                             .set_password(&value)
                             .map_err(|_| "无法保存发送队列密钥")?;

@@ -9,6 +9,7 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
 };
+use zeroize::{Zeroize, Zeroizing};
 
 mod runtime_cache;
 pub use runtime_cache::{config_stamp, ConfigCache, ConfigFileStamp};
@@ -359,7 +360,7 @@ pub struct SecurityConfig {
 
 impl Drop for SecurityConfig {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.secret_key);
+        self.secret_key.zeroize();
     }
 }
 
@@ -436,8 +437,9 @@ impl Config {
             config.normalize()?;
             return Ok(config);
         }
-        let text =
-            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+        let text = Zeroizing::new(
+            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?,
+        );
         Self::from_text(&text, path)
     }
 
@@ -457,9 +459,9 @@ impl Config {
         path: &Path,
         patch: &ProbeConfigFilePatch,
     ) -> Result<(Self, Self)> {
-        let text = fs::read_to_string(path)?;
+        let text = Zeroizing::new(fs::read_to_string(path)?);
         let before = Self::from_text(&text, path)?;
-        let updated = patch_probe_config_toml(&text, patch)?;
+        let updated = Zeroizing::new(patch_probe_config_toml(&text, patch)?);
         let config = if updated == text {
             before.clone()
         } else {
@@ -495,27 +497,34 @@ impl Config {
         fs::create_dir_all(parent)?;
         let env_path = parent.join("env");
         let original = match fs::read_to_string(&env_path) {
-            Ok(text) => Some(text),
+            Ok(text) => Some(Zeroizing::new(text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        let key = SecretBox::random_key_material();
-        let mut updated = original
-            .as_deref()
-            .unwrap_or("")
-            .lines()
-            .filter(|line| {
-                line.split_once('=')
-                    .is_none_or(|(name, _)| name.trim() != "AGENTHUB_SECRET_KEY")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut key = Zeroizing::new(SecretBox::random_key_material());
+        let mut updated = Zeroizing::new(
+            original
+                .as_deref()
+                .map(String::as_str)
+                .unwrap_or("")
+                .lines()
+                .filter(|line| {
+                    line.split_once('=')
+                        .is_none_or(|(name, _)| name.trim() != "AGENTHUB_SECRET_KEY")
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        updated.reserve(key.len() + "AGENTHUB_SECRET_KEY=\n\n".len());
         if !updated.is_empty() {
             updated.push('\n');
         }
-        updated.push_str(&format!("AGENTHUB_SECRET_KEY={key}\n"));
+        updated.push_str("AGENTHUB_SECRET_KEY=");
+        updated.push_str(&key);
+        updated.push('\n');
         write_runtime_env(&env_path, &updated)?;
-        self.security.secret_key = key;
+        self.security.secret_key.zeroize();
+        self.security.secret_key = std::mem::take(&mut *key);
         Ok(())
     }
 
@@ -546,7 +555,8 @@ impl Config {
             options.mode(0o600);
         }
         let mut file = options.open(path)?;
-        file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+        let serialized = Zeroizing::new(toml::to_string_pretty(self)?);
+        file.write_all(serialized.as_bytes())?;
         file.sync_all()?;
         Ok(())
     }
@@ -556,7 +566,7 @@ impl Config {
             .ok()
             .filter(|v| !v.trim().is_empty())
         {
-            zeroize::Zeroize::zeroize(&mut self.security.secret_key);
+            self.security.secret_key.zeroize();
             self.security.secret_key = value;
         }
         if self.codex.host_label.trim().is_empty() {
@@ -585,10 +595,12 @@ impl Config {
         if !env_path.exists() {
             return Ok(());
         }
-        let text = fs::read_to_string(&env_path)
-            .with_context(|| format!("read env {}", env_path.display()))?;
+        let text = Zeroizing::new(
+            fs::read_to_string(&env_path)
+                .with_context(|| format!("read env {}", env_path.display()))?,
+        );
         if let Some(value) = env_file_value(&text, "AGENTHUB_SECRET_KEY") {
-            zeroize::Zeroize::zeroize(&mut self.security.secret_key);
+            self.security.secret_key.zeroize();
             self.security.secret_key = value;
         }
         Ok(())

@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-zeroize = "1"
+zeroize.workspace = true
 libc.workspace = true
 aes-gcm.workspace = true
 anyhow.workspace = true

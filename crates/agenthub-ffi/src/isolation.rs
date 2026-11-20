@@ -2,6 +2,7 @@ use crate::overview::DesktopState;
 use agenthub_core::{config::Config, db::PanelDb, platform::PlatformPaths};
 use anyhow::{anyhow, Context, Result};
 use std::{fs, io::Write, path::Path};
+use zeroize::{Zeroize, Zeroizing};
 
 pub const KEY_SERVICE_PRODUCTION: &str = "com.lich13.agenthub.codex-desktop";
 pub const KEY_SERVICE_PREVIEW: &str = "com.lich13.agenthub.codex-desktop.preview";
@@ -25,7 +26,7 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
 
     if !config_file.exists() {
         let mut seed = Config::load(&production_platform.config_file)?;
-        seed.security.secret_key.clear();
+        seed.security.secret_key.zeroize();
         seed.paths.data_dir = isolated_root.to_path_buf();
         seed.paths.db_path = isolated_root.join("agenthub.sqlite");
         seed.paths.log_dir = log_dir.clone();
@@ -50,8 +51,9 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
 
     let env_file = isolated_root.join("env");
     if !env_file.exists() {
-        let key = agenthub_core::crypto::SecretBox::random_key_material();
-        write_atomic_0600(&env_file, format!("AGENTHUB_SECRET_KEY={key}\n").as_bytes())?;
+        let key = Zeroizing::new(agenthub_core::crypto::SecretBox::random_key_material());
+        let contents = Zeroizing::new(format!("AGENTHUB_SECRET_KEY={}\n", key.as_str()));
+        write_atomic_0600(&env_file, contents.as_bytes())?;
     }
 
     let mut config = Config::load_runtime(&platform.config_file)?;
