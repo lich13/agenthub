@@ -2,6 +2,21 @@
 import Foundation
 import XCTest
 
+extension RuntimeTransport where Self == MockRuntimeTransport {
+    static var emptyDesktop: MockRuntimeTransport {
+        MockRuntimeTransport { command, _ in
+            switch command {
+            case "remote.get":
+                Data(#"{"target":"local","revision":1,"configured":false,"machines":[]}"#.utf8)
+            case "system.capabilities":
+                Data(#"{"host_surface":"desktop_embedded_tauri","capabilities":{"grokbot_sessions":true}}"#.utf8)
+            default:
+                Data("[]".utf8)
+            }
+        }
+    }
+}
+
 final class RuntimeConnectionAndIsolationTests: XCTestCase {
     func testTwoParallelIsolatedFFIRuntimesCoexistWithoutFlockConflict() async throws {
         let rootA = FileManager.default.temporaryDirectory
@@ -97,5 +112,174 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
         XCTAssertEqual(store.target, .local)
         XCTAssertEqual(store.revision, 4)
         XCTAssertEqual(store.machineScope, "local:")
+        XCTAssertTrue(store.ready)
+        XCTAssertNil(store.capabilitiesError)
+        XCTAssertTrue(store.capabilities.grokbotSessions)
+        XCTAssertFalse(store.capabilities.updatePrune)
+    }
+
+    @MainActor
+    func testSwitchRetryReconnectAndLateReadsWithIdenticalThreadKeys() async throws {
+        let (firstDetail, detailStarted) = AsyncStream<Void>.makeStream()
+        let (releaseDetail, detailReply) = AsyncStream<Void>.makeStream()
+        let (secondCaps, capsStarted) = AsyncStream<Void>.makeStream()
+        let (releaseCaps, capsReply) = AsyncStream<Void>.makeStream()
+        let (write, writeStarted) = AsyncStream<Void>.makeStream()
+        let (releaseWrite, writeReply) = AsyncStream<Void>.makeStream()
+        let mock = MockRuntimeTransport { command, args in
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(args.utf8)) as? [String: Any])
+            let req = object["request"] as? [String: Any] ?? [:]
+            let revision = req["revision"] as? Int ?? 0
+            switch command {
+            case "remote.get":
+                return Data(#"{"target":"local","revision":1,"configured":true}"#.utf8)
+            case "system.capabilities":
+                return Data(#"{"host_surface":"desktop_embedded_tauri","capabilities":{"grokbot_sessions":true}}"#.utf8)
+            case "remote.select":
+                let target = try XCTUnwrap(req["target"] as? String)
+                let id = req["machineId"] as? String ?? ""
+                if id == "unreachable" { throw AgentHubFFIError("connection refused") }
+                return try JSONSerialization.data(withJSONObject: [
+                    "target": target, "configured": true, "revision": revision + 1,
+                    "activeMachineId": id, "sshHost": id,
+                ])
+            case "remote.invoke":
+                switch req["command"] as? String {
+                case "system.capabilities":
+                    if revision == 3 {
+                        capsStarted.yield()
+                        var it = releaseCaps.makeAsyncIterator()
+                        _ = await it.next()
+                    }
+                    return try JSONSerialization.data(withJSONObject: [
+                        "host_surface": "linux_server_api", "capabilities": ["prune_backups": revision == 2],
+                    ])
+                case "threads.detail":
+                    XCTAssertEqual((req["args"] as? [String: String])?["id"], "shared-id")
+                    if revision == 2 {
+                        detailStarted.yield()
+                        var it = releaseDetail.makeAsyncIterator()
+                        _ = await it.next()
+                    }
+                    return try JSONEncoder().encode("origin-\(revision)")
+                case "cleanup.unifiedExecute":
+                    writeStarted.yield()
+                    var it = releaseWrite.makeAsyncIterator()
+                    _ = await it.next()
+                    return Data("true".utf8)
+                default:
+                    throw AgentHubFFIError("unexpected remote request")
+                }
+            default:
+                throw AgentHubFFIError("unexpected local request")
+            }
+        }
+        let store = RuntimeConnectionStore(transport: mock, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        await store.bootstrap()
+        try await store.selectMachine(target: .remote, machineId: "a")
+        XCTAssertTrue(store.capabilities.updatePrune)
+        let source = store.revision
+        let lateRead = Task { () -> String in try await store.rpc("threads.detail", args: ["id": "shared-id"]) }
+        var detail = firstDetail.makeAsyncIterator()
+        _ = await detail.next()
+        do {
+            try await store.selectMachine(target: .remote, machineId: "unreachable")
+            XCTFail("A failed connection must be retryable")
+        } catch {
+            XCTAssertFalse(store.changing)
+            XCTAssertEqual(store.revision, source)
+            XCTAssertEqual(store.activeMachineId, "a")
+        }
+        let switchToB = Task { try await store.selectMachine(target: .remote, machineId: "b") }
+        var caps = secondCaps.makeAsyncIterator()
+        _ = await caps.next()
+        XCTAssertFalse(store.ready)
+        capsReply.yield()
+        try await switchToB.value
+        XCTAssertTrue(store.ready)
+        XCTAssertFalse(store.changing)
+        XCTAssertNil(store.capabilitiesError)
+        XCTAssertFalse(store.capabilities.updatePrune)
+        let current: String = try await store.rpc("threads.detail", args: ["id": "shared-id"])
+        detailReply.yield()
+        do { _ = try await lateRead.value; XCTFail("published the old machine's detail") }
+        catch { XCTAssertEqual(current, "origin-3") }
+
+        let confirmation = try CleanupInteractionVectors.load().preview.executionRequest(for: ["claude_empty"])
+        let request = CleanupRequestEnvelope(request: confirmation)
+        XCTAssertFalse(confirmation.targets.isEmpty)
+        do {
+            let _: Bool = try await store.rpc("cleanup.unifiedExecute", args: request, at: source)
+            XCTFail("sent an old confirmation")
+        } catch {
+            XCTAssertFalse(mock.recordedCalls.contains { $0.args.contains("cleanup.unifiedExecute") })
+        }
+        let accepted = Task { () -> Bool in try await store.rpc("cleanup.unifiedExecute", args: request, at: store.revision) }
+        var pending = write.makeAsyncIterator()
+        _ = await pending.next()
+        do { try await store.selectMachine(target: .remote, machineId: "b"); XCTFail("switched during a write") }
+        catch { XCTAssertTrue(store.isBusyForSwitch) }
+        writeReply.yield()
+        _ = try await accepted.value
+        try await store.selectMachine(target: .remote, machineId: "b")
+        XCTAssertEqual(store.revision, 4)
+        try await store.selectMachine(target: .local)
+        XCTAssertTrue(store.capabilities.grokbotSessions)
+        XCTAssertEqual(mock.recordedCalls.filter { $0.args.contains("cleanup.unifiedExecute") }.count, 1)
+    }
+
+    @MainActor
+    func testSwitchDuringFirstScanPageCancelsTheSourceBeforeDisconnect() async throws {
+        let vectors = try CleanupInteractionVectors.load()
+        let started = AsyncStream<Void>.makeStream()
+        let reply = AsyncStream<Void>.makeStream()
+        let stopping = AsyncStream<Void>.makeStream()
+        let mock = MockRuntimeTransport { command, args in
+            switch command {
+            case "cleanup.hiddenDryRun":
+                if args.contains(#""start""#) {
+                    started.continuation.yield()
+                    var waiting = reply.stream.makeAsyncIterator()
+                    _ = await waiting.next()
+                    return try JSONEncoder().encode(vectors.hiddenStart)
+                }
+                XCTAssertTrue(args.contains(#""cancel""#))
+                XCTAssertTrue(args.contains(vectors.hiddenStart.scan.id))
+                return try JSONEncoder().encode(vectors.hiddenPage)
+            case "remote.select":
+                return Data(#"{"target":"remote","revision":1,"configured":true,"activeMachineId":"next"}"#.utf8)
+            case "remote.invoke":
+                XCTAssertTrue(args.contains("system.capabilities"))
+                return Data(#"{"host_surface":"linux_server_api","capabilities":{}}"#.utf8)
+            default:
+                throw AgentHubFFIError("unexpected command")
+            }
+        }
+        let store = RuntimeConnectionStore(transport: mock, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let source = store.revision
+        let scan = HiddenCleanupScan { request in
+            try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: source)
+        }
+        let token = store.registerBeforeMachineChange {
+            let done = scan.stop()
+            stopping.continuation.yield()
+            await done?.value
+        }
+        defer { store.unregisterBeforeMachineChange(token) }
+        let run = Task { try await scan.run { _, _ in XCTFail("published a stopped scan") } }
+        var opening = started.stream.makeAsyncIterator()
+        _ = await opening.next()
+        let switching = Task { try await store.selectMachine(target: .remote, machineId: "next") }
+        var cancelling = stopping.stream.makeAsyncIterator()
+        _ = await cancelling.next()
+        XCTAssertTrue(store.isBusyForSwitch)
+        do { try await store.selectMachine(target: .remote, machineId: "other"); XCTFail("concurrent switch") }
+        catch { XCTAssertEqual(store.revision, source) }
+        reply.continuation.yield()
+        try await run.value
+        try await switching.value
+        XCTAssertTrue(store.ready)
+        XCTAssertNil(store.capabilitiesError)
+        XCTAssertEqual(mock.recordedCalls.map(\.command), ["cleanup.hiddenDryRun", "cleanup.hiddenDryRun", "remote.select", "remote.invoke"])
     }
 }

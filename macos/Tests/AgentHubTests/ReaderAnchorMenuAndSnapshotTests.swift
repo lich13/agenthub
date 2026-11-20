@@ -279,7 +279,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
     // MARK: - 4. Offscreen Light/Dark & 5-Provider Baseline Snapshot Verification (SnapshotBaselines.json)
 
     @MainActor
-    func testOffscreenProviderThemeAndViewportSnapshotsMatchLockedBaselines() throws {
+    func testOffscreenProviderThemeAndViewportSnapshotsMatchLockedBaselines() async throws {
         guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
             return
         }
@@ -314,10 +314,10 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             .appendingPathComponent("SnapshotBaselines.json")
         let baseline = try JSONDecoder().decode(BaselineSpec.self, from: Data(contentsOf: baselineURL))
 
-        let transport = MockRuntimeTransport { _, _ in Data("[]".utf8) }
         let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.snap.\(UUID().uuidString)")!
         defer { defaults.removePersistentDomain(forName: defaults.description) }
-        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        let store = RuntimeConnectionStore(transport: .emptyDesktop, defaults: defaults)
+        await store.bootstrap()
         let pngOutDir = ProcessInfo.processInfo.environment["AGENTHUB_SNAPSHOT_PNG_DIR"]
 
         // 1) Verify 1440x900, 1280x820, and 767x820 across Light and Dark against SnapshotBaselines.json regions

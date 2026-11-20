@@ -584,8 +584,7 @@ public struct PlanSaveRequest: Codable, Equatable, Sendable {
 }
 
 public struct PlanSaveResult: Codable, Equatable, Sendable {
-    public var path: String
-    public var filename: String?
+    public var filename: String
 }
 
 // MARK: - Rust pulldown-cmark GFM AST Models

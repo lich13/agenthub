@@ -186,6 +186,15 @@ public struct AppShellView: View {
 
     @ViewBuilder
     private func workspaceStage(isCompactMobile: Bool) -> some View {
+        if store.ready {
+            workspaceContent(isCompactMobile: isCompactMobile)
+                .id(store.revision)
+                .disabled(store.changing)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceContent(isCompactMobile: Bool) -> some View {
         switch store.activeWorkspace {
         case .probe:
             ProbeWorkspaceView(store: store)
@@ -194,6 +203,7 @@ public struct AppShellView: View {
         case .codex, .claude, .grok, .grokbot, .antigravity, .dsh:
             if let builder = providerContentBuilder {
                 builder(store.activeWorkspace, store, isCompactMobile)
+                    .id(store.activeWorkspace)
             } else {
                 UnifiedProviderWorkspaceView(
                     store: store,
@@ -222,6 +232,7 @@ public struct AppShellView: View {
                         )
                     }
                 )
+                .id(store.activeWorkspace)
             }
         }
     }

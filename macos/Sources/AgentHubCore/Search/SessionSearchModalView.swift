@@ -6,7 +6,7 @@ import SwiftUI
 public enum SessionSearchMatchKind {
     public static func label(for kind: String) -> String {
         switch kind {
-        case "session", "thread_info": "线程信息"
+        case "metadata", "session", "thread_info": "线程信息"
         case "user", "user_message": "用户消息"
         case "assistant", "assistant_message": "助手回复"
         case "thinking", "reasoning": "思考"
@@ -245,7 +245,7 @@ public struct SessionSearchModalView: View {
 
                             if nextCursor != nil && results.count < 200 {
                                 Button("加载更多") {
-                                    Task { await loadMore() }
+                                    loadMore()
                                 }
                                 .buttonStyle(SecondaryButtonStyle())
                                 .disabled(loading)
@@ -298,6 +298,8 @@ public struct SessionSearchModalView: View {
         }
         .onChange(of: query) { _ in scheduleDebouncedSearch() }
         .onChange(of: scope) { _ in scheduleDebouncedSearch() }
+        .onChange(of: currentSessionKey) { _ in scheduleDebouncedSearch() }
+        .onDisappear { searchTask?.cancel() }
     }
 
     private func scopeButton(_ target: SearchScope, label: String, disabled: Bool) -> some View {
@@ -328,14 +330,14 @@ public struct SessionSearchModalView: View {
     private func scheduleDebouncedSearch() {
         searchTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            results = []
-            nextCursor = nil
-            truncated = false
-            errorText = nil
-            loading = false
-            return
-        }
+        results = []
+        nextCursor = nil
+        truncated = false
+        warnings = []
+        errorText = nil
+        selectedIndex = 0
+        loading = !trimmed.isEmpty
+        guard !trimmed.isEmpty else { return }
         searchTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
@@ -343,17 +345,18 @@ public struct SessionSearchModalView: View {
         }
     }
 
-    private func loadMore() async {
-        guard let cursor = nextCursor, results.count < 200 else { return }
+    private func loadMore() {
+        guard !loading, let cursor = nextCursor, results.count < 200 else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        await runSearch(trimmed: trimmed, cursor: cursor, append: true)
+        loading = true
+        searchTask = Task { await runSearch(trimmed: trimmed, cursor: cursor, append: true) }
     }
 
     private func runSearch(trimmed: String, cursor: String?, append: Bool) async {
         loading = true
         errorText = nil
-        defer { loading = false }
+        defer { if !Task.isCancelled { loading = false } }
         struct ReqWrap: Encodable { let request: SessionSearchRequest }
         let req = SessionSearchRequest(
             provider: provider,
@@ -365,6 +368,7 @@ public struct SessionSearchModalView: View {
         )
         do {
             let resp: SessionSearchResponse = try await store.rpc("sessions.search", args: ReqWrap(request: req))
+            guard !Task.isCancelled, req.query == query.trimmingCharacters(in: .whitespacesAndNewlines), req.scope == scope else { return }
             if append {
                 let existingIds = Set(results.map(\.resultId))
                 let added = resp.results.filter { !existingIds.contains($0.resultId) }
@@ -377,6 +381,7 @@ public struct SessionSearchModalView: View {
             truncated = resp.truncated || results.count >= 200
             warnings = resp.warnings ?? []
         } catch {
+            guard !Task.isCancelled else { return }
             errorText = error.localizedDescription
         }
     }

@@ -3,6 +3,7 @@ import SwiftUI
 public struct ProbeWorkspaceView: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
+    private let sourceRevision: UInt64
 
     @State private var status: ProbeStatus?
     @State private var settingsView: ProbeSettingsView?
@@ -16,6 +17,7 @@ public struct ProbeWorkspaceView: View {
     @State private var actionMessage: (tone: StatusChipTone, text: String)?
 
     @State private var activeJobId: String?
+    @State private var startingJob = false
     @State private var activeJobAction: String?
 
     @State private var hookStatuses: [String: ClaudeHooksStatus] = [:]
@@ -25,9 +27,11 @@ public struct ProbeWorkspaceView: View {
 
     public init(store: RuntimeConnectionStore) {
         self.store = store
+        self.sourceRevision = store.revision
     }
 
     private var jobBusy: Bool {
+        if startingJob { return true }
         guard let id = activeJobId else { return false }
         if let tracked = store.trackedJobs[id] {
             return !tracked.isTerminal
@@ -147,6 +151,11 @@ public struct ProbeWorkspaceView: View {
                     }
                 }
             }
+        }
+        .onChange(of: activeJobId.flatMap { store.trackedJobs[$0]?.status }) { status in
+            guard status == "succeeded" || status == "failed",
+                  activeJobAction == "probe.installHooks" || activeJobAction == "probe.removeHooks" else { return }
+            Task { await refreshStatusAndEvents(force: true) }
         }
         .task(id: store.machineScope) {
             draft = nil
@@ -466,7 +475,7 @@ public struct ProbeWorkspaceView: View {
                         MetricCard(label: "实际命令", value: "\(actualCount) 条")
                     }
                     FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                        Button(managed ? "重新写入 Hook" : "写入通知 Hook") {
+                        Button(hookStatus == "stale" || hookStatus == "missing" ? "修复 Hook" : managed ? "重新写入 Hook" : "写入通知 Hook") {
                             pendingHookDialog = ("codex", "Codex", "install", status?.codexHooksPath ?? "")
                         }
                         .buttonStyle(SecondaryButtonStyle())
@@ -561,9 +570,10 @@ public struct ProbeWorkspaceView: View {
 
     @ViewBuilder
     private var liveOverviewPanel: some View {
-        let replyNeeded = status?.replyNeededThreads ?? []
-        let recoverable = status?.recoverableThreads ?? []
-        let running = status?.runningThreads ?? []
+        let sessions = status?.activeSessions ?? []
+        let replyNeeded = sessions.filter { $0.bucket == "reply_needed" }
+        let recoverable = sessions.filter { $0.bucket == "recoverable" }
+        let running = sessions.filter { $0.bucket == "running" }
         let combined: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] =
             replyNeeded.map { ($0, "待回复", .warning) } +
             recoverable.map { ($0, "异常", .danger) } +
@@ -691,7 +701,7 @@ public struct ProbeWorkspaceView: View {
            let loaded = envelope.data
         {
             settingsView = loaded
-            if draft == nil || force {
+            if draft == nil {
                 draft = ProbeSettingsDraft.from(loaded)
             }
         }
@@ -737,7 +747,7 @@ public struct ProbeWorkspaceView: View {
             let payload = try currentDraft.buildSavePayload()
             let savedEnv: OptionalResultEnvelope<ProbeSettingsView> = try await store.rpc(
                 "probe.settings.save",
-                args: ["settings": .object(payload)]
+                args: ["settings": .object(payload)], at: sourceRevision
             )
             if let saved = savedEnv.data {
                 settingsView = saved
@@ -745,7 +755,7 @@ public struct ProbeWorkspaceView: View {
                 if !currentDraft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     refreshed.barkDeviceKeyConfigured = true
                 }
-                draft = refreshed
+                if draft == currentDraft { draft = refreshed }
             }
             saveMessage = (.success, "设置已保存")
         } catch {
@@ -754,12 +764,18 @@ public struct ProbeWorkspaceView: View {
     }
 
     private func startProbeJob(_ command: String, label: String) async {
+        guard !jobBusy else { return }
+        startingJob = true
+        defer { startingJob = false }
         actionMessage = nil
         activeJobAction = command
         do {
-            let res: StartedJobResponse = try await store.rpc(command)
+            let res: StartedJobResponse = try await store.rpc(command, at: sourceRevision)
             activeJobId = res.jobId
             store.trackStartedJob(res.jobId)
+            if command == "probe.installHooks" || command == "probe.removeHooks" {
+                draft?.manageStopHook = command == "probe.installHooks"
+            }
             if command != "probe.barkTest" {
                 actionMessage = (.success, "\(label) 已开始")
             }
@@ -772,7 +788,6 @@ public struct ProbeWorkspaceView: View {
         if dialog.provider == "codex" {
             let cmd = dialog.action == "install" ? "probe.installHooks" : "probe.removeHooks"
             await startProbeJob(cmd, label: dialog.action == "install" ? "写入 Codex Hook" : "移除 Codex Hook")
-            await refreshStatusAndEvents(force: true)
             return
         }
         hookBusy = true
@@ -784,7 +799,7 @@ public struct ProbeWorkspaceView: View {
                     "request": .object(["action": .string(dialog.action), "confirmed": .bool(true)]),
                     "provider": .string(dialog.provider),
                 ],
-                localOnly: true
+                localOnly: true, at: sourceRevision
             )
             hookStatuses[dialog.provider] = st
             actionMessage = (.success, "\(dialog.name) Hook 已更新")

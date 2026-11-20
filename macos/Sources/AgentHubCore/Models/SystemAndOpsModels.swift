@@ -52,8 +52,7 @@ public struct OptionalResultEnvelope<T: Decodable & Sendable>: Decodable, Sendab
     public let data: T?
 
     private enum CodingKeys: String, CodingKey {
-        case available
-        case data
+        case available, data, reason, error
     }
 
     public init(available: Bool, data: T?) {
@@ -63,7 +62,7 @@ public struct OptionalResultEnvelope<T: Decodable & Sendable>: Decodable, Sendab
 
     public init(from decoder: Decoder) throws {
         if let keyed = try? decoder.container(keyedBy: CodingKeys.self),
-           keyed.contains(.available),
+           keyed.contains(.data) || keyed.contains(.error) || keyed.contains(.reason),
            let avail = try? keyed.decode(Bool.self, forKey: .available)
         {
             self.available = avail
@@ -402,8 +401,8 @@ public struct StartedJobResponse: Decodable, Equatable, Sendable {
 }
 
 public struct JobFailureAnalysis: Codable, Equatable, Sendable {
-    public var summary: String?
-    public var hint: String?
+    public var explanation: String
+    public var suggestions: [String]
 }
 
 public struct JobRecord: Codable, Equatable, Identifiable, Sendable {
@@ -543,13 +542,10 @@ public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
 }
 
 public struct UnifiedCleanupCandidate: Codable, Equatable, Identifiable, Sendable {
-    public var id: String { "\(scope ?? ""):\(targetId)" }
-    public var scope: String?
-    public var targetId: String
-    public var title: String?
+    public var id: String
+    public var title: String
     public var estimatedBytes: Int64
-    public var deletable: Bool
-    public var skipReason: String?
+    public var blockedReason: String?
     public var fingerprint: String?
 }
 
@@ -563,6 +559,7 @@ public struct UnifiedCleanupScopePlan: Codable, Equatable, Identifiable, Sendabl
     public var deletableCount: Int
     public var estimatedBytes: Int64
     public var candidates: [UnifiedCleanupCandidate]
+    public var issues: [String]
 }
 
 public struct UnifiedCleanupPlan: Codable, Equatable, Sendable {
@@ -572,41 +569,79 @@ public struct UnifiedCleanupPlan: Codable, Equatable, Sendable {
     public var scopes: [UnifiedCleanupScopePlan]
 }
 
-public struct UnifiedCleanupItemOutcome: Codable, Equatable, Identifiable, Sendable {
-    public var id: String { "\(scope):\(targetId)" }
+public struct UnifiedCleanupTargetSelection: Codable, Equatable, Sendable {
+    public let scope: String
+    public let id: String
+    public let fingerprint: String?
+}
+
+public struct UnifiedCleanupExecuteRequest: Codable, Equatable, Sendable {
+    public let confirmed: Bool
+    public let scopes: [String]
+    public let targets: [UnifiedCleanupTargetSelection]
+}
+
+public struct UnifiedCleanupScopeResult: Codable, Equatable, Sendable {
     public var scope: String
-    public var targetId: String
-    public var status: String
-    public var error: String?
-    public var freedBytes: Int64?
+    public var label: String
+    public var deletedCount: Int
+    public var failedCount: Int
+    public var skippedCount: Int
+    public var deletedBytes: Int64
+    public var issues: [String]
+    public var residuals: [String]
 }
 
 public struct UnifiedCleanupResult: Codable, Equatable, Sendable {
     public var deletedCount: Int
     public var failedCount: Int
     public var skippedCount: Int
-    public var freedBytes: Int64
-    public var items: [UnifiedCleanupItemOutcome]
+    public var deletedBytes: Int64
+    public var scopes: [UnifiedCleanupScopeResult]
+
+    var unsuccessfulDetails: [String] {
+        scopes.flatMap { scope in
+            (scope.issues + scope.residuals).map { "\(scope.label) · \($0)" }
+        }
+    }
 }
 
 public struct HiddenScanProgress: Codable, Equatable, Sendable {
-    public var scanId: String
-    public var status: String
-    public var scannedFiles: Int?
-    public var nextCursor: String?
+    public enum Phase: String, Codable, Sendable {
+        case preparing, scanning, complete, stopping, stopped, failed
+    }
+
+    public var id: String
+    public var phase: Phase
+    public var processed: Int
+    public var total: Int
+    public var cursor: Int
+    public var nextCursor: Int
+    public var hasMore: Bool
+    public var error: String?
+}
+
+public struct HiddenThreadCandidate: Codable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var fingerprint: String?
+    public var allowed: Bool
+    public var reason: String?
+
+    var unified: UnifiedCleanupCandidate {
+        UnifiedCleanupCandidate(id: id, title: title.isEmpty ? id : title, estimatedBytes: 0,
+                                blockedReason: allowed ? nil : (reason ?? "当前线程暂不可清理"), fingerprint: fingerprint)
+    }
 }
 
 public struct HiddenThreadDeletePlan: Codable, Equatable, Sendable {
-    public var candidateCount: Int
-    public var deletableCount: Int
-    public var estimatedBytes: Int64
-    public var candidates: [UnifiedCleanupCandidate]
-    public var scan: HiddenScanProgress?
+    public var candidates: [HiddenThreadCandidate]
+    public var scan: HiddenScanProgress
 }
 
 public struct CodexAccountScopeStatus: Codable, Equatable, Sendable {
     public var scopedThreads: Int
-    public var checkedFiles: Int?
+    public var scopedFiles: Int
 }
 
 public struct CodexAccountScopeItem: Codable, Equatable, Identifiable, Sendable {
@@ -628,6 +663,7 @@ public struct CodexAccountScopeItem: Codable, Equatable, Identifiable, Sendable 
 
 public struct CodexAccountScopeResult: Codable, Equatable, Sendable {
     public var clearedThreads: Int
+    public var clearedFiles: Int
     public var remainingFiles: Int
     public var items: [CodexAccountScopeItem]
 }

@@ -138,27 +138,29 @@ public final class RuntimeConnectionStore: ObservableObject {
         do {
             let view: RemoteConnectionView = try await invokeLocal("remote.get")
             applyConnectionView(view)
-            ready = true
             connectionError = nil
         } catch {
-            ready = true
             connectionError = error.localizedDescription
         }
         await refreshSystemCapabilities()
     }
 
     public func refreshSystemCapabilities() async {
+        let sourceRevision = revision
         do {
             let response: SystemCapabilitiesResponse = try await rpc("system.capabilities")
+            guard revision == sourceRevision, !Task.isCancelled else { return }
             let next = RuntimeCapabilityMatrix.from(response)
             capabilities = next
             capabilitiesError = nil
-            if activeWorkspace == .grokbot && !next.grokbotSessions {
+            if !next.visibleWorkspaces.contains(activeWorkspace) {
                 activeWorkspace = .codex
             }
         } catch {
+            guard revision == sourceRevision, !Task.isCancelled else { return }
             capabilitiesError = error.localizedDescription
         }
+        ready = true
     }
 
     private func applyConnectionView(_ view: RemoteConnectionView) {
@@ -169,6 +171,13 @@ public final class RuntimeConnectionStore: ObservableObject {
         activeMachineId = view.activeMachineId
         activeMachineName = view.activeMachineName
         machines = view.machines ?? []
+        ready = false
+        capabilities = .bootstrap
+        if view.target == .remote {
+            capabilities.hostSurface = "linux_server_api"
+            capabilities.grokbotSessions = false
+            if activeWorkspace == .grokbot { activeWorkspace = .codex }
+        }
     }
 
     // MARK: - Typed RPC & Machine Switching
@@ -184,10 +193,19 @@ public final class RuntimeConnectionStore: ObservableObject {
         return try await invokeLocal(command, argsJSON: argsJSON)
     }
 
-    public func rpcRaw(_ command: String, argsObject: [String: JSONValue] = [:], localOnly: Bool = false) async throws -> Data {
-        if changing {
-            throw AgentHubFFIError("连接切换中，请稍后重试")
+    public func rpcRaw(
+        _ command: String, argsObject: [String: JSONValue] = [:], localOnly: Bool = false, at expectedRevision: UInt64? = nil
+    ) async throws -> Data {
+        if let expectedRevision, revision != expectedRevision {
+            throw AgentHubFFIError("连接已变化，已丢弃旧请求")
         }
+        if changing {
+            guard command == "cleanup.hiddenDryRun", case let .object(request)? = argsObject["request"],
+                  request["mode"] == .string("cancel") else {
+                throw AgentHubFFIError("连接切换中，请稍后重试")
+            }
+        }
+        try Task.checkCancellation()
         let capturedRevision = revision
         let capturedTarget = target
         let isReadHookStatus: Bool = {
@@ -222,32 +240,34 @@ public final class RuntimeConnectionStore: ObservableObject {
         if capturedRevision != revision {
             throw AgentHubFFIError("连接已变化，已丢弃旧响应")
         }
+        if !isWrite { try Task.checkCancellation() }
         return data
     }
 
     public func rpc<Res: Decodable>(
         _ command: String,
         args: [String: JSONValue] = [:],
-        localOnly: Bool = false
+        localOnly: Bool = false,
+        at expectedRevision: UInt64? = nil
     ) async throws -> Res {
-        let data = try await rpcRaw(command, argsObject: args, localOnly: localOnly)
+        let data = try await rpcRaw(command, argsObject: args, localOnly: localOnly, at: expectedRevision)
         return try JSONDecoder().decode(Res.self, from: data)
     }
 
     public func rpc<Req: Encodable, Res: Decodable>(
         _ command: String,
         args: Req,
-        localOnly: Bool = false
+        localOnly: Bool = false,
+        at expectedRevision: UInt64? = nil
     ) async throws -> Res {
         let encoded = try JSONEncoder().encode(args)
-        let argsObj = (try? JSONDecoder().decode([String: JSONValue].self, from: encoded)) ?? [:]
-        let data = try await rpcRaw(command, argsObject: argsObj, localOnly: localOnly)
-        return try JSONDecoder().decode(Res.self, from: data)
+        let argsObj = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
+        return try await rpc(command, args: argsObj, localOnly: localOnly, at: expectedRevision)
     }
 
     private func runBeforeMachineChangeCleanups(_ cleanups: [BeforeMachineChangeCleanup]) async {
-        for fn in cleanups {
-            await fn()
+        await withTaskGroup(of: Void.self) { group in
+            for fn in cleanups { group.addTask { await fn() } }
         }
     }
 
@@ -259,34 +279,27 @@ public final class RuntimeConnectionStore: ObservableObject {
         if isBusyForSwitch {
             throw AgentHubFFIError("操作进行中，请稍后切换")
         }
-        if updatesState && !readCleanups.isEmpty {
-            let cleanups = Array(readCleanups.values)
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { [self] in
-                    await self.runBeforeMachineChangeCleanups(cleanups)
-                }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                }
-                _ = await group.next()
-                group.cancelAll()
+        let res: Res
+        do {
+            changing = true
+            defer { changing = false }
+            if updatesState && !readCleanups.isEmpty {
+                // A pending scan start must return its ID before the source channel disconnects.
+                await runBeforeMachineChangeCleanups(Array(readCleanups.values))
             }
-            if isBusyForSwitch {
-                throw AgentHubFFIError("操作进行中，请稍后切换")
+            res = try await invokeLocal(command, args: RemoteRequestEnvelope(request: request))
+            if updatesState, let view = res as? RemoteConnectionView {
+                applyConnectionView(view)
+                connectionError = nil
+                connectionNotice = command == "remote.save" ? "已保存" : nil
+                capabilitiesError = nil
+                jobPollingTask?.cancel()
+                jobPollingTask = nil
+                trackedJobs.removeAll()
+                trackedJobOrder.removeAll()
             }
         }
-        changing = true
-        defer { changing = false }
-
-        let res: Res = try await invokeLocal(command, args: RemoteRequestEnvelope(request: request))
-        if updatesState, let view = res as? RemoteConnectionView {
-            applyConnectionView(view)
-            connectionError = nil
-            connectionNotice = (command == "remote.save") ? "已保存" : nil
-            trackedJobs.removeAll()
-            trackedJobOrder.removeAll()
-            await refreshSystemCapabilities()
-        }
+        if updatesState { await refreshSystemCapabilities() }
         return res
     }
 
@@ -344,6 +357,7 @@ public final class RuntimeConnectionStore: ObservableObject {
 
     private func startJobPollingIfNeeded() {
         guard jobPollingTask == nil else { return }
+        let sourceRevision = revision
         jobPollingTask = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
                 let activeIds = self.trackedJobOrder.filter { id in
@@ -355,6 +369,7 @@ public final class RuntimeConnectionStore: ObservableObject {
                     return
                 }
                 for id in activeIds {
+                    guard self.revision == sourceRevision, !Task.isCancelled else { return }
                     if let envelope: OptionalResultEnvelope<JobRecord> = try? await self.rpc(
                         "jobs.detail",
                         args: ["id": .string(id), "includeOutput": .bool(false)]

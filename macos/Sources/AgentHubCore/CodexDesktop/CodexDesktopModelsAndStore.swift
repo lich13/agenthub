@@ -502,7 +502,9 @@ public final class CodexDesktopStore: ObservableObject {
         let tid = threadId
         busy = true
         actionError = nil
-        defer { busy = false }
+        attachGeneration &+= 1
+        let currentAttachGen = attachGeneration
+        defer { if attachGeneration == currentAttachGen { busy = false } }
 
         struct AttachReq: Encodable {
             struct Inner: Encodable {
@@ -517,8 +519,6 @@ public final class CodexDesktopStore: ObservableObject {
         else { return }
 
         do {
-            attachGeneration &+= 1
-            let currentAttachGen = attachGeneration
             let initialData = try await connection.transport.desktopAttach(
                 requestJSON: reqJSON,
                 onStreamFrame: { [weak self] frameData in
@@ -537,32 +537,40 @@ public final class CodexDesktopStore: ObservableObject {
                 onStreamClosed: nil
             )
             let initialView = try JSONDecoder().decode(DesktopView.self, from: initialData)
-            if connection.revision == rev
-                && initialView.threadId == tid
-                && attachGeneration == currentAttachGen
-                && lastStreamFrameGeneration != currentAttachGen
-            {
+            guard connection.revision == rev, initialView.threadId == tid, attachGeneration == currentAttachGen else {
+                await detach(sessionId: initialView.sessionId, revision: rev)
+                return
+            }
+            if lastStreamFrameGeneration != currentAttachGen {
                 view = initialView
             }
         } catch {
+            guard attachGeneration == currentAttachGen, connection.revision == rev else { return }
             actionError = error.localizedDescription
         }
     }
 
     public func detachIfNeeded() async {
-        if let bindingId = attachmentBindingId, let sessionId = view?.sessionId {
+        attachGeneration &+= 1
+        busy = false
+        let revision = connection.revision
+        guard let sessionId = view?.sessionId else { return }
+        view = nil
+        if let bindingId = attachmentBindingId {
             attachmentBindingId = nil
             await unbindAttachments(sessionId: sessionId, bindingId: bindingId)
         }
-        guard let sessionId = view?.sessionId else { return }
-        view = nil
+        await detach(sessionId: sessionId, revision: revision)
+    }
+
+    private func detach(sessionId: String, revision: UInt64) async {
         struct DetachWrap: Encodable {
             struct Inner: Encodable { let revision: UInt64; let sessionId: String }
             let request: Inner
         }
         let _: DesktopAck? = try? await connection.invokeLocal(
             "codex.desktop.detach",
-            args: DetachWrap(request: .init(revision: connection.revision, sessionId: sessionId))
+            args: DetachWrap(request: .init(revision: revision, sessionId: sessionId))
         )
     }
 
@@ -594,6 +602,7 @@ public final class CodexDesktopStore: ObservableObject {
                 args: ActWrap(request: .init(revision: connection.revision, sessionId: sessionId, action: action)),
                 localOnly: true
             )
+            guard view?.sessionId == sessionId else { return }
             view = updated
             onStreamViewUpdated?()
         } catch {
@@ -744,7 +753,7 @@ public final class CodexDesktopStore: ObservableObject {
             onEventFrame: { [weak self] frameData in
                 guard let ev = try? JSONDecoder().decode(DesktopAttachmentEvent.self, from: frameData) else { return }
                 Task { @MainActor [weak self] in
-                    guard let self, self.connection.revision == rev else { return }
+                    guard let self, self.connection.revision == rev, self.view?.sessionId == sessionId else { return }
                     if let err = ev.error, !err.isEmpty {
                         self.onAttachmentError?(err)
                     } else if !ev.items.isEmpty {
@@ -756,7 +765,11 @@ public final class CodexDesktopStore: ObservableObject {
         ),
             let res = try? JSONDecoder().decode(DesktopAttachmentResult.self, from: data)
         {
-            attachmentBindingId = res.bindingId
+            if connection.revision == rev, view?.sessionId == sessionId {
+                attachmentBindingId = res.bindingId
+            } else {
+                await unbindAttachments(sessionId: sessionId, bindingId: res.bindingId)
+            }
         }
     }
 

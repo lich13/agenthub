@@ -86,6 +86,29 @@ fn fixture() -> Value {
     serde_json::from_slice(&std::fs::read(root().join("contracts/wire-types.json")).unwrap())
         .unwrap()
 }
+
+#[test]
+fn cleanup_interaction_vectors_match_serialized_service_dtos() {
+    use agenthub_core::{
+        archive::HiddenThreadDeletePlan,
+        services::cleanup::{
+            UnifiedCleanupExecuteRequest, UnifiedCleanupPlan, UnifiedCleanupResult,
+        },
+    };
+    fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) {
+        let dto: T = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(dto).unwrap(), *value);
+    }
+    let cases: Value = serde_json::from_str(include_str!(
+        "../../../contracts/parity-vectors/cleanup.json"
+    ))
+    .unwrap();
+    round_trip::<UnifiedCleanupPlan>(&cases["preview"]);
+    round_trip::<HiddenThreadDeletePlan>(&cases["hiddenStart"]);
+    round_trip::<HiddenThreadDeletePlan>(&cases["hiddenPage"]);
+    round_trip::<UnifiedCleanupExecuteRequest>(&cases["execute"]);
+    round_trip::<UnifiedCleanupResult>(&cases["result"]);
+}
 #[test]
 fn actual_rust_types_match_reviewed_wire_fields_and_serde_rules() {
     let actual = serde_json::to_value(current_types()).unwrap();

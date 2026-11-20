@@ -67,7 +67,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
     }
 
     @MainActor
-    func testOffscreenShellGeometryAndHitTargetsZeroPointDrift() throws {
+    func testOffscreenShellGeometryAndHitTargetsZeroPointDrift() async throws {
         guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
             return
         }
@@ -97,8 +97,8 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        let mock = MockRuntimeTransport { _, _ in Data("[]".utf8) }
-        let store = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        let store = RuntimeConnectionStore(transport: .emptyDesktop, defaults: defaults)
+        await store.bootstrap()
         store.setTheme(.light)
         store.activeWorkspace = .codex
 

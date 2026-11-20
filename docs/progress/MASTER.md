@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.28**：macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）与 Rust `agenthub-ffi` 静态库架构，彻底退役 `src-tauri/`、`webui/`、Node／pnpm 工具链及 Rust `objc2` 胶水；核心对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，保持六大平台阅读、探针通知、清理与本机 Codex 桌面协作体验一致。API 协议保持 2、数据库 schema 保持 3。
+当前源码版本为 **2.1.29**。修复全平台清理的预览及确认、隐藏线程分页和切机后的数据隔离。原生工作区同时修复搜索定位、子智能体分页、Probe 活动、账号隔离、作业输出与计划导出。API 协议 2，数据库 schema 3。
 
 最近正式版本为 [**v2.1.28**](https://github.com/lich13/agenthub/releases/tag/v2.1.28)，发布提交为 [`eafbcd4`](https://github.com/lich13/agenthub/commit/eafbcd4c31574f0ed4efe8b09af90fed85668c65)。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/44588237182) 的发布边界检查、后端与契约检查、macOS Swift 6 检查、两端打包签名及发布六项任务全部通过，已发布八项正式资产。服务端已通过部署脚本升级为 `agenthub-webd 2.1.28`，服务为 `active`、健康为 `ok`；Mac 使用同版正式 DMG（校验与签名通过）从 `2.1.27` 原地更新至 `2.1.28` 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面、会话阅读与通知实收待用户验收。
 

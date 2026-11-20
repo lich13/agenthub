@@ -47,7 +47,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                     {
                         savedPlanFilename.value = req["filename"] as? String
                     }
-                    return Data("{\"path\":\"/Users/example/Downloads/plan.md\"}".utf8)
+                    return Data(#"{"filename":"plan.md"}"#.utf8)
                 }
                 return Data("{}".utf8)
             }

@@ -94,6 +94,7 @@ public struct MachineButtonView: View {
                     .foregroundStyle(palette.errFg.color)
             }
         }
+        .onChange(of: store.revision) { _ in localError = nil }
     }
 
     private func selectTarget(id: String) {

@@ -37,6 +37,7 @@ public struct UnifiedProviderWorkspaceView: View {
     public var codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)?
     public var codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)?
 
+    private let sourceRevision: UInt64
     @StateObject private var threadStore = ThreadMessageStore()
     @StateObject private var claudeHistoryStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
     @StateObject private var grokHistoryStore = PagedEventHistoryStore<GrokHistoryEvent> { ev, idx in
@@ -66,7 +67,8 @@ public struct UnifiedProviderWorkspaceView: View {
     @State private var loadOlderError: String?
     @State private var showAllHistory: Bool = false
     @State private var revealedPositionKey: String?
-    @State private var pendingJumpPositionKey: String?
+    @State private var pendingSearch: SessionSearchResult?
+    @State private var searchSelection: UnifiedSessionSummaryItem?
     @State private var latestReplyText: String?
     @State private var renameRequestSeqByKey: [String: Int] = [:]
     @State private var codexTailRefreshTask: Task<Void, Never>?
@@ -109,6 +111,7 @@ public struct UnifiedProviderWorkspaceView: View {
         codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)? = nil,
         codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)? = nil
     ) {
+        self.sourceRevision = store.revision
         self.store = store
         self.workspace = workspace
         self.isCompactMobile = isCompactMobile
@@ -156,6 +159,7 @@ public struct UnifiedProviderWorkspaceView: View {
         if let key = selectedKey, let match = allVisibleItems.first(where: { $0.sessionKey == key }) {
             return match
         }
+        if let searchSelection, searchSelection.sessionKey == selectedKey { return searchSelection }
         return isCompactMobile ? nil : activeItems.first
     }
 
@@ -324,7 +328,7 @@ public struct UnifiedProviderWorkspaceView: View {
             subagentDrawerOpen = false
             selectedSubagent = nil
             revealedPositionKey = nil
-            pendingJumpPositionKey = nil
+            pendingSearch = nil
             loadOlderError = nil
             detailLoadedForKey = nil
             readWarningExpanded = false
@@ -347,7 +351,27 @@ public struct UnifiedProviderWorkspaceView: View {
             grokHistoryStore.clearAll()
             providerHistoryStore.clearAll()
         }
+        .onDisappear { codexTailRefreshTask?.cancel() }
         .onChange(of: selectedItem?.sessionKey) { _ in
+            codexTailRefreshTask?.cancel()
+            subagentDrawerOpen = false
+            selectedSubagent = nil
+            if searchSelection?.sessionKey != selectedKey { searchSelection = nil }
+            if pendingSearch?.sessionKey != selectedKey { pendingSearch = nil }
+            previewImageItem = nil
+            errorMessage = nil
+            feedbackMessage = nil
+            currentDetailHistory = nil
+            headerInlineRename = false
+            loadingOlder = false
+            hasMoreOlder = false
+            beforeCursor = nil
+            showAllHistory = false
+            detailLoadedForKey = nil
+            latestReplyText = nil
+            rows = []
+            timelineEntries = []
+            subagents = nil
             revealedPositionKey = nil
             loadOlderError = nil
             readWarningExpanded = false
@@ -1129,6 +1153,12 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func fetchSessionList() async {
+        let requestedQuery = query
+        let requestedArchived = archivedOpen
+        func isCurrent() -> Bool {
+            !Task.isCancelled && store.revision == sourceRevision && query == requestedQuery && archivedOpen == requestedArchived
+        }
+        guard isCurrent() else { return }
         do {
             switch provider {
             case .codex:
@@ -1141,12 +1171,14 @@ public struct UnifiedProviderWorkspaceView: View {
                     "threads.list",
                     args: ListArgs(archived: false, q: query.isEmpty ? nil : query, limit: 120)
                 )
+                guard isCurrent() else { return }
                 activeItems = active.map { mapCodexSummary($0, archived: false) }
                 if archivedOpen {
                     let arch: [ThreadSummary] = try await store.rpc(
                         "threads.list",
                         args: ListArgs(archived: true, q: query.isEmpty ? nil : query, limit: 120)
                     )
+                    guard isCurrent() else { return }
                     archivedItems = arch.map { mapCodexSummary($0, archived: true) }
                 }
 
@@ -1156,37 +1188,8 @@ public struct UnifiedProviderWorkspaceView: View {
                     "claude.list",
                     args: ClaudeListArgs(q: query.isEmpty ? nil : query, limit: 100)
                 )
-                activeItems = list.map { item in
-                    let stLabel = Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
-                    let chip: (String?, StatusChipTone) = if item.status == "running" {
-                        ("运行中", .info)
-                    } else if item.status == "waiting" {
-                        ("等待处理", .warning)
-                    } else if item.readError != nil {
-                        ("异常", .danger)
-                    } else {
-                        (nil, .neutral)
-                    }
-                    return UnifiedSessionSummaryItem(
-                        sessionKey: item.sessionKey,
-                        nativeId: item.id,
-                        title: item.title.isEmpty ? item.id : item.title,
-                        cwd: item.cwd,
-                        path: item.path,
-                        statusText: stLabel,
-                        statusChipBadge: chip.0,
-                        statusChipTone: chip.1,
-                        running: item.status == "running",
-                        archived: false,
-                        canRename: item.canRename,
-                        renameBlockReason: item.renameBlockReason,
-                        canArchive: false,
-                        canDelete: true,
-                        storageSize: item.storageSize,
-                        readError: item.readError,
-                        readWarning: item.readWarning
-                    )
-                }
+                guard isCurrent() else { return }
+                activeItems = list.map(mapClaudeSummary)
 
             case .grok:
                 struct GrokListArgs: Encodable { let q: String?; let limit: Int }
@@ -1194,25 +1197,8 @@ public struct UnifiedProviderWorkspaceView: View {
                     "grok.list",
                     args: GrokListArgs(q: query.isEmpty ? nil : query, limit: 100)
                 )
-                activeItems = list.map { item in
-                    UnifiedSessionSummaryItem(
-                        sessionKey: item.id,
-                        nativeId: item.id,
-                        title: item.title.isEmpty ? item.id : item.title,
-                        cwd: item.cwd,
-                        path: HistoryAndResumeHelpers.grokHandoffPath(item),
-                        statusText: Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
-                        statusChipBadge: item.status == "running" ? "运行中" : nil,
-                        statusChipTone: .info,
-                        running: item.status == "running",
-                        archived: false,
-                        canRename: true,
-                        renameBlockReason: nil,
-                        canArchive: false,
-                        canDelete: true,
-                        storageSize: item.storageSize
-                    )
-                }
+                guard isCurrent() else { return }
+                activeItems = list.map(mapGrokSummary)
 
             case .antigravity, .dsh:
                 let prefix = (provider == .antigravity) ? "antigravity" : "dsh"
@@ -1224,12 +1210,14 @@ public struct UnifiedProviderWorkspaceView: View {
                     "\(prefix).list",
                     args: ProvListWrap(request: .init(q: query.isEmpty ? nil : query, archived: false, limit: 100))
                 )
+                guard isCurrent() else { return }
                 activeItems = active.map(mapProviderSummary)
                 if archivedOpen {
                     let arch: [ProviderSessionSummary] = try await store.rpc(
                         "\(prefix).list",
                         args: ProvListWrap(request: .init(q: query.isEmpty ? nil : query, archived: true, limit: 100))
                     )
+                    guard isCurrent() else { return }
                     archivedItems = arch.map(mapProviderSummary)
                 }
 
@@ -1244,31 +1232,13 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: GBWrap(request: .init(q: query.isEmpty ? nil : query, limit: 100)),
                     localOnly: true
                 )
-                activeItems = list.map { item in
-                    let st = item.status == "authorization" ? "需要授权"
-                        : (item.status == "reply_needed" ? "需要回复" : (!item.path.isEmpty ? "近期缓存" : "未缓存"))
-                    return UnifiedSessionSummaryItem(
-                        sessionKey: item.sessionKey,
-                        nativeId: item.id,
-                        title: item.title.isEmpty ? item.id : item.title,
-                        cwd: item.cwd,
-                        path: item.path,
-                        statusText: st,
-                        statusChipBadge: "只读",
-                        statusChipTone: .neutral,
-                        running: false,
-                        archived: false,
-                        canRename: false,
-                        renameBlockReason: nil,
-                        canArchive: false,
-                        canDelete: false,
-                        storageSize: item.storageSize
-                    )
-                }
+                guard isCurrent() else { return }
+                activeItems = list.map(mapGrokBotSummary)
             }
             syncPartitionedSelection()
             errorMessage = nil
         } catch {
+            guard isCurrent() else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -1282,12 +1252,17 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private func isCurrentDetail(_ item: UnifiedSessionSummaryItem) -> Bool {
+        !Task.isCancelled && store.revision == sourceRevision && selectedItem?.sessionKey == item.sessionKey
+    }
+
     private func fetchSessionDetail(for item: UnifiedSessionSummaryItem) async {
+        guard isCurrentDetail(item) else { return }
         let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
         if detailLoadedForKey != item.sessionKey {
             detailLoading = true
         }
-        defer { detailLoading = false }
+        defer { if isCurrentDetail(item) { detailLoading = false } }
         do {
             var incomingHistory: HistoryMetadata?
             switch provider {
@@ -1301,6 +1276,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     "threads.detail",
                     args: DetailArgs(id: item.sessionKey, options: .init(limit: 120))
                 ) else { return }
+                guard isCurrentDetail(item) else { return }
+                if searchSelection?.sessionKey == item.sessionKey {
+                    searchSelection = mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived")
+                }
                 let slot = threadStore.applyDetail(detail)
                 incomingHistory = detail.history
                 if subagents != slot.subagents { subagents = slot.subagents }
@@ -1331,6 +1310,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     "claude.detail",
                     args: Req(sessionKey: item.sessionKey, limit: 160)
                 )
+                guard isCurrentDetail(item) else { return }
+                if searchSelection?.sessionKey == item.sessionKey {
+                    searchSelection = mapClaudeSummary(detail.summary)
+                }
                 let slot = claudeHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -1361,6 +1344,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     "grok.detail",
                     args: Req(id: item.sessionKey, limit: 160)
                 )
+                guard isCurrentDetail(item) else { return }
+                if searchSelection?.sessionKey == item.sessionKey {
+                    searchSelection = mapGrokSummary(detail.summary)
+                }
                 let slot = grokHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -1397,6 +1384,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160)),
                     localOnly: provider == .grokbot
                 )
+                guard isCurrentDetail(item) else { return }
+                if searchSelection?.sessionKey == item.sessionKey {
+                    searchSelection = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
+                }
                 let slot = providerHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -1430,11 +1421,12 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             }
 
-            if let pending = pendingJumpPositionKey, selectedItem?.sessionKey == item.sessionKey {
-                pendingJumpPositionKey = nil
-                await jumpAndRevealPositionKey(pending)
+            if let pending = pendingSearch, pending.sessionKey == item.sessionKey, isCurrentDetail(item) {
+                pendingSearch = nil
+                await jumpAndRevealPositionKey(pending.positionKey)
             }
         } catch {
+            guard isCurrentDetail(item) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -1455,7 +1447,7 @@ public struct UnifiedProviderWorkspaceView: View {
 
         guard hasMoreOlder, !loadingOlder, loadOlderError == nil, let cursor = beforeCursor else { return false }
         loadingOlder = true
-        defer { loadingOlder = false }
+        defer { if isCurrentDetail(item) { loadingOlder = false } }
         let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
 
         do {
@@ -1470,6 +1462,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     "threads.blocks",
                     args: BlocksArgs(id: item.sessionKey, options: .init(limit: 120, before: cursor))
                 )
+                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
                 let slot = threadStore.applyBlockPage(page, expectedCursor: cursor)
                 let advanced = (!page.blocks.isEmpty && slot.beforeCursor != cursor)
                 hasMoreOlder = advanced ? slot.hasMoreBlocks : false
@@ -1491,6 +1484,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     "claude.detail",
                     args: Req(sessionKey: item.sessionKey, limit: 160, before: cursor)
                 )
+                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
                 let slot = claudeHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -1513,6 +1507,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     "grok.detail",
                     args: Req(id: item.sessionKey, limit: 160, before: cursor)
                 )
+                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
                 let slot = grokHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -1540,6 +1535,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160, before: cursor)),
                     localOnly: provider == .grokbot
                 )
+                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
                 let slot = providerHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -1557,17 +1553,18 @@ public struct UnifiedProviderWorkspaceView: View {
                 return !page.events.isEmpty
             }
         } catch {
+            guard isCurrentDetail(item) else { return false }
             loadOlderError = error.localizedDescription
             return false
         }
     }
 
     private func performRename(item: UnifiedSessionSummaryItem, newTitle: String) async throws {
+        guard store.revision == sourceRevision else { throw CancellationError() }
         switch provider {
         case .codex:
             struct RenameArgs: Encodable { let threadId: String; let name: String }
-            struct RenameAck: Decodable { let jobId: String?; let threadId: String? }
-            let ack: RenameAck = try await store.rpc("threads.rename", args: RenameArgs(threadId: item.sessionKey, name: newTitle))
+            let ack: StartedJobResponse = try await store.rpc("threads.rename", args: RenameArgs(threadId: item.sessionKey, name: newTitle))
             store.trackStartedJob(ack.jobId)
             threadStore.recordOptimisticTitle(threadId: item.sessionKey, title: newTitle)
         case .claudeCode:
@@ -1590,6 +1587,7 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func toggleSingleArchive(_ item: UnifiedSessionSummaryItem) async {
+        guard store.revision == sourceRevision else { return }
         do {
             let nextFallbackKey: String? = {
                 guard !item.archived, selectedKey == item.sessionKey, !archivedOpen else { return nil }
@@ -1600,9 +1598,8 @@ public struct UnifiedProviderWorkspaceView: View {
             }()
             if provider == .codex {
                 struct Args: Encodable { let threadId: String }
-                struct Ack: Decodable { let jobId: String? }
                 let cmd = item.archived ? "threads.restore" : "threads.archive"
-                let ack: Ack = try await store.rpc(cmd, args: Args(threadId: item.sessionKey))
+                let ack: StartedJobResponse = try await store.rpc(cmd, args: Args(threadId: item.sessionKey))
                 store.trackStartedJob(ack.jobId)
             } else {
                 let prefix = provider == .antigravity ? "antigravity" : "dsh"
@@ -1625,6 +1622,7 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func triggerSingleDelete(_ item: UnifiedSessionSummaryItem) async {
+        guard store.revision == sourceRevision else { return }
         if provider == .claudeCode {
             claudeDeleteError = nil
             claudeDeleteResiduals = []
@@ -1650,6 +1648,7 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func confirmClaudeDelete(_ preview: ClaudeDeletePreview) async {
+        guard store.revision == sourceRevision else { return }
         batchBusy = true
         claudeDeleteError = nil
         defer { batchBusy = false }
@@ -1662,7 +1661,7 @@ public struct UnifiedProviderWorkspaceView: View {
                 "claude.deleteExecute",
                 args: Wrap(request: .init(sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint))
             )
-            if let residuals = result.residuals, !residuals.isEmpty, !result.deleted {
+            if let residuals = result.residuals, !residuals.isEmpty {
                 claudeDeleteResiduals = residuals
                 claudeDeleteError = "部分任务文件未能清理"
             } else {
@@ -1678,6 +1677,7 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func confirmGrokDelete(_ preview: GrokDeletePreview) async {
+        guard store.revision == sourceRevision else { return }
         batchBusy = true
         grokDeleteError = nil
         defer { batchBusy = false }
@@ -1690,7 +1690,7 @@ public struct UnifiedProviderWorkspaceView: View {
                 "grok.deleteExecute",
                 args: Wrap(request: .init(id: preview.id, confirmed: true, fingerprint: preview.fingerprint))
             )
-            if let residuals = result.residuals, !residuals.isEmpty, !result.deleted {
+            if let residuals = result.residuals, !residuals.isEmpty {
                 grokDeleteResiduals = residuals
                 grokDeleteError = "部分任务文件未能清理"
             } else {
@@ -1733,7 +1733,7 @@ public struct UnifiedProviderWorkspaceView: View {
         keys: [String],
         partition: SessionSelectionPartition
     ) async {
-        guard !keys.isEmpty, !batchBusy else { return }
+        guard store.revision == sourceRevision, !keys.isEmpty, !batchBusy else { return }
         let capturedRevision = store.revision
         batchTargetPartition = partition
         batchBusy = true
@@ -1751,7 +1751,7 @@ public struct UnifiedProviderWorkspaceView: View {
                 operation: operation,
                 sessionKeys: keys
             ) { req in
-                try await targetStore.rpc("sessions.bulkPreview", args: Wrap(request: req))
+                try await targetStore.rpc("sessions.bulkPreview", args: Wrap(request: req), at: capturedRevision)
             }
             guard store.revision == capturedRevision else { return }
             batchPreview = preview
@@ -1762,7 +1762,7 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
     private func executePreparedBatch() async {
-        guard let preview = batchPreview, !batchBusy else { return }
+        guard store.revision == sourceRevision, let preview = batchPreview, !batchBusy else { return }
         let capturedRevision = store.revision
         let targetPartition = batchTargetPartition
         batchPreview = nil
@@ -1773,7 +1773,7 @@ public struct UnifiedProviderWorkspaceView: View {
 
         let targetStore = store
         let outcome = await SessionBatchChunkExecutor.execute(preview: preview) { req in
-            try await targetStore.rpc("sessions.bulkExecute", args: Wrap(request: req))
+            try await targetStore.rpc("sessions.bulkExecute", args: Wrap(request: req), at: capturedRevision)
         }
         guard store.revision == capturedRevision else { return }
 
@@ -1797,8 +1797,11 @@ public struct UnifiedProviderWorkspaceView: View {
     // MARK: - Bounded Timeline Window Jump (j:/w:/n: Cursors) & Search Reveal
 
     private func handleTimelineTickSelected(_ entry: TimelineEntry) async {
-        guard let item = selectedItem else { return }
-        let targetId = entry.id
+        await jumpAndRevealPositionKey(entry.id)
+    }
+
+    private func jumpAndRevealPositionKey(_ targetId: String) async {
+        guard targetId != "session", !targetId.isEmpty, let item = selectedItem, isCurrentDetail(item) else { return }
 
         // If target is already loaded in the current displayed rows, jump directly without fetching.
         if coordinatorRef?.scrollToPositionKey(targetId, reduceMotion: motionObserver.reduceMotion) == true {
@@ -1834,7 +1837,7 @@ public struct UnifiedProviderWorkspaceView: View {
             try await readTimelineWindowPage(for: item, cursor: cursor)
         }
 
-        if let winRows = timelineWindow.items {
+        if isCurrentDetail(item), timelineWindow.pendingTargetId == targetId, let winRows = timelineWindow.items {
             coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
             _ = coordinatorRef?.scrollToPositionKey(targetId, reduceMotion: motionObserver.reduceMotion)
             timelineWindow.clearPendingTarget()
@@ -1945,47 +1948,16 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
-    private func jumpAndRevealPositionKey(_ positionKey: String?) async {
-        guard let positionKey, !positionKey.isEmpty, let item = selectedItem else { return }
-        let capturedRevision = store.revision
-        let capturedSession = item.sessionKey
-
-        // Unfold single target block inside Codex 60/3 compact history if needed
-        if provider == .codex, revealedPositionKey != positionKey {
-            revealedPositionKey = positionKey
-            let slot = threadStore.slot(for: item.sessionKey)
-            if !slot.blocks.isEmpty {
-                let rebuilt = ConversationRowBuilder.buildCodexRows(
-                    blocks: slot.blocks,
-                    showAllHistory: showAllHistory || slot.showAllHistory,
-                    planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.threadSubagents,
-                    revealedBlockId: positionKey
-                )
-                coordinatorRef?.updateRowsPreservingAnchor(rebuilt, preferAutoFollowBottom: false)
-                rows = rebuilt
-            }
-        }
-
-        if coordinatorRef?.scrollToPositionKey(positionKey, reduceMotion: motionObserver.reduceMotion) == true {
-            return
-        }
-
-        // Bounded backward paging until positionKey is loaded or cursor stops advancing (AGENTS.md:37, 130)
-        var attempts = 0
-        while attempts < 25, hasMoreOlder, store.revision == capturedRevision, selectedItem?.sessionKey == capturedSession {
-            attempts += 1
-            let loaded = await loadOlderPageIfNeeded()
-            if !loaded { break }
-            if coordinatorRef?.scrollToPositionKey(positionKey, reduceMotion: motionObserver.reduceMotion) == true {
-                return
-            }
-        }
-    }
-
     private func handleSearchResultSelected(_ result: SessionSearchResult) {
         if selectedItem?.sessionKey != result.sessionKey {
-            pendingJumpPositionKey = result.positionKey
+            pendingSearch = result
+            if !allVisibleItems.contains(where: { $0.sessionKey == result.sessionKey }) {
+                searchSelection = UnifiedSessionSummaryItem(
+                    sessionKey: result.sessionKey, nativeId: result.nativeId, title: result.title,
+                    cwd: result.cwd ?? "", path: "", statusText: "", running: false, archived: false,
+                    canRename: false, canArchive: false, canDelete: false
+                )
+            }
             selectedKey = result.sessionKey
             mobileDetailOpen = true
             if supportsArchive && !activeItems.contains(where: { $0.sessionKey == result.sessionKey }) {
@@ -2012,6 +1984,80 @@ public struct UnifiedProviderWorkspaceView: View {
             }
         }
         return "最近"
+    }
+
+    private func mapClaudeSummary(_ item: ClaudeSessionSummary) -> UnifiedSessionSummaryItem {
+        let stLabel = Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
+        let chip: (String?, StatusChipTone) = if item.status == "running" {
+            ("运行中", .info)
+        } else if item.status == "waiting" {
+            ("等待处理", .warning)
+        } else if item.readError != nil {
+            ("异常", .danger)
+        } else {
+            (nil, .neutral)
+        }
+        return UnifiedSessionSummaryItem(
+            sessionKey: item.sessionKey,
+            nativeId: item.id,
+            title: item.title.isEmpty ? item.id : item.title,
+            cwd: item.cwd,
+            path: item.path,
+            statusText: stLabel,
+            statusChipBadge: chip.0,
+            statusChipTone: chip.1,
+            running: item.status == "running",
+            archived: false,
+            canRename: item.canRename,
+            renameBlockReason: item.renameBlockReason,
+            canArchive: false,
+            canDelete: true,
+            storageSize: item.storageSize,
+            readError: item.readError,
+            readWarning: item.readWarning
+        )
+    }
+
+    private func mapGrokSummary(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
+        UnifiedSessionSummaryItem(
+            sessionKey: item.id,
+            nativeId: item.id,
+            title: item.title.isEmpty ? item.id : item.title,
+            cwd: item.cwd,
+            path: HistoryAndResumeHelpers.grokHandoffPath(item),
+            statusText: Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
+            statusChipBadge: item.status == "running" ? "运行中" : nil,
+            statusChipTone: .info,
+            running: item.status == "running",
+            archived: false,
+            canRename: true,
+            renameBlockReason: nil,
+            canArchive: false,
+            canDelete: true,
+            storageSize: item.storageSize
+        )
+    }
+
+    private func mapGrokBotSummary(_ item: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
+        let st = item.status == "authorization" ? "需要授权"
+            : (item.status == "reply_needed" ? "需要回复" : (!item.path.isEmpty ? "近期缓存" : "未缓存"))
+        return UnifiedSessionSummaryItem(
+            sessionKey: item.sessionKey,
+            nativeId: item.id,
+            title: item.title.isEmpty ? item.id : item.title,
+            cwd: item.cwd,
+            path: item.path,
+            statusText: st,
+            statusChipBadge: "只读",
+            statusChipTone: .neutral,
+            running: false,
+            archived: false,
+            canRename: false,
+            renameBlockReason: nil,
+            canArchive: false,
+            canDelete: false,
+            storageSize: item.storageSize
+        )
     }
 
     private func mapCodexSummary(_ s: ThreadSummary, archived: Bool) -> UnifiedSessionSummaryItem {

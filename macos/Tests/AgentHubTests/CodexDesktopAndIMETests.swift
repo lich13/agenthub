@@ -190,6 +190,95 @@ final class CodexDesktopAndIMETests: XCTestCase {
     }
 
     @MainActor
+    func testLeavingBeforeAttachCompletesReleasesItsSessionAndIgnoresLaterFrames() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let replies = AsyncStream<Void>.makeStream()
+        let view = DesktopView(sessionId: "fixture-stream", threadId: "fixture", connected: true, writable: true)
+        let payload = try JSONEncoder().encode(view)
+        let transport = MockRuntimeTransport { command, _ in
+            if command == "codex.desktop.attach" {
+                started.continuation.yield()
+                var it = replies.stream.makeAsyncIterator()
+                _ = await it.next()
+                return payload
+            }
+            XCTAssertEqual(command, "codex.desktop.detach")
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let desktop = CodexDesktopStore(connection: store, threadId: view.threadId)
+        let connecting = Task { await desktop.connect() }
+        var it = started.stream.makeAsyncIterator()
+        _ = await it.next()
+        await desktop.detachIfNeeded()
+        replies.continuation.yield()
+        await connecting.value
+        transport.emitDesktopStreamFrame(payload)
+        await Task.yield()
+        XCTAssertNil(desktop.view)
+        XCTAssertFalse(desktop.busy)
+        XCTAssertEqual(transport.recordedCalls.map(\.command), ["codex.desktop.attach", "codex.desktop.detach"])
+        XCTAssertTrue(transport.recordedCalls.last?.args.contains(view.sessionId) == true)
+    }
+
+    @MainActor
+    func testSearchReturnSelectsLatestQueryAfterOlderResponseArrives() async throws {
+        let first = expectation(description: "first query sent")
+        let newer = expectation(description: "second query returned")
+        let retired = expectation(description: "first query returned")
+        let release = AsyncStream<Void>.makeStream()
+        defer { release.continuation.finish() }
+        let transport = MockRuntimeTransport { _, args in
+            struct Request: Decodable { let request: SessionSearchRequest }
+            let request = try JSONDecoder().decode(Request.self, from: Data(args.utf8)).request
+            if request.query == "first" {
+                first.fulfill()
+                var iterator = release.stream.makeAsyncIterator()
+                _ = await iterator.next()
+                retired.fulfill()
+            } else {
+                newer.fulfill()
+            }
+            let key = request.query
+            let result = SessionSearchResult(resultId: key, sessionKey: key, nativeId: key, title: key,
+                                             matchKind: "metadata", positionKey: "session", snippet: key)
+            return try JSONEncoder().encode(SessionSearchResponse(provider: .codex, scope: .provider, query: key,
+                                                                  results: [result], truncated: false))
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        var selection: String?
+        let host = NSHostingView(rootView: SessionSearchModalView(store: store, provider: .codex, currentSessionKey: nil,
+                                                                  onSelectResult: { selection = $0.sessionKey }, onClose: {}))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func input(_ root: NSView) -> IMEGuardedNSTextField? {
+            if let field = root as? IMEGuardedNSTextField { return field }
+            return root.subviews.lazy.compactMap(input).first
+        }
+        let field = try XCTUnwrap(input(host))
+        window.makeFirstResponder(field)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        func enter(_ text: String) {
+            field.stringValue = text
+            field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+            host.layoutSubtreeIfNeeded()
+        }
+        enter("first")
+        await fulfillment(of: [first], timeout: 3)
+        enter("second")
+        await fulfillment(of: [newer], timeout: 3)
+        release.continuation.yield()
+        await fulfillment(of: [retired], timeout: 3)
+        for _ in 0 ..< 50 where selection == nil {
+            host.layoutSubtreeIfNeeded()
+            _ = field.delegate?.control?(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            await Task.yield()
+        }
+        XCTAssertEqual(selection, "second")
+    }
+
+    @MainActor
     func testMentionsCatalogFanoutAttachmentBoundsSyncAndElicitationSchemaEncoding() async throws {
         let suite = "com.lich13.agenthub.desktop.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

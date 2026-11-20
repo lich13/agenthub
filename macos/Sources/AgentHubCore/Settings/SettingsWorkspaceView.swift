@@ -74,6 +74,8 @@ public struct MaintenanceOpsView: View {
     public var isNarrow: Bool
 
     @State private var updateStatus: UpdateStatus?
+    private let sourceRevision: UInt64
+    @State private var startingUpdate = false
     @State private var updateLoading: Bool = false
     @State private var updateError: String?
     @State private var lastUpdateAction: UnifiedUpdateActionKind?
@@ -81,6 +83,7 @@ public struct MaintenanceOpsView: View {
 
     public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
+        self.sourceRevision = store.revision
         self.isNarrow = isNarrow
     }
 
@@ -90,6 +93,7 @@ public struct MaintenanceOpsView: View {
     }
 
     private var updateBusy: Bool {
+        if startingUpdate { return true }
         guard let id = activeUpdateJobId else { return false }
         guard let job = store.trackedJobs[id] else { return true }
         return !job.isTerminal
@@ -304,6 +308,9 @@ public struct MaintenanceOpsView: View {
     }
 
     private func triggerUpdateAction(_ action: UnifiedUpdateActionKind) async {
+        guard !updateBusy else { return }
+        startingUpdate = true
+        defer { startingUpdate = false }
         updateError = nil
         lastUpdateAction = action
         let command = switch action {
@@ -312,7 +319,7 @@ public struct MaintenanceOpsView: View {
         case .prune: "updates.prune"
         }
         do {
-            let res: StartedJobResponse = try await store.rpc(command)
+            let res: StartedJobResponse = try await store.rpc(command, at: sourceRevision)
             activeUpdateJobId = res.jobId
             store.trackStartedJob(res.jobId)
             await fetchUpdateStatus()
@@ -343,14 +350,17 @@ public struct UnifiedThreadCleanupSection: View {
     @State private var hiddenScanStopped: Bool = false
     @State private var result: UnifiedCleanupResult?
     @State private var selectedScopes: Set<String> = []
-    @State private var armed: Bool = false
+    @State private var confirmation: (revision: UInt64, request: UnifiedCleanupExecuteRequest)?
+    private var armed: Bool { confirmation != nil }
     @State private var expandedScope: String?
     @State private var candidatePage: Int = 0
     @State private var resultPage: Int = 0
-    @State private var scanning: Bool = false
+    @State private var previewTask: Task<Void, Never>?
+    @State private var hiddenRunner: HiddenCleanupScan?
+    private var scanning: Bool { previewTask != nil || hiddenRunner != nil }
     @State private var executing: Bool = false
     @State private var errorMessage: String?
-    @State private var hiddenScanTask: Task<Void, Never>?
+    @State private var hiddenError: String?
 
     public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
@@ -454,7 +464,7 @@ public struct UnifiedThreadCleanupSection: View {
 
                                 // 17x17pt Checkbox (styles.css:631)
                                 Button {
-                                    armed = false
+                                    confirmation = nil
                                     if isSelected {
                                         selectedScopes.remove(resolvedKey)
                                     } else if canSelect {
@@ -483,6 +493,11 @@ public struct UnifiedThreadCleanupSection: View {
                             }
 
                             // 5pt .unified-scope-bar usage ratio bar (styles.css:634-637)
+                            if let sp, sp.scanned, !sp.issues.isEmpty {
+                                Text(sp.issues.joined(separator: "\n"))
+                                    .font(DesignFonts.body(11))
+                                    .foregroundStyle(palette.warnFg.color)
+                            }
                             if ratioPct > 0 {
                                 GeometryReader { barGeo in
                                     ZStack(alignment: .leading) {
@@ -549,12 +564,12 @@ public struct UnifiedThreadCleanupSection: View {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(slice) { cand in
                             HStack {
-                                Text(cand.title ?? cand.targetId)
+                                Text(cand.title.isEmpty ? cand.id : cand.title)
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textPrimary.color)
                                     .lineLimit(1)
                                 Spacer()
-                                Text(CleanupFormatting.formatBytes(cand.estimatedBytes))
+                                Text(cand.blockedReason ?? CleanupFormatting.formatBytes(cand.estimatedBytes))
                                     .font(DesignFonts.mono(11))
                                     .foregroundStyle(palette.textMuted.color)
                             }
@@ -569,13 +584,13 @@ public struct UnifiedThreadCleanupSection: View {
 
                 if let result {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("已清理 \(result.deletedCount) 项 · 释放 \(CleanupFormatting.formatBytes(result.freedBytes)) · 失败 \(result.failedCount) 项")
+                        Text("已清理 \(result.deletedCount) 项 · 释放 \(CleanupFormatting.formatBytes(result.deletedBytes)) · 跳过 \(result.skippedCount) 项 · 失败 \(result.failedCount) 项")
                             .font(DesignFonts.body(12, weight: .medium))
                             .foregroundStyle((result.failedCount == 0 ? palette.okFg : palette.warnFg).color)
-                        let failures = result.items.filter { $0.status != "deleted" }
+                        let failures = result.unsuccessfulDetails
                         if !failures.isEmpty {
-                            ForEach(paginate(failures, page: resultPage)) { item in
-                                Text("\(item.targetId)：\(item.error ?? item.status)")
+                            ForEach(paginate(failures, page: resultPage).indices, id: \.self) { index in
+                                Text(failures[index])
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.errFg.color)
                             }
@@ -586,6 +601,9 @@ public struct UnifiedThreadCleanupSection: View {
                     }
                 }
 
+                if let hiddenError {
+                    Text(hiddenError).font(DesignFonts.body(12)).foregroundStyle(palette.errFg.color)
+                }
                 if let errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
                         .font(DesignFonts.body(12))
@@ -605,7 +623,7 @@ public struct UnifiedThreadCleanupSection: View {
                     .disabled(busy)
 
                     if store.capabilities.hiddenCleanupScan {
-                        if hiddenScanTask != nil {
+                        if hiddenRunner != nil {
                             Button("取消隐藏扫描") {
                                 cancelHiddenScan()
                             }
@@ -621,23 +639,20 @@ public struct UnifiedThreadCleanupSection: View {
 
                     if !armed {
                         Button("一键清理所选平台") {
-                            armed = true
+                            guard let request = plan?.executionRequest(for: selectedScopes), !request.targets.isEmpty else { return }
+                            confirmation = (store.revision, request)
                         }
                         .buttonStyle(DangerButtonStyle(soft: true))
-                        .disabled(Self.isCleanupExecuteDisabled(
-                            busy: busy,
-                            hiddenScanStopped: hiddenScanStopped,
-                            selectedDeletableCount: selectedDeletableCount
-                        ))
+                        .disabled(busy || selectedDeletableCount == 0)
                     } else {
                         Button("确认清理所选") {
                             Task { await executeCleanup() }
                         }
                         .buttonStyle(DangerButtonStyle(soft: false))
-                        .disabled(busy || hiddenScanStopped)
+                        .disabled(busy)
 
                         Button("取消") {
-                            armed = false
+                            confirmation = nil
                         }
                         .buttonStyle(SecondaryButtonStyle())
                         .disabled(busy)
@@ -645,30 +660,10 @@ public struct UnifiedThreadCleanupSection: View {
                 }
             }
         }
-        .onChange(of: store.revision) { _ in
-            cancelHiddenScan()
-            plan = nil
-            hiddenScan = nil
-            hiddenScanStopped = false
-            result = nil
-            selectedScopes = []
-            armed = false
-            expandedScope = nil
-            candidatePage = 0
-            resultPage = 0
-            errorMessage = nil
-        }
         .onDisappear {
+            previewTask?.cancel()
             cancelHiddenScan()
         }
-    }
-
-    public static func isCleanupExecuteDisabled(
-        busy: Bool,
-        hiddenScanStopped: Bool,
-        selectedDeletableCount: Int
-    ) -> Bool {
-        busy || hiddenScanStopped || selectedDeletableCount == 0
     }
 
     private func scopeSummary(_ scope: String, scopePlan: UnifiedCleanupScopePlan?) -> String {
@@ -679,14 +674,14 @@ public struct UnifiedThreadCleanupSection: View {
         if !sp.scanned {
             if scope == "codex_hidden" {
                 if scanning {
-                    let scanned = hiddenScan?.scannedFiles ?? sp.candidates.count
+                    let scanned = hiddenScan?.processed ?? sp.candidates.count
                     return scanned > 0 ? "正在深度扫描隐藏线程（已扫 \(scanned) 个文件）…" : "正在深度扫描隐藏线程…"
                 }
                 if hiddenScanStopped && !sp.candidates.isEmpty {
                     return "已停止扫描 · 已保留 \(sp.candidates.count) 条已扫候选（需完整扫描后方可清理）"
                 }
             }
-            return "未深度扫描"
+            return sp.issues.first ?? "未深度扫描"
         }
         return sp.deletableCount > 0
             ? "\(sp.deletableCount) 项可清理 · \(CleanupFormatting.formatBytes(sp.estimatedBytes))"
@@ -714,198 +709,100 @@ public struct UnifiedThreadCleanupSection: View {
         }
     }
 
-    public static func mergeHiddenPageIntoPlan(
-        existing: UnifiedCleanupPlan?,
-        pagePlan: HiddenThreadDeletePlan,
-        accumulated: [UnifiedCleanupCandidate],
-        completed: Bool
-    ) -> UnifiedCleanupPlan {
-        let hiddenScope = UnifiedCleanupScopePlan(
-            scope: "codex_hidden",
-            supported: true,
-            scanned: completed,
-            unavailableReason: nil,
-            candidateCount: max(accumulated.count, pagePlan.candidateCount),
-            deletableCount: completed ? pagePlan.deletableCount : accumulated.filter(\.deletable).count,
-            estimatedBytes: completed ? pagePlan.estimatedBytes : accumulated.reduce(Int64(0)) { $0 + $1.estimatedBytes },
-            candidates: accumulated
-        )
-        if var cur = existing {
-            if cur.scopes.contains(where: { $0.scope == "codex_hidden" }) {
-                cur.scopes = cur.scopes.map { $0.scope == "codex_hidden" ? hiddenScope : $0 }
-            } else {
-                cur.scopes.append(hiddenScope)
-            }
-            cur.totalCandidates = cur.scopes.reduce(0) { $0 + $1.candidateCount }
-            cur.totalDeletable = cur.scopes.filter(\.scanned).reduce(0) { $0 + $1.deletableCount }
-            cur.totalEstimatedBytes = cur.scopes.filter(\.scanned).reduce(Int64(0)) { $0 + $1.estimatedBytes }
-            return cur
-        }
-        return UnifiedCleanupPlan(
-            totalCandidates: hiddenScope.candidateCount,
-            totalDeletable: completed ? hiddenScope.deletableCount : 0,
-            totalEstimatedBytes: completed ? hiddenScope.estimatedBytes : 0,
-            scopes: [hiddenScope]
-        )
-    }
-
     private func runPreview(includeUnified: Bool) {
-        let capturedRevision = store.revision
-        armed = false
+        let revision = store.revision
+        confirmation = nil
         result = nil
         errorMessage = nil
+        hiddenError = nil
+        hiddenScan = nil
         hiddenScanStopped = false
         candidatePage = 0
         resultPage = 0
-        hiddenScanTask?.cancel()
-        hiddenScanTask = Task { @MainActor in
-            scanning = true
-            defer {
-                scanning = false
-                hiddenScanTask = nil
-            }
-            do {
-                if includeUnified {
-                    let unified: UnifiedCleanupPlan = try await store.rpc("cleanup.unifiedDryRun")
-                    guard store.revision == capturedRevision else { return }
+        selectedScopes.remove("codex_hidden")
+        if includeUnified {
+            plan = nil
+            expandedScope = nil
+            selectedScopes = []
+            previewTask = Task { @MainActor in
+                defer { if !Task.isCancelled { previewTask = nil } }
+                do {
+                    var unified: UnifiedCleanupPlan = try await store.rpc("cleanup.unifiedDryRun")
+                    guard store.revision == revision, !Task.isCancelled else { return }
+                    if let hidden = plan?.scopes.first(where: { $0.scope == "codex_hidden" }) {
+                        unified.replaceHidden(hidden)
+                    }
                     plan = unified
                     selectedScopes = Set(unified.scopes.filter { $0.supported && $0.scanned && $0.deletableCount > 0 }.map(\.scope))
-                } else if var cur = plan {
-                    // Fresh hidden rescan clears old partial hidden candidates first (DESIGN.md:87)
-                    cur.scopes = cur.scopes.map {
-                        $0.scope == "codex_hidden"
-                            ? UnifiedCleanupScopePlan(scope: "codex_hidden", supported: true, scanned: false, unavailableReason: nil, candidateCount: 0, deletableCount: 0, estimatedBytes: 0, candidates: [])
-                            : $0
-                    }
-                    selectedScopes.remove("codex_hidden")
-                    plan = cur
+                    expandedScope = expandedScope ?? unified.scopes.first(where: { !$0.candidates.isEmpty })?.scope
+                } catch {
+                    if store.revision == revision, !Task.isCancelled { errorMessage = error.localizedDescription }
                 }
-                if store.capabilities.hiddenCleanupScan {
-                    try await runPaginatedHiddenScan(capturedRevision: capturedRevision)
+            }
+        } else {
+            plan?.replaceHidden(UnifiedCleanupScopePlan(scope: "codex_hidden", supported: true, scanned: false, candidateCount: 0,
+                                                       deletableCount: 0, estimatedBytes: 0, candidates: [], issues: []))
+        }
+        guard store.capabilities.hiddenCleanupScan else { return }
+        let runner = HiddenCleanupScan { request in
+            try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: revision)
+        }
+        hiddenRunner = runner
+        let cleanupToken = store.registerBeforeMachineChange {
+            if hiddenRunner === runner { await cancelHiddenScan()?.value }
+            else { await runner.stop()?.value }
+        }
+        Task { @MainActor in
+            defer {
+                store.unregisterBeforeMachineChange(cleanupToken)
+                if hiddenRunner === runner { hiddenRunner = nil }
+            }
+            do {
+                try await runner.run { progress, scope in
+                    guard store.revision == revision, hiddenRunner === runner else { return }
+                    hiddenScan = progress
+                    hiddenScanStopped = progress.phase == .stopped
+                    var merged = plan ?? UnifiedCleanupPlan(totalCandidates: 0, totalDeletable: 0, totalEstimatedBytes: 0, scopes: [])
+                    merged.replaceHidden(scope)
+                    plan = merged
+                    if scope.scanned && scope.deletableCount > 0 {
+                        selectedScopes.insert(scope.scope)
+                        expandedScope = expandedScope ?? scope.scope
+                    }
                 }
             } catch {
-                if !Task.isCancelled, store.revision == capturedRevision {
-                    errorMessage = error.localizedDescription
-                }
+                if store.revision == revision, hiddenRunner === runner { hiddenError = error.localizedDescription }
             }
         }
     }
 
-    private func runPaginatedHiddenScan(capturedRevision: UInt64) async throws {
-        var mode = "start"
-        var scanId: String?
-        var cursor: String?
-        var accumulated: [UnifiedCleanupCandidate] = []
-
-        while !Task.isCancelled && store.revision == capturedRevision {
-            var reqObj: [String: JSONValue] = [
-                "mode": .string(mode),
-                "limit": .number(100),
-            ]
-            if let scanId { reqObj["scanId"] = .string(scanId) }
-            if let cursor { reqObj["cursor"] = .string(cursor) }
-
-            let pagePlan: HiddenThreadDeletePlan = try await store.rpc(
-                "cleanup.hiddenDryRun",
-                args: ["request": .object(reqObj)]
-            )
-            guard !Task.isCancelled, store.revision == capturedRevision else { return }
-            accumulated = pagePlan.candidates.count >= accumulated.count
-                ? pagePlan.candidates
-                : (accumulated + pagePlan.candidates.filter { item in !accumulated.contains(where: { $0.targetId == item.targetId }) })
-            hiddenScan = pagePlan.scan
-
-            let isComplete = (pagePlan.scan?.status == "complete" || pagePlan.scan?.status == "completed")
-                && pagePlan.scan?.nextCursor == nil
-            plan = Self.mergeHiddenPageIntoPlan(
-                existing: plan,
-                pagePlan: pagePlan,
-                accumulated: accumulated,
-                completed: isComplete
-            )
-            if expandedScope == nil && !accumulated.isEmpty {
-                expandedScope = "codex_hidden"
-            }
-
-            if !isComplete, let prog = pagePlan.scan, let next = prog.nextCursor {
-                selectedScopes.remove("codex_hidden")
-                mode = "poll"
-                scanId = prog.scanId
-                cursor = next
-            } else {
-                if isComplete && pagePlan.deletableCount > 0 {
-                    selectedScopes.insert("codex_hidden")
-                } else {
-                    selectedScopes.remove("codex_hidden")
-                }
-                break
-            }
-        }
-    }
-
-    private func cancelHiddenScan() {
-        let wasRunning = (hiddenScanTask != nil || scanning)
-        let scanId = hiddenScan?.scanId
-        hiddenScanTask?.cancel()
-        hiddenScanTask = nil
-        scanning = false
-        if wasRunning {
-            hiddenScanStopped = true
-            armed = false
-            // Keep already-fetched partial hiddenItems visible in `plan`, but disable cleanup on incomplete scan!
-            selectedScopes.remove("codex_hidden")
-            if var cur = plan {
-                cur.scopes = cur.scopes.map { sp in
-                    guard sp.scope == "codex_hidden" else { return sp }
-                    var copy = sp
-                    copy.scanned = false
-                    return copy
-                }
-                cur.totalDeletable = cur.scopes.filter(\.scanned).reduce(0) { $0 + $1.deletableCount }
-                cur.totalEstimatedBytes = cur.scopes.filter(\.scanned).reduce(Int64(0)) { $0 + $1.estimatedBytes }
-                plan = cur
-            }
-        }
-        if let scanId {
-            Task {
-                let _: HiddenThreadDeletePlan? = try? await store.rpc(
-                    "cleanup.hiddenDryRun",
-                    args: ["request": .object(["mode": .string("cancel"), "scanId": .string(scanId)])]
-                )
-            }
-        }
+    @discardableResult
+    private func cancelHiddenScan() -> Task<Void, Never>? {
+        guard let runner = hiddenRunner else { return nil }
+        selectedScopes.remove("codex_hidden")
+        confirmation = nil
+        hiddenScanStopped = true
+        let cancellation = runner.stop()
+        // Keep the scan busy until the server has received the cancellation.
+        return cancellation
     }
 
     private func executeCleanup() async {
-        guard let currentPlan = plan else { return }
-        armed = false
+        guard let pending = confirmation, pending.revision == store.revision, !executing else { return }
+        confirmation = nil
         executing = true
         errorMessage = nil
         defer { executing = false }
-        let scopesToRun = activeSelectedScopes
-        var targets: [JSONValue] = []
-        for sp in currentPlan.scopes where scopesToRun.contains(sp.scope) {
-            for c in sp.candidates where c.deletable {
-                var obj: [String: JSONValue] = [
-                    "scope": .string(sp.scope),
-                    "targetId": .string(c.targetId),
-                ]
-                if let fp = c.fingerprint { obj["fingerprint"] = .string(fp) }
-                targets.append(.object(obj))
-            }
-        }
         do {
-            let res: UnifiedCleanupResult = try await store.rpc(
-                "cleanup.unifiedExecute",
-                args: [
-                    "request": .object([
-                        "confirmed": .bool(true),
-                        "scopes": .array(scopesToRun.map { .string($0) }),
-                        "targets": .array(targets),
-                    ]),
-                ]
+            let outcome: UnifiedCleanupResult = try await store.rpc(
+                "cleanup.unifiedExecute", args: CleanupRequestEnvelope(request: pending.request), at: pending.revision
             )
-            result = res
+            result = outcome
+            plan?.apply(outcome)
+            selectedScopes = Set(activeSelectedScopes)
+            expandedScope = plan?.scopes.first(where: { !$0.candidates.isEmpty })?.scope
+            resultPage = 0
+            candidatePage = 0
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -918,9 +815,11 @@ public struct CodexAccountScopeSection: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
 
+    private let sourceRevision: UInt64
     @State private var scopedThreads: Int?
     @State private var result: CodexAccountScopeResult?
     @State private var autoEnabled: Bool = false
+    @State private var savingAuto = false
     @State private var hookInstalled: Bool = false
     @State private var checking: Bool = false
     @State private var clearing: Bool = false
@@ -930,6 +829,7 @@ public struct CodexAccountScopeSection: View {
 
     public init(store: RuntimeConnectionStore) {
         self.store = store
+        self.sourceRevision = store.revision
     }
 
     private var busy: Bool { checking || clearing }
@@ -970,7 +870,7 @@ public struct CodexAccountScopeSection: View {
                         ),
                         label: "回合结束后自动解除"
                     )
-                    .disabled(!hookInstalled || busy)
+                    .disabled(!hookInstalled || busy || savingAuto)
                 }
 
                 if let result {
@@ -1084,18 +984,12 @@ public struct CodexAccountScopeSection: View {
     }
 
     private func setAutoClear(_ next: Bool) async {
+        guard !savingAuto else { return }
+        savingAuto = true
+        defer { savingAuto = false }
         errorMessage = nil
         do {
-            let setEnv: OptionalResultEnvelope<ProbeSettingsView> = try await store.rpc("probe.settings.get")
-            guard let loaded = setEnv.data else { return }
-            var d = ProbeSettingsDraft.from(loaded)
-            d.clearAccountScope = next
-            let payload = try d.buildSavePayload()
-            let _: OptionalResultEnvelope<ProbeSettingsView> = try await store.rpc(
-                "probe.settings.save",
-                args: ["settings": .object(payload)]
-            )
-            autoEnabled = next
+            autoEnabled = try await store.saveAutoClearAccountScope(next, at: sourceRevision)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1121,26 +1015,9 @@ public struct CodexAccountScopeSection: View {
         errorMessage = nil
         page = 0
         defer { clearing = false }
-        var totalCleared = 0
-        var latestItems: [CodexAccountScopeItem] = []
-        var latestRemaining = 0
-
         do {
-            while !Task.isCancelled {
-                let batch: CodexAccountScopeResult = try await store.rpc("threads.accountScopeClear")
-                totalCleared += batch.clearedThreads
-                latestRemaining = batch.remainingFiles
-                latestItems = batch.items
-                result = CodexAccountScopeResult(
-                    clearedThreads: totalCleared,
-                    remainingFiles: latestRemaining,
-                    items: latestItems
-                )
-                if batch.remainingFiles <= 0 || batch.clearedThreads <= 0 {
-                    break
-                }
-            }
-            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus")
+            try await store.clearAccountScope(at: sourceRevision) { result = $0 }
+            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus", at: sourceRevision)
             scopedThreads = status.scopedThreads
         } catch {
             errorMessage = error.localizedDescription

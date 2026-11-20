@@ -9,7 +9,6 @@ public struct JobHistorySectionView: View {
     @State private var jobs: [JobRecord] = []
     @State private var errorMessage: String?
     @State private var expandedJobIds: Set<String> = []
-    @State private var loadedOutputs: [String: String] = [:]
 
     public init(store: RuntimeConnectionStore, title: String = "执行记录") {
         self.store = store
@@ -54,13 +53,11 @@ public struct JobHistorySectionView: View {
                                     store: store,
                                     job: job,
                                     expanded: expandedJobIds.contains(job.id),
-                                    cachedOutput: loadedOutputs[job.id],
                                     onToggle: {
                                         if expandedJobIds.contains(job.id) {
                                             expandedJobIds.remove(job.id)
                                         } else {
                                             expandedJobIds.insert(job.id)
-                                            Task { await fetchJobOutput(id: job.id) }
                                         }
                                     }
                                 )
@@ -96,14 +93,6 @@ public struct JobHistorySectionView: View {
         }
     }
 
-    private func fetchJobOutput(id: String) async {
-        if let envelope: OptionalResultEnvelope<JobRecord> = try? await store.rpc(
-            "jobs.detail",
-            args: ["id": .string(id), "includeOutput": .bool(true)]
-        ), let detail = envelope.data, let out = detail.output {
-            loadedOutputs[id] = out
-        }
-    }
 }
 
 public struct JobRecordRowView: View {
@@ -111,8 +100,17 @@ public struct JobRecordRowView: View {
     @ObservedObject public var store: RuntimeConnectionStore
     public let job: JobRecord
     public var expanded: Bool
-    public var cachedOutput: String?
+    @State private var detail: JobRecord?
+    @State private var loading = false
+    @State private var outputError: String?
     public let onToggle: () -> Void
+
+    public init(store: RuntimeConnectionStore, job: JobRecord, expanded: Bool, onToggle: @escaping () -> Void) {
+        self.store = store
+        self.job = job
+        self.expanded = expanded
+        self.onToggle = onToggle
+    }
 
     public var body: some View {
         let tone: StatusChipTone = switch job.status {
@@ -143,7 +141,11 @@ public struct JobRecordRowView: View {
             }
 
             if expanded {
-                let text = cachedOutput ?? job.output ?? "正在读取输出…"
+                if let analysis = (detail ?? job).failureAnalysis {
+                    Text(analysis.explanation).font(DesignFonts.body(12))
+                    ForEach(analysis.suggestions, id: \.self) { Text($0).font(DesignFonts.body(12)) }
+                }
+                let text = outputError ?? (loading && detail == nil ? "正在读取输出…" : (detail ?? job).output ?? "")
                 ScrollView(.horizontal) {
                     Text(text.isEmpty ? "（无输出）" : text)
                         .font(DesignFonts.mono(12))
@@ -152,6 +154,7 @@ public struct JobRecordRowView: View {
                         .padding(10)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .task(id: job.status) { await fetchOutput() }
                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.codeBg.color))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
@@ -159,5 +162,25 @@ public struct JobRecordRowView: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+    }
+
+    private func fetchOutput() async {
+        repeat {
+            loading = true
+            do {
+                let record: JobRecord? = try await store.rpc(
+                    "jobs.detail", args: ["id": .string(job.id), "includeOutput": .bool(true)]
+                )
+                guard !Task.isCancelled else { return }
+                detail = record
+                outputError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                outputError = error.localizedDescription
+            }
+            loading = false
+            guard (detail ?? job).status == "running" else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        } while !Task.isCancelled
     }
 }

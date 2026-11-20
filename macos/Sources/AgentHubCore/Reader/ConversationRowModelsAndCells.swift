@@ -462,13 +462,14 @@ public final class AttachmentViewportManager {
     ) {
         guard loadedImages[key] == nil, !inFlightKeys.contains(key) else { return }
         inFlightKeys.insert(key)
+        let sourceRevision = store.revision
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.inFlightKeys.remove(key) }
             struct ReqWrap: Encodable { let request: SessionAttachmentRequest }
             guard let resp: SessionAttachmentResponse = try? await store.rpc(
                 "sessions.attachmentRead",
-                args: ReqWrap(request: request)
+                args: ReqWrap(request: request), at: sourceRevision
             ),
                 let data = Data(base64Encoded: resp.base64),
                 let img = NSImage(data: data)

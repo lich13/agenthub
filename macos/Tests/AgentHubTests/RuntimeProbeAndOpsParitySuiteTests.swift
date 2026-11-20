@@ -613,81 +613,40 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
     func testPorted_hiddenScan() throws {
         try runAsyncParityCheck {
             let f = "webui/src/lib/query/hiddenScan.test.ts"
-            let basePlanJson = """
-            {
-              "scopes": [
-                {"scope":"codex_hidden","label":"Codex 隐藏线程","supported":true,"scanned":false,"candidateCount":0,"deletableCount":0,"estimatedBytes":0,"candidates":[]},
-                {"scope":"claude_empty","label":"Claude 空会话","supported":true,"scanned":true,"candidateCount":2,"deletableCount":2,"estimatedBytes":1024,"candidates":[]},
-                {"scope":"grok_empty","label":"Grok 空会话","supported":true,"scanned":true,"candidateCount":1,"deletableCount":1,"estimatedBytes":512,"candidates":[]}
-              ],
-              "totalCandidates": 3,
-              "totalDeletable": 3,
-              "totalEstimatedBytes": 1536
+            let fixtures = try CleanupInteractionVectors.load()
+            var plan = fixtures.preview
+            var modes: [String] = []
+            let runner = HiddenCleanupScan { request in
+                modes.append(request.mode)
+                if request.mode == "start" { return fixtures.hiddenStart }
+                XCTAssertEqual(request.scanId, fixtures.hiddenStart.scan.id)
+                XCTAssertEqual(request.cursor, 0)
+                return fixtures.hiddenPage
             }
-            """
-            let initialPlan = try JSONDecoder().decode(UnifiedCleanupPlan.self, from: Data(basePlanJson.utf8))
-            let page1Json = """
-            {
-              "candidateCount": 2,
-              "deletableCount": 2,
-              "estimatedBytes": 4096,
-              "candidates": [
-                {"scope":"codex_hidden","targetId":"h1","title":"Hidden 1","estimatedBytes":2048,"deletable":true},
-                {"scope":"codex_hidden","targetId":"h2","title":"Hidden 2","estimatedBytes":2048,"deletable":true}
-              ],
-              "scan": {"scanId":"scan-1","status":"running","scannedFiles":50,"nextCursor":"cur-2"}
+            try await runner.run { progress, scope in
+                plan.replaceHidden(scope)
+                if progress.phase == .preparing {
+                    XCTAssertFalse(scope.scanned)
+                    XCTAssertTrue(plan.executionRequest(for: ["codex_hidden"]).targets.isEmpty)
+                    ParityCaseTracker.shared.record(f, "incomplete-scan-disables-cleanup-execution")
+                }
             }
-            """
-            let page1 = try JSONDecoder().decode(HiddenThreadDeletePlan.self, from: Data(page1Json.utf8))
-
-            // Partial merge (stopped before completion): retains all partial candidates visible, while `scanned` stays false so cleanup execution is disabled!
-            let partialMerged = UnifiedThreadCleanupSection.mergeHiddenPageIntoPlan(
-                existing: initialPlan,
-                pagePlan: page1,
-                accumulated: page1.candidates,
-                completed: false
-            )
-            let hiddenScopePartial = try XCTUnwrap(partialMerged.scopes.first(where: { $0.scope == "codex_hidden" }))
-            XCTAssertEqual(hiddenScopePartial.candidates.count, 2, "Partial hidden items MUST remain visible after cancelHiddenScan")
-            XCTAssertFalse(hiddenScopePartial.scanned, "Incomplete stopped scan MUST keep scanned == false so cleanup execution stays disabled")
-            ParityCaseTracker.shared.record(f, "partial-hidden-items-retained-on-stop")
-
-            // Regression (DESIGN.md:87): Even when claude_empty/grok_empty have 3 deletable items, stopped hidden scan MUST disable cleanup execution!
-            XCTAssertTrue(
-                UnifiedThreadCleanupSection.isCleanupExecuteDisabled(
-                    busy: false,
-                    hiddenScanStopped: true,
-                    selectedDeletableCount: 3
-                ),
-                "Stopped hidden scan must disable cleanup execution even if other scopes have deletable items"
-            )
-            XCTAssertFalse(
-                UnifiedThreadCleanupSection.isCleanupExecuteDisabled(
-                    busy: false,
-                    hiddenScanStopped: false,
-                    selectedDeletableCount: 3
-                )
-            )
-            ParityCaseTracker.shared.record(f, "stopped-scan-disables-cleanup-execution")
-
-            // Completed scan marks scanned = true and unlocks execution
-            let completedMerged = UnifiedThreadCleanupSection.mergeHiddenPageIntoPlan(
-                existing: partialMerged,
-                pagePlan: page1,
-                accumulated: page1.candidates,
-                completed: true
-            )
-            let hiddenScopeComplete = try XCTUnwrap(completedMerged.scopes.first(where: { $0.scope == "codex_hidden" }))
-            XCTAssertTrue(hiddenScopeComplete.scanned)
-            XCTAssertEqual(hiddenScopeComplete.deletableCount, 2)
+            XCTAssertEqual(modes, ["start", "poll"])
+            XCTAssertEqual(plan.executionRequest(for: ["codex_hidden"]).targets.map(\.id), ["hidden-1"])
             ParityCaseTracker.shared.record(f, "completed-scan-enables-cleanup")
-
-            XCTAssertTrue(completedMerged.scopes.contains(where: { $0.scope == "claude_empty" }))
-            ParityCaseTracker.shared.record(f, "claude-empty-scope-present")
-            XCTAssertTrue(completedMerged.scopes.contains(where: { $0.scope == "grok_empty" }))
-            ParityCaseTracker.shared.record(f, "grok-empty-scope-present")
-            XCTAssertEqual(completedMerged.totalDeletable, 5)
+            XCTAssertEqual(plan.totalDeletable, 3)
             ParityCaseTracker.shared.record(f, "recomputes-aggregate-cleanup-totals")
+
+            let request = plan.executionRequest(for: ["claude_empty", "grok_empty"])
+            let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(request))
+            XCTAssertEqual(encoded, fixtures.execute)
+            ParityCaseTracker.shared.record(f, "confirmed-selection-matches-rust")
+            plan.apply(fixtures.result)
+            XCTAssertEqual(plan.totalDeletable, 2)
+            XCTAssertEqual(plan.scopes.first { $0.scope == "claude_empty" }?.candidates.map(\.id), ["p/busy"])
+            ParityCaseTracker.shared.record(f, "blocked-items-retained")
+            XCTAssertEqual(fixtures.result.unsuccessfulDetails.count, 2)
+            ParityCaseTracker.shared.record(f, "residuals-and-issues-displayed")
         }
     }
 

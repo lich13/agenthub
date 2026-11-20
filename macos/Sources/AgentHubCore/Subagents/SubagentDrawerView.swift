@@ -539,6 +539,8 @@ public struct SubagentPanelView: View {
         timelineEntries = []
         beforeCursor = nil
         hasMoreOlder = false
+        loadingOlder = false
+        loading = false
         errorText = nil
     }
 
@@ -551,6 +553,8 @@ public struct SubagentPanelView: View {
         timelineEntries = []
         beforeCursor = nil
         hasMoreOlder = false
+        loadingOlder = false
+        loading = false
         errorText = nil
         pendingRestoreAnchor = scrollAnchorStack.isEmpty ? nil : scrollAnchorStack.removeLast()
     }
@@ -558,7 +562,7 @@ public struct SubagentPanelView: View {
     private func fetchSubagentDetail(_ agent: SubagentActivity) async {
         guard let agentId = agent.agentId, !agentId.isEmpty else { return }
         if rows.isEmpty { loading = true }
-        defer { if loading { loading = false } }
+        defer { if currentAgent?.agentId == agentId, !Task.isCancelled { loading = false } }
         let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
         do {
             if provider == .codex {
@@ -567,6 +571,7 @@ public struct SubagentPanelView: View {
                     "threads.subagentDetail",
                     args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: 120))
                 )
+                guard currentAgent?.agentId == agentId else { return }
                 guard resp.rootThreadId == rootSessionKey, resp.agent.agentId == agentId else {
                     throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                 }
@@ -597,6 +602,7 @@ public struct SubagentPanelView: View {
                     "claude.detail",
                     args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160)
                 )
+                guard currentAgent?.agentId == agentId else { return }
                 let slot = subagentClaudeStore.applyHeadPoll(
                     key: scopeKey,
                     headEvents: detail.events,
@@ -617,12 +623,14 @@ public struct SubagentPanelView: View {
                 if rows != nextRows { rows = nextRows }
                 if !timelineEntries.isEmpty { timelineEntries = [] }
             }
+            errorText = nil
             if let restore = pendingRestoreAnchor {
                 pendingRestoreAnchor = nil
                 coordinatorRef?.updateRowsPreservingAnchor(rows, preferAutoFollowBottom: false)
                 coordinatorRef?.restoreExplicitAnchor(restore)
             }
         } catch {
+            guard currentAgent?.agentId == agentId, !Task.isCancelled else { return }
             errorText = error.localizedDescription
         }
     }
@@ -632,63 +640,70 @@ public struct SubagentPanelView: View {
               let agent = currentAgent, let agentId = agent.agentId, !agentId.isEmpty
         else { return }
         loadingOlder = true
-        defer { loadingOlder = false }
+        defer { if currentAgent?.agentId == agentId { loadingOlder = false } }
         let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
 
-        if provider == .codex {
-            struct ReqWrap: Encodable { let request: SubagentDetailRequest }
-            guard let resp: SubagentDetailResponse = try? await store.rpc(
-                "threads.subagentDetail",
-                args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: 120, before: cursor))
-            ) else { return }
-            let page = ThreadBlockPage(
-                threadId: resp.detail.summary.id,
-                blocks: resp.detail.blocks,
-                totalBlocks: resp.detail.totalBlocks ?? resp.detail.blocks.count,
-                hasMoreBlocks: resp.detail.hasMoreBlocks ?? false,
-                beforeCursor: resp.detail.beforeCursor,
-                history: resp.detail.history
-            )
-            let slot = subagentThreadStore.applyBlockPage(page, expectedCursor: cursor)
-            hasMoreOlder = slot.hasMoreBlocks && slot.beforeCursor != cursor
-            beforeCursor = hasMoreOlder ? slot.beforeCursor : nil
-            let nextRows = ConversationRowBuilder.buildCodexRows(
-                blocks: slot.blocks,
-                showAllHistory: true,
-                planFallbackTitle: resp.agent.name,
-                subagentsSupported: true
-            )
-            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-            rows = nextRows
-        } else if provider == .claudeCode {
-            struct ClaudeSubReq: Encodable {
-                let sessionKey: String
-                let agentId: String
-                let limit: Int
-                let before: String
+        do {
+            if provider == .codex {
+                struct ReqWrap: Encodable { let request: SubagentDetailRequest }
+                let resp: SubagentDetailResponse = try await store.rpc(
+                    "threads.subagentDetail",
+                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: 120, before: cursor))
+                )
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                let page = ThreadBlockPage(
+                    threadId: resp.detail.summary.id,
+                    blocks: resp.detail.blocks,
+                    totalBlocks: resp.detail.totalBlocks ?? resp.detail.blocks.count,
+                    hasMoreBlocks: resp.detail.hasMoreBlocks ?? false,
+                    beforeCursor: resp.detail.beforeCursor,
+                    history: resp.detail.history
+                )
+                let slot = subagentThreadStore.applyBlockPage(page, expectedCursor: cursor)
+                hasMoreOlder = slot.hasMoreBlocks && slot.beforeCursor != cursor
+                beforeCursor = hasMoreOlder ? slot.beforeCursor : nil
+                let nextRows = ConversationRowBuilder.buildCodexRows(
+                    blocks: slot.blocks,
+                    showAllHistory: true,
+                    planFallbackTitle: resp.agent.name,
+                    subagentsSupported: true
+                )
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                rows = nextRows
+            } else if provider == .claudeCode {
+                struct ClaudeSubReq: Encodable {
+                    let sessionKey: String
+                    let agentId: String
+                    let limit: Int
+                    let before: String
+                }
+                let page: ClaudeSessionDetail = try await store.rpc(
+                    "claude.detail",
+                    args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160, before: cursor)
+                )
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                let slot = subagentClaudeStore.applyOlderPage(
+                    key: scopeKey,
+                    expectedCursor: cursor,
+                    olderEvents: page.events,
+                    history: page.history,
+                    totalEvents: page.totalEvents,
+                    beforeCursor: page.beforeCursor,
+                    hasMore: page.hasMore
+                )
+                hasMoreOlder = slot.hasMore
+                beforeCursor = slot.beforeCursor
+                let nextRows = ConversationRowBuilder.buildClaudeRows(
+                    events: slot.events,
+                    recordedOnly: true,
+                    attachmentsAsNamesOnly: true
+                )
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                rows = nextRows
             }
-            guard let page: ClaudeSessionDetail = try? await store.rpc(
-                "claude.detail",
-                args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160, before: cursor)
-            ) else { return }
-            let slot = subagentClaudeStore.applyOlderPage(
-                key: scopeKey,
-                expectedCursor: cursor,
-                olderEvents: page.events,
-                history: page.history,
-                totalEvents: page.totalEvents,
-                beforeCursor: page.beforeCursor,
-                hasMore: page.hasMore
-            )
-            hasMoreOlder = slot.hasMore
-            beforeCursor = slot.beforeCursor
-            let nextRows = ConversationRowBuilder.buildClaudeRows(
-                events: slot.events,
-                recordedOnly: true,
-                attachmentsAsNamesOnly: true
-            )
-            coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-            rows = nextRows
+        } catch {
+            guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+            errorText = error.localizedDescription
         }
     }
 

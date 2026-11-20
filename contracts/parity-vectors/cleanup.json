@@ -1,0 +1,162 @@
+{
+  "preview": {
+    "totalCandidates": 3,
+    "totalDeletable": 2,
+    "totalEstimatedBytes": 24,
+    "scopes": [
+      {
+        "scope": "claude_empty",
+        "provider": "claude",
+        "label": "Claude Code 空残余会话",
+        "supported": true,
+        "scanned": true,
+        "unavailableReason": null,
+        "candidateCount": 2,
+        "deletableCount": 1,
+        "estimatedBytes": 12,
+        "candidates": [
+          {
+            "id": "p/fixture",
+            "title": "Fixture",
+            "estimatedBytes": 12,
+            "fingerprint": "fixture-fingerprint",
+            "blockedReason": null
+          },
+          {
+            "id": "p/busy",
+            "title": "Busy",
+            "estimatedBytes": 7,
+            "blockedReason": "占用"
+          }
+        ],
+        "issues": []
+      },
+      {
+        "scope": "grok_empty",
+        "provider": "grok",
+        "label": "Grok Build 空残余会话",
+        "supported": true,
+        "scanned": true,
+        "unavailableReason": null,
+        "candidateCount": 1,
+        "deletableCount": 1,
+        "estimatedBytes": 12,
+        "candidates": [
+          {
+            "id": "fixture",
+            "title": "Fixture",
+            "estimatedBytes": 12,
+            "blockedReason": null
+          }
+        ],
+        "issues": []
+      }
+    ]
+  },
+  "hiddenStart": {
+    "scan": {
+      "id": "scan-fixture",
+      "phase": "preparing",
+      "processed": 0,
+      "total": 0,
+      "cursor": 0,
+      "nextCursor": 0,
+      "hasMore": false,
+      "error": null
+    },
+    "total_threads": 0,
+    "visible_threads": 0,
+    "hidden_threads": 0,
+    "archived_threads": 0,
+    "session_index_lines": 0,
+    "rollout_files": 0,
+    "hidden_ids": [],
+    "candidates": [],
+    "hidden_source_counts": {},
+    "integrity": "pending"
+  },
+  "hiddenPage": {
+    "scan": {
+      "id": "scan-fixture",
+      "phase": "complete",
+      "processed": 1,
+      "total": 1,
+      "cursor": 0,
+      "nextCursor": 1,
+      "hasMore": false,
+      "error": null
+    },
+    "total_threads": 1,
+    "visible_threads": 0,
+    "hidden_threads": 1,
+    "archived_threads": 0,
+    "session_index_lines": 0,
+    "rollout_files": 0,
+    "hidden_ids": [
+      "hidden-1"
+    ],
+    "candidates": [
+      {
+        "id": "hidden-1",
+        "title": "Fixture",
+        "fingerprint": null,
+        "allowed": true,
+        "reason": null
+      }
+    ],
+    "hidden_source_counts": {},
+    "integrity": "ok"
+  },
+  "execute": {
+    "confirmed": true,
+    "scopes": [
+      "claude_empty",
+      "grok_empty"
+    ],
+    "targets": [
+      {
+        "scope": "claude_empty",
+        "id": "p/fixture",
+        "fingerprint": "fixture-fingerprint"
+      },
+      {
+        "scope": "grok_empty",
+        "id": "fixture"
+      }
+    ]
+  },
+  "result": {
+    "deletedCount": 1,
+    "failedCount": 1,
+    "skippedCount": 0,
+    "deletedBytes": 12,
+    "scopes": [
+      {
+        "scope": "claude_empty",
+        "provider": "claude",
+        "label": "Claude Code 空残余会话",
+        "deletedCount": 1,
+        "skippedCount": 0,
+        "failedCount": 0,
+        "deletedBytes": 12,
+        "residuals": [],
+        "issues": []
+      },
+      {
+        "scope": "grok_empty",
+        "provider": "grok",
+        "label": "Grok Build 空残余会话",
+        "deletedCount": 0,
+        "skippedCount": 0,
+        "failedCount": 1,
+        "deletedBytes": 0,
+        "residuals": [
+          "fixture/path"
+        ],
+        "issues": [
+          "fixture: 占用"
+        ]
+      }
+    ]
+  }
+}
