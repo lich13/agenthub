@@ -256,7 +256,7 @@ impl DesktopCommand {
                     "attachments":message.attachments(),"clientUserMessageId":message.client_id,
                     "restoreMessage":{
                         "id":message.client_id,"text":message.prompt(),
-                        "createdAt":chrono::Utc::now().timestamp_millis(),"cwd":cwd,
+                        "createdAt":jiff::Timestamp::now().as_millisecond(),"cwd":cwd,
                         "context":{"prompt":message.prompt(),"addedFiles":[],"ideContext":null,
                             "imageAttachments":[],"fileAttachments":message.attachments(),"commentAttachments":[],
                             "workspaceRoots":[cwd]}

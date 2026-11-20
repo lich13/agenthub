@@ -4,6 +4,32 @@ import SwiftUI
 import XCTest
 
 final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
+    @MainActor
+    func testCollaborationMenuHasOneUnclippedChevronAtTrailingInset() throws {
+        guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else { return }
+        for height in [24, 28, 30] {
+            let width = 160
+            let label = CollaborationMenuLabel(title: "A", height: CGFloat(height), fill: .white)
+            let menu = AnchoredMenuButton(entries: [NativeMenuEntry(id: "a", title: "A", selected: true) {}]) { label }
+                .foregroundStyle(.black).frame(width: CGFloat(width), height: CGFloat(height)).background(Color.white)
+            let pixels = try renderOffscreenView(menu, size: NSSize(width: width, height: height), appearance: .aqua)
+            let black = { (x: Int, y: Int) in
+                let offset = 4 * (y * width + x)
+                return pixels[offset ..< offset + 3].allSatisfy { $0 < 195 }
+            }
+            var xs: [Int] = [], ys: [Int] = []
+            for x in 64 ..< width {
+                for y in 0 ..< height where black(x, y) { xs.append(x); ys.append(y) }
+            }
+            let left = try XCTUnwrap(xs.min()), right = try XCTUnwrap(xs.max())
+            let bottom = try XCTUnwrap(ys.min()), top = try XCTUnwrap(ys.max())
+            XCTAssertEqual((left + right) / 2, width - 15, accuracy: 2)
+            XCTAssertTrue((5 ... 11).contains(right - left), "trailing control must contain one full chevron")
+            XCTAssertEqual((bottom + top) / 2, height / 2, accuracy: 2)
+            XCTAssertTrue((2 ... 6).contains(top - bottom))
+        }
+    }
+
     // MARK: - 1. Six-Provider Menu Matrix, Multi-Select Context Menu & Keyboard Guard (§2.3)
 
     func testSixProviderMenuMatricesAndBatchKeyboardRules() {
@@ -457,6 +483,11 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 appearance: appearance,
                 pngName: pngOutDir.map { "\($0)/assistant-side-copy-\(schemeKey).png" }
             )
+            let cellHeight = Int(max(48, ceil(rowHeight)))
+            let paper = (palette.background.r, palette.background.g, palette.background.b)
+            XCTAssertEqual(countRegionInkPixels(pixels: cellPixels, imageWidth: 920, region: (0, 0, 66, cellHeight), bg: paper), 0)
+            XCTAssertGreaterThan(countRegionInkPixels(pixels: cellPixels, imageWidth: 920, region: (76, 0, 80, cellHeight), bg: paper), 10)
+            XCTAssertEqual(countRegionInkPixels(pixels: cellPixels, imageWidth: 920, region: (901, 0, 19, cellHeight), bg: paper), 0)
             let rightMarginInk = countRegionInkPixels(
                 pixels: cellPixels,
                 imageWidth: 920,

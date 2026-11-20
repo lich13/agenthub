@@ -194,11 +194,11 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let rawContract = try Data(contentsOf: contractURL)
             let root = try XCTUnwrap(JSONSerialization.jsonObject(with: rawContract) as? [String: Any])
             let actions = try XCTUnwrap(root["actions"] as? [[String: Any]])
-            // Every action in agenthub-contract.json that has a tauriCommand (excluding dedicated stream attach)
+            // Every action in agenthub-contract.json that has a ffiHandler (excluding dedicated stream attach)
             let invokeActions: [String] = actions.compactMap { entry in
                 guard let id = entry["id"] as? String,
-                      let tauriCmd = entry["tauriCommand"] as? String,
-                      !tauriCmd.isEmpty,
+                      let handler = entry["ffiHandler"] as? String,
+                      !handler.isEmpty,
                       id != "codex.desktop.attach"
                 else { return nil }
                 return id
@@ -263,7 +263,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                     return Data("{\"target\":\"local\",\"revision\":7,\"sshHost\":null,\"configured\":true,\"activeMachineId\":null,\"activeMachineName\":null,\"machines\":[]}".utf8)
                 }
                 if cmd == "system.capabilities" {
-                    return Data("{\"ok\":true,\"api_version\":2,\"host_surface\":\"desktop_embedded_tauri\",\"capabilities\":{\"threads\":true,\"jobs\":true,\"probe\":true,\"settings\":true,\"job_history\":true,\"app_updater\":true,\"thread_cleanup\":true,\"thread_archive_actions\":true,\"systemd\":false,\"linux_update_job\":false,\"prune_backups\":false,\"grokbot_sessions\":true}}".utf8)
+                    return protocol2CapabilitiesFixture(remote: false)
                 }
                 if cmd == "jobs.detail" {
                     return Data("{\"available\":true,\"data\":{\"id\":\"job-1\",\"kind\":\"update_check\",\"status\":\"succeeded\",\"title\":\"Check\",\"started_at\":1700000000}}".utf8)
@@ -327,7 +327,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                     return Data("{\"target\":\"remote\",\"revision\":8,\"sshHost\":\"prod-1\",\"configured\":true,\"activeMachineId\":\"m1\",\"activeMachineName\":\"Prod\",\"machines\":[{\"id\":\"m1\",\"name\":\"Prod\",\"sshHost\":\"prod-1\",\"useSudo\":false}]}".utf8)
                 }
                 if cmd == "remote.invoke" || cmd == "system.capabilities" {
-                    return Data("{\"ok\":true,\"api_version\":2,\"host_surface\":\"linux_server_api\",\"capabilities\":{\"threads\":true}}".utf8)
+                    return protocol2CapabilitiesFixture(remote: true)
                 }
                 return Data("{\"ok\":true}".utf8)
             }
@@ -435,7 +435,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
         XCTAssertEqual(ProbeFormatting.dedupeBadge(deduped)?.label, "重复事件")
         ParityCaseTracker.shared.record(f, "deduped-badge-present")
 
-        var draft = ProbeSettingsDraft.from(ProbeSettingsView())
+        var draft = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
         draft.pollSecondsText = "2"
         XCTAssertFalse(draft.validationErrors().isEmpty, "Out-of-range pollSeconds (<5) rejected")
         ParityCaseTracker.shared.record(f, "rejects-out-of-range-poll-seconds")
@@ -486,7 +486,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let cardHost = NSHostingView(
                 rootView: GithubCiCardView(
                     store: store,
-                    draft: .constant(ProbeSettingsDraft.from(ProbeSettingsView())),
+                    draft: .constant(ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())),
                     saving: false,
                     saveMessage: nil,
                     onSave: {}

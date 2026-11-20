@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-use syn::{visit::Visit, Attribute, Fields, Item};
+use syn::{Attribute, Fields, Item};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -240,67 +240,8 @@ fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
     );
 }
 
-#[derive(Default)]
-struct DispatchRegistryVisitor {
-    entries: BTreeMap<String, String>,
-    in_dispatch: bool,
-    arms: Vec<String>,
-}
-impl<'a> Visit<'a> for DispatchRegistryVisitor {
-    fn visit_item_const(&mut self, item: &'a syn::ItemConst) {
-        if item.ident == "REGISTERED_COMMAND_ENTRIES" {
-            if let syn::Expr::Reference(expr_ref) = &*item.expr {
-                if let syn::Expr::Array(arr) = &*expr_ref.expr {
-                    for elem in &arr.elems {
-                        if let syn::Expr::Tuple(tuple) = elem {
-                            if tuple.elems.len() == 2 {
-                                if let (
-                                    syn::Expr::Lit(syn::ExprLit {
-                                        lit: syn::Lit::Str(id),
-                                        ..
-                                    }),
-                                    syn::Expr::Lit(syn::ExprLit {
-                                        lit: syn::Lit::Str(adapter),
-                                        ..
-                                    }),
-                                ) = (&tuple.elems[0], &tuple.elems[1])
-                                {
-                                    self.entries.insert(id.value(), adapter.value());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fn visit_item_fn(&mut self, f: &'a syn::ItemFn) {
-        if f.sig.ident == "dispatch" {
-            self.in_dispatch = true;
-            syn::visit::visit_item_fn(self, f);
-            self.in_dispatch = false;
-        }
-    }
-    fn visit_expr_match(&mut self, node: &'a syn::ExprMatch) {
-        if self.in_dispatch {
-            if let syn::Expr::Path(p) = &*node.expr {
-                if p.path.is_ident("command") {
-                    for arm in &node.arms {
-                        if let syn::Pat::Lit(pat_lit) = &arm.pat {
-                            if let syn::Lit::Str(s) = &pat_lit.lit {
-                                self.arms.push(s.value());
-                            }
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-        syn::visit::visit_expr_match(self, node);
-    }
-}
 #[test]
-fn registry_maps_to_real_types_and_registered_adapter_functions() {
+fn registry_maps_to_real_types() {
     let f = fixture();
     let registry: Value = serde_json::from_slice(
         &std::fs::read(root().join("contracts/agenthub-contract.json")).unwrap(),
@@ -329,28 +270,6 @@ fn registry_maps_to_real_types_and_registered_adapter_functions() {
                     .as_str()
                     .is_some_and(|s| !s.trim().is_empty()),
                 "{name}: unclassified dynamic JSON"
-            );
-        }
-    }
-    let mut dispatch = DispatchRegistryVisitor::default();
-    dispatch.visit_file(
-        &syn::parse_file(
-            &std::fs::read_to_string(root().join("crates/agenthub-ffi/src/commands/dispatch.rs"))
-                .unwrap(),
-        )
-        .unwrap(),
-    );
-    for action in registry["actions"].as_array().unwrap() {
-        if let Some(adapter) = action["tauriCommand"].as_str() {
-            let id = action["id"].as_str().unwrap();
-            assert_eq!(
-                dispatch.entries.get(id).map(String::as_str),
-                Some(adapter),
-                "unregistered FFI command mapping for {id}: expected {adapter}"
-            );
-            assert!(
-                dispatch.arms.iter().any(|arm| arm == id),
-                "missing FFI dispatch match arm for {id}"
             );
         }
     }

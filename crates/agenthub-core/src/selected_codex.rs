@@ -17,6 +17,35 @@ use std::{
 
 pub mod tree;
 
+const ACTIVE_STATUSES: &[&str] = &[
+    "running",
+    "active",
+    "in_progress",
+    "inprogress",
+    "pending",
+    "submitting",
+];
+
+fn is_active_status(status: &str) -> bool {
+    ACTIVE_STATUSES
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(status))
+}
+
+fn has_active_job(conn: &Connection, table: &str, key: &str, id: &str) -> rusqlite::Result<bool> {
+    // Table and key come from the native schema inventory. Status literals are static.
+    static VALUES: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| ACTIVE_STATUSES.join("','"));
+    conn.query_row(
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('{}'))",
+            *VALUES
+        ),
+        [id],
+        |row| row.get(0),
+    )
+}
+
 static MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +197,7 @@ fn snapshot_from_inventory(
     }
     for field in ["status", "state"] {
         if let Some(status) = row.get(field).and_then(Value::as_str) {
+            ensure!(!is_active_status(status), "线程仍在运行，暂不能归档或恢复");
             ensure!(
                 matches!(
                     status.to_ascii_lowercase().as_str(),
@@ -182,28 +212,13 @@ fn snapshot_from_inventory(
                         | "aborted"
                         | "archived"
                         | "stopped"
-                        | "running"
-                        | "active"
-                        | "in_progress"
-                        | "inprogress"
-                        | "pending"
-                        | "submitting"
                 ),
                 "线程活动状态无法确认，暂不能归档或恢复"
             );
         }
-        ensure!(
-            !row.get(field)
-                .and_then(Value::as_str)
-                .is_some_and(|s| matches!(
-                    s.to_ascii_lowercase().as_str(),
-                    "running" | "active" | "in_progress" | "inprogress" | "pending" | "submitting"
-                )),
-            "线程仍在运行，暂不能归档或恢复"
-        );
     }
     for (table, key) in &inventory.job_tables {
-        let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
+        let active = has_active_job(conn, table, key, id)?;
         ensure!(!active, "线程仍有关联的运行任务，暂不能归档或恢复");
     }
     let index_rows = &inventory.index_rows;
@@ -412,7 +427,7 @@ pub fn execute_archives(
                 inventory.columns.contains("archived_at"),
                 "原生归档字段不可用"
             );
-            let at = archive.then(|| chrono::Utc::now().timestamp());
+            let at = archive.then(|| jiff::Timestamp::now().as_second());
             let changed = if inventory.columns.contains("archived") {
                 tx.execute(
                     "UPDATE threads SET archived=?2,archived_at=?3 WHERE id=?1",
@@ -688,7 +703,19 @@ mod tests {
         text.push_str("{}\n");
         fs::write(&files[0], text).unwrap();
         assert!(execute_archive(&paths, &ids[0], true, &preview.fingerprint).is_err());
-        conn.execute("INSERT INTO jobs VALUES(?1,'running')", [&ids[0]])
+        for status in ["running", "inprogress"] {
+            conn.execute(
+                "INSERT INTO jobs VALUES(?1,?2)",
+                rusqlite::params![ids[0], status],
+            )
+            .unwrap();
+            assert!(
+                preview_archives(&paths, &ids[..1], true)[0].is_err(),
+                "{status}"
+            );
+            conn.execute("DELETE FROM jobs", []).unwrap();
+        }
+        conn.execute("INSERT INTO jobs VALUES(?1,'inprogress')", [&ids[0]])
             .unwrap();
         let result = preview_archives(
             &paths,

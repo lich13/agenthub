@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub enum PlatformKind {
     Linux,
     Macos,
-    Windows,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,119 +20,78 @@ pub struct PlatformPaths {
     pub service_file: Option<PathBuf>,
 }
 
-impl PlatformPaths {
+impl PlatformKind {
     pub fn current() -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            Self::for_kind(PlatformKind::Macos)
+        if cfg!(target_os = "macos") {
+            Self::Macos
+        } else {
+            Self::Linux
         }
-        #[cfg(target_os = "windows")]
-        {
-            Self::for_kind(PlatformKind::Windows)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Self::for_kind(PlatformKind::Linux)
+    }
+}
+
+pub(crate) fn current_home() -> anyhow::Result<PathBuf> {
+    dirs::home_dir()
+        .filter(|p| p.is_absolute())
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve user home directory"))
+}
+
+pub(crate) fn provider_root(variable: &str, relative: &str) -> anyhow::Result<PathBuf> {
+    match std::env::var_os(variable).filter(|value| !value.is_empty()) {
+        Some(root) => Ok(PathBuf::from(root)),
+        None => Ok(current_home()?.join(relative)),
+    }
+}
+
+impl PlatformPaths {
+    pub fn current() -> anyhow::Result<Self> {
+        match PlatformKind::current() {
+            PlatformKind::Linux => Ok(Self::linux_server()),
+            PlatformKind::Macos => Self::desktop_current(),
         }
     }
 
-    pub fn desktop_current() -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            Self::for_desktop_kind(PlatformKind::Macos)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Self::for_desktop_kind(PlatformKind::Windows)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Self::for_desktop_kind(PlatformKind::Linux)
+    pub fn desktop_current() -> anyhow::Result<Self> {
+        Ok(Self::macos(current_home()?))
+    }
+
+    pub fn linux_server() -> Self {
+        Self {
+            kind: PlatformKind::Linux,
+            data_dir: PathBuf::from("/var/lib/agenthub-webd"),
+            config_file: PathBuf::from("/etc/agenthub-webd/config.toml"),
+
+            log_dir: PathBuf::from("/var/log/agenthub-webd"),
+            service_name: "agenthub-webd".to_string(),
+            service_kind: "systemd".to_string(),
+            service_file: Some(PathBuf::from("/etc/systemd/system/agenthub-webd.service")),
         }
     }
 
-    pub fn for_kind(kind: PlatformKind) -> Self {
-        Self::for_kind_with_home(kind, dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")))
-    }
+    pub fn macos(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
+        Self {
+            kind: PlatformKind::Macos,
+            data_dir: home.join("Library/Application Support/AgentHub"),
+            config_file: home.join("Library/Application Support/AgentHub/config.toml"),
 
-    pub fn for_desktop_kind(kind: PlatformKind) -> Self {
-        Self::for_desktop_kind_with_home(
-            kind,
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")),
-        )
+            log_dir: home.join("Library/Logs/AgentHub"),
+            service_name: "AgentHub.app".to_string(),
+            // Protocol 2 service kind consumed by older Apps.
+            service_kind: "tauri".to_string(),
+            service_file: None,
+        }
     }
 
     pub fn for_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
-        let home = home.into();
         match kind {
-            PlatformKind::Linux => Self {
-                kind,
-                data_dir: PathBuf::from("/var/lib/agenthub-webd"),
-                config_file: PathBuf::from("/etc/agenthub-webd/config.toml"),
-
-                log_dir: PathBuf::from("/var/log/agenthub-webd"),
-                service_name: "agenthub-webd".to_string(),
-                service_kind: "systemd".to_string(),
-                service_file: Some(PathBuf::from("/etc/systemd/system/agenthub-webd.service")),
-            },
-            PlatformKind::Macos => Self {
-                kind,
-                data_dir: home.join("Library/Application Support/AgentHub"),
-                config_file: home.join("Library/Application Support/AgentHub/config.toml"),
-
-                log_dir: home.join("Library/Logs/AgentHub"),
-                service_name: "AgentHub.app".to_string(),
-                service_kind: "tauri".to_string(),
-                service_file: None,
-            },
-            PlatformKind::Windows => Self {
-                kind,
-                data_dir: PathBuf::from(r"%ProgramData%\AgentHub"),
-                config_file: PathBuf::from(r"%ProgramData%\AgentHub\config.toml"),
-
-                log_dir: PathBuf::from(r"%ProgramData%\AgentHub\logs"),
-                service_name: "AgentHub".to_string(),
-                service_kind: "windows_service".to_string(),
-                service_file: None,
-            },
-        }
-    }
-
-    pub fn for_desktop_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
-        let home = home.into();
-        match kind {
-            PlatformKind::Linux => {
-                let data_dir = home.join(".local/share/AgentHub");
-                Self {
-                    kind,
-                    config_file: home.join(".config/AgentHub/config.toml"),
-
-                    log_dir: home.join(".local/state/AgentHub/logs"),
-                    data_dir,
-                    service_name: "AgentHub".to_string(),
-                    service_kind: "tauri".to_string(),
-                    service_file: None,
-                }
-            }
-            PlatformKind::Macos => Self::for_kind_with_home(kind, home),
-            PlatformKind::Windows => Self {
-                kind,
-                data_dir: home.join("AppData/Roaming/AgentHub"),
-                config_file: home.join("AppData/Roaming/AgentHub/config.toml"),
-
-                log_dir: home.join("AppData/Local/AgentHub/Logs"),
-                service_name: "AgentHub".to_string(),
-                service_kind: "tauri".to_string(),
-                service_file: None,
-            },
+            PlatformKind::Linux => Self::linux_server(),
+            PlatformKind::Macos => Self::macos(home),
         }
     }
 
     pub fn daemon_binary(&self) -> PathBuf {
-        let binary = match self.kind {
-            PlatformKind::Windows => "agenthub-webd.exe",
-            PlatformKind::Linux | PlatformKind::Macos => "agenthub-webd",
-        };
+        let binary = "agenthub-webd";
         if self.kind == PlatformKind::Linux && self.service_kind == "systemd" {
             return PathBuf::from("/usr/local/bin").join(binary);
         }

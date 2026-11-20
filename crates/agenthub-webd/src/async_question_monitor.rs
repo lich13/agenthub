@@ -1,5 +1,7 @@
 //! Background detection and final validation of native asynchronous questions.
-use super::{probe_runtime, record_probe_event_with_bark, task_notification_suppression_reason};
+use super::{
+    build_probe_event, record_probe_event_with_bark, task_notification_suppression_reason,
+};
 use agenthub_core::{
     codex::{self, AsyncQuestionCall, ThreadSummary},
     config::Config,
@@ -25,7 +27,8 @@ fn event_for(
     call: &AsyncQuestionCall,
 ) -> Option<ProbeBuiltEvent> {
     let body = format_probe_pending_elicitation(&call.pending()?);
-    let mut event = probe_runtime(config).build_event(
+    let mut event = build_probe_event(
+        config,
         ProbeEventInput::hook_stop_with_context(
             Some(&thread.id),
             Some(&call.turn_id),
@@ -131,7 +134,7 @@ pub fn prepare_event(
     let eligible = since
         .zip(call.created_at_ms)
         .is_some_and(|(since, created)| {
-            created > since && created <= chrono::Utc::now().timestamp_millis()
+            created > since && created <= jiff::Timestamp::now().as_millisecond()
         });
     if !eligible || call.pending().is_none() {
         let mut event = event;
@@ -180,7 +183,7 @@ pub async fn run_with_threads(
             &owned_threads
         }
     };
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
     const PASSIVE_ASYNC_QUESTION_MAX_AGE_MS: i64 = 6 * 86_400_000;
     let mut active_markers = Vec::new();
     for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {

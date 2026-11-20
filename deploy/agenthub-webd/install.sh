@@ -123,21 +123,6 @@ install_payload() {
 }
 
 
-install_codex_home_write_paths() {
-  install -d -m 0700 -o root -g root /root/.codex
-
-  local ubuntu_owner="root"
-  local ubuntu_group="root"
-  if getent passwd ubuntu >/dev/null 2>&1; then
-    ubuntu_owner="ubuntu"
-    ubuntu_group="$(id -gn ubuntu 2>/dev/null || printf 'ubuntu')"
-  fi
-
-  [[ -d /home ]] || install -d -m 0755 -o root -g root /home
-  [[ -d /home/ubuntu ]] || install -d -m 0755 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu
-  install -d -m 0700 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu/.codex
-}
-
 install_config() {
   local source_dir
   source_dir="$(script_dir)"
@@ -287,7 +272,6 @@ main() {
   replace_file "${SAFETY}" "${SHARE_DIR}/install-safety.py" 0644
   replace_file "$(script_dir)/updater.pub" "${SHARE_DIR}/updater.pub" 0644
   install_config
-  install_codex_home_write_paths
   install_systemd
   if [[ "${ENABLE_SERVICE}" -eq 1 ]]; then
     systemctl is-active --quiet "${SERVICE_NAME}.service"

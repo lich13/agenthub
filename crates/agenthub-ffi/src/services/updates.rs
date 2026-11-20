@@ -49,7 +49,6 @@ pub fn desktop_update_status_with_state(
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> Result<UpdateStatus> {
-    let config = state.config();
     let recent_check_job = if latest_version.is_none() && last_error.is_none() {
         state
             .db
@@ -62,10 +61,8 @@ pub fn desktop_update_status_with_state(
     } else {
         None
     };
-    Ok(updates::update_status_with_recent_check_job_for_surface(
-        &config,
+    Ok(updates::update_status_with_recent_check_job(
         state.platform(),
-        state.host_surface(),
         latest_version,
         last_error,
         recent_check_job.as_ref(),
@@ -81,7 +78,10 @@ pub(crate) async fn check_update_status(
 
     match check_update(state, &job_id, UPDATER_FEED_URL).await {
         Ok(status) => {
-            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
+            state
+                .db
+                .finish_job(&job_id, "succeeded", Some(0), None)
+                .map_err(|err| format!("操作已完成，但无法保存作业 {job_id} 的结果: {err}"))?;
             Ok(DesktopUpdateCheckResponse { job_id, status })
         }
         Err(err) => Err(finish_update_error(state, &job_id, err)),
@@ -107,7 +107,10 @@ pub(crate) async fn install_update_and_restart(
 
     match install_update(state, &job_id, UPDATER_FEED_URL).await {
         Ok(installed) => {
-            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
+            state
+                .db
+                .finish_job(&job_id, "succeeded", Some(0), None)
+                .map_err(|err| format!("操作已完成，但无法保存作业 {job_id} 的结果: {err}"))?;
             if installed {
                 host.request_app_restart();
             }
@@ -124,7 +127,7 @@ fn update_job_id(spec: &updates::MacosUpdaterJobSpec) -> String {
         .unwrap_or(spec.kind.as_str());
     format!(
         "desktop-update-{action}-{}-{}",
-        chrono::Utc::now().timestamp_millis(),
+        jiff::Timestamp::now().as_millisecond(),
         std::process::id()
     )
 }
@@ -141,7 +144,9 @@ fn finish_update_error(state: &DesktopState, job_id: &str, err: anyhow::Error) -
     let _ = state
         .db
         .append_job_output(job_id, &format!("error: {message}\n"));
-    let _ = state.db.finish_job(job_id, "failed", None, Some(&message));
+    if let Err(error) = state.db.finish_job(job_id, "failed", None, Some(&message)) {
+        return format!("{message}；无法保存作业 {job_id} 的结果: {error}");
+    }
     message
 }
 
@@ -149,11 +154,7 @@ fn native_update_job_plan_for_action(
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<updates::MacosUpdaterJobSpec> {
-    let plan = updates::plan_update_action_for_surface(
-        platform,
-        agenthub_core::services::system::HostSurface::DesktopEmbeddedTauri,
-        action,
-    )?;
+    let plan = updates::plan_update_action(platform, action)?;
     plan.macos_job
         .ok_or_else(|| anyhow!("update action did not produce a macOS updater job spec"))
 }
@@ -340,6 +341,7 @@ fn extract_and_verify_bundle(
     if bundle_ver.trim_start_matches('v') != expected_version.trim().trim_start_matches('v') {
         bail!("更新包内版本号与清单不一致");
     }
+    // Minisign authenticates the publisher; codesign checks the sealed bundle contents.
     let verify = Command::new("/usr/bin/codesign")
         .args(["--verify", "--deep", "--strict"])
         .arg(&extracted)
@@ -394,16 +396,11 @@ async fn install_update(state: &DesktopState, job_id: &str, feed_url: &str) -> R
         let backup = parent_dir.join(format!(
             ".AgentHub.app.backup-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_millis()
+            jiff::Timestamp::now().as_millisecond()
         ));
         std::fs::rename(&target_bundle, &backup)
             .map_err(|err| anyhow!("备份当前应用失败: {err}"))?;
-        if let Err(err) = std::fs::rename(&extracted, &target_bundle) {
-            let _ = std::fs::rename(&backup, &target_bundle);
-            bail!("替换应用包失败: {err}");
-        }
-        let _ = std::fs::remove_dir_all(&backup);
-        Ok(())
+        replace_backed_up_bundle(&extracted, &target_bundle, &backup)
     })
     .await
     .map_err(|err| anyhow!("安装更新任务异常: {err}"))??;
@@ -412,6 +409,20 @@ async fn install_update(state: &DesktopState, job_id: &str, feed_url: &str) -> R
         .db
         .append_job_output(job_id, "signed app update installed\n")?;
     Ok(true)
+}
+
+fn replace_backed_up_bundle(extracted: &Path, target: &Path, backup: &Path) -> Result<()> {
+    if let Err(err) = std::fs::rename(extracted, target) {
+        if let Err(restore) = std::fs::rename(backup, target) {
+            anyhow::bail!(
+                "替换应用失败: {err}；恢复失败: {restore}；原应用保存在 {}",
+                backup.display()
+            );
+        }
+        bail!("替换应用包失败: {err}");
+    }
+    let _ = std::fs::remove_dir_all(backup);
+    Ok(())
 }
 
 #[cfg(test)]

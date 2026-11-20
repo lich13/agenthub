@@ -509,7 +509,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase, ParityExecutableSuite
         XCTAssertGreaterThanOrEqual(actions.count, 50)
         ParityCaseTracker.shared.record(f, "actions-count-verified")
 
-        let names = Set(actions.compactMap { $0["id"] as? String ?? $0["name"] as? String ?? $0["tauriCommand"] as? String })
+        let names = Set(actions.compactMap { $0["id"] as? String })
         XCTAssertEqual(names.count, actions.count)
         ParityCaseTracker.shared.record(f, "unique-operation-identifiers")
 

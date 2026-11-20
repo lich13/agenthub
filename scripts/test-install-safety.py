@@ -384,7 +384,6 @@ replace_file() {{
   python3 "${{SAFETY}}" replace "${{TRANSACTION}}" "$1" "$2" "$3"
 }}
 retire_web_payload() {{ :; }}
-install_codex_home_write_paths() {{ :; }}
 install_config() {{
   replace_file "${{INSTALL_CONFIG_SOURCE}}" "${{CONFIG_FILE}}" 0640
   replace_file "${{INSTALL_ENV_SOURCE}}" "${{ENV_FILE}}" 0640

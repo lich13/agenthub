@@ -210,7 +210,7 @@ final class VisualSceneCaptureTests: XCTestCase {
         case "remote.get":
             return Data(#"{"target":"local","revision":0,"sshHost":null,"configured":false,"machines":[]}"#.utf8)
         case "system.capabilities":
-            return Data(#"{"protocol_version":2,"service_mode":"macos_desktop","capabilities":{"codex_sessions":true,"codex_desktop":true,"thread_subagents":true,"claude_sessions":true,"claude_subagents":true,"grok_sessions":true,"grokbot_sessions":true,"antigravity_sessions":true,"dsh_sessions":true,"session_search":true,"github_ci":true,"codex_account_scope":true}}"#.utf8)
+            return protocol2CapabilitiesFixture(remote: false)
         case "threads.list":
             if args.contains("\"archived\":true") { return Data("[]".utf8) }
             return Data("""
@@ -295,7 +295,7 @@ final class VisualSceneCaptureTests: XCTestCase {
         case "probe.status":
             return Data(#"{"available":true,"data":{"label":"Probe","enabled":true,"available":true,"platform":"macos","service_kind":"launchd","service_name":"com.lich13.agenthub.probe","flavor":"builtin","hook_status":"managed","bark_status":"configured","recent_event_count":2,"running_count":1,"reply_needed_count":1,"recoverable_count":0,"running_threads":[],"reply_needed_threads":[],"recoverable_threads":[],"lifecycle_status":"ok","doctor_status":"ok","runtime_version":"2.1.27","config_path":"~/Library/Application Support/AgentHub/config.toml","codex_home":"~/.codex","configured_codex_home":"~/.codex","resolved_codex_home":"~/.codex","codex_home_source":"default","logs_db_source":"resolved_codex_home","host_label":"local","snapshot_age_seconds":1,"is_refreshing":false,"snapshot_status":"fresh"}}"#.utf8)
         case "probe.settings.get":
-            return Data(#"{"available":true,"data":{"codex":{"home":"~/.codex","configured_codex_home":"~/.codex","resolved_codex_home":"~/.codex","codex_home_source":"default","logs_db_source":"resolved_codex_home","discovery_warnings":[],"workspace":"~/Documents","host_label":"local"},"probe":{"enabled":true,"poll_seconds":15,"recent_limit":50,"clear_account_scope":false,"providers":{"codex":true,"claude":true,"grok":true,"antigravity":true,"dsh":true,"grokbot":false}},"notifications":{"enabled":true,"device_key_configured":true,"server_url":"https://api.day.app","group":"AgentHub"}}}"#.utf8)
+            return ProbeSettingsFixture.data
         case "probe.events":
             return Data(#"{"available":true,"data":{"limit":10,"events":[]}}"#.utf8)
         case "github.ci.status":

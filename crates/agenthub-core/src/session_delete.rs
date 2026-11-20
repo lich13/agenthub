@@ -136,29 +136,22 @@ pub(crate) fn same_source(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        (
-            before.dev(),
-            before.ino(),
-            before.ctime(),
-            before.ctime_nsec(),
-            before.uid(),
-            before.gid(),
-        ) == (
-            after.dev(),
-            after.ino(),
-            after.ctime(),
-            after.ctime_nsec(),
-            after.uid(),
-            after.gid(),
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        before.created().ok() == after.created().ok()
-    }
+    use std::os::unix::fs::MetadataExt;
+    (
+        before.dev(),
+        before.ino(),
+        before.ctime(),
+        before.ctime_nsec(),
+        before.uid(),
+        before.gid(),
+    ) == (
+        after.dev(),
+        after.ino(),
+        after.ctime(),
+        after.ctime_nsec(),
+        after.uid(),
+        after.gid(),
+    )
 }
 
 fn replace(
@@ -170,22 +163,17 @@ fn replace(
     let result = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
         let mut file = options.open(&temporary)?;
         write(&mut file)?;
-        #[cfg(unix)]
-        {
-            use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-            let current = file.metadata()?;
-            if (current.uid(), current.gid()) != (source.uid(), source.gid()) {
-                let result = unsafe { libc::fchown(file.as_raw_fd(), source.uid(), source.gid()) };
-                if result != 0 {
-                    return Err(std::io::Error::last_os_error().into());
-                }
+        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+        let current = file.metadata()?;
+        if (current.uid(), current.gid()) != (source.uid(), source.gid()) {
+            // SAFETY: File owns the descriptor and both IDs come from the source file metadata.
+            let result = unsafe { libc::fchown(file.as_raw_fd(), source.uid(), source.gid()) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().into());
             }
         }
         // chown may clear mode bits, so restore permissions afterwards.
@@ -207,11 +195,8 @@ fn replace(
 fn open_shared(path: &Path) -> Result<Option<fs::File>> {
     let mut options = OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     let file = match options.open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -305,7 +290,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn shared_index_replacement_preserves_owner_group_and_mode() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -349,11 +333,8 @@ mod tests {
         for (path, metadata) in [&json, &jsonl].into_iter().zip(before) {
             let after = fs::metadata(path).unwrap();
             assert_eq!(metadata.modified().unwrap(), after.modified().unwrap());
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                assert_eq!(metadata.ino(), after.ino());
-            }
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(metadata.ino(), after.ino());
         }
         edit_json(&json, |value| {
             value
@@ -399,7 +380,6 @@ mod tests {
         assert!(!root.exists());
     }
 
-    #[cfg(unix)]
     #[test]
     fn root_directory_link_is_unlinked_without_entering_target() {
         let root =
@@ -420,7 +400,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn permission_failure_is_reported_and_other_paths_are_removed() {
         use std::os::unix::fs::PermissionsExt;

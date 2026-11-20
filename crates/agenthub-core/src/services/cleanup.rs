@@ -1,12 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    archive,
-    codex::CodexPaths,
-    platform::PlatformPaths,
-    services::system::{require_capability, Capability},
-};
+use crate::{archive, codex::CodexPaths, platform::PlatformPaths};
 
 pub const UNIFIED_CLEANUP_CONFIRMATION_MESSAGE: &str = "unified thread cleanup must be confirmed";
 
@@ -62,14 +57,14 @@ pub struct UnifiedCleanupPaths {
 }
 
 impl UnifiedCleanupPaths {
-    pub fn default_for_codex(codex: CodexPaths) -> Self {
-        Self {
+    pub fn default_for_codex(codex: CodexPaths) -> Result<Self> {
+        Ok(Self {
             codex,
-            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
-            dsh: crate::dsh::DshPaths::default_for_user(),
-            claude: crate::claude::ClaudePaths::default_for_user(),
-            grok: crate::grok::GrokPaths::default_for_user(),
-        }
+            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+            dsh: crate::dsh::DshPaths::default_for_user()?,
+            claude: crate::claude::ClaudePaths::default_for_user()?,
+            grok: crate::grok::GrokPaths::default_for_user()?,
+        })
     }
 }
 
@@ -332,7 +327,6 @@ pub fn dry_run_unified_with_capability(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
 ) -> Result<UnifiedCleanupPlan> {
-    require_capability(platform, Capability::ThreadCleanup)?;
     let mut plan = UnifiedCleanupPlan::default();
     for scope in ALL_UNIFIED_SCOPES {
         let item = dry_run_single_scope(platform, paths, *scope);
@@ -725,7 +719,6 @@ pub fn execute_unified_with_capability(
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,
 ) -> Result<UnifiedCleanupResult> {
-    require_capability(platform, Capability::ThreadCleanup)?;
     anyhow::ensure!(request.confirmed, UNIFIED_CLEANUP_CONFIRMATION_MESSAGE);
     anyhow::ensure!(
         !request.targets.is_empty(),
@@ -848,7 +841,7 @@ pub fn execute_unified_with_capability(
 
 #[cfg(test)]
 mod tests {
-    use crate::platform::{PlatformKind, PlatformPaths};
+    use crate::platform::PlatformPaths;
 
     #[test]
     fn unified_cleanup_recomputes_targets_preserves_non_empty_and_continues_after_failure() {
@@ -931,8 +924,8 @@ mod tests {
             claude,
             grok,
         };
-        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let linux = PlatformPaths::linux_server();
+        let macos = PlatformPaths::macos("/fixture/home");
 
         // Linux marks Antigravity scope unsupported; macOS marks it supported.
         let linux_plan = super::dry_run_unified_with_capability(&linux, &paths).unwrap();

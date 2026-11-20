@@ -73,8 +73,10 @@ impl Observer {
                     .get(&run.repository_id)
                     .copied()
                     .unwrap_or(0);
-                let finished_ms = chrono::DateTime::parse_from_rfc3339(&run.updated_at)
-                    .map_or(0, |time| time.timestamp_millis());
+                let finished_ms = run
+                    .updated_at
+                    .parse::<jiff::Timestamp>()
+                    .map_or(0, |time| time.as_millisecond());
                 if !initial
                     && self.repositories.contains(&run.repository_id)
                     && eligible
@@ -181,12 +183,17 @@ pub(crate) fn start(
                 let state_clone = state.clone();
                 Some(
                     tokio::task::spawn_blocking(move || {
-                        agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
+                        agenthub_core::services::use_cases::AgentHubUseCases::with_config(
                             &config,
                             state_clone.platform(),
-                            state_clone.host_surface(),
                         )
-                        .github_ci(&state_clone.db, Request { cached_only: true, ..Default::default() })
+                        .github_ci(
+                            &state_clone.db,
+                            Request {
+                                cached_only: true,
+                                ..Default::default()
+                            },
+                        )
                         .map_err(|_| "CI 状态不可用".to_string())
                     })
                     .await

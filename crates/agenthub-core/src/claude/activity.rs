@@ -162,12 +162,13 @@ fn pid_domain() -> Option<String> {
 }
 
 fn started_ms(value: &str) -> Option<i64> {
-    chrono::NaiveDateTime::parse_from_str(
-        &value.split_whitespace().collect::<Vec<_>>().join(" "),
+    jiff::civil::DateTime::strptime(
         "%a %b %e %T %Y",
+        value.split_whitespace().collect::<Vec<_>>().join(" "),
     )
     .ok()
-    .map(|d| d.and_utc().timestamp_millis())
+    .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
+    .map(|ts| ts.as_millisecond())
 }
 
 type ReadonlySnapshotCacheEntry = ((PathBuf, PathBuf), Snapshot, std::time::Instant);
@@ -535,6 +536,7 @@ fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
     let mut executable = [0_u8; 4096];
     // Kernel-provided executable and NUL-separated argv keep a PTY host's
     // argv[0] label distinct from arguments forwarded to its child.
+    // SAFETY: executable is writable for the supplied buffer length and pid fits the native type.
     let count = unsafe {
         libc::proc_pidpath(
             pid.try_into().ok()?,
@@ -549,6 +551,7 @@ fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
     let executable = PathBuf::from(std::str::from_utf8(&executable[..end]).ok()?);
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid.try_into().ok()?];
     let mut size = 0;
+    // SAFETY: The three-element MIB is live; a null output buffer requests the length in size.
     if unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -564,6 +567,7 @@ fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
         return None;
     }
     let mut buffer = vec![0_u8; size];
+    // SAFETY: The live MIB and output buffer match their lengths; size starts at the allocated capacity.
     if unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -629,7 +633,7 @@ fn collect() -> Option<Vec<Process>> {
     let format = "pid=,stat=,lstart=,ucomm=,args=";
     #[cfg(not(target_os = "macos"))]
     let format = "pid=,stat=,lstart=,comm=,args=";
-    let output = Command::new("ps")
+    let output = Command::new("/bin/ps")
         .args(["-ww", "-axo", format])
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
@@ -712,10 +716,10 @@ fn parse_process_table(output: &[u8]) -> Option<Vec<Process>> {
         if !named && role == ProcessRole::Unknown {
             continue;
         }
-        let started =
-            chrono::NaiveDateTime::parse_from_str(&fields[2..7].join(" "), "%a %b %e %T %Y")
-                .ok()
-                .map(|d| d.and_utc().timestamp_millis());
+        let started = jiff::civil::DateTime::strptime("%a %b %e %T %Y", fields[2..7].join(" "))
+            .ok()
+            .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
+            .map(|ts| ts.as_millisecond());
         processes.push(Process {
             pid,
             started_ms: started,

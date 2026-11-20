@@ -955,7 +955,7 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    let mut probe_cfg = crate::config::Config::default();
+    let mut probe_cfg = crate::config::Config::current_defaults().unwrap();
     probe_cfg.probe.enabled = true;
     probe_cfg.probe.notifications.enabled = true;
     probe_cfg.probe.notifications.notify_antigravity = true;

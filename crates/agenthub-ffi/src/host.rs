@@ -19,6 +19,8 @@ pub type AgentHubStreamCallback =
 #[derive(Clone, Copy)]
 pub struct AgentHubHostCallbacks {
     pub host_ctx: *mut std::ffi::c_void,
+    pub retain_host_ctx: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    pub release_host_ctx: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     pub open_external_url:
         Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char, usize)>,
     pub deliver_ci_notifications:
@@ -32,15 +34,17 @@ pub struct AgentHubHostCallbacks {
         Option<unsafe extern "C" fn(*mut std::ffi::c_void, u64, *const c_char, usize)>,
 }
 
-// SAFETY: Host callback pointers and opaque context are managed by the Swift
-// host singleton and invoked without blocking on the caller thread.
+// SAFETY: Host callbacks may be called on runtime workers. HostBridge retains the context across them.
 unsafe impl Send for AgentHubHostCallbacks {}
+// SAFETY: Callbacks accept concurrent invocation. The host context synchronizes access to its runtime.
 unsafe impl Sync for AgentHubHostCallbacks {}
 
 impl Default for AgentHubHostCallbacks {
     fn default() -> Self {
         Self {
             host_ctx: std::ptr::null_mut(),
+            retain_host_ctx: None,
+            release_host_ctx: None,
             open_external_url: None,
             deliver_ci_notifications: None,
             request_app_restart: None,
@@ -52,7 +56,6 @@ impl Default for AgentHubHostCallbacks {
     }
 }
 
-#[derive(Clone, Copy)]
 pub struct RpcSink {
     request_id: u64,
     callback: AgentHubRpcCallback,
@@ -68,13 +71,16 @@ impl RpcSink {
         }
     }
 
-    pub fn respond(self, result: Result<String, String>) {
-        let Some(cb) = self.callback else {
+    pub fn respond(mut self, result: Result<String, String>) {
+        match result {
+            Ok(json) => self.send(true, &json),
+            Err(error) => self.send(false, &error),
+        }
+    }
+
+    fn send(&mut self, ok: bool, payload: &str) {
+        let Some(cb) = self.callback.take() else {
             return;
-        };
-        let (ok, payload) = match result {
-            Ok(json) => (true, json),
-            Err(err) => (false, err),
         };
         let bytes = payload.as_bytes();
         let ptr = if bytes.is_empty() {
@@ -95,9 +101,20 @@ impl RpcSink {
     }
 }
 
+impl Drop for RpcSink {
+    fn drop(&mut self) {
+        self.send(false, "请求已中断，结果未确认");
+    }
+}
+
+#[derive(Default)]
+struct StreamState {
+    seq: u64,
+    closed: bool,
+}
+
 struct StreamSinkInner {
-    seq: AtomicU64,
-    closed: AtomicBool,
+    state: Mutex<StreamState>,
     callback: AgentHubStreamCallback,
     ctx: usize,
 }
@@ -108,17 +125,13 @@ pub struct StreamSink(Arc<StreamSinkInner>);
 impl StreamSink {
     pub fn new(callback: AgentHubStreamCallback, ctx: *mut std::ffi::c_void) -> Self {
         Self(Arc::new(StreamSinkInner {
-            seq: AtomicU64::new(0),
-            closed: AtomicBool::new(false),
+            state: Mutex::new(StreamState::default()),
             callback,
             ctx: ctx as usize,
         }))
     }
 
     pub fn send_value<T: serde::Serialize>(&self, value: &T) -> bool {
-        if self.0.closed.load(Ordering::Acquire) {
-            return false;
-        }
         let Ok(json) = serde_json::to_string(value) else {
             return false;
         };
@@ -126,16 +139,15 @@ impl StreamSink {
     }
 
     pub fn send_json(&self, json: &str) -> bool {
-        if self.0.closed.load(Ordering::Acquire) {
-            return false;
-        }
         let Some(cb) = self.0.callback else {
             return false;
         };
-        let seq = self.0.seq.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.0.closed.load(Ordering::Acquire) {
+        let mut state = self.0.state.lock().expect("stream callback");
+        if state.closed {
             return false;
         }
+        state.seq += 1;
+        let seq = state.seq;
         let bytes = json.as_bytes();
         let ptr = if bytes.is_empty() {
             std::ptr::null()
@@ -162,11 +174,14 @@ impl StreamSink {
 
 impl StreamSinkInner {
     fn emit_close_once(&self) {
-        if self.closed.swap(true, Ordering::AcqRel) {
+        let mut state = self.state.lock().expect("stream callback");
+        if state.closed {
             return;
         }
+        state.closed = true;
         if let Some(cb) = self.callback {
-            let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+            state.seq += 1;
+            let seq = state.seq;
             // SAFETY: guaranteed single terminal invocation with null/0 payload.
             unsafe {
                 cb(
@@ -204,8 +219,21 @@ pub struct HostBridge {
     pending: Mutex<PendingOps>,
 }
 
+impl Drop for HostBridge {
+    fn drop(&mut self) {
+        if let Some(release) = self.callbacks.release_host_ctx {
+            // SAFETY: paired with construction, after the final Arc borrow.
+            unsafe { release(self.callbacks.host_ctx) };
+        }
+    }
+}
+
 impl HostBridge {
     pub fn new(callbacks: AgentHubHostCallbacks) -> Arc<Self> {
+        if let Some(retain) = callbacks.retain_host_ctx {
+            // SAFETY: the caller owns a live context throughout initialization.
+            unsafe { retain(callbacks.host_ctx) };
+        }
         Arc::new(Self {
             callbacks,
             closing: AtomicBool::new(false),
@@ -246,6 +274,7 @@ impl HostBridge {
         };
         if let Some(cancel) = self.callbacks.cancel_choose_local_path {
             for op_id in active_choosers {
+                // SAFETY: HostBridge retains the context through this call and the operation ID is passed by value.
                 unsafe { cancel(self.callbacks.host_ctx, op_id) };
             }
         }
@@ -264,6 +293,7 @@ impl HostBridge {
         } else {
             bytes.as_ptr().cast::<c_char>()
         };
+        // SAFETY: HostBridge retains the context and the borrowed bytes remain live until this callback returns.
         unsafe { open(self.callbacks.host_ctx, ptr, bytes.len()) };
         Ok(())
     }
@@ -279,12 +309,14 @@ impl HostBridge {
             } else {
                 bytes.as_ptr().cast::<c_char>()
             };
+            // SAFETY: HostBridge retains the context and the borrowed bytes remain live until this callback returns.
             unsafe { deliver(self.callbacks.host_ctx, ptr, bytes.len()) };
         }
     }
 
     pub fn request_app_restart(&self) {
         if let Some(restart) = self.callbacks.request_app_restart {
+            // SAFETY: HostBridge retains the context through this call and the operation ID is passed by value.
             unsafe { restart(self.callbacks.host_ctx) };
         }
     }
@@ -319,22 +351,11 @@ impl HostBridge {
         } else {
             bytes.as_ptr().cast::<c_char>()
         };
+        // SAFETY: HostBridge retains the context and the borrowed bytes remain live until this callback returns.
         unsafe { begin(self.callbacks.host_ctx, op_id, directory, ptr, bytes.len()) };
         match tokio::time::timeout(Duration::from_secs(300), rx).await {
             Ok(Ok(None)) => Ok(None),
-            Ok(Ok(Some(raw))) => {
-                let path = raw.strip_suffix('\n').unwrap_or(&raw);
-                if path.len() > 8192 {
-                    return Err("所选路径超出限制".into());
-                }
-                if path.is_empty()
-                    || path.chars().any(char::is_control)
-                    || !std::path::Path::new(path).is_absolute()
-                {
-                    return Err("所选路径无法处理".into());
-                }
-                Ok(Some(PathBuf::from(path)))
-            }
+            Ok(Ok(Some(raw))) => Ok(Some(PathBuf::from(raw))),
             Ok(Err(_)) => Ok(None),
             Err(_) => {
                 let removed = self
@@ -346,6 +367,7 @@ impl HostBridge {
                     .is_some();
                 if removed {
                     if let Some(cancel) = self.callbacks.cancel_choose_local_path {
+                        // SAFETY: HostBridge retains the context through this call and the operation ID is passed by value.
                         unsafe { cancel(self.callbacks.host_ctx, op_id) };
                     }
                 }
@@ -384,6 +406,7 @@ impl HostBridge {
             }
             pending.pasteboard_count.insert(op_id, tx);
         }
+        // SAFETY: HostBridge retains the context through this call and the operation ID is passed by value.
         unsafe { begin(self.callbacks.host_ctx, op_id) };
         match tokio::time::timeout(Duration::from_secs(5), rx).await {
             Ok(Ok(count)) => Ok(count),
@@ -435,6 +458,7 @@ impl HostBridge {
         } else {
             bytes.as_ptr().cast::<c_char>()
         };
+        // SAFETY: HostBridge retains the context and the borrowed bytes remain live until this callback returns.
         unsafe { begin(self.callbacks.host_ctx, op_id, ptr, bytes.len()) };
         match tokio::time::timeout(Duration::from_secs(5), rx).await {
             Ok(Ok(true)) => Ok(()),

@@ -207,15 +207,8 @@ fn is_executable_file(path: &Path) -> bool {
     if !metadata.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

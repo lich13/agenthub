@@ -1,52 +1,6 @@
 import AppKit
-import CAgentHubFFI
 import Foundation
 @preconcurrency import UserNotifications
-
-// MARK: - Legacy WebKit localStorage (UTF-16LE SQLite) One-Shot Migration
-
-public struct LegacyPreferencesSnapshot: Codable, Equatable, Sendable {
-    public var theme: String?
-    public var navCollapsed: Bool?
-}
-
-public enum LegacyPrefsMigrator {
-    public static let migrationFlagKey = "agenthub.native.migratedLegacyWebviewPrefs"
-    public static let themeDefaultsKey = "agenthub.theme"
-    public static let navCollapsedDefaultsKey = "agenthub.nav-collapsed"
-
-    public static func readFromDisk(homeDirectory: String? = nil) -> LegacyPreferencesSnapshot {
-        let ptr: UnsafeMutablePointer<CChar>? = if let homeDirectory {
-            homeDirectory.withCString { agenthub_ffi_read_legacy_webview_prefs($0) }
-        } else {
-            agenthub_ffi_read_legacy_webview_prefs(nil)
-        }
-        guard let ptr else { return LegacyPreferencesSnapshot() }
-        defer { agenthub_ffi_string_free(ptr) }
-        let json = Data(String(cString: ptr).utf8)
-        return (try? JSONDecoder().decode(LegacyPreferencesSnapshot.self, from: json))
-            ?? LegacyPreferencesSnapshot()
-    }
-
-    @discardableResult
-    public static func migrateIfNeeded(
-        defaults: UserDefaults = .standard,
-        homeDirectory: String? = nil
-    ) -> LegacyPreferencesSnapshot? {
-        guard !defaults.bool(forKey: migrationFlagKey) else {
-            return nil
-        }
-        let legacy = readFromDisk(homeDirectory: homeDirectory)
-        if defaults.string(forKey: themeDefaultsKey) == nil, let theme = legacy.theme {
-            defaults.set(ThemeMode.normalize(theme).rawValue, forKey: themeDefaultsKey)
-        }
-        if defaults.object(forKey: navCollapsedDefaultsKey) == nil, let collapsed = legacy.navCollapsed {
-            defaults.set(collapsed ? "1" : "0", forKey: navCollapsedDefaultsKey)
-        }
-        defaults.set(true, forKey: migrationFlagKey)
-        return legacy
-    }
-}
 
 // MARK: - Native macOS UNUserNotificationCenter CI Delivery & Click Routing
 

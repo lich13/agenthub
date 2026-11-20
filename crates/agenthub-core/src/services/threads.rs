@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     codex::{MessageBlock, ThreadDetail, ThreadSummary},
     platform::PlatformPaths,
-    services::system::{require_capability, Capability},
 };
 
 pub const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
@@ -67,10 +66,9 @@ pub fn load_thread_read_model_inputs(
 }
 
 pub fn plan_threads_list_request(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     mut query: ThreadsQuery,
 ) -> anyhow::Result<ThreadListPlan> {
-    require_capability(platform, Capability::Threads)?;
     query.q = query
         .q
         .as_deref()
@@ -82,10 +80,9 @@ pub fn plan_threads_list_request(
 }
 
 pub fn plan_thread_detail_request(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     request: ThreadDetailRequest,
 ) -> anyhow::Result<ThreadDetailPlan> {
-    require_capability(platform, Capability::Threads)?;
     let thread_id = required_thread_id(&request.id)?;
     let full = request.full.unwrap_or(false);
     Ok(ThreadDetailPlan {
@@ -172,7 +169,7 @@ fn block_page_limit(limit: Option<usize>) -> usize {
 mod tests {
 
     use crate::{
-        platform::{PlatformKind, PlatformPaths},
+        platform::PlatformPaths,
         services::threads::{
             plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
             requested_thread_limit, ThreadsQuery,
@@ -187,9 +184,8 @@ mod tests {
 
     #[test]
     fn read_plans_capture_shared_thread_sources_for_linux_and_macos_only() {
-        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
-        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+        let linux = PlatformPaths::linux_server();
+        let macos = PlatformPaths::macos("/fixture/home");
 
         let list = plan_threads_list_request(
             &linux,
@@ -223,8 +219,5 @@ mod tests {
 
         let blocks = plan_thread_blocks_request(&macos, " thread-a ", Some(0), None).unwrap();
         assert_eq!(blocks.block_limit, Some(1));
-
-        assert!(plan_threads_list_request(&windows, ThreadsQuery::default()).is_err());
-        assert!(plan_thread_blocks_request(&windows, "thread-a", None, None).is_err());
     }
 }

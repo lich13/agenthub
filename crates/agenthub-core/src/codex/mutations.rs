@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
+use jiff::Timestamp;
 use rusqlite::Connection;
 
 use super::{thread_rows::table_columns, CodexPaths};
@@ -12,7 +12,7 @@ pub fn set_thread_archived(paths: &CodexPaths, id: &str, archived: bool) -> Resu
         anyhow::bail!("threads.archived_at column not found");
     }
     let archived_at = if archived {
-        Some(Utc::now().timestamp())
+        Some(Timestamp::now().as_second())
     } else {
         None
     };

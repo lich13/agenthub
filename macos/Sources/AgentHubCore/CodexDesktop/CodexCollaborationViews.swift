@@ -780,27 +780,13 @@ public struct DesktopCollaborationFooterView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("模型").font(DesignFonts.body(11, weight: .medium)).foregroundStyle(palette.textSecondary.color)
-                Menu {
-                    ForEach(modelCatalog) { model in
-                        Button(model.name) {
-                            settingsNotice = nil
-                            applyDesktopSettings(
-                                model: model.handle,
-                                reasoningEffort: model.defaultReasoningEffort,
-                                mode: currentMode
-                            )
-                        }
+                AnchoredMenuButton(entries: modelCatalog.map { model in
+                    NativeMenuEntry(id: model.handle, title: model.name, selected: model.handle == selectedModel?.handle) {
+                        settingsNotice = nil
+                        applyDesktopSettings(model: model.handle, reasoningEffort: model.defaultReasoningEffort, mode: currentMode)
                     }
-                } label: {
-                    HStack {
-                        Text(selectedModel?.name ?? desktop.view?.model ?? (settingsCatalogLoading ? "读取模型…" : "没有可用模型"))
-                            .font(DesignFonts.body(12))
-                        Spacer()
-                        LucideIcon(.chevronDown, size: 12)
-                    }
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: 30)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                }, accessibilityLabel: "模型") {
+                    CollaborationMenuLabel(title: selectedModel?.name ?? desktop.view?.model ?? (settingsCatalogLoading ? "读取模型…" : "没有可用模型"), height: 30, fill: palette.surface.color)
                 }
                 .disabled(desktop.busy || settingsCatalogLoading || modelCatalog.isEmpty)
             }
@@ -808,27 +794,16 @@ public struct DesktopCollaborationFooterView: View {
             if let selectedModel {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("思考强度").font(DesignFonts.body(11, weight: .medium)).foregroundStyle(palette.textSecondary.color)
-                    Menu {
-                        Button("继承原生默认") {
+                    AnchoredMenuButton(entries: [NativeMenuEntry(id: "", title: "继承原生默认", selected: currentEffort.isEmpty) {
+                        settingsNotice = nil
+                        applyDesktopSettings(model: selectedModel.handle, reasoningEffort: nil, mode: currentMode)
+                    }] + selectedModel.reasoningEfforts.map { effort in
+                        NativeMenuEntry(id: effort, title: effort, selected: currentEffort == effort) {
                             settingsNotice = nil
-                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: nil, mode: currentMode)
+                            applyDesktopSettings(model: selectedModel.handle, reasoningEffort: effort, mode: currentMode)
                         }
-                        ForEach(selectedModel.reasoningEfforts, id: \.self) { effort in
-                            Button(effort) {
-                                settingsNotice = nil
-                                applyDesktopSettings(model: selectedModel.handle, reasoningEffort: effort, mode: currentMode)
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(currentEffort.isEmpty ? "继承原生默认" : currentEffort)
-                                .font(DesignFonts.body(12))
-                            Spacer()
-                            LucideIcon(.chevronDown, size: 12)
-                        }
-                        .padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(palette.surface.color))
+                    }, accessibilityLabel: "思考强度") {
+                        CollaborationMenuLabel(title: currentEffort.isEmpty ? "继承原生默认" : currentEffort, height: 30, fill: palette.surface.color)
                     }
                     .disabled(desktop.busy || settingsCatalogLoading || selectedModel.reasoningEfforts.isEmpty)
                 }
@@ -905,14 +880,13 @@ public struct DesktopCollaborationFooterView: View {
     private var referenceCatalogPickerPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Menu {
-                    Button("插件与应用") { catalogPickerKind = "mentions"; catalogPickerQuery = "" }
-                    Button("技能") { catalogPickerKind = "skills"; catalogPickerQuery = "" }
-                    Button("应用") { catalogPickerKind = "apps"; catalogPickerQuery = "" }
-                    Button("插件") { catalogPickerKind = "plugins"; catalogPickerQuery = "" }
-                } label: {
-                    Text(catalogKindLabel(catalogPickerKind))
-                        .font(DesignFonts.body(12, weight: .medium))
+                AnchoredMenuButton(entries: ["mentions", "skills", "apps", "plugins"].map { kind in
+                    NativeMenuEntry(id: kind, title: catalogKindLabel(kind), selected: catalogPickerKind == kind) {
+                        catalogPickerKind = kind
+                        catalogPickerQuery = ""
+                    }
+                }, accessibilityLabel: catalogKindLabel(catalogPickerKind)) {
+                    CollaborationMenuLabel(title: catalogKindLabel(catalogPickerKind), height: 24, fill: .clear, weight: .medium)
                 }
                 .frame(width: 100)
 
@@ -1582,21 +1556,15 @@ private struct DesktopElicitationFieldRow: View {
             Text("\(field.title)\(field.required ? " *" : "")")
                 .font(DesignFonts.body(12, weight: .medium))
             if let choices = field.choices {
-                Menu {
-                    Button("请选择") { onChange("") }
-                    ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
-                        Button(choice.label) { onChange(choice.encodedJSON) }
+                AnchoredMenuButton(entries: [NativeMenuEntry(id: "", title: "请选择", selected: value.isEmpty) {
+                    onChange("")
+                }] + choices.map { choice in
+                    NativeMenuEntry(id: choice.encodedJSON, title: choice.label, selected: value == choice.encodedJSON) {
+                        onChange(choice.encodedJSON)
                     }
-                } label: {
+                }, accessibilityLabel: field.title) {
                     let currentLabel = choices.first(where: { $0.encodedJSON == value })?.label ?? "请选择"
-                    HStack {
-                        Text(currentLabel).font(DesignFonts.body(12))
-                        Spacer()
-                        LucideIcon(.chevronDown, size: 12)
-                    }
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: 28)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(palette.elevated.color))
+                    CollaborationMenuLabel(title: currentLabel, height: 28, fill: palette.elevated.color)
                 }
                 .disabled(busy)
             } else {
@@ -1614,5 +1582,23 @@ private struct DesktopElicitationFieldRow: View {
                 Text(desc).font(DesignFonts.body(11)).foregroundStyle(palette.textMuted.color)
             }
         }
+    }
+}
+
+struct CollaborationMenuLabel: View {
+    let title: String
+    let height: CGFloat
+    let fill: Color
+    var weight: Font.Weight = .regular
+
+    var body: some View {
+        HStack {
+            Text(title).font(DesignFonts.body(12, weight: weight)).lineLimit(1)
+            Spacer()
+            LucideIcon(.chevronDown, size: 12)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: height)
+        .background(RoundedRectangle(cornerRadius: 6).fill(fill))
     }
 }

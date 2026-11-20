@@ -70,7 +70,7 @@ pub(super) async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Resu
         let poll_seconds = match cache.load_config(&config_path) {
             Ok(config) => {
                 if !upgraded_hooks {
-                    upgrade_managed_question_hooks_on_start(&config);
+                    refresh_managed_provider_hooks(&config)?;
                     upgraded_hooks = true;
                 }
                 match cache.panel_db(&config) {
@@ -134,7 +134,7 @@ mod tests {
         let cfg_path = root.join("config.toml");
         let db_a = root.join("panel_a.sqlite");
         let db_b = root.join("panel_b.sqlite");
-        let mut cfg = Config::default();
+        let mut cfg = Config::current_defaults().unwrap();
         cfg.paths.data_dir = root.clone();
         cfg.paths.db_path = db_a.clone();
         cfg.security.secret_key = agenthub_core::crypto::SecretBox::random_key_material();

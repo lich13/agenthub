@@ -119,6 +119,12 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+if [[ "${BUNDLE_ID}" != "com.lich13.agenthub" ]]; then
+  # Swift expands this on the user's Mac when opening the preview bundle.
+  # shellcheck disable=SC2088
+  preview_root='~/Library/Application Support/AgentHubPreview'
+  plutil -insert AgentHubIsolatedDataRoot -string "${AGENTHUB_ISOLATED_DATA_DIR:-$preview_root}" "${APP_BUNDLE}/Contents/Info.plist"
+fi
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
 
 echo "==> Signing AgentHub.app with identity '${CODESIGN_ID}'..."
@@ -186,7 +192,7 @@ hdiutil create \
   shasum -a 256 "${TAR_NAME}" > "${TAR_NAME}.sha256"
 )
 
-if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+if [[ -n "${AGENTHUB_SIGNING_PRIVATE_KEY:-}" || -n "${AGENTHUB_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
   echo "==> Signing updater archive with sign-minisign-archive.py..."
   python3 "${ROOT}/scripts/sign-minisign-archive.py" \
     --archive "${TAR_PATH}" \

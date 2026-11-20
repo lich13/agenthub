@@ -865,12 +865,14 @@ public struct NativeMenuEntry: Identifiable {
     public let title: String
     public var disabled: Bool
     public var isSeparator: Bool
+    public var isSelected: Bool = false
     public var action: () -> Void
 
-    public init(id: String, title: String, disabled: Bool = false, action: @escaping () -> Void) {
+    public init(id: String, title: String, disabled: Bool = false, selected: Bool = false, action: @escaping () -> Void) {
         self.id = id
         self.title = title
         self.disabled = disabled
+        self.isSelected = selected
         self.isSeparator = false
         self.action = action
     }
@@ -971,6 +973,7 @@ public struct AnchoredMenuButton<Label: View>: View {
             let mi = NSMenuItem(title: item.title, action: #selector(MenuTargetRelay.invokeEntry(_:)), keyEquivalent: "")
             mi.target = relay
             mi.tag = idx
+            mi.state = item.isSelected ? .on : .off
             mi.isEnabled = !item.disabled
             menu.addItem(mi)
         }

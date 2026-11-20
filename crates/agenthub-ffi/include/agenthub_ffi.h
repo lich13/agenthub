@@ -9,6 +9,14 @@ extern "C" {
 
 typedef struct AgentHubRuntime AgentHubRuntime;
 
+typedef struct AgentHubCommandAccess {
+    bool remote;
+    bool read_only;
+} AgentHubCommandAccess;
+
+// Returns the registered access for this command. hook_status selects the read-only hooks query.
+AgentHubCommandAccess agenthub_ffi_command_access(const char *command_utf8, bool hook_status);
+
 // Callback buffer (utf8_ptr, len) is valid only for the duration of the callback frame;
 // never dereference utf8_ptr when len == 0.
 typedef void (*AgentHubRpcCallback)(
@@ -36,6 +44,11 @@ typedef enum AgentHubRawImageKind {
     AGENTHUB_RAW_IMAGE_TIFF = 3,
 } AgentHubRawImageKind;
 
+typedef struct AgentHubPasteboardLimits {
+    size_t files, image_bytes, text_utf16_units, path_utf16_units;
+} AgentHubPasteboardLimits;
+AgentHubPasteboardLimits agenthub_ffi_pasteboard_limits(void);
+
 typedef struct AgentHubRawFileUrl {
     const char *utf8_ptr;
     size_t utf8_len;
@@ -62,6 +75,8 @@ typedef struct AgentHubRawPasteboard {
 // Every Host callback MUST return immediately without blocking on MainActor.
 typedef struct AgentHubHostCallbacks {
     void *host_ctx;
+    void (*retain_host_ctx)(void *host_ctx);
+    void (*release_host_ctx)(void *host_ctx);
     void (*open_external_url)(void *host_ctx, const char *url_utf8, size_t len);
     void (*deliver_ci_notifications)(void *host_ctx, const char *events_json_utf8, size_t len);
     void (*request_app_restart)(void *host_ctx);
@@ -87,7 +102,6 @@ void agenthub_ffi_complete_choose_local_path(const AgentHubRuntime *runtime, uin
 void agenthub_ffi_complete_pasteboard_change_count(const AgentHubRuntime *runtime, uint64_t op_id, int64_t count);
 void agenthub_ffi_complete_write_pasteboard(const AgentHubRuntime *runtime, uint64_t op_id, bool ok);
 
-char *agenthub_ffi_read_legacy_webview_prefs(const char *home_dir_utf8);
 char *agenthub_ffi_parse_gfm_markdown(const char *utf8_ptr, size_t len);
 
 void agenthub_ffi_invoke(

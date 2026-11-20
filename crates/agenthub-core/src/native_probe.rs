@@ -186,16 +186,16 @@ pub fn scan_event(
 ) -> Result<NativeScan> {
     match provider {
         NativeProvider::Grok => crate::grok::notification_for_event(
-            &crate::grok::GrokPaths::default_for_user(),
+            &crate::grok::GrokPaths::default_for_user()?,
             id,
             event,
         ),
         NativeProvider::Dsh => crate::dsh::notifications::scan_selected(
-            &crate::dsh::DshPaths::default_for_user(),
+            &crate::dsh::DshPaths::default_for_user()?,
             Some(id),
         ),
         NativeProvider::GrokBot => crate::grokbot::scan_selected(
-            &crate::grokbot::GrokBotPaths::default_for_user(),
+            &crate::grokbot::GrokBotPaths::default_for_user()?,
             Some(id),
         ),
         NativeProvider::Claude | NativeProvider::Antigravity => {
@@ -207,16 +207,16 @@ pub fn scan_event(
 pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     match provider {
         NativeProvider::GrokBot => {
-            crate::grokbot::scan(&crate::grokbot::GrokBotPaths::default_for_user())
+            crate::grokbot::scan(&crate::grokbot::GrokBotPaths::default_for_user()?)
         }
         NativeProvider::Claude => {
-            crate::claude::notification_snapshots(&crate::claude::ClaudePaths::default_for_user())
+            crate::claude::notification_snapshots(&crate::claude::ClaudePaths::default_for_user()?)
         }
         NativeProvider::Grok => {
-            crate::grok::notification_snapshots(&crate::grok::GrokPaths::default_for_user())
+            crate::grok::notification_snapshots(&crate::grok::GrokPaths::default_for_user()?)
         }
         NativeProvider::Dsh => {
-            crate::dsh::notifications::scan(&crate::dsh::DshPaths::default_for_user())
+            crate::dsh::notifications::scan(&crate::dsh::DshPaths::default_for_user()?)
         }
         NativeProvider::Antigravity => {
             anyhow::bail!("Antigravity requires the local native transport")
@@ -282,8 +282,8 @@ pub fn timestamp(value: &Value) -> Option<i64> {
         .or_else(|| {
             value
                 .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|ts| ts.timestamp_millis())
+                .and_then(|s| (s).parse::<jiff::Timestamp>().ok())
+                .map(|ts| ts.as_millisecond())
         })
 }
 
@@ -617,7 +617,7 @@ mod tests {
         let (turns_rhetorical, _) = grok_events("session", &events, &updates);
         assert_eq!(turns_rhetorical[0].kind, "completion");
 
-        let mut cfg = Config::default();
+        let mut cfg = Config::current_defaults().unwrap();
         assert!(NativeProvider::Grok.event_enabled(&cfg, "reply_needed"));
         cfg.probe.notifications.notify_grok_reply_needed = false;
         assert!(!NativeProvider::Grok.event_enabled(&cfg, "reply_needed"));

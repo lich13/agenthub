@@ -2,7 +2,7 @@
 use super::PanelDb;
 use crate::config::Config;
 use anyhow::Result;
-use chrono::Utc;
+use jiff::Timestamp;
 use rand::Rng;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ CREATE INDEX idx_probe_notification_pending ON probe_notification_deliveries(sta
 
 impl PanelDb {
     pub fn sync_notification_channels(&self, config: &Config) -> Result<()> {
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.sync_notification_channels_in_transaction(&tx, config, now)?;
@@ -129,9 +129,9 @@ impl PanelDb {
             self.sync_notification_channels_in_transaction(
                 tx,
                 &config,
-                Utc::now().timestamp_millis(),
+                Timestamp::now().as_millisecond(),
             )?;
-            Self::sync_question_baselines(tx, &config, Utc::now().timestamp_millis())?;
+            Self::sync_question_baselines(tx, &config, Timestamp::now().as_millisecond())?;
             Ok(config)
         })
     }
@@ -189,8 +189,11 @@ impl PanelDb {
         payload: &Value,
         aliases: &[String],
     ) -> Result<bool> {
-        let (ciphertext, nonce) = self.crypto.encrypt(&serde_json::to_vec(payload)?)?;
-        let now = Utc::now().timestamp_millis();
+        let (ciphertext, nonce) = self.crypto.encrypt(
+            &["notification", channel.as_str(), key],
+            &serde_json::to_vec(payload)?,
+        )?;
+        let now = Timestamp::now().as_millisecond();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for alias in aliases.iter().filter(|alias| alias.as_str() != key) {
@@ -247,7 +250,7 @@ impl PanelDb {
         channel: NotificationChannel,
         key: &str,
     ) -> Result<Option<NotificationLease>> {
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         let owner = Uuid::new_v4().to_string();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -276,7 +279,7 @@ impl PanelDb {
         &self,
         lease: &NotificationLease,
     ) -> Result<Option<i64>> {
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         let conn = self.conn.lock().expect("db mutex");
         Ok(conn.query_row(
             "SELECT min(lease_until_ms,first_attempt_ms+?5)-?4 FROM probe_notification_deliveries
@@ -294,7 +297,7 @@ impl PanelDb {
         lease: &NotificationLease,
         outcome: &Value,
     ) -> Result<Option<Value>> {
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         let sent = outcome["sent"].as_bool() == Some(true);
         let skipped = outcome["skipped"].as_bool() == Some(true);
         let confirmed = lease.chunk_index + usize::from(sent);
@@ -365,7 +368,7 @@ impl PanelDb {
     }
 
     pub fn due_notification_deliveries(&self, limit: usize) -> Result<Vec<NotificationDelivery>> {
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut changed_keys = Vec::new();
@@ -414,14 +417,14 @@ impl PanelDb {
         rows.into_iter()
             .map(|(event_key, ciphertext, nonce)| {
                 Ok(NotificationDelivery {
-                    event_key,
                     channel: NotificationChannel::Bark,
                     payload: self
                         .crypto
-                        .decrypt(&ciphertext, &nonce)
+                        .decrypt(&["notification", "bark", &event_key], &ciphertext, &nonce)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                         .unwrap_or(Value::Null),
+                    event_key,
                 })
             })
             .collect()

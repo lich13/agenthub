@@ -181,8 +181,9 @@ impl<T: Clone> ReadCache<T> {
     ) -> Result<T> {
         let before = stamp();
         if let Ok(mut entries) = self.entries.lock() {
-            if let Some(index) = entries.iter().position(|entry| entry.path == path) {
-                let mut entry = entries.remove(index).expect("known cache entry");
+            if let Some(mut entry) =
+                crate::lru::take_first(&mut entries, |entry| entry.path == path)
+            {
                 if Some(&entry.stamp) == before.as_ref() {
                     entry.last_accessed = std::time::Instant::now();
                     let value = entry.value.clone();
@@ -199,14 +200,7 @@ impl<T: Clone> ReadCache<T> {
             if bytes <= self.max_bytes {
                 if let Ok(mut entries) = self.entries.lock() {
                     entries.retain(|entry| entry.path != path);
-                    while entries.len() >= self.max_entries
-                        || entries.iter().map(|entry| entry.bytes).sum::<u64>() + bytes
-                            > self.max_bytes
-                    {
-                        if entries.pop_front().is_none() {
-                            break;
-                        }
-                    }
+                    let total = entries.iter().map(|entry| entry.bytes).sum::<u64>() + bytes;
                     entries.push_back(Entry {
                         path: path.to_path_buf(),
                         stamp,
@@ -214,6 +208,14 @@ impl<T: Clone> ReadCache<T> {
                         bytes,
                         last_accessed: std::time::Instant::now(),
                     });
+                    crate::lru::trim(
+                        &mut entries,
+                        self.max_entries,
+                        total,
+                        self.max_bytes,
+                        |_| true,
+                        |entry| entry.bytes,
+                    );
                 }
             }
         }

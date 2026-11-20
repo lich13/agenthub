@@ -46,29 +46,19 @@ impl SessionStorageSize {
 struct Stamp {
     len: u64,
     modified: Option<SystemTime>,
-    #[cfg(unix)]
     identity: (u64, u64, i64, i64),
 }
 impl Stamp {
     fn new(meta: &Metadata) -> Self {
-        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Self {
             len: meta.len(),
             modified: meta.modified().ok(),
-            #[cfg(unix)]
             identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
         }
     }
     fn same_file(&self, other: &Self) -> bool {
-        #[cfg(unix)]
-        {
-            (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1)
-        }
-        #[cfg(not(unix))]
-        {
-            self == other
-        }
+        (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1)
     }
     /// An append keeps the file and never shrinks it.
     fn grew_into(&self, next: &Self) -> bool {
@@ -215,19 +205,14 @@ impl Cache {
     }
     fn get(&self, source: Source) -> SessionStorageSize {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let mut entry = if let Some(index) = entries
-            .iter()
-            .position(|entry| entry.source.same_slot(&source))
-        {
-            entries.remove(index).expect("existing entry")
-        } else {
-            Entry {
-                source: source.clone(),
-                value: pending_size(),
-                checked: Instant::now(),
-                queued: false,
-            }
-        };
+        let mut entry =
+            crate::lru::take_first(&mut entries, |entry| entry.source.same_slot(&source))
+                .unwrap_or_else(|| Entry {
+                    source: source.clone(),
+                    value: pending_size(),
+                    checked: Instant::now(),
+                    queued: false,
+                });
         if entry.source != source {
             // Ordinary appends use the bounded TTL. Resetting on every mtime
             // change would leave an actively written session permanently pending.
@@ -251,12 +236,16 @@ impl Cache {
         }
         // Keep the last verified value while refreshing an unchanged source.
         let value = entry.value.clone();
-        while entries.len() >= CACHE_ENTRIES {
-            if let Some(index) = entries.iter().position(|entry| !entry.queued) {
-                entries.remove(index);
-            } else {
-                entries.pop_front();
-            }
+        if entries.len() >= CACHE_ENTRIES {
+            let has_idle = entries.iter().any(|entry| !entry.queued);
+            crate::lru::trim(
+                &mut entries,
+                CACHE_ENTRIES - 1,
+                0,
+                0,
+                |entry| !has_idle || !entry.queued,
+                |_| 0,
+            );
         }
         entries.push_back(entry);
         value
@@ -309,22 +298,18 @@ fn scan(source: &Source) -> SessionStorageSize {
     let mut partial = false;
     let mut seen = HashSet::new();
     let started = Instant::now();
-    let mut add = |path: &Path, meta: Metadata| {
-        #[cfg(unix)]
+    let mut add = |meta: Metadata| {
         let key = {
             use std::os::unix::fs::MetadataExt;
             format!("{}:{}", meta.dev(), meta.ino())
         };
-        #[cfg(not(unix))]
-        let key = path.to_string_lossy().into_owned();
-        let _ = path;
         if seen.insert(key) {
             bytes = bytes.saturating_add(meta.len());
         }
     };
     if let Some((path, _)) = &source.primary {
-        if let Some((path, meta)) = metadata(&source.root, path) {
-            add(&path, meta);
+        if let Some((_, meta)) = metadata(&source.root, path) {
+            add(meta);
         } else {
             return SessionStorageSize::unavailable(StorageScope::Directory);
         }
@@ -346,12 +331,12 @@ fn scan(source: &Source) -> SessionStorageSize {
         if entry.file_type().is_symlink() {
             continue;
         }
-        let Some((path, meta)) = metadata(&source.root, entry.path()) else {
+        let Some((_, meta)) = metadata(&source.root, entry.path()) else {
             partial = true;
             continue;
         };
         if meta.is_file() {
-            add(&path, meta);
+            add(meta);
         } else if !meta.is_dir() || entry.depth() == SCAN_DEPTH {
             partial = true;
         }

@@ -762,9 +762,11 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
     let sibling = f.file.with_file_name("keep.jsonl");
     fs::copy(&f.file, &sibling).unwrap();
     let cases = SessionUseCases {
-        platform: crate::platform::PlatformPaths::desktop_current(),
+        platform: crate::platform::PlatformPaths::desktop_current().unwrap(),
         codex: crate::codex::CodexPaths::new(f.root.join("codex")),
-        grok: crate::grok::GrokPaths::default_for_user(),
+        grok: crate::grok::GrokPaths {
+            home: f.root.join("grok"),
+        },
         claude: f.paths.clone(),
         antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
             f.root.join("antigravity"),
@@ -822,7 +824,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     };
     let f = Fixture::new();
     f.complete();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.enabled = true;
     let dbpath = f.root.join("panel.sqlite");
     let db = PanelDb::open_with_secret_box(
@@ -837,7 +839,8 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
         0
     );
     let mut user = f.row("next", Some("a1"), "user", json!("Next request"));
-    user["timestamp"] = json!((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339());
+    user["timestamp"] =
+        json!((jiff::Timestamp::now() + jiff::SignedDuration::from_secs(1)).to_string());
     f.append(&user);
     let mut final_row = f.row(
         "done",
@@ -2595,9 +2598,9 @@ fn failure_evidence_written_after_the_hook_is_not_resumed_execution() {
         json!("Fixture API error"),
     );
     error["isApiErrorMessage"] = json!(true);
-    error["timestamp"] = json!(chrono::DateTime::from_timestamp_millis(received + 10)
+    error["timestamp"] = json!(jiff::Timestamp::from_millisecond(received + 10)
         .unwrap()
-        .to_rfc3339());
+        .to_string());
     f.append(&error);
     let context = notification_context(&f.paths, &f.file).unwrap();
     assert_eq!(
@@ -2798,7 +2801,7 @@ fn batch_delete_filters_shared_history_only_for_successful_projects() {
         .unwrap();
     }
     let cases = SessionUseCases {
-        platform: crate::platform::PlatformPaths::desktop_current(),
+        platform: crate::platform::PlatformPaths::desktop_current().unwrap(),
         codex: crate::codex::CodexPaths::new(f.root.join("codex")),
         grok: crate::grok::GrokPaths {
             home: f.root.join("grok"),

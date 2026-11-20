@@ -49,7 +49,7 @@ function printActionChecklist(action) {
   console.log(`kind: ${action.kind}`);
   console.log(`coreUseCase: ${action.coreUseCase}`);
   if (action.linuxRpc) console.log(`linuxRpc: ${action.linuxRpc}`);
-  if (action.tauriCommand) console.log(`ffiAdapter: ${action.tauriCommand}`);
+  if (action.ffiHandler) console.log(`ffiAdapter: ${action.ffiHandler}`);
   if (action.hostOnlyReason) console.log(`hostOnlyReason: ${action.hostOnlyReason}`);
   console.log(dtoLine(action));
   console.log("Required sync points:");

@@ -13,7 +13,7 @@ pub(crate) async fn antigravity_list(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .antigravity()
+            .antigravity()?
             .list(request)
     })
     .await
@@ -26,7 +26,7 @@ pub(crate) async fn antigravity_detail(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .antigravity()
+            .antigravity()?
             .detail(request)
     })
     .await
@@ -39,7 +39,7 @@ pub(crate) async fn antigravity_rename(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .antigravity()
+            .antigravity()?
             .rename(&request.session_key, &request.title)
     })
     .await
@@ -52,7 +52,7 @@ pub(crate) async fn antigravity_archive(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .antigravity()
+            .antigravity()?
             .archive(&request.session_key)
     })
     .await
@@ -65,7 +65,7 @@ pub(crate) async fn antigravity_restore(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .antigravity()
+            .antigravity()?
             .restore(&request.session_key)
     })
     .await
@@ -75,7 +75,7 @@ pub(crate) async fn antigravity_restore(
 pub(crate) async fn dsh_list(_state: AppState, request: ProviderListRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .dsh()
+            .dsh()?
             .list(request)
     })
     .await
@@ -85,7 +85,7 @@ pub(crate) async fn dsh_list(_state: AppState, request: ProviderListRequest) -> 
 pub(crate) async fn dsh_detail(_state: AppState, request: ProviderDetailRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .dsh()
+            .dsh()?
             .detail(request)
     })
     .await
@@ -95,7 +95,7 @@ pub(crate) async fn dsh_detail(_state: AppState, request: ProviderDetailRequest)
 pub(crate) async fn dsh_rename(_state: AppState, request: ProviderRenameRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .dsh()
+            .dsh()?
             .rename(&request.session_key, &request.title)
     })
     .await
@@ -105,7 +105,7 @@ pub(crate) async fn dsh_rename(_state: AppState, request: ProviderRenameRequest)
 pub(crate) async fn dsh_archive(_state: AppState, request: ProviderSessionRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .dsh()
+            .dsh()?
             .archive(&request.session_key)
     })
     .await
@@ -115,7 +115,7 @@ pub(crate) async fn dsh_archive(_state: AppState, request: ProviderSessionReques
 pub(crate) async fn dsh_restore(_state: AppState, request: ProviderSessionRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .dsh()
+            .dsh()?
             .restore(&request.session_key)
     })
     .await

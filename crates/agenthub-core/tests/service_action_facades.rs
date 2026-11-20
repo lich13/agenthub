@@ -60,7 +60,7 @@ fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
 
 #[test]
 fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
 
     assert_eq!(
         "barkTest".parse::<ProbeAction>().unwrap(),
@@ -95,7 +95,7 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
 
 #[test]
 fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
 
     let default_plan =
         plan_probe_action(&platform, ProbeAction::BarkTest, &platform.config_file).unwrap();
@@ -123,18 +123,8 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
 }
 
 #[test]
-fn probe_action_capability_gate_rejects_unsupported_platforms() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Windows);
-
-    let err = plan_probe_action(&platform, ProbeAction::InstallHooks, &platform.config_file)
-        .expect_err("Windows must not expose Probe actions");
-
-    assert!(err.to_string().contains("probe is unavailable on windows"));
-}
-
-#[test]
 fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = PlatformPaths::linux_server();
     let check = plan_update_action(&linux, UpdateAction::Check).unwrap();
     assert_eq!(
         check.linux_job.as_ref().unwrap().kind,
@@ -170,8 +160,8 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
 
 #[test]
 fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
-    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux_config = Config::linux_defaults();
+    let linux = PlatformPaths::linux_server();
 
     let probe = ProbeUseCases::new(&linux);
     let bark = probe.action(ProbeAction::BarkTest).unwrap();
@@ -204,9 +194,8 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
 }
 
 #[test]
-fn thread_detail_cleanup_facades_are_capability_gated() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+fn thread_detail_facades_normalize_inputs() {
+    let linux = PlatformPaths::linux_server();
 
     let detail = plan_thread_detail_request(
         &linux,
@@ -236,21 +225,11 @@ fn thread_detail_cleanup_facades_are_capability_gated() {
 
     let blocks = plan_thread_blocks_request(&linux, "thread-a", Some(0), None).unwrap();
     assert_eq!(blocks.block_limit, Some(1));
-
-    assert!(plan_thread_detail_request(
-        &windows,
-        ThreadDetailRequest {
-            id: "thread-a".into(),
-            ..ThreadDetailRequest::default()
-        }
-    )
-    .is_err());
 }
 
 #[test]
 fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+    let linux = PlatformPaths::linux_server();
 
     let list = plan_threads_list_request(
         &linux,
@@ -270,8 +249,6 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
     assert_eq!(page.blocks.len(), 1);
     assert_eq!(page.total_blocks, 2);
     assert!(page.has_more_blocks);
-
-    assert!(plan_threads_list_request(&windows, ThreadsQuery::default()).is_err());
 }
 
 #[test]
@@ -293,11 +270,8 @@ fn thread_limit_helpers_are_shared_core_contracts() {
 fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
     let archived = archive_thread_response("thread-a".to_string(), true);
     assert_eq!(archived.command, commands::THREADS_ARCHIVE);
-    let archive_plan = plan_thread_archive_with_capability(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        "thread-a",
-    )
-    .unwrap();
+    let archive_plan =
+        plan_thread_archive_with_capability(&PlatformPaths::linux_server(), "thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&archive_plan).unwrap().command,
         commands::THREADS_ARCHIVE
@@ -305,11 +279,8 @@ fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
 
     let restored = archive_thread_response("thread-a".to_string(), false);
     assert_eq!(restored.command, commands::THREADS_RESTORE);
-    let restore_plan = plan_thread_restore_with_capability(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        "thread-a",
-    )
-    .unwrap();
+    let restore_plan =
+        plan_thread_restore_with_capability(&PlatformPaths::linux_server(), "thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&restore_plan).unwrap().command,
         commands::THREADS_RESTORE
@@ -318,7 +289,7 @@ fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
     let renamed = rename_thread_response("thread-a".to_string(), "new name").unwrap();
     assert_eq!(renamed.command, commands::THREADS_RENAME);
     let rename_plan = plan_thread_rename_with_capability(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
+        &PlatformPaths::linux_server(),
         ThreadRenameRequest {
             thread_id: "thread-a".to_string(),
             name: " new name ".to_string(),

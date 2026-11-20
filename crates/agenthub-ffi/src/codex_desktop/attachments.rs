@@ -3,7 +3,9 @@
 use super::*;
 use crate::codex_desktop::clipboard::RawPasteboardSnapshot;
 use crate::host::{HostBridge, StreamSink};
-use agenthub_core::codex::desktop::references::NativeReference;
+use agenthub_core::codex::desktop::{attachments::AttachmentStore, references::NativeReference};
+
+type SharedAttachments = Arc<std::sync::Mutex<AttachmentStore>>;
 
 #[derive(Clone)]
 pub(super) struct Receiver {
@@ -80,7 +82,7 @@ async fn references(
     receiver: &Receiver,
     handles: &[String],
 ) -> Result<Vec<NativeReference>, String> {
-    if handles.len() > 32 {
+    if handles.len() > super::clipboard::MAX_FILES {
         return Err("引用数量超出限制".into());
     }
     let grants = bridge.grants.lock().await;
@@ -95,8 +97,11 @@ async fn references(
         .collect()
 }
 
-async fn release(runtime: &BridgeRuntime, references: Vec<NativeReference>) -> Result<(), String> {
-    let store = runtime.attachments.clone();
+async fn release(
+    store: &SharedAttachments,
+    references: Vec<NativeReference>,
+) -> Result<(), String> {
+    let store = store.clone();
     agenthub_core::read_tasks::spawn_blocking(move || {
         store
             .lock()
@@ -232,7 +237,7 @@ pub(crate) async fn handle(
                 return Err("附件授权已变化".into());
             }
             let values = references(bridge, &receiver, &handles).await?;
-            release(&runtime, values).await?;
+            release(&runtime.attachments, values).await?;
             if let Some(current) = bridge
                 .receiver
                 .lock()
@@ -322,7 +327,7 @@ pub(crate) async fn paste(
                 let file = store
                     .lock()
                     .map_err(|_| "无法保存粘贴图片")?
-                    .import_png(&png, chrono::Utc::now().timestamp().max(0) as u64)?;
+                    .import_png(&png, jiff::Timestamp::now().as_second().max(0) as u64)?;
                 (DesktopPasteDisposition::Attachments, vec![file])
             }
             PasteContent::Text => (DesktopPasteDisposition::Text, Vec::new()),
@@ -333,31 +338,35 @@ pub(crate) async fn paste(
     .await
     .map_err(|_| "无法读取剪贴板附件")??;
 
-    let current_count = host.pasteboard_change_count().await?;
-    if current_count != count {
-        let _ = release(&runtime, values).await;
-        return Err("剪贴板已变化，请重新粘贴".into());
-    }
-    if values.is_empty() {
-        context(host, bridge, remote, &runtime, &receiver).await?;
+    let has_attachments = !values.is_empty();
+    finish_paste(
+        &runtime.attachments,
+        count,
+        &values,
+        host.pasteboard_change_count(),
+        async {
+            if has_attachments {
+                deliver(
+                    host,
+                    state,
+                    remote,
+                    bridge,
+                    &runtime,
+                    &receiver,
+                    values.clone(),
+                )
+                .await
+            } else {
+                context(host, bridge, remote, &runtime, &receiver).await
+            }
+        },
+    )
+    .await?;
+    if !has_attachments {
         return Ok(DesktopAttachmentResult {
             binding_id: receiver.id,
             paste_disposition: Some(disposition),
         });
-    }
-    if let Err(error) = deliver(
-        host,
-        state,
-        remote,
-        bridge,
-        &runtime,
-        &receiver,
-        values.clone(),
-    )
-    .await
-    {
-        let _ = release(&runtime, values).await;
-        return Err(error);
     }
     if let Some(current) = bridge
         .receiver
@@ -372,6 +381,28 @@ pub(crate) async fn paste(
         binding_id: receiver.id,
         paste_disposition: Some(disposition),
     })
+}
+
+async fn finish_paste(
+    store: &SharedAttachments,
+    snapshot_count: i64,
+    values: &[NativeReference],
+    current_count: impl std::future::Future<Output = Result<i64, &'static str>>,
+    deliver: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    let result = match current_count.await {
+        Ok(current) if current == snapshot_count => deliver.await,
+        Ok(_) => Err("剪贴板已变化，请重新粘贴".into()),
+        Err(error) => Err(error.into()),
+    };
+    if let Err(error) = &result {
+        if !values.is_empty() {
+            release(store, values.to_vec())
+                .await
+                .map_err(|cleanup| format!("{error}；{cleanup}"))?;
+        }
+    }
+    result
 }
 
 async fn deliver(
@@ -412,7 +443,7 @@ async fn deliver(
     if values.is_empty() {
         return Ok(());
     }
-    if current.handles.len() + values.len() > 32 {
+    if current.handles.len() + values.len() > super::clipboard::MAX_FILES {
         return Err("引用数量超出限制，本次附件未添加".into());
     }
     let items = values
@@ -447,7 +478,7 @@ async fn deliver(
 }
 
 fn capture_drop(paths: Vec<PathBuf>, remaining: usize) -> Result<Vec<NativeReference>, String> {
-    if paths.is_empty() || paths.len() > remaining.min(32) {
+    if paths.is_empty() || paths.len() > remaining.min(super::clipboard::MAX_FILES) {
         return Err("引用数量超出限制，本次附件未添加".into());
     }
     super::clipboard::selected_files(paths).map_err(str::to_owned)
@@ -481,7 +512,7 @@ pub(crate) async fn drop_files(
             .clone()
             .ok_or("请先连接 Codex 桌面")?;
         context(&host, &bridge, &remote, &runtime, &receiver).await?;
-        let remaining = 32usize.saturating_sub(receiver.handles.len());
+        let remaining = super::clipboard::MAX_FILES.saturating_sub(receiver.handles.len());
         let values =
             agenthub_core::read_tasks::spawn_blocking(move || capture_drop(paths, remaining))
                 .await
@@ -576,5 +607,67 @@ mod tests {
             serde_json::json!({"revision":1,"sessionId":"fixture","action":{"type":"listen"}})
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod paste_completion_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_clipboard_recheck_or_lost_receiver_releases_only_undelivered_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = SecretBox::from_key_material(&"11".repeat(32)).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(
+            AttachmentStore::open(directory.path().join("attachments"), key, 1).unwrap(),
+        ));
+        let import = || {
+            store
+                .lock()
+                .unwrap()
+                .import_png(b"\x89PNG\r\n\x1a\nfixture", 1)
+                .unwrap()
+        };
+        let path = |reference: &NativeReference| match reference {
+            NativeReference::File { path, .. } => path.clone(),
+            _ => panic!("expected imported PNG"),
+        };
+        let delivered = import();
+        finish_paste(
+            &store,
+            4,
+            std::slice::from_ref(&delivered),
+            async { Ok(4) },
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        for (count, receiver) in [
+            (Ok(5), Ok(())),
+            (Err("timeout"), Ok(())),
+            (Ok(4), Err("focus")),
+            (Ok(4), Err("receiver")),
+        ] {
+            let pending = import();
+            let error = finish_paste(
+                &store,
+                4,
+                std::slice::from_ref(&pending),
+                async { count },
+                async { receiver.map_err(str::to_owned) },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error,
+                match count {
+                    Ok(5) => "剪贴板已变化，请重新粘贴",
+                    Err(reason) => reason,
+                    _ => receiver.unwrap_err(),
+                }
+            );
+            assert!(!path(&pending).exists());
+            assert!(path(&delivered).is_file());
+        }
     }
 }

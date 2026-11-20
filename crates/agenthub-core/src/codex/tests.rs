@@ -3630,7 +3630,7 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         "agenthub-{label}-{}-{}-{}",
         std::process::id(),
         counter,
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        jiff::Timestamp::now().as_nanosecond()
     ))
 }
 

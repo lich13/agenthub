@@ -89,11 +89,8 @@ fn file_size_counts_metadata_without_reading_content_or_following_links() {
     let temp = TempDir::new("storage-file");
     let file = temp.path().join("session.jsonl");
     fs::write(&file, b"metadata-only").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
-    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
 
     let size = file_size(temp.path(), &file);
     assert_eq!(size.bytes, Some(13));
@@ -103,17 +100,14 @@ fn file_size_counts_metadata_without_reading_content_or_following_links() {
     let missing = file_size(temp.path(), &temp.path().join("missing.jsonl"));
     assert_eq!(missing, SessionStorageSize::unavailable(StorageScope::File));
 
-    #[cfg(unix)]
-    {
-        let target = temp.path().join("target.jsonl");
-        let link = temp.path().join("link.jsonl");
-        fs::write(&target, b"outside link target").unwrap();
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert_eq!(
-            file_size(temp.path(), &link),
-            SessionStorageSize::unavailable(StorageScope::File)
-        );
-    }
+    let target = temp.path().join("target.jsonl");
+    let link = temp.path().join("link.jsonl");
+    fs::write(&target, b"outside link target").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(
+        file_size(temp.path(), &link),
+        SessionStorageSize::unavailable(StorageScope::File)
+    );
 }
 
 #[test]
@@ -127,17 +121,14 @@ fn directory_size_is_pending_then_counts_logical_files_once() {
     fs::write(nested.join("events.jsonl"), b"nested events").unwrap();
     let unreadable = nested.join("metadata-only.bin");
     fs::write(&unreadable, b"unreadable bytes").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
-        let outside = temp
-            .path()
-            .with_file_name(format!("agenthub-storage-outside-{}", uuid::Uuid::new_v4()));
-        fs::write(&outside, vec![b'x'; 4096]).unwrap();
-        std::os::unix::fs::symlink(&outside, nested.join("external-link")).unwrap();
-        let _ = fs::remove_file(&outside);
-    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let outside = temp
+        .path()
+        .with_file_name(format!("agenthub-storage-outside-{}", uuid::Uuid::new_v4()));
+    fs::write(&outside, vec![b'x'; 4096]).unwrap();
+    std::os::unix::fs::symlink(&outside, nested.join("external-link")).unwrap();
+    let _ = fs::remove_file(&outside);
 
     let first = directory_size(temp.path(), &directory, Some(&primary), "fixture-owner");
     assert_eq!(first.bytes, None);
@@ -233,13 +224,7 @@ fn directory_size_keeps_completed_cache_for_primary_append() {
 
     let replacement = temp.path().join("replacement.jsonl");
     fs::write(&replacement, b"replacement-primary").unwrap();
-    #[cfg(unix)]
     fs::rename(&replacement, &primary).unwrap();
-    #[cfg(not(unix))]
-    {
-        fs::remove_file(&primary).unwrap();
-        fs::rename(&replacement, &primary).unwrap();
-    }
     let replaced = directory_size(temp.path(), &directory, Some(&primary), owner);
     assert_eq!(replaced.status, StorageStatus::Pending);
     assert_eq!(replaced.bytes, None);
@@ -287,7 +272,6 @@ fn directory_size_marks_depth_and_entry_bounds_partial() {
     assert!(many_size.bytes.is_some_and(|bytes| bytes <= 10_001));
 }
 
-#[cfg(unix)]
 #[test]
 fn storage_size_rejects_symlink_roots_and_directories() {
     let temp = TempDir::new("storage-links");
@@ -310,7 +294,6 @@ fn storage_size_rejects_symlink_roots_and_directories() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn directory_size_rejects_cached_sources_replaced_with_symlinks() {
     for replace_primary in [true, false] {
@@ -360,7 +343,6 @@ fn directory_size_rejects_cached_sources_replaced_with_symlinks() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn directory_size_invalidates_replaced_directory_with_unchanged_timestamp() {
     let temp = TempDir::new("storage-directory-identity");

@@ -9,9 +9,9 @@ use std::{fs, path::PathBuf, time::SystemTime};
 
 #[test]
 fn default_config_uses_agenthub_runtime_names() {
-    let config = Config::default();
+    let config = Config::current_defaults().unwrap();
 
-    let platform = PlatformPaths::current();
+    let platform = PlatformPaths::current().unwrap();
     assert_eq!(config.paths.data_dir, platform.data_dir);
     assert_eq!(
         config.paths.db_path,
@@ -22,7 +22,7 @@ fn default_config_uses_agenthub_runtime_names() {
 
 #[test]
 fn linux_default_config_values_stay_cloud_compatible() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
+    let config = Config::linux_defaults();
 
     assert_eq!(
         config.paths.data_dir,
@@ -71,15 +71,15 @@ fn macos_default_config_uses_application_support_and_tauri_app_paths() {
 }
 
 #[test]
-fn platform_paths_cover_linux_macos_and_windows() {
+fn platform_paths_cover_linux_and_macos() {
     let mac_home = temp_dir("agenthub-platform-macos-home");
     fs::create_dir_all(&mac_home).unwrap();
 
     assert_eq!(
-        PlatformPaths::for_kind(PlatformKind::Linux).data_dir,
+        PlatformPaths::linux_server().data_dir,
         PathBuf::from("/var/lib/agenthub-webd")
     );
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = PlatformPaths::linux_server();
     assert_eq!(
         linux.config_file,
         PathBuf::from("/etc/agenthub-webd/config.toml")
@@ -112,15 +112,6 @@ fn platform_paths_cover_linux_macos_and_windows() {
         macos.daemon_binary(),
         mac_home.join("Library/Application Support/AgentHub/bin/agenthub-webd")
     );
-    assert_eq!(
-        PlatformPaths::for_kind(PlatformKind::Windows).data_dir,
-        PathBuf::from(r"%ProgramData%\AgentHub")
-    );
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-    assert_eq!(
-        windows.daemon_binary(),
-        windows.data_dir.join("bin").join("agenthub-webd.exe")
-    );
     fs::remove_dir_all(mac_home).unwrap();
 }
 
@@ -129,7 +120,7 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     let root = temp_dir("agenthub-probe-status");
     let config = sandboxed_config(&root);
     seed_codex_logs_db(&config.codex.home.join("logs_2.sqlite"), &[]);
-    let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+    let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
         .status()
         .await
         .unwrap();
@@ -161,7 +152,7 @@ async fn probe_status_exposes_hook_and_bark_config_without_device_key() {
     config.probe.notifications.notify_reply_needed = false;
     config.probe.notifications.notify_recoverable = true;
     config.probe.notifications.server_url = "https://api.day.app/custom".to_string();
-    let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+    let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
         .status()
         .await
         .unwrap();
@@ -214,7 +205,7 @@ async fn probe_status_and_hooks_expose_builtin_runtime_state() {
     )
     .unwrap();
     config.probe.notifications.enabled = true;
-    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+    let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
 
     let status = runtime.status().await.unwrap();
     assert_eq!(status.lifecycle_status, "managed");
@@ -254,30 +245,22 @@ fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() 
 
 #[test]
 fn capabilities_response_has_no_status_collection_or_private_paths() {
-    let root = temp_dir("agenthub-capabilities-sandbox");
-    let config = sandboxed_config(&root);
-    let paths = PlatformPaths::for_kind(PlatformKind::Macos);
-    let response =
-        agenthub_core::services::use_cases::AgentHubUseCases::with_config(&config, &paths)
-            .system()
-            .unwrap()
-            .runtime_capabilities();
+    let paths = PlatformPaths::macos("/fixture/home");
+    let response = agenthub_core::services::use_cases::AgentHubUseCases::new(&paths)
+        .system()
+        .runtime_capabilities();
     let json = serde_json::to_value(response).unwrap();
     assert_eq!(json["host_surface"], "desktop_embedded_tauri");
     assert_eq!(json["capabilities"]["thread_cleanup"], true);
     assert_eq!(json["api_version"], 2);
     assert_eq!(json.as_object().unwrap().len(), 3);
     assert!(json["capabilities"].get("status").is_none());
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() {
     let root = temp_dir("agenthub-probe-event-model");
-    let runtime = ProbeRuntime::new(
-        sandboxed_config(&root),
-        PlatformPaths::for_kind(PlatformKind::Linux),
-    );
+    let runtime = ProbeRuntime::new(sandboxed_config(&root), PlatformPaths::linux_server());
 
     let hook = runtime.build_event(ProbeEventInput::hook_stop(
         Some("thread-a"),
@@ -330,7 +313,7 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
 fn sandboxed_config(root: &std::path::Path) -> Config {
     let codex_home = root.join(".codex");
     fs::create_dir_all(&codex_home).unwrap();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.codex.home = codex_home;
     config.codex.workspace = root.join("workspace");
     config.paths.data_dir = root.join("data");

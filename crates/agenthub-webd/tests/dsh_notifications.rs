@@ -135,7 +135,7 @@ impl Fixture {
     fn session(&self, id: &str, kind: &str) {
         let dir = self.paths.home.join("sessions/project").join(id);
         fs::create_dir_all(&dir).unwrap();
-        let now = chrono::Utc::now().timestamp_millis() + 100;
+        let now = jiff::Timestamp::now().as_millisecond() + 100;
         let mut lines = vec![
             json!({"type":"session","version":4,"id":id,"isSeeded":false}),
             json!({"type":"turn/start","seq":0,"time":now,"data":{"turn":1}}),
@@ -285,7 +285,7 @@ fn built_cli_rechecks_answer_and_recovered_failure_before_retry() {
                 json!({"id":"approval","outcome":"allowed-once"}),
             ),
         };
-        f.append("fixture",json!({"type":event,"seq":seq,"time":chrono::Utc::now().timestamp_millis(),"data":data}));
+        f.append("fixture",json!({"type":event,"seq":seq,"time":jiff::Timestamp::now().as_millisecond(),"data":data}));
         Connection::open(f.db.path())
             .unwrap()
             .execute("UPDATE probe_notification_deliveries SET next_ms=0", [])

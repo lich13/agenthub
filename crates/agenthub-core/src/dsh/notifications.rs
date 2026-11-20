@@ -186,16 +186,15 @@ impl State {
                     });
             }
             "tool/call" if data["name"] == "ask_user_question" => {
-                ensure!(
-                    turn.is_some() && turn == self.open_turn,
-                    "DSH question outside turn"
-                );
+                let turn = turn
+                    .filter(|value| Some(*value) == self.open_turn)
+                    .context("DSH question outside turn")?;
                 let id = data["callId"]
                     .as_str()
                     .context("missing DSH question identity")?;
                 let event = make(
                     "reply_needed",
-                    format!("turn:{}:question:{id}", turn.unwrap()),
+                    format!("turn:{turn}:question:{id}"),
                     question_body(&data["arguments"])?,
                 )?;
                 self.pending
@@ -254,11 +253,9 @@ impl State {
                 self.pending.remove(&format!("approval:{id}"));
             }
             "turn/end" => {
-                ensure!(
-                    turn.is_some() && turn == self.open_turn,
-                    "unmatched DSH turn end"
-                );
-                let turn = turn.unwrap();
+                let turn = turn
+                    .filter(|value| Some(*value) == self.open_turn)
+                    .context("unmatched DSH turn end")?;
                 self.open_turn = None;
                 self.pending.retain(|_, (_, _, continued)| *continued);
                 let reason = data["reason"]["kind"]
@@ -396,35 +393,28 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
     let mut cache = CACHE
         .lock()
         .map_err(|_| anyhow::anyhow!("DSH reader unavailable"))?;
-    let old = cache
-        .entries
-        .iter()
-        .position(|c| c.path == path)
-        .and_then(|i| cache.entries.remove(i));
+    let old = crate::lru::take_first(&mut cache.entries, |c| c.path == path);
     if let Some(old) = &old {
         cache.bytes -= old.bytes;
     }
-    if old
-        .as_ref()
-        .is_some_and(|c| c.stamp == before && c.identity == identity)
-    {
-        let mut old = old.unwrap();
-        old.last_accessed = std::time::Instant::now();
-        let result = old.state.snapshot(id, key, &identity);
-        cache.bytes += old.bytes;
-        cache.entries.push_back(old);
-        return result;
-    }
+    let old = match old {
+        Some(mut old) if old.stamp == before && old.identity == identity => {
+            old.last_accessed = std::time::Instant::now();
+            let result = old.state.snapshot(id, key, &identity);
+            cache.bytes += old.bytes;
+            cache.entries.push_back(old);
+            return result;
+        }
+        other => other,
+    };
     let mut file = regular_file(path)?;
-    let append = old.as_ref().is_some_and(|c| {
-        c.identity == identity
-            && before.len > c.stamp.len
-            && anchor(&mut file, c.offset).ok().as_ref() == Some(&c.anchor)
-    });
-    let mut current = if append {
-        old.unwrap()
-    } else {
-        Cached {
+    let mut current = old
+        .filter(|c| {
+            c.identity == identity
+                && before.len > c.stamp.len
+                && anchor(&mut file, c.offset).ok().as_ref() == Some(&c.anchor)
+        })
+        .unwrap_or_else(|| Cached {
             path: path.into(),
             stamp: before.clone(),
             identity: identity.clone(),
@@ -433,8 +423,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             state: State::default(),
             bytes: 0,
             last_accessed: std::time::Instant::now(),
-        }
-    };
+        });
     file.seek(SeekFrom::Start(current.offset))?;
     let mut bytes = Vec::new();
     file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
@@ -505,15 +494,16 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             .header
             .as_ref()
             .map_or(0, |h| h.to_string().len());
-    cache.bytes += current.bytes;
+    let total = (cache.bytes + current.bytes) as u64;
     cache.entries.push_back(current);
-    while cache.bytes > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES as usize {
-        if let Some(entry) = cache.entries.pop_front() {
-            cache.bytes -= entry.bytes;
-        } else {
-            break;
-        }
-    }
+    cache.bytes = crate::lru::trim(
+        &mut cache.entries,
+        usize::MAX,
+        total,
+        crate::resource_limits::NATIVE_PROBE_CACHE_BYTES,
+        |_| true,
+        |entry| entry.bytes as u64,
+    ) as usize;
     Ok(result)
 }
 fn consume_lines(state: &mut State, bytes: &[u8]) -> Result<()> {

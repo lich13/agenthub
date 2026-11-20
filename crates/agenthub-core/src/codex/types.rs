@@ -41,9 +41,12 @@ pub struct ThreadSummary {
 impl ThreadSummary {
     pub(crate) fn sort_by_message_time(rows: &mut [Self]) {
         rows.sort_by_cached_key(|thread| {
-            (std::cmp::Reverse(thread.updated_at.as_deref().and_then(
-                |time| chrono::DateTime::parse_from_rfc3339(time).ok(),
-            )),)
+            (std::cmp::Reverse(
+                thread
+                    .updated_at
+                    .as_deref()
+                    .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
+            ),)
         });
     }
 }

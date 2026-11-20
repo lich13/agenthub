@@ -15,20 +15,20 @@ fn contract_actions() -> Vec<serde_json::Value> {
 
 #[test]
 fn ffi_dispatch_handler_matches_contract_registry() {
-    let registered_tauri_paths: BTreeSet<String> = commands::dispatch::REGISTERED_COMMAND_ENTRIES
+    let registered_ffi_paths: BTreeSet<String> = commands::dispatch::REGISTERED_COMMAND_ENTRIES
         .iter()
-        .map(|(_, tauri_cmd)| (*tauri_cmd).to_owned())
+        .map(|(_, handler)| (*handler).to_owned())
         .collect();
     let registered_action_ids: BTreeSet<String> = commands::dispatch::REGISTERED_COMMAND_ENTRIES
         .iter()
         .map(|(action_id, _)| (*action_id).to_owned())
         .collect();
 
-    let expected_tauri_paths: BTreeSet<String> = contract_actions()
+    let expected_ffi_paths: BTreeSet<String> = contract_actions()
         .into_iter()
         .filter_map(|action| {
             action
-                .get("tauriCommand")
+                .get("ffiHandler")
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
@@ -39,7 +39,7 @@ fn ffi_dispatch_handler_matches_contract_registry() {
         .into_iter()
         .filter(|action| {
             action
-                .get("tauriCommand")
+                .get("ffiHandler")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|value| !value.is_empty())
         })
@@ -51,8 +51,8 @@ fn ffi_dispatch_handler_matches_contract_registry() {
         })
         .collect();
 
-    assert_eq!(registered_tauri_paths.len(), 73);
-    assert_eq!(registered_tauri_paths, expected_tauri_paths);
+    assert_eq!(registered_ffi_paths.len(), 73);
+    assert_eq!(registered_ffi_paths, expected_ffi_paths);
     assert_eq!(registered_action_ids, expected_action_ids);
 }
 

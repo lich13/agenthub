@@ -51,7 +51,7 @@ public enum ConversationViewModel {
         let dk = block.displayKind?.lowercased() ?? ""
         return dk == "question_result"
             || k == "request_user_input_result"
-            || !(block.answers ?? []).isEmpty
+            || !block.answers.isEmpty
     }
 
     public static func isToolBlock(_ block: MessageBlock) -> Bool {

@@ -25,7 +25,7 @@ pub(super) fn seed_main_task_identities(home: &Path, ids: &[&str]) {
 pub(super) fn test_notification_config(ids: &[&str]) -> (Config, TestTaskIdentity) {
     let root =
         std::env::temp_dir().join(format!("agenthub-test-identity-{}", uuid::Uuid::new_v4()));
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.codex.home = root.join(".codex");
     seed_main_task_identities(&config.codex.home, ids);
     (config, TestTaskIdentity(root))
@@ -63,7 +63,7 @@ impl Fixture {
             [transcript.to_str().unwrap()],
         )
         .unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = home;
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
@@ -101,15 +101,17 @@ fn hook_stop_accuracy_keeps_control_payload_suppression_without_transcript() {
         hook_stop_last_assistant_message(None, Some("turn-a"), Some(r#"{"suggestions":[]}"#))
             .unwrap()
             .unwrap();
-    let event =
-        probe_runtime(&Config::default()).build_event(ProbeEventInput::hook_stop_with_context(
+    let event = build_probe_event(
+        &Config::current_defaults().unwrap(),
+        ProbeEventInput::hook_stop_with_context(
             None,
             Some("turn-a"),
             None,
             None,
             Some(&selection.message),
             "hook-stop",
-        ));
+        ),
+    );
     assert_eq!(
         event.suppression_reason.as_deref(),
         Some("internal_control_payload")
@@ -122,7 +124,7 @@ fn notify_completion_accuracy_requires_verified_final_body() {
     let input =
         notify_completion_context(&fixture.config, Some(&fixture.payload("main")), None, None)
             .unwrap();
-    let event = probe_runtime(&fixture.config).build_event(input);
+    let event = build_probe_event(&fixture.config, input);
     assert_eq!(
         event.suppression_reason.as_deref(),
         Some("unconfirmed_final_body")
@@ -168,7 +170,7 @@ async fn hook_stop_accuracy_fixture_turns_deliver_only_exact_terminal_answers() 
             json!({"session_id":"main","turn_id":turn,"transcript_path":fixture.transcript});
         let input = hook_stop_event_input(&fixture.config, Some(&payload), None, None, "hook-stop")
             .unwrap();
-        let event = probe_runtime(&fixture.config).build_event(input);
+        let event = build_probe_event(&fixture.config, input);
         assert_eq!(event.payload["body_selected_turn_id"], turn);
         let (outcome, bark) =
             record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event)
@@ -214,7 +216,7 @@ async fn hook_stop_accuracy_fixture_final_body_reaches_bark_with_current_title()
         "hook-stop",
     )
     .unwrap();
-    let event = probe_runtime(&fixture.config).build_event(input);
+    let event = build_probe_event(&fixture.config, input);
     let (outcome, bark) =
         record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event.clone())
             .await
@@ -258,7 +260,7 @@ async fn hook_stop_accuracy_internal_unknown_and_unconfirmed_body_have_zero_side
             "hook-stop",
         )
         .unwrap();
-        let event = probe_runtime(&fixture.config).build_event(input);
+        let event = build_probe_event(&fixture.config, input);
         let (outcome, bark) =
             record_probe_event_with_bark(&|| Ok(fixture.config.clone()), &db, event)
                 .await

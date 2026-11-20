@@ -1,51 +1,16 @@
 use crate::overview::DesktopState;
-use agenthub_core::{
-    config::Config,
-    db::PanelDb,
-    platform::PlatformPaths,
-    probe_error_monitor::{
-        ProbeErrorMonitorLaunchAgentStatus, PROBE_ERROR_MONITOR_LAUNCH_AGENT_LABEL,
-    },
-};
+use agenthub_core::{config::Config, db::PanelDb, platform::PlatformPaths};
 use anyhow::{anyhow, Context, Result};
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{fs, io::Write, path::Path};
 
-pub const ISOLATED_DATA_DIR_ENV: &str = "AGENTHUB_ISOLATED_DATA_DIR";
 pub const KEY_SERVICE_PRODUCTION: &str = "com.lich13.agenthub.codex-desktop";
 pub const KEY_SERVICE_PREVIEW: &str = "com.lich13.agenthub.codex-desktop.preview";
 
-static ISOLATED_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-pub fn is_isolated_mode() -> bool {
-    ISOLATED_ACTIVE.load(Ordering::Acquire)
-}
-
-pub fn set_isolated_mode(isolated: bool) {
-    ISOLATED_ACTIVE.store(isolated, Ordering::Release);
-}
-
-pub fn resolve_isolated_root(explicit: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = explicit.filter(|p| !p.as_os_str().is_empty()) {
-        return Some(path.to_path_buf());
+pub fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> {
+    match isolated_root {
+        Some(root) => build_isolated_desktop_state(root),
+        None => DesktopState::current(),
     }
-    std::env::var_os(ISOLATED_DATA_DIR_ENV)
-        .filter(|val| !val.is_empty())
-        .map(PathBuf::from)
-}
-
-pub fn init_desktop_state(isolated_root: Option<&Path>) -> Result<(DesktopState, bool)> {
-    let Some(root) = resolve_isolated_root(isolated_root) else {
-        set_isolated_mode(false);
-        return Ok((DesktopState::current()?, false));
-    };
-    set_isolated_mode(true);
-    let state = build_isolated_desktop_state(&root)?;
-    Ok((state, true))
 }
 
 pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState> {
@@ -56,14 +21,10 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
     create_dir_0700(&workspace_dir)?;
 
     let config_file = isolated_root.join("config.toml");
-    let production_platform = PlatformPaths::desktop_current();
+    let production_platform = PlatformPaths::desktop_current()?;
 
     if !config_file.exists() {
-        let mut seed = if production_platform.config_file.is_file() {
-            Config::load(&production_platform.config_file).unwrap_or_default()
-        } else {
-            Config::default()
-        };
+        let mut seed = Config::load(&production_platform.config_file)?;
         seed.security.secret_key.clear();
         seed.paths.data_dir = isolated_root.to_path_buf();
         seed.paths.db_path = isolated_root.join("agenthub.sqlite");
@@ -107,7 +68,9 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
             .secret_box()
             .map_err(|err| anyhow!("isolated secret box failed: {err}"))?,
     )?;
-    Ok(DesktopState::new(config, db, platform))
+    let mut state = DesktopState::new(config, db, platform);
+    state.isolated = true;
+    Ok(state)
 }
 
 fn create_dir_0700(path: &Path) -> Result<()> {
@@ -138,20 +101,4 @@ fn write_atomic_0600(target: &Path, bytes: &[u8]) -> Result<()> {
     temp.persist(target)
         .map_err(|err| anyhow!("persist isolated file failed: {}", err.error))?;
     Ok(())
-}
-
-pub fn skipped_launch_agent_status(
-    config: &Config,
-    platform: &PlatformPaths,
-) -> ProbeErrorMonitorLaunchAgentStatus {
-    ProbeErrorMonitorLaunchAgentStatus {
-        supported: false,
-        enabled: config.probe.monitor_enabled(),
-        loaded: false,
-        changed: false,
-        label: PROBE_ERROR_MONITOR_LAUNCH_AGENT_LABEL.to_string(),
-        plist_path: None,
-        helper_path: platform.daemon_binary(),
-        config_path: platform.config_file.clone(),
-    }
 }

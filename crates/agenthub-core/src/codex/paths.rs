@@ -207,14 +207,7 @@ fn default_fallback_codex_home(current_user_home: Option<&Path>) -> (PathBuf, &'
             .unwrap_or_else(|| PathBuf::from(".codex"));
         (path, "fallback_current_user")
     }
-    #[cfg(target_os = "windows")]
-    {
-        let path = current_user_home
-            .map(|home| home.join(".codex"))
-            .unwrap_or_else(|| PathBuf::from(".codex"));
-        (path, "fallback_current_user")
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
         let _ = current_user_home;
         (PathBuf::from("/root/.codex"), "fallback_root")
@@ -224,7 +217,7 @@ fn default_fallback_codex_home(current_user_home: Option<&Path>) -> (PathBuf, &'
 fn default_linux_codex_discovery_paths(
     current_user_home: Option<&Path>,
 ) -> (PathBuf, PathBuf, PathBuf) {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let base = current_user_home
             .map(|home| home.join(".agenthub/non-linux-codex-discovery"))
@@ -235,7 +228,7 @@ fn default_linux_codex_discovery_paths(
             base.join("home"),
         )
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
         let _ = current_user_home;
         (

@@ -258,7 +258,7 @@ mod tests {
             &grok_root,
             "completion",
             "Recovered fixture",
-            chrono::Utc::now().timestamp_millis() + 1000,
+            jiff::Timestamp::now().as_millisecond() + 1000,
         );
         db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
             .unwrap();
@@ -322,7 +322,7 @@ mod tests {
                 &claude_root,
             )])
             .await;
-            let paths = agenthub_core::claude::ClaudePaths::default_for_user();
+            let paths = agenthub_core::claude::ClaudePaths::default_for_user().unwrap();
             fs::create_dir_all(paths.projects.join("fixture")).unwrap();
             fs::create_dir_all(paths.config.join("sessions")).unwrap();
             let cwd = root.canonicalize().unwrap();
@@ -346,7 +346,7 @@ mod tests {
                     .spawn()
                     .unwrap(),
             );
-            let output = Command::new("ps")
+            let output = Command::new("/bin/ps")
                 .args(["-p", &owner.0.id().to_string(), "-o", "lstart="])
                 .env("LC_ALL", "C")
                 .env("TZ", "UTC")
@@ -364,7 +364,7 @@ mod tests {
                 )
             };
             let registration = paths.config.join("sessions/fixture.json");
-            let mut row = json!({"pid":owner.0.id(),"sessionId":"fixture","cwd":cwd,"procStart":proc_start,"startedAt":chrono::Utc::now().timestamp_millis(),"pidDomain":domain,"status":"busy"});
+            let mut row = json!({"pid":owner.0.id(),"sessionId":"fixture","cwd":cwd,"procStart":proc_start,"startedAt":jiff::Timestamp::now().as_millisecond(),"pidDomain":domain,"status":"busy"});
             fs::write(&registration, row.to_string()).unwrap();
             let db = PanelDb::open_with_secret_box(
                 root.join("pending.sqlite"),
@@ -375,11 +375,10 @@ mod tests {
                 .unwrap();
             db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
                 .unwrap();
-            let timestamp = chrono::DateTime::from_timestamp_millis(
-                chrono::Utc::now().timestamp_millis() + 1000,
-            )
-            .unwrap()
-            .to_rfc3339();
+            let timestamp =
+                jiff::Timestamp::from_millisecond(jiff::Timestamp::now().as_millisecond() + 1000)
+                    .unwrap()
+                    .to_string();
             let transcript = paths.projects.join("fixture/fixture.jsonl");
             let rows = [
                 json!({"type":"user","uuid":"user","promptId":"prompt-fixture","sessionId":"fixture","cwd":cwd,"version":"2.1.322","timestamp":timestamp,"message":{"role":"user","content":"Fixture request"}}),
@@ -513,7 +512,7 @@ mod tests {
                     turn_id: "fixture-turn".into(),
                     kind: "completion".into(),
                     body: "Unrelated completion stays pending".into(),
-                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+                    timestamp_ms: jiff::Timestamp::now().as_millisecond() + 1000,
                 }]
                 .into(),
             }],
@@ -566,7 +565,7 @@ mod tests {
                 turn_id: "fixture-turn".into(),
                 kind: "completion".into(),
                 body: "Fixture completed".into(),
-                timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+                timestamp_ms: jiff::Timestamp::now().as_millisecond() + 1000,
             }]
             .into(),
         };
@@ -628,7 +627,7 @@ mod tests {
                 &grok_root,
                 kind,
                 "Final fixture answer",
-                chrono::Utc::now().timestamp_millis() + 1000,
+                jiff::Timestamp::now().as_millisecond() + 1000,
             )
             .streams
             .remove(0);
@@ -705,7 +704,7 @@ mod tests {
             &grok_root,
             "completion",
             "Fixture reply",
-            chrono::Utc::now().timestamp_millis() + 1000,
+            jiff::Timestamp::now().as_millisecond() + 1000,
         )
         .streams
         .remove(0);
@@ -788,14 +787,16 @@ mod tests {
         db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
             .unwrap();
 
-        let projects = agenthub_core::claude::ClaudePaths::default_for_user().projects;
+        let projects = agenthub_core::claude::ClaudePaths::default_for_user()
+            .unwrap()
+            .projects;
         std::fs::create_dir_all(projects.join("fixture")).unwrap();
         let at = |offset: i64| {
-            chrono::DateTime::from_timestamp_millis(
-                chrono::Utc::now().timestamp_millis() + 1_000 + offset,
+            jiff::Timestamp::from_millisecond(
+                jiff::Timestamp::now().as_millisecond() + 1_000 + offset,
             )
             .unwrap()
-            .to_rfc3339()
+            .to_string()
         };
         let row = |session: &str,
                    id: &str,
@@ -1038,7 +1039,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let codex_event = crate::probe_runtime(&codex_config).build_event(codex_input);
+        let codex_event = crate::build_probe_event(&codex_config, codex_input);
         let (codex_outcome, _) =
             crate::record_probe_event_with_bark(&|| Ok(codex_config.clone()), &db, codex_event)
                 .await
@@ -1056,17 +1057,17 @@ mod tests {
         ])
         .await;
 
-        let start_ms = chrono::Utc::now().timestamp_millis() + 1_000;
+        let start_ms = jiff::Timestamp::now().as_millisecond() + 1_000;
         let now_ms = start_ms + 1_000;
-        let start_rfc3339 = chrono::DateTime::from_timestamp_millis(start_ms)
+        let start_rfc3339 = jiff::Timestamp::from_millisecond(start_ms)
             .unwrap()
-            .to_rfc3339();
-        let now_rfc3339 = chrono::DateTime::from_timestamp_millis(now_ms)
+            .to_string();
+        let now_rfc3339 = jiff::Timestamp::from_millisecond(now_ms)
             .unwrap()
-            .to_rfc3339();
+            .to_string();
 
         // 2. Claude Code: real JSONL transcript + claude_hook::parse + notification_delivery::claude_hook
-        let claude_paths = agenthub_core::claude::ClaudePaths::default_for_user();
+        let claude_paths = agenthub_core::claude::ClaudePaths::default_for_user().unwrap();
         let claude_transcript = claude_paths.projects.join("fixture/session.jsonl");
         std::fs::create_dir_all(claude_transcript.parent().unwrap()).unwrap();
         let claude_user = serde_json::json!({
@@ -1118,7 +1119,7 @@ mod tests {
         .unwrap();
 
         // 3. Grok: real summary.json + events.jsonl + updates.jsonl + native_probe::scan(Grok)
-        let grok_paths = agenthub_core::grok::GrokPaths::default_for_user();
+        let grok_paths = agenthub_core::grok::GrokPaths::default_for_user().unwrap();
         let grok_id = "00000000-0000-4000-8000-000000000003";
         let grok_session_dir = grok_paths.home.join("sessions/%2Ffixture").join(grok_id);
         std::fs::create_dir_all(&grok_session_dir).unwrap();
@@ -1202,7 +1203,7 @@ mod tests {
         };
 
         // 5. DSH: real v4 session.v4.jsonl + native_probe::scan(Dsh)
-        let dsh_paths = agenthub_core::dsh::DshPaths::default_for_user();
+        let dsh_paths = agenthub_core::dsh::DshPaths::default_for_user().unwrap();
         let dsh_id = "00000000-0000-4000-8000-000000000004";
         let dsh_dir = dsh_paths.home.join("sessions/fixture").join(dsh_id);
         std::fs::create_dir_all(&dsh_dir).unwrap();

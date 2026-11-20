@@ -52,9 +52,7 @@ fn run(id: u64, status: &str, conclusion: Option<&str>, attempt: u64, time: i64)
         conclusion: conclusion.map(str::to_owned),
         html_url: format!("https://github.com/fixture/repo/actions/runs/{id}"),
         created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: chrono::DateTime::from_timestamp_millis(time)
-            .unwrap()
-            .to_rfc3339(),
+        updated_at: jiff::Timestamp::from_millisecond(time).unwrap().to_string(),
         repository_id: 10,
         repository_name: "fixture/repo".into(),
         is_bot: false,
@@ -189,7 +187,7 @@ fn only_success_failure_timeout_notify_and_history_is_bounded() {
 #[tokio::test]
 async fn disabled_monitor_and_manual_refresh_only_read_cached_results() {
     let fixture = Database::new();
-    let config = Config::default();
+    let config = Config::current_defaults().unwrap();
     assert!(!enabled(&config));
     let mut monitor = Monitor::new().unwrap();
     assert!(monitor
@@ -238,7 +236,7 @@ async fn disabled_monitor_and_manual_refresh_only_read_cached_results() {
 #[tokio::test]
 async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
     let fixture = Database::new();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let mut state = Stored::default();
     state.snapshot.last_scan_ms = now() - 1000;
@@ -280,9 +278,9 @@ async fn refresh_during_rate_limit_finishes_without_reading_credentials() {
 #[test]
 fn saving_disable_and_reenable_resets_the_baseline_before_next_poll() {
     let fixture = Database::new();
-    let mut active = Config::default();
+    let mut active = Config::current_defaults().unwrap();
     active.probe.notifications.notify_github_ci = true;
-    let inactive = Config::default();
+    let inactive = Config::current_defaults().unwrap();
     let time = now();
     let mut state = Stored::default();
     reconcile(
@@ -561,7 +559,7 @@ async fn refresh_during_scan_is_consumed_and_unchanged_polls_do_not_write() {
     server.set("/user", json!(account()));
     server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     status(
         &fixture.db,
@@ -614,7 +612,7 @@ async fn settings_reset_during_scan_is_preserved() {
     server.set("/user", json!(account()));
     server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let mut state = Stored::default();
     state.snapshot.enabled = true;
@@ -622,7 +620,7 @@ async fn settings_reset_during_scan_is_preserved() {
     save(&fixture.db, &state).unwrap();
     let events = monitor
         .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
-            settings_changed(&fixture.db, &config, &Config::default()).unwrap();
+            settings_changed(&fixture.db, &config, &Config::current_defaults().unwrap()).unwrap();
             Ok("fixture-only".into())
         })
         .await
@@ -696,7 +694,7 @@ fn batch_acknowledgement_preserves_unprocessed_events_and_old_state_is_readable(
 #[test]
 fn cached_status_never_requests_scan_and_exposes_monitor_baseline() {
     let fixture = Database::new();
-    let config = Config::default();
+    let config = Config::current_defaults().unwrap();
     let cached = Request {
         refresh: true,
         cached_only: true,
@@ -743,7 +741,7 @@ async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_o
                     "conclusion": "success",
                     "html_url": "https://github.com/fixture/repo/actions/runs/1",
                     "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": chrono::DateTime::from_timestamp_millis(time + 1000).unwrap().to_rfc3339(),
+                    "updated_at": jiff::Timestamp::from_millisecond(time + 1000).unwrap().to_string(),
                     "actor": { "login": "dependabot[bot]", "type": "Bot" }
                 },
                 {
@@ -756,7 +754,7 @@ async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_o
                     "conclusion": "failure",
                     "html_url": "https://github.com/fixture/repo/actions/runs/2",
                     "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": chrono::DateTime::from_timestamp_millis(time + 1000).unwrap().to_rfc3339(),
+                    "updated_at": jiff::Timestamp::from_millisecond(time + 1000).unwrap().to_string(),
                     "actor": { "login": "alice", "type": "User" }
                 }
             ]
@@ -775,7 +773,7 @@ async fn bot_runs_and_repository_filters_suppress_pending_events_without_storm_o
     assert!(cached[0].is_bot);
     assert!(!cached[1].is_bot);
 
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     assert!(config.probe.notifications.github_ci_filter_bots);
 
@@ -860,7 +858,7 @@ async fn subset_repository_filter_polls_only_selected_repos_and_baselines_newly_
         json!({"workflow_runs": [other_completed, other_running]}),
     );
 
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     config.probe.notifications.github_ci_repositories = vec!["FIXTURE/REPO".into()];
 
@@ -983,7 +981,7 @@ async fn a_failed_repository_cannot_borrow_another_repositories_observation_afte
         let server = Server::new().await;
         let mut monitor = server.monitor();
         let mut state = Stored::default();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.notify_github_ci = true;
         let time = 1_800_000_000_000;
         server.set("/user", json!(account()));
@@ -1027,9 +1025,9 @@ async fn a_failed_repository_cannot_borrow_another_repositories_observation_afte
         monitor = server.monitor();
         bot["status"] = "completed".into();
         bot["conclusion"] = "success".into();
-        bot["updated_at"] = json!(chrono::DateTime::from_timestamp_millis(time + 1000)
+        bot["updated_at"] = json!(jiff::Timestamp::from_millisecond(time + 1000)
             .unwrap()
-            .to_rfc3339());
+            .to_string());
         server.set(failed, json!({"workflow_runs":[bot]}));
         monitor
             .scan_with_config(&mut state, &config, true, time + 4000)
@@ -1045,7 +1043,7 @@ async fn direct_config_bot_toggles_reset_each_cutoff_even_when_repository_reads_
     let fixture = Database::new();
     let server = Server::new().await;
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let config_path = fixture.root.join("config.toml");
     server.set("/user", json!(account()));
@@ -1087,7 +1085,7 @@ async fn due_repositories_use_five_or_sixty_seconds_and_reuse_credentials_and_30
     let fixture = Database::new();
     let server = Server::new().await;
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     config.probe.notifications.github_ci_filter_bots = true;
     let time = now();
@@ -1177,7 +1175,7 @@ async fn failed_account_refresh_waits_for_credentials_and_does_not_use_stale_ide
     let fixture = Database::new();
     let server = Server::new().await;
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     server.set("/user", json!(account()));
     server.set(
@@ -1228,7 +1226,7 @@ async fn credential_failure_after_restart_and_short_account_limit_retry_verify_a
     for limited in [false, true] {
         let fixture = Database::new();
         let server = Server::new().await;
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.notify_github_ci = true;
         let mut state = Stored::default();
         reconcile(
@@ -1288,7 +1286,7 @@ async fn failed_repository_catalog_waits_and_manual_refresh_recovers() {
         let fixture = Database::new();
         let server = Server::new().await;
         let mut monitor = server.monitor();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.notify_github_ci = true;
         server.set("/user", json!(account()));
         server.reply(
@@ -1340,7 +1338,7 @@ async fn repository_and_bot_settings_saved_during_scan_cannot_be_overwritten() {
         let fixture = Database::new();
         let server = Server::new().await;
         let mut monitor = server.monitor();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.notify_github_ci = true;
         server.set("/user", json!(account()));
         server.set("/user/repos?affiliation=owner&per_page=100", json!([]));
@@ -1385,7 +1383,7 @@ async fn repository_and_bot_settings_saved_during_scan_cannot_be_overwritten() {
 #[test]
 fn source_bot_cutoff_survives_restart_and_suppresses_unseen_history() {
     let fixture = Database::new();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let time = now() - 10000;
     let mut state = Stored::default();
@@ -1431,7 +1429,7 @@ async fn acknowledgement_during_scan_is_not_reinserted() {
     let fixture = Database::new();
     let server = Server::new().await;
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let time = now() - 2000;
     let mut state = Stored::default();
@@ -1477,7 +1475,7 @@ async fn acknowledgement_during_scan_is_not_reinserted() {
 fn whole_second_completions_use_observations_from_the_current_source_baseline() {
     for bot in [false, true] {
         let second = 1_800_000_000_000;
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.github_ci_filter_bots = false;
         let mut state = Stored::default();
         let mut running = run(1, "in_progress", None, 1, second);
@@ -1563,7 +1561,7 @@ async fn config_file_and_state_save_during_scan_leave_refresh_pending_for_latest
         let fixture = Database::new();
         let server = Server::new().await;
         let mut monitor = server.monitor();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.notify_github_ci = true;
         config.paths.db_path = fixture.db.path().to_path_buf();
         let path = fixture.root.join("config.toml");
@@ -1637,7 +1635,7 @@ async fn current_config_is_checked_even_when_database_settings_are_unchanged() {
     let fixture = Database::new();
     let server = Server::new().await;
     let mut monitor = server.monitor();
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.notifications.notify_github_ci = true;
     let current_config = Mutex::new(config);
     let load_config = || Ok(current_config.lock().unwrap().clone());
@@ -1668,7 +1666,7 @@ fn bot_toggle_same_second_requires_the_same_observed_unfinished_attempt() {
         ("in_progress", 2, second, 0),
         ("completed", 1, second, 0),
     ] {
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.github_ci_filter_bots = false;
         let mut state = Stored::default();
         let mut old = run(

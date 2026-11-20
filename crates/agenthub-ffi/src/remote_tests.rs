@@ -32,18 +32,6 @@ fn remote_fixture() -> (tempfile::TempDir, RemoteConnections) {
     (root, connection)
 }
 
-const RESPONDER: &str = r#"
-import sys,struct,json
-while True:
- h=sys.stdin.buffer.read(4)
- if not h: break
- n=struct.unpack('>I',h)[0]
- r=json.loads(sys.stdin.buffer.read(n))
- b=json.dumps({'id':r['id'],'result':'fixture','error':None}).encode()
- sys.stdout.buffer.write(struct.pack('>I',len(b))+b)
- sys.stdout.buffer.flush()
-"#;
-
 #[tokio::test]
 async fn concurrent_recovery_shares_success_and_authentication_failure() {
     for succeed in [true, false] {
@@ -53,7 +41,7 @@ async fn concurrent_recovery_shares_success_and_authentication_failure() {
             calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;
             if succeed {
-                Ok(ssh::fixture(RESPONDER))
+                Ok(ssh::fixture("reply"))
             } else {
                 Err("authentication failed".into())
             }
@@ -77,7 +65,7 @@ async fn concurrent_recovery_shares_success_and_authentication_failure() {
 async fn late_handshake_cannot_restore_a_switched_or_closed_connection() {
     for close in [false, true] {
         let (_root, connection) = remote_fixture();
-        let client = ssh::fixture(RESPONDER);
+        let client = ssh::fixture("reply");
         let result = connection
             .ensure_client_with(1, |_| async {
                 if close {
@@ -102,13 +90,13 @@ async fn failed_switch_does_not_leave_a_closed_recovery_attempt() {
     let result = connection
         .ensure_client_with(1, |_| async {
             *guard.lock().unwrap() = Some(connection.begin_change(1).unwrap());
-            Ok(ssh::fixture(RESPONDER))
+            Ok(ssh::fixture("reply"))
         })
         .await;
     assert!(result.is_err());
     drop(guard.lock().unwrap().take());
     assert!(connection
-        .ensure_client_with(1, |_| async { Ok(ssh::fixture(RESPONDER)) })
+        .ensure_client_with(1, |_| async { Ok(ssh::fixture("reply")) })
         .await
         .unwrap()
         .is_connected());
@@ -128,9 +116,7 @@ async fn reads_retry_once_and_writes_are_not_replayed() {
                 },
                 |_| async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ssh::fixture(
-                        "import sys; sys.stdin.buffer.read(1); sys.exit(1)",
-                    ))
+                    Ok(ssh::fixture("disconnect"))
                 },
             )
             .await;
@@ -149,11 +135,7 @@ async fn reads_retry_once_and_writes_are_not_replayed() {
             },
             |_| async {
                 let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
-                Ok(ssh::fixture(if first {
-                    "import sys; sys.stdin.buffer.read(1); sys.exit(1)"
-                } else {
-                    RESPONDER
-                }))
+                Ok(ssh::fixture(if first { "disconnect" } else { "reply" }))
             },
         )
         .await
@@ -176,10 +158,7 @@ async fn business_errors_keep_the_channel_and_do_not_retry() {
             },
             |_| async {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ssh::fixture(&RESPONDER.replace(
-                    "'result':'fixture','error':None",
-                    "'result':None,'error':'job not found'",
-                )))
+                Ok(ssh::fixture("error"))
             },
         )
         .await;

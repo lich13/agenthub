@@ -606,7 +606,7 @@ fn test_config(name: &str) -> (PathBuf, PathBuf, Config) {
         .as_nanos();
     let root = std::env::temp_dir().join(format!("agenthub-hook-request-{name}-{unique}"));
     fs::create_dir_all(root.join(".codex/sessions")).unwrap();
-    let mut config = Config::for_platform_kind(PlatformKind::Macos);
+    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/fixture/home");
     config.codex.home = root.join(".codex");
     config.paths.data_dir = root.join("data");
     config.paths.db_path = root.join("data/agenthub.sqlite");
@@ -650,7 +650,7 @@ fn seed_local_thread_title(
             thread_id,
             first_user_message,
             first_user_message,
-            chrono::Utc::now().timestamp_millis()
+            jiff::Timestamp::now().as_millisecond()
         ],
     )
     .unwrap();

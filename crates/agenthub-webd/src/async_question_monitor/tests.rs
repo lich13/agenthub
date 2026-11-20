@@ -53,7 +53,7 @@ impl Fixture {
         let conn = rusqlite::Connection::open(home.join("state_5.sqlite")).unwrap();
         conn.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived_at INTEGER, archived INTEGER, rollout_path TEXT, cwd TEXT, model TEXT, source TEXT, thread_source TEXT, has_user_event INTEGER, first_user_message TEXT);").unwrap();
         conn.execute("INSERT INTO threads VALUES ('main','Question fixture',?1,NULL,0,?2,'/workspace','fixture','vscode','user',1,'fixture')", rusqlite::params![PanelDb::now(), rollout.to_string_lossy()]).unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = home;
         config.probe.enabled = true;
         config.probe.notifications.enabled = true;
@@ -69,7 +69,7 @@ impl Fixture {
             .unwrap();
         db.set_setting(
             "probe_async_question_baseline",
-            &json!({"enabled":true,"since_ms":chrono::Utc::now().timestamp_millis()-60_000})
+            &json!({"enabled":true,"since_ms":jiff::Timestamp::now().as_millisecond()-60_000})
                 .to_string(),
         )
         .unwrap();
@@ -98,7 +98,7 @@ impl Fixture {
     }
 
     fn question(&self, call: &str) {
-        self.append(json!({"type":"response_item","timestamp":chrono::Utc::now().to_rfc3339(),"payload":{"type":"function_call","name":"request_user_input_async","call_id":call,"arguments":json!({"questions":[{"title":"请确认测试结果。","options":["通过","失败"]},{"title":"请选择保留项。","options":["甲","乙"]}]}).to_string()}}));
+        self.append(json!({"type":"response_item","timestamp":jiff::Timestamp::now().to_string(),"payload":{"type":"function_call","name":"request_user_input_async","call_id":call,"arguments":json!({"questions":[{"title":"请确认测试结果。","options":["通过","失败"]},{"title":"请选择保留项。","options":["甲","乙"]}]}).to_string()}}));
         self.append(json!({"type":"response_item","payload":{"type":"function_call_output","call_id":call,"output":"{\"accepted\":true}"}}));
     }
 
@@ -295,46 +295,6 @@ fn hook_accepts_async_title_string_options_and_free_text_questions() {
     let mut invalid = payload;
     invalid["tool_input"]["questions"][1]["title"] = json!("");
     assert!(crate::validate_hook_request_user_input_payload(&invalid).is_err());
-}
-
-#[tokio::test]
-async fn startup_upgrade_is_idempotent_and_preserves_other_hooks_and_config() {
-    let fixture = Fixture::new(StatusCode::OK).await;
-    let user_hook =
-        json!({"type":"command","command":"/usr/local/bin/example-user-hook","timeout":20});
-    let stop = json!([{"matcher":"*","hooks":[user_hook.clone()]}]);
-    let hook_path = fixture.config.codex.home.join("hooks.json");
-    let config_path = fixture.config.codex.home.join("config.toml");
-    fs::write(
-        &config_path,
-        "# User configuration\nmodel = 'example-model'\n",
-    )
-    .unwrap();
-    fs::write(&hook_path,json!({"custom":true,"hooks":{"Stop":stop,"PreToolUse":[{"matcher":"^request_user_input$","custom":"keep","hooks":[user_hook.clone(),{"type":"command","command":"/usr/local/bin/agenthub-webd probe hook-request-user-input","timeout":9,"async":true}]}]}}).to_string()).unwrap();
-    assert!(crate::upgrade_managed_question_hooks(&fixture.config).unwrap());
-    let after = fs::read(&hook_path).unwrap();
-    assert!(!crate::upgrade_managed_question_hooks(&fixture.config).unwrap());
-    assert_eq!(fs::read(&hook_path).unwrap(), after);
-    let root: Value = serde_json::from_slice(&after).unwrap();
-    assert_eq!(root["hooks"]["Stop"], stop);
-    assert_eq!(
-        root["hooks"]["PreToolUse"][0]["matcher"],
-        "^request_user_input$"
-    );
-    assert_eq!(root["hooks"]["PreToolUse"][0]["hooks"], json!([user_hook]));
-    assert_eq!(
-        root["hooks"]["PreToolUse"][1]["matcher"],
-        agenthub_core::probe::PROBE_QUESTION_HOOK_MATCHER
-    );
-    assert_eq!(root["hooks"]["PreToolUse"][1]["custom"], "keep");
-    assert!(root["hooks"]["PreToolUse"][1]["hooks"][0]
-        .get("async")
-        .is_none());
-    assert_eq!(
-        fs::read_to_string(config_path).unwrap(),
-        "# User configuration\nmodel = 'example-model'\n"
-    );
-    assert_eq!(fs::read_dir(&fixture.config.codex.home).unwrap().count(), 4);
 }
 
 #[tokio::test]

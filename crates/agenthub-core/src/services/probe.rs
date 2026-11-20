@@ -5,10 +5,9 @@ use crate::{
     platform::PlatformPaths,
     probe as probe_core,
     services::commands,
-    services::system::{require_capability, Capability},
 };
 use anyhow::{anyhow, Result};
-use chrono::Utc;
+use jiff::Timestamp;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -170,7 +169,6 @@ pub fn plan_probe_action(
     action: ProbeAction,
     config_path: impl AsRef<Path>,
 ) -> Result<ProbeActionPlan> {
-    require_capability(platform, probe_action_capability(action))?;
     Ok(ProbeActionPlan {
         action,
         job: probe_fixed_job_spec(platform, action, config_path.as_ref())?,
@@ -215,8 +213,8 @@ fn native_stream_live_bucket(
 fn is_updated_within_fresh_window(updated_at: &Option<String>, now_ms: i64) -> bool {
     let Some(ts) = updated_at
         .as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.timestamp_millis())
+        .and_then(|s| (s).parse::<jiff::Timestamp>().ok())
+        .map(|dt| dt.as_millisecond())
     else {
         return true;
     };
@@ -285,7 +283,7 @@ fn aggregate_active_sessions(
     running_threads: &[ThreadSummary],
     reply_needed_threads: &[ThreadSummary],
     recoverable_threads: &[ThreadSummary],
-) -> Vec<probe_core::ProbeLiveSession> {
+) -> Result<Vec<probe_core::ProbeLiveSession>> {
     let mut sessions = Vec::new();
     let per_bucket_limit = limit.clamp(1, 50);
     for (bucket, threads) in [
@@ -316,20 +314,20 @@ fn aggregate_active_sessions(
         if let Some((ref cached_key, ref cached_items, ts)) = *guard {
             if *cached_key == cache_key && ts.elapsed() < std::time::Duration::from_secs(3) {
                 sessions.extend(cached_items.iter().cloned());
-                return sessions;
+                return Ok(sessions);
             }
         }
     }
 
     let codex_len = sessions.len();
-    let now_ms = Utc::now().timestamp_millis();
+    let now_ms = Timestamp::now().as_millisecond();
 
     let claude_paths = match &sandbox_root {
         Some(root) => crate::claude::ClaudePaths {
             projects: root.join(".claude/projects"),
             config: root.join(".claude"),
         },
-        None => crate::claude::ClaudePaths::default_for_user(),
+        None => crate::claude::ClaudePaths::default_for_user()?,
     };
     if claude_paths.available() {
         if let Ok(items) = crate::claude::list_claude_sessions_without_storage(
@@ -368,7 +366,7 @@ fn aggregate_active_sessions(
         Some(root) => crate::grok::GrokPaths {
             home: root.join(".grok"),
         },
-        None => crate::grok::GrokPaths::default_for_user(),
+        None => crate::grok::GrokPaths::default_for_user()?,
     };
     if grok_paths.sessions().is_dir() {
         if let Ok((items, scan)) =
@@ -409,7 +407,7 @@ fn aggregate_active_sessions(
             Some(root) => crate::antigravity::sessions::AntigravityPaths::offline(
                 root.join(".gemini/antigravity"),
             ),
-            None => crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+            None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
         };
         if ag_paths.available() {
             if let Ok(items) =
@@ -442,7 +440,7 @@ fn aggregate_active_sessions(
             Some(root) => crate::dsh::DshPaths {
                 home: root.join(".dsh"),
             },
-            None => crate::dsh::DshPaths::default_for_user(),
+            None => crate::dsh::DshPaths::default_for_user()?,
         };
         if dsh_paths.home.join("sessions").is_dir() {
             if let Ok((items, scan)) =
@@ -487,7 +485,7 @@ fn aggregate_active_sessions(
         ));
     }
 
-    sessions
+    Ok(sessions)
 }
 
 fn probe_codex_buckets_with_paths(
@@ -522,7 +520,7 @@ fn probe_codex_buckets(
     probe_codex_buckets_with_paths(&resolved.codex_paths(), limit).unwrap_or_default()
 }
 
-pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
+pub fn aggregate_probe_status(config: &Config) -> Result<ProbeStatusAggregation> {
     let limit = config.probe.recent_limit.clamp(1, 200);
     let (running_threads, reply_needed_threads, recoverable_threads) =
         probe_codex_buckets(config, limit);
@@ -532,15 +530,15 @@ pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
         &running_threads,
         &reply_needed_threads,
         &recoverable_threads,
-    );
-    ProbeStatusAggregation {
+    )?;
+    Ok(ProbeStatusAggregation {
         recent_event_count: recent_probe_event_count(&config.paths.db_path, limit as u32)
             .unwrap_or(0),
         running_threads,
         reply_needed_threads,
         recoverable_threads,
         active_sessions,
-    }
+    })
 }
 
 pub fn probe_threads_for_status_with_paths(
@@ -804,14 +802,6 @@ impl FromStr for ProbeAction {
             "installHooks" | "hooks-install" => Ok(Self::InstallHooks),
             "removeHooks" | "hooks-remove" => Ok(Self::RemoveHooks),
             action => Err(anyhow!("unknown probe action: {action}")),
-        }
-    }
-}
-
-fn probe_action_capability(action: ProbeAction) -> Capability {
-    match action {
-        ProbeAction::BarkTest | ProbeAction::InstallHooks | ProbeAction::RemoveHooks => {
-            Capability::Probe
         }
     }
 }
@@ -1205,12 +1195,10 @@ fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
     else {
         return false;
     };
-    let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
+    let Ok(updated_at) = (updated_at).parse::<jiff::Timestamp>() else {
         return false;
     };
-    let age_seconds = Utc::now()
-        .signed_duration_since(updated_at.with_timezone(&Utc))
-        .num_seconds();
+    let age_seconds = Timestamp::now().duration_since(updated_at).as_secs();
     (0..=max_age_seconds).contains(&age_seconds)
 }
 
@@ -1223,28 +1211,21 @@ mod tests {
     use crate::{
         codex::{ThreadStatus, ThreadSummary},
         config::Config,
-        platform::{PlatformKind, PlatformPaths},
+        platform::PlatformPaths,
     };
 
     #[test]
     fn probe_action_plans_are_platform_scoped_and_include_execution_contracts() {
-        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+        let linux = PlatformPaths::linux_server();
         let bark = plan_probe_action(&linux, ProbeAction::BarkTest, &linux.config_file)
             .expect("Linux should allow fixed Probe jobs");
 
         assert_eq!(bark.job.kind, "probe_bark_test");
-
-        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-        let bark_err = plan_probe_action(&windows, ProbeAction::BarkTest, &windows.config_file)
-            .expect_err("Windows should not allow Probe actions");
-        assert!(bark_err
-            .to_string()
-            .contains("probe is unavailable on windows"));
     }
 
     #[test]
     fn bark_delivery_and_status_labels_are_core_defined() {
-        let mut config = Config::for_platform_kind(PlatformKind::Linux);
+        let mut config = Config::linux_defaults();
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = false;
 
@@ -1304,8 +1285,8 @@ mod tests {
             .join(grok_session_id);
         std::fs::create_dir_all(&codex_home).unwrap();
         std::fs::create_dir_all(&grok_dir).unwrap();
-        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_rfc3339 = jiff::Timestamp::now().to_string();
+        let now_ms = jiff::Timestamp::now().as_millisecond();
         std::fs::write(
             grok_dir.join("summary.json"),
             serde_json::json!({
@@ -1368,10 +1349,10 @@ mod tests {
         )
         .unwrap();
 
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.paths.db_path = root.join("panel.sqlite");
-        let agg = super::aggregate_probe_status(&config);
+        let agg = super::aggregate_probe_status(&config).unwrap();
         assert!(
             agg.active_sessions.iter().any(|s| s.provider == "grok"
                 && s.id == grok_session_id
@@ -1399,15 +1380,15 @@ mod tests {
         let root_a = std::env::temp_dir().join(format!(
             "agenthub-probe-cache-a-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            jiff::Timestamp::now().as_nanosecond()
         ));
         let root_b = std::env::temp_dir().join(format!(
             "agenthub-probe-cache-b-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            jiff::Timestamp::now().as_nanosecond()
         ));
-        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_rfc3339 = jiff::Timestamp::now().to_string();
+        let now_ms = jiff::Timestamp::now().as_millisecond();
 
         // Seed Grok reply_needed in root_a only
         let grok_id_a = "aaaaaaaa-2222-4333-8444-555555555555";
@@ -1476,19 +1457,19 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(root_b.join(".codex")).unwrap();
 
-        let mut cfg_a = Config::default();
+        let mut cfg_a = Config::current_defaults().unwrap();
         cfg_a.codex.home = root_a.join(".codex");
         cfg_a.paths.db_path = root_a.join("panel.sqlite");
 
-        let mut cfg_b = Config::default();
+        let mut cfg_b = Config::current_defaults().unwrap();
         cfg_b.codex.home = root_b.join(".codex");
         cfg_b.paths.db_path = root_b.join("panel.sqlite");
 
-        let sessions_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[]);
+        let sessions_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[]).unwrap();
         assert!(sessions_a.iter().any(|s| s.id == grok_id_a));
 
         // Querying with cfg_b must NOT hit cfg_a's cached sessions
-        let sessions_b = super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[]);
+        let sessions_b = super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[]).unwrap();
         assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
 
         super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);

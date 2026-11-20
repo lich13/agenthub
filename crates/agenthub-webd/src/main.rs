@@ -39,7 +39,6 @@ use agenthub_core::{
         scan_codex_turn_errors, ProbeErrorCursor, ProbeErrorMonitorRuntimeStatus,
     },
     services::probe as probe_service,
-    services::system::HostSurface,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -89,6 +88,15 @@ fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    match cli.command {
+        Command::RpcStdio => return ssh_server::proxy().await,
+        Command::Health => return ssh_server::health().await,
+        _ => (),
+    }
+    let config_path = match cli.config {
+        Some(path) => path,
+        None => PlatformPaths::current()?.config_file,
+    };
     if matches!(
         cli.command,
         Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook { .. }
@@ -118,7 +126,7 @@ async fn run(cli: Cli) -> Result<()> {
             Command::ClaudeHook => {
                 let _ = tokio::time::timeout(
                     Duration::from_millis(4800),
-                    claude_hook::run(&cli.config),
+                    claude_hook::run(&config_path),
                 )
                 .await;
             }
@@ -126,7 +134,7 @@ async fn run(cli: Cli) -> Result<()> {
                 let _ = tokio::time::timeout(
                     Duration::from_millis(4800),
                     provider_monitor::run_provider_hook(
-                        &cli.config,
+                        &config_path,
                         agenthub_core::native_probe::NativeProvider::Grok,
                     ),
                 )
@@ -158,13 +166,13 @@ async fn run(cli: Cli) -> Result<()> {
                         let mut stdout = io::stdout().lock();
                         let _ = print_antigravity_stop_allow_once(&allow_printed, &mut stdout);
                     }
-                    if spawn_detached_antigravity_hook(&cli.config, conversation_id.as_deref()) {
+                    if spawn_detached_antigravity_hook(&config_path, conversation_id.as_deref()) {
                         std::process::exit(0);
                     }
                     let _ = tokio::time::timeout(
                         Duration::from_millis(4800),
                         provider_monitor::run_antigravity_hook(
-                            &cli.config,
+                            &config_path,
                             conversation_id.as_deref(),
                         ),
                     )
@@ -174,7 +182,7 @@ async fn run(cli: Cli) -> Result<()> {
                         .await;
                     let _ = tokio::time::timeout(
                         Duration::from_millis(4500),
-                        provider_monitor::run_antigravity_hook(&cli.config, cascade_id.as_deref()),
+                        provider_monitor::run_antigravity_hook(&config_path, cascade_id.as_deref()),
                     )
                     .await;
                 }
@@ -186,14 +194,14 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook { .. } => unreachable!(),
         Command::InitConfig => {
-            Config::write_default(&cli.config)?;
-            println!("wrote {}", cli.config.display());
+            Config::write_default(&config_path)?;
+            println!("wrote {}", config_path.display());
         }
         Command::Doctor => {
-            let config = Config::load_runtime(&cli.config)?;
+            let config = Config::load_runtime(&config_path)?;
             let db = open_panel_db(&config)?;
             let resolved = resolve_codex_paths(&config.codex.home);
-            println!("config={}", cli.config.display());
+            println!("config={}", config_path.display());
             println!("db={}", db.path().display());
             println!("codex_home={}", resolved.home.display());
             println!(
@@ -206,7 +214,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Probe {
             command: ProbeCommand::HookRequestUserInput,
         } => {
-            if let Err(err) = handle_hook_request_user_input_command(&cli.config).await {
+            if let Err(err) = handle_hook_request_user_input_command(&config_path).await {
                 eprintln!(
                     "{}",
                     serde_json::to_string(&json!({
@@ -221,22 +229,21 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Probe {
             command: ProbeCommand::HookRequestUserInputConfirm,
         } => {
-            if let Err(err) = handle_hook_request_user_input_confirm_command(&cli.config).await {
+            if let Err(err) = handle_hook_request_user_input_confirm_command(&config_path).await {
                 tracing::warn!("probe hook-request-user-input-confirm failed closed");
                 tracing::debug!("probe hook-request-user-input-confirm diagnostic: {err:#}");
             }
         }
         Command::Probe {
             command: ProbeCommand::MonitorErrors,
-        } => run_probe_error_monitor_daemon(cli.config).await?,
+        } => run_probe_error_monitor_daemon(config_path).await?,
         Command::Probe { command } => {
-            let config = Config::load_runtime(&cli.config)?;
+            let config = Config::load_runtime(&config_path)?;
             let db = open_panel_db(&config)?;
-            run_probe_command(command, &config, db, &cli.config).await?;
+            run_probe_command(command, &config, db, &config_path).await?;
         }
-        Command::Serve => serve(cli.config).await?,
-        Command::RpcStdio => ssh_server::proxy().await?,
-        Command::Health => ssh_server::health().await?,
+        Command::Serve => serve(config_path).await?,
+        Command::RpcStdio | Command::Health => unreachable!(),
     }
     Ok(())
 }
@@ -249,7 +256,7 @@ async fn run_probe_command(
 ) -> Result<()> {
     let cache = monitor_start::DaemonMonitorCache::default();
     let load_config = || cache.load_config(config_path);
-    let mut platform = PlatformPaths::current();
+    let mut platform = PlatformPaths::current()?;
     platform.config_file = config_path.to_path_buf();
     match command {
         ProbeCommand::Status => {
@@ -354,7 +361,7 @@ async fn run_probe_command(
                 thread_id.as_deref(),
                 turn_id.as_deref(),
             )?;
-            let event = probe_runtime(config).build_event(input);
+            let event = build_probe_event(config, input);
             let (outcome, bark) = record_probe_event_with_bark(&load_config, &db, event).await?;
             println!(
                 "{}",
@@ -379,8 +386,15 @@ async fn run_probe_command(
     Ok(())
 }
 
-fn probe_runtime(config: &Config) -> ProbeRuntime {
-    ProbeRuntime::new(config.clone(), PlatformPaths::current())
+fn build_probe_event(
+    config: &Config,
+    input: ProbeEventInput,
+) -> agenthub_core::probe::ProbeBuiltEvent {
+    ProbeRuntime::build_event_for(
+        config,
+        agenthub_core::platform::PlatformKind::current(),
+        input,
+    )
 }
 
 fn redact_probe_event(event: agenthub_core::db::ProbeEvent) -> agenthub_core::db::ProbeEvent {
@@ -459,7 +473,7 @@ async fn remove_probe_hooks(
     let config_before = read_optional_text(&codex_config_path)?;
     let codex_config_after = prune_codex_hook_state_toml(&config_before)?;
     let codex_config_changed = codex_config_after != config_before;
-    let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%d%H%M%S");
     let backup_path = hooks_path.with_extension(format!("json.agenthub-probe-bak-{stamp}"));
     let codex_config_backup_path =
         codex_config_path.with_extension(format!("toml.agenthub-probe-bak-{stamp}"));
@@ -551,7 +565,7 @@ async fn install_probe_hooks_with_repair(
     let resolved = resolve_codex_paths(&config.codex.home);
     let hooks_path = resolved.home.join("hooks.json");
     let codex_config_path = resolved.home.join("config.toml");
-    let mut platform = PlatformPaths::current();
+    let mut platform = PlatformPaths::current()?;
     if let Some(path) = config_path {
         platform.config_file = path.to_path_buf();
     }
@@ -591,11 +605,11 @@ async fn install_probe_hooks_with_repair(
     let codex_config_changed = codex_config_after != config_before;
     let backup_path = hooks_path.with_extension(format!(
         "json.agenthub-probe-bak-{}",
-        chrono::Utc::now().format("%Y%m%d%H%M%S")
+        jiff::Timestamp::now().strftime("%Y%m%d%H%M%S")
     ));
     let codex_config_backup_path = codex_config_path.with_extension(format!(
         "toml.agenthub-probe-bak-{}",
-        chrono::Utc::now().format("%Y%m%d%H%M%S")
+        jiff::Timestamp::now().strftime("%Y%m%d%H%M%S")
     ));
     let mut hooks_backed_up = false;
     let mut codex_config_backed_up = false;
@@ -869,115 +883,13 @@ fn ensure_probe_hook(
 fn is_agenthub_managed_hook_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
     (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
-        && (lowered.contains("agenthubd")
-            || lowered.contains("agenthub-webd")
-            || lowered.contains("/opt/agenthub")
-            || lowered.contains("application support/agenthub")
-            || lowered.contains("codex-sentinel"))
+        && (lowered.contains("agenthub-webd"))
 }
 
-fn upgrade_managed_question_hook_groups(root: &mut Value) -> bool {
-    let Some(groups) = root
-        .pointer_mut("/hooks/PreToolUse")
-        .and_then(Value::as_array_mut)
-    else {
-        return false;
-    };
-    let original = groups.clone();
-    let mut upgraded = Vec::new();
-    for group in &original {
-        let Some(items) = group.get("hooks").and_then(Value::as_array) else {
-            upgraded.push(group.clone());
-            continue;
-        };
-        let (mut owned, others): (Vec<_>, Vec<_>) = items.iter().cloned().partition(|item| {
-            item.get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| {
-                    is_agenthub_managed_hook_command(command)
-                        && command.contains("probe hook-request-user-input")
-                })
-        });
-        if owned.is_empty() {
-            upgraded.push(group.clone());
-            continue;
-        }
-        if !others.is_empty() {
-            let mut remaining = group.clone();
-            remaining["hooks"] = json!(others);
-            upgraded.push(remaining);
-        }
-        for item in &mut owned {
-            item["timeout"] = json!(5);
-            if let Some(item) = item.as_object_mut() {
-                item.remove("async");
-            }
-        }
-        let mut managed = group.clone();
-        managed["matcher"] = json!(agenthub_core::probe::PROBE_QUESTION_HOOK_MATCHER);
-        managed["hooks"] = json!(owned);
-        upgraded.push(managed);
-    }
-    if upgraded == original {
-        return false;
-    }
-    *groups = upgraded;
-    true
-}
-
-fn upgrade_managed_question_hooks(config: &Config) -> Result<bool> {
-    if !config.probe.hooks.manage_stop_hook {
-        return Ok(false);
-    }
-    let path = resolve_codex_paths(&config.codex.home)
-        .home
-        .join("hooks.json");
-    if !path.exists() {
-        return Ok(false);
-    }
-    let metadata = fs::symlink_metadata(&path)?;
-    anyhow::ensure!(
-        metadata.is_file() && !metadata.file_type().is_symlink(),
-        "managed hooks source is not a regular file"
-    );
-    let before = fs::read(&path)?;
-    let mut root: Value = serde_json::from_slice(&before)?;
-    if !upgrade_managed_question_hook_groups(&mut root) {
-        return Ok(false);
-    }
-    let staged = path.with_file_name(format!(".agenthub-hooks-{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged)?;
-        file.set_permissions(metadata.permissions())?;
-        file.write_all(&serde_json::to_vec_pretty(&root)?)?;
-        file.sync_all()?;
-        anyhow::ensure!(
-            fs::read(&path)? == before,
-            "managed hooks changed during upgrade"
-        );
-        fs::rename(&staged, &path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&staged);
-    }
-    result?;
-    Ok(true)
-}
-
-fn upgrade_managed_question_hooks_on_start(config: &Config) {
-    if let Err(error) = upgrade_managed_question_hooks(config) {
-        tracing::warn!(
-            "Managed question hook upgrade failed: {}",
-            safe_probe_monitor_error(&error.to_string())
-        );
-    }
+fn refresh_managed_provider_hooks(_config: &Config) -> Result<()> {
     #[cfg(all(target_os = "macos", not(test)))]
     {
-        let platform = PlatformPaths::current();
+        let platform = PlatformPaths::current()?;
         let binary = platform.daemon_binary();
         if binary.is_file() {
             for provider in [
@@ -1008,6 +920,7 @@ fn upgrade_managed_question_hooks_on_start(config: &Config) {
             }
         }
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1336,10 +1249,9 @@ async fn serve(config_path: PathBuf) -> Result<()> {
         "Management API is available only on Linux"
     );
     let config = Config::load_runtime(&config_path)?;
-    upgrade_managed_question_hooks_on_start(&config);
+    refresh_managed_provider_hooks(&config)?;
     let db = open_panel_db(&config)?;
-    let state = AppState::new_for_surface(config.clone(), db, HostSurface::LinuxServerApi)
-        .with_config_path(config_path.clone());
+    let state = AppState::new(config.clone(), db).with_config_path(config_path.clone());
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
     github_ci_monitor::spawn(config_path.clone(), Some(state.clone()));
@@ -1524,7 +1436,8 @@ async fn deliver_probe_error_incidents(
             "source_log_row_id".to_string(),
             json!(incident.source_row_id),
         );
-        let event = probe_runtime(config).build_event(
+        let event = build_probe_event(
+            config,
             ProbeEventInput::hook_stop_with_context(
                 Some(&incident.thread_id),
                 Some(&incident.turn_id),
@@ -1652,7 +1565,8 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                 .rollout_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_string());
-            let mut event = probe_runtime(&config).build_event(
+            let mut event = build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some(thread.id.as_str()),
                     thread.active_turn_id.as_deref(),
@@ -1668,8 +1582,8 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
             event.payload["notification_source_ms"] = json!(thread
                 .updated_at
                 .as_deref()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-                .map(|time| time.timestamp_millis())
+                .and_then(|time| (time).parse::<jiff::Timestamp>().ok())
+                .map(|time| time.as_millisecond())
                 .unwrap_or(0));
             event.payload["thread_title"] = json!(thread.title.clone());
             event.payload["thread_id"] = json!(thread.id.clone());
@@ -2031,7 +1945,7 @@ model = "gpt-5"
                             "matcher": "*",
                             "hooks": [{
                                 "type": "command",
-                                "command": "/opt/agenthub/bin/agenthubd --config /opt/agenthub/config.toml probe hook-stop"
+                                "command": "/opt/fixture/bin/agenthub-webd --config /opt/fixture/config.toml probe hook-stop"
                             }]
                         },
                         {
@@ -2047,7 +1961,7 @@ model = "gpt-5"
                             "matcher": "^request_user_input$",
                             "hooks": [{
                                 "type": "command",
-                                "command": "/opt/agenthub/bin/agenthubd --config /opt/agenthub/config.toml probe hook-request-user-input",
+                                "command": "/opt/fixture/bin/agenthub-webd --config /opt/fixture/config.toml probe hook-request-user-input",
                                 "timeout": 9,
                                 "async": true
                             }]
@@ -2108,7 +2022,9 @@ last_error = "old agenthub request hook"
         assert!(commands
             .iter()
             .any(|command| command.contains("agenthub-webd")));
-        assert!(!commands.iter().any(|command| command.contains("agenthubd")));
+        assert!(!commands
+            .iter()
+            .any(|command| command.starts_with("/opt/fixture/")));
         assert!(commands.contains(&"/usr/local/bin/third-party-hook"));
         assert!(stop.iter().all(|group| group["hooks"]
             .as_array()
@@ -2159,7 +2075,7 @@ last_error = "old agenthub request hook"
                     "matcher": "*",
                     "hooks": [{
                         "type": "command",
-                        "command": "/opt/agenthub/bin/agenthubd --config /opt/agenthub/config.toml probe hook-stop"
+                        "command": "/opt/fixture/bin/agenthub-webd --config /opt/fixture/config.toml probe hook-stop"
                     }]
                 }]
             }
@@ -2295,11 +2211,10 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
 
-        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
-            Some("thread-a"),
-            Some("turn-1"),
-            "hook-stop",
-        ));
+        let event = build_probe_event(
+            &config,
+            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+        );
         let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
             .await
             .unwrap();
@@ -2345,15 +2260,17 @@ last_error = "old agenthub request hook"
             .into_iter()
             .enumerate()
         {
-            let event =
-                probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            let event = build_probe_event(
+                &config,
+                ProbeEventInput::hook_stop_with_context(
                     Some(&format!("thread-control-{index}")),
                     Some(&format!("turn-control-{index}")),
                     Some(&format!("thread-control-{index}")),
                     None,
                     Some(body),
                     "hook-stop",
-                ));
+                ),
+            );
             let (outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
                 .await
                 .unwrap();
@@ -2381,15 +2298,17 @@ last_error = "old agenthub request hook"
             0
         );
 
-        let normal_event =
-            probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+        let normal_event = build_probe_event(
+            &config,
+            ProbeEventInput::hook_stop_with_context(
                 Some("thread-extra-key"),
                 Some("turn-extra-key"),
                 Some("thread-extra-key"),
                 None,
                 Some(r#"{"suggestions":[],"message":"normal JSON"}"#),
                 "hook-stop",
-            ));
+            ),
+        );
         let (normal_outcome, normal_bark) =
             record_probe_event_with_bark(&|| Ok(config.clone()), &db, normal_event)
                 .await
@@ -2446,7 +2365,7 @@ last_error = "old agenthub request hook"
             "hook-stop",
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(event_input);
+        let event = build_probe_event(&config, event_input);
 
         assert_eq!(
             event.suppression_reason.as_deref(),
@@ -2551,7 +2470,7 @@ last_error = "old agenthub request hook"
         for payload in payloads {
             let event_input =
                 hook_stop_event_input(&config, Some(&payload), None, None, "hook-stop").unwrap();
-            let event = probe_runtime(&config).build_event(event_input);
+            let event = build_probe_event(&config, event_input);
             assert_ne!(
                 event.suppression_reason.as_deref(),
                 Some("internal_memory_consolidation"),
@@ -2595,7 +2514,7 @@ last_error = "old agenthub request hook"
                 }),
             )
             .unwrap();
-            let event = probe_runtime(&config).build_event(event_input);
+            let event = build_probe_event(&config, event_input);
             assert_ne!(
                 event.suppression_reason.as_deref(),
                 Some("internal_memory_consolidation")
@@ -2643,7 +2562,7 @@ last_error = "old agenthub request hook"
             }),
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(event_input);
+        let event = build_probe_event(&config, event_input);
 
         assert_eq!(
             event.suppression_reason.as_deref(),
@@ -2680,14 +2599,17 @@ last_error = "old agenthub request hook"
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
-            None,
-            Some("turn-stdin"),
-            Some("session-stdin"),
-            Some("/tmp/transcript.jsonl"),
-            Some("assistant body"),
-            "hook-stop",
-        ));
+        let event = build_probe_event(
+            &config,
+            ProbeEventInput::hook_stop_with_context(
+                None,
+                Some("turn-stdin"),
+                Some("session-stdin"),
+                Some("/tmp/transcript.jsonl"),
+                Some("assistant body"),
+                "hook-stop",
+            ),
+        );
 
         let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
             .await
@@ -2754,7 +2676,8 @@ last_error = "old agenthub request hook"
         )
         .unwrap()
         .unwrap();
-        let event = probe_runtime(&config).build_event(
+        let event = build_probe_event(
+            &config,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-transcript"),
                 Some("turn-transcript"),
@@ -2819,7 +2742,7 @@ last_error = "old agenthub request hook"
             params![
                 "thread-title",
                 "真实 HookStop 标题",
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
                 transcript.to_string_lossy().as_ref()
             ],
         )
@@ -2849,7 +2772,7 @@ last_error = "old agenthub request hook"
                 .unwrap()
                 .as_deref(),
         );
-        let event = probe_runtime(&config).build_event(event_input);
+        let event = build_probe_event(&config, event_input);
 
         handle_built_probe_event(&|| Ok(config.clone()), &db, event)
             .await
@@ -2882,22 +2805,20 @@ last_error = "old agenthub request hook"
         let first = handle_built_probe_event(
             &|| Ok(config.clone()),
             &db,
-            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
-                Some("thread-a"),
-                Some("turn-1"),
-                "hook-stop",
-            )),
+            build_probe_event(
+                &config,
+                ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+            ),
         )
         .await
         .unwrap();
         let duplicate = handle_built_probe_event(
             &|| Ok(config.clone()),
             &db,
-            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
-                Some("thread-a"),
-                Some("turn-1"),
-                "hook-stop",
-            )),
+            build_probe_event(
+                &config,
+                ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+            ),
         )
         .await
         .unwrap();
@@ -2955,14 +2876,14 @@ last_error = "old agenthub request hook"
         let first = record_probe_event_with_bark(
             &|| Ok(config.clone()),
             &db,
-            probe_runtime(&config).build_event(passive_input()),
+            build_probe_event(&config, passive_input()),
         )
         .await
         .unwrap();
         let duplicate = record_probe_event_with_bark(
             &|| Ok(config.clone()),
             &db,
-            probe_runtime(&config).build_event(passive_input()),
+            build_probe_event(&config, passive_input()),
         )
         .await
         .unwrap();
@@ -2975,7 +2896,7 @@ last_error = "old agenthub request hook"
         assert_eq!(events[0].payload["dedupe_ttl_seconds"], 6 * 60 * 60);
         assert_eq!(events[0].payload["scan_source"], "passive-scan");
 
-        let hook = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+        let hook = build_probe_event(&config, ProbeEventInput::hook_stop_with_context(
             Some("thread-hook"),
             Some("turn-hook"),
             Some("thread-hook"),
@@ -3006,10 +2927,10 @@ last_error = "old agenthub request hook"
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(ProbeEventInput::notify_completion(
-            Some("thread-a"),
-            Some("turn-a"),
-        ));
+        let event = build_probe_event(
+            &config,
+            ProbeEventInput::notify_completion(Some("thread-a"), Some("turn-a")),
+        );
 
         let (_outcome, bark) = record_probe_event_with_bark(&|| Ok(config.clone()), &db, event)
             .await
@@ -3061,7 +2982,7 @@ last_error = "old agenthub request hook"
             None,
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
         let (_outcome, _bark) =
             record_probe_event_with_bark(&|| Ok(config.clone()), &db, event.clone())
                 .await
@@ -3125,7 +3046,7 @@ last_error = "old agenthub request hook"
             None,
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
 
         assert!(event.bark_body.contains("最后一条 final message"));
         assert!(!event.bark_body.contains("上一条旧消息"));
@@ -3188,7 +3109,7 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
         writer.join().unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
 
         assert!(event.bark_body.contains("最终完成正文唯一标记"));
         assert!(!event.bark_body.contains("过早 stdin 正文"));
@@ -3246,7 +3167,7 @@ last_error = "old agenthub request hook"
             None,
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
         let (_outcome, _bark) =
             record_probe_event_with_bark(&|| Ok(config.clone()), &db, event.clone())
                 .await
@@ -3297,7 +3218,7 @@ last_error = "old agenthub request hook"
             "hook-stop",
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(event_input);
+        let event = build_probe_event(&config, event_input);
 
         assert!(event.bark_body.contains("CLI turn 最终正文"));
         assert!(!event.bark_body.contains("上一轮完成正文"));
@@ -3335,7 +3256,7 @@ last_error = "old agenthub request hook"
             None,
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
 
         assert_eq!(event.kind, "reply-needed");
         assert_eq!(event.event_type, "reply_needed");
@@ -3373,7 +3294,7 @@ last_error = "old agenthub request hook"
             None,
         )
         .unwrap();
-        let event = probe_runtime(&config).build_event(context);
+        let event = build_probe_event(&config, context);
 
         assert_eq!(event.kind, "reply-needed");
         assert_eq!(event.event_type, "reply_needed");
@@ -3411,7 +3332,8 @@ last_error = "old agenthub request hook"
         )
         .unwrap()
         .unwrap();
-        let event = probe_runtime(&config).build_event(
+        let event = build_probe_event(
+            &config,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-plan"),
                 Some("turn-plan"),
@@ -3491,7 +3413,8 @@ last_error = "old agenthub request hook"
         assert!(!body.contains("fallback should not be used"));
 
         let (sandbox_cfg, sandbox_root) = crate::api::test_support::sandboxed_test_config();
-        let event = probe_runtime(&sandbox_cfg).build_event(
+        let event = build_probe_event(
+            &sandbox_cfg,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-question"),
                 Some("turn-question"),
@@ -3585,11 +3508,11 @@ last_error = "old agenthub request hook"
             title: "旧计划线程".to_string(),
             status: agenthub_core::codex::ThreadStatus::ReplyNeeded,
             updated_at: Some(
-                (chrono::Utc::now()
-                    - chrono::Duration::seconds(
+                (jiff::Timestamp::now()
+                    - jiff::SignedDuration::from_secs(
                         probe_service::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS + 60,
                     ))
-                .to_rfc3339(),
+                .to_string(),
             ),
             archived_at: None,
             message_count: 1,
@@ -3635,7 +3558,8 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
         let make_event = |body: &str| {
-            probe_runtime(&config).build_event(
+            build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-plan"),
                     Some("turn-plan"),
@@ -3701,7 +3625,8 @@ last_error = "old agenthub request hook"
         )
         .unwrap();
         let make_event = || {
-            probe_runtime(&config).build_event(
+            build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-plan-ttl"),
                     Some("turn-plan-ttl"),
@@ -3753,7 +3678,8 @@ last_error = "old agenthub request hook"
             .unwrap();
         let body = "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续";
         let make_event = || {
-            probe_runtime(&config).build_event(
+            build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-question-ttl"),
                     Some("turn-question"),
@@ -3805,7 +3731,8 @@ last_error = "old agenthub request hook"
             .unwrap();
         let body = "问题 1：Continue?\n选项 1：继续\n选项 2：停止";
         let make_event = || {
-            probe_runtime(&config).build_event(
+            build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-pre-tool-question"),
                     Some("turn-pre-tool-question"),
@@ -3860,7 +3787,8 @@ last_error = "old agenthub request hook"
             )
         };
         let make_event = |body: String| {
-            probe_runtime(&config).build_event(
+            build_probe_event(
+                &config,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-question-time"),
                     Some("turn-question"),
@@ -3970,7 +3898,8 @@ last_error = "old agenthub request hook"
         db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
             .unwrap();
         let full_body = format!("开头\n{}\n末尾唯一完整反馈", "完整正文".repeat(900));
-        let event = probe_runtime(&config).build_event(
+        let event = build_probe_event(
+            &config,
             ProbeEventInput::notify_completion_with_context(
                 Some("thread-long"),
                 Some("turn-long"),
@@ -4035,7 +3964,8 @@ last_error = "old agenthub request hook"
             "开头\nAuthorization: Bearer secret-token\n{}\n<proposed_plan>不要存这个标签</proposed_plan>\n末尾唯一完整反馈",
             "完整正文".repeat(900)
         );
-        let event = probe_runtime(&config).build_event(
+        let event = build_probe_event(
+            &config,
             ProbeEventInput::notify_completion_with_context(
                 Some("thread-safe-store"),
                 Some("turn-safe-store"),
@@ -4096,7 +4026,8 @@ last_error = "old agenthub request hook"
             .unwrap();
         let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
         let body = agenthub_core::codex::extract_proposed_plan_text(raw_plan).unwrap();
-        let event = probe_runtime(&config).build_event(
+        let event = build_probe_event(
+            &config,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-plan-stable"),
                 Some("turn-plan-stable"),
@@ -4330,7 +4261,7 @@ last_error = "old agenthub request hook"
             params![
                 "thread-old-plan",
                 "真实旧计划线程",
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
                 rollout.to_string_lossy().as_ref()
             ],
         )
@@ -4405,7 +4336,7 @@ last_error = "old agenthub request hook"
             params![
                 "thread-question-no-repeat",
                 "待选择线程",
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
                 rollout.to_string_lossy().as_ref()
             ],
         )
@@ -4547,11 +4478,10 @@ last_error = "old agenthub request hook"
         let result = handle_built_probe_event(
             &|| Ok(config.clone()),
             &db,
-            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
-                Some("thread-a"),
-                Some("turn-a"),
-                "hook-stop",
-            )),
+            build_probe_event(
+                &config,
+                ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-a"), "hook-stop"),
+            ),
         )
         .await
         .unwrap();
@@ -4699,7 +4629,7 @@ last_error = "old agenthub request hook"
             params![
                 "stale-reply",
                 "stale reply",
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
                 codex_home
                     .join("sessions")
                     .join("rollout-stale-reply.jsonl")
@@ -4783,7 +4713,7 @@ last_error = "old agenthub request hook"
 
     fn test_config(codex_home: PathBuf) -> Config {
         let root = codex_home.parent().unwrap_or(&codex_home).to_path_buf();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.codex.workspace = root.join("workspace");
         config.paths.data_dir = root.join("data");

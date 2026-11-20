@@ -1,12 +1,9 @@
 use super::*;
-use agenthub_core::{
-    db::JobRecord,
-    platform::{PlatformKind, PlatformPaths},
-};
+use agenthub_core::{db::JobRecord, platform::PlatformPaths};
 
 #[test]
 fn native_update_commands_are_validated_against_core_plan() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::macos("/fixture/home");
 
     let check = native_update_job_plan_for_action(&platform, UpdateAction::Check).unwrap();
     assert_eq!(check.kind, "agenthub_update_check");
@@ -19,21 +16,13 @@ fn native_update_commands_are_validated_against_core_plan() {
 
 #[test]
 fn recent_check_job_output_keeps_no_update_status_explicit() {
-    let config = agenthub_core::config::Config::for_platform_kind(PlatformKind::Macos);
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::macos("/fixture/home");
     let job = job_record(
         "succeeded",
-        "checking signed Tauri updater feed\nno signed app update available\n",
+        "checking signed app updater feed\nno signed app update available\n",
     );
 
-    let status = updates::update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        agenthub_core::services::system::HostSurface::default_for_platform(&platform),
-        None,
-        None,
-        Some(&job),
-    );
+    let status = updates::update_status_with_recent_check_job(&platform, None, None, Some(&job));
 
     assert_eq!(status.state, UpdateState::Idle);
     assert_eq!(
@@ -63,4 +52,19 @@ fn job_record(status: &str, output: &str) -> JobRecord {
         output: output.to_string(),
         error: None,
     }
+}
+
+#[test]
+fn double_rename_failure_retains_previous_bundle_and_reports_location() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("saved.app");
+    std::fs::create_dir(&backup).unwrap();
+    std::fs::write(backup.join("previous"), b"old").unwrap();
+    let target = root.path().join("missing-parent/AgentHub.app");
+    let error = super::replace_backed_up_bundle(&root.path().join("absent.app"), &target, &backup)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("替换应用失败") && error.contains("恢复失败"));
+    assert!(error.contains(backup.to_str().unwrap()));
+    assert_eq!(std::fs::read(backup.join("previous")).unwrap(), b"old");
 }

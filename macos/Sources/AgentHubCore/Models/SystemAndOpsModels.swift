@@ -78,112 +78,27 @@ public struct OptionalResultEnvelope<T: Decodable & Sendable>: Decodable, Sendab
 // MARK: - System Capabilities
 
 public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
-    public var threads: Bool = false
-    public var threadSubagents: Bool?
-    public var claudeSubagents: Bool?
-    public var codexDesktop: Bool?
-    public var jobs: Bool = false
-    public var probe: Bool = false
-    public var settings: Bool = false
-    public var jobHistory: Bool = false
-    public var appUpdater: Bool = false
-    public var threadCleanup: Bool = false
-    public var hiddenCleanupScan: Bool?
-    public var codexAccountScope: Bool?
-    public var threadArchiveActions: Bool = false
-    public var systemd: Bool = false
-    public var linuxUpdateJob: Bool = false
-    public var pruneBackups: Bool = false
-    public var antigravitySessions: Bool?
-    public var antigravityNotifications: Bool?
-    public var dshSessions: Bool?
-    public var dshNotifications: Bool?
-    public var grokbotSessions: Bool?
-    public var grokbotNotifications: Bool?
-    public var githubCi: Bool?
+    public var codexDesktop = false
+    public var systemd = false
+    public var linuxUpdateJob = false
+    public var pruneBackups = false
+    public var antigravityNotifications = false
+    public var dshNotifications = false
+    public var grokbotSessions = false
+    public var grokbotNotifications = false
 
     enum CodingKeys: String, CodingKey {
-        case threads
-        case codexSessions = "codex_sessions"
-        case threadSubagents = "thread_subagents"
-        case claudeSubagents = "claude_subagents"
         case codexDesktop = "codex_desktop"
-        case jobs, probe, settings
-        case jobHistory = "job_history"
-        case appUpdater = "app_updater"
-        case threadCleanup = "thread_cleanup"
-        case hiddenCleanupScan = "hidden_cleanup_scan"
-        case codexAccountScope = "codex_account_scope"
-        case threadArchiveActions = "thread_archive_actions"
         case systemd
         case linuxUpdateJob = "linux_update_job"
         case pruneBackups = "prune_backups"
-        case antigravitySessions = "antigravity_sessions"
         case antigravityNotifications = "antigravity_notifications"
-        case dshSessions = "dsh_sessions"
         case dshNotifications = "dsh_notifications"
         case grokbotSessions = "grokbot_sessions"
         case grokbotNotifications = "grokbot_notifications"
-        case githubCi = "github_ci"
     }
 
     public init() {}
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.threads = try c.decodeIfPresent(Bool.self, forKey: .threads)
-            ?? c.decodeIfPresent(Bool.self, forKey: .codexSessions)
-            ?? true
-        self.threadSubagents = try c.decodeIfPresent(Bool.self, forKey: .threadSubagents)
-        self.claudeSubagents = try c.decodeIfPresent(Bool.self, forKey: .claudeSubagents)
-        self.codexDesktop = try c.decodeIfPresent(Bool.self, forKey: .codexDesktop)
-        self.jobs = try c.decodeIfPresent(Bool.self, forKey: .jobs) ?? true
-        self.probe = try c.decodeIfPresent(Bool.self, forKey: .probe) ?? true
-        self.settings = try c.decodeIfPresent(Bool.self, forKey: .settings) ?? true
-        self.jobHistory = try c.decodeIfPresent(Bool.self, forKey: .jobHistory) ?? true
-        self.appUpdater = try c.decodeIfPresent(Bool.self, forKey: .appUpdater) ?? false
-        self.threadCleanup = try c.decodeIfPresent(Bool.self, forKey: .threadCleanup) ?? true
-        self.hiddenCleanupScan = try c.decodeIfPresent(Bool.self, forKey: .hiddenCleanupScan)
-        self.codexAccountScope = try c.decodeIfPresent(Bool.self, forKey: .codexAccountScope)
-        self.threadArchiveActions = try c.decodeIfPresent(Bool.self, forKey: .threadArchiveActions) ?? true
-        self.systemd = try c.decodeIfPresent(Bool.self, forKey: .systemd) ?? false
-        self.linuxUpdateJob = try c.decodeIfPresent(Bool.self, forKey: .linuxUpdateJob) ?? false
-        self.pruneBackups = try c.decodeIfPresent(Bool.self, forKey: .pruneBackups) ?? false
-        self.antigravitySessions = try c.decodeIfPresent(Bool.self, forKey: .antigravitySessions)
-        self.antigravityNotifications = try c.decodeIfPresent(Bool.self, forKey: .antigravityNotifications)
-        self.dshSessions = try c.decodeIfPresent(Bool.self, forKey: .dshSessions)
-        self.dshNotifications = try c.decodeIfPresent(Bool.self, forKey: .dshNotifications)
-        self.grokbotSessions = try c.decodeIfPresent(Bool.self, forKey: .grokbotSessions)
-        self.grokbotNotifications = try c.decodeIfPresent(Bool.self, forKey: .grokbotNotifications)
-        self.githubCi = try c.decodeIfPresent(Bool.self, forKey: .githubCi)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(threads, forKey: .threads)
-        try c.encodeIfPresent(threadSubagents, forKey: .threadSubagents)
-        try c.encodeIfPresent(claudeSubagents, forKey: .claudeSubagents)
-        try c.encodeIfPresent(codexDesktop, forKey: .codexDesktop)
-        try c.encode(jobs, forKey: .jobs)
-        try c.encode(probe, forKey: .probe)
-        try c.encode(settings, forKey: .settings)
-        try c.encode(jobHistory, forKey: .jobHistory)
-        try c.encode(appUpdater, forKey: .appUpdater)
-        try c.encode(threadCleanup, forKey: .threadCleanup)
-        try c.encodeIfPresent(hiddenCleanupScan, forKey: .hiddenCleanupScan)
-        try c.encodeIfPresent(codexAccountScope, forKey: .codexAccountScope)
-        try c.encode(threadArchiveActions, forKey: .threadArchiveActions)
-        try c.encode(systemd, forKey: .systemd)
-        try c.encode(linuxUpdateJob, forKey: .linuxUpdateJob)
-        try c.encode(pruneBackups, forKey: .pruneBackups)
-        try c.encodeIfPresent(antigravitySessions, forKey: .antigravitySessions)
-        try c.encodeIfPresent(antigravityNotifications, forKey: .antigravityNotifications)
-        try c.encodeIfPresent(dshSessions, forKey: .dshSessions)
-        try c.encodeIfPresent(dshNotifications, forKey: .dshNotifications)
-        try c.encodeIfPresent(grokbotSessions, forKey: .grokbotSessions)
-        try c.encodeIfPresent(grokbotNotifications, forKey: .grokbotNotifications)
-        try c.encodeIfPresent(githubCi, forKey: .githubCi)
-    }
 }
 
 public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
@@ -193,76 +108,43 @@ public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case apiVersion = "api_version"
-        case protocolVersion = "protocol_version"
         case hostSurface = "host_surface"
-        case serviceMode = "service_mode"
         case capabilities
     }
 
-    public init(apiVersion: Int = 2, hostSurface: String = "desktop_embedded_tauri", capabilities: SystemCapabilitiesCore = SystemCapabilitiesCore()) {
+    // Protocol 2 keeps this wire identifier for the native macOS host.
+    public static let desktopSurface = "desktop_embedded_tauri"
+
+    public init(apiVersion: Int = 2, hostSurface: String = SystemCapabilitiesResponse.desktopSurface, capabilities: SystemCapabilitiesCore = SystemCapabilitiesCore()) {
         self.apiVersion = apiVersion
         self.hostSurface = hostSurface
         self.capabilities = capabilities
     }
 
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.apiVersion = try c.decodeIfPresent(Int.self, forKey: .apiVersion)
-            ?? c.decodeIfPresent(Int.self, forKey: .protocolVersion)
-            ?? 2
-        self.hostSurface = try c.decodeIfPresent(String.self, forKey: .hostSurface)
-            ?? c.decodeIfPresent(String.self, forKey: .serviceMode)
-            ?? "desktop_embedded_tauri"
-        self.capabilities = try c.decodeIfPresent(SystemCapabilitiesCore.self, forKey: .capabilities)
-            ?? SystemCapabilitiesCore()
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(apiVersion, forKey: .apiVersion)
-        try c.encode(hostSurface, forKey: .hostSurface)
-        try c.encode(capabilities, forKey: .capabilities)
-    }
 }
 
 public struct RuntimeCapabilityMatrix: Equatable, Sendable {
+    public var isReady: Bool
     public var hostSurface: String
     public var codexStatePaths: Bool
-    public var threadSubagents: Bool
-    public var claudeSubagents: Bool
-    public var hiddenCleanupScan: Bool
-    public var codexAccountScope: Bool
     public var antigravityNotifications: Bool
     public var dshNotifications: Bool
-    public var antigravitySessions: Bool
-    public var dshSessions: Bool
     public var grokbotSessions: Bool
-    public var githubCi: Bool
     public var grokbotNotifications: Bool
     public var codexDesktop: Bool
     public var updatePrune: Bool
-    public var threadCleanup: Bool
-    public var threadArchiveActions: Bool
     public var updateServiceLabels: Bool
 
     public static let bootstrap = RuntimeCapabilityMatrix(
-        hostSurface: "desktop_embedded_tauri",
+        isReady: false,
+        hostSurface: SystemCapabilitiesResponse.desktopSurface,
         codexStatePaths: false,
-        threadSubagents: false,
-        claudeSubagents: false,
-        hiddenCleanupScan: false,
-        codexAccountScope: false,
         antigravityNotifications: false,
         dshNotifications: false,
-        antigravitySessions: true,
-        dshSessions: true,
         grokbotSessions: true,
-        githubCi: false,
         grokbotNotifications: false,
         codexDesktop: false,
         updatePrune: false,
-        threadCleanup: false,
-        threadArchiveActions: false,
         updateServiceLabels: false
     )
 
@@ -271,23 +153,15 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         let c = response.capabilities
         let remote = response.hostSurface == "linux_server_api"
         return RuntimeCapabilityMatrix(
+            isReady: true,
             hostSurface: response.hostSurface,
             codexStatePaths: remote && c.systemd,
-            threadSubagents: c.threadSubagents == true,
-            claudeSubagents: c.claudeSubagents == true,
-            hiddenCleanupScan: c.hiddenCleanupScan == true,
-            codexAccountScope: c.codexAccountScope == true,
-            antigravityNotifications: !remote && c.antigravityNotifications == true,
-            dshNotifications: !remote && c.dshNotifications == true,
-            antigravitySessions: c.antigravitySessions ?? true,
-            dshSessions: c.dshSessions ?? true,
-            grokbotSessions: !remote && (c.grokbotSessions == true),
-            githubCi: c.githubCi == true,
-            grokbotNotifications: !remote && c.grokbotNotifications == true,
-            codexDesktop: !remote && c.codexDesktop == true,
+            antigravityNotifications: !remote && c.antigravityNotifications,
+            dshNotifications: !remote && c.dshNotifications,
+            grokbotSessions: !remote && (c.grokbotSessions),
+            grokbotNotifications: !remote && c.grokbotNotifications,
+            codexDesktop: !remote && c.codexDesktop,
             updatePrune: remote && c.pruneBackups,
-            threadCleanup: c.threadCleanup,
-            threadArchiveActions: c.threadArchiveActions,
             updateServiceLabels: remote && c.linuxUpdateJob
         )
     }
@@ -296,8 +170,6 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         WorkspaceId.allCases.filter { id in
             switch id {
             case .grokbot: return grokbotSessions
-            case .antigravity: return antigravitySessions
-            case .dsh: return dshSessions
             default: return true
             }
         }

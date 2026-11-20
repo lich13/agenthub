@@ -3,7 +3,7 @@ use agenthub_core::{
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
@@ -17,12 +17,7 @@ use agenthub_core::{
 
 #[test]
 fn linux_capabilities_expose_api_and_maintenance_features() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
-    let capabilities = system_capabilities_for_surface(
-        &config,
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        HostSurface::LinuxServerApi,
-    );
+    let capabilities = system_capabilities_for_surface(HostSurface::LinuxServerApi);
 
     assert!(capabilities.threads);
     assert!(capabilities.jobs);
@@ -41,14 +36,7 @@ fn linux_capabilities_expose_api_and_maintenance_features() {
 
 #[test]
 fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() {
-    let home = temp_dir("agenthub-capabilities-macos");
-    std::fs::create_dir_all(&home).unwrap();
-    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    let capabilities = system_capabilities_for_surface(
-        &config,
-        &PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home),
-        HostSurface::DesktopEmbeddedTauri,
-    );
+    let capabilities = system_capabilities_for_surface(HostSurface::DesktopEmbedded);
 
     assert!(capabilities.threads);
     assert!(capabilities.jobs);
@@ -63,19 +51,13 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() 
     assert!(capabilities.dsh_notifications);
     assert!(!capabilities.linux_update_job);
     assert!(!capabilities.prune_backups);
-
-    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
 fn macos_linux_maintenance_capabilities_are_rejected_by_gate_and_matrix() {
-    let config = Config::for_platform_kind(PlatformKind::Macos);
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
-    let capabilities = system_capabilities_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-    );
+    let platform = PlatformPaths::macos("/fixture/home");
+    let capabilities =
+        system_capabilities_for_surface(HostSurface::default_for_platform(&platform));
 
     for capability in [
         Capability::Systemd,
@@ -104,7 +86,7 @@ fn bark_device_key_is_trimmed_and_empty_values_are_ignored() {
 
 #[test]
 fn settings_view_reports_secret_state_without_returning_secret() {
-    let mut config = Config::for_platform_kind(PlatformKind::Linux);
+    let mut config = Config::linux_defaults();
     config.probe.notifications.enabled = true;
     config.probe.notifications.server_url = "https://bark.example.com".to_string();
 
@@ -123,11 +105,11 @@ fn settings_view_reports_secret_state_without_returning_secret() {
 
 #[test]
 fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
-    let mut config = Config::for_platform_kind(PlatformKind::Linux);
+    let mut config = Config::linux_defaults();
     config.probe.notifications.enabled = true;
     config.probe.notifications.server_url = "https://bark.example.com".to_string();
 
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = PlatformPaths::linux_server();
     let plan = probe_settings_view_with_capability(&config, &linux, ProbeSecretState::Configured)
         .expect("Linux should expose shared Probe settings");
     let serialized = serde_json::to_string(&plan).unwrap();
@@ -137,17 +119,10 @@ fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
     assert!(!serialized.contains("secret-bark-key"));
     assert!(!serialized.contains("device_key\":\""));
 
-    let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+    let macos = PlatformPaths::macos("/fixture/home");
     assert!(
         probe_settings_view_with_capability(&config, &macos, ProbeSecretState::Missing).is_ok()
     );
-
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-    let err = probe_settings_view_with_capability(&config, &windows, ProbeSecretState::Missing)
-        .expect_err("Windows should not expose shared settings");
-    assert!(err
-        .to_string()
-        .contains("settings is unavailable on windows"));
 }
 
 #[test]
@@ -322,7 +297,7 @@ fn probe_settings_save_request_keeps_nested_bark_key_when_top_level_is_blank() {
 
 #[test]
 fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
     let plan = plan_probe_settings_save(
         &platform,
         ProbeSettingsSaveRequest {
@@ -352,22 +327,10 @@ fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
     assert!(!serialized.contains("secret-bark-key"));
 }
 
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let unique = format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    std::env::temp_dir().join(format!("{label}-{unique}"))
-}
-
 #[test]
 fn local_notification_switches_default_off_and_round_trip_through_settings_and_toml() {
     use agenthub_core::config::{patch_probe_config_toml, ProbeConfigFilePatch};
-    let config = Config::default();
+    let config = Config::current_defaults().unwrap();
     let defaults = serde_json::to_value(&config.probe.notifications).unwrap();
     let fields = [
         "notify_antigravity",

@@ -30,7 +30,6 @@ pub fn apply_probe_settings_save_plan(
         "probe_settings.updated",
         Some("probe"),
         Some("settings"),
-        None,
         json!({"config_path": config_path}),
     )?;
 
@@ -51,7 +50,6 @@ pub fn start_probe_action_plan(
         &format!("{}.started", spec.kind),
         Some("probe"),
         Some(&spec.title),
-        None,
         json!({"args": spec.args, "action": action.as_rpc_action()}),
     )?;
     let process = probe_service::probe_process_command(state.platform(), config_path, action);
@@ -65,7 +63,7 @@ pub fn list_threads_read_model(
     state: &AppState,
     query: ThreadsQuery,
 ) -> Result<Vec<ThreadSummary>> {
-    let platform = PlatformPaths::for_kind(agenthub_core::platform::PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
     let plan = AgentHubUseCases::new(&platform)
         .threads()
         .list_read(query)?;
@@ -148,11 +146,9 @@ pub fn job_detail_plan(
 }
 
 fn job_response_value(job: JobRecord) -> Result<Value> {
-    let response = AgentHubUseCases::new(&PlatformPaths::for_kind(
-        agenthub_core::platform::PlatformKind::Linux,
-    ))
-    .jobs()
-    .response(job);
+    let response = AgentHubUseCases::new(&PlatformPaths::linux_server())
+        .jobs()
+        .response(job);
     Ok(serde_json::to_value(response)?)
 }
 
@@ -177,7 +173,6 @@ pub async fn apply_thread_state_action_plan(
             },
             Some("thread"),
             Some(&plan.thread_id),
-            None,
             json!({}),
         )?;
     }
@@ -191,7 +186,6 @@ pub async fn apply_thread_state_action_plan(
             "thread.renamed",
             Some("thread"),
             Some(&plan.thread_id),
-            None,
             json!({"name": name}),
         )?;
     }
@@ -221,7 +215,6 @@ pub fn start_update_action_plan(
             audit_action,
             Some("system"),
             Some("updates"),
-            None,
             json!({ "action": format!("{action:?}") }),
         )?;
     }

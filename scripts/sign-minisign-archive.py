@@ -46,13 +46,13 @@ def is_encrypted_minisign_secret_key(secret_text: str) -> bool:
 def load_secret_key_from_env_or_path(key_path: Path | None) -> str:
     if key_path is not None:
         return decode_secret_key_text(key_path.read_text(encoding="utf-8"))
-    env_key = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip()
+    env_key = os.environ.get("AGENTHUB_SIGNING_PRIVATE_KEY", "").strip()
     if env_key:
         return decode_secret_key_text(env_key)
-    env_path = os.environ.get("TAURI_SIGNING_PRIVATE_KEY_PATH", "").strip()
+    env_path = os.environ.get("AGENTHUB_SIGNING_PRIVATE_KEY_PATH", "").strip()
     if env_path:
         return decode_secret_key_text(Path(env_path).read_text(encoding="utf-8"))
-    raise ValueError("missing TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH")
+    raise ValueError("missing AGENTHUB_SIGNING_PRIVATE_KEY or AGENTHUB_SIGNING_PRIVATE_KEY_PATH")
 
 
 def sign_archive(
@@ -76,7 +76,7 @@ def sign_archive(
 
     secret_text = load_secret_key_from_env_or_path(secret_key_path)
     encrypted = is_encrypted_minisign_secret_key(secret_text)
-    password = os.environ.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "")
+    password = os.environ.get("AGENTHUB_SIGNING_PRIVATE_KEY_PASSWORD", "")
 
     trusted_comment = (
         f"timestamp:{int(time.time())}\tfile:{archive.name}\tversion:{normalized_version}"

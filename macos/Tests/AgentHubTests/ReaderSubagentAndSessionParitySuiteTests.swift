@@ -482,16 +482,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
         try runAsyncParityCheck {
             let f = "webui/src/lib/domain/subagentCapabilities.test.ts"
             let bootstrapCaps = RuntimeCapabilityMatrix.from(nil)
-            XCTAssertFalse(bootstrapCaps.threadSubagents)
-            var coreCaps = SystemCapabilitiesCore()
-            coreCaps.threads = true
-            coreCaps.threadSubagents = true
-            coreCaps.claudeSubagents = true
-            let decodedCaps = SystemCapabilitiesResponse(apiVersion: 2, hostSurface: "desktop_embedded_tauri", capabilities: coreCaps)
+            XCTAssertFalse(bootstrapCaps.isReady)
+            let decodedCaps = try JSONDecoder().decode(SystemCapabilitiesResponse.self, from: protocol2CapabilitiesFixture(remote: false))
             let liveCaps = RuntimeCapabilityMatrix.from(decodedCaps)
-            XCTAssertTrue(liveCaps.threadSubagents)
+            XCTAssertTrue(liveCaps.isReady)
             ParityCaseTracker.shared.record(f, "default-local-codex-subagents-enabled")
-            XCTAssertTrue(liveCaps.claudeSubagents)
+            XCTAssertFalse(liveCaps.updatePrune)
             ParityCaseTracker.shared.record(f, "default-local-claude-subagents-enabled")
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: SubagentCollection(agents: [SubagentActivity(agentId: "a1", name: "W", status: "running")], counts: [:], complete: true), isSupported: false))
             ParityCaseTracker.shared.record(f, "unsupported-claude-subagents-hidden")
@@ -527,7 +523,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 if cmd == "threads.subagentDetail" {
                     XCTAssertTrue(args.contains("\"rootThreadId\":\"root-1\""))
                     return Data("""
-                    {"summary":{"id":"child-1","title":"Child","status":"Running"},"messages":[],"blocks":[{"id":"cb-1","role":"assistant","kind":"message","text":"Child reply"}],"raw_event_count":1,"total_blocks":1,"has_more_blocks":false}
+                    {"summary":{"id":"child-1","title":"Child","status":"Running","message_count":1},"messages":[],"blocks":[{"id":"cb-1","role":"assistant","kind":"message","text":"Child reply","questions":[],"answers":[]}],"raw_event_count":1,"total_blocks":1,"has_more_blocks":false}
                     """.utf8)
                 }
                 if cmd == "claude.detail" {

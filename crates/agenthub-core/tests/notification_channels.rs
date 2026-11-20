@@ -5,7 +5,7 @@ use agenthub_core::{
     platform::PlatformKind,
     services::settings::PROBE_BARK_DEVICE_KEY_SETTING,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
@@ -306,7 +306,7 @@ fn completed_bark_claims_survive_reopen_without_replay() {
             .stage_notification_delivery(
                 channel,
                 "restart-event",
-                Utc::now().timestamp_millis(),
+                Timestamp::now().as_millisecond(),
                 &payload()
             )
             .unwrap());
@@ -333,9 +333,9 @@ fn transient_failures_use_fifteen_then_sixty_seconds_and_stop_after_three_attemp
         for attempt in 1..=3 {
             let lease = claim(&db, &key);
             assert_eq!(lease.chunk_attempts, attempt);
-            let before_finish = Utc::now().timestamp_millis();
+            let before_finish = Timestamp::now().as_millisecond();
             let outcome = finish(&db, &lease, &http_failure(status));
-            let after_finish = Utc::now().timestamp_millis();
+            let after_finish = Timestamp::now().as_millisecond();
             let row = fixture.row(NotificationChannel::Bark, &key);
             assert_eq!(row.attempts as usize, attempt);
             assert_eq!(outcome["attempts"], attempt);
@@ -528,11 +528,11 @@ fn retry_after_is_a_floor_and_cannot_extend_the_ten_minute_deadline() {
     ] {
         stage(&db, &fixture, NotificationChannel::Bark, key);
         let lease = claim(&db, key);
-        let before = Utc::now().timestamp_millis();
+        let before = Timestamp::now().as_millisecond();
         let mut rejection = http_failure(429);
         rejection["retry_after_ms"] = json!(retry_after_ms);
         let outcome = finish(&db, &lease, &rejection);
-        let after = Utc::now().timestamp_millis();
+        let after = Timestamp::now().as_millisecond();
         assert_eq!(outcome["status"], expected);
         if expected == "waiting_retry" {
             let next = outcome["next_retry_ms"].as_i64().unwrap();
@@ -557,16 +557,16 @@ fn lifetime_starts_at_first_claim_and_expired_pending_work_is_never_sent() {
         .connection()
         .execute(
             "UPDATE probe_notification_deliveries SET created_ms=?1 WHERE event_key=?2",
-            params![Utc::now().timestamp_millis() - 3_600_000, key],
+            params![Timestamp::now().as_millisecond() - 3_600_000, key],
         )
         .unwrap();
     assert!(fixture
         .row(NotificationChannel::Bark, key)
         .first_attempt_ms
         .is_none());
-    let before = Utc::now().timestamp_millis();
+    let before = Timestamp::now().as_millisecond();
     let lease = claim(&db, key);
-    let after = Utc::now().timestamp_millis();
+    let after = Timestamp::now().as_millisecond();
     let first = fixture
         .row(NotificationChannel::Bark, key)
         .first_attempt_ms
@@ -576,7 +576,7 @@ fn lifetime_starts_at_first_claim_and_expired_pending_work_is_never_sent() {
     finish(&db, &lease, &http_failure(503));
     fixture.connection().execute(
         "UPDATE probe_notification_deliveries SET first_attempt_ms=?1,next_ms=0 WHERE event_key=?2",
-        params![Utc::now().timestamp_millis() - 600_000, key],
+        params![Timestamp::now().as_millisecond() - 600_000, key],
     ).unwrap();
     assert!(db
         .claim_notification_delivery(NotificationChannel::Bark, key)
@@ -606,7 +606,7 @@ fn retry_is_not_scheduled_when_its_backoff_would_cross_the_deadline() {
         .connection()
         .execute(
             "UPDATE probe_notification_deliveries SET first_attempt_ms=?1 WHERE event_key=?2",
-            params![Utc::now().timestamp_millis() - 590_000, key],
+            params![Timestamp::now().as_millisecond() - 590_000, key],
         )
         .unwrap();
     let lease = claim(&db, key);
@@ -623,9 +623,9 @@ fn expired_lease_is_recovered_after_restart_and_late_results_are_fenced() {
     db.sync_notification_channels(&fixture.config).unwrap();
     let key = "interrupted-event";
     stage(&db, &fixture, NotificationChannel::Bark, key);
-    let before_claim = Utc::now().timestamp_millis();
+    let before_claim = Timestamp::now().as_millisecond();
     let old_lease = claim(&db, key);
-    let after_claim = Utc::now().timestamp_millis();
+    let after_claim = Timestamp::now().as_millisecond();
     let row = fixture.row(NotificationChannel::Bark, key);
     assert!((before_claim + 30_000..=after_claim + 30_000).contains(&row.lease_until_ms));
     let mut foreign = old_lease.clone();
@@ -646,9 +646,9 @@ fn expired_lease_is_recovered_after_restart_and_late_results_are_fenced() {
     drop(db);
 
     let db = fixture.open();
-    let before_recovery = Utc::now().timestamp_millis();
+    let before_recovery = Timestamp::now().as_millisecond();
     assert!(db.due_notification_deliveries(100).unwrap().is_empty());
-    let after_recovery = Utc::now().timestamp_millis();
+    let after_recovery = Timestamp::now().as_millisecond();
     let row = fixture.row(NotificationChannel::Bark, key);
     assert_eq!(row.status, "pending");
     assert_eq!(row.attempts, 1);
@@ -706,7 +706,7 @@ fn only_an_active_owned_delivery_lease_has_remaining_time() {
             "expired-deadline" => {
                 fixture.connection().execute(
                     "UPDATE probe_notification_deliveries SET first_attempt_ms=?1 WHERE event_key=?2",
-                    params![Utc::now().timestamp_millis() - 600_000, key],
+                    params![Timestamp::now().as_millisecond() - 600_000, key],
                 ).unwrap();
             }
             "completed" => {
@@ -878,7 +878,7 @@ fn expiration_and_channel_disable_clear_native_pending_counts() {
             } else {
                 fixture.connection().execute(
                     "UPDATE probe_notification_deliveries SET first_attempt_ms=?1,next_ms=0 WHERE event_key=?2",
-                    params![Utc::now().timestamp_millis() - 600_000, key],
+                    params![Timestamp::now().as_millisecond() - 600_000, key],
                 ).unwrap();
                 assert!(db.due_notification_deliveries(100).unwrap().is_empty());
             }

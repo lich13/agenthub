@@ -43,19 +43,21 @@ impl HookProvider {
         }
     }
 
-    pub fn default_settings_path(self) -> PathBuf {
-        match self {
-            Self::Claude => ClaudePaths::default_for_user().config.join("settings.json"),
-            Self::Grok => crate::grok::GrokPaths::default_for_user()
+    pub fn default_settings_path(self) -> Result<PathBuf> {
+        Ok(match self {
+            Self::Claude => ClaudePaths::default_for_user()?
+                .config
+                .join("settings.json"),
+            Self::Grok => crate::grok::GrokPaths::default_for_user()?
                 .home
                 .join("hooks/agenthub.json"),
             Self::Antigravity => {
-                let home = crate::antigravity::sessions::AntigravityPaths::default_for_user().home;
+                let home = crate::antigravity::sessions::AntigravityPaths::default_for_user()?.home;
                 home.parent()
                     .unwrap_or(home.as_path())
                     .join("config/hooks.json")
             }
-        }
+        })
     }
 }
 
@@ -377,7 +379,7 @@ pub fn manage_provider(
     request: ClaudeHooksRequest,
 ) -> Result<ClaudeHooksStatus> {
     manage_file(
-        &provider.default_settings_path(),
+        &provider.default_settings_path()?,
         provider.handler(),
         provider.label(),
         binary,
@@ -419,11 +421,18 @@ pub fn manage_file(
             "本机通知程序不可用，请修复 App 安装"
         );
     }
-    if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+    let object = root
+        .as_object_mut()
+        .context("Claude 设置必须为 JSON 对象，未作修改")?;
+    if let Some(hooks) = object.get_mut("hooks").and_then(Value::as_object_mut) {
         for groups in hooks.values_mut() {
-            let groups = groups.as_array_mut().unwrap();
+            let groups = groups
+                .as_array_mut()
+                .context("Claude hook 分组格式错误，未作修改")?;
             groups.retain_mut(|group| {
-                let handlers = group["hooks"].as_array_mut().unwrap();
+                let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                    return true;
+                };
                 let before_len = handlers.len();
                 handlers.retain(|h| !managed_any_agenthub_handler(h, binary));
                 // Preserve pre-existing empty groups and any user/plugin handlers.
@@ -435,42 +444,39 @@ pub fn manage_file(
                 .values()
                 .all(|v| v.as_array().is_some_and(Vec::is_empty))
         {
-            root.as_object_mut().unwrap().remove("hooks");
+            object.remove("hooks");
         }
     }
     if handler == GROK_HANDLER {
-        if let Some(obj) = root.as_object_mut() {
-            for (ev, _) in EVENTS {
-                let remove_key = if let Some(groups) = obj.get_mut(ev).and_then(Value::as_array_mut)
-                {
-                    let mut removed_any = false;
-                    groups.retain_mut(|group| {
-                        let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut)
-                        else {
-                            return true;
-                        };
-                        let before_len = handlers.len();
-                        handlers.retain(|h| !managed_any_agenthub_handler(h, binary));
-                        if handlers.len() != before_len {
-                            removed_any = true;
-                        }
-                        // Preserve pre-existing empty groups and any user/plugin handlers.
-                        before_len == handlers.len() || !handlers.is_empty()
-                    });
-                    removed_any && groups.is_empty()
-                } else {
-                    false
-                };
-                if remove_key {
-                    obj.remove(ev);
-                }
+        for (ev, _) in EVENTS {
+            let remove_key = if let Some(groups) = object.get_mut(ev).and_then(Value::as_array_mut)
+            {
+                let mut removed_any = false;
+                groups.retain_mut(|group| {
+                    let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut)
+                    else {
+                        return true;
+                    };
+                    let before_len = handlers.len();
+                    handlers.retain(|h| !managed_any_agenthub_handler(h, binary));
+                    if handlers.len() != before_len {
+                        removed_any = true;
+                    }
+                    // Preserve pre-existing empty groups and any user/plugin handlers.
+                    before_len == handlers.len() || !handlers.is_empty()
+                });
+                removed_any && groups.is_empty()
+            } else {
+                false
+            };
+            if remove_key {
+                object.remove(ev);
             }
         }
     }
     if handler == ANTIGRAVITY_HANDLER {
-        let root_obj = root.as_object_mut().unwrap();
         if request.action == ClaudeHooksAction::Install {
-            root_obj.insert(
+            object.insert(
                 "agenthub".into(),
                 json!({
                     "enabled": true,
@@ -478,22 +484,20 @@ pub fn manage_file(
                 }),
             );
         } else {
-            root_obj.remove("agenthub");
+            object.remove("agenthub");
         }
     } else if request.action == ClaudeHooksAction::Install {
-        let hooks = root
-            .as_object_mut()
-            .unwrap()
+        let hooks = object
             .entry("hooks")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .unwrap();
+            .context("Claude hooks 格式错误，未作修改")?;
         for (event, matcher) in EVENTS {
             hooks
                 .entry(event)
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
-                .unwrap()
+                .context("Claude hook 分组格式错误，未作修改")?
                 .push(expected_group_for_handler(binary, config, handler, matcher));
         }
     }

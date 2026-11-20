@@ -60,7 +60,7 @@ if [[ "${CHECK_ONLY}" -eq 1 ]]; then
 fi
 
 command -v minisign >/dev/null 2>&1 || die "minisign is required for release archive signing"
-[[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]] || die "release signing key is required"
+[[ -n "${AGENTHUB_SIGNING_PRIVATE_KEY:-}" || -n "${AGENTHUB_SIGNING_PRIVATE_KEY_PATH:-}" ]] || die "release signing key is required"
 VERSION="$(python3 -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"])')"
 python3 "${ROOT}/scripts/sign-minisign-archive.py" \
   --archive "${DIST}/${ASSET}" \

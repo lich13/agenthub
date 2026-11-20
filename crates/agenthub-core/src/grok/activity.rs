@@ -1,5 +1,4 @@
 use super::{GrokDeletionEligibility, GrokPaths, GrokSessionSummary};
-use chrono::{DateTime, NaiveDateTime};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -284,8 +283,8 @@ fn read_registrations(path: &Path) -> Option<Vec<Registration>> {
                     .get("opened_at")
                     .or_else(|| row.get("openedAt"))
                     .and_then(Value::as_str)
-                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.timestamp()),
+                    .and_then(|value| (value).parse::<jiff::Timestamp>().ok())
+                    .map(|value| value.as_second()),
                 cwd: row.get("cwd").and_then(Value::as_str).map(str::to_owned),
             })
         })
@@ -293,7 +292,7 @@ fn read_registrations(path: &Path) -> Option<Vec<Registration>> {
 }
 
 fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u32, Process>> {
-    let output = Command::new("ps")
+    let output = Command::new("/bin/ps")
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
         .args(["-axo", "pid=,lstart=,stat=,comm="])
@@ -320,9 +319,10 @@ fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u
             continue;
         }
         let start = fields.by_ref().take(5).collect::<Vec<_>>().join(" ");
-        let started_at = NaiveDateTime::parse_from_str(&start, "%a %b %e %T %Y")
+        let started_at = jiff::civil::DateTime::strptime("%a %b %e %T %Y", &start)
             .ok()
-            .map(|time| time.and_utc().timestamp());
+            .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
+            .map(|ts| ts.as_second());
         let zombie = fields.next().is_some_and(|state| state.starts_with('Z'));
         let command = fields.collect::<Vec<_>>().join(" ");
         #[cfg(target_os = "linux")]
@@ -447,9 +447,7 @@ impl Turns {
 struct Stamp {
     len: u64,
     modified: SystemTime,
-    #[cfg(unix)]
     identity: (u64, u64),
-    #[cfg(unix)]
     changed: (i64, i64),
 }
 
@@ -459,27 +457,16 @@ impl Stamp {
         if !metadata.is_file() {
             return None;
         }
-        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Some(Self {
             len: metadata.len(),
             modified: metadata.modified().ok()?,
-            #[cfg(unix)]
             identity: (metadata.dev(), metadata.ino()),
-            #[cfg(unix)]
             changed: (metadata.ctime(), metadata.ctime_nsec()),
         })
     }
     fn same_file(&self, other: &Self) -> bool {
-        #[cfg(unix)]
-        {
-            self.identity == other.identity
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = other;
-            false
-        }
+        self.identity == other.identity
     }
 }
 
@@ -517,10 +504,7 @@ impl TurnCache {
         let stamp =
             Stamp::read(&file).ok_or_else(|| std::io::Error::other("invalid activity file"))?;
         let old = self.0.lock().ok().and_then(|mut entries| {
-            let index = entries
-                .iter()
-                .position(|entry| entry.path == path && entry.id == id)?;
-            entries.remove(index)
+            crate::lru::take_first(&mut entries, |entry| entry.path == path && entry.id == id)
         });
         let mut cursor = match old {
             Some(cursor) if cursor.stamp == stamp && cursor.caught_up => {
@@ -591,10 +575,8 @@ impl TurnCache {
     fn publish(&self, cursor: Cursor) {
         if let Ok(mut entries) = self.0.lock() {
             entries.retain(|entry| entry.path != cursor.path);
-            while entries.len() >= 256 {
-                entries.pop_front();
-            }
             entries.push_back(cursor);
+            crate::lru::trim(&mut entries, 256, 0, 0, |_| true, |_| 0);
         }
     }
 }

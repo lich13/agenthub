@@ -22,8 +22,9 @@ pub(super) struct HookEvent {
 }
 
 pub(super) fn installed() -> bool {
-    std::env::current_exe()
-        .is_ok_and(|binary| hooks::configured(&ClaudePaths::default_for_user(), &binary))
+    std::env::current_exe().is_ok_and(|binary| {
+        ClaudePaths::default_for_user().is_ok_and(|paths| hooks::configured(&paths, &binary))
+    })
 }
 
 /// The Stop payload lists in-flight background work so a hook can tell a
@@ -88,7 +89,7 @@ pub(super) fn parse(value: &Value) -> Result<Option<HookEvent>> {
         "invalid hook identity"
     );
     let path = PathBuf::from(get("transcript_path"));
-    let root = ClaudePaths::default_for_user().projects;
+    let root = ClaudePaths::default_for_user()?.projects;
     let canonical_root = root.canonicalize().ok();
     ensure!(
         path.is_absolute()
@@ -112,12 +113,12 @@ pub(super) fn parse(value: &Value) -> Result<Option<HookEvent>> {
         kind: kind.into(),
         body: super::notification_format::summary(&body),
         idle,
-        received_ms: chrono::Utc::now().timestamp_millis(),
+        received_ms: jiff::Timestamp::now().as_millisecond(),
     }))
 }
 
 pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationContext> {
-    let context = claude::notification_context(&ClaudePaths::default_for_user(), &hook.path)?;
+    let context = claude::notification_context(&ClaudePaths::default_for_user()?, &hook.path)?;
     ensure!(
         context.stream.id == hook.session_id
             && hook
@@ -141,7 +142,7 @@ pub(super) async fn run(config_path: &Path) -> Result<()> {
     let cache = super::monitor_start::DaemonMonitorCache::default();
     let load_config = || cache.load_config(config_path);
     let config = load_config()?;
-    let paths = ClaudePaths::default_for_user();
+    let paths = ClaudePaths::default_for_user()?;
     ensure!(
         hooks::installed(&paths, &std::env::current_exe()?, config_path),
         "managed hook is not installed"
@@ -168,7 +169,7 @@ mod tests {
     #[test]
     fn failure_categories_never_include_raw_api_errors() {
         let _env_guard = crate::api::test_support::CONFIG_ENV_LOCK.blocking_lock();
-        let root = ClaudePaths::default_for_user().projects;
+        let root = ClaudePaths::default_for_user().unwrap().projects;
         let value = serde_json::json!({"hook_event_name":"StopFailure", "error":"rate_limit", "error_details":"private fixture detail", "last_assistant_message":"private fixture error", "session_id":"fixture", "prompt_id":"prompt-fixture", "transcript_path":root.join("fixture/session.jsonl")});
         let event = parse(&value).unwrap().unwrap();
         assert_eq!(event.kind, "failure");
@@ -178,7 +179,7 @@ mod tests {
     #[test]
     fn subagent_stops_and_pauses_for_delegated_work_are_not_session_terminals() {
         let _env_guard = crate::api::test_support::CONFIG_ENV_LOCK.blocking_lock();
-        let root = ClaudePaths::default_for_user().projects;
+        let root = ClaudePaths::default_for_user().unwrap().projects;
         let base = |event: &str| serde_json::json!({"hook_event_name":event, "error":"rate_limit", "last_assistant_message":"Fixture answer", "session_id":"fixture", "prompt_id":"prompt-fixture", "transcript_path":root.join("fixture/session.jsonl")});
         for event in ["Stop", "StopFailure"] {
             assert!(parse(&base(event)).unwrap().is_some(), "{event}");

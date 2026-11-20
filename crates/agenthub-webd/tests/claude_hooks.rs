@@ -108,7 +108,7 @@ impl Fixture {
                 }
             }
         });
-        let mut config = Config::for_platform_kind(PlatformKind::Macos);
+        let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/fixture/home");
         config.codex.home = root.join("codex");
         config.paths.data_dir = root.join("data");
         config.paths.db_path = root.join("data/panel.sqlite");
@@ -173,10 +173,10 @@ impl Fixture {
         writeln!(file, "{value}").unwrap();
     }
     fn user(&self, uuid: &str, parent: Option<&str>, prompt: &str) {
-        self.append(json!({"type":"user","uuid":uuid,"parentUuid":parent,"promptId":prompt,"sessionId":"session-fixture","version":"2.1.284","cwd":"/fixture/project","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"user","content":"Synthetic prompt"}}));
+        self.append(json!({"type":"user","uuid":uuid,"parentUuid":parent,"promptId":prompt,"sessionId":"session-fixture","version":"2.1.284","cwd":"/fixture/project","timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"user","content":"Synthetic prompt"}}));
     }
     fn complete(&self) {
-        self.append(json!({"type":"assistant","uuid":"answer-one","parentUuid":"message-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"**完成**\n- 已核对 🙂","stop_reason":"end_turn"}}));
+        self.append(json!({"type":"assistant","uuid":"answer-one","parentUuid":"message-one","sessionId":"session-fixture","timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"assistant","content":"**完成**\n- 已核对 🙂","stop_reason":"end_turn"}}));
     }
     fn input(&self, event: &str, subtype: &str, prompt: &str) -> Value {
         json!({"session_id":"session-fixture","prompt_id":prompt,"transcript_path":self.transcript,"hook_event_name":event,"notification_type":subtype,"message":"**请确认**\n选择蓝色或绿色。","last_assistant_message":"**完成**\n- 已核对 🙂","error":"rate_limit","error_details":"private fixture error details"})
@@ -434,7 +434,7 @@ fn failure_retry_is_discarded_after_recovery_and_clears_queued_body() {
     f.reply_code.store(503, Ordering::Relaxed);
     f.hook(&f.input("StopFailure", "", "prompt-one"));
     f.wait_count(1);
-    f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"message-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Working again","stop_reason":null}}));
+    f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"message-one","sessionId":"session-fixture","timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"assistant","content":"Working again","stop_reason":null}}));
     f.reply_code.store(200, Ordering::Relaxed);
     let conn = Connection::open(&f.config.paths.db_path).unwrap();
     conn.execute(
@@ -474,10 +474,10 @@ fn same_turn_recovery_completion_and_cancellation_reject_late_failure_hooks() {
     for recovery in ["resume", "complete", "cancel"] {
         let f = Fixture::new();
         f.user("message-one", None, "prompt-one");
-        f.append(json!({"type":"assistant","uuid":"error-one","parentUuid":"message-one","sessionId":"session-fixture","isApiErrorMessage":true,"timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"API error fixture","stop_reason":"end_turn"}}));
+        f.append(json!({"type":"assistant","uuid":"error-one","parentUuid":"message-one","sessionId":"session-fixture","isApiErrorMessage":true,"timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"assistant","content":"API error fixture","stop_reason":"end_turn"}}));
         match recovery {
-            "resume" => f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"error-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Working again","stop_reason":null}})),
-            "complete" => f.append(json!({"type":"assistant","uuid":"done","parentUuid":"error-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Done","stop_reason":"end_turn"}})),
+            "resume" => f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"error-one","sessionId":"session-fixture","timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"assistant","content":"Working again","stop_reason":null}})),
+            "complete" => f.append(json!({"type":"assistant","uuid":"done","parentUuid":"error-one","sessionId":"session-fixture","timestamp":jiff::Timestamp::now().to_string(),"message":{"role":"assistant","content":"Done","stop_reason":"end_turn"}})),
             _ => f.append(json!({"type":"system","subtype":"cancelled"})),
         }
         f.hook(&f.input("StopFailure", "", "prompt-one"));
@@ -502,7 +502,7 @@ fn polling_rechecks_failed_turns_but_delivers_valid_historical_completion() {
         if kind == "completion" {
             f.complete();
         } else {
-            f.append(json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture failure"],"timestamp":chrono::Utc::now().to_rfc3339()}));
+            f.append(json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture failure"],"timestamp":jiff::Timestamp::now().to_string()}));
         }
         let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
         f.db.stage_native_notifications(

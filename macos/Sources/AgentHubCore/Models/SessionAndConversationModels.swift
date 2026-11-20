@@ -268,7 +268,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
     public var input: String?
     public var truncated: Bool?
     public var resolved: Bool?
-    public var answers: [UserInputAnswer]?
+    public var answers: [UserInputAnswer]
     public var planStatus: String?
     public var groupId: String?
     public var toolName: String?
@@ -307,7 +307,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         input: String? = nil,
         truncated: Bool? = nil,
         resolved: Bool? = nil,
-        answers: [UserInputAnswer]? = nil,
+        answers: [UserInputAnswer] = [],
         planStatus: String? = nil,
         toolName: String? = nil,
         callId: String? = nil,
@@ -349,8 +349,8 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         subagent = try c.decodeIfPresent(SubagentActivity.self, forKey: .subagent)
         userMessage = try c.decodeIfPresent(UserMessageContent.self, forKey: .userMessage)
         id = try c.decode(String.self, forKey: .id)
-        role = (try? c.decode(String.self, forKey: .role)) ?? ""
-        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        role = try c.decode(String.self, forKey: .role)
+        kind = try c.decode(String.self, forKey: .kind)
         displayKind = try c.decodeIfPresent(String.self, forKey: .displayKind)
         status = try c.decodeIfPresent(String.self, forKey: .status)
         text = try c.decodeIfPresent(String.self, forKey: .text)
@@ -358,7 +358,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         input = try c.decodeIfPresent(String.self, forKey: .input)
         truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated)
         resolved = try c.decodeIfPresent(Bool.self, forKey: .resolved)
-        answers = try c.decodeIfPresent([UserInputAnswer].self, forKey: .answers)
+        answers = try c.decode([UserInputAnswer].self, forKey: .answers)
         planStatus = try c.decodeIfPresent(String.self, forKey: .planStatus)
         groupId = try c.decodeIfPresent(String.self, forKey: .groupId)
         toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
@@ -366,7 +366,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
         itemId = try c.decodeIfPresent(String.self, forKey: .itemId)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
-        questions = (try? c.decode([UserInputQuestion].self, forKey: .questions)) ?? []
+        questions = try c.decode([UserInputQuestion].self, forKey: .questions)
         payload = try c.decodeIfPresent(JSONValue.self, forKey: .payload)
         collapsedIds = try c.decodeIfPresent([String].self, forKey: .collapsedIds)
     }
@@ -388,16 +388,10 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
     public var activeJobId: String?
     public var pendingElicitation: PendingElicitation?
     public var lastEventKind: String?
-    public var parentThreadId: String?
-    public var agentNickname: String?
-    public var agentRole: String?
-    public var firstUserMessage: String?
-    public var preview: String?
 
     enum CodingKeys: String, CodingKey {
         case storageSize
-        case storageSizeSnake = "storage_size"
-        case id, title, status, cwd, model, preview
+        case id, title, status, cwd, model
         case updatedAt = "updated_at"
         case archivedAt = "archived_at"
         case messageCount = "message_count"
@@ -407,14 +401,6 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
         case activeJobId = "active_job_id"
         case pendingElicitation = "pending_elicitation"
         case lastEventKind = "last_event_kind"
-        case parentThreadId = "parent_thread_id"
-        case parentThreadIdCamel = "parentThreadId"
-        case agentNickname = "agent_nickname"
-        case agentNicknameCamel = "agentNickname"
-        case agentRole = "agent_role"
-        case agentRoleCamel = "agentRole"
-        case firstUserMessage = "first_user_message"
-        case firstUserMessageCamel = "firstUserMessage"
     }
 
     public init(
@@ -427,8 +413,7 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
         latestMessage: String? = nil,
         cwd: String? = nil,
         rolloutPath: String? = nil,
-        storageSize: SessionStorageSize? = nil,
-        firstUserMessage: String? = nil
+        storageSize: SessionStorageSize? = nil
     ) {
         self.id = id
         self.title = title
@@ -440,54 +425,8 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
         self.cwd = cwd
         self.rolloutPath = rolloutPath
         self.storageSize = storageSize
-        self.firstUserMessage = firstUserMessage
     }
 
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        storageSize = (try? c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSize))
-            ?? (try? c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSizeSnake))
-        id = try c.decode(String.self, forKey: .id)
-        title = (try? c.decode(String.self, forKey: .title)) ?? ""
-        status = (try? c.decode(String.self, forKey: .status)) ?? "Recent"
-        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
-        archivedAt = try c.decodeIfPresent(String.self, forKey: .archivedAt)
-        messageCount = (try? c.decode(Int.self, forKey: .messageCount)) ?? 0
-        latestMessage = try c.decodeIfPresent(String.self, forKey: .latestMessage)
-        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
-        model = try c.decodeIfPresent(String.self, forKey: .model)
-        rolloutPath = try c.decodeIfPresent(String.self, forKey: .rolloutPath)
-        activeTurnId = try c.decodeIfPresent(String.self, forKey: .activeTurnId)
-        activeJobId = try c.decodeIfPresent(String.self, forKey: .activeJobId)
-        pendingElicitation = try c.decodeIfPresent(PendingElicitation.self, forKey: .pendingElicitation)
-        lastEventKind = try c.decodeIfPresent(String.self, forKey: .lastEventKind)
-        parentThreadId = (try? c.decodeIfPresent(String.self, forKey: .parentThreadId))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .parentThreadIdCamel))
-        agentNickname = (try? c.decodeIfPresent(String.self, forKey: .agentNickname))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .agentNicknameCamel))
-        agentRole = (try? c.decodeIfPresent(String.self, forKey: .agentRole))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .agentRoleCamel))
-        firstUserMessage = (try? c.decodeIfPresent(String.self, forKey: .firstUserMessage))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .firstUserMessageCamel))
-        preview = try c.decodeIfPresent(String.self, forKey: .preview)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encodeIfPresent(storageSize, forKey: .storageSize)
-        try c.encode(id, forKey: .id)
-        try c.encode(title, forKey: .title)
-        try c.encode(status, forKey: .status)
-        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
-        try c.encodeIfPresent(archivedAt, forKey: .archivedAt)
-        try c.encode(messageCount, forKey: .messageCount)
-        try c.encodeIfPresent(latestMessage, forKey: .latestMessage)
-        try c.encodeIfPresent(cwd, forKey: .cwd)
-        try c.encodeIfPresent(model, forKey: .model)
-        try c.encodeIfPresent(rolloutPath, forKey: .rolloutPath)
-        try c.encodeIfPresent(firstUserMessage, forKey: .firstUserMessage)
-        try c.encodeIfPresent(preview, forKey: .preview)
-    }
 }
 
 public struct ThreadDetail: Codable, Equatable, Sendable {
@@ -546,9 +485,9 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
         subagents = try c.decodeIfPresent(SubagentCollection.self, forKey: .subagents)
         subagentUpdates = try c.decodeIfPresent([String: SubagentActivity].self, forKey: .subagentUpdates)
         summary = try c.decode(ThreadSummary.self, forKey: .summary)
-        messages = (try? c.decode([CodexMessage].self, forKey: .messages)) ?? []
-        blocks = (try? c.decode([MessageBlock].self, forKey: .blocks)) ?? []
-        rawEventCount = (try? c.decode(Int.self, forKey: .rawEventCount)) ?? blocks.count
+        messages = try c.decode([CodexMessage].self, forKey: .messages)
+        blocks = try c.decode([MessageBlock].self, forKey: .blocks)
+        rawEventCount = try c.decode(Int.self, forKey: .rawEventCount)
         totalBlocks = try c.decodeIfPresent(Int.self, forKey: .totalBlocks)
         hasMoreBlocks = try c.decodeIfPresent(Bool.self, forKey: .hasMoreBlocks)
         beforeCursor = try c.decodeIfPresent(String.self, forKey: .beforeCursor)
@@ -565,14 +504,10 @@ public struct ThreadBlockPage: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case history, blocks
-        case threadId = "thread_id"
-        case threadIdCamel = "threadId"
-        case totalBlocks = "total_blocks"
-        case totalBlocksCamel = "totalBlocks"
-        case hasMoreBlocks = "has_more_blocks"
-        case hasMoreBlocksCamel = "hasMoreBlocks"
-        case beforeCursor = "before_cursor"
-        case beforeCursorCamel = "beforeCursor"
+        case threadId
+        case totalBlocks
+        case hasMoreBlocks
+        case beforeCursor
     }
 
     public init(
@@ -589,29 +524,5 @@ public struct ThreadBlockPage: Codable, Equatable, Sendable {
         self.hasMoreBlocks = hasMoreBlocks
         self.beforeCursor = beforeCursor
         self.history = history
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        history = try c.decodeIfPresent(HistoryMetadata.self, forKey: .history)
-        threadId = (try? c.decode(String.self, forKey: .threadId))
-            ?? (try? c.decode(String.self, forKey: .threadIdCamel)) ?? ""
-        blocks = (try? c.decode([MessageBlock].self, forKey: .blocks)) ?? []
-        totalBlocks = (try? c.decode(Int.self, forKey: .totalBlocks))
-            ?? (try? c.decode(Int.self, forKey: .totalBlocksCamel)) ?? blocks.count
-        hasMoreBlocks = (try? c.decode(Bool.self, forKey: .hasMoreBlocks))
-            ?? (try? c.decode(Bool.self, forKey: .hasMoreBlocksCamel)) ?? false
-        beforeCursor = (try? c.decodeIfPresent(String.self, forKey: .beforeCursor))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .beforeCursorCamel))
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encodeIfPresent(history, forKey: .history)
-        try c.encode(threadId, forKey: .threadId)
-        try c.encode(blocks, forKey: .blocks)
-        try c.encode(totalBlocks, forKey: .totalBlocks)
-        try c.encode(hasMoreBlocks, forKey: .hasMoreBlocks)
-        try c.encodeIfPresent(beforeCursor, forKey: .beforeCursor)
     }
 }

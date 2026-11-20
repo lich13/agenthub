@@ -1,9 +1,9 @@
 use super::{ok, ApiResponse};
 use crate::{linux_adapter, state::AppState};
 use agenthub_core::{
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{
-        system::{require_capability_for_surface, Capability},
+        system::{require_capability, Capability},
         updates::{self as update_service, UpdateAction},
     },
 };
@@ -13,25 +13,17 @@ use serde_json::json;
 use std::time::Duration;
 
 pub(crate) async fn system_capabilities(state: AppState) -> ApiResponse {
-    let platform = state.platform().clone();
     ok(
-        agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
-            &state.config(),
-            &platform,
-            state.host_surface(),
-        )
-        .system()?
-        .runtime_capabilities(),
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+            .system()
+            .runtime_capabilities(),
     )
 }
 
 pub(crate) async fn system_update_status(state: AppState) -> ApiResponse {
     let latest = github_latest_release("lich13", "agenthub").await.ok();
-    let platform = state.platform().clone();
-    ok(update_service::update_status_for_surface(
-        &state.config(),
-        &platform,
-        state.host_surface(),
+    ok(update_service::update_status(
+        state.platform(),
         latest.as_deref(),
         None,
     ))
@@ -63,9 +55,8 @@ pub(crate) async fn start_update_action(
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let platform = state.platform().clone();
-    require_capability_for_surface(
+    require_capability(
         &platform,
-        state.host_surface(),
         match action {
             UpdateAction::Prune => Capability::PruneBackups,
             UpdateAction::Check | UpdateAction::Install => Capability::LinuxUpdateJob,
@@ -77,5 +68,5 @@ pub(crate) async fn start_update_action(
 }
 
 pub(crate) fn linux_update_platform() -> PlatformPaths {
-    PlatformPaths::for_kind(PlatformKind::Linux)
+    PlatformPaths::linux_server()
 }

@@ -4,10 +4,9 @@ pub mod commands;
 pub mod gfm_markdown;
 pub mod host;
 pub mod isolation;
-pub mod legacy_prefs;
 pub mod overview;
 pub mod remote;
-#[path = "resources_wrapper.rs"]
+#[path = "resources_inner.rs"]
 pub mod resources;
 pub mod services;
 
@@ -29,14 +28,60 @@ use std::{
 };
 use tokio::task::AbortHandle;
 
+#[repr(C)]
+pub struct AgentHubPasteboardLimits {
+    pub files: usize,
+    pub image_bytes: usize,
+    pub text_utf16_units: usize,
+    pub path_utf16_units: usize,
+}
+
+#[repr(C)]
+pub struct AgentHubCommandAccess {
+    pub remote: bool,
+    pub read_only: bool,
+}
+
+/// # Safety
+/// A non-null command must be a readable NUL-terminated string for this call.
+#[no_mangle]
+pub unsafe extern "C" fn agenthub_ffi_command_access(
+    command_utf8: *const c_char,
+    hook_status: bool,
+) -> AgentHubCommandAccess {
+    use agenthub_core::services::commands::{desktop_command_is_read, is_allowed_rpc_command};
+    let command = if command_utf8.is_null() {
+        ""
+    } else {
+        // SAFETY: the caller provides a live C string, borrowed only for this query.
+        unsafe { std::ffi::CStr::from_ptr(command_utf8) }
+            .to_str()
+            .unwrap_or("")
+    };
+    AgentHubCommandAccess {
+        remote: is_allowed_rpc_command(command),
+        read_only: desktop_command_is_read(command, hook_status),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn agenthub_ffi_pasteboard_limits() -> AgentHubPasteboardLimits {
+    use codex_desktop::clipboard::*;
+    AgentHubPasteboardLimits {
+        files: MAX_FILES,
+        image_bytes: CAPTURE_BYTES,
+        text_utf16_units: TEXT_BYTES,
+        path_utf16_units: MAX_PATH_UNITS,
+    }
+}
+
 pub struct AgentHubRuntime {
-    tokio_runtime: Option<tokio::runtime::Runtime>,
+    tokio_runtime: tokio::runtime::Runtime,
     state: DesktopState,
     remote: remote::RemoteConnections,
     bridge: Arc<codex_desktop::CodexDesktopBridge>,
     host: Arc<HostBridge>,
     ci_task: AbortHandle,
-    isolated: bool,
 }
 
 impl AgentHubRuntime {
@@ -50,12 +95,12 @@ impl AgentHubRuntime {
             .build()
             .map_err(|err| format!("failed to initialize async runtime: {err}"))?;
 
-        let (state, isolated) =
-            isolation::init_desktop_state(isolated_root).map_err(|err| err.to_string())?;
+        let state = isolation::init_desktop_state(isolated_root).map_err(|err| err.to_string())?;
 
+        let isolated = state.isolated;
         if !isolated {
             let helper_changed = if let Some(dir) = resource_dir {
-                resources::sync_agenthub_webd_helper_from_resource(dir)?
+                resources::sync_agenthub_webd_helper_from_resource(dir, state.platform())?
             } else {
                 false
             };
@@ -80,43 +125,41 @@ impl AgentHubRuntime {
         };
 
         Ok(Self {
-            tokio_runtime: Some(tokio_runtime),
+            tokio_runtime,
             state,
             remote,
             bridge,
             host,
             ci_task,
-            isolated,
         })
     }
 
-    pub fn shutdown_gracefully(mut self) {
+    pub fn shutdown_gracefully(self) {
         // Step 1 & 2: Reject new calls, wake pending oneshots, and cancel active NSOpenPanel.
         self.host.begin_shutdown();
         // Step 3: Abort CI observer task.
         self.ci_task.abort();
         // Step 4: Close owned SSH transport.
         self.remote.disconnect();
-        // Step 5 & 6: Unbind attachment receiver, close stream listeners, release DesktopWorkerLease,
-        // and shut down Tokio runtime within a bounded 2s deadline.
-        if let Some(rt) = self.tokio_runtime.take() {
-            let bridge = self.bridge.clone();
-            rt.block_on(async move {
-                bridge.shutdown().await;
-            });
-            drop(self.bridge);
-            rt.shutdown_timeout(Duration::from_secs(2));
-        }
-        if self.isolated {
-            isolation::set_isolated_mode(false);
-        }
+        stop_runtime(self.tokio_runtime, self.bridge.shutdown());
     }
+}
+
+fn stop_runtime(runtime: tokio::runtime::Runtime, cleanup: impl std::future::Future<Output = ()>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    runtime.block_on(async {
+        if tokio::time::timeout_at(deadline, cleanup).await.is_err() {
+            eprintln!("Desktop bridge shutdown timed out");
+        }
+    });
+    runtime.shutdown_timeout(deadline.saturating_duration_since(tokio::time::Instant::now()));
 }
 
 unsafe fn opt_cstr(ptr: *const c_char) -> Result<Option<String>, String> {
     if ptr.is_null() {
         return Ok(None);
     }
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let s = unsafe { CStr::from_ptr(ptr) }
         .to_str()
         .map_err(|_| "invalid UTF-8 string".to_string())?;
@@ -130,8 +173,8 @@ fn into_c_string_ptr(text: String) -> *mut c_char {
         text
     };
     CString::new(sanitized)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+        .expect("interior NULs removed")
+        .into_raw()
 }
 
 /// # Safety
@@ -145,31 +188,38 @@ pub unsafe extern "C" fn agenthub_ffi_init(
     out_error_utf8: *mut *mut c_char,
 ) -> i32 {
     if !out_runtime.is_null() {
+        // SAFETY: The checked C out-parameter points to a writable pointer slot for this call.
         unsafe { *out_runtime = std::ptr::null_mut() };
     }
     if !out_error_utf8.is_null() {
+        // SAFETY: The checked C out-parameter points to a writable pointer slot for this call.
         unsafe { *out_error_utf8 = std::ptr::null_mut() };
     }
     if out_runtime.is_null() {
         if !out_error_utf8.is_null() {
+            // SAFETY: The checked C out-parameter points to a writable pointer slot for this call.
             unsafe { *out_error_utf8 = into_c_string_ptr("out_runtime is null".into()) };
         }
         return -1;
     }
 
     let result = (|| -> Result<AgentHubRuntime, String> {
+        // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
         let res_dir = unsafe { opt_cstr(resource_dir_utf8) }?.map(PathBuf::from);
+        // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
         let iso_dir = unsafe { opt_cstr(isolated_root_utf8) }?.map(PathBuf::from);
         AgentHubRuntime::build(res_dir.as_deref(), iso_dir.as_deref(), callbacks)
     })();
 
     match result {
         Ok(runtime) => {
+            // SAFETY: The checked C out-parameter points to a writable pointer slot for this call.
             unsafe { *out_runtime = Box::into_raw(Box::new(runtime)) };
             0
         }
         Err(error) => {
             if !out_error_utf8.is_null() {
+                // SAFETY: The checked C out-parameter points to a writable pointer slot for this call.
                 unsafe { *out_error_utf8 = into_c_string_ptr(error) };
             }
             -1
@@ -184,6 +234,7 @@ pub unsafe extern "C" fn agenthub_ffi_shutdown(runtime: *mut AgentHubRuntime) {
     if runtime.is_null() {
         return;
     }
+    // SAFETY: Shutdown takes the single handle produced by init after all host borrows have ended.
     let boxed = unsafe { Box::from_raw(runtime) };
     boxed.shutdown_gracefully();
 }
@@ -193,6 +244,7 @@ pub unsafe extern "C" fn agenthub_ffi_shutdown(runtime: *mut AgentHubRuntime) {
 #[no_mangle]
 pub unsafe extern "C" fn agenthub_ffi_string_free(ptr: *mut c_char) {
     if !ptr.is_null() {
+        // SAFETY: The caller returns the unique CString allocation handed out by this library.
         unsafe { drop(CString::from_raw(ptr)) };
     }
 }
@@ -205,6 +257,7 @@ pub unsafe extern "C" fn agenthub_ffi_set_main_window_state(
     visible: bool,
     focused: bool,
 ) {
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         return;
     };
@@ -219,9 +272,11 @@ pub unsafe extern "C" fn agenthub_ffi_complete_choose_local_path(
     op_id: u64,
     path_or_null: *const c_char,
 ) {
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         return;
     };
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let path = unsafe { opt_cstr(path_or_null) }.ok().flatten();
     rt.host.complete_choose_local_path(op_id, path);
 }
@@ -234,6 +289,7 @@ pub unsafe extern "C" fn agenthub_ffi_complete_pasteboard_change_count(
     op_id: u64,
     count: i64,
 ) {
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         return;
     };
@@ -248,29 +304,11 @@ pub unsafe extern "C" fn agenthub_ffi_complete_write_pasteboard(
     op_id: u64,
     ok: bool,
 ) {
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         return;
     };
     rt.host.complete_write_pasteboard(op_id, ok);
-}
-
-/// # Safety
-/// `home_dir_utf8` must be null or a valid null-terminated UTF-8 path.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_read_legacy_webview_prefs(
-    home_dir_utf8: *const c_char,
-) -> *mut c_char {
-    let home = unsafe { opt_cstr(home_dir_utf8) }
-        .ok()
-        .flatten()
-        .map(PathBuf::from)
-        .or_else(dirs::home_dir);
-    let prefs = match home {
-        Some(dir) => legacy_prefs::read_legacy_webview_prefs(&dir),
-        None => legacy_prefs::LegacyWebviewPrefs::default(),
-    };
-    let json = serde_json::to_string(&prefs).unwrap_or_else(|_| "{}".to_string());
-    into_c_string_ptr(json)
 }
 
 /// # Safety
@@ -283,12 +321,15 @@ pub unsafe extern "C" fn agenthub_ffi_parse_gfm_markdown(
     let source = if len == 0 || utf8_ptr.is_null() {
         ""
     } else {
+        // SAFETY: The caller keeps the nonempty UTF-8 buffer readable for len bytes during parsing.
         let bytes = unsafe { std::slice::from_raw_parts(utf8_ptr.cast::<u8>(), len) };
         std::str::from_utf8(bytes).unwrap_or("")
     };
     let doc = gfm_markdown::parse_gfm_markdown(source);
-    let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{\"blocks\":[]}".to_string());
-    into_c_string_ptr(json)
+    match serde_json::to_string(&doc) {
+        Ok(json) => into_c_string_ptr(json),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// # Safety
@@ -303,18 +344,13 @@ pub unsafe extern "C" fn agenthub_ffi_invoke(
     callback_ctx: *mut std::ffi::c_void,
 ) {
     let sink = RpcSink::new(request_id, callback, callback_ctx);
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         sink.respond(Err("runtime is null".into()));
         return;
     };
-    if rt.host.is_closing() {
-        sink.respond(Err("应用正在关闭".into()));
-        return;
-    }
-    let Some(tokio_rt) = rt.tokio_runtime.as_ref() else {
-        sink.respond(Err("应用正在关闭".into()));
-        return;
-    };
+    let tokio_rt = &rt.tokio_runtime;
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let command = match unsafe { opt_cstr(command_utf8) } {
         Ok(Some(cmd)) => cmd,
         _ => {
@@ -322,6 +358,7 @@ pub unsafe extern "C" fn agenthub_ffi_invoke(
             return;
         }
     };
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let args = match unsafe { opt_cstr(args_json_utf8) } {
         Ok(Some(json)) => json,
         Ok(None) => "{}".to_string(),
@@ -334,7 +371,7 @@ pub unsafe extern "C" fn agenthub_ffi_invoke(
     let remote = rt.remote.clone();
     let bridge = rt.bridge.clone();
     let host = rt.host.clone();
-    let isolated = rt.isolated;
+    let isolated = rt.state.isolated;
     tokio_rt.spawn(async move {
         let ctx = DispatchContext {
             state: &state,
@@ -362,21 +399,14 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_attach(
 ) {
     let initial_sink = RpcSink::new(request_id, initial_cb, initial_ctx);
     let stream_sink = StreamSink::new(stream_cb, stream_ctx);
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         stream_sink.close();
         initial_sink.respond(Err("runtime is null".into()));
         return;
     };
-    if rt.host.is_closing() {
-        stream_sink.close();
-        initial_sink.respond(Err("应用正在关闭".into()));
-        return;
-    }
-    let Some(tokio_rt) = rt.tokio_runtime.as_ref() else {
-        stream_sink.close();
-        initial_sink.respond(Err("应用正在关闭".into()));
-        return;
-    };
+    let tokio_rt = &rt.tokio_runtime;
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
         Ok(Some(s)) => s,
         _ => {
@@ -429,6 +459,7 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_attachments(
 ) {
     let result_sink = RpcSink::new(request_id, result_cb, result_ctx);
     let event_stream = event_cb.map(|_| StreamSink::new(event_cb, event_ctx));
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         if let Some(s) = &event_stream {
             s.close();
@@ -436,20 +467,8 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_attachments(
         result_sink.respond(Err("runtime is null".into()));
         return;
     };
-    if rt.host.is_closing() {
-        if let Some(s) = &event_stream {
-            s.close();
-        }
-        result_sink.respond(Err("应用正在关闭".into()));
-        return;
-    };
-    let Some(tokio_rt) = rt.tokio_runtime.as_ref() else {
-        if let Some(s) = &event_stream {
-            s.close();
-        }
-        result_sink.respond(Err("应用正在关闭".into()));
-        return;
-    };
+    let tokio_rt = &rt.tokio_runtime;
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
         Ok(Some(s)) => s,
         _ => {
@@ -525,23 +544,19 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_paste(
     result_ctx: *mut std::ffi::c_void,
 ) {
     let result_sink = RpcSink::new(request_id, result_cb, result_ctx);
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         result_sink.respond(Err("runtime is null".into()));
         return;
     };
-    if rt.host.is_closing() {
-        result_sink.respond(Err("应用正在关闭".into()));
-        return;
-    }
-    let Some(tokio_rt) = rt.tokio_runtime.as_ref() else {
-        result_sink.respond(Err("应用正在关闭".into()));
-        return;
-    };
+    let tokio_rt = &rt.tokio_runtime;
+    // SAFETY: The caller lends the initialized pasteboard descriptor through this C entry.
     let Some(raw_pb) = (unsafe { raw_pasteboard.as_ref() }) else {
         result_sink.respond(Err("无法读取剪贴板附件".into()));
         return;
     };
     let snapshot =
+        // SAFETY: All nested pointer/length pairs are backed by the host snapshot until the copy returns.
         match unsafe { codex_desktop::clipboard::RawPasteboardSnapshot::from_raw(raw_pb) } {
             Ok(snap) => snap,
             Err(err) => {
@@ -549,6 +564,7 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_paste(
                 return;
             }
         };
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
         Ok(Some(s)) => s,
         _ => {
@@ -589,15 +605,12 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_drop_files(
     logical_x: f64,
     logical_y: f64,
 ) {
+    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
     let Some(rt) = (unsafe { runtime.as_ref() }) else {
         return;
     };
-    if rt.host.is_closing() {
-        return;
-    }
-    let Some(tokio_rt) = rt.tokio_runtime.as_ref() else {
-        return;
-    };
+    let tokio_rt = &rt.tokio_runtime;
+    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
     let Some(raw) = (unsafe { opt_cstr(paths_json_utf8) }).ok().flatten() else {
         return;
     };
@@ -618,3 +631,6 @@ pub unsafe extern "C" fn agenthub_ffi_desktop_drop_files(
 
 #[cfg(test)]
 mod contract_guard_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

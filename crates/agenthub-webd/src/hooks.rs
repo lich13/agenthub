@@ -18,7 +18,7 @@ pub(super) async fn handle_hook_stop_command(
         turn_id.as_deref(),
         &kind,
     )?;
-    let event = probe_runtime(config).build_event(event_input);
+    let event = build_probe_event(config, event_input);
     handle_built_probe_event(load_config, db, event).await
 }
 
@@ -85,7 +85,7 @@ pub(super) async fn handle_hook_request_user_input_confirm_command(
     let event_input = hook_request_user_input_event_input(&config, stdin_payload)?
         .with_body_selection_diagnostics(diagnostics);
     let db = open_panel_db(&config)?;
-    let event = probe_runtime(&config).build_event(event_input);
+    let event = build_probe_event(&config, event_input);
     record_probe_event_with_bark_timeout(
         &load_config,
         &db,
@@ -574,8 +574,7 @@ pub(super) fn hook_memory_suppression_reason(
 ) -> Option<&'static str> {
     let transcript_path = hook_transcript_path_for_identity(payload).flatten();
     let cwd = read_string_field(payload, &["cwd"]);
-    probe_runtime(config)
-        .hook_context_suppression_reason(cwd.as_deref(), transcript_path.as_deref())
+    ProbeRuntime::suppression_reason_for_config(config, cwd.as_deref(), transcript_path.as_deref())
         .filter(|_| hook_transcript_path_for_identity(payload).is_some())
 }
 

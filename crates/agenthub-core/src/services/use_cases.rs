@@ -10,7 +10,7 @@ use crate::{
         jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
         probe::ProbeUseCases,
         settings::SettingsUseCases,
-        system::{self, Capability, HostSurface, SystemCapabilities},
+        system::{self, HostSurface, SystemCapabilities},
         threads::{self, ThreadDetailPlan, ThreadDetailRequest, ThreadListPlan, ThreadsQuery},
     },
     update::{analyze_job_failure, JobFailureAnalysis},
@@ -30,7 +30,6 @@ pub struct JobResponse {
 pub struct AgentHubUseCases<'a> {
     config: Option<&'a Config>,
     platform: &'a PlatformPaths,
-    host_surface: HostSurface,
 }
 
 impl<'a> AgentHubUseCases<'a> {
@@ -38,7 +37,6 @@ impl<'a> AgentHubUseCases<'a> {
         Self {
             config: None,
             platform,
-            host_surface: HostSurface::default_for_platform(platform),
         }
     }
 
@@ -46,19 +44,6 @@ impl<'a> AgentHubUseCases<'a> {
         Self {
             config: Some(config),
             platform,
-            host_surface: HostSurface::default_for_platform(platform),
-        }
-    }
-
-    pub fn with_config_for_surface(
-        config: &'a Config,
-        platform: &'a PlatformPaths,
-        host_surface: HostSurface,
-    ) -> Self {
-        Self {
-            config: Some(config),
-            platform,
-            host_surface,
         }
     }
 
@@ -67,11 +52,6 @@ impl<'a> AgentHubUseCases<'a> {
         db: &crate::db::PanelDb,
         request: crate::github_ci::Request,
     ) -> Result<crate::github_ci::Snapshot> {
-        system::require_capability_for_surface(
-            self.platform,
-            self.host_surface,
-            Capability::Probe,
-        )?;
         crate::github_ci::status(
             db,
             self.config
@@ -86,60 +66,58 @@ impl<'a> AgentHubUseCases<'a> {
         }
     }
 
-    pub fn grok(self) -> GrokUseCases {
-        GrokUseCases {
-            paths: crate::grok::GrokPaths::default_for_user(),
-        }
+    pub fn grok(self) -> Result<GrokUseCases> {
+        Ok(GrokUseCases {
+            paths: crate::grok::GrokPaths::default_for_user()?,
+        })
     }
 
-    pub fn claude(self) -> ClaudeUseCases {
-        ClaudeUseCases {
-            paths: crate::claude::ClaudePaths::default_for_user(),
-        }
+    pub fn claude(self) -> Result<ClaudeUseCases> {
+        Ok(ClaudeUseCases {
+            paths: crate::claude::ClaudePaths::default_for_user()?,
+        })
     }
 
-    pub fn antigravity(self) -> AntigravityUseCases {
-        AntigravityUseCases {
-            paths: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
-        }
+    pub fn antigravity(self) -> Result<AntigravityUseCases> {
+        Ok(AntigravityUseCases {
+            paths: crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+        })
     }
 
-    pub fn grokbot(self) -> GrokBotUseCases {
-        GrokBotUseCases {
-            paths: crate::grokbot::GrokBotPaths::default_for_user(),
-        }
+    pub fn grokbot(self) -> Result<GrokBotUseCases> {
+        Ok(GrokBotUseCases {
+            paths: crate::grokbot::GrokBotPaths::default_for_user()?,
+        })
     }
 
-    pub fn dsh(self) -> DshUseCases {
-        DshUseCases {
-            paths: crate::dsh::DshPaths::default_for_user(),
-        }
+    pub fn dsh(self) -> Result<DshUseCases> {
+        Ok(DshUseCases {
+            paths: crate::dsh::DshPaths::default_for_user()?,
+        })
     }
 
-    pub fn jobs(self) -> JobUseCases<'a> {
-        JobUseCases {
-            platform: self.platform,
-        }
+    pub fn jobs(self) -> JobUseCases {
+        JobUseCases
     }
 
     pub fn sessions(
         self,
         codex: crate::codex::CodexPaths,
-    ) -> crate::services::sessions::SessionUseCases {
-        crate::services::sessions::SessionUseCases {
+    ) -> Result<crate::services::sessions::SessionUseCases> {
+        Ok(crate::services::sessions::SessionUseCases {
             platform: self.platform.clone(),
             codex,
-            grok: crate::grok::GrokPaths::default_for_user(),
-            claude: crate::claude::ClaudePaths::default_for_user(),
-            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
-            dsh: crate::dsh::DshPaths::default_for_user(),
-        }
+            grok: crate::grok::GrokPaths::default_for_user()?,
+            claude: crate::claude::ClaudePaths::default_for_user()?,
+            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+            dsh: crate::dsh::DshPaths::default_for_user()?,
+        })
     }
 
     pub fn search(
         self,
         codex: crate::codex::CodexPaths,
-    ) -> crate::services::search::SearchUseCases {
+    ) -> Result<crate::services::search::SearchUseCases> {
         crate::services::search::SearchUseCases::new(self.platform, codex)
     }
 
@@ -160,12 +138,10 @@ impl<'a> AgentHubUseCases<'a> {
         ProbeUseCases::new(self.platform)
     }
 
-    pub fn system(self) -> Result<SystemUseCases<'a>> {
-        Ok(SystemUseCases {
-            config: self.config_required()?,
-            platform: self.platform,
-            host_surface: self.host_surface,
-        })
+    pub fn system(self) -> SystemUseCases {
+        SystemUseCases {
+            host_surface: HostSurface::default_for_platform(self.platform),
+        }
     }
 
     fn config_required(self) -> Result<&'a Config> {
@@ -222,7 +198,6 @@ impl<'a> ThreadUseCases<'a> {
         paths: &crate::codex::CodexPaths,
         request: &crate::codex::subagents::SubagentDetailRequest,
     ) -> Result<crate::codex::subagents::SubagentDetailResponse> {
-        system::require_capability(self.platform, Capability::ThreadSubagents)?;
         crate::codex::subagents::read_subagent_detail(paths, request)
     }
 
@@ -259,7 +234,6 @@ impl<'a> ThreadUseCases<'a> {
         self,
         paths: &crate::codex::CodexPaths,
     ) -> Result<crate::codex::account_scope::CodexAccountScopeStatus> {
-        system::require_capability(self.platform, Capability::ThreadCleanup)?;
         Ok(crate::codex::account_scope::status(paths))
     }
 
@@ -267,24 +241,19 @@ impl<'a> ThreadUseCases<'a> {
         self,
         paths: &crate::codex::CodexPaths,
     ) -> Result<crate::codex::account_scope::CodexAccountScopeResult> {
-        system::require_capability(self.platform, Capability::ThreadCleanup)?;
         crate::codex::account_scope::clear(paths)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct JobUseCases<'a> {
-    platform: &'a PlatformPaths,
-}
+pub struct JobUseCases;
 
-impl<'a> JobUseCases<'a> {
+impl JobUseCases {
     pub fn list(self, limit: Option<u32>) -> Result<u32> {
-        system::require_capability(self.platform, Capability::JobHistory)?;
         Ok(normalize_job_list_limit(limit))
     }
 
     pub fn detail(self, job_id: &str) -> Result<String> {
-        system::require_capability(self.platform, Capability::JobHistory)?;
         required_job_id(job_id)
     }
 
@@ -320,7 +289,6 @@ impl<'a> CleanupUseCases<'a> {
         owner: String,
         request: crate::archive::hidden_scan::HiddenScanRequest,
     ) -> Result<crate::archive::HiddenThreadDeletePlan> {
-        system::require_capability(self.platform, Capability::ThreadCleanup)?;
         crate::archive::hidden_scan::request(paths, owner, request).await
     }
 }
@@ -359,13 +327,11 @@ pub fn job_response(job: JobRecord) -> JobResponse {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SystemUseCases<'a> {
-    config: &'a Config,
-    platform: &'a PlatformPaths,
+pub struct SystemUseCases {
     host_surface: HostSurface,
 }
 
-impl<'a> SystemUseCases<'a> {
+impl SystemUseCases {
     pub fn runtime_capabilities(self) -> system::SystemCapabilitiesResponse {
         system::SystemCapabilitiesResponse {
             api_version: system::API_VERSION,
@@ -375,7 +341,7 @@ impl<'a> SystemUseCases<'a> {
     }
 
     pub fn capabilities(self) -> SystemCapabilities {
-        system::system_capabilities_for_surface(self.config, self.platform, self.host_surface)
+        system::system_capabilities_for_surface(self.host_surface)
     }
 }
 

@@ -1,6 +1,6 @@
 //! AgentHub-owned outgoing messages only. This never reads or writes Codex's
 //! native queue/database. The adapter supplies a dedicated Keychain-backed key;
-//! it must not reuse PanelDb's development fallback encryption key.
+//! notification settings use a separate key.
 use super::PanelDb;
 use crate::crypto::SecretBox;
 use anyhow::{anyhow, ensure, Result};
@@ -97,12 +97,14 @@ impl DesktopLedger {
         ensure!(
             metadata.is_file()
                 && metadata.nlink() == 1
+                // SAFETY: Reading the process UID takes no pointers or arguments.
                 && metadata.uid() == unsafe { libc::geteuid() }
                 && metadata.mode() & 0o077 == 0,
             "desktop queue ownership could not be verified"
         );
         // SAFETY: this descriptor is valid and retained for the entire worker.
         ensure!(
+            // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
             unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
             "desktop queue is owned by another AgentHub process"
         );
@@ -119,7 +121,10 @@ impl DesktopLedger {
             plaintext.len() <= MAX_BODY_BYTES,
             "desktop submission is too large"
         );
-        let (ciphertext, nonce) = self.crypto.encrypt(&plaintext).map_err(|_| safe_error())?;
+        let (ciphertext, nonce) = self
+            .crypto
+            .encrypt(&["desktop_submission", source, thread, id], &plaintext)
+            .map_err(|_| safe_error())?;
         let mut conn = self.db.conn.lock().map_err(|_| safe_error())?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -132,7 +137,7 @@ impl DesktopLedger {
         ).optional().map_err(|_| safe_error())? {
             ensure!(existing_source == source && existing_thread == thread, "desktop submission identity changed");
             if let (Some(cipher), Some(nonce)) = (existing_cipher, existing_nonce) {
-                ensure!(self.crypto.decrypt(&cipher, &nonce).map_err(|_| safe_error())? == plaintext,
+                ensure!(self.crypto.decrypt(&["desktop_submission", source, thread, id], &cipher, &nonce).map_err(|_| safe_error())? == plaintext,
                     "desktop submission identity changed");
             }
             return Ok(());
@@ -151,7 +156,7 @@ impl DesktopLedger {
         tx.execute(
             "INSERT INTO codex_desktop_submissions(id,source_id,thread_id,status,ciphertext,nonce,created_at,updated_at)
              VALUES(?1,?2,?3,'queued',?4,?5,?6,?6)",
-            params![id,source,thread,ciphertext,nonce,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,ciphertext,nonce,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         tx.execute(
             "DELETE FROM codex_desktop_submissions WHERE id IN (
@@ -198,7 +203,16 @@ impl DesktopLedger {
             .map(|(mut record, cipher, nonce)| {
                 let plaintext = self
                     .crypto
-                    .decrypt(&cipher, &nonce)
+                    .decrypt(
+                        &[
+                            "desktop_submission",
+                            &record.source_id,
+                            &record.thread_id,
+                            &record.id,
+                        ],
+                        &cipher,
+                        &nonce,
+                    )
                     .map_err(|_| safe_error())?;
                 let mut payload: Value =
                     serde_json::from_slice(&plaintext).map_err(|_| safe_error())?;
@@ -226,7 +240,7 @@ impl DesktopLedger {
                 AND status IN ('dispatching','outcome_unknown'))
              AND id=(SELECT id FROM codex_desktop_submissions WHERE source_id=?2 AND thread_id=?3
                 AND status IN ('queued','held') ORDER BY rowid LIMIT 1)",
-            params![id,source,thread,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         Ok(changed == 1)
     }
@@ -240,7 +254,7 @@ impl DesktopLedger {
              WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='queued'
              AND NOT EXISTS(SELECT 1 FROM codex_desktop_submissions WHERE source_id=?2 AND thread_id=?3
                 AND status IN ('dispatching','outcome_unknown'))",
-            params![id,source,thread,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         Ok(changed == 1)
     }
@@ -255,7 +269,7 @@ impl DesktopLedger {
         let changed = conn.execute(
             "UPDATE codex_desktop_submissions SET status='accepted',turn_id=?4,ciphertext=NULL,nonce=NULL,updated_at=?5
              WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status IN ('dispatching','outcome_unknown')",
-            params![id,source,thread,turn_id,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,turn_id,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         Ok(changed == 1)
     }
@@ -269,7 +283,7 @@ impl DesktopLedger {
             .execute(
                 "UPDATE codex_desktop_submissions SET status='outcome_unknown',updated_at=?4
              WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='dispatching'",
-                params![id, source, thread, chrono::Utc::now().timestamp_millis()],
+                params![id, source, thread, jiff::Timestamp::now().as_millisecond()],
             )
             .map_err(|_| safe_error())?;
         Ok(())
@@ -285,7 +299,7 @@ impl DesktopLedger {
             .execute(
                 "UPDATE codex_desktop_submissions SET status='held',updated_at=?4
              WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='dispatching'",
-                params![id, source, thread, chrono::Utc::now().timestamp_millis()],
+                params![id, source, thread, jiff::Timestamp::now().as_millisecond()],
             )
             .map_err(|_| safe_error())?;
         Ok(())
@@ -296,7 +310,7 @@ impl DesktopLedger {
         let changed = self.db.conn.lock().map_err(|_| safe_error())?.execute(
             "UPDATE codex_desktop_submissions SET status='cancelled',ciphertext=NULL,nonce=NULL,updated_at=?4
              WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status IN ('queued','held')",
-            params![id,source,thread,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         Ok(changed == 1)
     }
@@ -311,7 +325,7 @@ impl DesktopLedger {
         validate_identity(source, thread, id)?;
         self.db.conn.lock().map_err(|_|safe_error())?.execute(
             "UPDATE codex_desktop_submissions SET status='held',updated_at=?4 WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='queued'",
-            params![id,source,thread,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_|safe_error())?;
         Ok(())
     }
@@ -335,7 +349,7 @@ impl DesktopLedger {
         for id in ids {
             validate_identity(source, thread, id)?;
             tx.execute("UPDATE codex_desktop_submissions SET status='queued',updated_at=?4 WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='held'",
-                params![id,source,thread,chrono::Utc::now().timestamp_millis()]).map_err(|_|safe_error())?;
+                params![id,source,thread,jiff::Timestamp::now().as_millisecond()]).map_err(|_|safe_error())?;
         }
         tx.commit().map_err(|_| safe_error())
     }
@@ -346,7 +360,7 @@ impl DesktopLedger {
         validate_identity(source, thread, id)?;
         self.db.conn.lock().map_err(|_|safe_error())?.execute(
             "UPDATE codex_desktop_submissions SET status='dismissed',ciphertext=NULL,nonce=NULL,updated_at=?4 WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='outcome_unknown'",
-            params![id,source,thread,chrono::Utc::now().timestamp_millis()],
+            params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map(|changed|changed==1).map_err(|_|safe_error())
     }
 
@@ -364,7 +378,7 @@ impl DesktopLedger {
                     thread,
                     if hold { "held" } else { "queued" },
                     if hold { "queued" } else { "held" },
-                    chrono::Utc::now().timestamp_millis()
+                    jiff::Timestamp::now().as_millisecond()
                 ],
             )
             .map_err(|_| safe_error())?;
@@ -378,7 +392,7 @@ impl DesktopLedger {
         self.db.conn.lock().map_err(|_| safe_error())?.execute(
             "UPDATE codex_desktop_submissions SET status=CASE status WHEN 'dispatching' THEN 'outcome_unknown' ELSE 'held' END,
                 updated_at=?2 WHERE source_id=?1 AND status IN ('dispatching','queued')",
-            params![source,chrono::Utc::now().timestamp_millis()],
+            params![source,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_| safe_error())?;
         Ok(())
     }

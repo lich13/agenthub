@@ -150,9 +150,10 @@ impl NativeFixture {
         &self,
         request: SessionAttachmentRequest,
     ) -> anyhow::Result<SessionAttachmentResponse> {
-        let platform =
-            PlatformPaths::for_desktop_kind_with_home(PlatformKind::Linux, &self.directory);
-        let mut sessions = AgentHubUseCases::new(&platform).sessions(self.paths.clone());
+        let platform = PlatformPaths::macos(&self.directory);
+        let mut sessions = AgentHubUseCases::new(&platform)
+            .sessions(self.paths.clone())
+            .unwrap();
         sessions.grok.home = self.directory.join("grok");
         sessions.claude.config = self.directory.join("claude");
         sessions.claude.projects = sessions.claude.config.join("projects");
@@ -2211,6 +2212,7 @@ fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
     assert_eq!(fixture.read_attachment(request).unwrap().base64, PNG);
     let platform = PlatformPaths::for_kind_with_home(PlatformKind::Linux, &fixture.directory);
     let found = SearchUseCases::new(&platform, fixture.paths.clone())
+        .unwrap()
         .search(SessionSearchRequest {
             provider: SessionProvider::Codex,
             scope: SearchScope::Thread,

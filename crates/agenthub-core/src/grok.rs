@@ -23,13 +23,10 @@ pub struct GrokPaths {
 }
 
 impl GrokPaths {
-    pub fn default_for_user() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        Self {
-            home: env::var_os("GROK_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".grok")),
-        }
+    pub fn default_for_user() -> Result<Self> {
+        Ok(Self {
+            home: crate::platform::provider_root("GROK_HOME", ".grok")?,
+        })
     }
     pub fn sessions(&self) -> PathBuf {
         self.home.join("sessions")
@@ -175,9 +172,12 @@ fn list_grok_sessions_from_dirs(
         }
     }
     result.sort_by_cached_key(|session| {
-        (std::cmp::Reverse(session.updated_at.as_deref().and_then(
-            |time| chrono::DateTime::parse_from_rfc3339(time).ok(),
-        )),)
+        (std::cmp::Reverse(
+            session
+                .updated_at
+                .as_deref()
+                .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
+        ),)
     });
     result.truncate(limit.clamp(1, 200));
     let active = activity::Snapshot::capture_readonly(paths);
@@ -346,13 +346,12 @@ fn notification_snapshots_from_dirs(
             let title =
                 crate::native_probe::notification_title(&summary.title, &summary.id, &summary.cwd);
             if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
-                if let Some(pos) = cache.entries.iter().position(|e| {
+                if let Some(mut hit) = crate::lru::take_first(&mut cache.entries, |e| {
                     e.session_dir == canonical_dir
                         && e.identity == identity
                         && e.stamp == stamp
                         && e.title == title
                 }) {
-                    let mut hit = cache.entries.remove(pos).expect("grok probe cache entry");
                     hit.last_accessed = std::time::Instant::now();
                     let out = hit.snapshot.clone();
                     cache.entries.push_back(hit);
@@ -390,25 +389,12 @@ fn notification_snapshots_from_dirs(
                             .sum::<usize>()) as u64;
                 if bytes <= crate::resource_limits::NATIVE_PROBE_CACHE_BYTES {
                     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
-                        if let Some(pos) = cache
-                            .entries
-                            .iter()
-                            .position(|e| e.session_dir == canonical_dir)
-                        {
-                            let old = cache.entries.remove(pos).expect("located cache entry");
+                        if let Some(old) = crate::lru::take_first(&mut cache.entries, |e| {
+                            e.session_dir == canonical_dir
+                        }) {
                             cache.bytes -= old.bytes;
                         }
-                        while cache.entries.len() >= crate::resource_limits::CLAUDE_SUMMARY_ENTRIES
-                            || cache.bytes + bytes
-                                > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES
-                        {
-                            if let Some(old) = cache.entries.pop_front() {
-                                cache.bytes -= old.bytes;
-                            } else {
-                                break;
-                            }
-                        }
-                        cache.bytes += bytes;
+                        let total = cache.bytes + bytes;
                         cache.entries.push_back(GrokProbeCacheEntry {
                             session_dir: canonical_dir,
                             identity,
@@ -418,6 +404,14 @@ fn notification_snapshots_from_dirs(
                             bytes,
                             last_accessed: std::time::Instant::now(),
                         });
+                        cache.bytes = crate::lru::trim(
+                            &mut cache.entries,
+                            crate::resource_limits::CLAUDE_SUMMARY_ENTRIES,
+                            total,
+                            crate::resource_limits::NATIVE_PROBE_CACHE_BYTES,
+                            |_| true,
+                            |entry| entry.bytes,
+                        );
                     }
                 }
             }

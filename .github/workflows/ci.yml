@@ -13,6 +13,10 @@ concurrency:
 permissions:
   contents: read
 
+# The checkout also contains a stable toolchain file for local development.
+env:
+  RUSTUP_TOOLCHAIN: 1.100.0
+
 jobs:
   backend:
     name: Backend & contract checks
@@ -22,19 +26,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
-          toolchain: stable
+          toolchain: 1.100.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: node
-          check-latest: true
+          node-version: '26.13.1'
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-agenthub-cargo-backend-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-stable-agenthub-cargo-backend-
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-agenthub-cargo-backend-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-agenthub-cargo-backend-
       - run: python3 scripts/privacy-check.py --git-objects
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
@@ -46,7 +49,7 @@ jobs:
         id: cargo-audit-cache
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-audit-0.22.2-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-audit-0.22.2-${{ hashFiles('Cargo.lock') }}
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked --force
@@ -67,7 +70,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
-          toolchain: stable
+          toolchain: 1.100.0
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |

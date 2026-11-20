@@ -4,6 +4,27 @@ import SwiftUI
 import XCTest
 
 final class ProbeAndSettingsConsoleTests: XCTestCase {
+    func testProtocolTwoRequiredFieldsAndConfiguredHome() throws {
+        let decoder = JSONDecoder()
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: ProbeSettingsFixture.data) as? [String: Any])
+        var settings = fixture
+        var codex = try XCTUnwrap(settings["codex"] as? [String: Any])
+        codex["configured_codex_home"] = "/fixture/profile"
+        settings["codex"] = codex
+        let view = try decoder.decode(ProbeSettingsView.self, from: JSONSerialization.data(withJSONObject: settings))
+        XCTAssertEqual(ProbeSettingsDraft.from(view).codexHome, "/fixture/profile")
+        var probe = try XCTUnwrap(settings["probe"] as? [String: Any])
+        for invalid in [nil, "15"] {
+            probe["poll_seconds"] = invalid
+            settings["probe"] = probe
+            let data = try JSONSerialization.data(withJSONObject: settings)
+            XCTAssertThrowsError(try decoder.decode(ProbeSettingsView.self, from: data))
+        }
+        let summary = #"{"id":"fixture","title":"T","status":"Recent","message_count":0}"#
+        XCTAssertNil(try decoder.decode(ThreadSummary.self, from: Data(summary.utf8)).storageSize)
+        XCTAssertThrowsError(try decoder.decode(ThreadSummary.self, from: Data(summary.replacingOccurrences(of: "message_count", with: "messageCount").utf8)))
+    }
+
     func testGithubCiCatalogSelectionAndTop20RunFilter() {
         let repos = [
             GithubCiRepository(id: 1, fullName: "org/active", archived: false),
@@ -39,7 +60,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
     }
 
     func testProbeSettingsDraftValidationAndSavePayloadContract() throws {
-        var draft = ProbeSettingsDraft.from(ProbeSettingsView())
+        var draft = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
         XCTAssertTrue(draft.validationErrors().isEmpty)
 
         draft.pollSecondsText = "4"

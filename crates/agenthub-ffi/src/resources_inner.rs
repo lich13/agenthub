@@ -1,17 +1,15 @@
 use std::path::Path;
 
 const AGENTHUB_WEBD_RESOURCE_NAME: &str = "agenthub-webd";
-const AGENTHUB_WEBD_HELPER_PLACEHOLDER: &[u8] = b"AGENTHUB_HELPER_PLACEHOLDER";
 
-pub(crate) fn sync_agenthub_webd_helper_from_resource(resource_dir: &Path) -> Result<bool, String> {
+pub(crate) fn sync_agenthub_webd_helper_from_resource(
+    resource_dir: &Path,
+    platform: &agenthub_core::platform::PlatformPaths,
+) -> Result<bool, String> {
     let source = resource_dir.join(AGENTHUB_WEBD_RESOURCE_NAME);
     if !source.is_file() {
         return Ok(false);
     }
-    if is_agenthub_webd_helper_placeholder(&source).map_err(|err| err.to_string())? {
-        return Ok(false);
-    }
-    let platform = agenthub_core::platform::PlatformPaths::desktop_current();
     let target = platform.daemon_binary();
     sync_agenthub_webd_helper_file(&source, &target).map_err(|err| err.to_string())
 }
@@ -30,16 +28,6 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
         helper_changed,
     )
     .map_err(|err| err.to_string())
-}
-
-fn is_agenthub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
-    use std::io::Read;
-
-    let file = std::fs::File::open(path)?;
-    let mut prefix = Vec::with_capacity(AGENTHUB_WEBD_HELPER_PLACEHOLDER.len());
-    file.take(AGENTHUB_WEBD_HELPER_PLACEHOLDER.len() as u64)
-        .read_to_end(&mut prefix)?;
-    Ok(prefix == AGENTHUB_WEBD_HELPER_PLACEHOLDER)
 }
 
 fn files_have_same_len_and_bytes(source: &Path, target: &Path) -> bool {
@@ -110,7 +98,6 @@ fn sync_agenthub_webd_helper_file(source: &Path, target: &Path) -> std::io::Resu
     result.map(|()| true)
 }
 
-#[cfg(unix)]
 fn ensure_executable(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -118,11 +105,6 @@ fn ensure_executable(path: &Path) -> std::io::Result<()> {
     let mut permissions = metadata.permissions();
     permissions.set_mode(permissions.mode() | 0o755);
     std::fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn ensure_executable(_path: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -141,67 +123,55 @@ mod tests {
         assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
 
         assert_eq!(std::fs::read(&target).unwrap(), b"#!/bin/sh\nexit 0\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            let first_meta = std::fs::metadata(&target).unwrap();
-            assert_ne!(
-                first_meta.permissions().mode() & 0o111,
-                0,
-                "helper must be executable"
-            );
-            let first_ino = first_meta.ino();
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let first_meta = std::fs::metadata(&target).unwrap();
+        assert_ne!(
+            first_meta.permissions().mode() & 0o111,
+            0,
+            "helper must be executable"
+        );
+        let first_ino = first_meta.ino();
 
-            // Repeat sync with identical bytes keeps existing inode untouched.
-            assert!(!sync_agenthub_webd_helper_file(&source, &target).unwrap());
-            assert_eq!(std::fs::metadata(&target).unwrap().ino(), first_ino);
+        // Repeat sync with identical bytes keeps existing inode untouched.
+        assert!(!sync_agenthub_webd_helper_file(&source, &target).unwrap());
+        assert_eq!(std::fs::metadata(&target).unwrap().ino(), first_ino);
 
-            // Updating helper bytes replaces via a temporary file + rename (new inode),
-            // avoiding macOS arm64 vnode signature cache invalidation (SIGKILL 137).
-            std::fs::write(&source, b"#!/bin/sh\necho v2\nexit 0\n").unwrap();
-            assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
-            let second_meta = std::fs::metadata(&target).unwrap();
-            assert_eq!(
-                std::fs::read(&target).unwrap(),
-                b"#!/bin/sh\necho v2\nexit 0\n"
-            );
-            assert_ne!(
-                second_meta.ino(),
-                first_ino,
-                "updated helper must be replaced with a new inode via atomic rename"
-            );
+        // Updating helper bytes replaces via a temporary file + rename (new inode),
+        // avoiding macOS arm64 vnode signature cache invalidation (SIGKILL 137).
+        std::fs::write(&source, b"#!/bin/sh\necho v2\nexit 0\n").unwrap();
+        assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
+        let second_meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"#!/bin/sh\necho v2\nexit 0\n"
+        );
+        assert_ne!(
+            second_meta.ino(),
+            first_ino,
+            "updated helper must be replaced with a new inode via atomic rename"
+        );
 
-            // Same-length content update also replaces via atomic rename.
-            let second_ino = second_meta.ino();
-            std::fs::write(&source, b"#!/bin/sh\necho v3\nexit 0\n").unwrap();
-            assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
-            let third_meta = std::fs::metadata(&target).unwrap();
-            assert_eq!(
-                std::fs::read(&target).unwrap(),
-                b"#!/bin/sh\necho v3\nexit 0\n"
-            );
-            assert_ne!(third_meta.ino(), second_ino);
+        // Same-length content update also replaces via atomic rename.
+        let second_ino = second_meta.ino();
+        std::fs::write(&source, b"#!/bin/sh\necho v3\nexit 0\n").unwrap();
+        assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
+        let third_meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"#!/bin/sh\necho v3\nexit 0\n"
+        );
+        assert_ne!(third_meta.ino(), second_ino);
 
-            // Unreadable same-length target is treated as different and replaced atomically.
-            let third_ino = third_meta.ino();
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
-            assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
-            let fourth_meta = std::fs::metadata(&target).unwrap();
-            assert_ne!(fourth_meta.ino(), third_ino);
-            assert_eq!(
-                std::fs::read(&target).unwrap(),
-                b"#!/bin/sh\necho v3\nexit 0\n"
-            );
-        }
-    }
-
-    #[test]
-    fn helper_placeholder_detection_prevents_dev_resource_sync() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("agenthub-webd");
-        std::fs::write(&source, b"AGENTHUB_HELPER_PLACEHOLDER\nnot a binary\n").unwrap();
-
-        assert!(is_agenthub_webd_helper_placeholder(&source).unwrap());
+        // Unreadable same-length target is treated as different and replaced atomically.
+        let third_ino = third_meta.ino();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(sync_agenthub_webd_helper_file(&source, &target).unwrap());
+        let fourth_meta = std::fs::metadata(&target).unwrap();
+        assert_ne!(fourth_meta.ino(), third_ino);
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"#!/bin/sh\necho v3\nexit 0\n"
+        );
     }
 
     #[test]

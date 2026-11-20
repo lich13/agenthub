@@ -362,34 +362,29 @@ pub(crate) fn is_writer_locked(paths: &CodexPaths, id: &str) -> bool {
     if !lock_path.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-        let Ok(file) = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&lock_path)
-        else {
-            return false;
-        };
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-        if rc == 0 {
-            unsafe {
-                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-            }
-            false
-        } else {
-            let err = std::io::Error::last_os_error();
-            matches!(
-                err.raw_os_error(),
-                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-            )
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let Ok(file) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&lock_path)
+    else {
+        return false;
+    };
+    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+    if rc == 0 {
+        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
+        unsafe {
+            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
         }
-    }
-    #[cfg(not(unix))]
-    {
         false
+    } else {
+        let err = std::io::Error::last_os_error();
+        matches!(
+            err.raw_os_error(),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+        )
     }
 }
 
@@ -436,29 +431,15 @@ pub(crate) fn ensure_ids_not_running(
             }
             for field in ["status", "state"] {
                 ensure!(
-                    !row.get(field).and_then(Value::as_str).is_some_and(|s| {
-                        matches!(
-                            s.to_ascii_lowercase().as_str(),
-                            "running"
-                                | "active"
-                                | "in_progress"
-                                | "inprogress"
-                                | "pending"
-                                | "submitting"
-                        )
-                    }),
+                    !row.get(field)
+                        .and_then(Value::as_str)
+                        .is_some_and(is_active_status),
                     "线程 {id} 正在运行，无法清理"
                 );
             }
         }
         for &(table, key) in &active_job_tables {
-            let active: bool = conn.query_row(
-                &format!(
-                    "SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"
-                ),
-                [id],
-                |r| r.get(0),
-            )?;
+            let active = has_active_job(conn, table, key, id)?;
             ensure!(!active, "线程 {id} 仍有关联的运行任务，无法清理");
         }
     }

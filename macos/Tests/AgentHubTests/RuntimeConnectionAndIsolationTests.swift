@@ -9,7 +9,7 @@ extension RuntimeTransport where Self == MockRuntimeTransport {
             case "remote.get":
                 Data(#"{"target":"local","revision":1,"configured":false,"machines":[]}"#.utf8)
             case "system.capabilities":
-                Data(#"{"host_surface":"desktop_embedded_tauri","capabilities":{"grokbot_sessions":true}}"#.utf8)
+                protocol2CapabilitiesFixture(remote: false)
             default:
                 Data("[]".utf8)
             }
@@ -74,17 +74,13 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
                 {"target":"remote","revision":3,"sshHost":"dev-box","configured":true,"activeMachineId":"m1","activeMachineName":"Dev Box","machines":[{"id":"m1","name":"Dev Box","sshHost":"dev-box","useSudo":true}]}
                 """.utf8)
             case "remote.invoke":
-                return Data("""
-                {"api_version":2,"host_surface":"linux_server_api","capabilities":{"threads":true,"jobs":true,"probe":true,"settings":true,"job_history":true,"app_updater":true,"thread_cleanup":true,"thread_archive_actions":true,"systemd":true,"linux_update_job":true,"prune_backups":true,"github_ci":true,"grokbot_sessions":false}}
-                """.utf8)
+                return protocol2CapabilitiesFixture(remote: true)
             case "remote.select":
                 return Data("""
                 {"target":"local","revision":4,"sshHost":null,"configured":true,"activeMachineId":null,"activeMachineName":null,"machines":[]}
                 """.utf8)
             case "system.capabilities":
-                return Data("""
-                {"api_version":2,"host_surface":"desktop_embedded_tauri","capabilities":{"threads":true,"jobs":true,"probe":true,"settings":true,"job_history":true,"app_updater":true,"thread_cleanup":true,"thread_archive_actions":true,"systemd":false,"linux_update_job":false,"prune_backups":false,"grokbot_sessions":true}}
-                """.utf8)
+                return protocol2CapabilitiesFixture(remote: false)
             default:
                 return Data("{}".utf8)
             }
@@ -134,7 +130,7 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
             case "remote.get":
                 return Data(#"{"target":"local","revision":1,"configured":true}"#.utf8)
             case "system.capabilities":
-                return Data(#"{"host_surface":"desktop_embedded_tauri","capabilities":{"grokbot_sessions":true}}"#.utf8)
+                return protocol2CapabilitiesFixture(remote: false)
             case "remote.select":
                 let target = try XCTUnwrap(req["target"] as? String)
                 let id = req["machineId"] as? String ?? ""
@@ -151,9 +147,7 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
                         var it = releaseCaps.makeAsyncIterator()
                         _ = await it.next()
                     }
-                    return try JSONSerialization.data(withJSONObject: [
-                        "host_surface": "linux_server_api", "capabilities": ["prune_backups": revision == 2],
-                    ])
+                    return protocol2CapabilitiesFixture(remote: true, pruneBackups: revision == 2)
                 case "threads.detail":
                     XCTAssertEqual((req["args"] as? [String: String])?["id"], "shared-id")
                     if revision == 2 {
@@ -250,7 +244,7 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
                 return Data(#"{"target":"remote","revision":1,"configured":true,"activeMachineId":"next"}"#.utf8)
             case "remote.invoke":
                 XCTAssertTrue(args.contains("system.capabilities"))
-                return Data(#"{"host_surface":"linux_server_api","capabilities":{}}"#.utf8)
+                return protocol2CapabilitiesFixture(remote: true)
             default:
                 throw AgentHubFFIError("unexpected command")
             }

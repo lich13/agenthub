@@ -28,10 +28,17 @@ fn identity_record(delivery: &NativeDelivery, identity: &str) -> Result<String> 
 }
 
 impl PanelDb {
-    fn decode_native_payload(&self, ciphertext: Vec<u8>, nonce: Vec<u8>) -> Result<NativeDelivery> {
-        Ok(serde_json::from_slice(
-            &self.crypto.decrypt(&ciphertext, &nonce)?,
-        )?)
+    fn decode_native_payload(
+        &self,
+        key: String,
+        ciphertext: Vec<u8>,
+        nonce: Vec<u8>,
+    ) -> Result<NativeDelivery> {
+        Ok(serde_json::from_slice(&self.crypto.decrypt(
+            &["native_notification", &key],
+            &ciphertext,
+            &nonce,
+        )?)?)
     }
 
     /// Queue events and advance cursors together. First enable baselines every
@@ -94,7 +101,7 @@ impl PanelDb {
             .optional()?;
         let baseline = enabled && prior.is_none_or(|(was_enabled, _, _)| !was_enabled);
         let activated_ms = if baseline {
-            chrono::Utc::now().timestamp_millis()
+            jiff::Timestamp::now().as_millisecond()
         } else {
             prior.map_or(0, |(_, ts, _)| ts)
         };
@@ -231,8 +238,10 @@ impl PanelDb {
                             now
                         ])?;
                         if inserted > 0 && status == "pending" {
-                            let (ciphertext, nonce) =
-                                self.crypto.encrypt(&serde_json::to_vec(&delivery)?)?;
+                            let (ciphertext, nonce) = self.crypto.encrypt(
+                                &["native_notification", &delivery.event_key],
+                                &serde_json::to_vec(&delivery)?,
+                            )?;
                             encrypt_delivery.execute(params![
                                 delivery.event_key,
                                 ciphertext,
@@ -395,15 +404,15 @@ impl PanelDb {
         provider: Option<NativeProvider>,
     ) -> Result<Vec<NativeDelivery>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
+        let mut stmt = conn.prepare("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
         let rows = stmt
             .query_map(
                 params![limit.min(100), provider.map(NativeProvider::as_str)],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(ciphertext, nonce)| self.decode_native_payload(ciphertext, nonce))
+            .map(|(key, ciphertext, nonce)| self.decode_native_payload(key, ciphertext, nonce))
             .collect()
     }
     pub fn claim_native_delivery(&self, key: &str) -> Result<bool> {
@@ -445,12 +454,14 @@ impl PanelDb {
     pub fn recover_interrupted_native_deliveries(&self) -> Result<()> {
         let deliveries = {
             let conn = self.conn.lock().expect("db mutex");
-            let mut stmt=conn.prepare("SELECT ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
+            let mut stmt=conn.prepare("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
             let rows = stmt
-                .query_map([Self::now() - 120], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .query_map([Self::now() - 120], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter()
-                .map(|(ciphertext, nonce)| self.decode_native_payload(ciphertext, nonce))
+                .map(|(key, ciphertext, nonce)| self.decode_native_payload(key, ciphertext, nonce))
                 .collect::<Result<Vec<_>>>()?
         };
         for delivery in deliveries {
@@ -567,7 +578,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-                let now = chrono::Utc::now().timestamp_millis();
+                let now = jiff::Timestamp::now().as_millisecond();
                 for key in ["probe_feedback_baseline", "probe_async_question_baseline"] {
                     let baseline = db.current_notification_baseline(key).unwrap();
                     if enabled {
@@ -891,7 +902,7 @@ mod tests {
         let config = config();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
-        let current = scan("fixture", 3, chrono::Utc::now().timestamp_millis() + 1000);
+        let current = scan("fixture", 3, jiff::Timestamp::now().as_millisecond() + 1000);
         db.stage_native_notifications(NativeProvider::Grok, &current, &config)
             .unwrap();
         let pending = db.pending_native_deliveries(100, None).unwrap();
@@ -910,7 +921,7 @@ mod tests {
         db.stage_notification_delivery(
             super::super::NotificationChannel::Bark,
             &format!("native:{}", pending[2].event_key),
-            chrono::Utc::now().timestamp_millis(),
+            jiff::Timestamp::now().as_millisecond(),
             &json!({}),
         )
         .unwrap();
@@ -930,7 +941,7 @@ mod tests {
         let config = config();
         db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
-        let scan = scan("target", 1, chrono::Utc::now().timestamp_millis() + 1000);
+        let scan = scan("target", 1, jiff::Timestamp::now().as_millisecond() + 1000);
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
                 .unwrap(),
@@ -1010,7 +1021,7 @@ mod tests {
         )
         .unwrap();
         let config = config();
-        let scan = scan("fixture-idle", 1, chrono::Utc::now().timestamp_millis());
+        let scan = scan("fixture-idle", 1, jiff::Timestamp::now().as_millisecond());
         db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
             .unwrap();
         db.sync_notification_channels(&config).unwrap();
@@ -1142,7 +1153,7 @@ mod tests {
         )
         .unwrap();
         let config = config();
-        let now = chrono::Utc::now().timestamp_millis() + 1000;
+        let now = jiff::Timestamp::now().as_millisecond() + 1000;
         let mut old = scan("fixture", 1, now);
         old.streams[0].provider = NativeProvider::Claude;
         assert_eq!(
@@ -1274,7 +1285,7 @@ mod tests {
     }
 
     fn config() -> Config {
-        let mut c = Config::default();
+        let mut c = Config::current_defaults().unwrap();
         c.probe.notifications.enabled = true;
         c
     }
@@ -1312,7 +1323,7 @@ mod tests {
         )
         .unwrap();
         let c = config();
-        let now = chrono::Utc::now().timestamp_millis() + 1000;
+        let now = jiff::Timestamp::now().as_millisecond() + 1000;
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
                 .unwrap(),
@@ -1448,7 +1459,7 @@ mod tests {
         )
         .unwrap();
         let mut c = config();
-        let now = chrono::Utc::now().timestamp_millis() + 1000;
+        let now = jiff::Timestamp::now().as_millisecond() + 1000;
         db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
             .unwrap();
         c.probe.notifications.notify_grok = false;
@@ -1477,7 +1488,7 @@ mod local_provider_tests {
     use super::*;
     use crate::native_probe::NativeStreamSnapshot;
     fn config() -> Config {
-        let mut c = Config::default();
+        let mut c = Config::current_defaults().unwrap();
         c.probe.enabled = true;
         c.probe.notifications.enabled = true;
         let n = &mut c.probe.notifications;
@@ -1510,7 +1521,7 @@ mod local_provider_tests {
                     turn_id: request.into(),
                     kind: kind.into(),
                     body: "Fixture question".into(),
-                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+                    timestamp_ms: jiff::Timestamp::now().as_millisecond() + 1000,
                 }]
                 .into(),
             }],
@@ -1756,7 +1767,7 @@ mod local_provider_tests {
             Some(5)
         );
 
-        let post_activation_ms = chrono::Utc::now().timestamp_millis() + 5_000;
+        let post_activation_ms = jiff::Timestamp::now().as_millisecond() + 5_000;
 
         // 1. Pre-activation event at cursor (position == 5, timestamp_ms < activated_ms) -> skipped (0)
         let mut at_cursor = baseline_scan.clone();

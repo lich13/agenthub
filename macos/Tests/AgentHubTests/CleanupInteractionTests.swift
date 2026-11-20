@@ -26,7 +26,9 @@ final class CleanupInteractionTests: XCTestCase {
             if command == "probe.settings.save" {
                 let payload = try JSONDecoder().decode(JSONValue.self, from: Data(args.utf8))
                 XCTAssertEqual(payload, .object(["settings": .object(["probe": .object(["hooks": .object(["clear_account_scope": .bool(true)])])])]))
-                return Data(#"{"probe":{"hooks":{"clear_account_scope":true}}}"#.utf8)
+                var saved = try ProbeSettingsFixture.settings()
+                saved.probe.hooks.clearAccountScope = true
+                return try JSONEncoder().encode(saved)
             }
             XCTAssertEqual(command, "threads.accountScopeClear")
             var replies = rounds.stream.makeAsyncIterator()

@@ -4,7 +4,6 @@ use agenthub_core::{
     db::PanelDb,
     jobs::JobRunner,
     platform::PlatformPaths,
-    services::system::HostSurface,
 };
 use serde_json::Value;
 use std::sync::{Arc, Mutex, RwLock};
@@ -23,7 +22,6 @@ impl Drop for TestSandboxDir {
 pub struct AppState {
     config: Arc<RwLock<Config>>,
     config_cache: Arc<ConfigCache>,
-    host_surface: HostSurface,
     platform: PlatformPaths,
     pub db: PanelDb,
     pub jobs: JobRunner,
@@ -35,39 +33,14 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config, db: PanelDb) -> Self {
-        Self::new_for_surface(config, db, HostSurface::LinuxServerApi)
-    }
-
-    pub fn new_for_surface(config: Config, db: PanelDb, host_surface: HostSurface) -> Self {
-        Self::new_for_surface_with_app_server_client(
-            config,
-            db,
-            host_surface,
-            CodexAppServerClient::new(),
-        )
-    }
-
-    fn new_for_surface_with_app_server_client(
-        config: Config,
-        db: PanelDb,
-        host_surface: HostSurface,
-        app_server_client: CodexAppServerClient,
-    ) -> Self {
         let jobs = JobRunner::new(db.clone());
-        let platform = match host_surface {
-            HostSurface::LinuxServerApi => {
-                PlatformPaths::for_kind(agenthub_core::platform::PlatformKind::Linux)
-            }
-            HostSurface::DesktopEmbeddedTauri => PlatformPaths::current(),
-        };
         Self {
             config: Arc::new(RwLock::new(config)),
             config_cache: Arc::new(ConfigCache::default()),
-            host_surface,
-            platform,
+            platform: PlatformPaths::linux_server(),
             db,
             jobs,
-            app_server_client,
+            app_server_client: CodexAppServerClient::new(),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
             #[cfg(test)]
             test_sandbox: None,
@@ -78,10 +51,6 @@ impl AppState {
     pub(crate) fn with_test_sandbox(mut self, root: std::path::PathBuf) -> Self {
         self.test_sandbox = Some(Arc::new(TestSandboxDir(root)));
         self
-    }
-
-    pub fn host_surface(&self) -> HostSurface {
-        self.host_surface
     }
 
     pub fn platform(&self) -> &PlatformPaths {
@@ -121,12 +90,14 @@ impl AppState {
         self.resolved_codex_paths().codex_paths()
     }
 
-    pub fn unified_cleanup_paths(&self) -> agenthub_core::services::cleanup::UnifiedCleanupPaths {
+    pub fn unified_cleanup_paths(
+        &self,
+    ) -> anyhow::Result<agenthub_core::services::cleanup::UnifiedCleanupPaths> {
         let codex = self.codex_paths();
         #[cfg(test)]
         if let Some(sandbox) = &self.test_sandbox {
             let claude_cfg = sandbox.0.join(".claude");
-            return agenthub_core::services::cleanup::UnifiedCleanupPaths {
+            return Ok(agenthub_core::services::cleanup::UnifiedCleanupPaths {
                 codex,
                 antigravity: agenthub_core::antigravity::sessions::AntigravityPaths::offline(
                     sandbox.0.join(".gemini/antigravity"),
@@ -141,7 +112,7 @@ impl AppState {
                 grok: agenthub_core::grok::GrokPaths {
                     home: sandbox.0.join(".grok"),
                 },
-            };
+            });
         }
         agenthub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex)
     }

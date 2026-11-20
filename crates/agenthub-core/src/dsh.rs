@@ -23,13 +23,10 @@ pub struct DshPaths {
     pub home: PathBuf,
 }
 impl DshPaths {
-    pub fn default_for_user() -> Self {
-        Self {
-            home: std::env::var_os("DSH_HOME")
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".dsh")),
-        }
+    pub fn default_for_user() -> Result<Self> {
+        Ok(Self {
+            home: crate::platform::provider_root("DSH_HOME", ".dsh")?,
+        })
     }
 }
 
@@ -247,12 +244,10 @@ fn registry(paths: &DshPaths) -> Result<Option<Registry>> {
         valid_id(id)?;
         archived.insert(id.to_owned());
     }
-    ensure!(
-        value
-            .pointer("/tables/workspaces")
-            .is_some_and(Value::is_object),
-        "DSH 工作区索引损坏"
-    );
+    let workspaces = value
+        .pointer("/tables/workspaces")
+        .and_then(Value::as_object)
+        .context("DSH 工作区索引损坏")?;
     let valid_references = |rows: &Value| {
         rows.as_array().is_some_and(|rows| {
             rows.iter()
@@ -265,7 +260,7 @@ fn registry(paths: &DshPaths) -> Result<Option<Registry>> {
             .is_none_or(valid_references),
         "DSH 置顶索引损坏"
     );
-    for row in value["tables"]["workspaces"].as_object().unwrap().values() {
+    for row in workspaces.values() {
         ensure!(
             row.get("sessionIds").is_some_and(valid_references),
             "DSH 工作区线程索引损坏"
@@ -508,7 +503,7 @@ fn dsh_command(command: &str) -> bool {
 }
 
 fn require_stopped() -> Result<()> {
-    let output = Command::new("ps")
+    let output = Command::new("/bin/ps")
         .args(["-axo", "command="])
         .output()
         .context("无法核验 DSH 运行状态")?;

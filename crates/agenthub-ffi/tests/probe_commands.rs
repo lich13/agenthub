@@ -40,7 +40,7 @@ fn write_codex_thread(
     title: &str,
     rollout_events: &[serde_json::Value],
 ) {
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let rollout = codex_home
         .join("sessions")
         .join(format!("rollout-{id}.jsonl"));
@@ -102,7 +102,7 @@ async fn typed_probe_status_includes_real_thread_buckets() {
 }
 
 #[tokio::test]
-async fn desktop_update_status_uses_macos_tauri_updater_shape() {
+async fn desktop_update_status_preserves_protocol_two_updater_name() {
     let temp = tempfile::tempdir().unwrap();
     let state = desktop_state(&temp);
 
@@ -111,7 +111,7 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
 
     assert_eq!(
         status.method,
-        agenthub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater
+        agenthub_core::services::updates::UpdateExecutionMethod::MacosAppUpdater
     );
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
     assert!(!serialized.contains("systemctl"));
@@ -136,7 +136,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         .db
         .append_job_output(
             "desktop-update-check-test",
-            "checking signed Tauri updater feed\nsigned app update available 999.0.0\n",
+            "checking signed app updater feed\nsigned app update available 999.0.0\n",
         )
         .unwrap();
     state
@@ -152,7 +152,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         status.state,
         agenthub_core::services::updates::UpdateState::Ready
     );
-    assert!(status.recommended_action.contains("Tauri updater"));
+    assert!(status.recommended_action.contains("app updater"));
 }
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn desktop_update_status_ignores_stale_older_signed_check_result() {
         .db
         .append_job_output(
             "desktop-update-check-old",
-            "checking signed Tauri updater feed\nsigned app update available 0.1.105\n",
+            "checking signed app updater feed\nsigned app update available 0.1.105\n",
         )
         .unwrap();
     state
@@ -207,7 +207,7 @@ async fn desktop_update_status_remembers_recent_signed_no_update_result() {
         .db
         .append_job_output(
             "desktop-update-check-no-update",
-            "checking signed Tauri updater feed\nno signed app update available\n",
+            "checking signed app updater feed\nno signed app update available\n",
         )
         .unwrap();
     state

@@ -171,12 +171,12 @@ public struct MaintenanceOpsView: View {
             updatePanelSection
 
             // Unified 6-Scope Cleanup + Hidden Scan
-            if store.capabilities.threadCleanup {
+            if store.capabilities.isReady {
                 UnifiedThreadCleanupSection(store: store, isNarrow: isNarrow)
             }
 
             // Codex Account Scope
-            if store.capabilities.codexAccountScope {
+            if store.capabilities.isReady {
                 CodexAccountScopeSection(store: store)
             }
 
@@ -622,7 +622,7 @@ public struct UnifiedThreadCleanupSection: View {
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(busy)
 
-                    if store.capabilities.hiddenCleanupScan {
+                    if store.capabilities.isReady {
                         if hiddenRunner != nil {
                             Button("取消隐藏扫描") {
                                 cancelHiddenScan()
@@ -743,7 +743,7 @@ public struct UnifiedThreadCleanupSection: View {
             plan?.replaceHidden(UnifiedCleanupScopePlan(scope: "codex_hidden", supported: true, scanned: false, candidateCount: 0,
                                                        deletableCount: 0, estimatedBytes: 0, candidates: [], issues: []))
         }
-        guard store.capabilities.hiddenCleanupScan else { return }
+        guard store.capabilities.isReady else { return }
         let runner = HiddenCleanupScan { request in
             try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: revision)
         }

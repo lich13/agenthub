@@ -10,7 +10,7 @@ rust-version.workspace = true
 hex.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 clap.workspace = true
 agenthub-core = { path = "../agenthub-core" }
 reqwest.workspace = true

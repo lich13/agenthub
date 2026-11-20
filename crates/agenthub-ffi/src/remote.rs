@@ -5,7 +5,7 @@ mod ssh;
 mod ssh_config;
 
 use agenthub_core::services::{
-    commands::{is_allowed_rpc_command, is_mutating_rpc_command},
+    commands::{remote_access, RemoteAccess},
     remote::*,
     system::{HostSurface, SystemCapabilitiesResponse, API_VERSION},
 };
@@ -292,7 +292,7 @@ impl RemoteConnections {
         match result {
             Err(error) if error.is_transport() => {
                 self.forget_client(&client);
-                if is_mutating_rpc_command(&request.command) {
+                if agenthub_core::services::commands::is_mutating_rpc_command(&request.command) {
                     return Err(error.to_string());
                 }
                 client = self.ensure_client_with(request.revision, connect).await?;
@@ -472,9 +472,7 @@ pub async fn remoteInvoke(
     state: &RemoteConnections,
     request: RemoteInvokeRequest,
 ) -> Result<Value, String> {
-    if !is_allowed_rpc_command(&request.command) {
-        return Err("不支持的远程操作".into());
-    }
+    let access = remote_access(&request.command).ok_or("不支持的远程操作")?;
     let guard = {
         let mut s = state.state.lock().expect("connection");
         if s.changing
@@ -483,7 +481,7 @@ pub async fn remoteInvoke(
         {
             return Err("连接已变化，操作已取消".into());
         }
-        if is_mutating_rpc_command(&request.command) {
+        if matches!(access, RemoteAccess::Write) {
             s.writes += 1;
             Some(LocalWriteGuard(state.state.clone()))
         } else {

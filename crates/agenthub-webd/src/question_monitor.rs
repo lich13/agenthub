@@ -1,5 +1,7 @@
 //! Ordinary feedback requests share the existing Codex sender and persistent records.
-use super::{probe_runtime, record_probe_event_with_bark, task_notification_suppression_reason};
+use super::{
+    build_probe_event, record_probe_event_with_bark, task_notification_suppression_reason,
+};
 use agenthub_core::{
     codex::{self, AssistantFeedback},
     config::Config,
@@ -11,7 +13,7 @@ use serde_json::json;
 use std::{collections::HashMap, path::Path, time::UNIX_EPOCH};
 
 fn is_fresh(completed_ms: i64) -> bool {
-    let age = chrono::Utc::now().timestamp_millis() - completed_ms;
+    let age = jiff::Timestamp::now().as_millisecond() - completed_ms;
     (0..=600_000).contains(&age)
 }
 
@@ -30,7 +32,8 @@ fn event_for(
     path: &Path,
     feedback: &AssistantFeedback,
 ) -> ProbeBuiltEvent {
-    let mut event = probe_runtime(config).build_event(
+    let mut event = build_probe_event(
+        config,
         ProbeEventInput::hook_stop_with_context(
             Some(thread_id),
             Some(&feedback.turn_id),
@@ -244,7 +247,7 @@ mod tests {
             let home = root.join(".codex");
             fs::create_dir_all(home.join("sessions")).unwrap();
             let rollout = home.join("sessions/rollout.jsonl");
-            let timestamp = chrono::Utc::now().to_rfc3339();
+            let timestamp = jiff::Timestamp::now().to_string();
             let events = [
                 json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}),
                 json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"请确认测试结果。"}]}}),
@@ -261,7 +264,7 @@ mod tests {
             let conn = rusqlite::Connection::open(home.join("state_5.sqlite")).unwrap();
             conn.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived_at INTEGER, archived INTEGER, rollout_path TEXT, cwd TEXT, model TEXT, source TEXT, thread_source TEXT, has_user_event INTEGER, first_user_message TEXT); ").unwrap();
             conn.execute("INSERT INTO threads VALUES ('main','Feedback fixture',?1,NULL,0,?2,'/workspace','fixture','vscode','user',1,'fixture')", rusqlite::params![PanelDb::now(), rollout.to_string_lossy().to_string()]).unwrap();
-            let mut config = Config::default();
+            let mut config = Config::current_defaults().unwrap();
             config.codex.home = home;
             config.probe.enabled = true;
             config.probe.notifications.enabled = true;
@@ -277,7 +280,7 @@ mod tests {
                 .unwrap();
             db.set_setting(
                 "probe_feedback_baseline",
-                &json!({"enabled":true,"since_ms":chrono::Utc::now().timestamp_millis()-60_000})
+                &json!({"enabled":true,"since_ms":jiff::Timestamp::now().as_millisecond()-60_000})
                     .to_string(),
             )
             .unwrap();
@@ -355,7 +358,7 @@ mod tests {
         let records = [
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"fresh-turn"}}),
             json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"请确认测试结果。"}]}}),
-            json!({"type":"event_msg","timestamp":chrono::Utc::now().to_rfc3339(),"payload":{"type":"task_complete","turn_id":"fresh-turn","status":"completed","last_agent_message":"请确认测试结果。"}}),
+            json!({"type":"event_msg","timestamp":jiff::Timestamp::now().to_string(),"payload":{"type":"task_complete","turn_id":"fresh-turn","status":"completed","last_agent_message":"请确认测试结果。"}}),
         ];
         let mut file = fs::OpenOptions::new().append(true).open(rollout).unwrap();
         for record in records {
@@ -395,7 +398,7 @@ mod tests {
         let (url, requests) = mock_bark_server(1);
         let fixture = Fixture::new(url);
         let rollout = fixture.config.codex.home.join("sessions/rollout.jsonl");
-        let timestamp = chrono::Utc::now().to_rfc3339();
+        let timestamp = jiff::Timestamp::now().to_string();
         let non_question = "我已检查配置是否生效，所有服务均已正常响应。为什么之前会出现偶发超时？";
         let events = [
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rhet"}}),

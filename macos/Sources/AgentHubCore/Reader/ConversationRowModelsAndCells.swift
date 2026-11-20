@@ -145,7 +145,7 @@ public enum ConversationRowBuilder {
                         kind: .questionResult(
                             statusText: block.status ?? "completed",
                             questions: block.questions,
-                            answers: block.answers ?? []
+                            answers: block.answers
                         )
                     ))
                 } else if ConversationViewModel.isQuestionBlock(block) {

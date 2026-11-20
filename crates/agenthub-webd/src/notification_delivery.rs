@@ -13,7 +13,7 @@ use agenthub_core::{
     services::{probe as probe_service, settings::PROBE_BARK_DEVICE_KEY_SETTING},
 };
 use anyhow::Result;
-use chrono::Utc;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -51,7 +51,8 @@ struct Candidate {
     source: Source,
     request: ProbeBarkRequest,
     event_ms: i64,
-    chunks: Vec<String>,
+    #[serde(default, rename = "chunks", skip_serializing_if = "Option::is_none")]
+    legacy_chunks: Option<Vec<String>>,
     instance_id: String,
     target_fingerprint: String,
 }
@@ -144,7 +145,7 @@ fn queued_candidate(
         .unwrap_or_default();
     Ok(Candidate {
         source,
-        chunks: vec![request.body.clone()],
+        legacy_chunks: None,
         request,
         event_ms,
         instance_id: db.notification_instance_id()?,
@@ -185,7 +186,7 @@ pub async fn github_ci(
         db,
         Source::GithubCi { event },
         request,
-        Utc::now().timestamp_millis(),
+        Timestamp::now().as_millisecond(),
     )?;
     deliver(
         load_config,
@@ -239,7 +240,7 @@ pub async fn codex(
         .or_else(|| event.payload["source_log_ts"].as_i64().map(|ts| ts * 1000))
         .or_else(|| event.payload["notification_source_ms"].as_i64())
         .or(db.notification_first_seen_ms(&event.dedupe_key)?)
-        .unwrap_or_else(|| Utc::now().timestamp_millis());
+        .unwrap_or_else(|| Timestamp::now().as_millisecond());
     let mut candidate = queued_candidate(
         config,
         db,
@@ -407,7 +408,7 @@ fn claude_aliases(db: &PanelDb, candidate: &Candidate) -> Result<Vec<String>> {
                 && super::claude_hook::installed() =>
         {
             let context = agenthub_core::claude::notification_context_for_key(
-                &agenthub_core::claude::ClaudePaths::default_for_user(),
+                &agenthub_core::claude::ClaudePaths::default_for_user()?,
                 &delivery.session_key,
             )?;
             let turn = delivery.event.turn_id.split(':').next().unwrap_or("");
@@ -616,7 +617,7 @@ async fn process_claude_hook(
             proof: Some(proof),
             verified: true,
         },
-        chunks: vec![request.body.clone()],
+        legacy_chunks: None,
         request,
         event_ms,
         instance_id: candidate.instance_id.clone(),
@@ -783,6 +784,10 @@ async fn process(
             .get_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING)?
             .unwrap_or_default();
         let valid_target = candidate.target_fingerprint == target_fingerprint(config, &secret);
+        let parts = candidate
+            .legacy_chunks
+            .as_deref()
+            .unwrap_or_else(|| std::slice::from_ref(&candidate.request.body));
         let outcome = if !channel.enabled(config)
             || !event_enabled(config, candidate)
             || !valid_target
@@ -815,7 +820,7 @@ async fn process(
             pending.retryable = true;
             pending.error_category = Some("source_pending".into());
             pending
-        } else if let Some(chunk) = candidate.chunks.get(lease.chunk_index) {
+        } else if let Some(chunk) = parts.get(lease.chunk_index) {
             let Some(remaining_ms) = db.notification_delivery_lease_remaining_ms(&lease)? else {
                 return Ok(db
                     .notification_delivery_outcome(channel, key)?
@@ -839,7 +844,7 @@ async fn process(
                 &candidate.request,
                 chunk,
                 lease.chunk_index,
-                candidate.chunks.len(),
+                parts.len(),
                 &id,
                 lease.chunk_attempts,
                 timeout
@@ -902,7 +907,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
             body: agenthub_core::probe::bark_test_body().into(),
             dedupe_key: key.clone(),
         },
-        Utc::now().timestamp_millis(),
+        Timestamp::now().as_millisecond(),
     )?;
     let mut outcome = deliver(
         &load_config,
@@ -1009,7 +1014,7 @@ pub(super) async fn claude_native_state(
     let instance = db.notification_instance_id()?;
     agenthub_core::read_tasks::spawn_blocking(move || {
         let context = agenthub_core::claude::notification_context_for_key(
-            &agenthub_core::claude::ClaudePaths::default_for_user(),
+            &agenthub_core::claude::ClaudePaths::default_for_user()?,
             &delivery.session_key,
         )?;
         let stream = &context.stream;

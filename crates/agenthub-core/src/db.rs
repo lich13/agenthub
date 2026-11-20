@@ -4,7 +4,7 @@ mod migration_tests;
 use crate::crypto::SecretBox;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
-use chrono::Utc;
+use jiff::Timestamp;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,7 +119,7 @@ impl PanelDb {
     }
 
     pub fn now() -> i64 {
-        Utc::now().timestamp()
+        Timestamp::now().as_second()
     }
 
     fn migrate(&self) -> Result<()> {
@@ -128,11 +128,7 @@ impl PanelDb {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute_batch("PRAGMA foreign_keys=ON;")?;
             let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version >= SCHEMA_VERSION && conn.query_row(
-                "SELECT count(*)=3 FROM sqlite_master WHERE type='index' AND name IN
-                 ('idx_native_probe_unfinished','idx_probe_events_notification_key','idx_probe_error_incidents_event')",
-                [], |row| row.get::<_, bool>(0),
-            )? {
+            if version >= SCHEMA_VERSION {
                 return Ok(());
             }
         }
@@ -140,7 +136,6 @@ impl PanelDb {
         let mut conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version >= SCHEMA_VERSION {
-            conn.execute_batch(NOTIFICATION_INDEXES)?;
             return Ok(());
         }
         let populated: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')", [], |row| row.get(0))?;
@@ -323,7 +318,7 @@ impl PanelDb {
                 tx,
                 key,
                 enabled,
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
             )
         })
     }
@@ -450,7 +445,7 @@ impl PanelDb {
         if plaintext.is_empty() {
             return Ok(());
         }
-        let (ciphertext, nonce) = self.crypto.encrypt(plaintext)?;
+        let (ciphertext, nonce) = self.crypto.encrypt(&["setting", key], plaintext)?;
         let value = serde_json::json!({
             "ciphertext": general_purpose::STANDARD.encode(ciphertext),
             "nonce": general_purpose::STANDARD.encode(nonce)
@@ -477,10 +472,22 @@ impl PanelDb {
             return Ok(None);
         }
         match encrypted_setting_parts(trimmed) {
-            Some(Ok((ciphertext, nonce))) => self.crypto.decrypt(&ciphertext, &nonce).map(Some),
+            Some(Ok((ciphertext, nonce))) => self
+                .crypto
+                .decrypt(&["setting", key], &ciphertext, &nonce)
+                .map(Some),
             Some(Err(err)) => Err(err),
             None => Ok(Some(trimmed.as_bytes().to_vec())),
         }
+    }
+
+    fn prune_audit(conn: &Connection, now: i64) -> Result<()> {
+        const RETENTION_SECONDS: i64 = 90 * 86_400;
+        conn.execute(
+            "DELETE FROM audit_log WHERE created_at < ?1",
+            [now - RETENTION_SECONDS],
+        )?;
+        Ok(())
     }
 
     pub fn record_audit(
@@ -489,25 +496,27 @@ impl PanelDb {
         action: &str,
         target_type: Option<&str>,
         target_id: Option<&str>,
-        ip: Option<&str>,
         detail: Value,
     ) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction()?;
+        let now = Self::now();
+        Self::prune_audit(&tx, now)?;
+        tx.execute(
             r#"
-            INSERT INTO audit_log(admin_id, action, target_type, target_id, ip, detail_json, created_at)
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO audit_log(admin_id, action, target_type, target_id, detail_json, created_at)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6)
             "#,
             params![
                 admin_id,
                 action,
                 target_type,
                 target_id,
-                ip,
                 detail.to_string(),
-                Self::now()
+                now
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -757,6 +766,7 @@ impl PanelDb {
         let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
         let limit = i64::from(max_delete_rows.max(1));
         let conn = self.conn.lock().expect("db mutex");
+        Self::prune_audit(&conn, Self::now())?;
         let events_deleted = conn.execute(
             "DELETE FROM probe_events WHERE rowid IN (
                 SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
@@ -926,6 +936,53 @@ mod tests {
     use super::{NewProbeEvent, PanelDb};
     use serde_json::json;
     use std::fs;
+
+    #[test]
+    fn audit_retention_runs_on_ssh_writes_and_probe_maintenance() {
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let now = PanelDb::now();
+        let seed = || {
+            let conn = db.conn.lock().unwrap();
+            for (action, days) in [("expired", 91), ("recent", 89)] {
+                conn.execute(
+                    "INSERT INTO audit_log(action, detail_json, created_at) VALUES (?1,'{}',?2)",
+                    rusqlite::params![action, now - days * 86_400],
+                )
+                .unwrap();
+            }
+        };
+        let count = |action: &str| {
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE action=?1",
+                    [action],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        seed();
+        db.record_audit(
+            Some("ssh-administrator"),
+            "settings",
+            None,
+            None,
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        assert_eq!(
+            (count("expired"), count("recent"), count("settings")),
+            (0, 1, 1)
+        );
+        seed();
+        db.maintain_probe_events(1, 10).unwrap();
+        assert_eq!((count("expired"), count("recent")), (0, 2));
+    }
 
     #[test]
     fn notification_baseline_only_writes_on_activation_changes() {

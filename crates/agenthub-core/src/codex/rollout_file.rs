@@ -12,7 +12,7 @@ impl RolloutName {
         let name = path.file_name()?.to_str()?;
         let name = name.strip_suffix(".zst").unwrap_or(name);
         let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-        chrono::NaiveDateTime::parse_from_str(core.get(..19)?, "%Y-%m-%dT%H-%M-%S").ok()?;
+        jiff::civil::DateTime::strptime("%Y-%m-%dT%H-%M-%S", core.get(..19)?).ok()?;
         if core.get(19..20)? != "-" {
             return None;
         }

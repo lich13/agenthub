@@ -421,7 +421,7 @@ fn reenabled_error_monitor_baselines_at_first_scan_without_replaying_disabled_er
     )
     .unwrap();
     let path = root.join("config.toml");
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.probe.enabled = false;
     config.probe.error_monitor.enabled = true;
     fs::write(&path, toml::to_string(&config).unwrap()).unwrap();

@@ -23,7 +23,7 @@ const REFRESH: &str = "github_ci_refresh";
 pub const POLL_SECONDS: i64 = 60;
 pub const ACTIVE_POLL_SECONDS: i64 = 5;
 fn now() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    jiff::Timestamp::now().as_millisecond()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,7 +168,9 @@ impl Run {
         )
     }
     fn finished_ms(&self) -> i64 {
-        chrono::DateTime::parse_from_rfc3339(&self.updated_at).map_or(0, |d| d.timestamp_millis())
+        self.updated_at
+            .parse::<jiff::Timestamp>()
+            .map_or(0, |d| d.as_millisecond())
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -275,7 +277,7 @@ fn update_state_in_transaction<T>(
         (REFRESH, request.to_string(), request != old_request),
     ] {
         if changed {
-            tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", rusqlite::params![key,value,chrono::Utc::now().timestamp()])?;
+            tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", rusqlite::params![key,value,jiff::Timestamp::now().as_second()])?;
         }
     }
     Ok(result)
@@ -744,7 +746,7 @@ impl Monitor {
     }
     #[cfg(test)]
     async fn scan(&mut self, state: &mut Stored, active: bool, time: i64) -> Result<()> {
-        self.scan_with_config(state, &Config::default(), active, time)
+        self.scan_with_config(state, &Config::current_defaults().unwrap(), active, time)
             .await
     }
     #[cfg(test)]
@@ -1006,7 +1008,7 @@ fn reconcile(
         state,
         account,
         runs,
-        &Config::default(),
+        &Config::current_defaults().unwrap(),
         active,
         baseline,
         time,

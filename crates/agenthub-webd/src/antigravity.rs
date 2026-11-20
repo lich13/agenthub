@@ -189,24 +189,16 @@ fn decode_local_file_uri(uri: &str) -> Option<std::path::PathBuf> {
 }
 
 fn has_open_file_handle(path: &std::path::Path) -> bool {
-    #[cfg(unix)]
-    {
-        let bin = if std::path::Path::new("/usr/sbin/lsof").is_file() {
-            "/usr/sbin/lsof"
-        } else {
-            "lsof"
-        };
-        std::process::Command::new(bin)
-            .args(["-Fp", "--"])
-            .arg(path)
-            .output()
-            .is_ok_and(|out| out.status.success() && out.stdout.contains(&b'p'))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        false
-    }
+    let bin = if std::path::Path::new("/usr/sbin/lsof").is_file() {
+        "/usr/sbin/lsof"
+    } else {
+        "lsof"
+    };
+    std::process::Command::new(bin)
+        .args(["-Fp", "--"])
+        .arg(path)
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.contains(&b'p'))
 }
 
 fn inspect_task_log(log_uri: &str) -> Option<antigravity::TaskLiveness> {
@@ -253,25 +245,18 @@ fn parse_ps_etime_ms(raw: &str) -> Option<i64> {
 }
 
 fn read_ps_process_table() -> Option<String> {
-    #[cfg(unix)]
-    {
-        let bin = if std::path::Path::new("/bin/ps").is_file() {
-            "/bin/ps"
-        } else {
-            "ps"
-        };
-        let out = std::process::Command::new(bin)
-            .args(["-ww", "-axo", "pid=,ppid=,etime=,command="])
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
+    let bin = if std::path::Path::new("/bin/ps").is_file() {
+        "/bin/ps"
+    } else {
+        "ps"
+    };
+    let out = std::process::Command::new(bin)
+        .args(["-ww", "-axo", "pid=,ppid=,etime=,command="])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn normalize_ws(input: &str) -> String {
@@ -929,7 +914,7 @@ pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Resu
         .get(cascade_id)
         .cloned()
         .unwrap_or_default();
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
     let (response, ctx) = load_trajectory_with_context(
         &client,
         port,
@@ -980,7 +965,7 @@ async fn scan_at(
     );
     let subagents_by_root = collect_subagents_by_root(summaries);
     let children_by_parent = index_children_by_parent(summaries);
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
     let mut scan = NativeScan::default();
     for (id, summary) in summaries {
         if is_subtrajectory(id, summary) {

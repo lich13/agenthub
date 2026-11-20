@@ -37,7 +37,7 @@ pub fn record(
         _ => "原生错误详情已省略",
     };
     let entry = DesktopDiagnostic {
-        timestamp: chrono::Utc::now().timestamp_millis(),
+        timestamp: jiff::Timestamp::now().as_millisecond(),
         source: match source {
             Source::Ipc => "ipc",
             Source::Helper => "helper",

@@ -51,7 +51,7 @@
         "actionLabels",
         "disabledStates",
         "remoteApiOnly",
-        "desktopTauriOnly",
+        "desktopOnly",
         "forbidden"
       ],
       "properties": {
@@ -70,13 +70,13 @@
           "additionalProperties": { "$ref": "#/$defs/nonEmptyString" }
         },
         "remoteApiOnly": { "$ref": "#/$defs/stringList" },
-        "desktopTauriOnly": { "$ref": "#/$defs/stringList" },
+        "desktopOnly": { "$ref": "#/$defs/stringList" },
         "forbidden": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["desktopEmbeddedTauri"],
+          "required": ["desktopEmbedded"],
           "properties": {
-            "desktopEmbeddedTauri": { "$ref": "#/$defs/stringList" }
+            "desktopEmbedded": { "$ref": "#/$defs/stringList" }
           }
         }
       }
@@ -117,7 +117,7 @@
         },
         "coreUseCase": { "$ref": "#/$defs/nonEmptyString" },
         "linuxRpc": { "$ref": "#/$defs/nonEmptyString" },
-        "tauriCommand": { "$ref": "#/$defs/nonEmptyString" },
+        "ffiHandler": { "$ref": "#/$defs/nonEmptyString" },
         "webuiWrapper": { "$ref": "#/$defs/nonEmptyString" },
         "dtoOwner": { "$ref": "#/$defs/nonEmptyString" },
         "requestDto": { "$ref": "#/$defs/nonEmptyString" },

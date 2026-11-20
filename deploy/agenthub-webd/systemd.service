@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 RuntimeDirectory=agenthub-webd
 RuntimeDirectoryMode=0700
+UMask=0077
 User=root
 Group=root
 Environment=GROK_LEADER_SOCKET=/var/lib/agenthub-webd/grok-leader.sock
@@ -21,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=-/root/.dsh/sessions -/root/.dsh/storages -/root/.gemini/antigravity /root/.codex /home/ubuntu/.codex -/root/.grok -/root/.claude /etc/agenthub-webd /var/lib/agenthub-webd /var/log/agenthub-webd
+ReadWritePaths=-/root/.dsh/sessions -/root/.dsh/storages -/root/.gemini/antigravity -/root/.codex -/home/ubuntu/.codex -/root/.grok -/root/.claude /etc/agenthub-webd /var/lib/agenthub-webd /var/log/agenthub-webd
 ReadOnlyPaths=-/root/.grok/auth.json -/root/.grok/config.toml -/root/.grok/endpoint.env -/root/.grok/sandbox.toml -/root/.grok/trusted_folders.toml -/root/.claude/.credentials.json -/root/.claude/.claude.json -/root/.claude/settings.json -/root/.claude/settings.local.json
 
 [Install]

@@ -1,10 +1,4 @@
-use crate::{
-    platform::PlatformPaths,
-    services::{
-        commands,
-        system::{require_capability, Capability},
-    },
-};
+use crate::{platform::PlatformPaths, services::commands};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -52,10 +46,9 @@ pub fn plan_thread_restore_with_capability(
 }
 
 pub fn plan_thread_rename_with_capability(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     request: ThreadRenameRequest,
 ) -> Result<ThreadStateActionPlan> {
-    require_capability(platform, Capability::ThreadArchiveActions)?;
     let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
     Ok(ThreadStateActionPlan {
         command: commands::THREADS_RENAME.to_string(),
@@ -145,11 +138,10 @@ fn required_command_thread_id(thread_id: &str) -> Result<String> {
 }
 
 fn plan_thread_archive_state_action(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     thread_id: &str,
     archived: bool,
 ) -> Result<ThreadStateActionPlan> {
-    require_capability(platform, Capability::ThreadArchiveActions)?;
     Ok(ThreadStateActionPlan {
         command: if archived {
             commands::THREADS_ARCHIVE

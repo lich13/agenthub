@@ -57,14 +57,14 @@ impl DiscoveredSession {
 }
 
 fn check_host_dsh_stopped_for(paths: &DshPaths) -> Result<()> {
-    let default_home = DshPaths::default_for_user().home;
+    let default_home = DshPaths::default_for_user()?.home;
     let same_as_default = paths.home == default_home
         || (paths.home.canonicalize().ok().is_some()
             && paths.home.canonicalize().ok() == default_home.canonicalize().ok());
     if !same_as_default {
         return Ok(());
     }
-    let output = std::process::Command::new("ps")
+    let output = std::process::Command::new("/bin/ps")
         .args(["-axo", "command="])
         .output()
         .context("无法核验 DeepSeek Harness 运行状态")?;
@@ -86,12 +86,10 @@ struct ExclusiveSessionLease {
 
 impl Drop for ExclusiveSessionLease {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            unsafe {
-                let _ = libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-            }
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
+        unsafe {
+            let _ = libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
         }
     }
 }
@@ -100,38 +98,34 @@ fn try_acquire_session_lease(session_dir: &Path) -> Result<Option<ExclusiveSessi
     let lock_path = session_dir.join("session.lock");
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_NOFOLLOW);
     let file = options
         .open(&lock_path)
         .context("无法打开 DSH 会话锁文件")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        use std::os::unix::io::AsRawFd;
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if rc != 0 {
-            let err = std::io::Error::last_os_error();
-            if matches!(
-                err.raw_os_error(),
-                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-            ) {
-                return Ok(None);
-            }
-            return Err(err).context("无法校验 DSH 会话锁状态");
-        }
-        // Verify inode stability after acquiring flock (matches DSH SessionWriteLease)
-        let fd_meta = file.metadata()?;
-        let path_meta = fs::symlink_metadata(&lock_path)?;
-        if (fd_meta.dev(), fd_meta.ino()) != (path_meta.dev(), path_meta.ino()) {
-            unsafe {
-                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-            }
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if matches!(
+            err.raw_os_error(),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+        ) {
             return Ok(None);
         }
+        return Err(err).context("无法校验 DSH 会话锁状态");
+    }
+    // Verify inode stability after acquiring flock (matches DSH SessionWriteLease)
+    let fd_meta = file.metadata()?;
+    let path_meta = fs::symlink_metadata(&lock_path)?;
+    if (fd_meta.dev(), fd_meta.ino()) != (path_meta.dev(), path_meta.ino()) {
+        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
+        unsafe {
+            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+        }
+        return Ok(None);
     }
     Ok(Some(ExclusiveSessionLease { file }))
 }
@@ -141,34 +135,29 @@ fn is_session_locked_readonly(session_dir: &Path) -> bool {
     if !lock_path.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-        let Ok(file) = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&lock_path)
-        else {
-            return false;
-        };
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if rc == 0 {
-            unsafe {
-                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-            }
-            false
-        } else {
-            let err = std::io::Error::last_os_error();
-            matches!(
-                err.raw_os_error(),
-                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-            )
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&lock_path)
+    else {
+        return false;
+    };
+    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
+        unsafe {
+            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
         }
-    }
-    #[cfg(not(unix))]
-    {
         false
+    } else {
+        let err = std::io::Error::last_os_error();
+        matches!(
+            err.raw_os_error(),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+        )
     }
 }
 
@@ -340,7 +329,9 @@ fn decode_log_lines_checked(
 }
 
 fn epoch_ms_to_rfc3339(ms: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+    jiff::Timestamp::from_millisecond(ms)
+        .ok()
+        .map(|ts| crate::timestamps::format_utc(ts, false))
 }
 
 fn value_timestamp_rfc3339(val: &Value) -> Option<String> {
@@ -591,7 +582,8 @@ fn build_summary(
             fs::symlink_metadata(&session.log_path)
                 .ok()
                 .and_then(|m| m.modified().ok())
-                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                .and_then(|t| jiff::Timestamp::try_from(t).ok())
+                .map(|ts| crate::timestamps::format_utc(ts, false))
         });
     let status = if archived {
         "archived"
@@ -998,7 +990,7 @@ fn parse_events(
                 let args = if let Some(s) = data["arguments"].as_str() {
                     s.to_owned()
                 } else if !data["arguments"].is_null() {
-                    serde_json::to_string_pretty(&data["arguments"]).unwrap_or_default()
+                    format!("{:#}", data["arguments"])
                 } else {
                     String::new()
                 };
@@ -1339,7 +1331,7 @@ fn ensure_registered_in_workspace(value: &mut Value, id: &str, cwd: &str) {
         }
     } else {
         let ws_id = "workspace-default".to_owned();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = jiff::Timestamp::now().to_string();
         workspaces.insert(
             ws_id.clone(),
             json!({
@@ -1410,7 +1402,7 @@ pub fn set_archived_checked(
         let storages = paths.home.join("storages");
         fs::create_dir_all(&storages)?;
         let ws_path = storages.join("workspace.json");
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = jiff::Timestamp::now().to_string();
         let initial = json!({
             "unit": { "name": "workspace", "version": 2 },
             "global": {
@@ -1945,28 +1937,25 @@ mod tests {
         for id in ["child", "missing", "../plain", "/plain"] {
             assert!(find_root_session(&paths, id).is_err(), "{id}");
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-            let outside = home.join("outside");
-            fs::create_dir(&outside).unwrap();
-            fs::write(
-                outside.join("session.v4.jsonl"),
-                "{\"type\":\"session\",\"version\":4,\"id\":\"linked\"}\n",
-            )
-            .unwrap();
-            symlink(&outside, home.join("sessions/project/linked")).unwrap();
-            assert!(find_root_session(&paths, "linked").is_err());
-            let external_project = home.join("external-project");
-            fs::create_dir_all(external_project.join("linked-project")).unwrap();
-            fs::write(
-                external_project.join("linked-project/session.v4.jsonl"),
-                "{\"type\":\"session\",\"version\":4,\"id\":\"linked-project\"}\n",
-            )
-            .unwrap();
-            symlink(&external_project, home.join("sessions/project-link")).unwrap();
-            assert!(find_root_session(&paths, "linked-project").is_err());
-        }
+        use std::os::unix::fs::symlink;
+        let outside = home.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(
+            outside.join("session.v4.jsonl"),
+            "{\"type\":\"session\",\"version\":4,\"id\":\"linked\"}\n",
+        )
+        .unwrap();
+        symlink(&outside, home.join("sessions/project/linked")).unwrap();
+        assert!(find_root_session(&paths, "linked").is_err());
+        let external_project = home.join("external-project");
+        fs::create_dir_all(external_project.join("linked-project")).unwrap();
+        fs::write(
+            external_project.join("linked-project/session.v4.jsonl"),
+            "{\"type\":\"session\",\"version\":4,\"id\":\"linked-project\"}\n",
+        )
+        .unwrap();
+        symlink(&external_project, home.join("sessions/project-link")).unwrap();
+        assert!(find_root_session(&paths, "linked-project").is_err());
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -2436,88 +2425,78 @@ mod tests {
         .is_err());
 
         // 4. Locked descendant blocks both preview and execute before any deletion
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let lock_file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(proj.join(sub_a).join("session.lock"))
-                .unwrap();
-            assert_eq!(
-                unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-                0
-            );
-            assert!(preview_batch_item_checked(
-                &paths,
-                root_a,
-                SessionOperation::Delete,
-                true,
-                || Ok(()),
-            )
-            .is_err());
-            assert!(execute_batch_item_checked(
-                &paths,
-                root_a,
-                SessionOperation::Delete,
-                &[sub_a.to_string()],
-                true,
-                || Ok(()),
-            )
-            .is_err());
-            assert!(proj.join(root_a).exists());
-            assert!(proj.join(sub_a).exists());
-            unsafe {
-                let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
-            }
+        use std::os::unix::io::AsRawFd;
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(proj.join(sub_a).join("session.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(
+            preview_batch_item_checked(&paths, root_a, SessionOperation::Delete, true, || Ok(()),)
+                .is_err()
+        );
+        assert!(execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[sub_a.to_string()],
+            true,
+            || Ok(()),
+        )
+        .is_err());
+        assert!(proj.join(root_a).exists());
+        assert!(proj.join(sub_a).exists());
+        unsafe {
+            let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
         }
 
         // 5. Partial filesystem failure stops on sub_a before touching root_a or workspace.json
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // Pre-create session.lock so lease acquisition succeeds while directory unlink fails
-            fs::write(proj.join(sub_a).join("session.lock"), b"").unwrap();
-            fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o500)).unwrap();
-            let partial = execute_batch_item_checked(
-                &paths,
-                root_a,
-                SessionOperation::Delete,
-                &[sub_a.to_string()],
-                true,
-                || Ok(()),
-            )
-            .unwrap();
-            assert_eq!(partial.status, "failed");
-            assert!(partial.deleted_ids.is_empty());
-            assert!(!partial.residuals.is_empty());
-            assert!(proj.join(root_a).exists());
-            let ws_mid: Value =
-                serde_json::from_slice(&fs::read(home.join("storages/workspace.json")).unwrap())
-                    .unwrap();
-            assert_eq!(
-                ws_mid["tables"]["workspaces"]["ws-1"]["sessionIds"],
-                json!([root_a, root_b])
-            );
+        use std::os::unix::fs::PermissionsExt;
+        // Pre-create session.lock so lease acquisition succeeds while directory unlink fails
+        fs::write(proj.join(sub_a).join("session.lock"), b"").unwrap();
+        fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o500)).unwrap();
+        let partial = execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[sub_a.to_string()],
+            true,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(partial.status, "failed");
+        assert!(partial.deleted_ids.is_empty());
+        assert!(!partial.residuals.is_empty());
+        assert!(proj.join(root_a).exists());
+        let ws_mid: Value =
+            serde_json::from_slice(&fs::read(home.join("storages/workspace.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            ws_mid["tables"]["workspaces"]["ws-1"]["sessionIds"],
+            json!([root_a, root_b])
+        );
 
-            fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o700)).unwrap();
-            let retried = execute_batch_item_checked(
-                &paths,
-                root_a,
-                SessionOperation::Delete,
-                &[sub_a.to_string()],
-                true,
-                || Ok(()),
-            )
-            .unwrap();
-            assert_eq!(retried.status, "succeeded");
-            assert!(!proj.join(root_a).exists());
-            assert!(!proj.join(sub_a).exists());
-            assert!(proj.join(root_b).exists());
-            assert!(proj.join(sub_b).exists());
-        }
+        fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o700)).unwrap();
+        let retried = execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[sub_a.to_string()],
+            true,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(retried.status, "succeeded");
+        assert!(!proj.join(root_a).exists());
+        assert!(!proj.join(sub_a).exists());
+        assert!(proj.join(root_b).exists());
+        assert!(proj.join(sub_b).exists());
 
         fs::remove_dir_all(home).unwrap();
     }
@@ -2606,62 +2585,59 @@ mod tests {
 
         let paths = DshPaths { home: home.clone() };
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let mut locks = Vec::new();
-            for id in [completed_id, active_id, seeded_id] {
-                let f = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(proj.join(id).join("session.lock"))
-                    .unwrap();
-                assert_eq!(
-                    unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-                    0
-                );
-                locks.push(f);
-            }
-
-            let list = list_sessions(
-                &paths,
-                &ProviderListRequest {
-                    archived: Some(false),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            let completed = list.iter().find(|s| s.id == completed_id).unwrap();
-            assert_eq!(completed.status, "idle");
-            assert!(!completed.can_rename);
-            assert!(!completed.can_delete);
-
-            let active = list.iter().find(|s| s.id == active_id).unwrap();
-            assert_eq!(active.status, "running");
-
-            let seeded = list.iter().find(|s| s.id == seeded_id).unwrap();
-            assert_eq!(seeded.status, "idle");
-
-            let detail = session_detail(
-                &paths,
-                &ProviderDetailRequest {
-                    session_key: completed_id.into(),
-                    limit: None,
-                    before: None,
-                },
-            )
-            .unwrap();
-            let tool_ev = detail
-                .events
-                .iter()
-                .find(|e| e.kind == "tool_call")
+        use std::os::unix::io::AsRawFd;
+        let mut locks = Vec::new();
+        for id in [completed_id, active_id, seeded_id] {
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(proj.join(id).join("session.lock"))
                 .unwrap();
-            assert_eq!(tool_ev.status.as_deref(), Some("completed"));
-
-            drop(locks);
+            assert_eq!(
+                unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            locks.push(f);
         }
+
+        let list = list_sessions(
+            &paths,
+            &ProviderListRequest {
+                archived: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let completed = list.iter().find(|s| s.id == completed_id).unwrap();
+        assert_eq!(completed.status, "idle");
+        assert!(!completed.can_rename);
+        assert!(!completed.can_delete);
+
+        let active = list.iter().find(|s| s.id == active_id).unwrap();
+        assert_eq!(active.status, "running");
+
+        let seeded = list.iter().find(|s| s.id == seeded_id).unwrap();
+        assert_eq!(seeded.status, "idle");
+
+        let detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: completed_id.into(),
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        let tool_ev = detail
+            .events
+            .iter()
+            .find(|e| e.kind == "tool_call")
+            .unwrap();
+        assert_eq!(tool_ev.status.as_deref(), Some("completed"));
+
+        drop(locks);
 
         fs::remove_dir_all(home).unwrap();
     }

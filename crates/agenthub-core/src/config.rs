@@ -351,10 +351,22 @@ impl Default for ProbeErrorMonitorConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub secret_key: String,
+}
+
+impl Drop for SecurityConfig {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.secret_key);
+    }
+}
+
+impl std::fmt::Debug for SecurityConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityConfig").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,70 +377,39 @@ pub struct PathConfig {
     pub log_dir: PathBuf,
 }
 
-fn default_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
-    match platform.kind {
-        PlatformKind::Linux => PathBuf::from("/home/ubuntu/codex-workspace"),
-        PlatformKind::Macos => home.join("agenthub-workspace"),
-        PlatformKind::Windows => PathBuf::from(r"%USERPROFILE%\AgentHub\workspace"),
-    }
-}
-
-fn default_desktop_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
-    match platform.kind {
-        PlatformKind::Linux | PlatformKind::Macos => home.join("agenthub-workspace"),
-        PlatformKind::Windows => home.join("AgentHub/workspace"),
-    }
-}
-
-fn current_home_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
-}
-
-fn current_platform_kind() -> PlatformKind {
-    #[cfg(target_os = "macos")]
-    {
-        PlatformKind::Macos
-    }
-    #[cfg(target_os = "windows")]
-    {
-        PlatformKind::Windows
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        PlatformKind::Linux
-    }
-}
-
 impl Config {
-    pub fn for_platform_kind(kind: PlatformKind) -> Self {
-        Self::for_platform_kind_with_home(kind, current_home_dir())
+    pub fn current_defaults() -> Result<Self> {
+        match PlatformKind::current() {
+            PlatformKind::Linux => Ok(Self::linux_defaults()),
+            PlatformKind::Macos => Ok(Self::for_platform_kind_with_home(
+                PlatformKind::Macos,
+                crate::platform::current_home()?,
+            )),
+        }
+    }
+
+    pub fn linux_defaults() -> Self {
+        Self::with_paths(
+            PlatformPaths::linux_server(),
+            PathBuf::from("/home/ubuntu/codex-workspace"),
+        )
     }
 
     pub fn for_platform_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
         let home = home.into();
-        let platform = PlatformPaths::for_kind_with_home(kind, &home);
-        Self::for_platform_paths_with_home(platform, &home, false)
+        match kind {
+            PlatformKind::Linux => Self::linux_defaults(),
+            PlatformKind::Macos => {
+                Self::with_paths(PlatformPaths::macos(&home), home.join("agenthub-workspace"))
+            }
+        }
     }
 
-    #[cfg(test)]
-    pub fn for_desktop_platform_kind_with_home(
-        kind: PlatformKind,
-        home: impl Into<PathBuf>,
-    ) -> Self {
-        let home = home.into();
-        let platform = PlatformPaths::for_desktop_kind_with_home(kind, &home);
-        Self::for_platform_paths_with_home(platform, &home, true)
-    }
-
-    fn for_platform_paths_with_home(platform: PlatformPaths, home: &Path, desktop: bool) -> Self {
+    fn with_paths(platform: PlatformPaths, workspace: PathBuf) -> Self {
         Self {
             codex: CodexConfig {
                 home: default_codex_home(),
-                workspace: if desktop {
-                    default_desktop_workspace_for_platform(&platform, home)
-                } else {
-                    default_workspace_for_platform(&platform, home)
-                },
+                workspace,
 
                 host_label: DEFAULT_HOST_LABEL.to_string(),
             },
@@ -444,23 +425,13 @@ impl Config {
             },
         }
     }
-
-    pub fn current_default_config_path() -> PathBuf {
-        PlatformPaths::current().config_file
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self::for_platform_kind(current_platform_kind())
-    }
 }
 
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if !path.exists() {
-            let mut config = Self::default();
+            let mut config = Self::current_defaults()?;
             config.load_sibling_env(path)?;
             config.normalize()?;
             return Ok(config);
@@ -554,7 +525,8 @@ impl Config {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create config dir {}", parent.display()))?;
         }
-        let text = toml::to_string_pretty(&Self::default()).context("serialize default config")?;
+        let text = toml::to_string_pretty(&Self::current_defaults()?)
+            .context("serialize default config")?;
         fs::write(path, text).with_context(|| format!("write config {}", path.display()))
     }
 
@@ -584,6 +556,7 @@ impl Config {
             .ok()
             .filter(|v| !v.trim().is_empty())
         {
+            zeroize::Zeroize::zeroize(&mut self.security.secret_key);
             self.security.secret_key = value;
         }
         if self.codex.host_label.trim().is_empty() {
@@ -615,6 +588,7 @@ impl Config {
         let text = fs::read_to_string(&env_path)
             .with_context(|| format!("read env {}", env_path.display()))?;
         if let Some(value) = env_file_value(&text, "AGENTHUB_SECRET_KEY") {
+            zeroize::Zeroize::zeroize(&mut self.security.secret_key);
             self.security.secret_key = value;
         }
         Ok(())
@@ -1169,7 +1143,7 @@ impl TomlPatchEditor {
 #[cfg(test)]
 mod tests {
     use super::{Config, ProbeConfigFilePatch, ProbeSettingsPatch};
-    use crate::platform::{PlatformKind, PlatformPaths};
+    use crate::platform::PlatformKind;
     use std::{fs, time::SystemTime};
 
     #[test]
@@ -1275,29 +1249,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_desktop_config_uses_user_scoped_tauri_paths_not_server_paths() {
-        let config =
-            Config::for_desktop_platform_kind_with_home(PlatformKind::Linux, "/home/alice");
-
-        assert_eq!(
-            config.paths.data_dir.to_string_lossy(),
-            "/home/alice/.local/share/AgentHub"
-        );
-        assert_eq!(
-            Config::current_default_config_path(),
-            PlatformPaths::current().config_file
-        );
-        assert_eq!(
-            config.codex.workspace.to_string_lossy(),
-            "/home/alice/agenthub-workspace"
-        );
-        assert!(!config.paths.data_dir.starts_with("/var/lib/agenthub-webd"));
-        assert!(!config.codex.workspace.starts_with("/home/ubuntu"));
-    }
-
-    #[test]
     fn default_config_includes_builtin_probe_settings() {
-        let config = Config::default();
+        let config = Config::current_defaults().unwrap();
 
         assert!(config.probe.enabled);
         assert_eq!(config.probe.poll_seconds, 15);
@@ -1312,7 +1265,7 @@ mod tests {
 
     #[test]
     fn default_config_matches_mac_app_probe_runtime_defaults() {
-        let config = Config::default();
+        let config = Config::current_defaults().unwrap();
 
         assert_eq!(config.probe.observability.hook_event_max_lines, 500);
         assert_eq!(config.probe.observability.hook_cooldown_max_lines, 1_000);
@@ -1321,7 +1274,7 @@ mod tests {
 
     #[test]
     fn probe_notification_server_url_requires_https_except_loopback_http() {
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.probe.notifications.server_url = "http://example.com".to_string();
         config.normalize().unwrap();
 
@@ -1512,7 +1465,7 @@ workspace = "/home/ubuntu/codex-workspace"
         fs::create_dir_all(&dir).unwrap();
         let config_path = dir.join("config.toml");
         let env_path = dir.join("env");
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.security.secret_key.clear();
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
         fs::write(
@@ -1532,7 +1485,7 @@ workspace = "/home/ubuntu/codex-workspace"
 
     #[test]
     fn default_config_uses_api_auth_and_neutral_host() {
-        let config = Config::default();
+        let config = Config::current_defaults().unwrap();
 
         assert_eq!(config.codex.host_label, "AgentHub");
         let serialized = toml::to_string(&config).unwrap();

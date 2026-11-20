@@ -5,24 +5,24 @@
       "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#ClaudeDeletePreview"
     },
     "ClaudeDeleteRequest": {
-      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeleteRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeleteRequest"
     },
     "ClaudeDetailRequest": {
-      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDetailRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDetailRequest"
     },
     "ClaudeDetailResponse": {
       "rust": "crates/agenthub-core/src/claude.rs#ClaudeSessionDetail",
       "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#ClaudeSessionDetail"
     },
     "ClaudeHooksAction": {
-      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksAction",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksAction"
     },
     "ClaudeHooksRequest": {
-      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksRequest"
     },
     "ClaudeHooksStatus": {
       "rust": "crates/agenthub-core/src/claude/hooks.rs#ClaudeHooksStatus",
@@ -65,8 +65,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift#CodexAccountScopeItem"
     },
     "CodexAccountScopeReason": {
-      "rust": "crates/agenthub-core/src/codex/account_scope.rs#CodexAccountScopeReason",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/codex/account_scope.rs#CodexAccountScopeReason"
     },
     "CodexAccountScopeResult": {
       "rust": "crates/agenthub-core/src/codex/account_scope.rs#CodexAccountScopeResult",
@@ -85,16 +85,16 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopAction"
     },
     "DesktopActionRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopActionRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopActionRequest"
     },
     "DesktopAnswer": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAnswer",
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopAnswer"
     },
     "DesktopAttachmentAction": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentAction",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentAction"
     },
     "DesktopAttachmentBounds": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentBounds",
@@ -105,8 +105,8 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopAttachmentEvent"
     },
     "DesktopAttachmentRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentRequest"
     },
     "DesktopAttachmentResult": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopAttachmentResult",
@@ -121,24 +121,24 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopCatalogItem"
     },
     "DesktopCatalogRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCatalogRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCatalogRequest"
     },
     "DesktopChoice": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChoice",
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopChoice"
     },
     "DesktopChooseRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChooseRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChooseRequest"
     },
     "DesktopChosenItem": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChosenItem",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopChosenItem"
     },
     "DesktopCreateRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCreateRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCreateRequest"
     },
     "DesktopCreatedThread": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopCreatedThread",
@@ -153,8 +153,8 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopDiagnostics"
     },
     "DesktopDiagnosticsRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopDiagnosticsRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopDiagnosticsRequest"
     },
     "DesktopFileReview": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopFileReview",
@@ -165,16 +165,16 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopGoal"
     },
     "DesktopJobDetailRequest": {
-      "rust": "crates/agenthub-ffi/src/services/jobs.rs#DesktopJobDetailRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-ffi/src/services/jobs.rs#DesktopJobDetailRequest"
     },
     "DesktopMode": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopMode",
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopMode"
     },
     "DesktopPasteDisposition": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPasteDisposition",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPasteDisposition"
     },
     "DesktopPendingRequest": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopPendingRequest",
@@ -197,20 +197,20 @@
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopQueuedMessage"
     },
     "DesktopReferenceSpan": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopReferenceSpan",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopReferenceSpan"
     },
     "DesktopReview": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopReview",
       "swift": "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift#DesktopReview"
     },
     "DesktopSessionRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopSessionRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopSessionRequest"
     },
     "DesktopThreadRequest": {
-      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopThreadRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopThreadRequest"
     },
     "DesktopView": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopView",
@@ -225,8 +225,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift#GithubCiRepository"
     },
     "GithubCiRequest": {
-      "rust": "crates/agenthub-core/src/github_ci.rs#Request",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/github_ci.rs#Request"
     },
     "GithubCiRun": {
       "rust": "crates/agenthub-core/src/github_ci.rs#Run",
@@ -241,8 +241,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#GrokDeletePreview"
     },
     "GrokDeleteRequest": {
-      "rust": "crates/agenthub-core/src/grok.rs#GrokDeleteRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/grok.rs#GrokDeleteRequest"
     },
     "GrokDetailResponse": {
       "rust": "crates/agenthub-core/src/grok.rs#GrokSessionDetail",
@@ -269,8 +269,8 @@
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
     },
     "HiddenScanRequest": {
-      "rust": "crates/agenthub-core/src/archive/hidden_scan.rs#HiddenScanRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/archive/hidden_scan.rs#HiddenScanRequest"
     },
     "JobsDetailResponse": {
       "rust": "crates/agenthub-core/src/services/use_cases.rs#JobResponse",
@@ -321,24 +321,24 @@
       "swift": "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift#ProbeSettingsView"
     },
     "ProbeStatusRequest": {
-      "rust": "crates/agenthub-core/src/services/probe.rs#ProbeStatusRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/probe.rs#ProbeStatusRequest"
     },
     "ProbeStatusResponse": {
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "swift": "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift#ProbeStatus"
     },
     "ProviderDetailRequest": {
-      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderDetailRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderDetailRequest"
     },
     "ProviderDetailResponse": {
       "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionDetail",
       "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#ProviderSessionDetail"
     },
     "ProviderListRequest": {
-      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderListRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderListRequest"
     },
     "ProviderListResponse": {
       "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionSummary",
@@ -349,12 +349,12 @@
       "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#ProviderSessionSummary"
     },
     "ProviderRenameRequest": {
-      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderRenameRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderRenameRequest"
     },
     "ProviderSessionRequest": {
-      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/provider_sessions.rs#ProviderSessionRequest"
     },
     "RemoteConnectionCredentials": {
       "rust": "crates/agenthub-core/src/services/remote.rs#RemoteConnectionCredentials",
@@ -365,8 +365,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift#RemoteConnectionView"
     },
     "RemoteInvokeRequest": {
-      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteInvokeRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteInvokeRequest"
     },
     "RemoteInvokeResponse": {
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
@@ -377,12 +377,12 @@
       "swift": "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift#RemoteMachineSummary"
     },
     "RemoteRevisionRequest": {
-      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteRevisionRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteRevisionRequest"
     },
     "RemoteSelectionRequest": {
-      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteSelectionRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/remote.rs#RemoteSelectionRequest"
     },
     "SessionAttachmentRequest": {
       "rust": "crates/agenthub-core/src/user_message.rs#SessionAttachmentRequest",
@@ -421,8 +421,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/SessionAndConversationModels.swift#SessionStorageSize"
     },
     "SshDeleteRequest": {
-      "rust": "crates/agenthub-core/src/services/remote.rs#SshDeleteRequest",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/remote.rs#SshDeleteRequest"
     },
     "SshHostList": {
       "rust": "crates/agenthub-core/src/services/remote.rs#SshHost",
@@ -449,8 +449,8 @@
       "swift": "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift#SystemCapabilitiesResponse"
     },
     "ThreadsArchiveResponse": {
-      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "ThreadsBlocksResponse": {
       "rust": "crates/agenthub-core/src/services/threads.rs#ThreadBlocksPage",
@@ -465,12 +465,12 @@
       "swift": "macos/Sources/AgentHubCore/Models/SessionAndConversationModels.swift#ThreadSummary"
     },
     "ThreadsRenameResponse": {
-      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "ThreadsRestoreResponse": {
-      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse",
-      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests."
+      "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
+      "rust": "crates/agenthub-core/src/services/jobs.rs#ActionResponse"
     },
     "UnifiedCleanupCandidate": {
       "rust": "crates/agenthub-core/src/services/cleanup.rs#UnifiedCleanupCandidate",
@@ -4367,11 +4367,6 @@
           {
             "fields": [],
             "name": "Macos",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Windows",
             "serde": []
           }
         ]
@@ -8588,57 +8583,27 @@
         "variants": [
           {
             "fields": [],
-            "name": "Threads",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "ThreadSubagents",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "ClaudeSubagents",
-            "serde": []
-          },
-          {
-            "fields": [],
             "name": "CodexDesktop",
             "serde": []
           },
           {
             "fields": [],
-            "name": "Jobs",
+            "name": "AntigravityNotifications",
             "serde": []
           },
           {
             "fields": [],
-            "name": "Probe",
+            "name": "DshNotifications",
             "serde": []
           },
           {
             "fields": [],
-            "name": "Settings",
+            "name": "GrokbotSessions",
             "serde": []
           },
           {
             "fields": [],
-            "name": "JobHistory",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "AppUpdater",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "ThreadCleanup",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "ThreadArchiveActions",
+            "name": "GrokbotNotifications",
             "serde": []
           },
           {
@@ -8671,8 +8636,10 @@
           },
           {
             "fields": [],
-            "name": "DesktopEmbeddedTauri",
-            "serde": []
+            "name": "DesktopEmbedded",
+            "serde": [
+              "serde (rename = \"desktop_embedded_tauri\")"
+            ]
           }
         ]
       },
@@ -9086,13 +9053,10 @@
           },
           {
             "fields": [],
-            "name": "MacosTauriUpdater",
-            "serde": []
-          },
-          {
-            "fields": [],
-            "name": "Unsupported",
-            "serde": []
+            "name": "MacosAppUpdater",
+            "serde": [
+              "serde (rename = \"macos_tauri_updater\")"
+            ]
           }
         ]
       },
@@ -10284,30 +10248,6 @@
         ]
       }
     },
-    "crates/agenthub-ffi/src/legacy_prefs.rs": {
-      "LegacyWebviewPrefs": {
-        "fields": [
-          {
-            "name": "theme",
-            "serde": [
-              "serde (skip_serializing_if = \"Option::is_none\")"
-            ],
-            "type": "Option < String >"
-          },
-          {
-            "name": "nav_collapsed",
-            "serde": [
-              "serde (skip_serializing_if = \"Option::is_none\")"
-            ],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      }
-    },
     "crates/agenthub-ffi/src/overview.rs": {
       "AgentHubPaths": {
         "fields": [
@@ -10508,29 +10448,6 @@
             "name": "limit",
             "serde": [],
             "type": "u32"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "DesktopProbeSettings": {
-        "fields": [
-          {
-            "name": "codex",
-            "serde": [],
-            "type": "Value"
-          },
-          {
-            "name": "probe",
-            "serde": [],
-            "type": "agenthub_core :: config :: ProbeConfig"
-          },
-          {
-            "name": "notifications",
-            "serde": [],
-            "type": "Value"
           }
         ],
         "kind": "struct",
@@ -10866,25 +10783,18 @@
       }
     }
   },
-  "swiftFiles": [
-    "macos/Sources/AgentHubCore/Bridge/FFIRuntimeBridge.swift",
-    "macos/Sources/AgentHubCore/Bridge/RuntimeConnectionStore.swift",
-    "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift",
-    "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift",
-    "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift",
-    "macos/Sources/AgentHubCore/Models/SessionAndConversationModels.swift",
-    "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift"
-  ],
   "swift": {
     "macos/Sources/AgentHubCore/Bridge/FFIRuntimeBridge.swift": {
       "types": {
         "AgentHubFFIError": "structAgentHubFFIError:LocalizedError,Equatable,Sendable{publicletmessage:Stringpublicinit(_message:String){self.message=message}publicvarerrorDescription:String?{message}}",
-        "FileOpenerService": "enumFileOpenerService{privatestructRevealArgs:Decodable{letpaths:[String]?letpath:String?}publicstaticfuncvalidateRevealPath(_raw:String)throws->URL{lettrimmed=raw.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmpty,trimmed.hasPrefix(\"/\"),!trimmed.unicodeScalars.contains(where:{CharacterSet.controlCharacters.contains($0)})else{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}returnURL(fileURLWithPath:trimmed)}publicstaticfuncrevealPaths(_paths:[String])asyncthrows{leturls=trypaths.map(validateRevealPath)guard!urls.isEmptyelse{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}awaitMainActor.run{NSWorkspace.shared.activateFileViewerSelecting(urls)}}publicstaticfuncrevealFromArgsJSON(_argsJSON:String)asyncthrows{letdecoded=tryJSONDecoder().decode(RevealArgs.self,from:Data(argsJSON.utf8))letlist=decoded.paths??(decoded.path.map{[$0]}??[])tryawaitrevealPaths(list)}}"
+        "NativeMarkdown": "enumNativeMarkdown{staticfuncparse(_markdown:String)->Data{Array(markdown.utf8).withUnsafeBufferPointer{bytesinletptr=bytes.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}guardletjson=agenthub_ffi_parse_gfm_markdown(ptr,bytes.count)else{returnData(#\"{\"blocks\":[]}\"#.utf8)}defer{agenthub_ffi_string_free(json)}returnData(String(cString:json).utf8)}}}",
+        "FileOpenerService": "enumFileOpenerService{publicstaticfuncvalidateRevealPath(_raw:String)throws->URL{lettrimmed=raw.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmpty,trimmed.hasPrefix(\"/\"),!trimmed.unicodeScalars.contains(where:{CharacterSet.controlCharacters.contains($0)})else{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}returnURL(fileURLWithPath:trimmed)}publicstaticfuncrevealPaths(_paths:[String])asyncthrows{leturls=trypaths.map(validateRevealPath)guard!urls.isEmptyelse{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}awaitMainActor.run{NSWorkspace.shared.activateFileViewerSelecting(urls)}}}"
       },
       "calls": []
     },
     "macos/Sources/AgentHubCore/Bridge/RuntimeConnectionStore.swift": {
       "types": {
+        "PreferenceKey": "enumPreferenceKey{staticlettheme=\"agenthub.theme\"staticletnavCollapsed=\"agenthub.nav-collapsed\"}",
         "RemoteRequestEnvelope": "structRemoteRequestEnvelope<T:Encodable>:Encodable{letrequest:T}"
       },
       "calls": []
@@ -10922,16 +10832,16 @@
         "ProbeLiveSession": "structProbeLiveSession:Codable,Equatable,Identifiable,Sendable{publicvarid:StringpublicvarsessionKey:String?publicvarprovider:String?publicvarbucket:String?publicvartitle:String?publicvarcwd:String?enumCodingKeys:String,CodingKey{caseidcasesessionKey=\"session_key\"caseprovider,bucket,title,cwd}publicvaruniqueKey:String{\"\\(provider ?? \"codex\"):\\(sessionKey ?? id):\\(bucket ?? \"live\")\"}}",
         "ProviderNotificationRuntimeStats": "structProviderNotificationRuntimeStats:Codable,Equatable,Sendable{publicvarprovider:Stringpublicvarstreams:Int}",
         "ProbeStatus": "structProbeStatus:Codable,Equatable,Sendable{publicvarhostLabel:String?publicvarhookStatus:String?publicvarerrorMonitorStatus:String?publicvarerrorMonitorIncidentCount:Int?publicvarcodexHome:String?publicvarcodexHooksPath:String?publicvardshSessionsPath:String?publicvaractualCommands:[String]?publicvarstaleCommandCount:Int?publicvaremptyGroupCount:Int?publicvardiscoveryWarnings:[String]?publicvarrunningCount:Int?publicvarreplyNeededCount:Int?publicvarrecoverableCount:Int?publicvarrunningThreads:[ProbeLiveSession]?publicvarreplyNeededThreads:[ProbeLiveSession]?publicvarrecoverableThreads:[ProbeLiveSession]?publicvaractiveSessions:[ProbeLiveSession]?publicvarproviderNotifications:[ProviderNotificationRuntimeStats]?enumCodingKeys:String,CodingKey{casehostLabel=\"host_label\"casehookStatus=\"hook_status\"caseerrorMonitorStatus=\"error_monitor_status\"caseerrorMonitorIncidentCount=\"error_monitor_incident_count\"casecodexHome=\"codex_home\"casecodexHooksPath=\"codex_hooks_path\"casedshSessionsPath=\"dsh_sessions_path\"caseactualCommands=\"actual_commands\"casestaleCommandCount=\"stale_command_count\"caseemptyGroupCount=\"empty_group_count\"casediscoveryWarnings=\"discovery_warnings\"caserunningCount=\"running_count\"casereplyNeededCount=\"reply_needed_count\"caserecoverableCount=\"recoverable_count\"caserunningThreads=\"running_threads\"casereplyNeededThreads=\"reply_needed_threads\"caserecoverableThreads=\"recoverable_threads\"caseactiveSessions=\"active_sessions\"caseproviderNotifications=\"provider_notifications\"}}",
-        "ProbeSettingsView": "structProbeSettingsView:Codable,Equatable,Sendable{publicvarcodex:[String:JSONValue]?publicvarprobe:[String:JSONValue]?publicvarnotifications:[String:JSONValue]?}",
+        "ProbeSettingsView": "structProbeSettingsView:Codable,Equatable,Sendable{publicstructCodex:Codable,Equatable,Sendable{publicvarconfiguredCodexHome:String?publicvarworkspace:StringpublicvarhostLabel:StringenumCodingKeys:String,CodingKey{caseconfiguredCodexHome=\"configured_codex_home\"caseworkspacecasehostLabel=\"host_label\"}}publicstructProbe:Codable,Equatable,Sendable{publicvarenabled:BoolpublicvarpollSeconds:IntpublicvarrecentLimit:Intpublicvarhooks:Hookspublicvarobservability:ObservabilitypublicvarerrorMonitor:ErrorMonitorenumCodingKeys:String,CodingKey{caseenabledcasepollSeconds=\"poll_seconds\"caserecentLimit=\"recent_limit\"casehookscaseobservabilitycaseerrorMonitor=\"error_monitor\"}}publicstructHooks:Codable,Equatable,Sendable{publicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolenumCodingKeys:String,CodingKey{casemanageStopHook=\"manage_stop_hook\"caseclearAccountScope=\"clear_account_scope\"}}publicstructObservability:Codable,Equatable,Sendable{publicvareventRetentionDays:IntpublicvarhookEventMaxLines:IntpublicvarhookCooldownMaxLines:IntpublicvarlogMaxBytes:IntenumCodingKeys:String,CodingKey{caseeventRetentionDays=\"event_retention_days\"casehookEventMaxLines=\"hook_event_max_lines\"casehookCooldownMaxLines=\"hook_cooldown_max_lines\"caselogMaxBytes=\"log_max_bytes\"}}publicstructErrorMonitor:Codable,Equatable,Sendable{publicvarenabled:Bool}publicstructNotifications:Codable,Equatable,Sendable{publicvardeviceKeyConfigured:BoolpublicvarserverUrl:Stringpublicvarenabled:Boolpublicvarsound:String?publicvargroup:Stringpublicvarurl:String?publicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaude:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolenumCodingKeys:String,CodingKey{casedeviceKeyConfigured=\"device_key_configured\"caseserverUrl=\"server_url\"caseenabledcasesoundcasegroupcaseurlcasenotifyCompletion=\"notify_completion\"casenotifyReplyNeeded=\"notify_reply_needed\"casenotifyRecoverable=\"notify_recoverable\"casenotifyCodex=\"notify_codex\"casenotifyGrok=\"notify_grok\"casenotifyGrokbot=\"notify_grokbot\"casenotifyGithubCi=\"notify_github_ci\"casegithubCiRepositories=\"github_ci_repositories\"casegithubCiFilterBots=\"github_ci_filter_bots\"casenotifyGrokCompletion=\"notify_grok_completion\"casenotifyGrokFailure=\"notify_grok_failure\"casenotifyGrokReplyNeeded=\"notify_grok_reply_needed\"casenotifyClaudeReplyNeeded=\"notify_claude_reply_needed\"casenotifyClaudeFailure=\"notify_claude_failure\"casenotifyClaudeCompletion=\"notify_claude_completion\"casenotifyClaude=\"notify_claude\"casenotifyAntigravity=\"notify_antigravity\"casenotifyAntigravityCompletion=\"notify_antigravity_completion\"casenotifyAntigravityFailure=\"notify_antigravity_failure\"casenotifyAntigravityReplyNeeded=\"notify_antigravity_reply_needed\"casenotifyAntigravityAuthorization=\"notify_antigravity_authorization\"casenotifyDsh=\"notify_dsh\"casenotifyDshCompletion=\"notify_dsh_completion\"casenotifyDshFailure=\"notify_dsh_failure\"casenotifyDshReplyNeeded=\"notify_dsh_reply_needed\"casenotifyDshAuthorization=\"notify_dsh_authorization\"}}publicvarcodex:Codexpublicvarprobe:Probepublicvarnotifications:Notifications}",
         "ProbeNotificationPlatform": "enumProbeNotificationPlatform:String,CaseIterable,Sendable,Identifiable{casecodexcaseclaudeCode=\"claude_code\"casegrokcasegrokbotcaseantigravitycasedshpublicvarid:String{rawValue}publicvarbrand:AgentBrandId{switchself{case.codex:.codexcase.claudeCode:.claudecase.grok:.grokcase.grokbot:.grokbotcase.antigravity:.antigravitycase.dsh:.dsh}}publicvarlabel:String{switchself{case.codex:\"Codex\"case.claudeCode:\"Claude Code\"case.grok:\"Grok Build\"case.grokbot:\"Grok Bot\"case.antigravity:\"Antigravity\"case.dsh:\"DeepSeek Harness\"}}}",
-        "ProbeSettingsDraft": "structProbeSettingsDraft:Equatable,Sendable{publicvarcodexHome:StringpublicvarcodexWorkspace:StringpublicvarhostLabel:StringpublicvarprobeEnabled:BoolpublicvarerrorMonitorEnabled:BoolpublicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolpublicvarpollSecondsText:StringpublicvarrecentLimitText:StringpublicvareventRetentionDaysText:StringpublicvarhookEventMaxLinesText:StringpublicvarhookCooldownMaxLinesText:StringpublicvarlogMaxMiBText:StringpublicvarbarkEnabled:BoolpublicvarbarkServerUrl:StringpublicvarbarkDeviceKey:StringpublicvarbarkDeviceKeyConfigured:BoolpublicvarbarkSound:StringpublicvarbarkGroup:StringpublicvarbarkUrl:StringpublicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyClaude:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:Boolpublicstaticfuncfrom(_view:ProbeSettingsView)->ProbeSettingsDraft{funcstr(_dict:[String:JSONValue]?,_key:String,fallback:String=\"\")->String{ifcaselet.string(s)?=dict?[key]{returns}returnfallback}funcbool(_dict:[String:JSONValue]?,_key:String,fallback:Bool)->Bool{ifcaselet.bool(b)?=dict?[key]{returnb}returnfallback}funcint(_dict:[String:JSONValue]?,_key:String,fallback:Int)->Int{ifcaselet.number(d)?=dict?[key]{returnInt(d)}returnfallback}funcobj(_dict:[String:JSONValue]?,_key:String)->[String:JSONValue]?{ifcaselet.object(o)?=dict?[key]{returno}returnnil}letcodex=view.codexletprobe=view.probelethooks=obj(probe,\"hooks\")leterrorMon=obj(probe,\"error_monitor\")letobs=obj(probe,\"observability\")letnotif=view.notifications??obj(probe,\"notifications\")letlogBytes=int(obs,\"log_max_bytes\",fallback:5*1024*1024)letlogMiB=Double(logBytes)/(1024.0*1024.0)letformattedMiB=logMiB.truncatingRemainder(dividingBy:1)==0?String(Int(logMiB)):String(format:\"%.6g\",logMiB)letrepos:[String]={ifcaselet.array(arr)?=notif?[\"github_ci_repositories\"]{returnarr.compactMap{ifcaselet.string(s)=$0{lett=s.trimmingCharacters(in:.whitespacesAndNewlines)returnt.isEmpty?nil:t}returnnil}}return[]}()letconfiguredHome:String={ifcaselet.string(explicit)?=codex?[\"configured_home\"]{returnexplicit}returnstr(codex,\"home\")}()returnProbeSettingsDraft(codexHome:configuredHome,codexWorkspace:str(codex,\"workspace\"),hostLabel:str(codex,\"host_label\",fallback:\"AgentHub\"),probeEnabled:bool(probe,\"enabled\",fallback:true),errorMonitorEnabled:bool(errorMon,\"enabled\",fallback:true),manageStopHook:bool(hooks,\"manage_stop_hook\",fallback:true),clearAccountScope:bool(hooks,\"clear_account_scope\",fallback:false),pollSecondsText:String(int(probe,\"poll_seconds\",fallback:15)),recentLimitText:String(int(probe,\"recent_limit\",fallback:50)),eventRetentionDaysText:String(int(obs,\"event_retention_days\",fallback:2)),hookEventMaxLinesText:String(int(obs,\"hook_event_max_lines\",fallback:500)),hookCooldownMaxLinesText:String(int(obs,\"hook_cooldown_max_lines\",fallback:1000)),logMaxMiBText:formattedMiB,barkEnabled:bool(notif,\"enabled\",fallback:false),barkServerUrl:str(notif,\"server_url\",fallback:\"https://api.day.app\"),barkDeviceKey:\"\",barkDeviceKeyConfigured:bool(notif,\"device_key_configured\",fallback:false),barkSound:str(notif,\"sound\"),barkGroup:str(notif,\"group\",fallback:\"AgentHub\"),barkUrl:str(notif,\"url\"),notifyCompletion:bool(notif,\"notify_completion\",fallback:true),notifyReplyNeeded:bool(notif,\"notify_reply_needed\",fallback:true),notifyRecoverable:bool(notif,\"notify_recoverable\",fallback:true),notifyCodex:bool(notif,\"notify_codex\",fallback:true),notifyGrok:bool(notif,\"notify_grok\",fallback:true),notifyGrokCompletion:bool(notif,\"notify_grok_completion\",fallback:true),notifyGrokFailure:bool(notif,\"notify_grok_failure\",fallback:true),notifyGrokReplyNeeded:bool(notif,\"notify_grok_reply_needed\",fallback:true),notifyGrokbot:bool(notif,\"notify_grokbot\",fallback:false),notifyClaude:bool(notif,\"notify_claude\",fallback:true),notifyClaudeCompletion:bool(notif,\"notify_claude_completion\",fallback:true),notifyClaudeFailure:bool(notif,\"notify_claude_failure\",fallback:true),notifyClaudeReplyNeeded:bool(notif,\"notify_claude_reply_needed\",fallback:true),notifyAntigravity:bool(notif,\"notify_antigravity\",fallback:false),notifyAntigravityCompletion:bool(notif,\"notify_antigravity_completion\",fallback:false),notifyAntigravityFailure:bool(notif,\"notify_antigravity_failure\",fallback:false),notifyAntigravityReplyNeeded:bool(notif,\"notify_antigravity_reply_needed\",fallback:false),notifyAntigravityAuthorization:bool(notif,\"notify_antigravity_authorization\",fallback:false),notifyDsh:bool(notif,\"notify_dsh\",fallback:false),notifyDshCompletion:bool(notif,\"notify_dsh_completion\",fallback:false),notifyDshFailure:bool(notif,\"notify_dsh_failure\",fallback:false),notifyDshReplyNeeded:bool(notif,\"notify_dsh_reply_needed\",fallback:false),notifyDshAuthorization:bool(notif,\"notify_dsh_authorization\",fallback:false),notifyGithubCi:bool(notif,\"notify_github_ci\",fallback:false),githubCiRepositories:repos,githubCiFilterBots:bool(notif,\"github_ci_filter_bots\",fallback:true))}publicfuncisPlatformEnabled(_platform:ProbeNotificationPlatform)->Bool{switchplatform{case.codex:notifyCodex&&(notifyCompletion||notifyReplyNeeded||notifyRecoverable)case.claudeCode:notifyClaude&&(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded)case.grok:notifyGrok&&(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded)case.grokbot:notifyGrokbotcase.antigravity:notifyAntigravity&&(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization)case.dsh:notifyDsh&&(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization)}}publicmutatingfuncsetPlatformEnabled(_platform:ProbeNotificationPlatform,enabled:Bool){switchplatform{case.codex:notifyCodex=enabledifenabled&&!(notifyCompletion||notifyReplyNeeded||notifyRecoverable){notifyCompletion=truenotifyReplyNeeded=truenotifyRecoverable=true}case.claudeCode:notifyClaude=enabledifenabled&&!(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded){notifyClaudeCompletion=truenotifyClaudeFailure=truenotifyClaudeReplyNeeded=true}case.grok:notifyGrok=enabledifenabled&&!(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded){notifyGrokCompletion=truenotifyGrokFailure=truenotifyGrokReplyNeeded=true}case.grokbot:notifyGrokbot=enabledcase.antigravity:notifyAntigravity=enabledifenabled&&!(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization){notifyAntigravityCompletion=truenotifyAntigravityFailure=truenotifyAntigravityReplyNeeded=truenotifyAntigravityAuthorization=true}case.dsh:notifyDsh=enabledifenabled&&!(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization){notifyDshCompletion=truenotifyDshFailure=truenotifyDshReplyNeeded=truenotifyDshAuthorization=true}}}publicfuncvalidationErrors()->[String]{varerrors:[String]=[]funccheckInt(_raw:String,label:String,min:Int,max:Int){guardletv=Int(raw.trimmingCharacters(in:.whitespaces)),v>=min,v<=maxelse{errors.append(\"\\(label)须为 \\(min) 到 \\(max) 之间的整数\")return}}checkInt(pollSecondsText,label:\"轮询秒数\",min:5,max:3600)checkInt(recentLimitText,label:\"最近事件数\",min:1,max:500)checkInt(eventRetentionDaysText,label:\"通知事件保留天数\",min:1,max:3650)checkInt(hookEventMaxLinesText,label:\"Hook 事件行数\",min:10,max:10000)checkInt(hookCooldownMaxLinesText,label:\"冷却行数\",min:10,max:10000)ifletmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces)),mib.isFinite{letbytes=Int((mib*1024.0*1024.0).rounded())ifbytes<4096||bytes>8*1024*1024{errors.append(\"日志上限 MiB 须在 0.00390625 到 8 之间\")}}else{errors.append(\"日志上限 MiB 格式无效\")}ifhostLabel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{errors.append(\"主机标签不能为空\")}returnerrors}publicfuncbuildSavePayload(submittedDeviceKey:String?=nil)throws->[String:JSONValue]{leterrs=validationErrors()ifletfirst=errs.first{throwNSError(domain:\"AgentHubProbe\",code:1,userInfo:[NSLocalizedDescriptionKey:first])}letpollSeconds=Int(pollSecondsText.trimmingCharacters(in:.whitespaces))??15letrecentLimit=Int(recentLimitText.trimmingCharacters(in:.whitespaces))??50letretentionDays=Int(eventRetentionDaysText.trimmingCharacters(in:.whitespaces))??2lethookMaxLines=Int(hookEventMaxLinesText.trimmingCharacters(in:.whitespaces))??500letcooldownLines=Int(hookCooldownMaxLinesText.trimmingCharacters(in:.whitespaces))??1000letmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces))??5.0letlogBytes=Int((mib*1024.0*1024.0).rounded())letkey=(submittedDeviceKey??barkDeviceKey).trimmingCharacters(in:.whitespacesAndNewlines)lettrimmedHome=codexHome.trimmingCharacters(in:.whitespacesAndNewlines)lethomePatch:JSONValue=(trimmedHome.isEmpty||trimmedHome.lowercased()==\"auto\")?.null:.string(trimmedHome)lettrimmedWs=codexWorkspace.trimmingCharacters(in:.whitespacesAndNewlines)varnotifObj:[String:JSONValue]=[\"enabled\":.bool(barkEnabled||!key.isEmpty),\"server_url\":.string(barkServerUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"sound\":barkSound.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkSound.trimmingCharacters(in:.whitespacesAndNewlines)),\"group\":.string(barkGroup.trimmingCharacters(in:.whitespacesAndNewlines)),\"url\":barkUrl.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"notify_completion\":.bool(notifyCompletion),\"notify_reply_needed\":.bool(notifyReplyNeeded),\"notify_recoverable\":.bool(notifyRecoverable),\"notify_codex\":.bool(notifyCodex),\"notify_grok\":.bool(notifyGrok),\"notify_grokbot\":.bool(notifyGrokbot),\"notify_github_ci\":.bool(notifyGithubCi),\"github_ci_repositories\":.array(githubCiRepositories.map{.string($0.trimmingCharacters(in:.whitespacesAndNewlines))}),\"github_ci_filter_bots\":.bool(githubCiFilterBots),\"notify_grok_completion\":.bool(notifyGrokCompletion),\"notify_grok_failure\":.bool(notifyGrokFailure),\"notify_grok_reply_needed\":.bool(notifyGrokReplyNeeded),\"notify_claude\":.bool(notifyClaude),\"notify_claude_completion\":.bool(notifyClaudeCompletion),\"notify_claude_failure\":.bool(notifyClaudeFailure),\"notify_claude_reply_needed\":.bool(notifyClaudeReplyNeeded),\"notify_antigravity\":.bool(notifyAntigravity),\"notify_antigravity_completion\":.bool(notifyAntigravityCompletion),\"notify_antigravity_failure\":.bool(notifyAntigravityFailure),\"notify_antigravity_reply_needed\":.bool(notifyAntigravityReplyNeeded),\"notify_antigravity_authorization\":.bool(notifyAntigravityAuthorization),\"notify_dsh\":.bool(notifyDsh),\"notify_dsh_completion\":.bool(notifyDshCompletion),\"notify_dsh_failure\":.bool(notifyDshFailure),\"notify_dsh_reply_needed\":.bool(notifyDshReplyNeeded),\"notify_dsh_authorization\":.bool(notifyDshAuthorization),]if!key.isEmpty{notifObj[\"device_key\"]=.string(key)}varpayload:[String:JSONValue]=[\"codex\":.object([\"home\":homePatch,\"workspace\":trimmedWs.isEmpty?.null:.string(trimmedWs),\"host_label\":.string(hostLabel.trimmingCharacters(in:.whitespacesAndNewlines)),]),\"probe\":.object([\"enabled\":.bool(probeEnabled),\"poll_seconds\":.number(Double(pollSeconds)),\"recent_limit\":.number(Double(recentLimit)),\"error_monitor\":.object([\"enabled\":.bool(errorMonitorEnabled)]),\"hooks\":.object([\"manage_stop_hook\":.bool(manageStopHook),\"clear_account_scope\":.bool(clearAccountScope),]),\"notifications\":.object(notifObj),\"observability\":.object([\"event_retention_days\":.number(Double(retentionDays)),\"hook_event_max_lines\":.number(Double(hookMaxLines)),\"hook_cooldown_max_lines\":.number(Double(cooldownLines)),\"log_max_bytes\":.number(Double(logBytes)),]),]),]if!key.isEmpty{payload[\"notifications\"]=.object([\"device_key\":.string(key)])}returnpayload}}",
+        "ProbeSettingsDraft": "structProbeSettingsDraft:Equatable,Sendable{publicvarcodexHome:StringpublicvarcodexWorkspace:StringpublicvarhostLabel:StringpublicvarprobeEnabled:BoolpublicvarerrorMonitorEnabled:BoolpublicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolpublicvarpollSecondsText:StringpublicvarrecentLimitText:StringpublicvareventRetentionDaysText:StringpublicvarhookEventMaxLinesText:StringpublicvarhookCooldownMaxLinesText:StringpublicvarlogMaxMiBText:StringpublicvarbarkEnabled:BoolpublicvarbarkServerUrl:StringpublicvarbarkDeviceKey:StringpublicvarbarkDeviceKeyConfigured:BoolpublicvarbarkSound:StringpublicvarbarkGroup:StringpublicvarbarkUrl:StringpublicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyClaude:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:Boolpublicstaticfuncfrom(_view:ProbeSettingsView)->ProbeSettingsDraft{letcodex=view.codexletprobe=view.probelethooks=probe.hooksletobs=probe.observabilityletnotif=view.notificationsletlogBytes=obs.logMaxBytesletlogMiB=Double(logBytes)/(1024.0*1024.0)letformattedMiB=logMiB.truncatingRemainder(dividingBy:1)==0?String(Int(logMiB)):String(format:\"%.6g\",logMiB)returnProbeSettingsDraft(codexHome:codex.configuredCodexHome??\"\",codexWorkspace:codex.workspace,hostLabel:codex.hostLabel,probeEnabled:probe.enabled,errorMonitorEnabled:probe.errorMonitor.enabled,manageStopHook:hooks.manageStopHook,clearAccountScope:hooks.clearAccountScope,pollSecondsText:String(probe.pollSeconds),recentLimitText:String(probe.recentLimit),eventRetentionDaysText:String(obs.eventRetentionDays),hookEventMaxLinesText:String(obs.hookEventMaxLines),hookCooldownMaxLinesText:String(obs.hookCooldownMaxLines),logMaxMiBText:formattedMiB,barkEnabled:notif.enabled,barkServerUrl:notif.serverUrl,barkDeviceKey:\"\",barkDeviceKeyConfigured:notif.deviceKeyConfigured,barkSound:notif.sound??\"\",barkGroup:notif.group,barkUrl:notif.url??\"\",notifyCompletion:notif.notifyCompletion,notifyReplyNeeded:notif.notifyReplyNeeded,notifyRecoverable:notif.notifyRecoverable,notifyCodex:notif.notifyCodex,notifyGrok:notif.notifyGrok,notifyGrokCompletion:notif.notifyGrokCompletion,notifyGrokFailure:notif.notifyGrokFailure,notifyGrokReplyNeeded:notif.notifyGrokReplyNeeded,notifyGrokbot:notif.notifyGrokbot,notifyClaude:notif.notifyClaude,notifyClaudeCompletion:notif.notifyClaudeCompletion,notifyClaudeFailure:notif.notifyClaudeFailure,notifyClaudeReplyNeeded:notif.notifyClaudeReplyNeeded,notifyAntigravity:notif.notifyAntigravity,notifyAntigravityCompletion:notif.notifyAntigravityCompletion,notifyAntigravityFailure:notif.notifyAntigravityFailure,notifyAntigravityReplyNeeded:notif.notifyAntigravityReplyNeeded,notifyAntigravityAuthorization:notif.notifyAntigravityAuthorization,notifyDsh:notif.notifyDsh,notifyDshCompletion:notif.notifyDshCompletion,notifyDshFailure:notif.notifyDshFailure,notifyDshReplyNeeded:notif.notifyDshReplyNeeded,notifyDshAuthorization:notif.notifyDshAuthorization,notifyGithubCi:notif.notifyGithubCi,githubCiRepositories:notif.githubCiRepositories,githubCiFilterBots:notif.githubCiFilterBots)}publicfuncisPlatformEnabled(_platform:ProbeNotificationPlatform)->Bool{switchplatform{case.codex:notifyCodex&&(notifyCompletion||notifyReplyNeeded||notifyRecoverable)case.claudeCode:notifyClaude&&(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded)case.grok:notifyGrok&&(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded)case.grokbot:notifyGrokbotcase.antigravity:notifyAntigravity&&(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization)case.dsh:notifyDsh&&(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization)}}publicmutatingfuncsetPlatformEnabled(_platform:ProbeNotificationPlatform,enabled:Bool){switchplatform{case.codex:notifyCodex=enabledifenabled&&!(notifyCompletion||notifyReplyNeeded||notifyRecoverable){notifyCompletion=truenotifyReplyNeeded=truenotifyRecoverable=true}case.claudeCode:notifyClaude=enabledifenabled&&!(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded){notifyClaudeCompletion=truenotifyClaudeFailure=truenotifyClaudeReplyNeeded=true}case.grok:notifyGrok=enabledifenabled&&!(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded){notifyGrokCompletion=truenotifyGrokFailure=truenotifyGrokReplyNeeded=true}case.grokbot:notifyGrokbot=enabledcase.antigravity:notifyAntigravity=enabledifenabled&&!(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization){notifyAntigravityCompletion=truenotifyAntigravityFailure=truenotifyAntigravityReplyNeeded=truenotifyAntigravityAuthorization=true}case.dsh:notifyDsh=enabledifenabled&&!(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization){notifyDshCompletion=truenotifyDshFailure=truenotifyDshReplyNeeded=truenotifyDshAuthorization=true}}}publicfuncvalidationErrors()->[String]{varerrors:[String]=[]funccheckInt(_raw:String,label:String,min:Int,max:Int){guardletv=Int(raw.trimmingCharacters(in:.whitespaces)),v>=min,v<=maxelse{errors.append(\"\\(label)须为 \\(min) 到 \\(max) 之间的整数\")return}}checkInt(pollSecondsText,label:\"轮询秒数\",min:5,max:3600)checkInt(recentLimitText,label:\"最近事件数\",min:1,max:500)checkInt(eventRetentionDaysText,label:\"通知事件保留天数\",min:1,max:3650)checkInt(hookEventMaxLinesText,label:\"Hook 事件行数\",min:10,max:10000)checkInt(hookCooldownMaxLinesText,label:\"冷却行数\",min:10,max:10000)ifletmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces)),mib.isFinite{letbytes=Int((mib*1024.0*1024.0).rounded())ifbytes<4096||bytes>8*1024*1024{errors.append(\"日志上限 MiB 须在 0.00390625 到 8 之间\")}}else{errors.append(\"日志上限 MiB 格式无效\")}ifhostLabel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{errors.append(\"主机标签不能为空\")}returnerrors}publicfuncbuildSavePayload(submittedDeviceKey:String?=nil)throws->[String:JSONValue]{leterrs=validationErrors()ifletfirst=errs.first{throwNSError(domain:\"AgentHubProbe\",code:1,userInfo:[NSLocalizedDescriptionKey:first])}letpollSeconds=Int(pollSecondsText.trimmingCharacters(in:.whitespaces))??15letrecentLimit=Int(recentLimitText.trimmingCharacters(in:.whitespaces))??50letretentionDays=Int(eventRetentionDaysText.trimmingCharacters(in:.whitespaces))??2lethookMaxLines=Int(hookEventMaxLinesText.trimmingCharacters(in:.whitespaces))??500letcooldownLines=Int(hookCooldownMaxLinesText.trimmingCharacters(in:.whitespaces))??1000letmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces))??5.0letlogBytes=Int((mib*1024.0*1024.0).rounded())letkey=(submittedDeviceKey??barkDeviceKey).trimmingCharacters(in:.whitespacesAndNewlines)lettrimmedHome=codexHome.trimmingCharacters(in:.whitespacesAndNewlines)lethomePatch:JSONValue=(trimmedHome.isEmpty||trimmedHome.lowercased()==\"auto\")?.null:.string(trimmedHome)lettrimmedWs=codexWorkspace.trimmingCharacters(in:.whitespacesAndNewlines)varnotifObj:[String:JSONValue]=[\"enabled\":.bool(barkEnabled||!key.isEmpty),\"server_url\":.string(barkServerUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"sound\":barkSound.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkSound.trimmingCharacters(in:.whitespacesAndNewlines)),\"group\":.string(barkGroup.trimmingCharacters(in:.whitespacesAndNewlines)),\"url\":barkUrl.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"notify_completion\":.bool(notifyCompletion),\"notify_reply_needed\":.bool(notifyReplyNeeded),\"notify_recoverable\":.bool(notifyRecoverable),\"notify_codex\":.bool(notifyCodex),\"notify_grok\":.bool(notifyGrok),\"notify_grokbot\":.bool(notifyGrokbot),\"notify_github_ci\":.bool(notifyGithubCi),\"github_ci_repositories\":.array(githubCiRepositories.map{.string($0.trimmingCharacters(in:.whitespacesAndNewlines))}),\"github_ci_filter_bots\":.bool(githubCiFilterBots),\"notify_grok_completion\":.bool(notifyGrokCompletion),\"notify_grok_failure\":.bool(notifyGrokFailure),\"notify_grok_reply_needed\":.bool(notifyGrokReplyNeeded),\"notify_claude\":.bool(notifyClaude),\"notify_claude_completion\":.bool(notifyClaudeCompletion),\"notify_claude_failure\":.bool(notifyClaudeFailure),\"notify_claude_reply_needed\":.bool(notifyClaudeReplyNeeded),\"notify_antigravity\":.bool(notifyAntigravity),\"notify_antigravity_completion\":.bool(notifyAntigravityCompletion),\"notify_antigravity_failure\":.bool(notifyAntigravityFailure),\"notify_antigravity_reply_needed\":.bool(notifyAntigravityReplyNeeded),\"notify_antigravity_authorization\":.bool(notifyAntigravityAuthorization),\"notify_dsh\":.bool(notifyDsh),\"notify_dsh_completion\":.bool(notifyDshCompletion),\"notify_dsh_failure\":.bool(notifyDshFailure),\"notify_dsh_reply_needed\":.bool(notifyDshReplyNeeded),\"notify_dsh_authorization\":.bool(notifyDshAuthorization),]if!key.isEmpty{notifObj[\"device_key\"]=.string(key)}varpayload:[String:JSONValue]=[\"codex\":.object([\"home\":homePatch,\"workspace\":trimmedWs.isEmpty?.null:.string(trimmedWs),\"host_label\":.string(hostLabel.trimmingCharacters(in:.whitespacesAndNewlines)),]),\"probe\":.object([\"enabled\":.bool(probeEnabled),\"poll_seconds\":.number(Double(pollSeconds)),\"recent_limit\":.number(Double(recentLimit)),\"error_monitor\":.object([\"enabled\":.bool(errorMonitorEnabled)]),\"hooks\":.object([\"manage_stop_hook\":.bool(manageStopHook),\"clear_account_scope\":.bool(clearAccountScope),]),\"notifications\":.object(notifObj),\"observability\":.object([\"event_retention_days\":.number(Double(retentionDays)),\"hook_event_max_lines\":.number(Double(hookMaxLines)),\"hook_cooldown_max_lines\":.number(Double(cooldownLines)),\"log_max_bytes\":.number(Double(logBytes)),]),]),]if!key.isEmpty{payload[\"notifications\"]=.object([\"device_key\":.string(key)])}returnpayload}}",
         "ProbeEventItem": "structProbeEventItem:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvarkind:String?publicvarprovider:String?publicvartitle:String?publicvarmessage:String?publicvarsummary:String?publicvarreason:String?publicvarsource:String?publicvarthreadId:String?publicvarbarkStatus:String?publicvardedupeStatus:String?publicvardedupeKey:String?publicvarcreatedAt:Int64?publicvarpayload:[String:JSONValue]?enumCodingKeys:String,CodingKey{caseid,kind,provider,title,message,summary,reason,source,payloadcasethreadId=\"thread_id\"casebarkStatus=\"bark_status\"casededupeStatus=\"dedupe_status\"casededupeKey=\"dedupe_key\"casecreatedAt=\"created_at\"}publicinit(id:String,kind:String?=nil,provider:String?=nil,title:String?=nil,message:String?=nil,summary:String?=nil,reason:String?=nil,source:String?=nil,threadId:String?=nil,barkStatus:String?=nil,dedupeStatus:String?=nil,dedupeKey:String?=nil,createdAt:Int64?=nil,payload:[String:JSONValue]?=nil){self.id=idself.kind=kindself.provider=providerself.title=titleself.message=messageself.summary=summaryself.reason=reasonself.source=sourceself.threadId=threadIdself.barkStatus=barkStatusself.dedupeStatus=dedupeStatusself.dedupeKey=dedupeKeyself.createdAt=createdAtself.payload=payload}}",
         "ProbeFormatting": "enumProbeFormatting{privatestaticletsafeBarkCategories:[String:String]=[\"dns\":\"域名解析失败\",\"connection\":\"连接失败\",\"tls\":\"TLS 连接失败\",\"certificate_validation\":\"证书验证失败\",\"timeout\":\"请求超时\",\"response_decode\":\"响应无法确认\",\"response_read\":\"响应读取失败\",\"redirect_rejected\":\"重定向已拒绝\",\"http_status\":\"HTTP 拒绝\",\"bark_response_code\":\"服务拒绝\",\"apns_permanent_rejection\":\"推送服务永久拒绝\",\"invalid_server_url\":\"地址无效\",\"network_unknown\":\"网络错误\",\"request_error\":\"网络错误\",]privatestaticletunknownReasons:Set<String>=[\"request_error\",\"network_unknown\",\"timeout\",\"response_decode\",\"response_read\",\"delivery_interrupted_outcome_unknown\",]publicstaticfunceventKindLabel(_raw:String?)->String{lettrimmed=raw?.trimmingCharacters(in:.whitespacesAndNewlines)??\"\"guard!trimmed.isEmptyelse{return\"Probe 事件\"}returnswitchtrimmed{case\"hook-stop\",\"hook_stop\":\"Stop Hook\"case\"completion\":\"完成\"case\"failure\":\"失败\"case\"reply-needed\",\"reply_needed\":\"需回复\"case\"recoverable\":\"异常/可恢复\"case\"running\":\"运行中\"case\"bark-test\":\"Bark 测试\"default:trimmed}}publicstaticfuncbarkBadge(_event:ProbeEventItem)->(label:String,tone:StatusChipTone){letbarkObj:[String:JSONValue]?={ifcaselet.object(o)?=event.payload?[\"bark\"]{returno}returnnil}()funcstr(_key:String)->String?{ifcaselet.string(s)?=barkObj?[key]{returns}returnnil}funcbool(_key:String)->Bool?{ifcaselet.bool(b)?=barkObj?[key]{returnb}returnnil}funcint(_key:String)->Int?{ifcaselet.number(n)?=barkObj?[key],n.isFinite{returnInt(n)}returnnil}letstatus=(str(\"status\")??event.barkStatus)?.trimmingCharacters(in:.whitespacesAndNewlines)ifbarkObj==nil&&(status==nil||status?.isEmpty==true){return(\"Bark 未记录\",.muted)}ifbool(\"sent\")==true||status==\"sent\"{return(\"Bark 已受理\",.success)}ifbool(\"skipped\")==true||status==\"skipped\"{return(\"已跳过\",.muted)}ifstatus==\"waiting_retry\"{ifletnextMs=int(\"next_retry_ms\"),nextMs>0{letdate=Date(timeIntervalSince1970:Double(nextMs)/1000.0)letdf=DateFormatter()df.dateFormat=\"HH:mm:ss\"return(\"等待重试 · \\(df.string(from: date))\",.warning)}return(\"等待重试\",.warning)}ifstatus==\"retrying\"{ifletattempts=int(\"attempts\"),attempts>0{return(\"重试中 · 第 \\(attempts) 次\",.warning)}return(\"重试中\",.warning)}letreason=str(\"reason\")??event.reason??\"\"letisUnknown=status==\"unknown\"||((status==nil||status?.isEmpty==true)&&unknownReasons.contains(reason))letbase=isUnknown?\"结果未确认\":\"发送失败\"ifletcat=safeBarkCategories[reason]{return(\"\\(base) · \\(cat)\",.warning)}return(base,.warning)}publicstaticfuncdedupeBadge(_event:ProbeEventItem)->(label:String,tone:StatusChipTone)?{ifletpayload=event.payload{ifcaselet.object(dedupe)?=payload[\"dedupe\"]{ifcase.bool(true)?=dedupe[\"duplicate\"]{return(\"重复事件\",.warning)}ifcase.bool(true)?=dedupe[\"claimed\"]{return(\"已认领\",.success)}ifcaselet.string(st)?=dedupe[\"status\"],!st.isEmpty{return(st,st.lowercased().contains(\"duplicate\")?.warning:.muted)}}ifcase.bool(true)?=payload[\"duplicate\"]{return(\"重复事件\",.warning)}}ifletds=event.dedupeStatus,!ds.isEmpty{ifds==\"duplicate\"{return(\"重复事件\",.warning)}ifds==\"claimed\"{return(\"已认领\",.success)}return(ds,ds.lowercased().contains(\"duplicate\")?.warning:.muted)}ifletdk=event.dedupeKey,!dk.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{return(\"去重键已记录\",.muted)}returnnil}}",
         "ProbeEventsResponse": "structProbeEventsResponse:Codable,Equatable,Sendable{publicvarevents:[ProbeEventItem]publicvarlimit:Int?}",
         "ClaudeHooksStatus": "structClaudeHooksStatus:Codable,Equatable,Sendable{publicvarinstalled:BoolpublicvarmanagedCount:IntpublicvarconfigPath:String?}",
         "GithubCiAccount": "structGithubCiAccount:Codable,Equatable,Sendable{publicvarid:UInt64publicvarlogin:String}",
         "GithubCiRepository": "structGithubCiRepository:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarfullName:Stringpublicvararchived:BoolenumCodingKeys:String,CodingKey{caseidcasefullName=\"full_name\"casearchived}publicinit(id:UInt64,fullName:String,archived:Bool=false){self.id=idself.fullName=fullNameself.archived=archived}}",
-        "GithubCiRun": "structGithubCiRun:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarrepositoryId:UInt64publicvarrepositoryName:Stringpublicvarname:String?publicvarworkflowName:StringpublicvardisplayTitle:String?publicvarheadBranch:String?publicvarheadSha:Stringpublicvarstatus:Stringpublicvarconclusion:String?publicvarhtmlUrl:StringpublicvarupdatedAt:StringpublicvarrunAttempt:UInt64?publicvarisBot:BoolenumCodingKeys:String,CodingKey{caseid,namecaserepositoryId=\"repository_id\"caserepositoryName=\"repository_name\"caseworkflowName=\"workflow_name\"casedisplayTitle=\"display_title\"caseheadBranch=\"head_branch\"caseheadSha=\"head_sha\"casestatus,conclusioncasehtmlUrl=\"html_url\"caseupdatedAt=\"updated_at\"caserunAttempt=\"run_attempt\"caseisBot=\"is_bot\"}publicinit(id:UInt64,repositoryId:UInt64,repositoryName:String,name:String?=nil,workflowName:String,displayTitle:String?=nil,headBranch:String?=nil,headSha:String=\"\",status:String,conclusion:String?=nil,htmlUrl:String,updatedAt:String,runAttempt:UInt64?=1,isBot:Bool=false){self.id=idself.repositoryId=repositoryIdself.repositoryName=repositoryNameself.name=nameself.workflowName=workflowNameself.displayTitle=displayTitleself.headBranch=headBranchself.headSha=headShaself.status=statusself.conclusion=conclusionself.htmlUrl=htmlUrlself.updatedAt=updatedAtself.runAttempt=runAttemptself.isBot=isBot}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)id=tryc.decode(UInt64.self,forKey:.id)repositoryId=(try?c.decode(UInt64.self,forKey:.repositoryId))??0repositoryName=(try?c.decode(String.self,forKey:.repositoryName))??\"\"name=tryc.decodeIfPresent(String.self,forKey:.name)workflowName=(try?c.decode(String.self,forKey:.workflowName))??(name??\"工作流\")displayTitle=tryc.decodeIfPresent(String.self,forKey:.displayTitle)headBranch=tryc.decodeIfPresent(String.self,forKey:.headBranch)headSha=(try?c.decode(String.self,forKey:.headSha))??\"\"status=(try?c.decode(String.self,forKey:.status))??\"completed\"conclusion=tryc.decodeIfPresent(String.self,forKey:.conclusion)htmlUrl=(try?c.decode(String.self,forKey:.htmlUrl))??\"\"updatedAt=(try?c.decode(String.self,forKey:.updatedAt))??\"\"runAttempt=tryc.decodeIfPresent(UInt64.self,forKey:.runAttempt)isBot=(try?c.decode(Bool.self,forKey:.isBot))??false}}",
+        "GithubCiRun": "structGithubCiRun:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarrepositoryId:UInt64publicvarrepositoryName:Stringpublicvarname:String?publicvarworkflowName:StringpublicvardisplayTitle:String?publicvarheadBranch:String?publicvarheadSha:Stringpublicvarstatus:Stringpublicvarconclusion:String?publicvarhtmlUrl:StringpublicvarupdatedAt:StringpublicvarrunAttempt:UInt64?publicvarisBot:BoolenumCodingKeys:String,CodingKey{caseid,namecaserepositoryId=\"repository_id\"caserepositoryName=\"repository_name\"caseworkflowName=\"workflow_name\"casedisplayTitle=\"display_title\"caseheadBranch=\"head_branch\"caseheadSha=\"head_sha\"casestatus,conclusioncasehtmlUrl=\"html_url\"caseupdatedAt=\"updated_at\"caserunAttempt=\"run_attempt\"caseisBot=\"is_bot\"}publicinit(id:UInt64,repositoryId:UInt64,repositoryName:String,name:String?=nil,workflowName:String,displayTitle:String?=nil,headBranch:String?=nil,headSha:String=\"\",status:String,conclusion:String?=nil,htmlUrl:String,updatedAt:String,runAttempt:UInt64?=1,isBot:Bool=false){self.id=idself.repositoryId=repositoryIdself.repositoryName=repositoryNameself.name=nameself.workflowName=workflowNameself.displayTitle=displayTitleself.headBranch=headBranchself.headSha=headShaself.status=statusself.conclusion=conclusionself.htmlUrl=htmlUrlself.updatedAt=updatedAtself.runAttempt=runAttemptself.isBot=isBot}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)id=tryc.decode(UInt64.self,forKey:.id)repositoryId=tryc.decode(UInt64.self,forKey:.repositoryId)repositoryName=tryc.decode(String.self,forKey:.repositoryName)name=tryc.decodeIfPresent(String.self,forKey:.name)workflowName=tryc.decodeIfPresent(String.self,forKey:.workflowName)??name??\"工作流\"displayTitle=tryc.decodeIfPresent(String.self,forKey:.displayTitle)headBranch=tryc.decodeIfPresent(String.self,forKey:.headBranch)headSha=tryc.decode(String.self,forKey:.headSha)status=tryc.decode(String.self,forKey:.status)conclusion=tryc.decodeIfPresent(String.self,forKey:.conclusion)htmlUrl=tryc.decode(String.self,forKey:.htmlUrl)updatedAt=tryc.decode(String.self,forKey:.updatedAt)runAttempt=tryc.decodeIfPresent(UInt64.self,forKey:.runAttempt)isBot=tryc.decode(Bool.self,forKey:.isBot)}}",
         "GithubCiSnapshot": "structGithubCiSnapshot:Codable,Equatable,Sendable{publicvarenabled:Boolpublicvarrefreshing:BoolpublicvarfilterBots:BoolpublicvarmonitoredRepositories:[String]publicvaraccount:GithubCiAccount?publicvarrepositories:[GithubCiRepository]publicvarruns:[GithubCiRun]publicvarerror:String?enumCodingKeys:String,CodingKey{caseenabled,refreshingcasefilterBots=\"filter_bots\"casemonitoredRepositories=\"monitored_repositories\"caseselectedRepositories=\"selected_repositories\"caseaccount,repositories,runs,error}publicinit(enabled:Bool=false,refreshing:Bool=false,filterBots:Bool=true,monitoredRepositories:[String]=[],account:GithubCiAccount?=nil,repositories:[GithubCiRepository]=[],runs:[GithubCiRun]=[],error:String?=nil){self.enabled=enabledself.refreshing=refreshingself.filterBots=filterBotsself.monitoredRepositories=monitoredRepositoriesself.account=accountself.repositories=repositoriesself.runs=runsself.error=error}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)enabled=tryc.decodeIfPresent(Bool.self,forKey:.enabled)??falserefreshing=tryc.decodeIfPresent(Bool.self,forKey:.refreshing)??falsefilterBots=tryc.decodeIfPresent(Bool.self,forKey:.filterBots)??truemonitoredRepositories=tryc.decodeIfPresent([String].self,forKey:.monitoredRepositories)??(tryc.decodeIfPresent([String].self,forKey:.selectedRepositories))??[]account=tryc.decodeIfPresent(GithubCiAccount.self,forKey:.account)repositories=tryc.decodeIfPresent([GithubCiRepository].self,forKey:.repositories)??[]runs=tryc.decodeIfPresent([GithubCiRun].self,forKey:.runs)??[]error=tryc.decodeIfPresent(String.self,forKey:.error)}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encode(enabled,forKey:.enabled)tryc.encode(refreshing,forKey:.refreshing)tryc.encode(filterBots,forKey:.filterBots)tryc.encode(monitoredRepositories,forKey:.monitoredRepositories)tryc.encodeIfPresent(account,forKey:.account)tryc.encode(repositories,forKey:.repositories)tryc.encode(runs,forKey:.runs)tryc.encodeIfPresent(error,forKey:.error)}}",
         "GithubCiRepoOption": "structGithubCiRepoOption:Equatable,Identifiable,Sendable{publicvarid:String{key}publicletkey:StringpublicletrepoId:StringpublicletfullName:String}",
         "GithubCiDomain": "enumGithubCiDomain{publicstaticfuncrunStatus(_run:GithubCiRun)->(label:String,tone:StatusChipTone){letstate=run.status==\"completed\"?(run.conclusion??\"completed\"):run.statusletlabel:String=switchstate{case\"success\":\"成功\"case\"failure\":\"失败\"case\"timed_out\":\"超时\"case\"cancelled\":\"已取消\"case\"skipped\":\"已跳过\"case\"in_progress\":\"运行中\"case\"queued\":\"排队中\"case\"waiting\",\"requested\",\"pending\":\"等待中\"case\"action_required\":\"待处理\"case\"startup_failure\":\"启动失败\"case\"neutral\",\"completed\":\"已完成\"case\"stale\":\"已过期\"default:state}lettone:StatusChipTone=ifstate==\"success\"{.success}elseif[\"failure\",\"timed_out\",\"startup_failure\"].contains(state){.danger}elseifrun.status!=\"completed\"{.warning}else{.neutral}return(label,tone)}publicstaticfuncvisibleRuns(runs:[GithubCiRun],repositories:[String],filterBots:Bool=false)->[GithubCiRun]{letnormalized=repositories.map{$0.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()}.filter{!$0.isEmpty}letfiltered=runs.filter{runin(!filterBots||!run.isBot)&&(normalized.isEmpty||normalized.contains{repoinString(run.repositoryId).lowercased()==repo||run.repositoryName.lowercased()==repo})}letsorted=filtered.sorted{lhs,rhsiniflhs.updatedAt!=rhs.updatedAt{returnlhs.updatedAt>rhs.updatedAt}returnfalse}returnArray(sorted.prefix(20))}publicstaticfuncformatRunUpdatedAt(_raw:String)->String{lettrimmed=raw.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmptyelse{return\"—\"}letisoFrac=ISO8601DateFormatter()isoFrac.formatOptions=[.withInternetDateTime,.withFractionalSeconds]letisoPlain=ISO8601DateFormatter()isoPlain.formatOptions=[.withInternetDateTime]guardletdate=isoFrac.date(from:trimmed)??isoPlain.date(from:trimmed)else{returntrimmed}letdf=DateFormatter()df.dateFormat=\"MM-dd HH:mm\"returndf.string(from:date)}publicstaticfuncbuildCatalog(repositories:[GithubCiRepository]=[],runs:[GithubCiRun]=[],configured:[String]=[])->[GithubCiRepoOption]{varcatalog:[GithubCiRepoOption]=[]varseenNames=Set<String>()varseenIds=Set<String>()funcpush(id:String,fullName:String){lettName=fullName.trimmingCharacters(in:.whitespacesAndNewlines)lettId=id.trimmingCharacters(in:.whitespacesAndNewlines)guard!tName.isEmptyelse{return}letlowerName=tName.lowercased()letlowerId=tId.lowercased()ifseenNames.contains(lowerName)||(!lowerId.isEmpty&&seenIds.contains(lowerId)){return}seenNames.insert(lowerName)if!lowerId.isEmpty{seenIds.insert(lowerId)}catalog.append(GithubCiRepoOption(key:tName,repoId:tId.isEmpty?tName:tId,fullName:tName))}forrepoinrepositorieswhere!repo.archived{push(id:String(repo.id),fullName:repo.fullName)}forruninruns{push(id:String(run.repositoryId),fullName:run.repositoryName)}forentryinconfigured{lett=entry.trimmingCharacters(in:.whitespacesAndNewlines)if!t.isEmpty{push(id:t,fullName:t)}}returncatalog}publicstaticfuncisSelected(_option:GithubCiRepoOption,configured:[String])->Bool{letlowerName=option.fullName.lowercased()letlowerId=option.repoId.lowercased()returnconfigured.contains{iteminlett=item.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()return!t.isEmpty&&(t==lowerName||t==lowerId)}}publicstaticfunctoggleSelection(_option:GithubCiRepoOption,configured:[String])->[String]{letlowerName=option.fullName.lowercased()letlowerId=option.repoId.lowercased()ifisSelected(option,configured:configured){returnconfigured.filter{iteminlett=item.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()return!t.isEmpty&&t!=lowerName&&t!=lowerId}}letcleaned=configured.map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}.filter{!$0.isEmpty}returncleaned+[option.fullName]}publicstaticfuncaddSelection(query:String,catalog:[GithubCiRepoOption],configured:[String])->[String]{letcleaned=configured.map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}.filter{!$0.isEmpty}lettrimmed=query.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmptyelse{returncleaned}letlower=trimmed.lowercased()letexact=catalog.first{$0.fullName.lowercased()==lower||$0.repoId.lowercased()==lower}letpartials=exact!=nil?[exact!]:catalog.filter{$0.fullName.lowercased().contains(lower)}letmatched=exact??(partials.count==1?partials[0]:nil)lettargetName=matched?.fullName??trimmedletalready=cleaned.contains{iteminletil=item.lowercased()returnil==targetName.lowercased()||(matched!=nil&&il==matched!.repoId.lowercased())}returnalready?cleaned:(cleaned+[targetName])}}"
@@ -10999,10 +10909,10 @@
         "UserInputAnswer": "structUserInputAnswer:Codable,Equatable,Sendable{publicvarquestionId:Stringpublicvaranswers:[String]publicvarnote:String?enumCodingKeys:String,CodingKey{casequestionId=\"question_id\"caseanswerscasenote}publicinit(questionId:String,answers:[String],note:String?=nil){self.questionId=questionIdself.answers=answersself.note=note}}",
         "PendingElicitation": "structPendingElicitation:Codable,Equatable,Sendable{publicvarturnId:String?publicvaritemId:String?publicvarquestions:[UserInputQuestion]enumCodingKeys:String,CodingKey{caseturnId=\"turn_id\"caseitemId=\"item_id\"casequestions}publicinit(turnId:String?=nil,itemId:String?=nil,questions:[UserInputQuestion]=[]){self.turnId=turnIdself.itemId=itemIdself.questions=questions}}",
         "CodexMessage": "structCodexMessage:Codable,Equatable,Sendable{publicvarrole:Stringpublicvarkind:Stringpublicvartext:StringpublicvarcreatedAt:String?enumCodingKeys:String,CodingKey{caserolecasekindcasetextcasecreatedAt=\"created_at\"}}",
-        "MessageBlock": "structMessageBlock:Codable,Equatable,Sendable,Identifiable{publicvarsubagent:SubagentActivity?publicvaruserMessage:UserMessageContent?publicvarid:Stringpublicvarrole:Stringpublicvarkind:StringpublicvardisplayKind:String?publicvarstatus:String?publicvartext:String?publicvarsummary:String?publicvarinput:String?publicvartruncated:Bool?publicvarresolved:Bool?publicvaranswers:[UserInputAnswer]?publicvarplanStatus:String?publicvargroupId:String?publicvartoolName:String?publicvarcallId:String?publicvarturnId:String?publicvaritemId:String?publicvarcreatedAt:String?publicvarquestions:[UserInputQuestion]publicvarpayload:JSONValue?publicvarcollapsedIds:[String]?enumCodingKeys:String,CodingKey{casesubagentcaseuserMessage=\"user_message\"caseid,role,kindcasedisplayKind=\"display_kind\"casestatus,text,summary,input,truncated,resolved,answerscaseplanStatus=\"plan_status\"casegroupId=\"group_id\"casetoolName=\"tool_name\"casecallId=\"call_id\"caseturnId=\"turn_id\"caseitemId=\"item_id\"casecreatedAt=\"created_at\"casequestions,payload,collapsedIds}publicinit(id:String,role:String,kind:String,displayKind:String?=nil,status:String?=nil,text:String?=nil,summary:String?=nil,input:String?=nil,truncated:Bool?=nil,resolved:Bool?=nil,answers:[UserInputAnswer]?=nil,planStatus:String?=nil,toolName:String?=nil,callId:String?=nil,turnId:String?=nil,itemId:String?=nil,createdAt:String?=nil,questions:[UserInputQuestion]=[],userMessage:UserMessageContent?=nil,subagent:SubagentActivity?=nil,payload:JSONValue?=nil,collapsedIds:[String]?=nil){self.id=idself.role=roleself.kind=kindself.displayKind=displayKindself.status=statusself.text=textself.summary=summaryself.input=inputself.truncated=truncatedself.resolved=resolvedself.answers=answersself.planStatus=planStatusself.toolName=toolNameself.callId=callIdself.turnId=turnIdself.itemId=itemIdself.createdAt=createdAtself.questions=questionsself.userMessage=userMessageself.subagent=subagentself.payload=payloadself.collapsedIds=collapsedIds}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)subagent=tryc.decodeIfPresent(SubagentActivity.self,forKey:.subagent)userMessage=tryc.decodeIfPresent(UserMessageContent.self,forKey:.userMessage)id=tryc.decode(String.self,forKey:.id)role=(try?c.decode(String.self,forKey:.role))??\"\"kind=(try?c.decode(String.self,forKey:.kind))??\"\"displayKind=tryc.decodeIfPresent(String.self,forKey:.displayKind)status=tryc.decodeIfPresent(String.self,forKey:.status)text=tryc.decodeIfPresent(String.self,forKey:.text)summary=tryc.decodeIfPresent(String.self,forKey:.summary)input=tryc.decodeIfPresent(String.self,forKey:.input)truncated=tryc.decodeIfPresent(Bool.self,forKey:.truncated)resolved=tryc.decodeIfPresent(Bool.self,forKey:.resolved)answers=tryc.decodeIfPresent([UserInputAnswer].self,forKey:.answers)planStatus=tryc.decodeIfPresent(String.self,forKey:.planStatus)groupId=tryc.decodeIfPresent(String.self,forKey:.groupId)toolName=tryc.decodeIfPresent(String.self,forKey:.toolName)callId=tryc.decodeIfPresent(String.self,forKey:.callId)turnId=tryc.decodeIfPresent(String.self,forKey:.turnId)itemId=tryc.decodeIfPresent(String.self,forKey:.itemId)createdAt=tryc.decodeIfPresent(String.self,forKey:.createdAt)questions=(try?c.decode([UserInputQuestion].self,forKey:.questions))??[]payload=tryc.decodeIfPresent(JSONValue.self,forKey:.payload)collapsedIds=tryc.decodeIfPresent([String].self,forKey:.collapsedIds)}}",
-        "ThreadSummary": "structThreadSummary:Codable,Equatable,Sendable,Identifiable{publicvarstorageSize:SessionStorageSize?publicvarid:Stringpublicvartitle:Stringpublicvarstatus:StringpublicvarupdatedAt:String?publicvararchivedAt:String?publicvarmessageCount:IntpublicvarlatestMessage:String?publicvarcwd:String?publicvarmodel:String?publicvarrolloutPath:String?publicvaractiveTurnId:String?publicvaractiveJobId:String?publicvarpendingElicitation:PendingElicitation?publicvarlastEventKind:String?publicvarparentThreadId:String?publicvaragentNickname:String?publicvaragentRole:String?publicvarfirstUserMessage:String?publicvarpreview:String?enumCodingKeys:String,CodingKey{casestorageSizecasestorageSizeSnake=\"storage_size\"caseid,title,status,cwd,model,previewcaseupdatedAt=\"updated_at\"casearchivedAt=\"archived_at\"casemessageCount=\"message_count\"caselatestMessage=\"latest_message\"caserolloutPath=\"rollout_path\"caseactiveTurnId=\"active_turn_id\"caseactiveJobId=\"active_job_id\"casependingElicitation=\"pending_elicitation\"caselastEventKind=\"last_event_kind\"caseparentThreadId=\"parent_thread_id\"caseparentThreadIdCamel=\"parentThreadId\"caseagentNickname=\"agent_nickname\"caseagentNicknameCamel=\"agentNickname\"caseagentRole=\"agent_role\"caseagentRoleCamel=\"agentRole\"casefirstUserMessage=\"first_user_message\"casefirstUserMessageCamel=\"firstUserMessage\"}publicinit(id:String,title:String,status:String=\"Recent\",updatedAt:String?=nil,archivedAt:String?=nil,messageCount:Int=0,latestMessage:String?=nil,cwd:String?=nil,rolloutPath:String?=nil,storageSize:SessionStorageSize?=nil,firstUserMessage:String?=nil){self.id=idself.title=titleself.status=statusself.updatedAt=updatedAtself.archivedAt=archivedAtself.messageCount=messageCountself.latestMessage=latestMessageself.cwd=cwdself.rolloutPath=rolloutPathself.storageSize=storageSizeself.firstUserMessage=firstUserMessage}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)storageSize=(try?c.decodeIfPresent(SessionStorageSize.self,forKey:.storageSize))??(try?c.decodeIfPresent(SessionStorageSize.self,forKey:.storageSizeSnake))id=tryc.decode(String.self,forKey:.id)title=(try?c.decode(String.self,forKey:.title))??\"\"status=(try?c.decode(String.self,forKey:.status))??\"Recent\"updatedAt=tryc.decodeIfPresent(String.self,forKey:.updatedAt)archivedAt=tryc.decodeIfPresent(String.self,forKey:.archivedAt)messageCount=(try?c.decode(Int.self,forKey:.messageCount))??0latestMessage=tryc.decodeIfPresent(String.self,forKey:.latestMessage)cwd=tryc.decodeIfPresent(String.self,forKey:.cwd)model=tryc.decodeIfPresent(String.self,forKey:.model)rolloutPath=tryc.decodeIfPresent(String.self,forKey:.rolloutPath)activeTurnId=tryc.decodeIfPresent(String.self,forKey:.activeTurnId)activeJobId=tryc.decodeIfPresent(String.self,forKey:.activeJobId)pendingElicitation=tryc.decodeIfPresent(PendingElicitation.self,forKey:.pendingElicitation)lastEventKind=tryc.decodeIfPresent(String.self,forKey:.lastEventKind)parentThreadId=(try?c.decodeIfPresent(String.self,forKey:.parentThreadId))??(try?c.decodeIfPresent(String.self,forKey:.parentThreadIdCamel))agentNickname=(try?c.decodeIfPresent(String.self,forKey:.agentNickname))??(try?c.decodeIfPresent(String.self,forKey:.agentNicknameCamel))agentRole=(try?c.decodeIfPresent(String.self,forKey:.agentRole))??(try?c.decodeIfPresent(String.self,forKey:.agentRoleCamel))firstUserMessage=(try?c.decodeIfPresent(String.self,forKey:.firstUserMessage))??(try?c.decodeIfPresent(String.self,forKey:.firstUserMessageCamel))preview=tryc.decodeIfPresent(String.self,forKey:.preview)}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encodeIfPresent(storageSize,forKey:.storageSize)tryc.encode(id,forKey:.id)tryc.encode(title,forKey:.title)tryc.encode(status,forKey:.status)tryc.encodeIfPresent(updatedAt,forKey:.updatedAt)tryc.encodeIfPresent(archivedAt,forKey:.archivedAt)tryc.encode(messageCount,forKey:.messageCount)tryc.encodeIfPresent(latestMessage,forKey:.latestMessage)tryc.encodeIfPresent(cwd,forKey:.cwd)tryc.encodeIfPresent(model,forKey:.model)tryc.encodeIfPresent(rolloutPath,forKey:.rolloutPath)tryc.encodeIfPresent(firstUserMessage,forKey:.firstUserMessage)tryc.encodeIfPresent(preview,forKey:.preview)}}",
-        "ThreadDetail": "structThreadDetail:Codable,Equatable,Sendable{publicvartimeline:[TimelineEntry]?publicvarafterCursor:String?publicvarhistory:HistoryMetadata?publicvarsubagents:SubagentCollection?publicvarsubagentUpdates:[String:SubagentActivity]?publicvarsummary:ThreadSummarypublicvarmessages:[CodexMessage]publicvarblocks:[MessageBlock]publicvarrawEventCount:IntpublicvartotalBlocks:Int?publicvarhasMoreBlocks:Bool?publicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casetimeline,history,subagents,summary,messages,blockscaseafterCursor=\"after_cursor\"casesubagentUpdates=\"subagent_updates\"caserawEventCount=\"raw_event_count\"casetotalBlocks=\"total_blocks\"casehasMoreBlocks=\"has_more_blocks\"casebeforeCursor=\"before_cursor\"}publicinit(summary:ThreadSummary,blocks:[MessageBlock]=[],timeline:[TimelineEntry]?=nil,history:HistoryMetadata?=nil,subagents:SubagentCollection?=nil,subagentUpdates:[String:SubagentActivity]?=nil,totalBlocks:Int?=nil,hasMoreBlocks:Bool?=nil,beforeCursor:String?=nil){self.summary=summaryself.messages=[]self.blocks=blocksself.timeline=timelineself.history=historyself.subagents=subagentsself.subagentUpdates=subagentUpdatesself.rawEventCount=totalBlocks??blocks.countself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursor}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)timeline=tryc.decodeIfPresent([TimelineEntry].self,forKey:.timeline)afterCursor=tryc.decodeIfPresent(String.self,forKey:.afterCursor)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)subagents=tryc.decodeIfPresent(SubagentCollection.self,forKey:.subagents)subagentUpdates=tryc.decodeIfPresent([String:SubagentActivity].self,forKey:.subagentUpdates)summary=tryc.decode(ThreadSummary.self,forKey:.summary)messages=(try?c.decode([CodexMessage].self,forKey:.messages))??[]blocks=(try?c.decode([MessageBlock].self,forKey:.blocks))??[]rawEventCount=(try?c.decode(Int.self,forKey:.rawEventCount))??blocks.counttotalBlocks=tryc.decodeIfPresent(Int.self,forKey:.totalBlocks)hasMoreBlocks=tryc.decodeIfPresent(Bool.self,forKey:.hasMoreBlocks)beforeCursor=tryc.decodeIfPresent(String.self,forKey:.beforeCursor)}}",
-        "ThreadBlockPage": "structThreadBlockPage:Codable,Equatable,Sendable{publicvarhistory:HistoryMetadata?publicvarthreadId:Stringpublicvarblocks:[MessageBlock]publicvartotalBlocks:IntpublicvarhasMoreBlocks:BoolpublicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casehistory,blockscasethreadId=\"thread_id\"casethreadIdCamel=\"threadId\"casetotalBlocks=\"total_blocks\"casetotalBlocksCamel=\"totalBlocks\"casehasMoreBlocks=\"has_more_blocks\"casehasMoreBlocksCamel=\"hasMoreBlocks\"casebeforeCursor=\"before_cursor\"casebeforeCursorCamel=\"beforeCursor\"}publicinit(threadId:String,blocks:[MessageBlock],totalBlocks:Int,hasMoreBlocks:Bool,beforeCursor:String?=nil,history:HistoryMetadata?=nil){self.threadId=threadIdself.blocks=blocksself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursorself.history=history}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)threadId=(try?c.decode(String.self,forKey:.threadId))??(try?c.decode(String.self,forKey:.threadIdCamel))??\"\"blocks=(try?c.decode([MessageBlock].self,forKey:.blocks))??[]totalBlocks=(try?c.decode(Int.self,forKey:.totalBlocks))??(try?c.decode(Int.self,forKey:.totalBlocksCamel))??blocks.counthasMoreBlocks=(try?c.decode(Bool.self,forKey:.hasMoreBlocks))??(try?c.decode(Bool.self,forKey:.hasMoreBlocksCamel))??falsebeforeCursor=(try?c.decodeIfPresent(String.self,forKey:.beforeCursor))??(try?c.decodeIfPresent(String.self,forKey:.beforeCursorCamel))}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encodeIfPresent(history,forKey:.history)tryc.encode(threadId,forKey:.threadId)tryc.encode(blocks,forKey:.blocks)tryc.encode(totalBlocks,forKey:.totalBlocks)tryc.encode(hasMoreBlocks,forKey:.hasMoreBlocks)tryc.encodeIfPresent(beforeCursor,forKey:.beforeCursor)}}"
+        "MessageBlock": "structMessageBlock:Codable,Equatable,Sendable,Identifiable{publicvarsubagent:SubagentActivity?publicvaruserMessage:UserMessageContent?publicvarid:Stringpublicvarrole:Stringpublicvarkind:StringpublicvardisplayKind:String?publicvarstatus:String?publicvartext:String?publicvarsummary:String?publicvarinput:String?publicvartruncated:Bool?publicvarresolved:Bool?publicvaranswers:[UserInputAnswer]publicvarplanStatus:String?publicvargroupId:String?publicvartoolName:String?publicvarcallId:String?publicvarturnId:String?publicvaritemId:String?publicvarcreatedAt:String?publicvarquestions:[UserInputQuestion]publicvarpayload:JSONValue?publicvarcollapsedIds:[String]?enumCodingKeys:String,CodingKey{casesubagentcaseuserMessage=\"user_message\"caseid,role,kindcasedisplayKind=\"display_kind\"casestatus,text,summary,input,truncated,resolved,answerscaseplanStatus=\"plan_status\"casegroupId=\"group_id\"casetoolName=\"tool_name\"casecallId=\"call_id\"caseturnId=\"turn_id\"caseitemId=\"item_id\"casecreatedAt=\"created_at\"casequestions,payload,collapsedIds}publicinit(id:String,role:String,kind:String,displayKind:String?=nil,status:String?=nil,text:String?=nil,summary:String?=nil,input:String?=nil,truncated:Bool?=nil,resolved:Bool?=nil,answers:[UserInputAnswer]=[],planStatus:String?=nil,toolName:String?=nil,callId:String?=nil,turnId:String?=nil,itemId:String?=nil,createdAt:String?=nil,questions:[UserInputQuestion]=[],userMessage:UserMessageContent?=nil,subagent:SubagentActivity?=nil,payload:JSONValue?=nil,collapsedIds:[String]?=nil){self.id=idself.role=roleself.kind=kindself.displayKind=displayKindself.status=statusself.text=textself.summary=summaryself.input=inputself.truncated=truncatedself.resolved=resolvedself.answers=answersself.planStatus=planStatusself.toolName=toolNameself.callId=callIdself.turnId=turnIdself.itemId=itemIdself.createdAt=createdAtself.questions=questionsself.userMessage=userMessageself.subagent=subagentself.payload=payloadself.collapsedIds=collapsedIds}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)subagent=tryc.decodeIfPresent(SubagentActivity.self,forKey:.subagent)userMessage=tryc.decodeIfPresent(UserMessageContent.self,forKey:.userMessage)id=tryc.decode(String.self,forKey:.id)role=tryc.decode(String.self,forKey:.role)kind=tryc.decode(String.self,forKey:.kind)displayKind=tryc.decodeIfPresent(String.self,forKey:.displayKind)status=tryc.decodeIfPresent(String.self,forKey:.status)text=tryc.decodeIfPresent(String.self,forKey:.text)summary=tryc.decodeIfPresent(String.self,forKey:.summary)input=tryc.decodeIfPresent(String.self,forKey:.input)truncated=tryc.decodeIfPresent(Bool.self,forKey:.truncated)resolved=tryc.decodeIfPresent(Bool.self,forKey:.resolved)answers=tryc.decode([UserInputAnswer].self,forKey:.answers)planStatus=tryc.decodeIfPresent(String.self,forKey:.planStatus)groupId=tryc.decodeIfPresent(String.self,forKey:.groupId)toolName=tryc.decodeIfPresent(String.self,forKey:.toolName)callId=tryc.decodeIfPresent(String.self,forKey:.callId)turnId=tryc.decodeIfPresent(String.self,forKey:.turnId)itemId=tryc.decodeIfPresent(String.self,forKey:.itemId)createdAt=tryc.decodeIfPresent(String.self,forKey:.createdAt)questions=tryc.decode([UserInputQuestion].self,forKey:.questions)payload=tryc.decodeIfPresent(JSONValue.self,forKey:.payload)collapsedIds=tryc.decodeIfPresent([String].self,forKey:.collapsedIds)}}",
+        "ThreadSummary": "structThreadSummary:Codable,Equatable,Sendable,Identifiable{publicvarstorageSize:SessionStorageSize?publicvarid:Stringpublicvartitle:Stringpublicvarstatus:StringpublicvarupdatedAt:String?publicvararchivedAt:String?publicvarmessageCount:IntpublicvarlatestMessage:String?publicvarcwd:String?publicvarmodel:String?publicvarrolloutPath:String?publicvaractiveTurnId:String?publicvaractiveJobId:String?publicvarpendingElicitation:PendingElicitation?publicvarlastEventKind:String?enumCodingKeys:String,CodingKey{casestorageSizecaseid,title,status,cwd,modelcaseupdatedAt=\"updated_at\"casearchivedAt=\"archived_at\"casemessageCount=\"message_count\"caselatestMessage=\"latest_message\"caserolloutPath=\"rollout_path\"caseactiveTurnId=\"active_turn_id\"caseactiveJobId=\"active_job_id\"casependingElicitation=\"pending_elicitation\"caselastEventKind=\"last_event_kind\"}publicinit(id:String,title:String,status:String=\"Recent\",updatedAt:String?=nil,archivedAt:String?=nil,messageCount:Int=0,latestMessage:String?=nil,cwd:String?=nil,rolloutPath:String?=nil,storageSize:SessionStorageSize?=nil){self.id=idself.title=titleself.status=statusself.updatedAt=updatedAtself.archivedAt=archivedAtself.messageCount=messageCountself.latestMessage=latestMessageself.cwd=cwdself.rolloutPath=rolloutPathself.storageSize=storageSize}}",
+        "ThreadDetail": "structThreadDetail:Codable,Equatable,Sendable{publicvartimeline:[TimelineEntry]?publicvarafterCursor:String?publicvarhistory:HistoryMetadata?publicvarsubagents:SubagentCollection?publicvarsubagentUpdates:[String:SubagentActivity]?publicvarsummary:ThreadSummarypublicvarmessages:[CodexMessage]publicvarblocks:[MessageBlock]publicvarrawEventCount:IntpublicvartotalBlocks:Int?publicvarhasMoreBlocks:Bool?publicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casetimeline,history,subagents,summary,messages,blockscaseafterCursor=\"after_cursor\"casesubagentUpdates=\"subagent_updates\"caserawEventCount=\"raw_event_count\"casetotalBlocks=\"total_blocks\"casehasMoreBlocks=\"has_more_blocks\"casebeforeCursor=\"before_cursor\"}publicinit(summary:ThreadSummary,blocks:[MessageBlock]=[],timeline:[TimelineEntry]?=nil,history:HistoryMetadata?=nil,subagents:SubagentCollection?=nil,subagentUpdates:[String:SubagentActivity]?=nil,totalBlocks:Int?=nil,hasMoreBlocks:Bool?=nil,beforeCursor:String?=nil){self.summary=summaryself.messages=[]self.blocks=blocksself.timeline=timelineself.history=historyself.subagents=subagentsself.subagentUpdates=subagentUpdatesself.rawEventCount=totalBlocks??blocks.countself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursor}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)timeline=tryc.decodeIfPresent([TimelineEntry].self,forKey:.timeline)afterCursor=tryc.decodeIfPresent(String.self,forKey:.afterCursor)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)subagents=tryc.decodeIfPresent(SubagentCollection.self,forKey:.subagents)subagentUpdates=tryc.decodeIfPresent([String:SubagentActivity].self,forKey:.subagentUpdates)summary=tryc.decode(ThreadSummary.self,forKey:.summary)messages=tryc.decode([CodexMessage].self,forKey:.messages)blocks=tryc.decode([MessageBlock].self,forKey:.blocks)rawEventCount=tryc.decode(Int.self,forKey:.rawEventCount)totalBlocks=tryc.decodeIfPresent(Int.self,forKey:.totalBlocks)hasMoreBlocks=tryc.decodeIfPresent(Bool.self,forKey:.hasMoreBlocks)beforeCursor=tryc.decodeIfPresent(String.self,forKey:.beforeCursor)}}",
+        "ThreadBlockPage": "structThreadBlockPage:Codable,Equatable,Sendable{publicvarhistory:HistoryMetadata?publicvarthreadId:Stringpublicvarblocks:[MessageBlock]publicvartotalBlocks:IntpublicvarhasMoreBlocks:BoolpublicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casehistory,blockscasethreadIdcasetotalBlockscasehasMoreBlockscasebeforeCursor}publicinit(threadId:String,blocks:[MessageBlock],totalBlocks:Int,hasMoreBlocks:Bool,beforeCursor:String?=nil,history:HistoryMetadata?=nil){self.threadId=threadIdself.blocks=blocksself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursorself.history=history}}"
       },
       "calls": []
     },
@@ -11010,9 +10920,9 @@
       "types": {
         "JSONValue": "enumJSONValue:Codable,Equatable,Sendable{casenullcasebool(Bool)casenumber(Double)casestring(String)casearray([JSONValue])caseobject([String:JSONValue])publicinit(fromdecoder:Decoder)throws{letcontainer=trydecoder.singleValueContainer()ifcontainer.decodeNil(){self=.null}elseifletb=try?container.decode(Bool.self){self=.bool(b)}elseifletd=try?container.decode(Double.self){self=.number(d)}elseiflets=try?container.decode(String.self){self=.string(s)}elseifleta=try?container.decode([JSONValue].self){self=.array(a)}elseifleto=try?container.decode([String:JSONValue].self){self=.object(o)}else{throwDecodingError.dataCorruptedError(in:container,debugDescription:\"Unsupported JSONValue\")}}publicfuncencode(toencoder:Encoder)throws{varcontainer=encoder.singleValueContainer()switchself{case.null:trycontainer.encodeNil()caselet.bool(b):trycontainer.encode(b)caselet.number(n):ifn.rounded(.towardZero)==n,leti=Int64(exactly:n){trycontainer.encode(i)}else{trycontainer.encode(n)}caselet.string(s):trycontainer.encode(s)caselet.array(a):trycontainer.encode(a)caselet.object(o):trycontainer.encode(o)}}}",
         "OptionalResultEnvelope": "structOptionalResultEnvelope<T:Decodable&Sendable>:Decodable,Sendable{publicletavailable:Boolpublicletdata:T?privateenumCodingKeys:String,CodingKey{caseavailable,data,reason,error}publicinit(available:Bool,data:T?){self.available=availableself.data=data}publicinit(fromdecoder:Decoder)throws{ifletkeyed=try?decoder.container(keyedBy:CodingKeys.self),keyed.contains(.data)||keyed.contains(.error)||keyed.contains(.reason),letavail=try?keyed.decode(Bool.self,forKey:.available){self.available=availself.data=trykeyed.decodeIfPresent(T.self,forKey:.data)return}letdirect=tryT(from:decoder)self.available=trueself.data=direct}}",
-        "SystemCapabilitiesCore": "structSystemCapabilitiesCore:Codable,Equatable,Sendable{publicvarthreads:Bool=falsepublicvarthreadSubagents:Bool?publicvarclaudeSubagents:Bool?publicvarcodexDesktop:Bool?publicvarjobs:Bool=falsepublicvarprobe:Bool=falsepublicvarsettings:Bool=falsepublicvarjobHistory:Bool=falsepublicvarappUpdater:Bool=falsepublicvarthreadCleanup:Bool=falsepublicvarhiddenCleanupScan:Bool?publicvarcodexAccountScope:Bool?publicvarthreadArchiveActions:Bool=falsepublicvarsystemd:Bool=falsepublicvarlinuxUpdateJob:Bool=falsepublicvarpruneBackups:Bool=falsepublicvarantigravitySessions:Bool?publicvarantigravityNotifications:Bool?publicvardshSessions:Bool?publicvardshNotifications:Bool?publicvargrokbotSessions:Bool?publicvargrokbotNotifications:Bool?publicvargithubCi:Bool?enumCodingKeys:String,CodingKey{casethreadscasecodexSessions=\"codex_sessions\"casethreadSubagents=\"thread_subagents\"caseclaudeSubagents=\"claude_subagents\"casecodexDesktop=\"codex_desktop\"casejobs,probe,settingscasejobHistory=\"job_history\"caseappUpdater=\"app_updater\"casethreadCleanup=\"thread_cleanup\"casehiddenCleanupScan=\"hidden_cleanup_scan\"casecodexAccountScope=\"codex_account_scope\"casethreadArchiveActions=\"thread_archive_actions\"casesystemdcaselinuxUpdateJob=\"linux_update_job\"casepruneBackups=\"prune_backups\"caseantigravitySessions=\"antigravity_sessions\"caseantigravityNotifications=\"antigravity_notifications\"casedshSessions=\"dsh_sessions\"casedshNotifications=\"dsh_notifications\"casegrokbotSessions=\"grokbot_sessions\"casegrokbotNotifications=\"grokbot_notifications\"casegithubCi=\"github_ci\"}publicinit(){}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)self.threads=tryc.decodeIfPresent(Bool.self,forKey:.threads)??c.decodeIfPresent(Bool.self,forKey:.codexSessions)??trueself.threadSubagents=tryc.decodeIfPresent(Bool.self,forKey:.threadSubagents)self.claudeSubagents=tryc.decodeIfPresent(Bool.self,forKey:.claudeSubagents)self.codexDesktop=tryc.decodeIfPresent(Bool.self,forKey:.codexDesktop)self.jobs=tryc.decodeIfPresent(Bool.self,forKey:.jobs)??trueself.probe=tryc.decodeIfPresent(Bool.self,forKey:.probe)??trueself.settings=tryc.decodeIfPresent(Bool.self,forKey:.settings)??trueself.jobHistory=tryc.decodeIfPresent(Bool.self,forKey:.jobHistory)??trueself.appUpdater=tryc.decodeIfPresent(Bool.self,forKey:.appUpdater)??falseself.threadCleanup=tryc.decodeIfPresent(Bool.self,forKey:.threadCleanup)??trueself.hiddenCleanupScan=tryc.decodeIfPresent(Bool.self,forKey:.hiddenCleanupScan)self.codexAccountScope=tryc.decodeIfPresent(Bool.self,forKey:.codexAccountScope)self.threadArchiveActions=tryc.decodeIfPresent(Bool.self,forKey:.threadArchiveActions)??trueself.systemd=tryc.decodeIfPresent(Bool.self,forKey:.systemd)??falseself.linuxUpdateJob=tryc.decodeIfPresent(Bool.self,forKey:.linuxUpdateJob)??falseself.pruneBackups=tryc.decodeIfPresent(Bool.self,forKey:.pruneBackups)??falseself.antigravitySessions=tryc.decodeIfPresent(Bool.self,forKey:.antigravitySessions)self.antigravityNotifications=tryc.decodeIfPresent(Bool.self,forKey:.antigravityNotifications)self.dshSessions=tryc.decodeIfPresent(Bool.self,forKey:.dshSessions)self.dshNotifications=tryc.decodeIfPresent(Bool.self,forKey:.dshNotifications)self.grokbotSessions=tryc.decodeIfPresent(Bool.self,forKey:.grokbotSessions)self.grokbotNotifications=tryc.decodeIfPresent(Bool.self,forKey:.grokbotNotifications)self.githubCi=tryc.decodeIfPresent(Bool.self,forKey:.githubCi)}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encode(threads,forKey:.threads)tryc.encodeIfPresent(threadSubagents,forKey:.threadSubagents)tryc.encodeIfPresent(claudeSubagents,forKey:.claudeSubagents)tryc.encodeIfPresent(codexDesktop,forKey:.codexDesktop)tryc.encode(jobs,forKey:.jobs)tryc.encode(probe,forKey:.probe)tryc.encode(settings,forKey:.settings)tryc.encode(jobHistory,forKey:.jobHistory)tryc.encode(appUpdater,forKey:.appUpdater)tryc.encode(threadCleanup,forKey:.threadCleanup)tryc.encodeIfPresent(hiddenCleanupScan,forKey:.hiddenCleanupScan)tryc.encodeIfPresent(codexAccountScope,forKey:.codexAccountScope)tryc.encode(threadArchiveActions,forKey:.threadArchiveActions)tryc.encode(systemd,forKey:.systemd)tryc.encode(linuxUpdateJob,forKey:.linuxUpdateJob)tryc.encode(pruneBackups,forKey:.pruneBackups)tryc.encodeIfPresent(antigravitySessions,forKey:.antigravitySessions)tryc.encodeIfPresent(antigravityNotifications,forKey:.antigravityNotifications)tryc.encodeIfPresent(dshSessions,forKey:.dshSessions)tryc.encodeIfPresent(dshNotifications,forKey:.dshNotifications)tryc.encodeIfPresent(grokbotSessions,forKey:.grokbotSessions)tryc.encodeIfPresent(grokbotNotifications,forKey:.grokbotNotifications)tryc.encodeIfPresent(githubCi,forKey:.githubCi)}}",
-        "SystemCapabilitiesResponse": "structSystemCapabilitiesResponse:Codable,Equatable,Sendable{publicvarapiVersion:IntpublicvarhostSurface:Stringpublicvarcapabilities:SystemCapabilitiesCoreenumCodingKeys:String,CodingKey{caseapiVersion=\"api_version\"caseprotocolVersion=\"protocol_version\"casehostSurface=\"host_surface\"caseserviceMode=\"service_mode\"casecapabilities}publicinit(apiVersion:Int=2,hostSurface:String=\"desktop_embedded_tauri\",capabilities:SystemCapabilitiesCore=SystemCapabilitiesCore()){self.apiVersion=apiVersionself.hostSurface=hostSurfaceself.capabilities=capabilities}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)self.apiVersion=tryc.decodeIfPresent(Int.self,forKey:.apiVersion)??c.decodeIfPresent(Int.self,forKey:.protocolVersion)??2self.hostSurface=tryc.decodeIfPresent(String.self,forKey:.hostSurface)??c.decodeIfPresent(String.self,forKey:.serviceMode)??\"desktop_embedded_tauri\"self.capabilities=tryc.decodeIfPresent(SystemCapabilitiesCore.self,forKey:.capabilities)??SystemCapabilitiesCore()}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encode(apiVersion,forKey:.apiVersion)tryc.encode(hostSurface,forKey:.hostSurface)tryc.encode(capabilities,forKey:.capabilities)}}",
-        "RuntimeCapabilityMatrix": "structRuntimeCapabilityMatrix:Equatable,Sendable{publicvarhostSurface:StringpublicvarcodexStatePaths:BoolpublicvarthreadSubagents:BoolpublicvarclaudeSubagents:BoolpublicvarhiddenCleanupScan:BoolpublicvarcodexAccountScope:BoolpublicvarantigravityNotifications:BoolpublicvardshNotifications:BoolpublicvarantigravitySessions:BoolpublicvardshSessions:BoolpublicvargrokbotSessions:BoolpublicvargithubCi:BoolpublicvargrokbotNotifications:BoolpublicvarcodexDesktop:BoolpublicvarupdatePrune:BoolpublicvarthreadCleanup:BoolpublicvarthreadArchiveActions:BoolpublicvarupdateServiceLabels:Boolpublicstaticletbootstrap=RuntimeCapabilityMatrix(hostSurface:\"desktop_embedded_tauri\",codexStatePaths:false,threadSubagents:false,claudeSubagents:false,hiddenCleanupScan:false,codexAccountScope:false,antigravityNotifications:false,dshNotifications:false,antigravitySessions:true,dshSessions:true,grokbotSessions:true,githubCi:false,grokbotNotifications:false,codexDesktop:false,updatePrune:false,threadCleanup:false,threadArchiveActions:false,updateServiceLabels:false)publicstaticfuncfrom(_response:SystemCapabilitiesResponse?)->RuntimeCapabilityMatrix{guardletresponseelse{return.bootstrap}letc=response.capabilitiesletremote=response.hostSurface==\"linux_server_api\"returnRuntimeCapabilityMatrix(hostSurface:response.hostSurface,codexStatePaths:remote&&c.systemd,threadSubagents:c.threadSubagents==true,claudeSubagents:c.claudeSubagents==true,hiddenCleanupScan:c.hiddenCleanupScan==true,codexAccountScope:c.codexAccountScope==true,antigravityNotifications:!remote&&c.antigravityNotifications==true,dshNotifications:!remote&&c.dshNotifications==true,antigravitySessions:c.antigravitySessions??true,dshSessions:c.dshSessions??true,grokbotSessions:!remote&&(c.grokbotSessions==true),githubCi:c.githubCi==true,grokbotNotifications:!remote&&c.grokbotNotifications==true,codexDesktop:!remote&&c.codexDesktop==true,updatePrune:remote&&c.pruneBackups,threadCleanup:c.threadCleanup,threadArchiveActions:c.threadArchiveActions,updateServiceLabels:remote&&c.linuxUpdateJob)}publicvarvisibleWorkspaces:[WorkspaceId]{WorkspaceId.allCases.filter{idinswitchid{case.grokbot:returngrokbotSessionscase.antigravity:returnantigravitySessionscase.dsh:returndshSessionsdefault:returntrue}}}}",
+        "SystemCapabilitiesCore": "structSystemCapabilitiesCore:Codable,Equatable,Sendable{publicvarcodexDesktop=falsepublicvarsystemd=falsepublicvarlinuxUpdateJob=falsepublicvarpruneBackups=falsepublicvarantigravityNotifications=falsepublicvardshNotifications=falsepublicvargrokbotSessions=falsepublicvargrokbotNotifications=falseenumCodingKeys:String,CodingKey{casecodexDesktop=\"codex_desktop\"casesystemdcaselinuxUpdateJob=\"linux_update_job\"casepruneBackups=\"prune_backups\"caseantigravityNotifications=\"antigravity_notifications\"casedshNotifications=\"dsh_notifications\"casegrokbotSessions=\"grokbot_sessions\"casegrokbotNotifications=\"grokbot_notifications\"}publicinit(){}}",
+        "SystemCapabilitiesResponse": "structSystemCapabilitiesResponse:Codable,Equatable,Sendable{publicvarapiVersion:IntpublicvarhostSurface:Stringpublicvarcapabilities:SystemCapabilitiesCoreenumCodingKeys:String,CodingKey{caseapiVersion=\"api_version\"casehostSurface=\"host_surface\"casecapabilities}publicstaticletdesktopSurface=\"desktop_embedded_tauri\"publicinit(apiVersion:Int=2,hostSurface:String=SystemCapabilitiesResponse.desktopSurface,capabilities:SystemCapabilitiesCore=SystemCapabilitiesCore()){self.apiVersion=apiVersionself.hostSurface=hostSurfaceself.capabilities=capabilities}}",
+        "RuntimeCapabilityMatrix": "structRuntimeCapabilityMatrix:Equatable,Sendable{publicvarisReady:BoolpublicvarhostSurface:StringpublicvarcodexStatePaths:BoolpublicvarantigravityNotifications:BoolpublicvardshNotifications:BoolpublicvargrokbotSessions:BoolpublicvargrokbotNotifications:BoolpublicvarcodexDesktop:BoolpublicvarupdatePrune:BoolpublicvarupdateServiceLabels:Boolpublicstaticletbootstrap=RuntimeCapabilityMatrix(isReady:false,hostSurface:SystemCapabilitiesResponse.desktopSurface,codexStatePaths:false,antigravityNotifications:false,dshNotifications:false,grokbotSessions:true,grokbotNotifications:false,codexDesktop:false,updatePrune:false,updateServiceLabels:false)publicstaticfuncfrom(_response:SystemCapabilitiesResponse?)->RuntimeCapabilityMatrix{guardletresponseelse{return.bootstrap}letc=response.capabilitiesletremote=response.hostSurface==\"linux_server_api\"returnRuntimeCapabilityMatrix(isReady:true,hostSurface:response.hostSurface,codexStatePaths:remote&&c.systemd,antigravityNotifications:!remote&&c.antigravityNotifications,dshNotifications:!remote&&c.dshNotifications,grokbotSessions:!remote&&(c.grokbotSessions),grokbotNotifications:!remote&&c.grokbotNotifications,codexDesktop:!remote&&c.codexDesktop,updatePrune:remote&&c.pruneBackups,updateServiceLabels:remote&&c.linuxUpdateJob)}publicvarvisibleWorkspaces:[WorkspaceId]{WorkspaceId.allCases.filter{idinswitchid{case.grokbot:returngrokbotSessionsdefault:returntrue}}}}",
         "MachineTarget": "enumMachineTarget:String,Codable,Equatable,Sendable{caselocalcaseremote}",
         "RemoteMachineSummary": "structRemoteMachineSummary:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvarname:StringpublicvarsshHost:StringpublicvaruseSudo:Boolpublicinit(id:String,name:String,sshHost:String,useSudo:Bool){self.id=idself.name=nameself.sshHost=sshHostself.useSudo=useSudo}}",
         "RemoteConnectionView": "structRemoteConnectionView:Codable,Equatable,Sendable{publicvartarget:MachineTargetpublicvarrevision:UInt64publicvarsshHost:String?publicvarconfigured:BoolpublicvaractiveMachineId:String?publicvaractiveMachineName:String?publicvarmachines:[RemoteMachineSummary]?publicinit(target:MachineTarget=.local,revision:UInt64=0,sshHost:String?=nil,configured:Bool=false,activeMachineId:String?=nil,activeMachineName:String?=nil,machines:[RemoteMachineSummary]?=[]){self.target=targetself.revision=revisionself.sshHost=sshHostself.configured=configuredself.activeMachineId=activeMachineIdself.activeMachineName=activeMachineNameself.machines=machines}}",
@@ -11042,5 +10952,14 @@
       },
       "calls": []
     }
-  }
+  },
+  "swiftFiles": [
+    "macos/Sources/AgentHubCore/Bridge/FFIRuntimeBridge.swift",
+    "macos/Sources/AgentHubCore/Bridge/RuntimeConnectionStore.swift",
+    "macos/Sources/AgentHubCore/CodexDesktop/CodexDesktopModelsAndStore.swift",
+    "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift",
+    "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift",
+    "macos/Sources/AgentHubCore/Models/SessionAndConversationModels.swift",
+    "macos/Sources/AgentHubCore/Models/SystemAndOpsModels.swift"
+  ]
 }

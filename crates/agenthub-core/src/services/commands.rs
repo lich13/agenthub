@@ -1,146 +1,119 @@
-pub const GITHUB_CI_STATUS: &str = "github.ci.status";
-pub const SESSIONS_ATTACHMENT_READ: &str = "sessions.attachmentRead";
-pub const SESSIONS_SEARCH: &str = "sessions.search";
-pub const GROK_LIST: &str = "grok.list";
-pub const SESSIONS_BULK_PREVIEW: &str = "sessions.bulkPreview";
-pub const SESSIONS_BULK_EXECUTE: &str = "sessions.bulkExecute";
-pub const GROK_DETAIL: &str = "grok.detail";
-pub const GROK_RENAME: &str = "grok.rename";
-pub const GROK_DELETE_PREVIEW: &str = "grok.deletePreview";
-pub const GROK_DELETE_EXECUTE: &str = "grok.deleteExecute";
-pub const CLAUDE_LIST: &str = "claude.list";
-pub const CLAUDE_DETAIL: &str = "claude.detail";
-pub const CLAUDE_RENAME: &str = "claude.rename";
-pub const CLAUDE_DELETE_PREVIEW: &str = "claude.deletePreview";
-pub const CLAUDE_DELETE_EXECUTE: &str = "claude.deleteExecute";
-pub const ANTIGRAVITY_LIST: &str = "antigravity.list";
-pub const ANTIGRAVITY_DETAIL: &str = "antigravity.detail";
-pub const ANTIGRAVITY_RENAME: &str = "antigravity.rename";
-pub const ANTIGRAVITY_ARCHIVE: &str = "antigravity.archive";
-pub const ANTIGRAVITY_RESTORE: &str = "antigravity.restore";
-pub const DSH_LIST: &str = "dsh.list";
-pub const DSH_DETAIL: &str = "dsh.detail";
-pub const DSH_RENAME: &str = "dsh.rename";
-pub const DSH_ARCHIVE: &str = "dsh.archive";
-pub const DSH_RESTORE: &str = "dsh.restore";
-pub const SYSTEM_CAPABILITIES: &str = "system.capabilities";
-pub const THREADS_LIST: &str = "threads.list";
-pub const THREADS_SUBAGENT_DETAIL: &str = "threads.subagentDetail";
-pub const THREADS_DETAIL: &str = "threads.detail";
-pub const THREADS_BLOCKS: &str = "threads.blocks";
-pub const THREADS_ARCHIVE: &str = "threads.archive";
-pub const THREADS_RESTORE: &str = "threads.restore";
-pub const THREADS_RENAME: &str = "threads.rename";
-pub const THREADS_ACCOUNT_SCOPE_STATUS: &str = "threads.accountScopeStatus";
-pub const THREADS_ACCOUNT_SCOPE_CLEAR: &str = "threads.accountScopeClear";
-pub const JOBS_LIST: &str = "jobs.list";
-pub const JOBS_DETAIL: &str = "jobs.detail";
-pub const PROBE_STATUS: &str = "probe.status";
-pub const PROBE_SETTINGS_GET: &str = "probe.settings.get";
-pub const PROBE_SETTINGS_SAVE: &str = "probe.settings.save";
-pub const PROBE_EVENTS: &str = "probe.events";
-pub const PROBE_BARK_TEST: &str = "probe.barkTest";
-pub const PROBE_INSTALL_HOOKS: &str = "probe.installHooks";
-pub const PROBE_REMOVE_HOOKS: &str = "probe.removeHooks";
-pub const UPDATES_STATUS: &str = "updates.status";
-pub const UPDATES_CHECK: &str = "updates.check";
-pub const UPDATES_INSTALL: &str = "updates.install";
-pub const UPDATES_PRUNE: &str = "updates.prune";
-pub const CLEANUP_UNIFIED_DRY_RUN: &str = "cleanup.unifiedDryRun";
-pub const CLEANUP_UNIFIED_EXECUTE: &str = "cleanup.unifiedExecute";
-pub const CLEANUP_HIDDEN_DRY_RUN: &str = "cleanup.hiddenDryRun";
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RemoteAccess {
+    Read,
+    Write,
+}
 
-pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
-    GITHUB_CI_STATUS,
-    SYSTEM_CAPABILITIES,
-    THREADS_LIST,
-    THREADS_DETAIL,
-    THREADS_SUBAGENT_DETAIL,
-    THREADS_BLOCKS,
-    THREADS_ARCHIVE,
-    THREADS_RESTORE,
-    THREADS_RENAME,
-    THREADS_ACCOUNT_SCOPE_STATUS,
-    THREADS_ACCOUNT_SCOPE_CLEAR,
-    JOBS_LIST,
-    JOBS_DETAIL,
-    PROBE_STATUS,
-    PROBE_SETTINGS_GET,
-    PROBE_SETTINGS_SAVE,
-    PROBE_EVENTS,
-    PROBE_BARK_TEST,
-    PROBE_INSTALL_HOOKS,
-    PROBE_REMOVE_HOOKS,
-    UPDATES_STATUS,
-    UPDATES_CHECK,
-    UPDATES_INSTALL,
-    UPDATES_PRUNE,
-    CLEANUP_UNIFIED_DRY_RUN,
-    CLEANUP_UNIFIED_EXECUTE,
-    CLEANUP_HIDDEN_DRY_RUN,
-    GROK_LIST,
-    GROK_DETAIL,
-    GROK_RENAME,
-    GROK_DELETE_PREVIEW,
-    GROK_DELETE_EXECUTE,
-    CLAUDE_LIST,
-    CLAUDE_DETAIL,
-    CLAUDE_RENAME,
-    CLAUDE_DELETE_PREVIEW,
-    CLAUDE_DELETE_EXECUTE,
-    ANTIGRAVITY_LIST,
-    ANTIGRAVITY_DETAIL,
-    ANTIGRAVITY_RENAME,
-    ANTIGRAVITY_ARCHIVE,
-    ANTIGRAVITY_RESTORE,
-    DSH_LIST,
-    DSH_DETAIL,
-    DSH_RENAME,
-    DSH_ARCHIVE,
-    DSH_RESTORE,
-    SESSIONS_ATTACHMENT_READ,
-    SESSIONS_SEARCH,
-    SESSIONS_BULK_PREVIEW,
-    SESSIONS_BULK_EXECUTE,
-];
+macro_rules! remote_commands {
+    ($( $name:ident = $wire:literal, $access:ident; )*) => {
+        $(pub const $name: &str = $wire;)*
+        pub const ALLOWED_RPC_COMMANDS: &[&str] = &[$($name),*];
+        pub fn remote_access(command: &str) -> Option<RemoteAccess> {
+            match command { $($name => Some(RemoteAccess::$access),)* _ => None }
+        }
+    }
+}
 
-/// Unknown commands fail closed as writes. Remote mutations are never retried.
+remote_commands! {
+    GITHUB_CI_STATUS = "github.ci.status", Read;
+    SESSIONS_ATTACHMENT_READ = "sessions.attachmentRead", Read;
+    SESSIONS_SEARCH = "sessions.search", Read;
+    GROK_LIST = "grok.list", Read;
+    SESSIONS_BULK_PREVIEW = "sessions.bulkPreview", Read;
+    SESSIONS_BULK_EXECUTE = "sessions.bulkExecute", Write;
+    GROK_DETAIL = "grok.detail", Read;
+    GROK_RENAME = "grok.rename", Write;
+    GROK_DELETE_PREVIEW = "grok.deletePreview", Read;
+    GROK_DELETE_EXECUTE = "grok.deleteExecute", Write;
+    CLAUDE_LIST = "claude.list", Read;
+    CLAUDE_DETAIL = "claude.detail", Read;
+    CLAUDE_RENAME = "claude.rename", Write;
+    CLAUDE_DELETE_PREVIEW = "claude.deletePreview", Read;
+    CLAUDE_DELETE_EXECUTE = "claude.deleteExecute", Write;
+    ANTIGRAVITY_LIST = "antigravity.list", Read;
+    ANTIGRAVITY_DETAIL = "antigravity.detail", Read;
+    ANTIGRAVITY_RENAME = "antigravity.rename", Write;
+    ANTIGRAVITY_ARCHIVE = "antigravity.archive", Write;
+    ANTIGRAVITY_RESTORE = "antigravity.restore", Write;
+    DSH_LIST = "dsh.list", Read;
+    DSH_DETAIL = "dsh.detail", Read;
+    DSH_RENAME = "dsh.rename", Write;
+    DSH_ARCHIVE = "dsh.archive", Write;
+    DSH_RESTORE = "dsh.restore", Write;
+    SYSTEM_CAPABILITIES = "system.capabilities", Read;
+    THREADS_LIST = "threads.list", Read;
+    THREADS_SUBAGENT_DETAIL = "threads.subagentDetail", Read;
+    THREADS_DETAIL = "threads.detail", Read;
+    THREADS_BLOCKS = "threads.blocks", Read;
+    THREADS_ARCHIVE = "threads.archive", Write;
+    THREADS_RESTORE = "threads.restore", Write;
+    THREADS_RENAME = "threads.rename", Write;
+    THREADS_ACCOUNT_SCOPE_STATUS = "threads.accountScopeStatus", Read;
+    THREADS_ACCOUNT_SCOPE_CLEAR = "threads.accountScopeClear", Write;
+    JOBS_LIST = "jobs.list", Read;
+    JOBS_DETAIL = "jobs.detail", Read;
+    PROBE_STATUS = "probe.status", Read;
+    PROBE_SETTINGS_GET = "probe.settings.get", Read;
+    PROBE_SETTINGS_SAVE = "probe.settings.save", Write;
+    PROBE_EVENTS = "probe.events", Read;
+    PROBE_BARK_TEST = "probe.barkTest", Write;
+    PROBE_INSTALL_HOOKS = "probe.installHooks", Write;
+    PROBE_REMOVE_HOOKS = "probe.removeHooks", Write;
+    UPDATES_STATUS = "updates.status", Read;
+    UPDATES_CHECK = "updates.check", Write;
+    UPDATES_INSTALL = "updates.install", Write;
+    UPDATES_PRUNE = "updates.prune", Write;
+    CLEANUP_UNIFIED_DRY_RUN = "cleanup.unifiedDryRun", Read;
+    CLEANUP_UNIFIED_EXECUTE = "cleanup.unifiedExecute", Write;
+    CLEANUP_HIDDEN_DRY_RUN = "cleanup.hiddenDryRun", Read;
+}
+
+pub const CLAUDE_HOOKS: &str = "claude.hooks";
+pub const CLAUDE_OWNERSHIP_DIAGNOSTICS: &str = "claude.ownershipDiagnostics";
+pub const GROKBOT_LIST: &str = "grokbot.list";
+pub const GROKBOT_DETAIL: &str = "grokbot.detail";
+pub const PLANS_SAVE: &str = "plans.save";
+pub const REMOTE_GET: &str = "remote.get";
+pub const REMOTE_SSH_HOSTS: &str = "remote.sshHosts";
+pub const REMOTE_SSH_DELETE: &str = "remote.sshDelete";
+pub const REMOTE_VERIFY: &str = "remote.verify";
+pub const REMOTE_SAVE: &str = "remote.save";
+pub const REMOTE_INSTALL: &str = "remote.install";
+pub const REMOTE_REMOVE: &str = "remote.remove";
+pub const REMOTE_SELECT: &str = "remote.select";
+pub const REMOTE_INVOKE: &str = "remote.invoke";
+pub const CODEX_DESKTOP_ATTACH: &str = "codex.desktop.attach";
+pub const CODEX_DESKTOP_ACTION: &str = "codex.desktop.action";
+pub const CODEX_DESKTOP_DETACH: &str = "codex.desktop.detach";
+pub const CODEX_DESKTOP_OPEN: &str = "codex.desktop.open";
+pub const CODEX_DESKTOP_CATALOG: &str = "codex.desktop.catalog";
+pub const CODEX_DESKTOP_CHOOSE: &str = "codex.desktop.choose";
+pub const CODEX_DESKTOP_CREATE: &str = "codex.desktop.create";
+pub const CODEX_DESKTOP_ATTACHMENTS: &str = "codex.desktop.attachments";
+pub const CODEX_DESKTOP_DIAGNOSTICS: &str = "codex.desktop.diagnostics";
+
+pub fn desktop_command_is_read(command: &str, hook_status: bool) -> bool {
+    match remote_access(command) {
+        Some(access) => access == RemoteAccess::Read,
+        None => match command {
+            CLAUDE_HOOKS => hook_status,
+            CLAUDE_OWNERSHIP_DIAGNOSTICS
+            | GROKBOT_LIST
+            | GROKBOT_DETAIL
+            | CODEX_DESKTOP_ATTACH
+            | CODEX_DESKTOP_CATALOG
+            | CODEX_DESKTOP_DIAGNOSTICS => true,
+            _ => false,
+        },
+    }
+}
+
 pub fn is_mutating_rpc_command(command: &str) -> bool {
-    !matches!(
-        command,
-        GITHUB_CI_STATUS
-            | SYSTEM_CAPABILITIES
-            | THREADS_LIST
-            | THREADS_DETAIL
-            | THREADS_SUBAGENT_DETAIL
-            | THREADS_BLOCKS
-            | THREADS_ACCOUNT_SCOPE_STATUS
-            | JOBS_LIST
-            | JOBS_DETAIL
-            | PROBE_STATUS
-            | PROBE_SETTINGS_GET
-            | PROBE_EVENTS
-            | UPDATES_STATUS
-            | CLEANUP_UNIFIED_DRY_RUN
-            | CLEANUP_HIDDEN_DRY_RUN
-            | GROK_LIST
-            | GROK_DETAIL
-            | GROK_DELETE_PREVIEW
-            | CLAUDE_LIST
-            | CLAUDE_DETAIL
-            | CLAUDE_DELETE_PREVIEW
-            | ANTIGRAVITY_LIST
-            | ANTIGRAVITY_DETAIL
-            | DSH_LIST
-            | DSH_DETAIL
-            | SESSIONS_ATTACHMENT_READ
-            | SESSIONS_SEARCH
-            | SESSIONS_BULK_PREVIEW
-    )
+    !matches!(remote_access(command), Some(RemoteAccess::Read))
 }
 
 pub fn is_allowed_rpc_command(command: &str) -> bool {
-    ALLOWED_RPC_COMMANDS.contains(&command)
+    remote_access(command).is_some()
 }
 
 #[cfg(test)]

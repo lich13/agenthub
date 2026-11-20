@@ -36,7 +36,6 @@ pub struct HistoryChange {
 struct Stamp {
     size: u64,
     modified: SystemTime,
-    #[cfg(unix)]
     identity: (u64, u64, i64, i64),
 }
 
@@ -51,36 +50,24 @@ impl Stamp {
     }
 
     fn from_metadata(meta: &fs::Metadata) -> Result<Self> {
-        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
             size: meta.len(),
             modified: meta.modified()?,
-            #[cfg(unix)]
             identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
         })
     }
 
     fn same_file(&self, other: &Self) -> bool {
-        #[cfg(unix)]
-        {
-            self.identity.0 == other.identity.0 && self.identity.1 == other.identity.1
-        }
-        #[cfg(not(unix))]
-        {
-            self.modified == other.modified
-        }
+        self.identity.0 == other.identity.0 && self.identity.1 == other.identity.1
     }
 }
 
 fn open(path: &Path) -> Result<File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_NOFOLLOW);
     Ok(options.open(path)?)
 }
 
@@ -251,19 +238,18 @@ impl<S: Default> JsonlCache<S> {
                 .entries
                 .lock()
                 .map_err(|_| anyhow::anyhow!("会话缓存不可用"))?;
-            let entry = entries
-                .iter()
-                .position(|entry| entry.path == path && entry.scope == scope)
-                .and_then(|index| entries.remove(index))
-                .unwrap_or_else(|| {
-                    Arc::new(Entry {
-                        path: path.into(),
-                        scope: scope.into(),
-                        snapshot: Mutex::new(None),
-                        weight: 0.into(),
-                        last_accessed_ms: now_ms.into(),
-                    })
-                });
+            let entry = crate::lru::take_first(&mut entries, |entry| {
+                entry.path == path && entry.scope == scope
+            })
+            .unwrap_or_else(|| {
+                Arc::new(Entry {
+                    path: path.into(),
+                    scope: scope.into(),
+                    snapshot: Mutex::new(None),
+                    weight: 0.into(),
+                    last_accessed_ms: now_ms.into(),
+                })
+            });
             entry.last_accessed_ms.store(now_ms, Ordering::Relaxed);
             entries.push_back(entry.clone());
             entry
@@ -411,20 +397,18 @@ impl<S: Default> JsonlCache<S> {
             .entries
             .lock()
             .map_err(|_| anyhow::anyhow!("会话缓存不可用"))?;
-        let mut bytes = entries
+        let bytes = entries
             .iter()
             .map(|entry| entry.weight.load(Ordering::Relaxed))
             .sum::<u64>();
-        while entries.len() > self.max_entries || bytes > self.max_bytes {
-            let Some(index) = entries
-                .iter()
-                .position(|entry| Arc::strong_count(entry) == 1)
-            else {
-                break;
-            };
-            let evicted = entries.remove(index).expect("cache entry");
-            bytes = bytes.saturating_sub(evicted.weight.load(Ordering::Relaxed));
-        }
+        crate::lru::trim(
+            &mut entries,
+            self.max_entries,
+            bytes,
+            self.max_bytes,
+            |entry| Arc::strong_count(entry) == 1,
+            |entry| entry.weight.load(Ordering::Relaxed),
+        );
         // An oversize active snapshot is not retained once its reader releases it.
         if entry.weight.load(Ordering::Relaxed) > self.max_bytes {
             entries.retain(|candidate| !Arc::ptr_eq(candidate, &entry));

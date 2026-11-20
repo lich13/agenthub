@@ -166,7 +166,7 @@ impl SessionUseCases {
                     "Grok Bot 仅限本机"
                 );
                 crate::grokbot::load_all_events(
-                    &crate::grokbot::GrokBotPaths::default_for_user(),
+                    &crate::grokbot::GrokBotPaths::default_for_user()?,
                     &request.session_key,
                 )?
                 .iter()
@@ -211,10 +211,6 @@ impl SessionUseCases {
     }
 
     pub fn bulk_preview(&self, request: SessionBatchRequest) -> Result<SessionBatchPreview> {
-        crate::services::system::require_capability(
-            &self.platform,
-            crate::services::system::Capability::ThreadCleanup,
-        )?;
         validate(request.provider, request.operation, &request.session_keys)?;
         if request.provider == SessionProvider::Codex
             && request.operation == SessionOperation::Delete
@@ -458,10 +454,6 @@ impl SessionUseCases {
     }
 
     pub fn bulk_execute(&self, request: SessionBatchExecuteRequest) -> Result<SessionBatchResult> {
-        crate::services::system::require_capability(
-            &self.platform,
-            crate::services::system::Capability::ThreadCleanup,
-        )?;
         let keys = request
             .items
             .iter()
@@ -707,7 +699,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("agenthub-bulk-delete-{}", uuid::Uuid::new_v4()));
         let service = SessionUseCases {
-            platform: crate::platform::PlatformPaths::desktop_current(),
+            platform: crate::platform::PlatformPaths::desktop_current().unwrap(),
             codex: CodexPaths::new(root.join("codex")),
             grok: GrokPaths {
                 home: root.join("grok"),
@@ -753,7 +745,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("agenthub-forged-desc-{}", uuid::Uuid::new_v4()));
         let service = SessionUseCases {
-            platform: crate::platform::PlatformPaths::desktop_current(),
+            platform: crate::platform::PlatformPaths::desktop_current().unwrap(),
             codex: CodexPaths::new(root.join("codex")),
             grok: GrokPaths {
                 home: root.join("grok"),
@@ -845,7 +837,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("agenthub-archive-execute-{}", uuid::Uuid::new_v4()));
         let service = SessionUseCases {
-            platform: crate::platform::PlatformPaths::desktop_current(),
+            platform: crate::platform::PlatformPaths::desktop_current().unwrap(),
             codex: CodexPaths::new(root.join("codex")),
             grok: GrokPaths {
                 home: root.join("grok"),

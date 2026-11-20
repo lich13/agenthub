@@ -96,7 +96,9 @@ impl JobRunner {
             if let Err(err) = result {
                 let message = redact_output(&err.to_string());
                 let _ = db.append_job_output(&id_for_task, &format!("\nerror: {message}\n"));
-                let _ = db.finish_job(&id_for_task, "failed", None, Some(&message));
+                if let Err(error) = db.finish_job(&id_for_task, "failed", None, Some(&message)) {
+                    eprintln!("Could not persist terminal status for job {id_for_task}: {error}");
+                }
             }
             if let Some(group) = exclusive_group.as_deref() {
                 running.lock().expect("running jobs").remove(group);

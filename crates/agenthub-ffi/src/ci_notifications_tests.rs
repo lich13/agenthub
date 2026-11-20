@@ -33,9 +33,11 @@ fn run(id: u64, status: &str, conclusion: Option<&str>, attempt: u64) -> Run {
 fn unrelated_repository_updates_do_not_advance_failed_repository_observations() {
     let mut observer = Observer::default();
     let mut state = snapshot();
-    let time = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+    let time = state.runs[1]
+        .updated_at
+        .parse::<jiff::Timestamp>()
         .unwrap()
-        .timestamp_millis();
+        .as_millisecond();
     state.runs[1].is_bot = true;
     state.last_scan_ms = time - 5000;
     state.repository_baselines_ms.insert(2, time - 10000);
@@ -189,9 +191,11 @@ fn source_baselines_cover_repository_readd_and_bot_toggle_missed_between_polls()
         let mut state = snapshot();
         state.runs[1].is_bot = bot;
         observer.observe(0, &state);
-        let finished = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+        let finished = state.runs[1]
+            .updated_at
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp_millis();
+            .as_millisecond();
         if bot {
             state.bot_baseline_ms = finished + 1000;
         } else {
@@ -205,9 +209,9 @@ fn source_baselines_cover_repository_readd_and_bot_toggle_missed_between_polls()
         state.last_scan_ms += 1;
         assert!(observer.observe(0, &state).is_empty());
         state.runs[1].run_attempt += 1;
-        state.runs[1].updated_at = chrono::DateTime::from_timestamp_millis(finished + 2000)
+        state.runs[1].updated_at = jiff::Timestamp::from_millisecond(finished + 2000)
             .unwrap()
-            .to_rfc3339();
+            .to_string();
         assert_eq!(observer.observe(0, &state).len(), 1);
         assert!(observer.observe(0, &state).is_empty());
     }
@@ -218,9 +222,11 @@ fn observed_completion_in_baseline_second_notifies_but_unseen_history_does_not()
     for bot in [false, true] {
         let mut observer = Observer::default();
         let mut state = snapshot();
-        let second = chrono::DateTime::parse_from_rfc3339(&state.runs[1].updated_at)
+        let second = state.runs[1]
+            .updated_at
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp_millis();
+            .as_millisecond();
         state.baseline_ms = second + 100;
         state.last_scan_ms = second + 400;
         state.repository_observed_ms.insert(2, second + 400);
@@ -263,9 +269,11 @@ fn bot_toggle_same_second_keeps_only_the_observed_attempt_with_a_current_reposit
             1,
         )];
         state.runs[0].is_bot = true;
-        let second = chrono::DateTime::parse_from_rfc3339(&state.runs[0].updated_at)
+        let second = state.runs[0]
+            .updated_at
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp_millis();
+            .as_millisecond();
         state.last_scan_ms = second - 5000;
         state.repository_observed_ms.insert(2, second - 5000);
         assert!(observer.observe(0, &state).is_empty());
@@ -277,9 +285,9 @@ fn bot_toggle_same_second_keeps_only_the_observed_attempt_with_a_current_reposit
         state.runs[0].conclusion = Some("success".into());
         state.runs[0].run_attempt = attempt;
         state.runs[0].updated_at =
-            chrono::DateTime::from_timestamp_millis(second - seconds_before * 1000)
+            jiff::Timestamp::from_millisecond(second - seconds_before * 1000)
                 .unwrap()
-                .to_rfc3339();
+                .to_string();
         let mut unseen = state.runs[0].clone();
         unseen.id = 3;
         state.runs.push(unseen);

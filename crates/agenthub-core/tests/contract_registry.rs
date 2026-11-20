@@ -1,4 +1,3 @@
-use agenthub_core::platform::{PlatformKind, PlatformPaths};
 use agenthub_core::services::{
     commands,
     contract_dtos::{CONTRACT_DTO_NAMES, CONTRACT_DTO_OWNER_NAMES},
@@ -142,19 +141,10 @@ fn contract_registry_matches_core_host_surfaces_and_capabilities() {
 #[test]
 fn contract_registry_capability_matrix_matches_core_policy() {
     let contract = contract();
-    for (surface, platform) in [
-        (
-            HostSurface::LinuxServerApi,
-            PlatformPaths::for_kind(PlatformKind::Linux),
-        ),
-        (
-            HostSurface::DesktopEmbeddedTauri,
-            PlatformPaths::for_kind(PlatformKind::Macos),
-        ),
-    ] {
+    for &surface in HostSurface::ALL {
         let expected = Capability::all()
             .iter()
-            .filter(|capability| capability.is_supported_on_surface(&platform, surface))
+            .filter(|capability| capability.is_supported_on_surface(surface))
             .map(|capability| capability.as_str().to_string())
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -222,7 +212,7 @@ fn shared_actions_declare_core_webui_linux_rpc_and_tauri_mappings() {
                 for key in [
                     "coreUseCase",
                     "linuxRpc",
-                    "tauriCommand",
+                    "ffiHandler",
                     "webuiWrapper",
                     "dtoOwner",
                     "requestDto",

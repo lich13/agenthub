@@ -92,8 +92,15 @@ impl Client {
     }
     fn spawn(mut command: Command) -> Result<Arc<Self>, String> {
         let mut child = command.spawn().map_err(|_| "无法启动系统 SSH")?;
+        let output = child.stdout.take().ok_or("SSH 输出不可用")?;
+        Self::with_output(child, output)
+    }
+
+    fn with_output(
+        mut child: Child,
+        mut output: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+    ) -> Result<Arc<Self>, String> {
         let input = child.stdin.take().ok_or("SSH 输入不可用")?;
-        let mut output = child.stdout.take().ok_or("SSH 输出不可用")?;
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let replies = pending.clone();
         let connected = Arc::new(AtomicBool::new(true));
@@ -181,22 +188,83 @@ impl Drop for Client {
 }
 
 #[cfg(test)]
-pub(super) fn fixture(program: &str) -> Arc<Client> {
-    let mut cmd = Command::new("python3");
-    cmd.args(["-c", program])
+pub(super) fn fixture(mode: &str) -> Arc<Client> {
+    // libtest owns stdout. The child uses its separate stderr pipe for RPC frames.
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "remote::ssh::tests::fixture_peer",
+            "--nocapture",
+        ])
+        .env("AGENTHUB_TEST_SSH_PEER", mode)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    Client::spawn(cmd).unwrap()
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let output = child.stderr.take().unwrap();
+    Client::with_output(child, output).unwrap()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "started as the RPC peer by SSH transport tests"]
+    async fn fixture_peer() {
+        let Ok(mode) = std::env::var("AGENTHUB_TEST_SSH_PEER") else {
+            return;
+        };
+        if mode == "exit" {
+            return;
+        }
+        let mut input = tokio::io::stdin();
+        let mut output = tokio::io::stderr();
+        while let Some(request) = ssh_rpc::read::<_, Request>(&mut input).await.unwrap() {
+            if mode == "disconnect" {
+                break;
+            }
+            if mode == "silent" {
+                continue;
+            }
+            let mut requests = vec![request];
+            if mode == "reverse" {
+                requests.push(ssh_rpc::read(&mut input).await.unwrap().unwrap());
+                requests.reverse();
+            }
+            for request in requests {
+                let response = match mode.as_str() {
+                    "error" => Response {
+                        id: request.id,
+                        result: None,
+                        error: Some("job not found".into()),
+                    },
+                    "reverse" => Response {
+                        id: request.id,
+                        result: Some(request.command.into()),
+                        error: None,
+                    },
+                    "reply" => Response {
+                        id: request.id,
+                        result: Some("fixture".into()),
+                        error: None,
+                    },
+                    _ => unreachable!(),
+                };
+                ssh_rpc::write(&mut output, &response).await.unwrap();
+            }
+            if mode == "reverse" {
+                break;
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_timed_out_write_closes_the_channel_and_releases_other_requests() {
-        let client = fixture("import sys; sys.stdin.buffer.read()");
+        let client = fixture("silent");
         let (write, read) = tokio::join!(
             client.call_with_timeout(
                 "threads.rename",
@@ -216,19 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_follow_request_ids_and_disconnect_does_not_replay() {
-        let client = fixture(
-            r#"
-import sys,struct,json
-requests=[]
-for _ in range(2):
- n=struct.unpack('>I',sys.stdin.buffer.read(4))[0]
- requests.append(json.loads(sys.stdin.buffer.read(n)))
-for r in reversed(requests):
- b=json.dumps({'id':r['id'],'result':r['command'],'error':None}).encode()
- sys.stdout.buffer.write(struct.pack('>I',len(b))+b)
-sys.stdout.buffer.flush()
-"#,
-        );
+        let client = fixture("reverse");
         let (one, two) = tokio::join!(
             client.call("first", serde_json::json!({})),
             client.call("second", serde_json::json!({}))
@@ -236,7 +292,7 @@ sys.stdout.buffer.flush()
         assert_eq!(one.unwrap(), "first");
         assert_eq!(two.unwrap(), "second");
         assert!(client.call("write", serde_json::json!({})).await.is_err());
-        let reconnect = fixture("import sys; sys.exit(255)");
+        let reconnect = fixture("exit");
         assert!(reconnect
             .call("auth", serde_json::json!({}))
             .await
@@ -246,7 +302,7 @@ sys.stdout.buffer.flush()
     }
     #[tokio::test]
     async fn explicit_close_releases_inflight_reads_and_owned_process() {
-        let client = fixture("import sys; sys.stdin.buffer.read()");
+        let client = fixture("silent");
         let pending = client.clone();
         let request =
             tokio::spawn(async move { pending.call("read", serde_json::json!({})).await });

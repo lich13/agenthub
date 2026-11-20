@@ -12,7 +12,7 @@ pub(crate) struct ClaudeListQuery {
 pub(crate) async fn claude_list(_state: AppState, query: ClaudeListQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .claude()
+            .claude()?
             .list(query.limit.unwrap_or(100), query.q.as_deref())
     })
     .await
@@ -25,7 +25,7 @@ pub(crate) async fn claude_detail(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .claude()
+            .claude()?
             .detail(request)
     })
     .await
@@ -42,7 +42,7 @@ pub(crate) struct ClaudeRenameRequest {
 pub(crate) async fn claude_rename(_state: AppState, request: ClaudeRenameRequest) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .claude()
+            .claude()?
             .rename(&request.session_key, &request.title)
     })
     .await
@@ -52,7 +52,7 @@ pub(crate) async fn claude_rename(_state: AppState, request: ClaudeRenameRequest
 pub(crate) async fn claude_delete_preview(_state: AppState, session_key: String) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .claude()
+            .claude()?
             .delete_preview(&session_key)
     })
     .await
@@ -65,7 +65,7 @@ pub(crate) async fn claude_delete_execute(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .claude()
+            .claude()?
             .delete_execute(request)
     })
     .await

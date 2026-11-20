@@ -1,22 +1,15 @@
+private enum PreferenceKey {
+    static let theme = "agenthub.theme"
+    static let navCollapsed = "agenthub.nav-collapsed"
+}
+
 import AppKit
+import CAgentHubFFI
 import Combine
 import Foundation
 
 @MainActor
 public final class RuntimeConnectionStore: ObservableObject {
-    public static let readCommands: Set<String> = [
-        "cleanup.unifiedDryRun", "github.ci.status", "cleanup.hiddenDryRun",
-        "system.capabilities", "threads.list", "threads.detail",
-        "threads.subagentDetail", "threads.blocks", "threads.accountScopeStatus",
-        "jobs.list", "jobs.detail", "probe.status", "probe.settings.get",
-        "probe.events", "updates.status", "grokbot.list", "grokbot.detail",
-        "grok.list", "grok.detail", "grok.deletePreview", "claude.list",
-        "claude.detail", "claude.ownershipDiagnostics", "claude.deletePreview", "antigravity.list",
-        "antigravity.detail", "dsh.list", "dsh.detail",
-        "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview",
-        "codex.desktop.attach", "codex.desktop.catalog", "codex.desktop.diagnostics",
-    ]
-
     public let transport: any RuntimeTransport
     private let defaults: UserDefaults
 
@@ -60,9 +53,8 @@ public final class RuntimeConnectionStore: ObservableObject {
     public init(transport: any RuntimeTransport, defaults: UserDefaults = .standard) {
         self.transport = transport
         self.defaults = defaults
-        LegacyPrefsMigrator.migrateIfNeeded(defaults: defaults)
-        self.themeMode = ThemeMode.normalize(defaults.string(forKey: LegacyPrefsMigrator.themeDefaultsKey))
-        self.navCollapsed = defaults.string(forKey: LegacyPrefsMigrator.navCollapsedDefaultsKey) == "1"
+        self.themeMode = ThemeMode.normalize(defaults.string(forKey: PreferenceKey.theme))
+        self.navCollapsed = defaults.string(forKey: PreferenceKey.navCollapsed) == "1"
         applyWindowAppearance()
     }
 
@@ -84,12 +76,12 @@ public final class RuntimeConnectionStore: ObservableObject {
 
     public func toggleNavCollapsed() {
         navCollapsed.toggle()
-        defaults.set(navCollapsed ? "1" : "0", forKey: LegacyPrefsMigrator.navCollapsedDefaultsKey)
+        defaults.set(navCollapsed ? "1" : "0", forKey: PreferenceKey.navCollapsed)
     }
 
     public func setTheme(_ next: ThemeMode) {
         themeMode = next
-        defaults.set(next.rawValue, forKey: LegacyPrefsMigrator.themeDefaultsKey)
+        defaults.set(next.rawValue, forKey: PreferenceKey.theme)
         applyWindowAppearance()
     }
 
@@ -209,13 +201,16 @@ public final class RuntimeConnectionStore: ObservableObject {
         let capturedRevision = revision
         let capturedTarget = target
         let isReadHookStatus: Bool = {
-            guard command == "claude.hooks",
-                  case let .object(req)? = argsObject["request"],
+            guard case let .object(req)? = argsObject["request"],
                   case let .string(act)? = req["action"]
             else { return false }
             return act == "status"
         }()
-        let isWrite = !Self.readCommands.contains(command) && !isReadHookStatus
+        let access = command.withCString { agenthub_ffi_command_access($0, isReadHookStatus) }
+        if capturedTarget == .remote && !localOnly && !access.remote {
+            throw AgentHubFFIError("不支持的远程操作")
+        }
+        let isWrite = !access.read_only
         if isWrite { writes += 1 }
         defer { if isWrite { writes = max(0, writes - 1) } }
 

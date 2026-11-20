@@ -8,8 +8,8 @@ use super::*;
     about = "AgentHub management API and background monitor"
 )]
 pub(super) struct Cli {
-    #[arg(long, env = "AGENTHUB_CONFIG", default_value_os_t = Config::current_default_config_path())]
-    pub(super) config: PathBuf,
+    #[arg(long, env = "AGENTHUB_CONFIG")]
+    pub(super) config: Option<PathBuf>,
 
     #[command(subcommand)]
     pub(super) command: Command,

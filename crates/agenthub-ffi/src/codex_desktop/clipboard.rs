@@ -10,11 +10,13 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
-const CAPTURE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 const PIXEL_BYTES: u64 = 128 * 1024 * 1024;
 const INVALID: &str = "剪贴板图片格式无效或不受支持";
 const TOO_LARGE: &str = "剪贴板图片超出安全大小限制";
-const TEXT_BYTES: usize = 32 * 8192;
+pub(crate) const MAX_FILES: usize = 32;
+pub(crate) const MAX_PATH_UNITS: usize = 8192;
+pub(crate) const TEXT_BYTES: usize = MAX_FILES * MAX_PATH_UNITS;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,20 +78,30 @@ impl RawPasteboardSnapshot {
     /// Caller must ensure `raw` and any non-zero-length slice pointers are valid
     /// for the duration of this call. Zero-length slices never dereference pointers.
     pub unsafe fn from_raw(raw: &AgentHubRawPasteboard) -> Result<Self, &'static str> {
+        if raw.total_item_count > MAX_FILES || raw.file_urls_len > MAX_FILES {
+            return Err("引用数量超出限制，本次附件未添加");
+        }
         let mut file_urls = Vec::new();
         if raw.file_urls_len > 0 {
             if raw.file_urls_ptr.is_null() {
                 return Err("文件名或路径格式无效");
             }
             let items =
-                unsafe { std::slice::from_raw_parts(raw.file_urls_ptr, raw.file_urls_len.min(34)) };
+                // SAFETY: The checked count describes the host's contiguous initialized file URL descriptors.
+                unsafe { std::slice::from_raw_parts(raw.file_urls_ptr, raw.file_urls_len) };
             for item in items {
+                if item.utf16_len > MAX_PATH_UNITS
+                    || item.utf8_len > item.utf16_len.saturating_mul(3)
+                {
+                    return Err("文件名或路径格式无效");
+                }
                 let url = if item.utf8_len == 0 {
                     String::new()
                 } else {
                     if item.utf8_ptr.is_null() {
                         return Err("文件名或路径格式无效");
                     }
+                    // SAFETY: The URL descriptor borrows this checked byte range from the live pasteboard snapshot.
                     let bytes = unsafe {
                         std::slice::from_raw_parts(item.utf8_ptr.cast::<u8>(), item.utf8_len)
                     };
@@ -103,12 +115,21 @@ impl RawPasteboardSnapshot {
                 });
             }
         }
+        if raw.image_bytes_len > CAPTURE_BYTES
+            || (raw.image_bytes_len != 0 && raw.image_bytes_len != raw.image_declared_bytes)
+        {
+            return Err(TOO_LARGE);
+        }
+        if raw.string_utf8_len > raw.string_utf16_len.saturating_mul(3) {
+            return Err(INVALID);
+        }
         let image_bytes = if raw.image_bytes_len == 0 || raw.image_declared_bytes > CAPTURE_BYTES {
             Vec::new()
         } else {
             if raw.image_bytes_ptr.is_null() {
                 return Err(INVALID);
             }
+            // SAFETY: The host lends the validated image byte range until it is copied into this Vec.
             unsafe { std::slice::from_raw_parts(raw.image_bytes_ptr, raw.image_bytes_len) }.to_vec()
         };
         let string_text = if !raw.has_string || raw.string_utf16_len > TEXT_BYTES {
@@ -118,6 +139,7 @@ impl RawPasteboardSnapshot {
         } else if raw.string_utf8_ptr.is_null() {
             None
         } else {
+            // SAFETY: The checked length describes bytes in the live host string buffer.
             let bytes = unsafe {
                 std::slice::from_raw_parts(raw.string_utf8_ptr.cast::<u8>(), raw.string_utf8_len)
             };
@@ -168,12 +190,12 @@ pub(super) fn read_content(
     snapshot: &RawPasteboardSnapshot,
     home_dir: Option<&Path>,
 ) -> Result<PasteContent, &'static str> {
-    if snapshot.total_item_count > 32 || snapshot.file_urls.len() > 32 {
+    if snapshot.total_item_count > MAX_FILES || snapshot.file_urls.len() > MAX_FILES {
         return Err("引用数量超出限制，本次附件未添加");
     }
     let mut paths = Vec::new();
     for item in &snapshot.file_urls {
-        if item.utf16_len > 8192 {
+        if item.utf16_len > MAX_PATH_UNITS {
             return Err("文件名或路径格式无效");
         }
         paths.push(local_file_url(&item.url).ok_or("仅支持本机文件，无法添加此文件地址")?);
@@ -239,7 +261,7 @@ fn text_paths(text: &str, home_dir: Option<&Path>) -> Option<Vec<PathBuf>> {
                     .and_then(|line| line.strip_suffix('\''))
             })
             .unwrap_or(line);
-        if line.len() > 8192 || line.chars().any(char::is_control) {
+        if line.len() > MAX_PATH_UNITS || line.chars().any(char::is_control) {
             return None;
         }
         let path = if line.starts_with("file:") {
@@ -257,7 +279,7 @@ fn text_paths(text: &str, home_dir: Option<&Path>) -> Option<Vec<PathBuf>> {
 }
 
 pub(super) fn selected_files(paths: Vec<PathBuf>) -> Result<Vec<NativeReference>, &'static str> {
-    if paths.is_empty() || paths.len() > 32 {
+    if paths.is_empty() || paths.len() > MAX_FILES {
         return Err("引用数量超出限制，本次附件未添加");
     }
     let mut files = Vec::new();
@@ -372,12 +394,14 @@ impl OwnedCF {
 #[cfg(target_os = "macos")]
 impl Drop for OwnedCF {
     fn drop(&mut self) {
+        // SAFETY: OwnedCF contains one non-null Create/Copy reference and releases it exactly once.
         unsafe { CFRelease(self.0) }
     }
 }
 
 #[cfg(target_os = "macos")]
 fn check_dimensions(bytes: &[u8]) -> Result<(), &'static str> {
+    // SAFETY: CFDataCreate copies the live input slice. OwnedCF holds each created object through dependent calls.
     unsafe {
         let data = OwnedCF::new(CFDataCreate(
             std::ptr::null(),
@@ -423,6 +447,7 @@ fn check_dimensions(bytes: &[u8]) -> Result<(), &'static str> {
 #[cfg(target_os = "macos")]
 pub(super) fn transcode_with_uti(bytes: &[u8], uti: &str) -> Result<Vec<u8>, &'static str> {
     const UTF8_ENCODING: u32 = 0x0800_0100;
+    // SAFETY: CFDataCreate copies the live input slice. OwnedCF holds each created object through dependent calls.
     unsafe {
         let data = OwnedCF::new(CFDataCreate(
             std::ptr::null(),

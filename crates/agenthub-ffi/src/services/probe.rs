@@ -1,12 +1,8 @@
 use crate::overview::DesktopState;
-use agenthub_core::{
-    probe::{ProbeRuntime, ProbeStatus},
-    services::system::{require_capability, Capability},
-};
+use agenthub_core::probe::{ProbeRuntime, ProbeStatus};
 use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
-    require_capability(state.platform(), Capability::Probe)?;
     let config = state.refresh_config()?;
     let mut status = ProbeRuntime::new(config, state.platform().clone())
         .status()
@@ -31,11 +27,7 @@ pub fn desktop_github_ci_status(
     request: agenthub_core::github_ci::Request,
 ) -> std::result::Result<agenthub_core::github_ci::Snapshot, String> {
     let config = state.config();
-    agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
-        &config,
-        state.platform(),
-        state.host_surface(),
-    )
-    .github_ci(&state.db, request)
-    .map_err(|error| error.to_string())
+    agenthub_core::services::use_cases::AgentHubUseCases::with_config(&config, state.platform())
+        .github_ci(&state.db, request)
+        .map_err(|error| error.to_string())
 }

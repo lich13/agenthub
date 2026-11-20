@@ -8,7 +8,7 @@ use crate::{
     services::probe::aggregate_probe_status,
 };
 use anyhow::Result;
-use chrono::Utc;
+use jiff::Timestamp;
 #[cfg(test)]
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,6 @@ pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS: i64 = 6 * 60 * 60;
 pub const INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON: &str = "internal_memory_consolidation";
 const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
-const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 
 pub fn redact_probe_event_for_output(mut event: ProbeEvent) -> ProbeEvent {
     event.title = event.title.map(|value| redact_output(&value));
@@ -123,16 +122,14 @@ impl ProbeRuntime {
 
     pub async fn status(&self) -> Result<ProbeStatus> {
         let runtime = Self::new(self.config.clone(), self.paths.clone());
-        crate::read_tasks::spawn_blocking(move || runtime.status_blocking())
-            .await
-            .map_err(Into::into)
+        crate::read_tasks::spawn_blocking(move || runtime.status_blocking()).await?
     }
 
-    fn status_blocking(&self) -> ProbeStatus {
+    fn status_blocking(&self) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
-        let aggregation = aggregate_probe_status(&self.config);
+        let aggregation = aggregate_probe_status(&self.config)?;
         let hook_status = self.hook_status();
-        ProbeStatus {
+        Ok(ProbeStatus {
             provider_notifications: json!([]),
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
@@ -184,11 +181,9 @@ impl ProbeRuntime {
             active_sessions: aggregation.active_sessions,
             config_path: self.paths.config_file.clone(),
             codex_hooks_path: Some(resolved.home.join("hooks.json")),
-            dsh_sessions_path: Some(
-                crate::dsh::DshPaths::default_for_user()
-                    .home
-                    .join("sessions"),
-            ),
+            dsh_sessions_path: crate::dsh::DshPaths::default_for_user()
+                .ok()
+                .map(|paths| paths.home.join("sessions")),
             codex_home: resolved.home.clone(),
             configured_codex_home: resolved.configured_codex_home.clone(),
             resolved_codex_home: resolved.home.clone(),
@@ -196,7 +191,7 @@ impl ProbeRuntime {
             logs_db_source: resolved.logs_db_source.clone(),
             discovery_warnings: resolved.discovery_warnings.clone(),
             host_label: self.config.codex.host_label.clone(),
-        }
+        })
     }
 
     pub fn hook_status(&self) -> ProbeHookStatus {
@@ -238,7 +233,15 @@ impl ProbeRuntime {
         }
     }
 
-    pub fn build_event(&self, mut input: ProbeEventInput) -> ProbeBuiltEvent {
+    pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
+        Self::build_event_for(&self.config, self.paths.kind, input)
+    }
+
+    pub fn build_event_for(
+        config: &Config,
+        kind: crate::platform::PlatformKind,
+        mut input: ProbeEventInput,
+    ) -> ProbeBuiltEvent {
         let suppression_reason = input.suppression_reason.clone().or_else(|| {
             matches!(input.kind, ProbeEventInputKind::HookStop)
                 .then(|| input.last_assistant_message.as_deref())
@@ -328,19 +331,16 @@ impl ProbeRuntime {
             dedupe_component(&event_type),
             dedupe_component(&dedupe_body_component)
         );
-        let beijing_time = Utc::now()
-            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
-            .format("%Y-%m-%d %H:%M:%S 北京时间")
+        let beijing_time = Timestamp::now()
+            .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::offset(8)))
+            .strftime("%Y-%m-%d %H:%M:%S 北京时间")
             .to_string();
-        let bark_message = probe_event_bark_message(&event_type, &body_source, &message);
         let bark = probe_event_bark_text(
             &event_type,
             input.thread_title.as_deref(),
-            &bark_message,
+            &message,
             Some(&bark_body),
         );
-        let bark_chunk_count =
-            probe_bark_body_chunks(&bark.body, PROBE_BARK_BODY_CHUNK_BYTES).len();
         let source = input.source_override.clone().unwrap_or_else(|| {
             if notify_completion {
                 "agenthub-webd probe notify-completion".to_string()
@@ -368,8 +368,8 @@ impl ProbeRuntime {
             "beijing_time": beijing_time.clone(),
             "reason_label": title.clone(),
             "source": source.clone(),
-            "host_label": self.config.codex.host_label.clone(),
-            "platform": self.paths.kind,
+            "host_label": config.codex.host_label,
+            "platform": kind,
             "notify_completion": notify_completion,
             "auto_reply": false,
             "hidden_desktop_control": false,
@@ -382,7 +382,6 @@ impl ProbeRuntime {
                 "body_truncated": body_truncated,
                 "dedupe_ttl_seconds": ttl_seconds,
                 "scan_source": scan_source.clone(),
-                "chunk_count": bark_chunk_count,
                 "request_count": 0,
                 "status": "pending"
             }
@@ -420,6 +419,14 @@ impl ProbeRuntime {
         cwd: Option<&str>,
         transcript_path: Option<&str>,
     ) -> Option<&'static str> {
+        Self::suppression_reason_for_config(&self.config, cwd, transcript_path)
+    }
+
+    pub fn suppression_reason_for_config(
+        config: &Config,
+        cwd: Option<&str>,
+        transcript_path: Option<&str>,
+    ) -> Option<&'static str> {
         if transcript_path.is_some_and(|path| !path.trim().is_empty()) {
             return None;
         }
@@ -428,7 +435,9 @@ impl ProbeRuntime {
         if !cwd.is_absolute() {
             return None;
         }
-        let memory_root = self.resolved_codex_paths().home.join("memories");
+        let memory_root = resolve_codex_paths(&config.codex.home)
+            .home
+            .join("memories");
         let canonical_cwd = fs::canonicalize(cwd).ok()?;
         let canonical_memory_root = fs::canonicalize(memory_root).ok()?;
         (canonical_cwd == canonical_memory_root)
@@ -1106,11 +1115,6 @@ fn probe_event_bark_text(
     }
 }
 
-fn probe_event_bark_message(event_type: &str, body_source: &str, fallback: &str) -> String {
-    let _ = (event_type, body_source);
-    fallback.to_string()
-}
-
 fn fallback_bark_title(title: Option<&str>) -> &str {
     title
         .map(str::trim)
@@ -1341,47 +1345,6 @@ fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
     truncated
 }
 
-fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    if value.is_empty() || max_bytes == 0 {
-        return vec![String::new()];
-    }
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < value.len() {
-        let mut end = (start + max_bytes).min(value.len());
-        while end > start && !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end == start {
-            end = value[start..]
-                .char_indices()
-                .nth(1)
-                .map(|(offset, _)| start + offset)
-                .unwrap_or(value.len());
-        }
-        chunks.push(value[start..end].to_string());
-        start = end;
-    }
-    chunks
-}
-
-fn probe_bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || max_bytes == 0 {
-        return vec![String::new()];
-    }
-    let raw_chunks = utf8_chunks(trimmed, max_bytes);
-    let chunk_count = raw_chunks.len();
-    if chunk_count <= 1 {
-        return raw_chunks;
-    }
-    raw_chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, chunk)| format!("第 {}/{} 段\n\n{chunk}", index + 1, chunk_count))
-        .collect()
-}
-
 fn dedupe_component(value: &str) -> String {
     let normalized = value
         .chars()
@@ -1414,9 +1377,9 @@ mod tests {
             let normalized_memory_root = memory_root.join("nested").join("..");
             fs::create_dir_all(codex_home.join("sessions")).unwrap();
             fs::create_dir_all(memory_root.join("nested")).unwrap();
-            let mut config = Config::default();
+            let mut config = Config::current_defaults().unwrap();
             config.codex.home = codex_home;
-            let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+            let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
 
             assert_eq!(
                 runtime.hook_context_suppression_reason(normalized_memory_root.to_str(), None),
@@ -1440,9 +1403,9 @@ mod tests {
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
         fs::create_dir_all(&memory_child).unwrap();
         fs::create_dir_all(&workspace).unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
-        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+        let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
 
         for (cwd, transcript_path) in [
             (None, None),
@@ -1464,8 +1427,8 @@ mod tests {
 
     #[test]
     fn probe_memory_suppression_discards_body_even_if_a_caller_supplies_one() {
-        let config = Config::default();
-        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+        let config = Config::current_defaults().unwrap();
+        let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
         let memory_body = "MEMORY_BODY_MUST_NOT_REACH_SUMMARY_HASH_OR_BARK";
 
         let event = runtime.build_event(
@@ -1513,12 +1476,11 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.hooks.manage_stop_hook = true;
 
-        let status =
-            ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux)).hook_status();
+        let status = ProbeRuntime::new(config, PlatformPaths::linux_server()).hook_status();
 
         assert_eq!(status.hook_status, "stale");
         assert_eq!(status.stale_command_count, 1);
@@ -1554,11 +1516,11 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.hooks.manage_stop_hook = true;
 
-        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
             .status()
             .await
             .unwrap();
@@ -1577,10 +1539,10 @@ mod tests {
         let root = unique_temp_dir("agenthub-probe-hook-status-pair");
         let codex_home = root.join(".codex");
         fs::create_dir_all(&codex_home).unwrap();
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home.clone();
         config.probe.hooks.manage_stop_hook = true;
-        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+        let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
         let stop_command = runtime.hook_status().hook_command;
         let request_command =
             stop_command.replace("probe hook-stop", "probe hook-request-user-input");
@@ -1658,10 +1620,10 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.recent_limit = 20;
-        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
             .status()
             .await
             .unwrap();
@@ -1700,11 +1662,11 @@ mod tests {
         .unwrap();
         db.create_job("job-live", "codex.run", "继续运行").unwrap();
         drop(db);
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.paths.db_path = panel_db_path;
         config.probe.recent_limit = 20;
-        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
             .status()
             .await
             .unwrap();
@@ -1750,7 +1712,7 @@ mod tests {
             );",
         )
         .unwrap();
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         conn.execute(
             "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
              VALUES('reply-thread', ?1, ?2, ?2, 'codex', '/tmp', '待确认', '')",
@@ -1764,10 +1726,10 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.recent_limit = 20;
-        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
             .status()
             .await
             .unwrap();
@@ -1783,9 +1745,9 @@ mod tests {
 
     #[test]
     fn build_event_redacts_and_truncates_last_assistant_message_and_names_status_events() {
-        let mut config = Config::default();
+        let mut config = Config::current_defaults().unwrap();
         config.codex.host_label = "probe-test".to_string();
-        let runtime = ProbeRuntime::new(config, PlatformPaths::current());
+        let runtime = ProbeRuntime::new(config, PlatformPaths::current().unwrap());
         let message = format!(
             "first line\nTOKEN=secret-token\n{}UNIQUE_FULL_BARK_TAIL",
             "完成".repeat(3000)
@@ -1904,8 +1866,8 @@ mod tests {
     #[test]
     fn build_event_formats_completion_bark_message_from_structural_event() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let completion = runtime.build_event(ProbeEventInput::notify_completion(
@@ -1928,8 +1890,8 @@ mod tests {
     #[test]
     fn build_event_bark_text_matches_codex_sentinel_lite_formats() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let completion = runtime.build_event(
@@ -1984,8 +1946,8 @@ mod tests {
     #[test]
     fn event_dedupe_key_changes_when_body_hash_changes() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let first = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2028,8 +1990,8 @@ mod tests {
     #[test]
     fn hook_stop_with_final_feedback_is_classified_as_completion() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2062,8 +2024,8 @@ mod tests {
     #[test]
     fn hook_stop_with_plan_feedback_is_classified_as_reply_needed() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2088,8 +2050,8 @@ mod tests {
     #[test]
     fn reply_needed_plan_bark_body_uses_extracted_plan_without_xml_tags() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2126,8 +2088,8 @@ mod tests {
     #[test]
     fn reply_needed_plan_event_keeps_bark_body_safe_and_persists_only_body_metadata() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body = "\
 线程 ID：thread-secret\n\
@@ -2159,7 +2121,7 @@ Authorization: Bearer secret-token\n\
         assert!(event.payload["bark"]["body_summary"].is_null());
         assert!(event.payload["bark"]["body_sha256"].is_string());
         assert!(event.payload["bark"]["body_length"].is_u64());
-        assert!(event.payload["bark"]["chunk_count"].is_u64());
+        assert!(event.payload["bark"].get("chunk_count").is_none());
         assert!(event.payload["bark"]["request_count"].is_u64());
 
         let stored = serde_json::to_string(&event.payload).unwrap();
@@ -2173,8 +2135,8 @@ Authorization: Bearer secret-token\n\
     #[test]
     fn bark_body_and_summary_redact_common_api_key_lines() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body = "\
 最终反馈：\n\
@@ -2202,36 +2164,10 @@ Authorization: Bearer secret-token\n\
     }
 
     #[test]
-    fn long_bark_chunks_reassemble_to_original_body_after_prefix_removal() {
-        let original = format!(
-            "{}中间🙂{}尾段",
-            "计划正文".repeat(280),
-            "emoji🙂".repeat(220)
-        );
-        let chunks = probe_bark_body_chunks(&original, 2400);
-
-        assert!(chunks.len() > 1);
-        let mut reassembled = String::new();
-        for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
-            assert!(chunk.starts_with(&prefix));
-            let body_part = chunk.strip_prefix(&prefix).unwrap();
-            assert!(body_part.len() <= 2400);
-            assert!(original.is_char_boundary(
-                original
-                    .find(body_part)
-                    .expect("chunk should start at utf8 boundary")
-            ));
-            reassembled.push_str(body_part);
-        }
-        assert_eq!(reassembled, original);
-    }
-
-    #[test]
     fn request_user_input_bark_body_keeps_only_question_options_and_safe_text() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body = "\
 等待用户选择：需要用户确认。\n\
@@ -2273,8 +2209,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn completion_bark_body_keeps_only_final_reply_text_and_safe_metadata() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body = "\
 线程 ID：thread-complete\n\
@@ -2308,8 +2244,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn bark_body_drops_memory_citation_metadata_but_keeps_literal_code() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body = "完成。\n\n<oai-mem-citation>\n<rollout_ids>\nprivate-id\n</rollout_ids>\n</oai-mem-citation>\n\n```xml\n<oai-mem-citation>literal</oai-mem-citation>\n```";
         let event = runtime.build_event(ProbeEventInput::notify_completion_with_context(
@@ -2330,8 +2266,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn passive_old_plan_payload_keeps_only_safe_body_metadata() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let old_plan = "\
 等待用户回复：Plan 已完成，正在等待确认后继续。\n\
@@ -2366,7 +2302,7 @@ Authorization: Bearer secret-token";
         assert!(event.payload["body_sha256"].as_str().unwrap().len() >= 64);
         assert!(event.payload["bark"].get("body").is_none());
         assert!(event.payload["bark_body"].is_null());
-        assert_eq!(event.payload["bark"]["chunk_count"], 1);
+        assert!(event.payload["bark"].get("chunk_count").is_none());
         assert_eq!(event.payload["bark"]["request_count"], 0);
         let stored = serde_json::to_string(&event.payload).unwrap();
         assert!(!stored.contains("Authorization"));
@@ -2379,8 +2315,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn passive_scan_status_events_use_six_hour_ttl_and_scan_metadata() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let passive = runtime.build_event(
@@ -2418,8 +2354,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn passive_scan_plan_dedupe_ignores_generated_time_but_tracks_plan_text() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
         let body_at_t1 = "等待用户回复：Plan 已完成，正在等待确认后继续。\n\nthread_id: thread-plan\ntime: ignored\nturn_id: turn-plan\n时间: 2026-06-16 21:03:40 北京时间\n状态说明: 这一轮已经写出 Plan 并等待用户确认，所以这是待回复，不是异常停止或普通完成。\n\nPlan 摘要:\n# 修复计划\n- 等待确认";
         let body_at_t2 = body_at_t1.replace("21:03:40", "21:05:42");
@@ -2454,8 +2390,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_with_terminal_error_is_classified_as_recoverable() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2483,8 +2419,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_with_normal_final_feedback_is_classified_as_completion() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2506,8 +2442,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_with_product_named_final_feedback_is_classified_as_completion() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2530,8 +2466,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_ignores_machine_control_payloads() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2550,8 +2486,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_does_not_treat_sentinel_system_message_as_completion_or_abnormal() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
@@ -2570,8 +2506,8 @@ Authorization: Bearer secret-token";
     #[test]
     fn hook_stop_does_not_treat_probe_system_message_as_completion_or_abnormal() {
         let runtime = ProbeRuntime::new(
-            Config::default(),
-            PlatformPaths::for_kind(PlatformKind::Linux),
+            Config::current_defaults().unwrap(),
+            PlatformPaths::linux_server(),
         );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(

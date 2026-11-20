@@ -55,7 +55,8 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                     "summary": [
                         "id": id,
                         "title": "Thread \(id)",
-                        "status": "Idle",
+                        "status": "Recent",
+                        "message_count": blocks.count,
                     ],
                     "messages": [],
                     "blocks": try JSONSerialization.jsonObject(with: JSONEncoder().encode(blocks)),
@@ -391,7 +392,7 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             let transport = MockRuntimeTransport { cmd, args in
                 if cmd == "threads.list" {
                     return Data("""
-                    [{"id":"t1","title":"First","status":"Running"},{"id":"t2","title":"Second","status":"Idle"}]
+                    [{"id":"t1","title":"First","status":"Running","message_count":1},{"id":"t2","title":"Second","status":"Recent","message_count":0}]
                     """.utf8)
                 }
                 if cmd == "threads.rename" {

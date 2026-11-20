@@ -6,7 +6,7 @@ use crate::{
 };
 use agenthub_core::{
     config::Config,
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeRuntime},
     services::{
         probe::{self as probe_service},
@@ -105,7 +105,7 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
     }
 
     if let Some(snapshot) = current_probe_status_snapshot(&state) {
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let age = now.saturating_sub(snapshot.refreshed_at_unix).max(0);
         let refreshing = if age >= 2 {
             spawn_probe_status_refresh(state);
@@ -202,7 +202,7 @@ fn store_probe_status_snapshot(state: &AppState, value: Value) {
     let mut cache = state.probe_status_cache.lock().expect("probe status cache");
     cache.snapshot = Some(CachedProbeStatus {
         value,
-        refreshed_at_unix: chrono::Utc::now().timestamp(),
+        refreshed_at_unix: jiff::Timestamp::now().as_second(),
     });
     cache.refreshing = false;
 }
@@ -232,7 +232,7 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
     let plan = AgentHubUseCases::with_config(config, &platform)
         .settings()?
         .probe_settings_view(secret_state)?;

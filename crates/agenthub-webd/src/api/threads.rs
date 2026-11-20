@@ -57,7 +57,6 @@ pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
                 "codex_account_scope.clear",
                 Some("codex_account_scope"),
                 None,
-                None,
                 serde_json::json!({
                     "cleared_threads": result.cleared_threads,
                     "cleared_files": result.cleared_files,

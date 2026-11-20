@@ -73,11 +73,11 @@ class MinisignVerificationTests(unittest.TestCase):
             write_checksum(cls.archive, cls.checksum)
 
             environment = os.environ.copy()
-            environment.pop("TAURI_SIGNING_PRIVATE_KEY_PATH", None)
-            environment["TAURI_SIGNING_PRIVATE_KEY"] = base64.b64encode(
+            environment.pop("AGENTHUB_SIGNING_PRIVATE_KEY_PATH", None)
+            environment["AGENTHUB_SIGNING_PRIVATE_KEY"] = base64.b64encode(
                 cls.private_key.read_bytes()
             ).decode("ascii")
-            environment["TAURI_SIGNING_PRIVATE_KEY_PASSWORD"] = ""
+            environment["AGENTHUB_SIGNING_PRIVATE_KEY_PASSWORD"] = ""
             result = subprocess.run(
                 [
                     sys.executable,

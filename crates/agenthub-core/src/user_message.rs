@@ -108,28 +108,30 @@ fn question_text(text: &str, include_questions: bool) -> String {
         {
             continue;
         }
-        let Ok(Value::Array(replies)) = serde_json::from_str::<Value>(&text[body..close]) else {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            question_item_id: String,
+            question: String,
+            answer: String,
+        }
+        let Ok(replies) = serde_json::from_str::<Vec<Reply>>(&text[body..close]) else {
             continue;
         };
         if replies.is_empty()
-            || !replies.iter().all(|reply| {
-                reply
-                    .get("questionItemId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.trim().is_empty())
-                    && reply.get("question").is_some_and(Value::is_string)
-                    && reply.get("answer").is_some_and(Value::is_string)
-            })
+            || replies
+                .iter()
+                .any(|reply| reply.question_item_id.trim().is_empty())
         {
             continue;
         }
         result.push_str(&text[kept..start]);
         for reply in replies {
             if include_questions {
-                result.push_str(reply["question"].as_str().unwrap());
+                result.push_str(&reply.question);
                 result.push('\n');
             }
-            result.push_str(reply["answer"].as_str().unwrap());
+            result.push_str(&reply.answer);
             result.push('\n');
         }
         kept = end;
@@ -680,24 +682,17 @@ fn file_fingerprint(path: &Path) -> Result<String> {
 }
 
 fn metadata_fingerprint(meta: &fs::Metadata) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            meta.dev(),
-            meta.ino(),
-            meta.len(),
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ctime(),
-            meta.ctime_nsec()
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        format!("{}:{:?}", meta.len(), meta.modified().ok())
-    }
+    use std::os::unix::fs::MetadataExt;
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        meta.dev(),
+        meta.ino(),
+        meta.len(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec()
+    )
 }
 
 #[cfg(test)]

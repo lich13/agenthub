@@ -1,9 +1,8 @@
 use crate::{
-    config::Config,
     db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::commands,
-    services::system::{require_capability_for_surface, Capability, HostSurface},
+    services::system::{require_capability, Capability},
     system::{compare_semver, extract_semver},
     update::{self, analyze_job_failure, JobFailureCategory},
 };
@@ -14,8 +13,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum UpdateExecutionMethod {
     LinuxSystemdJob,
-    MacosTauriUpdater,
-    Unsupported,
+    // Protocol 2 method identifier.
+    #[serde(rename = "macos_tauri_updater")]
+    MacosAppUpdater,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,14 +118,12 @@ pub struct UpdateActionPlan {
     pub macos_job: Option<MacosUpdaterJobSpec>,
 }
 
-pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed Tauri updater feed\n";
+pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed app updater feed\n";
 pub const MACOS_UPDATER_NO_UPDATE_OUTPUT: &str = "no signed app update available\n";
 const MACOS_UPDATER_AVAILABLE_PREFIX: &str = "signed app update available ";
 
-pub fn update_status_for_surface(
-    _config: &Config,
+pub fn update_status(
     platform: &PlatformPaths,
-    host_surface: HostSurface,
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> UpdateStatus {
@@ -142,8 +140,8 @@ pub fn update_status_for_surface(
     } else {
         UpdateState::Idle
     };
-    let method = execution_method_for_surface(platform.kind, host_surface);
-    let recommended_action = recommended_action(platform.kind, method, update_available);
+    let method = execution_method(platform);
+    let recommended_action = recommended_action(method, update_available);
 
     UpdateStatus {
         current_version,
@@ -157,35 +155,27 @@ pub fn update_status_for_surface(
     }
 }
 
-pub fn update_status_with_recent_check_job_for_surface(
-    config: &Config,
+pub fn update_status_with_recent_check_job(
     platform: &PlatformPaths,
-    host_surface: HostSurface,
     latest_version: Option<&str>,
     last_error: Option<&str>,
     recent_check_job: Option<&JobRecord>,
 ) -> UpdateStatus {
-    let mut status =
-        update_status_for_surface(config, platform, host_surface, latest_version, last_error);
+    let mut status = update_status(platform, latest_version, last_error);
     if latest_version.is_some() || last_error.is_some() || platform.kind != PlatformKind::Macos {
         return status;
     }
     if let Some(job) = recent_check_job {
-        derive_macos_recent_check_status(&mut status, job, config, platform, host_surface);
+        derive_macos_recent_check_status(&mut status, job, platform);
     }
     status
 }
 
-pub fn update_job_plan_for_surface(
-    platform: &PlatformPaths,
-    host_surface: HostSurface,
-    action: UpdateAction,
-) -> UpdateJobPlan {
+pub fn update_job_plan(platform: &PlatformPaths, action: UpdateAction) -> UpdateJobPlan {
     UpdateJobPlan {
         action,
-        method: execution_method_for_surface(platform.kind, host_surface),
-        exclusive: platform.kind == PlatformKind::Linux
-            && host_surface == HostSurface::LinuxServerApi,
+        method: execution_method(platform),
+        exclusive: platform.kind == PlatformKind::Linux,
     }
 }
 
@@ -193,28 +183,13 @@ pub fn plan_update_action(
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<UpdateActionPlan> {
-    plan_update_action_for_surface(
-        platform,
-        HostSurface::default_for_platform(platform),
-        action,
-    )
-}
-
-pub fn plan_update_action_for_surface(
-    platform: &PlatformPaths,
-    host_surface: HostSurface,
-    action: UpdateAction,
-) -> Result<UpdateActionPlan> {
-    let job_plan = update_job_plan_for_surface(platform, host_surface, action);
-    let required_capability =
-        update_action_capability_for_surface(platform.kind, host_surface, action);
-    require_capability_for_surface(platform, host_surface, required_capability)?;
+    let job_plan = update_job_plan(platform, action);
+    if action == UpdateAction::Prune {
+        require_capability(platform, Capability::PruneBackups)?;
+    }
     let (linux_job, macos_job) = match job_plan.method {
         UpdateExecutionMethod::LinuxSystemdJob => (Some(linux_update_job_spec(job_plan)), None),
-        UpdateExecutionMethod::MacosTauriUpdater => (None, Some(macos_updater_job_spec(action)?)),
-        UpdateExecutionMethod::Unsupported => {
-            anyhow::bail!("updates are unavailable on this platform")
-        }
+        UpdateExecutionMethod::MacosAppUpdater => (None, Some(macos_updater_job_spec(action)?)),
     };
     Ok(UpdateActionPlan {
         action,
@@ -271,9 +246,7 @@ pub fn linux_update_job_spec(plan: UpdateJobPlan) -> LinuxUpdateJobSpec {
 fn derive_macos_recent_check_status(
     status: &mut UpdateStatus,
     job: &JobRecord,
-    config: &Config,
     platform: &PlatformPaths,
-    host_surface: HostSurface,
 ) {
     if job.kind != "agenthub_update_check" {
         return;
@@ -287,7 +260,7 @@ fn derive_macos_recent_check_status(
         return;
     }
     if let Some(version) = macos_signed_update_version_from_output(&job.output) {
-        *status = update_status_for_surface(config, platform, host_surface, Some(&version), None);
+        *status = update_status(platform, Some(&version), None);
         status.state = if status.update_available == Some(true) {
             UpdateState::Ready
         } else {
@@ -320,22 +293,6 @@ fn non_empty_string(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn update_action_capability_for_surface(
-    platform: PlatformKind,
-    host_surface: HostSurface,
-    action: UpdateAction,
-) -> Capability {
-    match (platform, host_surface, action) {
-        (_, _, UpdateAction::Prune) => Capability::PruneBackups,
-        (
-            PlatformKind::Linux,
-            HostSurface::LinuxServerApi,
-            UpdateAction::Check | UpdateAction::Install,
-        ) => Capability::LinuxUpdateJob,
-        (_, _, UpdateAction::Check | UpdateAction::Install) => Capability::AppUpdater,
-    }
-}
-
 pub fn update_available_for_versions(current_version: &str, latest_version: &str) -> Option<bool> {
     Some(
         compare_semver(
@@ -346,45 +303,29 @@ pub fn update_available_for_versions(current_version: &str, latest_version: &str
     )
 }
 
-fn execution_method_for_surface(
-    platform: PlatformKind,
-    host_surface: HostSurface,
-) -> UpdateExecutionMethod {
-    match (platform, host_surface) {
-        (PlatformKind::Linux, HostSurface::LinuxServerApi) => {
-            UpdateExecutionMethod::LinuxSystemdJob
-        }
-        (PlatformKind::Linux | PlatformKind::Macos, HostSurface::DesktopEmbeddedTauri) => {
-            UpdateExecutionMethod::MacosTauriUpdater
-        }
-        _ => UpdateExecutionMethod::Unsupported,
+fn execution_method(platform: &PlatformPaths) -> UpdateExecutionMethod {
+    match platform.kind {
+        PlatformKind::Linux => UpdateExecutionMethod::LinuxSystemdJob,
+        PlatformKind::Macos => UpdateExecutionMethod::MacosAppUpdater,
     }
 }
 
-fn recommended_action(
-    platform: PlatformKind,
-    method: UpdateExecutionMethod,
-    update_available: Option<bool>,
-) -> String {
-    match (platform, method, update_available) {
-        (PlatformKind::Linux, UpdateExecutionMethod::LinuxSystemdJob, Some(true)) => {
-            "Confirm install to start the Linux server update job after precheck.".to_string()
+fn recommended_action(method: UpdateExecutionMethod, update_available: Option<bool>) -> String {
+    match (method, update_available) {
+        (UpdateExecutionMethod::LinuxSystemdJob, Some(true)) => {
+            "Confirm install to start the Linux server update job after precheck."
         }
-        (PlatformKind::Linux, UpdateExecutionMethod::LinuxSystemdJob, _) => {
-            "Run the fixed Linux update precheck before installing a new release.".to_string()
+        (UpdateExecutionMethod::LinuxSystemdJob, _) => {
+            "Run the fixed Linux update precheck before installing a new release."
         }
-        (
-            PlatformKind::Macos | PlatformKind::Linux,
-            UpdateExecutionMethod::MacosTauriUpdater,
-            Some(true),
-        ) => "Confirm install in the Tauri updater after signature verification.".to_string(),
-        (
-            PlatformKind::Macos | PlatformKind::Linux,
-            UpdateExecutionMethod::MacosTauriUpdater,
-            _,
-        ) => "Use the Tauri updater to check signed app releases.".to_string(),
-        _ => "Updates are unavailable on this platform in the current release.".to_string(),
+        (UpdateExecutionMethod::MacosAppUpdater, Some(true)) => {
+            "Confirm install in the app updater after signature verification."
+        }
+        (UpdateExecutionMethod::MacosAppUpdater, _) => {
+            "Use the app updater to check signed app releases."
+        }
     }
+    .to_string()
 }
 
 impl From<JobFailureCategory> for UpdateFailureCategory {
@@ -407,11 +348,11 @@ impl From<JobFailureCategory> for UpdateFailureCategory {
 #[cfg(test)]
 mod tests {
     use super::{plan_update_action, UpdateAction};
-    use crate::platform::{PlatformKind, PlatformPaths};
+    use crate::platform::PlatformPaths;
 
     #[test]
     fn linux_update_action_plan_includes_capability_and_job_spec() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::linux_server();
 
         let plan = plan_update_action(&platform, UpdateAction::Install)
             .expect("Linux should allow update shell jobs");
@@ -426,7 +367,7 @@ mod tests {
 
     #[test]
     fn macos_update_action_plan_uses_native_updater_and_rejects_prune() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::macos("/fixture/home");
 
         let plan = plan_update_action(&platform, UpdateAction::Install)
             .expect("macOS should plan native updater installs");
@@ -445,20 +386,6 @@ mod tests {
             .expect_err("macOS should not plan Linux backup pruning");
         let message = err.to_string();
         assert!(message.contains("prune_backups is unavailable on macos"));
-        assert!(!message.contains("systemd"));
-        assert!(!message.contains("Nginx"));
-        assert!(!message.contains("sudo"));
-        assert!(!message.contains("/opt/agenthub"));
-    }
-
-    #[test]
-    fn windows_update_actions_fail_before_any_host_specific_plan() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
-
-        let err = plan_update_action(&platform, UpdateAction::Check)
-            .expect_err("Windows update check is not supported in this release");
-        let message = err.to_string();
-        assert!(message.contains("app_updater is unavailable on windows"));
         assert!(!message.contains("systemd"));
         assert!(!message.contains("Nginx"));
         assert!(!message.contains("sudo"));

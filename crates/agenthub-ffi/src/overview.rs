@@ -3,8 +3,7 @@ use agenthub_core::{
     config::{Config, ConfigCache},
     db::PanelDb,
     jobs::JobRunner,
-    platform::{PlatformKind, PlatformPaths},
-    services::system::HostSurface,
+    platform::PlatformPaths,
 };
 use anyhow::{anyhow, Result};
 use serde::Serialize;
@@ -30,12 +29,12 @@ pub struct DesktopState {
     pub db: PanelDb,
     pub jobs: JobRunner,
     platform: PlatformPaths,
-    host_surface: HostSurface,
+    pub(crate) isolated: bool,
 }
 
 impl DesktopState {
     pub fn current() -> Result<Self> {
-        let platform = PlatformPaths::desktop_current();
+        let platform = PlatformPaths::desktop_current()?;
         let mut config = load_desktop_config(&platform)?;
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
@@ -56,7 +55,7 @@ impl DesktopState {
             db,
             jobs,
             platform,
-            host_surface: HostSurface::DesktopEmbeddedTauri,
+            isolated: false,
         }
     }
 
@@ -87,10 +86,6 @@ impl DesktopState {
     pub fn platform(&self) -> &PlatformPaths {
         &self.platform
     }
-
-    pub fn host_surface(&self) -> HostSurface {
-        self.host_surface
-    }
 }
 
 fn default_local_desktop_workspace() -> Option<PathBuf> {
@@ -98,14 +93,7 @@ fn default_local_desktop_workspace() -> Option<PathBuf> {
 }
 
 pub fn agenthub_paths_for_home(home: impl Into<PathBuf>) -> AgentHubPaths {
-    agenthub_paths_for_platform_home(PlatformKind::Macos, home)
-}
-
-pub fn agenthub_paths_for_platform_home(
-    kind: PlatformKind,
-    home: impl Into<PathBuf>,
-) -> AgentHubPaths {
-    let platform = PlatformPaths::for_desktop_kind_with_home(kind, home);
+    let platform = PlatformPaths::macos(home);
     agenthub_paths_for_platform(&platform)
 }
 
@@ -130,7 +118,7 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agenthub_core::services::jobs as job_service;
+    use agenthub_core::{platform::PlatformKind, services::jobs as job_service};
 
     #[test]
     fn mac_style_paths_use_agenthub_application_support_and_logs() {

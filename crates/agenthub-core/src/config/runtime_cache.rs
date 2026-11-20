@@ -34,7 +34,7 @@ pub fn config_stamp(path: &Path) -> Option<ConfigFileStamp> {
 
 #[derive(Default)]
 pub struct ConfigCache {
-    cached: std::sync::Mutex<Option<(ConfigFileStamp, Config)>>,
+    cached: std::sync::Mutex<Option<(std::path::PathBuf, ConfigFileStamp, Config)>>,
 }
 
 impl ConfigCache {
@@ -44,8 +44,10 @@ impl ConfigCache {
             .lock()
             .map_err(|_| anyhow::anyhow!("configuration cache unavailable"))?;
         let stamp = config_stamp(config_path);
-        if let (Some(current_stamp), Some((cached_stamp, cached_cfg))) = (&stamp, &*cached) {
-            if current_stamp == cached_stamp {
+        if let (Some(current_stamp), Some((cached_path, cached_stamp, cached_cfg))) =
+            (&stamp, &*cached)
+        {
+            if config_path == cached_path && current_stamp == cached_stamp {
                 return Ok(cached_cfg.clone());
             }
         }
@@ -54,7 +56,7 @@ impl ConfigCache {
         // different file's identity. The next scan will load it normally.
         *cached = stamp
             .filter(|before| Some(before) == config_stamp(config_path).as_ref())
-            .map(|stamp| (stamp, loaded.clone()));
+            .map(|stamp| (config_path.into(), stamp, loaded.clone()));
         Ok(loaded)
     }
 }
@@ -70,7 +72,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let path = root.join("config.toml");
         let env = root.join("env");
-        let mut cfg = Config::default();
+        let mut cfg = Config::current_defaults().unwrap();
         cfg.security.secret_key = crate::crypto::SecretBox::random_key_material();
         cfg.probe.poll_seconds = 25;
         std::fs::write(&path, toml::to_string(&cfg).unwrap()).unwrap();
@@ -113,7 +115,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .as_ref()
-                .map(|(stamp, _)| stamp)
+                .map(|(_, stamp, _)| stamp)
                 == config_stamp(&path).as_ref()
         );
         cfg.security.secret_key.clear();

@@ -676,8 +676,8 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
             let timestamp = value
                 .get("timestamp")
                 .and_then(Value::as_str)
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|time| time.timestamp_millis());
+                .and_then(|s| (s).parse::<jiff::Timestamp>().ok())
+                .map(|time| time.as_millisecond());
             completed = turn.zip(timestamp);
         }
     }

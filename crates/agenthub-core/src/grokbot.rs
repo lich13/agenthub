@@ -25,12 +25,11 @@ pub struct GrokBotPaths {
     pub persistence: PathBuf,
 }
 impl GrokBotPaths {
-    pub fn default_for_user() -> Self {
-        Self {
-            persistence: dirs::home_dir()
-                .unwrap_or_default()
+    pub fn default_for_user() -> Result<Self> {
+        Ok(Self {
+            persistence: crate::platform::current_home()?
                 .join("Library/Application Support/Grok Bot/sand-client-persistence"),
-        }
+        })
     }
 }
 fn base32(bytes: &[u8]) -> String {
@@ -136,8 +135,10 @@ fn roster(paths: &GrokBotPaths) -> Result<Option<(String, Arc<Value>)>> {
     };
     let value = read_slice(&paths.persistence, &key(&scope, "roster.last-roster"), 4)?
         .unwrap_or_else(|| Arc::new(serde_json::json!({"rows":[]})));
-    ensure!(value["rows"].is_array(), "Grok Bot 列表格式错误");
     Ok(Some((scope, value)))
+}
+fn roster_rows(roster: &Value) -> Result<&Vec<Value>> {
+    roster["rows"].as_array().context("Grok Bot 列表格式错误")
 }
 fn session_key(scope: &str, id: &str) -> String {
     format!("{}:{id}", hex::encode(Sha256::digest(scope)))
@@ -148,9 +149,7 @@ fn locate(paths: &GrokBotPaths, session: &str) -> Result<(String, Value)> {
     let id = session
         .strip_prefix(&prefix)
         .context("Grok Bot 线程不在当前账户中")?;
-    let row = roster["rows"]
-        .as_array()
-        .unwrap()
+    let row = roster_rows(&roster)?
         .iter()
         .find(|row| row["id"].as_str() == Some(id))
         .context("Grok Bot 线程不在当前账户中")?;
@@ -192,7 +191,9 @@ fn text(value: &Value) -> String {
     String::new()
 }
 fn timestamp(ms: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp_millis(ms).map(|t| t.to_rfc3339())
+    jiff::Timestamp::from_millisecond(ms)
+        .ok()
+        .map(|ts| crate::timestamps::format_utc(ts, false))
 }
 fn row_title(row: &Value) -> String {
     row["title"]
@@ -250,9 +251,7 @@ pub fn list(
     let Some((scope, roster)) = roster(paths)? else {
         return Ok(vec![]);
     };
-    let mut rows = roster["rows"]
-        .as_array()
-        .unwrap()
+    let mut rows = roster_rows(&roster)?
         .iter()
         .filter(|r| r["isRemovedFromSidebar"] != true)
         .map(|r| summary(paths, &scope, r))
@@ -297,9 +296,9 @@ fn interaction(entry: &Value) -> Option<(&'static str, String, String)> {
             let question = &message["phoneCallQuestion"];
             if question.is_object()
                 && (question.get("closed").is_some()
-                    || question["deadlineAtMs"]
-                        .as_i64()
-                        .is_some_and(|deadline| deadline <= chrono::Utc::now().timestamp_millis()))
+                    || question["deadlineAtMs"].as_i64().is_some_and(|deadline| {
+                        deadline <= jiff::Timestamp::now().as_millisecond()
+                    }))
             {
                 return None;
             }
@@ -646,7 +645,7 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
         return Ok(NativeScan::default());
     };
     let mut scan = NativeScan::default();
-    for row in roster["rows"].as_array().unwrap() {
+    for row in roster_rows(&roster)? {
         let Some(id) = row["id"].as_str() else {
             scan.errors += 1;
             continue;

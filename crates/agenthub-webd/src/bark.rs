@@ -1,7 +1,7 @@
 //! HTTP transport only. Diagnostics never contain response text, URLs or credentials.
 use super::{BarkPushResponse, ProbeBarkOutcome, ProbeBarkRequest};
 use agenthub_core::config::{valid_probe_notification_server_url, Config};
-use chrono::Utc;
+use jiff::Timestamp;
 use reqwest::{header::RETRY_AFTER, Client};
 use serde_json::json;
 use std::{
@@ -83,9 +83,10 @@ pub(crate) fn retry_after(value: Option<&str>, now_ms: i64) -> Option<i64> {
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(seconds.saturating_mul(1000).min(i64::MAX as u64) as i64);
     }
-    chrono::DateTime::parse_from_rfc2822(value)
+    jiff::fmt::rfc2822::DateTimeParser::new()
+        .parse_timestamp(value)
         .ok()
-        .map(|date| date.timestamp_millis().saturating_sub(now_ms).max(0))
+        .map(|date| date.as_millisecond().saturating_sub(now_ms).max(0))
 }
 
 fn permanent_apns(message: &str) -> bool {
@@ -231,7 +232,7 @@ async fn send(
             .headers()
             .get(RETRY_AFTER)
             .and_then(|h| h.to_str().ok()),
-        Utc::now().timestamp_millis(),
+        Timestamp::now().as_millisecond(),
     );
     let temporary = matches!(status, 408 | 429 | 500 | 502 | 503 | 504);
     let mut bytes = Vec::new();
@@ -328,7 +329,7 @@ mod tests {
                 fixture_url("https", "fixturekey@example.invalid"),
             ),
         ] {
-            let mut config = Config::default();
+            let mut config = Config::current_defaults().unwrap();
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server_url.clone();
 

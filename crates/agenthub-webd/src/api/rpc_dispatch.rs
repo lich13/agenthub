@@ -26,249 +26,75 @@ use agenthub_core::services::{
 };
 use serde_json::Value;
 
-pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) -> ApiResponse {
-    if !rpc_commands::is_allowed_rpc_command(&command) {
-        return Err(api_error(ApiErrorKind::NotFound, "不支持的远程操作"));
-    }
-    match command.as_str() {
-        rpc_commands::GITHUB_CI_STATUS => {
-            let config = state.config();
-            super::ok(
-                agenthub_core::services::use_cases::AgentHubUseCases::with_config_for_surface(
-                    &config,
-                    state.platform(),
-                    state.host_surface(),
-                )
-                .github_ci(&state.db, rpc_payload(&args)?)?,
-            )
-        }
+mod conversations;
+mod maintenance;
+mod providers;
 
-        rpc_commands::THREADS_SUBAGENT_DETAIL => {
-            super::threads::subagent_detail(state, rpc_wrapped_payload(&args, &["request"])?).await
+macro_rules! remote_handlers {
+    ($( $id:path => $handler:path, )*) => {
+        #[cfg(test)]
+        const HANDLED_COMMANDS: &[&str] = &[$($id),*];
+        pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) -> ApiResponse {
+            match command.as_str() {
+                $($id => $handler(state, args).await,)*
+                _ => Err(api_error(ApiErrorKind::NotFound, "不支持的远程操作")),
+            }
         }
-        rpc_commands::SESSIONS_ATTACHMENT_READ => {
-            super::sessions::attachment_read(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::SESSIONS_SEARCH => {
-            super::sessions::search(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::SESSIONS_BULK_PREVIEW => {
-            super::sessions::bulk_preview(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::SESSIONS_BULK_EXECUTE => {
-            super::sessions::bulk_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::GROK_LIST => {
-            grok_list(
-                state,
-                GrokListQuery {
-                    q: args
-                        .get("q")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                },
-            )
-            .await
-        }
-        rpc_commands::GROK_DETAIL => {
-            let id = rpc_required_string(&args, "id")?;
-            grok_detail(
-                state,
-                id,
-                super::grok::GrokDetailQuery {
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|n| n as usize),
-                    before: args
-                        .get("before")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                },
-            )
-            .await
-        }
-        rpc_commands::GROK_RENAME => grok_rename(state, rpc_payload(&args)?).await,
-        rpc_commands::GROK_DELETE_PREVIEW => {
-            grok_delete_preview(state, rpc_required_string(&args, "id")?).await
-        }
-        rpc_commands::GROK_DELETE_EXECUTE => {
-            grok_delete_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::CLAUDE_LIST => {
-            claude_list(
-                state,
-                ClaudeListQuery {
-                    q: args
-                        .get("q")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                },
-            )
-            .await
-        }
-        rpc_commands::CLAUDE_DETAIL => claude_detail(state, rpc_payload(&args)?).await,
-        rpc_commands::CLAUDE_RENAME => claude_rename(state, rpc_payload(&args)?).await,
-        rpc_commands::CLAUDE_DELETE_PREVIEW => {
-            let session_key = rpc_required_string(&args, "sessionKey")?;
-            claude_delete_preview(state, session_key).await
-        }
-        rpc_commands::CLAUDE_DELETE_EXECUTE => {
-            claude_delete_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::ANTIGRAVITY_LIST => {
-            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
-                Default::default()
-            } else {
-                rpc_wrapped_payload(&args, &["request"])?
-            };
-            antigravity_list(state, request).await
-        }
-        rpc_commands::ANTIGRAVITY_DETAIL => {
-            antigravity_detail(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::ANTIGRAVITY_RENAME => {
-            antigravity_rename(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::ANTIGRAVITY_ARCHIVE => {
-            antigravity_archive(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::ANTIGRAVITY_RESTORE => {
-            antigravity_restore(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::DSH_LIST => {
-            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
-                Default::default()
-            } else {
-                rpc_wrapped_payload(&args, &["request"])?
-            };
-            dsh_list(state, request).await
-        }
-        rpc_commands::DSH_DETAIL => {
-            dsh_detail(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::DSH_RENAME => {
-            dsh_rename(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::DSH_ARCHIVE => {
-            dsh_archive(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::DSH_RESTORE => {
-            dsh_restore(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::PROBE_STATUS => get_probe_status(state, rpc_payload(&args)?).await,
-        rpc_commands::PROBE_SETTINGS_GET => get_probe_settings(state).await,
-        rpc_commands::PROBE_SETTINGS_SAVE => {
-            patch_probe_settings(state, rpc_wrapped_payload(&args, &["settings"])?).await
-        }
-        rpc_commands::PROBE_EVENTS => {
-            get_probe_events(
-                state,
-                ProbeEventsQuery {
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|value| value as u32),
-                },
-            )
-            .await
-        }
-        rpc_commands::PROBE_BARK_TEST => {
-            start_probe_action(state, probe_service::ProbeAction::BarkTest).await
-        }
-        rpc_commands::PROBE_INSTALL_HOOKS => {
-            start_probe_action(state, probe_service::ProbeAction::InstallHooks).await
-        }
-        rpc_commands::PROBE_REMOVE_HOOKS => {
-            start_probe_action(state, probe_service::ProbeAction::RemoveHooks).await
-        }
-        rpc_commands::CLEANUP_UNIFIED_DRY_RUN => unified_cleanup_dry_run(state).await,
-        rpc_commands::CLEANUP_UNIFIED_EXECUTE => {
-            unified_cleanup_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::CLEANUP_HIDDEN_DRY_RUN => {
-            hidden_threads_delete_dry_run(state, rpc_wrapped_payload(&args, &["request"])?).await
-        }
-        rpc_commands::UPDATES_STATUS => system_update_status(state).await,
-        rpc_commands::UPDATES_CHECK => start_update_action(state, UpdateAction::Check, None).await,
-        rpc_commands::UPDATES_INSTALL => {
-            start_update_action(
-                state,
-                UpdateAction::Install,
-                Some("agenthub.update.install_started"),
-            )
-            .await
-        }
-        rpc_commands::UPDATES_PRUNE => {
-            start_update_action(
-                state,
-                UpdateAction::Prune,
-                Some("agenthub.update.prune_started"),
-            )
-            .await
-        }
-        rpc_commands::THREADS_LIST => super::list_threads(state, rpc_payload(&args)?).await,
-        rpc_commands::THREADS_DETAIL => {
-            thread_detail(
-                state,
-                rpc_required_string(&args, "id")?,
-                rpc_nested_payload_or_empty(&args, "options")?,
-            )
-            .await
-        }
-        rpc_commands::THREADS_BLOCKS => {
-            thread_blocks(
-                state,
-                rpc_required_string(&args, "id")?,
-                rpc_nested_payload_or_empty(&args, "options")?,
-            )
-            .await
-        }
-        rpc_commands::THREADS_ARCHIVE => {
-            archive_thread(state, rpc_required_string(&args, "threadId")?).await
-        }
-        rpc_commands::THREADS_RESTORE => {
-            restore_thread(state, rpc_required_string(&args, "threadId")?).await
-        }
-        rpc_commands::THREADS_RENAME => {
-            rename_thread(
-                state,
-                rpc_required_string(&args, "threadId")?,
-                rpc_payload(&args)?,
-            )
-            .await
-        }
-        rpc_commands::THREADS_ACCOUNT_SCOPE_STATUS => {
-            super::threads::account_scope_status(state).await
-        }
-        rpc_commands::THREADS_ACCOUNT_SCOPE_CLEAR => {
-            super::threads::account_scope_clear(state).await
-        }
-        rpc_commands::SYSTEM_CAPABILITIES => system_capabilities(state).await,
-        rpc_commands::JOBS_LIST => list_jobs(state, rpc_query_strings(&args, &["limit"])).await,
-        rpc_commands::JOBS_DETAIL => {
-            job_detail(
-                state,
-                rpc_required_string(&args, "id")?,
-                args.get("includeOutput")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
-            )
-            .await
-        }
-        _ => Err(api_error(
-            ApiErrorKind::NotFound,
-            &format!("rpc command allowlist drifted without handler mapping: {command}"),
-        )),
-    }
+    };
+}
+
+remote_handlers! {
+    rpc_commands::GITHUB_CI_STATUS => maintenance::handle_github_ci_status,
+    rpc_commands::THREADS_SUBAGENT_DETAIL => conversations::handle_threads_subagent_detail,
+    rpc_commands::SESSIONS_ATTACHMENT_READ => conversations::handle_sessions_attachment_read,
+    rpc_commands::SESSIONS_SEARCH => conversations::handle_sessions_search,
+    rpc_commands::SESSIONS_BULK_PREVIEW => conversations::handle_sessions_bulk_preview,
+    rpc_commands::SESSIONS_BULK_EXECUTE => conversations::handle_sessions_bulk_execute,
+    rpc_commands::GROK_LIST => providers::handle_grok_list,
+    rpc_commands::GROK_DETAIL => providers::handle_grok_detail,
+    rpc_commands::GROK_RENAME => providers::handle_grok_rename,
+    rpc_commands::GROK_DELETE_PREVIEW => providers::handle_grok_delete_preview,
+    rpc_commands::GROK_DELETE_EXECUTE => providers::handle_grok_delete_execute,
+    rpc_commands::CLAUDE_LIST => providers::handle_claude_list,
+    rpc_commands::CLAUDE_DETAIL => providers::handle_claude_detail,
+    rpc_commands::CLAUDE_RENAME => providers::handle_claude_rename,
+    rpc_commands::CLAUDE_DELETE_PREVIEW => providers::handle_claude_delete_preview,
+    rpc_commands::CLAUDE_DELETE_EXECUTE => providers::handle_claude_delete_execute,
+    rpc_commands::ANTIGRAVITY_LIST => providers::handle_antigravity_list,
+    rpc_commands::ANTIGRAVITY_DETAIL => providers::handle_antigravity_detail,
+    rpc_commands::ANTIGRAVITY_RENAME => providers::handle_antigravity_rename,
+    rpc_commands::ANTIGRAVITY_ARCHIVE => providers::handle_antigravity_archive,
+    rpc_commands::ANTIGRAVITY_RESTORE => providers::handle_antigravity_restore,
+    rpc_commands::DSH_LIST => providers::handle_dsh_list,
+    rpc_commands::DSH_DETAIL => providers::handle_dsh_detail,
+    rpc_commands::DSH_RENAME => providers::handle_dsh_rename,
+    rpc_commands::DSH_ARCHIVE => providers::handle_dsh_archive,
+    rpc_commands::DSH_RESTORE => providers::handle_dsh_restore,
+    rpc_commands::PROBE_STATUS => maintenance::handle_probe_status,
+    rpc_commands::PROBE_SETTINGS_GET => maintenance::handle_probe_settings_get,
+    rpc_commands::PROBE_SETTINGS_SAVE => maintenance::handle_probe_settings_save,
+    rpc_commands::PROBE_EVENTS => maintenance::handle_probe_events,
+    rpc_commands::PROBE_BARK_TEST => maintenance::handle_probe_bark_test,
+    rpc_commands::PROBE_INSTALL_HOOKS => maintenance::handle_probe_install_hooks,
+    rpc_commands::PROBE_REMOVE_HOOKS => maintenance::handle_probe_remove_hooks,
+    rpc_commands::CLEANUP_UNIFIED_DRY_RUN => maintenance::handle_cleanup_unified_dry_run,
+    rpc_commands::CLEANUP_UNIFIED_EXECUTE => maintenance::handle_cleanup_unified_execute,
+    rpc_commands::CLEANUP_HIDDEN_DRY_RUN => maintenance::handle_cleanup_hidden_dry_run,
+    rpc_commands::UPDATES_STATUS => maintenance::handle_updates_status,
+    rpc_commands::UPDATES_CHECK => maintenance::handle_updates_check,
+    rpc_commands::UPDATES_INSTALL => maintenance::handle_updates_install,
+    rpc_commands::UPDATES_PRUNE => maintenance::handle_updates_prune,
+    rpc_commands::THREADS_LIST => conversations::handle_threads_list,
+    rpc_commands::THREADS_DETAIL => conversations::handle_threads_detail,
+    rpc_commands::THREADS_BLOCKS => conversations::handle_threads_blocks,
+    rpc_commands::THREADS_ARCHIVE => conversations::handle_threads_archive,
+    rpc_commands::THREADS_RESTORE => conversations::handle_threads_restore,
+    rpc_commands::THREADS_RENAME => conversations::handle_threads_rename,
+    rpc_commands::THREADS_ACCOUNT_SCOPE_STATUS => conversations::handle_threads_account_scope_status,
+    rpc_commands::THREADS_ACCOUNT_SCOPE_CLEAR => conversations::handle_threads_account_scope_clear,
+    rpc_commands::SYSTEM_CAPABILITIES => maintenance::handle_system_capabilities,
+    rpc_commands::JOBS_LIST => maintenance::handle_jobs_list,
+    rpc_commands::JOBS_DETAIL => maintenance::handle_jobs_detail,
 }
 
 #[cfg(test)]
@@ -339,14 +165,9 @@ mod tests {
     }
     #[test]
     fn rpc_dispatch_match_arms_cover_contract_linux_rpc_actions() {
-        let source = include_str!("rpc_dispatch.rs")
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("rpc dispatcher source must include production section");
         let contract: serde_json::Value =
             serde_json::from_str(include_str!("../../../../contracts/agenthub-contract.json"))
                 .expect("contract registry must be valid JSON");
-        let command_source = include_str!("../../../agenthub-core/src/services/commands.rs");
         let contract_linux_rpc = contract
             .get("actions")
             .and_then(serde_json::Value::as_array)
@@ -363,21 +184,9 @@ mod tests {
             contract_linux_rpc, allowed_rpc,
             "contract registry Linux RPC names must match the core allowlist"
         );
-        for command in rpc_commands::ALLOWED_RPC_COMMANDS {
-            let const_name = command_source
-                .lines()
-                .filter_map(|line| line.strip_prefix("pub const "))
-                .find_map(|line| {
-                    let (name, rest) = line.split_once(": &str = ")?;
-                    let value = rest.trim().trim_end_matches(';').trim_matches('"');
-                    (value == *command).then_some(name)
-                })
-                .unwrap_or_else(|| panic!("core command constant missing for {command}"));
-            let match_arm = format!("rpc_commands::{const_name} =>");
-            assert!(
-                source.contains(&match_arm),
-                "RPC dispatcher must have a match arm for contract Linux RPC {command}: {match_arm}"
-            );
-        }
+        assert_eq!(
+            contract_linux_rpc,
+            HANDLED_COMMANDS.iter().copied().collect()
+        );
     }
 }

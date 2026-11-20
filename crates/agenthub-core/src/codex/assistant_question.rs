@@ -333,7 +333,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("agenthub-feedback-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("rollout.jsonl");
-        let timestamp = chrono::Utc::now().to_rfc3339();
+        let timestamp = jiff::Timestamp::now().to_string();
         let start =
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}});
         let final_reply = json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"请确认测试结果。"}]}});

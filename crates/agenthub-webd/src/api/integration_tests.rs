@@ -69,7 +69,7 @@ fn init_isolated_codex_home(codex_home: &std::path::Path) {
 }
 
 fn rpc_test_state() -> crate::state::AppState {
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     let sandbox_root = temp_test_dir("agenthub-test-sandbox");
     let codex_home = sandbox_root.join(".codex");
     init_isolated_codex_home(&codex_home);
@@ -216,7 +216,7 @@ async fn codex_account_scope_is_reported_cleared_and_audited_by_count() {
     let sandbox = temp_test_dir("agenthub-account-scope");
     let codex_home = sandbox.join(".codex");
     init_isolated_codex_home(&codex_home);
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.codex.home = codex_home.clone();
     config.paths.data_dir = sandbox.join("data");
     config.paths.db_path = sandbox.join("data/panel.sqlite");
@@ -529,14 +529,12 @@ async fn panel_update_starts_fixed_panel_jobs() {
 
 #[test]
 fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
 
-    let precheck =
-        update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
-            &platform,
-            agenthub_core::services::system::HostSurface::LinuxServerApi,
-            UpdateAction::Check,
-        ));
+    let precheck = update_service::linux_update_job_spec(update_service::update_job_plan(
+        &platform,
+        UpdateAction::Check,
+    ));
     assert_eq!(precheck.kind, "agenthub_update_check");
     assert_eq!(
         precheck.command,
@@ -547,12 +545,10 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
         ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"])
     );
 
-    let install =
-        update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
-            &platform,
-            agenthub_core::services::system::HostSurface::LinuxServerApi,
-            UpdateAction::Install,
-        ));
+    let install = update_service::linux_update_job_spec(update_service::update_job_plan(
+        &platform,
+        UpdateAction::Install,
+    ));
     assert_eq!(install.kind, "agenthub_update_install");
     assert_eq!(
         install.command,
@@ -566,9 +562,8 @@ fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
         )
     );
 
-    let prune = update_service::linux_update_job_spec(update_service::update_job_plan_for_surface(
+    let prune = update_service::linux_update_job_spec(update_service::update_job_plan(
         &platform,
-        agenthub_core::services::system::HostSurface::LinuxServerApi,
         UpdateAction::Prune,
     ));
     assert_eq!(prune.kind, "agenthub_update_prune");
@@ -706,7 +701,7 @@ async fn probe_reply_needed_bucket_only_includes_fresh_pending_actions() {
     let dir = temp_test_dir("agenthub-probe-reply-needed-fresh");
     let codex_home = dir.join(".codex");
     mark_codex_home(&codex_home);
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let old_updated = now - PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS - 60;
     let fresh_updated = now - 30;
     let old_rollout = codex_home.join("old-plan.jsonl");
@@ -1074,7 +1069,7 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
     };
 
     let plan = thread_service::plan_thread_blocks_request(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
+        &PlatformPaths::linux_server(),
         "thread-a",
         Some(2),
         None,
@@ -1139,7 +1134,7 @@ fn thread_block_page_uses_before_cursor() {
     };
 
     let plan = thread_service::plan_thread_blocks_request(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
+        &PlatformPaths::linux_server(),
         "thread-a",
         Some(2),
         Some("b:4".to_string()),
@@ -1157,7 +1152,7 @@ fn thread_block_page_uses_before_cursor() {
 
 #[test]
 fn thread_list_plan_clamps_requested_page_size() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
     for (limit, expected) in [(Some(120), 120), (None, 80), (Some(0), 1), (Some(900), 500)] {
         assert_eq!(
             thread_service::plan_threads_list_request(

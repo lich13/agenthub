@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local, TimeZone, Utc};
 use rusqlite::Connection;
 use std::{collections::HashSet, path::PathBuf};
 
@@ -331,9 +330,10 @@ fn format_timestamp(value: i64) -> Option<String> {
     } else {
         value
     };
-    Utc.timestamp_opt(seconds, 0)
-        .single()
-        .map(|dt| DateTime::<Local>::from(dt).to_rfc3339())
+    jiff::Timestamp::from_second(seconds).ok().map(|ts| {
+        ts.display_with_offset(jiff::tz::TimeZone::system().to_offset(ts))
+            .to_string()
+    })
 }
 
 pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {

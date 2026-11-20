@@ -426,7 +426,7 @@ fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_file
         dsh: crate::dsh::DshPaths {
             home: paths.home.join("unused-dsh"),
         },
-        platform: crate::platform::PlatformPaths::for_kind(crate::platform::PlatformKind::Macos),
+        platform: crate::platform::PlatformPaths::macos("/fixture/home"),
     };
     let batch = sessions
         .bulk_preview(crate::services::sessions::SessionBatchRequest {

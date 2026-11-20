@@ -487,8 +487,10 @@ fn run_native_rm(
         let mut output = child.stdout.take();
         if let Some(stdout) = &output {
             let fd = stdout.as_raw_fd();
+            // SAFETY: The pipe owner keeps fd open. This fcntl operation takes integer flags only.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags == -1
+                // SAFETY: The pipe owner keeps fd open. This fcntl operation takes integer flags only.
                 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
             {
                 return Err(std::io::Error::last_os_error().into());

@@ -122,7 +122,7 @@ pub(crate) fn sandboxed_test_config() -> (Config, PathBuf) {
     ));
     let codex_home = sandbox_root.join(".codex");
     let _ = fs::create_dir_all(&codex_home);
-    let mut config = Config::default();
+    let mut config = Config::current_defaults().unwrap();
     config.codex.home = codex_home;
     config.codex.workspace = sandbox_root.join("workspace");
     config.paths.data_dir = sandbox_root.join("data");

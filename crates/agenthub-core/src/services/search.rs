@@ -60,21 +60,21 @@ pub struct SearchUseCases {
     claude: claude::ClaudePaths,
     antigravity: crate::antigravity::sessions::AntigravityPaths,
     dsh: crate::dsh::DshPaths,
-    grokbot: crate::grokbot::GrokBotPaths,
-    local_grokbot: bool,
+    grokbot: Option<crate::grokbot::GrokBotPaths>,
 }
 
 impl SearchUseCases {
-    pub fn new(platform: &PlatformPaths, codex: codex::CodexPaths) -> Self {
-        Self {
+    pub fn new(platform: &PlatformPaths, codex: codex::CodexPaths) -> Result<Self> {
+        Ok(Self {
             codex,
-            grok: grok::GrokPaths::default_for_user(),
-            claude: claude::ClaudePaths::default_for_user(),
-            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
-            dsh: crate::dsh::DshPaths::default_for_user(),
-            grokbot: crate::grokbot::GrokBotPaths::default_for_user(),
-            local_grokbot: platform.kind == crate::platform::PlatformKind::Macos,
-        }
+            grok: grok::GrokPaths::default_for_user()?,
+            claude: claude::ClaudePaths::default_for_user()?,
+            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+            dsh: crate::dsh::DshPaths::default_for_user()?,
+            grokbot: (platform.kind == crate::platform::PlatformKind::Macos)
+                .then(crate::grokbot::GrokBotPaths::default_for_user)
+                .transpose()?,
+        })
     }
 
     pub fn search(&self, request: SessionSearchRequest) -> Result<SessionSearchResponse> {
@@ -84,15 +84,18 @@ impl SearchUseCases {
         let mut warnings = Vec::new();
         match request.provider {
             SessionProvider::Grokbot => {
-                ensure!(self.local_grokbot, "Grok Bot 仅限本机");
+                let paths = self
+                    .grokbot
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Grok Bot 仅限本机"))?;
                 let summaries = if request.scope == SearchScope::Thread {
                     vec![crate::grokbot::session_summary(
-                        &self.grokbot,
+                        paths,
                         request.session_key.as_deref().unwrap(),
                     )?]
                 } else {
                     crate::grokbot::list(
-                        &self.grokbot,
+                        paths,
                         &crate::provider_sessions::ProviderListRequest {
                             limit: Some(MAX_SESSIONS),
                             ..Default::default()
@@ -103,7 +106,7 @@ impl SearchUseCases {
                     &request,
                     &needle,
                     summaries,
-                    |key| crate::grokbot::load_all_events(&self.grokbot, key),
+                    |key| crate::grokbot::load_all_events(paths, key),
                     &mut matches,
                     &mut warnings,
                 )?;
@@ -866,10 +869,9 @@ mod tests {
             dsh: crate::dsh::DshPaths {
                 home: root.join("dsh"),
             },
-            grokbot: crate::grokbot::GrokBotPaths {
+            grokbot: Some(crate::grokbot::GrokBotPaths {
                 persistence: root.join("grokbot"),
-            },
-            local_grokbot: true,
+            }),
         }
     }
 
@@ -953,9 +955,10 @@ mod tests {
                         .id
                 );
             }
-            let platform = crate::platform::PlatformPaths::desktop_current();
+            let platform = crate::platform::PlatformPaths::desktop_current().unwrap();
             let sessions = crate::services::use_cases::AgentHubUseCases::new(&platform)
-                .sessions(service.codex.clone());
+                .sessions(service.codex.clone())
+                .unwrap();
             let response = sessions
                 .attachment_read(SessionAttachmentRequest {
                     root_thread_id: None,
@@ -1068,10 +1071,9 @@ mod tests {
         )
         .unwrap();
         let service = SearchUseCases {
-            grokbot: crate::grokbot::GrokBotPaths {
+            grokbot: Some(crate::grokbot::GrokBotPaths {
                 persistence: root.join("grokbot"),
-            },
-            local_grokbot: true,
+            }),
             codex: codex::CodexPaths::new(root.join("codex")),
             claude: claude::ClaudePaths {
                 config: root.join("claude"),

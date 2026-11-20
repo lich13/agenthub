@@ -339,26 +339,13 @@ fn logs_database_identity(path: &Path) -> Result<String> {
         .with_context(|| format!("resolve Codex logs DB {}", path.display()))?;
     let metadata = fs::metadata(&canonical)
         .with_context(|| format!("stat Codex logs DB {}", canonical.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(format!(
-            "{}:{}:{}",
-            canonical.display(),
-            metadata.dev(),
-            metadata.ino()
-        ))
-    }
-    #[cfg(not(unix))]
-    {
-        let created = metadata
-            .created()
-            .ok()
-            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|value| value.as_nanos())
-            .unwrap_or_default();
-        Ok(format!("{}:{created}", canonical.display()))
-    }
+    use std::os::unix::fs::MetadataExt;
+    Ok(format!(
+        "{}:{}:{}",
+        canonical.display(),
+        metadata.dev(),
+        metadata.ino()
+    ))
 }
 
 pub fn probe_error_monitor_launch_agent_plist(

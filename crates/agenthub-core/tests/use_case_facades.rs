@@ -1,7 +1,7 @@
 use agenthub_core::{
     config::Config,
     db::JobRecord,
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{
         probe::ProbeAction,
         settings::{
@@ -14,7 +14,7 @@ use agenthub_core::{
 
 #[test]
 fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
-    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux_platform = PlatformPaths::linux_server();
     let use_cases = AgentHubUseCases::new(&linux_platform);
 
     let list = use_cases
@@ -118,8 +118,8 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
 
 #[test]
 fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
-    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
-    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux_config = Config::linux_defaults();
+    let linux_platform = PlatformPaths::linux_server();
     let linux = AgentHubUseCases::with_config(&linux_config, &linux_platform);
 
     let settings_view = linux
@@ -153,24 +153,22 @@ fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
     let bark = linux.probe().action(ProbeAction::BarkTest).unwrap();
     assert_eq!(bark.job.kind, "probe_bark_test");
 
-    let capabilities = linux.system().unwrap().capabilities();
+    let capabilities = linux.system().capabilities();
     assert!(capabilities.probe);
     assert!(capabilities.prune_backups);
 }
 
 #[test]
 fn config_backed_use_cases_report_missing_config_in_core() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
     let use_cases = AgentHubUseCases::new(&platform);
 
     assert!(use_cases.probe().action(ProbeAction::BarkTest).is_ok());
-    for result in [
-        use_cases.settings().map(|_| ()),
-        use_cases.system().map(|_| ()),
-    ] {
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("config is required"));
-    }
+    assert!(use_cases.system().capabilities().systemd);
+    assert!(use_cases
+        .settings()
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("config is required"));
 }

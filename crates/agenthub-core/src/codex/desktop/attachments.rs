@@ -2,6 +2,8 @@
 //! Images must remain readable by the native owner, so only the ownership index
 //! is encrypted. A durable retention marker precedes every queue handoff.
 use super::references::NativeReference;
+
+const BOUND_INDEX_HEADER: &[u8] = b"AgentHub index v2\0";
 use crate::{crypto::SecretBox, security::hash_token};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -86,8 +88,17 @@ impl AttachmentStore {
                 if bytes.len() as u64 > INDEX_LIMIT {
                     return Err(ERROR);
                 }
+                let (data, nonce_len) = match bytes.strip_prefix(BOUND_INDEX_HEADER) {
+                    Some(data) => (data, 13),
+                    None => (bytes.as_slice(), 12),
+                };
+                let (nonce, ciphertext) = data.split_at_checked(nonce_len).ok_or(ERROR)?;
                 let plaintext = crypto
-                    .decrypt(&bytes[12..], &bytes[..12])
+                    .decrypt(
+                        &["attachment_index", root.to_str().ok_or(ERROR)?],
+                        ciphertext,
+                        nonce,
+                    )
                     .map_err(|_| ERROR)?;
                 let index: Index = serde_json::from_slice(&plaintext).map_err(|_| ERROR)?;
                 (index, Some(identity(&metadata)))
@@ -200,8 +211,19 @@ impl AttachmentStore {
     fn persist(&mut self, next: Index) -> Result<()> {
         self.check()?;
         let bytes = serde_json::to_vec(&next).map_err(|_| ERROR)?;
-        let (encrypted, nonce) = self.crypto.encrypt(&bytes).map_err(|_| ERROR)?;
-        if encrypted.len() + nonce.len() > INDEX_LIMIT as usize {
+        let (encrypted, nonce) = self
+            .crypto
+            .encrypt(
+                &["attachment_index", self.root.to_str().ok_or(ERROR)?],
+                &bytes,
+            )
+            .map_err(|_| ERROR)?;
+        let header = if nonce.len() == 13 {
+            BOUND_INDEX_HEADER
+        } else {
+            &[]
+        };
+        if header.len() + encrypted.len() + nonce.len() > INDEX_LIMIT as usize {
             return Err(ERROR);
         }
         let temporary = self.root.join(format!(
@@ -216,7 +238,8 @@ impl AttachmentStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(&temporary)
                 .map_err(|_| ERROR)?;
-            file.write_all(&nonce)
+            file.write_all(header)
+                .and_then(|()| file.write_all(&nonce))
                 .and_then(|()| file.write_all(&encrypted))
                 .and_then(|()| file.sync_all())
                 .map_err(|_| ERROR)?;
@@ -370,6 +393,7 @@ fn private_directory(path: &Path) -> Result<(u64, u64)> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ERROR)?;
     // SAFETY: geteuid only reads this process's effective UID.
     if !metadata.is_dir()
+        // SAFETY: Reading the process UID takes no pointers or arguments.
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o7777 != 0o700
     {
@@ -387,6 +411,7 @@ fn private_file(path: &Path) -> Result<File> {
     // SAFETY: geteuid only reads this process's effective UID.
     if !metadata.is_file()
         || metadata.nlink() != 1
+        // SAFETY: Reading the process UID takes no pointers or arguments.
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o7777 != 0o600
     {

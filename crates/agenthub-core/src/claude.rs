@@ -30,14 +30,12 @@ pub struct ClaudePaths {
     pub projects: PathBuf,
 }
 impl ClaudePaths {
-    pub fn default_for_user() -> Self {
-        let config = env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"));
-        Self {
+    pub fn default_for_user() -> Result<Self> {
+        let config = crate::platform::provider_root("CLAUDE_CONFIG_DIR", ".claude")?;
+        Ok(Self {
             projects: config.join("projects"),
             config,
-        }
+        })
     }
     pub fn available(&self) -> bool {
         self.projects.is_dir()
@@ -540,9 +538,12 @@ pub(crate) fn list_claude_sessions_without_storage(
         }
     }
     result.sort_by_cached_key(|session| {
-        (std::cmp::Reverse(session.updated_at.as_deref().and_then(
-            |time| chrono::DateTime::parse_from_rfc3339(time).ok(),
-        )),)
+        (std::cmp::Reverse(
+            session
+                .updated_at
+                .as_deref()
+                .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
+        ),)
     });
     result.truncate(limit.clamp(1, 200));
     Ok(result)

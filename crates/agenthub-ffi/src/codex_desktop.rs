@@ -178,7 +178,7 @@ impl CodexDesktopBridge {
             let attachments = agenthub_core::codex::desktop::attachments::AttachmentStore::open(
                 attachment_root,
                 attachment_crypto,
-                chrono::Utc::now().timestamp().max(0) as u64,
+                jiff::Timestamp::now().as_second().max(0) as u64,
             )?;
             Ok::<_, &'static str>((attachments, Arc::new(lease)))
         })

@@ -70,7 +70,7 @@ public struct ProbeWorkspaceView: View {
                         }
 
                         // 1. Full-width GitHub CI Panel
-                        if store.capabilities.githubCi {
+                        if store.capabilities.isReady {
                             GithubCiCardView(
                                 store: store,
                                 draft: $draft,

@@ -114,10 +114,10 @@ fn scan_events(f: &Fixture) -> Arc<Vec<NativeTurnEvent>> {
 #[test]
 fn baseline_and_reloaded_cache_do_not_replay_requests() {
     let f = Fixture::new("fixture");
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now().as_millisecond();
     let entry = |id: &str, ts: i64| json!({"kind":"send-message","id":id,"timestampMs":ts,"message":{"type":"local-tool-permission","ask":{"status":"pending","requestId":id}}});
     f.replica(json!([entry("old", now - 1000)]));
-    let mut config = crate::config::Config::default();
+    let mut config = crate::config::Config::current_defaults().unwrap();
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_grokbot = true;
     let db = crate::db::PanelDb::open_with_secret_box(
@@ -277,7 +277,7 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
     let f = Fixture::new("fixture");
     let db_path = f.root.join("fixture.sqlite");
     let config = |enabled| {
-        let mut c = crate::config::Config::default();
+        let mut c = crate::config::Config::current_defaults().unwrap();
         c.probe.notifications.enabled = true;
         c.probe.notifications.notify_grokbot = enabled;
         c
@@ -293,7 +293,7 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         &config(true),
     )
     .unwrap();
-    let entry = json!({"kind":"send-message","id":"request","timestampMs":chrono::Utc::now().timestamp_millis()+1000,"message":{"type":"local-tool-permission","ask":{"status":"pending","requestId":"request"}}});
+    let entry = json!({"kind":"send-message","id":"request","timestampMs":jiff::Timestamp::now().as_millisecond()+1000,"message":{"type":"local-tool-permission","ask":{"status":"pending","requestId":"request"}}});
     f.replica(json!([entry.clone()]));
     assert_eq!(
         db.stage_native_notifications(
@@ -379,7 +379,7 @@ fn targeted_notification_scan_does_not_read_other_bot_transcripts() {
 #[test]
 fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     let f = Fixture::new("fixture");
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now().as_millisecond();
     let msg = |id: &str, ts: i64, content: &str| {
         json!({
             "kind": "send-message",
@@ -390,7 +390,7 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     };
 
     // 1. Existing stream from pre-v2.1.11 upgrade with cursor = 0 and historical message older than prior_scanned_at
-    let mut config = crate::config::Config::default();
+    let mut config = crate::config::Config::current_defaults().unwrap();
     config.probe.enabled = true;
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_grokbot = true;
@@ -577,13 +577,13 @@ fn restored_notifications_keep_the_suspended_message_baseline() {
         "../../tests/fixtures/grokbot-1.1.0-messages.json"
     ))
     .unwrap();
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now().as_millisecond();
     let mut entries = fixture["entries"].as_array().unwrap()[1..].to_vec();
     for (index, entry) in entries.iter_mut().enumerate() {
         entry["timestampMs"] = json!(now + index as i64 + 1000);
     }
     f.replica(json!(entries));
-    let mut config = crate::config::Config::default();
+    let mut config = crate::config::Config::current_defaults().unwrap();
     config.probe.enabled = true;
     config.probe.notifications.enabled = true;
     config.probe.notifications.notify_grokbot = true;

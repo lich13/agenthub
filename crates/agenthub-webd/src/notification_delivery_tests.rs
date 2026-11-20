@@ -1397,7 +1397,7 @@ async fn retry_after_headers_reach_the_persistent_schedule() {
         Reply::json(StatusCode::TOO_MANY_REQUESTS, json!({"code":429}))
             .header("Retry-After", "120"),
     );
-    let before = chrono::Utc::now().timestamp_millis();
+    let before = jiff::Timestamp::now().as_millisecond();
     let outcome = codex(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
@@ -1407,13 +1407,15 @@ async fn retry_after_headers_reach_the_persistent_schedule() {
     )
     .await
     .unwrap();
-    let after = chrono::Utc::now().timestamp_millis();
+    let after = jiff::Timestamp::now().as_millisecond();
     assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
     assert!((before + 120_000..=after + 120_000).contains(&outcome.next_retry_ms.unwrap()));
     retry_pending(&fixture.config, &fixture.db).await.unwrap();
     assert_eq!(fixture.bark.count(), 1);
 
-    let date = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc2822();
+    let date = (jiff::Timestamp::now() + jiff::SignedDuration::from_secs(120))
+        .strftime("%a, %d %b %Y %T +0000")
+        .to_string();
     fixture.bark.reply(
         Reply::json(StatusCode::SERVICE_UNAVAILABLE, json!({"code":503}))
             .header("Retry-After", &date),
@@ -1572,22 +1574,36 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
     )
     .unwrap();
     candidate.request.body = event.bark_body.clone();
-    candidate.chunks = vec![
+    candidate.legacy_chunks = Some(vec![
         "第 1/3 段\n\n甲\n".into(),
         "第 2/3 段\n\n乙\n".into(),
         "第 3/3 段\n\n丙".into(),
-    ];
-    let first = deliver(
-        &|| Ok(fixture.config.clone()),
-        &fixture.config,
-        &fixture.db,
-        &key,
-        NotificationChannel::Bark,
-        &candidate,
-        true,
-        REQUEST_TIMEOUT,
+    ]);
+    assert!(fixture
+        .db
+        .stage_notification_delivery(
+            NotificationChannel::Bark,
+            &key,
+            candidate.event_ms,
+            &serde_json::to_value(&candidate).unwrap()
+        )
+        .unwrap());
+    // An upgrade can find a multi-part delivery staged long ago with no first attempt.
+    let conn = rusqlite::Connection::open(fixture.db.path()).unwrap();
+    conn.execute("UPDATE probe_notification_deliveries SET created_ms=created_ms-3600000 WHERE event_key=?1 AND first_attempt_ms IS NULL", [&key]).unwrap();
+    drop(conn);
+    let reopened = PanelDb::open_with_secret_box(
+        fixture.db.path(),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
-    .await
+    .unwrap();
+    retry_pending(&fixture.config, &reopened).await.unwrap();
+    let first: ProbeBarkOutcome = serde_json::from_value(
+        reopened
+            .notification_delivery_outcome(NotificationChannel::Bark, &key)
+            .unwrap()
+            .unwrap(),
+    )
     .unwrap();
     assert_eq!(first.status.as_deref(), Some("waiting_retry"));
     assert!(first.chunk_count >= 3);
@@ -1827,7 +1843,7 @@ async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
 
 fn ci_event(fixture: &Fixture) -> agenthub_core::github_ci::Event {
     serde_json::from_value(json!({
-        "observed_ms": Utc::now().timestamp_millis(),
+        "observed_ms": Timestamp::now().as_millisecond(),
         "account": {"id": 1, "login": "fixture"},
         "run": {
             "id": 42,

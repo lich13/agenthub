@@ -7,7 +7,6 @@ use crate::{
         ProbeSettingsPatch,
     },
     platform::PlatformPaths,
-    services::system::{require_capability, Capability},
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -143,10 +142,9 @@ pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -
 
 pub fn probe_settings_view_with_capability(
     config: &Config,
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     bark_device_key: ProbeSecretState,
 ) -> Result<SettingsView> {
-    require_capability(platform, Capability::Settings)?;
     Ok(build_settings_view(config, bark_device_key))
 }
 
@@ -389,10 +387,9 @@ pub struct ProbeSettingsSavePlan {
 }
 
 pub fn plan_probe_settings_save(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     request: ProbeSettingsSaveRequest,
 ) -> Result<ProbeSettingsSavePlan> {
-    require_capability(platform, Capability::Settings)?;
     let normalized = normalize_probe_settings_save_request(request)?;
     let secret_writes: Vec<SecretSettingWritePlan> = normalized
         .bark_device_key
@@ -429,7 +426,7 @@ pub fn apply_probe_settings_save_plan(
             tx,
             &before,
             &config,
-            chrono::Utc::now().timestamp_millis(),
+            jiff::Timestamp::now().as_millisecond(),
         )?;
         crate::github_ci::settings_changed(tx, &before, &config)?;
         Ok(config)
@@ -711,11 +708,11 @@ mod tests {
         plan_probe_settings_save, ProbeNotificationsSavePatch, ProbeSettingsSavePatch,
         ProbeSettingsSaveRequest,
     };
-    use crate::platform::{PlatformKind, PlatformPaths};
+    use crate::platform::PlatformPaths;
 
     #[test]
     fn probe_settings_save_plan_normalizes_nested_bark_key_and_patch() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::linux_server();
         let plan = plan_probe_settings_save(
             &platform,
             ProbeSettingsSaveRequest {
@@ -754,19 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn probe_settings_save_plan_requires_shared_settings_capability() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
-        let err = plan_probe_settings_save(&platform, ProbeSettingsSaveRequest::default())
-            .expect_err("Windows should not allow settings facade");
-
-        assert!(err
-            .to_string()
-            .contains("settings is unavailable on windows"));
-    }
-
-    #[test]
     fn probe_settings_save_plan_separates_config_write_from_secret_write_audit() {
-        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::macos("/fixture/home");
         let plan = plan_probe_settings_save(
             &platform,
             ProbeSettingsSaveRequest {
@@ -792,7 +778,7 @@ mod tests {
     fn nullable_notification_fields_round_trip_and_remove_only_the_requested_keys() {
         use serde_json::json;
         let original = "[probe.notifications] # kept\nsound = \"bell\"\nurl = \"https://example.invalid/\"\ngroup = \"Fixture\"\n[custom]\nkeep = true\n";
-        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::macos("/fixture/home");
         for nested in [false, true] {
             for input in [
                 json!({}),

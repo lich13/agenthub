@@ -39,6 +39,77 @@ public struct InstructionSegment: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+private extension String {
+    func matches(_ pattern: NSRegularExpression) -> Bool {
+        pattern.firstMatch(in: self, range: NSRange(startIndex..., in: self)) != nil
+    }
+
+    func replacing(_ pattern: NSRegularExpression, with template: String) -> String {
+        pattern.stringByReplacingMatches(in: self, range: NSRange(startIndex..., in: self), withTemplate: template)
+    }
+}
+
+private enum MarkdownPatterns {
+    static let memoryMarker = try! NSRegularExpression(pattern: "oai-mem-citation|citation_entries|rollout_ids|memory_citation", options: [.caseInsensitive])
+    static let headingPrefix = try! NSRegularExpression(pattern: "^#{1,6}\\s+")
+    static let closingHashes = try! NSRegularExpression(pattern: "\\s+#+$")
+    static let labelPunctuation = try! NSRegularExpression(pattern: "^[`*]+|[`*:]+$")
+    static let trailingWhitespace = try! NSRegularExpression(pattern: "\\s+$")
+    static let finalNewline = try! NSRegularExpression(pattern: "\\r?\\n$")
+    static let leadingHashes = try! NSRegularExpression(pattern: "^#+\\s*")
+    static let codeDelimiters = try! NSRegularExpression(pattern: "^`|`$")
+    static let urlScheme = try! NSRegularExpression(pattern: "^[a-z][a-z0-9+.-]*:", options: [.caseInsensitive])
+    static let explicitRelativePath = try! NSRegularExpression(pattern: "^(?:/|\\.{1,2}/|~/ )")
+    static let fileName = try! NSRegularExpression(pattern: "^[^?#]+(?:/|\\.[\\p{L}\\d_-]+(?:[:#]|$))")
+    static let lineFragment = try! NSRegularExpression(pattern: "#L\\d+(?:C\\d+)?(?:-L?C?\\d+(?:C\\d+)?)?$", options: [.caseInsensitive])
+    static let lineSuffix = try! NSRegularExpression(pattern: ":\\d+(?::\\d+)?$")
+    static let markdownLink = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\([^)]*\\)")
+    static let htmlTag = try! NSRegularExpression(pattern: "<[^>]*>")
+    static let emphasis = try! NSRegularExpression(pattern: "[*_`~]+")
+    static let illegalFileCharacters = try! NSRegularExpression(pattern: "[\\x00-\\x1f\\x7f<>:\"/\\\\|?*]+")
+    static let whitespace = try! NSRegularExpression(pattern: "\\s+")
+    static let fileNameEdges = try! NSRegularExpression(pattern: "^[.\\s]+|[.\\s]+$")
+    static let markdownExtension = try! NSRegularExpression(pattern: "\\.md$", options: [.caseInsensitive])
+    static let fileNameEnd = try! NSRegularExpression(pattern: "[.\\s]+$")
+    static let reservedFileName = try! NSRegularExpression(pattern: "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", options: [.caseInsensitive])
+    static let instructionLabels = [
+        "^(?:[a-z]:[/\\\\]|[/\\\\]|\\.{1,2}[/\\\\]|~[/\\\\])(?:[^<>\\n]*[/\\\\])?agents\\.md$",
+        "^(?:[\\w.-]+[/\\\\])+agents\\.md$",
+        "^agents\\.md(?:\\s+instructions(?:\\s+for\\s+.+)?)?$",
+    ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+    static let quoted = try! NSRegularExpression(pattern: "^( {4}| *\\t| {0,3}>)")
+    static let indented = try! NSRegularExpression(pattern: "^( {4}| *\\t)")
+    static let lines = try! NSRegularExpression(pattern: "[^\\n]*\\n|[^\\n]+$")
+    static let fence = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)")
+    static let comment = try! NSRegularExpression(pattern: "<!--[\\s\\S]*?(?:-->|$)")
+    static let memoryTag = try! NSRegularExpression(
+        pattern: "(?:<|&lt;)(\\/?)(oai-mem-citation|citation_entries|rollout_ids)(?:\\s+[^<>]*?)?\\s*(?:>|&gt;)",
+        options: [.caseInsensitive]
+    )
+    static let memoryField = try! NSRegularExpression(
+        pattern: "^[ \\t]*(?:[\"']memory_citation[\"']|memory_citation)[ \\t]*[:=][ \\t]*",
+        options: [.caseInsensitive, .anchorsMatchLines]
+    )
+    static let pageMetadata = try! NSRegularExpression(pattern: "<external_codex_apps_open_page>([\\s\\S]*?)<\\/external_codex_apps_open_page>")
+    static let instructionFile = try! NSRegularExpression(
+        pattern: "(?:^|[\\s/\\\\`\"'(=:])agents\\.md(?=$|[\\s`\"'),:;\\]}>])",
+        options: [.caseInsensitive]
+    )
+    static let instructionLines = try! NSRegularExpression(pattern: "[^\\n]*(?:\\n|$)")
+    static let heading = try! NSRegularExpression(pattern: "^ {0,3}(#{1,6})\\s")
+    static let openInstructions = try! NSRegularExpression(pattern: "^\\s*<INSTRUCTIONS>[ \\t]*(?:\\r?\\n|$)", options: [.caseInsensitive])
+    static let closeInstructions = try! NSRegularExpression(pattern: "<\\/INSTRUCTIONS\\s*>", options: [.caseInsensitive])
+    static let ordinaryTag = try! NSRegularExpression(pattern: "^<([a-z][a-z0-9_:-]*)", options: [.caseInsensitive])
+    static let replyEnvelope = try! NSRegularExpression(
+        pattern: "^[ \\t]{0,3}<send_user_message_question_reply>([\\s\\S]*?)<\\/send_user_message_question_reply>[ \\t]*(?=\\r?$)",
+        options: [.anchorsMatchLines]
+    )
+    static let fileHeader = try! NSRegularExpression(pattern: "^# Files mentioned by the user:\\r?\\n")
+    static let fileLine = try! NSRegularExpression(pattern: "^## .+: .+$")
+    static let agentsPath = try! NSRegularExpression(pattern: "^[^\\s]+[/\\\\]agents\\.md$")
+    static let planHeading = try! NSRegularExpression(pattern: "^ {0,3}#\\s+(.+?)\\s*#*\\s*$", options: [.anchorsMatchLines])
+}
+
 public enum VisibleMarkdownEngine {
     public static func literalMarkdownRanges(_ text: String, includeInline: Bool = true, includeQuotes: Bool = true) -> [UTF16Range] {
         let ns = text as NSString
@@ -46,11 +117,9 @@ public enum VisibleMarkdownEngine {
         if total == 0 { return [] }
 
         var ranges: [UTF16Range] = []
-        let lineRegex = try! NSRegularExpression(pattern: "[^\\n]*\\n|[^\\n]+$")
-        let fenceRegex = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)")
-        let indentedOrQuoteRegex = try! NSRegularExpression(
-            pattern: includeQuotes ? "^( {4}| *\\t| {0,3}>)" : "^( {4}| *\\t)"
-        )
+        let lineRegex = MarkdownPatterns.lines
+        let fenceRegex = MarkdownPatterns.fence
+        let indentedOrQuoteRegex = includeQuotes ? MarkdownPatterns.quoted : MarkdownPatterns.indented
 
         var fence: (marker: unichar, count: Int)?
         for match in lineRegex.matches(in: text, range: NSRange(location: 0, length: total)) {
@@ -124,7 +193,7 @@ public enum VisibleMarkdownEngine {
             ranges.append(contentsOf: inlineRanges)
         }
 
-        let commentRegex = try! NSRegularExpression(pattern: "<!--[\\s\\S]*?(?:-->|$)")
+        let commentRegex = MarkdownPatterns.comment
         for match in commentRegex.matches(in: text, range: NSRange(location: 0, length: total)) {
             ranges.append(UTF16Range(start: match.range.location, end: match.range.location + match.range.length))
         }
@@ -135,7 +204,7 @@ public enum VisibleMarkdownEngine {
     public static func memoryMetadataRanges(_ text: String, protectedRanges: [UTF16Range]? = nil) -> [UTF16Range] {
         let ns = text as NSString
         let total = ns.length
-        guard text.range(of: "oai-mem-citation|citation_entries|rollout_ids|memory_citation", options: [.regularExpression, .caseInsensitive]) != nil else {
+        guard text.matches(MarkdownPatterns.memoryMarker) else {
             return []
         }
 
@@ -154,10 +223,7 @@ public enum VisibleMarkdownEngine {
 
         var ranges: [UTF16Range] = []
         var stack: [(name: String, start: Int)] = []
-        let tagRegex = try! NSRegularExpression(
-            pattern: "(?:<|&lt;)(\\/?)(oai-mem-citation|citation_entries|rollout_ids)(?:\\s+[^<>]*?)?\\s*(?:>|&gt;)",
-            options: [.caseInsensitive]
-        )
+        let tagRegex = MarkdownPatterns.memoryTag
         for match in tagRegex.matches(in: text, range: NSRange(location: 0, length: total)) {
             let start = match.range.location
             let end = start + match.range.length
@@ -177,10 +243,7 @@ public enum VisibleMarkdownEngine {
             ranges.append(UTF16Range(start: item.start, end: total))
         }
 
-        let fieldRegex = try! NSRegularExpression(
-            pattern: "^[ \\t]*(?:[\"']memory_citation[\"']|memory_citation)[ \\t]*[:=][ \\t]*",
-            options: [.caseInsensitive, .anchorsMatchLines]
-        )
+        let fieldRegex = MarkdownPatterns.memoryField
         for match in fieldRegex.matches(in: text, range: NSRange(location: 0, length: total)) {
             let start = match.range.location
             let matchText = ns.substring(with: match.range) as NSString
@@ -227,7 +290,7 @@ public enum VisibleMarkdownEngine {
         let ns = text as NSString
         let literal = protectedRanges ?? literalMarkdownRanges(text, includeInline: true, includeQuotes: true)
         var ranges: [UTF16Range] = []
-        let regex = try! NSRegularExpression(pattern: "<external_codex_apps_open_page>([\\s\\S]*?)<\\/external_codex_apps_open_page>")
+        let regex = MarkdownPatterns.pageMetadata
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             let start = match.range.location
             let end = start + match.range.length
@@ -268,10 +331,7 @@ public enum VisibleMarkdownEngine {
     }
 
     public static func isInstructionFileActivity(_ values: [String?]) -> Bool {
-        let regex = try! NSRegularExpression(
-            pattern: "(?:^|[\\s/\\\\`\"'(=:])agents\\.md(?=$|[\\s`\"'),:;\\]}>])",
-            options: [.caseInsensitive]
-        )
+        let regex = MarkdownPatterns.instructionFile
         return values.contains { value in
             guard let value, !value.isEmpty else { return false }
             let ns = value as NSString
@@ -281,17 +341,11 @@ public enum VisibleMarkdownEngine {
 
     private static func isInstructionLabel(_ line: String) -> Bool {
         var label = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        label = label.replacingOccurrences(of: "^#{1,6}\\s+", with: "", options: .regularExpression)
-        label = label.replacingOccurrences(of: "\\s+#+$", with: "", options: .regularExpression)
-        label = label.replacingOccurrences(of: "^[`*]+|[`*:]+$", with: "", options: .regularExpression)
-        let patterns = [
-            "^(?:[a-z]:[/\\\\]|[/\\\\]|\\.{1,2}[/\\\\]|~[/\\\\])(?:[^<>\\n]*[/\\\\])?agents\\.md$",
-            "^(?:[\\w.-]+[/\\\\])+agents\\.md$",
-            "^agents\\.md(?:\\s+instructions(?:\\s+for\\s+.+)?)?$",
-        ]
+        label = label.replacing(MarkdownPatterns.headingPrefix, with: "")
+        label = label.replacing(MarkdownPatterns.closingHashes, with: "")
+        label = label.replacing(MarkdownPatterns.labelPunctuation, with: "")
         let ns = label as NSString
-        return patterns.contains { pat in
-            let re = try! NSRegularExpression(pattern: pat, options: [.caseInsensitive])
+        return MarkdownPatterns.instructionLabels.contains { re in
             return re.firstMatch(in: label, range: NSRange(location: 0, length: ns.length)) != nil
         }
     }
@@ -310,7 +364,7 @@ public enum VisibleMarkdownEngine {
         }
 
         let code = literalMarkdownRanges(text, includeInline: false, includeQuotes: true)
-        let lineRegex = try! NSRegularExpression(pattern: "[^\\n]*(?:\\n|$)")
+        let lineRegex = MarkdownPatterns.instructionLines
         let allLines = lineRegex.matches(in: text, range: NSRange(location: 0, length: total)).compactMap { m -> (index: Int, text: String)? in
             guard m.range.length > 0 else { return nil }
             return (index: m.range.location, text: ns.substring(with: m.range))
@@ -333,7 +387,7 @@ public enum VisibleMarkdownEngine {
             guard end > start else { return }
             let val = text.utf16Substring(from: start, to: end)
             guard !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            let trimmedEnd = val.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+            let trimmedEnd = val.replacing(MarkdownPatterns.trailingWhitespace, with: "")
             result.append(InstructionSegment(
                 kind: kind,
                 id: "\(kind):\(start)",
@@ -344,9 +398,9 @@ public enum VisibleMarkdownEngine {
         }
 
         var cursor = 0
-        let headingRegex = try! NSRegularExpression(pattern: "^ {0,3}(#{1,6})\\s")
-        let openInstructionsRegex = try! NSRegularExpression(pattern: "^\\s*<INSTRUCTIONS>[ \\t]*(?:\\r?\\n|$)", options: [.caseInsensitive])
-        let closeInstructionsRegex = try! NSRegularExpression(pattern: "<\\/INSTRUCTIONS\\s*>", options: [.caseInsensitive])
+        let headingRegex = MarkdownPatterns.heading
+        let openInstructionsRegex = MarkdownPatterns.openInstructions
+        let closeInstructionsRegex = MarkdownPatterns.closeInstructions
 
         for marker in markers {
             let start = marker.index
@@ -509,7 +563,7 @@ public enum UserContextEngine {
             cursor = end
         }
 
-        let ordinaryTagRegex = try! NSRegularExpression(pattern: "^<([a-z][a-z0-9_:-]*)", options: [.caseInsensitive])
+        let ordinaryTagRegex = MarkdownPatterns.ordinaryTag
 
         while cursor < total {
             if let literal = VisibleMarkdownEngine.protectedRange(ranges, at: cursor) {
@@ -604,10 +658,7 @@ public enum UserContextEngine {
         let protectedRanges = projected.contains("<send_user_message_question_reply>")
             ? VisibleMarkdownEngine.literalMarkdownRanges(projected, includeInline: true, includeQuotes: true)
             : []
-        let envelopeRegex = try! NSRegularExpression(
-            pattern: "^[ \\t]{0,3}<send_user_message_question_reply>([\\s\\S]*?)<\\/send_user_message_question_reply>[ \\t]*(?=\\r?$)",
-            options: [.anchorsMatchLines]
-        )
+        let envelopeRegex = MarkdownPatterns.replyEnvelope
 
         var cursor = 0
         let addText: (Int) -> Void = { end in
@@ -666,20 +717,20 @@ public enum UserContextEngine {
     private static func fileHeaderEnd(ns: NSString, start: Int) -> Int? {
         let total = ns.length
         let rest = ns.substring(from: start)
-        let headerRegex = try! NSRegularExpression(pattern: "^# Files mentioned by the user:\\r?\\n")
+        let headerRegex = MarkdownPatterns.fileHeader
         guard let m = headerRegex.firstMatch(in: rest, range: NSRange(location: 0, length: min((rest as NSString).length, 64))) else {
             return nil
         }
         var cursor = start + m.range.length
         var files = 0
         var disclaimer = false
-        let fileLineRegex = try! NSRegularExpression(pattern: "^## .+: .+$")
+        let fileLineRegex = MarkdownPatterns.fileLine
 
         while cursor < total {
             let nl = ns.range(of: "\n", options: [], range: NSRange(location: cursor, length: total - cursor))
             let end = nl.location == NSNotFound ? total : nl.location + 1
             let raw = ns.substring(with: NSRange(location: cursor, length: end - cursor))
-                .replacingOccurrences(of: "\\r?\\n$", with: "", options: .regularExpression)
+                .replacing(MarkdownPatterns.finalNewline, with: "")
             if raw == "## My request:" || raw == "## My request for Codex:" {
                 return (files > 0 && (disclaimer || raw == "## My request for Codex:")) ? end : nil
             }
@@ -705,11 +756,11 @@ public enum UserContextEngine {
         guard nl.location != NSNotFound else { return nil }
         var label = ns.substring(with: NSRange(location: start, length: nl.location - start))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        label = label.replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
-        label = label.replacingOccurrences(of: "^`|`$", with: "", options: .regularExpression)
+        label = label.replacing(MarkdownPatterns.leadingHashes, with: "")
+        label = label.replacing(MarkdownPatterns.codeDelimiters, with: "")
             .lowercased()
 
-        let pathPattern = try! NSRegularExpression(pattern: "^[^\\s]+[/\\\\]agents\\.md$")
+        let pathPattern = MarkdownPatterns.agentsPath
         let labelNS = label as NSString
         let matchesPath = pathPattern.firstMatch(in: label, range: NSRange(location: 0, length: labelNS.length)) != nil
         guard label == "agents.md"
@@ -823,24 +874,17 @@ public enum FileLinksAndPlanExport {
             if let host = comps.host, !host.isEmpty && host != "localhost" { return nil }
             if comps.user != nil || comps.password != nil || comps.port != nil || comps.query != nil { return nil }
             source = comps.percentEncodedPath + (comps.percentEncodedFragment.map { "#\($0)" } ?? "")
-        } else if source.range(of: "^[a-z][a-z0-9+.-]*:", options: [.regularExpression, .caseInsensitive]) != nil {
+        } else if source.matches(MarkdownPatterns.urlScheme) {
             return nil
         } else {
-            let explicitRel = source.range(of: "^(?:/|\\.{1,2}/|~/ )", options: .regularExpression) != nil
+            let explicitRel = source.matches(MarkdownPatterns.explicitRelativePath)
                 || source.hasPrefix("/") || source.hasPrefix("./") || source.hasPrefix("../") || source.hasPrefix("~/")
-            let looksLikeFile = source.range(
-                of: "^[^?#]+(?:/|\\.[\\p{L}\\d_-]+(?:[:#]|$))",
-                options: .regularExpression
-            ) != nil
+            let looksLikeFile = source.matches(MarkdownPatterns.fileName)
             if !explicitRel && !looksLikeFile { return nil }
         }
 
-        source = source.replacingOccurrences(
-            of: "#L\\d+(?:C\\d+)?(?:-L?C?\\d+(?:C\\d+)?)?$",
-            with: "",
-            options: [.regularExpression, .caseInsensitive]
-        )
-        source = source.replacingOccurrences(of: ":\\d+(?::\\d+)?$", with: "", options: .regularExpression)
+        source = source.replacing(MarkdownPatterns.lineFragment, with: "")
+        source = source.replacing(MarkdownPatterns.lineSuffix, with: "")
         if let decoded = source.removingPercentEncoding {
             source = decoded
         }
@@ -859,7 +903,7 @@ public enum FileLinksAndPlanExport {
         let fallback = VisibleMarkdownEngine.visibleMarkdown(rawFallback)
 
         var heading: String?
-        let headingRegex = try! NSRegularExpression(pattern: "^ {0,3}#\\s+(.+?)\\s*#*\\s*$", options: [.anchorsMatchLines])
+        let headingRegex = MarkdownPatterns.planHeading
         let ns = markdown as NSString
         if let match = headingRegex.firstMatch(in: markdown, range: NSRange(location: 0, length: ns.length)) {
             heading = ns.substring(with: match.range(at: 1))
@@ -869,16 +913,16 @@ public enum FileLinksAndPlanExport {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
         let rawTitle = (heading ?? firstLine ?? (fallback.isEmpty ? nil : fallback) ?? "计划")
-            .replacingOccurrences(of: "^#{1,6}\\s+", with: "", options: .regularExpression)
+            .replacing(MarkdownPatterns.headingPrefix, with: "")
 
         var title = rawTitle
-            .replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "[*_`~]+", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "[\\x00-\\x1f\\x7f<>:\"/\\\\|?*]+", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "^[.\\s]+|[.\\s]+$", with: "", options: .regularExpression)
-        title = title.replacingOccurrences(of: "\\.md$", with: "", options: [.regularExpression, .caseInsensitive])
+            .replacing(MarkdownPatterns.markdownLink, with: "$1")
+            .replacing(MarkdownPatterns.htmlTag, with: "")
+            .replacing(MarkdownPatterns.emphasis, with: "")
+            .replacing(MarkdownPatterns.illegalFileCharacters, with: " ")
+            .replacing(MarkdownPatterns.whitespace, with: " ")
+            .replacing(MarkdownPatterns.fileNameEdges, with: "")
+        title = title.replacing(MarkdownPatterns.markdownExtension, with: "")
 
         var stem = ""
         for ch in title {
@@ -887,9 +931,9 @@ public enum FileLinksAndPlanExport {
             stem = next
         }
         stem = stem.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "[.\\s]+$", with: "", options: .regularExpression)
+            .replacing(MarkdownPatterns.fileNameEnd, with: "")
         if stem.isEmpty { stem = "计划" }
-        let reserved = stem.range(of: "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", options: [.regularExpression, .caseInsensitive]) != nil
+        let reserved = stem.matches(MarkdownPatterns.reservedFileName)
         return "\(reserved ? "_\(stem)" : stem).md"
     }
 

@@ -18,7 +18,7 @@ pub(crate) struct GrokDetailQuery {
 pub(crate) async fn grok_list(_state: AppState, query: GrokListQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .grok()
+            .grok()?
             .list(query.limit.unwrap_or(50), query.q.as_deref())
     })
     .await
@@ -31,11 +31,9 @@ pub(crate) async fn grok_detail(
     query: GrokDetailQuery,
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&linux_update_platform()).grok().page(
-            &id,
-            query.limit,
-            query.before.as_deref(),
-        )
+        AgentHubUseCases::new(&linux_update_platform())
+            .grok()?
+            .page(&id, query.limit, query.before.as_deref())
     })
     .await
     .map_err(anyhow::Error::from)??)
@@ -49,7 +47,7 @@ pub(crate) struct GrokRenameRequest {
 
 pub(crate) async fn grok_rename(_state: AppState, request: GrokRenameRequest) -> ApiResponse {
     ok(AgentHubUseCases::new(&linux_update_platform())
-        .grok()
+        .grok()?
         .rename(&request.id, &request.title)
         .await?)
 }
@@ -57,7 +55,7 @@ pub(crate) async fn grok_rename(_state: AppState, request: GrokRenameRequest) ->
 pub(crate) async fn grok_delete_preview(_state: AppState, id: String) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .grok()
+            .grok()?
             .delete_preview(&id)
     })
     .await
@@ -70,7 +68,7 @@ pub(crate) async fn grok_delete_execute(
 ) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&linux_update_platform())
-            .grok()
+            .grok()?
             .delete_execute(request)
     })
     .await

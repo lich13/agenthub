@@ -496,10 +496,10 @@ fn legacy_encrypted_reference_round_trip_keeps_identity_compatibility() {
         .expect("legacy reference body serializes");
     let crypto = crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap();
     let (ciphertext, nonce) = crypto
-        .encrypt(&plaintext)
+        .encrypt(&["desktop_submission", "fixture"], &plaintext)
         .expect("legacy reference body encrypts");
     let recovered = crypto
-        .decrypt(&ciphertext, &nonce)
+        .decrypt(&["desktop_submission", "fixture"], &ciphertext, &nonce)
         .expect("legacy reference body decrypts");
     let body: Value =
         serde_json::from_slice(&recovered).expect("legacy encrypted reference body deserializes");

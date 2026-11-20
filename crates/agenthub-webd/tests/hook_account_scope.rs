@@ -19,7 +19,7 @@ fn stop_hook_clears_the_finished_thread_tree_only_when_switched_on() {
         "agenthub-hook-account-scope-{}",
         uuid::Uuid::new_v4()
     ));
-    let mut config = Config::for_platform_kind(PlatformKind::Macos);
+    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/fixture/home");
     config.codex.home = root.join(".codex");
     config.paths.data_dir = root.join("data");
     config.paths.db_path = root.join("data/agenthub.sqlite");

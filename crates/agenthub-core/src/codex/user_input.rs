@@ -226,8 +226,8 @@ impl AsyncQuestionTracker {
                 created_at_ms: value
                     .get("timestamp")
                     .and_then(Value::as_str)
-                    .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-                    .map(|v| v.timestamp_millis()),
+                    .and_then(|v| (v).parse::<jiff::Timestamp>().ok())
+                    .map(|v| v.as_millisecond()),
                 answered: HashSet::new(),
                 cancelled: false,
             });

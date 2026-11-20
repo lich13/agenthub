@@ -536,13 +536,13 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
     let d1_id = "88888888-8888-4888-8888-888888888882";
     let d2_id = "88888888-8888-4888-8888-888888888883";
     let d3_id = "88888888-8888-4888-8888-888888888884";
-    let base = chrono::Utc::now() - chrono::Duration::seconds(10);
-    let t0 = base.to_rfc3339();
-    let t1 = (base + chrono::Duration::seconds(1)).to_rfc3339();
-    let t2 = (base + chrono::Duration::seconds(2)).to_rfc3339();
-    let t3 = (base + chrono::Duration::seconds(3)).to_rfc3339();
-    let t4 = (base + chrono::Duration::seconds(4)).to_rfc3339();
-    let t5 = (base + chrono::Duration::seconds(5)).to_rfc3339();
+    let base = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(10);
+    let t0 = base.to_string();
+    let t1 = (base + jiff::SignedDuration::from_secs(1)).to_string();
+    let t2 = (base + jiff::SignedDuration::from_secs(2)).to_string();
+    let t3 = (base + jiff::SignedDuration::from_secs(3)).to_string();
+    let t4 = (base + jiff::SignedDuration::from_secs(4)).to_string();
+    let t5 = (base + jiff::SignedDuration::from_secs(5)).to_string();
     let (t0_r, t1_r, t2_r, t3_r, t4_r, t5_r) = (
         t0.clone(),
         t1.clone(),
@@ -853,7 +853,7 @@ async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication(
         &serde_json::Map::new(),
         &BTreeMap::new(),
         BTreeMap::new(),
-        chrono::Utc::now().timestamp_millis(),
+        jiff::Timestamp::now().as_millisecond(),
         true,
     )
     .await;
@@ -961,7 +961,7 @@ async fn summary_parent_index_keeps_both_fields_and_excludes_settled_senders() {
         &summaries,
         &index_children_by_parent(&summaries),
         BTreeMap::new(),
-        chrono::Utc::now().timestamp_millis(),
+        jiff::Timestamp::now().as_millisecond(),
         true,
     )
     .await;

@@ -1,28 +1,19 @@
-use agenthub_core::services::system::HostSurface;
 use agenthub_core::{
-    config::Config,
     jobs::ProcessCommand,
     platform::{PlatformKind, PlatformPaths},
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
-        macos_updater_update_available_output, update_job_plan_for_surface,
-        update_status_for_surface, update_status_with_recent_check_job_for_surface, UpdateAction,
-        UpdateExecutionMethod, UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
+        macos_updater_update_available_output, update_job_plan, update_status,
+        update_status_with_recent_check_job, UpdateAction, UpdateExecutionMethod,
+        UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
     },
 };
 
 #[test]
 fn linux_update_status_uses_fixed_panel_job_executor() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
 
-    let status = update_status_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        Some("v999.0.0"),
-        None,
-    );
+    let status = update_status(&platform, Some("v999.0.0"), None);
 
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(status.latest_version.as_deref(), Some("v999.0.0"));
@@ -38,52 +29,33 @@ fn linux_update_status_uses_fixed_panel_job_executor() {
 
 #[test]
 fn update_status_does_not_downgrade_or_reinstall_same_version() {
-    let config = Config::for_platform_kind(PlatformKind::Macos);
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::macos("/fixture/home");
 
-    let older = update_status_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        Some("v0.1.105"),
-        None,
-    );
-    let same = update_status_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        Some(env!("CARGO_PKG_VERSION")),
-        None,
-    );
+    let older = update_status(&platform, Some("v0.1.105"), None);
+    let same = update_status(&platform, Some(env!("CARGO_PKG_VERSION")), None);
 
     assert_eq!(older.update_available, Some(false));
     assert_eq!(same.update_available, Some(false));
-    assert!(older.recommended_action.contains("Tauri updater"));
+    assert!(older.recommended_action.contains("app updater"));
 }
 
 #[test]
-fn macos_update_status_uses_tauri_updater_without_linux_leakage() {
+fn macos_update_status_uses_app_updater_without_linux_leakage() {
     let home = temp_dir("agenthub-updates-macos-status");
     std::fs::create_dir_all(&home).unwrap();
-    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+
     let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
 
-    let status = update_status_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        Some("v0.1.103"),
-        Some("network timeout"),
-    );
+    let status = update_status(&platform, Some("v0.1.103"), Some("network timeout"));
     let serialized = serde_json::to_string(&status).unwrap();
 
-    assert_eq!(status.method, UpdateExecutionMethod::MacosTauriUpdater);
+    assert_eq!(status.method, UpdateExecutionMethod::MacosAppUpdater);
     assert_eq!(status.state, UpdateState::Failed);
     assert_eq!(
         status.failure_category,
         Some(UpdateFailureCategory::NetworkTlsEof)
     );
-    assert!(status.recommended_action.contains("Tauri updater"));
+    assert!(status.recommended_action.contains("app updater"));
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/agenthub"));
@@ -92,13 +64,9 @@ fn macos_update_status_uses_tauri_updater_without_linux_leakage() {
 
 #[test]
 fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
-    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux_platform = PlatformPaths::linux_server();
 
-    let start = update_job_plan_for_surface(
-        &linux_platform,
-        HostSurface::default_for_platform(&linux_platform),
-        UpdateAction::Install,
-    );
+    let start = update_job_plan(&linux_platform, UpdateAction::Install);
     assert_eq!(start.action, UpdateAction::Install);
     assert_eq!(start.method, UpdateExecutionMethod::LinuxSystemdJob);
     assert!(start.exclusive);
@@ -107,25 +75,17 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
     std::fs::create_dir_all(&mac_home).unwrap();
     let mac_platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
 
-    let mac_plan = update_job_plan_for_surface(
-        &mac_platform,
-        HostSurface::default_for_platform(&mac_platform),
-        UpdateAction::Install,
-    );
-    assert_eq!(mac_plan.method, UpdateExecutionMethod::MacosTauriUpdater);
+    let mac_plan = update_job_plan(&mac_platform, UpdateAction::Install);
+    assert_eq!(mac_plan.method, UpdateExecutionMethod::MacosAppUpdater);
     assert!(!mac_plan.exclusive);
     std::fs::remove_dir_all(mac_home).unwrap();
 }
 
 #[test]
 fn linux_update_job_specs_are_planned_in_core_service() {
-    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::linux_server();
 
-    let precheck = linux_update_job_spec(update_job_plan_for_surface(
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        UpdateAction::Check,
-    ));
+    let precheck = linux_update_job_spec(update_job_plan(&platform, UpdateAction::Check));
     assert_eq!(precheck.kind, "agenthub_update_check");
     assert_eq!(precheck.title, "AgentHub update precheck");
     assert_eq!(
@@ -141,11 +101,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
         ProcessCommand::new("/usr/local/bin/agenthub-webd-update", ["--precheck"])
     );
 
-    let install = linux_update_job_spec(update_job_plan_for_surface(
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        UpdateAction::Install,
-    ));
+    let install = linux_update_job_spec(update_job_plan(&platform, UpdateAction::Install));
     assert_eq!(install.kind, "agenthub_update_install");
     assert_eq!(
         install.command,
@@ -159,11 +115,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
         )
     );
 
-    let prune = linux_update_job_spec(update_job_plan_for_surface(
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        UpdateAction::Prune,
-    ));
+    let prune = linux_update_job_spec(update_job_plan(&platform, UpdateAction::Prune));
     assert_eq!(prune.kind, "agenthub_update_prune");
     assert!(prune.command.contains("release update backups"));
     let prune_process = prune.process_command().unwrap();
@@ -175,7 +127,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
         agenthub_core::update::PANEL_PRUNE_SCRIPT
     );
 
-    let mac = PlatformPaths::for_kind(PlatformKind::Macos);
+    let mac = PlatformPaths::macos("/fixture/home");
     let plan =
         agenthub_core::services::updates::plan_update_action(&mac, UpdateAction::Check).unwrap();
     assert!(plan.linux_job.is_none());
@@ -211,8 +163,7 @@ fn macos_updater_job_specs_and_output_markers_are_core_contracts() {
 
 #[test]
 fn recent_macos_updater_check_job_derives_status_in_core() {
-    let config = Config::for_platform_kind(PlatformKind::Macos);
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::macos("/fixture/home");
     let available_job = job_record(
         "succeeded",
         &format!(
@@ -222,14 +173,8 @@ fn recent_macos_updater_check_job_derives_status_in_core() {
         ),
     );
 
-    let available = update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        None,
-        None,
-        Some(&available_job),
-    );
+    let available =
+        update_status_with_recent_check_job(&platform, None, None, Some(&available_job));
     assert_eq!(available.latest_version.as_deref(), Some("999.0.0"));
     assert_eq!(available.update_available, Some(true));
     assert_eq!(available.state, UpdateState::Ready);
@@ -242,14 +187,8 @@ fn recent_macos_updater_check_job_derives_status_in_core() {
             macos_updater_no_update_output()
         ),
     );
-    let no_update = update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        None,
-        None,
-        Some(&no_update_job),
-    );
+    let no_update =
+        update_status_with_recent_check_job(&platform, None, None, Some(&no_update_job));
     assert_eq!(
         no_update.latest_version.as_deref(),
         Some(env!("CARGO_PKG_VERSION"))
@@ -258,32 +197,17 @@ fn recent_macos_updater_check_job_derives_status_in_core() {
     assert_eq!(no_update.state, UpdateState::Idle);
 
     let running_job = job_record("running", MACOS_UPDATER_CHECKING_OUTPUT);
-    let running = update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        None,
-        None,
-        Some(&running_job),
-    );
+    let running = update_status_with_recent_check_job(&platform, None, None, Some(&running_job));
     assert_eq!(running.state, UpdateState::Checking);
 
     let failed_job = job_record("failed", "error: network timeout\n");
-    let failed = update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        None,
-        None,
-        Some(&failed_job),
-    );
+    let failed = update_status_with_recent_check_job(&platform, None, None, Some(&failed_job));
     assert_eq!(failed.state, UpdateState::Failed);
 }
 
 #[test]
 fn explicit_update_status_inputs_take_precedence_over_recent_check_job() {
-    let config = Config::for_platform_kind(PlatformKind::Macos);
-    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::macos("/fixture/home");
     let job = job_record(
         "succeeded",
         &format!(
@@ -293,14 +217,7 @@ fn explicit_update_status_inputs_take_precedence_over_recent_check_job() {
         ),
     );
 
-    let status = update_status_with_recent_check_job_for_surface(
-        &config,
-        &platform,
-        HostSurface::default_for_platform(&platform),
-        Some("0.1.0"),
-        None,
-        Some(&job),
-    );
+    let status = update_status_with_recent_check_job(&platform, Some("0.1.0"), None, Some(&job));
 
     assert_eq!(status.latest_version.as_deref(), Some("0.1.0"));
     assert_ne!(status.latest_version.as_deref(), Some("999.0.0"));

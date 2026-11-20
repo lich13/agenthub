@@ -71,9 +71,137 @@ public struct ProbeStatus: Codable, Equatable, Sendable {
 }
 
 public struct ProbeSettingsView: Codable, Equatable, Sendable {
-    public var codex: [String: JSONValue]?
-    public var probe: [String: JSONValue]?
-    public var notifications: [String: JSONValue]?
+    public struct Codex: Codable, Equatable, Sendable {
+        public var configuredCodexHome: String?
+        public var workspace: String
+        public var hostLabel: String
+
+        enum CodingKeys: String, CodingKey {
+            case configuredCodexHome = "configured_codex_home"
+            case workspace
+            case hostLabel = "host_label"
+        }
+    }
+
+    public struct Probe: Codable, Equatable, Sendable {
+        public var enabled: Bool
+        public var pollSeconds: Int
+        public var recentLimit: Int
+        public var hooks: Hooks
+        public var observability: Observability
+        public var errorMonitor: ErrorMonitor
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case pollSeconds = "poll_seconds"
+            case recentLimit = "recent_limit"
+            case hooks
+            case observability
+            case errorMonitor = "error_monitor"
+        }
+    }
+
+    public struct Hooks: Codable, Equatable, Sendable {
+        public var manageStopHook: Bool
+        public var clearAccountScope: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case manageStopHook = "manage_stop_hook"
+            case clearAccountScope = "clear_account_scope"
+        }
+    }
+
+    public struct Observability: Codable, Equatable, Sendable {
+        public var eventRetentionDays: Int
+        public var hookEventMaxLines: Int
+        public var hookCooldownMaxLines: Int
+        public var logMaxBytes: Int
+
+        enum CodingKeys: String, CodingKey {
+            case eventRetentionDays = "event_retention_days"
+            case hookEventMaxLines = "hook_event_max_lines"
+            case hookCooldownMaxLines = "hook_cooldown_max_lines"
+            case logMaxBytes = "log_max_bytes"
+        }
+    }
+
+    public struct ErrorMonitor: Codable, Equatable, Sendable {
+        public var enabled: Bool
+    }
+
+    public struct Notifications: Codable, Equatable, Sendable {
+        public var deviceKeyConfigured: Bool
+        public var serverUrl: String
+        public var enabled: Bool
+        public var sound: String?
+        public var group: String
+        public var url: String?
+        public var notifyCompletion: Bool
+        public var notifyReplyNeeded: Bool
+        public var notifyRecoverable: Bool
+        public var notifyCodex: Bool
+        public var notifyGrok: Bool
+        public var notifyGrokbot: Bool
+        public var notifyGithubCi: Bool
+        public var githubCiRepositories: [String]
+        public var githubCiFilterBots: Bool
+        public var notifyGrokCompletion: Bool
+        public var notifyGrokFailure: Bool
+        public var notifyGrokReplyNeeded: Bool
+        public var notifyClaudeReplyNeeded: Bool
+        public var notifyClaudeFailure: Bool
+        public var notifyClaudeCompletion: Bool
+        public var notifyClaude: Bool
+        public var notifyAntigravity: Bool
+        public var notifyAntigravityCompletion: Bool
+        public var notifyAntigravityFailure: Bool
+        public var notifyAntigravityReplyNeeded: Bool
+        public var notifyAntigravityAuthorization: Bool
+        public var notifyDsh: Bool
+        public var notifyDshCompletion: Bool
+        public var notifyDshFailure: Bool
+        public var notifyDshReplyNeeded: Bool
+        public var notifyDshAuthorization: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case deviceKeyConfigured = "device_key_configured"
+            case serverUrl = "server_url"
+            case enabled
+            case sound
+            case group
+            case url
+            case notifyCompletion = "notify_completion"
+            case notifyReplyNeeded = "notify_reply_needed"
+            case notifyRecoverable = "notify_recoverable"
+            case notifyCodex = "notify_codex"
+            case notifyGrok = "notify_grok"
+            case notifyGrokbot = "notify_grokbot"
+            case notifyGithubCi = "notify_github_ci"
+            case githubCiRepositories = "github_ci_repositories"
+            case githubCiFilterBots = "github_ci_filter_bots"
+            case notifyGrokCompletion = "notify_grok_completion"
+            case notifyGrokFailure = "notify_grok_failure"
+            case notifyGrokReplyNeeded = "notify_grok_reply_needed"
+            case notifyClaudeReplyNeeded = "notify_claude_reply_needed"
+            case notifyClaudeFailure = "notify_claude_failure"
+            case notifyClaudeCompletion = "notify_claude_completion"
+            case notifyClaude = "notify_claude"
+            case notifyAntigravity = "notify_antigravity"
+            case notifyAntigravityCompletion = "notify_antigravity_completion"
+            case notifyAntigravityFailure = "notify_antigravity_failure"
+            case notifyAntigravityReplyNeeded = "notify_antigravity_reply_needed"
+            case notifyAntigravityAuthorization = "notify_antigravity_authorization"
+            case notifyDsh = "notify_dsh"
+            case notifyDshCompletion = "notify_dsh_completion"
+            case notifyDshFailure = "notify_dsh_failure"
+            case notifyDshReplyNeeded = "notify_dsh_reply_needed"
+            case notifyDshAuthorization = "notify_dsh_authorization"
+        }
+    }
+
+    public var codex: Codex
+    public var probe: Probe
+    public var notifications: Notifications
 }
 
 public enum ProbeNotificationPlatform: String, CaseIterable, Sendable, Identifiable {
@@ -164,103 +292,64 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
     public var githubCiFilterBots: Bool
 
     public static func from(_ view: ProbeSettingsView) -> ProbeSettingsDraft {
-        func str(_ dict: [String: JSONValue]?, _ key: String, fallback: String = "") -> String {
-            if case let .string(s)? = dict?[key] { return s }
-            return fallback
-        }
-        func bool(_ dict: [String: JSONValue]?, _ key: String, fallback: Bool) -> Bool {
-            if case let .bool(b)? = dict?[key] { return b }
-            return fallback
-        }
-        func int(_ dict: [String: JSONValue]?, _ key: String, fallback: Int) -> Int {
-            if case let .number(d)? = dict?[key] { return Int(d) }
-            return fallback
-        }
-        func obj(_ dict: [String: JSONValue]?, _ key: String) -> [String: JSONValue]? {
-            if case let .object(o)? = dict?[key] { return o }
-            return nil
-        }
-
         let codex = view.codex
         let probe = view.probe
-        let hooks = obj(probe, "hooks")
-        let errorMon = obj(probe, "error_monitor")
-        let obs = obj(probe, "observability")
-        let notif = view.notifications ?? obj(probe, "notifications")
-
-        let logBytes = int(obs, "log_max_bytes", fallback: 5 * 1024 * 1024)
+        let hooks = probe.hooks
+        let obs = probe.observability
+        let notif = view.notifications
+        let logBytes = obs.logMaxBytes
         let logMiB = Double(logBytes) / (1024.0 * 1024.0)
         let formattedMiB = logMiB.truncatingRemainder(dividingBy: 1) == 0
             ? String(Int(logMiB))
             : String(format: "%.6g", logMiB)
 
-        let repos: [String] = {
-            if case let .array(arr)? = notif?["github_ci_repositories"] {
-                return arr.compactMap {
-                    if case let .string(s) = $0 {
-                        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return t.isEmpty ? nil : t
-                    }
-                    return nil
-                }
-            }
-            return []
-        }()
-
-        let configuredHome: String = {
-            if case let .string(explicit)? = codex?["configured_home"] {
-                return explicit
-            }
-            return str(codex, "home")
-        }()
-
         return ProbeSettingsDraft(
-            codexHome: configuredHome,
-            codexWorkspace: str(codex, "workspace"),
-            hostLabel: str(codex, "host_label", fallback: "AgentHub"),
-            probeEnabled: bool(probe, "enabled", fallback: true),
-            errorMonitorEnabled: bool(errorMon, "enabled", fallback: true),
-            manageStopHook: bool(hooks, "manage_stop_hook", fallback: true),
-            clearAccountScope: bool(hooks, "clear_account_scope", fallback: false),
-            pollSecondsText: String(int(probe, "poll_seconds", fallback: 15)),
-            recentLimitText: String(int(probe, "recent_limit", fallback: 50)),
-            eventRetentionDaysText: String(int(obs, "event_retention_days", fallback: 2)),
-            hookEventMaxLinesText: String(int(obs, "hook_event_max_lines", fallback: 500)),
-            hookCooldownMaxLinesText: String(int(obs, "hook_cooldown_max_lines", fallback: 1000)),
+            codexHome: codex.configuredCodexHome ?? "",
+            codexWorkspace: codex.workspace,
+            hostLabel: codex.hostLabel,
+            probeEnabled: probe.enabled,
+            errorMonitorEnabled: probe.errorMonitor.enabled,
+            manageStopHook: hooks.manageStopHook,
+            clearAccountScope: hooks.clearAccountScope,
+            pollSecondsText: String(probe.pollSeconds),
+            recentLimitText: String(probe.recentLimit),
+            eventRetentionDaysText: String(obs.eventRetentionDays),
+            hookEventMaxLinesText: String(obs.hookEventMaxLines),
+            hookCooldownMaxLinesText: String(obs.hookCooldownMaxLines),
             logMaxMiBText: formattedMiB,
-            barkEnabled: bool(notif, "enabled", fallback: false),
-            barkServerUrl: str(notif, "server_url", fallback: "https://api.day.app"),
+            barkEnabled: notif.enabled,
+            barkServerUrl: notif.serverUrl,
             barkDeviceKey: "",
-            barkDeviceKeyConfigured: bool(notif, "device_key_configured", fallback: false),
-            barkSound: str(notif, "sound"),
-            barkGroup: str(notif, "group", fallback: "AgentHub"),
-            barkUrl: str(notif, "url"),
-            notifyCompletion: bool(notif, "notify_completion", fallback: true),
-            notifyReplyNeeded: bool(notif, "notify_reply_needed", fallback: true),
-            notifyRecoverable: bool(notif, "notify_recoverable", fallback: true),
-            notifyCodex: bool(notif, "notify_codex", fallback: true),
-            notifyGrok: bool(notif, "notify_grok", fallback: true),
-            notifyGrokCompletion: bool(notif, "notify_grok_completion", fallback: true),
-            notifyGrokFailure: bool(notif, "notify_grok_failure", fallback: true),
-            notifyGrokReplyNeeded: bool(notif, "notify_grok_reply_needed", fallback: true),
-            notifyGrokbot: bool(notif, "notify_grokbot", fallback: false),
-            notifyClaude: bool(notif, "notify_claude", fallback: true),
-            notifyClaudeCompletion: bool(notif, "notify_claude_completion", fallback: true),
-            notifyClaudeFailure: bool(notif, "notify_claude_failure", fallback: true),
-            notifyClaudeReplyNeeded: bool(notif, "notify_claude_reply_needed", fallback: true),
-            notifyAntigravity: bool(notif, "notify_antigravity", fallback: false),
-            notifyAntigravityCompletion: bool(notif, "notify_antigravity_completion", fallback: false),
-            notifyAntigravityFailure: bool(notif, "notify_antigravity_failure", fallback: false),
-            notifyAntigravityReplyNeeded: bool(notif, "notify_antigravity_reply_needed", fallback: false),
-            notifyAntigravityAuthorization: bool(notif, "notify_antigravity_authorization", fallback: false),
-            notifyDsh: bool(notif, "notify_dsh", fallback: false),
-            notifyDshCompletion: bool(notif, "notify_dsh_completion", fallback: false),
-            notifyDshFailure: bool(notif, "notify_dsh_failure", fallback: false),
-            notifyDshReplyNeeded: bool(notif, "notify_dsh_reply_needed", fallback: false),
-            notifyDshAuthorization: bool(notif, "notify_dsh_authorization", fallback: false),
-            notifyGithubCi: bool(notif, "notify_github_ci", fallback: false),
-            githubCiRepositories: repos,
-            githubCiFilterBots: bool(notif, "github_ci_filter_bots", fallback: true)
+            barkDeviceKeyConfigured: notif.deviceKeyConfigured,
+            barkSound: notif.sound ?? "",
+            barkGroup: notif.group,
+            barkUrl: notif.url ?? "",
+            notifyCompletion: notif.notifyCompletion,
+            notifyReplyNeeded: notif.notifyReplyNeeded,
+            notifyRecoverable: notif.notifyRecoverable,
+            notifyCodex: notif.notifyCodex,
+            notifyGrok: notif.notifyGrok,
+            notifyGrokCompletion: notif.notifyGrokCompletion,
+            notifyGrokFailure: notif.notifyGrokFailure,
+            notifyGrokReplyNeeded: notif.notifyGrokReplyNeeded,
+            notifyGrokbot: notif.notifyGrokbot,
+            notifyClaude: notif.notifyClaude,
+            notifyClaudeCompletion: notif.notifyClaudeCompletion,
+            notifyClaudeFailure: notif.notifyClaudeFailure,
+            notifyClaudeReplyNeeded: notif.notifyClaudeReplyNeeded,
+            notifyAntigravity: notif.notifyAntigravity,
+            notifyAntigravityCompletion: notif.notifyAntigravityCompletion,
+            notifyAntigravityFailure: notif.notifyAntigravityFailure,
+            notifyAntigravityReplyNeeded: notif.notifyAntigravityReplyNeeded,
+            notifyAntigravityAuthorization: notif.notifyAntigravityAuthorization,
+            notifyDsh: notif.notifyDsh,
+            notifyDshCompletion: notif.notifyDshCompletion,
+            notifyDshFailure: notif.notifyDshFailure,
+            notifyDshReplyNeeded: notif.notifyDshReplyNeeded,
+            notifyDshAuthorization: notif.notifyDshAuthorization,
+            notifyGithubCi: notif.notifyGithubCi,
+            githubCiRepositories: notif.githubCiRepositories,
+            githubCiFilterBots: notif.githubCiFilterBots
         )
     }
 
@@ -716,19 +805,19 @@ public struct GithubCiRun: Codable, Equatable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UInt64.self, forKey: .id)
-        repositoryId = (try? c.decode(UInt64.self, forKey: .repositoryId)) ?? 0
-        repositoryName = (try? c.decode(String.self, forKey: .repositoryName)) ?? ""
+        repositoryId = try c.decode(UInt64.self, forKey: .repositoryId)
+        repositoryName = try c.decode(String.self, forKey: .repositoryName)
         name = try c.decodeIfPresent(String.self, forKey: .name)
-        workflowName = (try? c.decode(String.self, forKey: .workflowName)) ?? (name ?? "工作流")
+        workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName) ?? name ?? "工作流"
         displayTitle = try c.decodeIfPresent(String.self, forKey: .displayTitle)
         headBranch = try c.decodeIfPresent(String.self, forKey: .headBranch)
-        headSha = (try? c.decode(String.self, forKey: .headSha)) ?? ""
-        status = (try? c.decode(String.self, forKey: .status)) ?? "completed"
+        headSha = try c.decode(String.self, forKey: .headSha)
+        status = try c.decode(String.self, forKey: .status)
         conclusion = try c.decodeIfPresent(String.self, forKey: .conclusion)
-        htmlUrl = (try? c.decode(String.self, forKey: .htmlUrl)) ?? ""
-        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+        htmlUrl = try c.decode(String.self, forKey: .htmlUrl)
+        updatedAt = try c.decode(String.self, forKey: .updatedAt)
         runAttempt = try c.decodeIfPresent(UInt64.self, forKey: .runAttempt)
-        isBot = (try? c.decode(Bool.self, forKey: .isBot)) ?? false
+        isBot = try c.decode(Bool.self, forKey: .isBot)
     }
 }
 

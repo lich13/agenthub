@@ -747,7 +747,7 @@ mod tests {
         env::temp_dir().join(format!(
             "agenthub-archive-{label}-{}-{counter}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            jiff::Timestamp::now().as_nanosecond()
         ))
     }
 }

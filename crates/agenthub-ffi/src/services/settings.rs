@@ -10,25 +10,7 @@ use agenthub_core::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopProbeSettings {
-    pub codex: Value,
-    pub probe: agenthub_core::config::ProbeConfig,
-    pub notifications: Value,
-}
-
-impl From<settings_service::SettingsView> for DesktopProbeSettings {
-    fn from(view: settings_service::SettingsView) -> Self {
-        Self {
-            codex: serde_json::to_value(view.codex).unwrap_or_else(|_| json!({})),
-            probe: view.probe,
-            notifications: serde_json::to_value(view.notifications).unwrap_or_else(|_| json!({})),
-        }
-    }
-}
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +25,9 @@ pub(crate) struct DesktopProbeEventsRequest {
     pub limit: Option<u32>,
 }
 
-pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
+pub(crate) fn probe_settings_with_state(
+    state: &DesktopState,
+) -> Result<settings_service::SettingsView> {
     let config = state.refresh_config()?;
     let secret_state = settings_service::ProbeSecretState::from_secret_bytes(
         state
@@ -54,14 +38,17 @@ pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopP
     let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()?
         .probe_settings_view(secret_state)?;
-    Ok(DesktopProbeSettings::from(plan))
+    Ok(plan)
 }
 
 pub(crate) fn probe_save_settings_with_state(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
-) -> Result<DesktopProbeSettings> {
+) -> Result<settings_service::SettingsView> {
     probe_save_settings_with_state_and_repair(state, request, |config, platform| {
+        if state.isolated {
+            return Ok(());
+        }
         crate::resources::repair_probe_error_monitor_launch_agent(config, platform, false)
             .map(|_| ())
             .map_err(anyhow::Error::msg)
@@ -72,7 +59,7 @@ fn probe_save_settings_with_state_and_repair(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
     repair_error_monitor: impl FnOnce(&Config, &agenthub_core::platform::PlatformPaths) -> Result<()>,
-) -> Result<DesktopProbeSettings> {
+) -> Result<settings_service::SettingsView> {
     let config = state.config();
     let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()?
@@ -92,7 +79,7 @@ fn probe_save_settings_with_state_and_repair(
 pub(crate) fn test_probe_save_settings_with_state(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
-) -> Result<DesktopProbeSettings> {
+) -> Result<settings_service::SettingsView> {
     probe_save_settings_with_state_and_repair(state, request, |_, _| Ok(()))
 }
 
@@ -190,9 +177,9 @@ mod tests {
         std::fs::create_dir_all(&config.codex.home).unwrap();
         std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
         std::fs::write(config.codex.home.join("session_index.jsonl"), "").unwrap();
-        let status = std::process::Command::new("sqlite3")
-            .arg(config.codex.home.join("state_5.sqlite"))
-            .arg(
+        rusqlite::Connection::open(config.codex.home.join("state_5.sqlite"))
+            .unwrap()
+            .execute_batch(
                 "CREATE TABLE threads(
                     id TEXT PRIMARY KEY,
                     created_at INTEGER NOT NULL,
@@ -205,9 +192,7 @@ mod tests {
                 CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL);
                 CREATE TABLE agent_job_items(id TEXT PRIMARY KEY, assigned_thread_id TEXT, status TEXT NOT NULL);",
             )
-            .status()
             .unwrap();
-        assert!(status.success());
         std::fs::create_dir_all(&config.codex.workspace).unwrap();
         let mut platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
         platform.kind = kind;
@@ -343,17 +328,6 @@ mod tests {
                 .as_deref(),
             Some(b"fixture-key-only".as_slice())
         );
-    }
-
-    #[test]
-    fn probe_settings_save_command_honors_core_capability_gate() {
-        let (_temp, state, _platform) = command_test_state(PlatformKind::Windows);
-
-        let err = test_probe_save_settings_with_state(&state, ProbeSettingsSaveRequest::default())
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("settings is unavailable on windows"), "{err}");
     }
 
     #[test]
