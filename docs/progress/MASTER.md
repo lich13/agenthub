@@ -4,9 +4,11 @@
 
 当前源码版本为 **2.1.29**。修复全平台清理的预览及确认、隐藏线程分页和切机后的数据隔离。原生工作区同时修复搜索定位、子智能体分页、Probe 活动、账号隔离、作业输出与计划导出。API 协议 2，数据库 schema 3。
 
-最近正式版本为 [**v2.1.28**](https://github.com/lich13/agenthub/releases/tag/v2.1.28)，发布提交为 [`eafbcd4`](https://github.com/lich13/agenthub/commit/eafbcd4c31574f0ed4efe8b09af90fed85668c65)。[标签 Release CI](https://github.com/lich13/agenthub/actions/runs/44588237182) 的发布边界检查、后端与契约检查、macOS Swift 6 检查、两端打包签名及发布六项任务全部通过，已发布八项正式资产。服务端已通过部署脚本升级为 `agenthub-webd 2.1.28`，服务为 `active`、健康为 `ok`；Mac 使用同版正式 DMG（校验与签名通过）从 `2.1.27` 原地更新至 `2.1.28` 并启动，未保留旧版副本。未执行回退，成功安装已清理临时备份；真实界面、会话阅读与通知实收待用户验收。
+[v2.1.29](https://github.com/lich13/agenthub/releases/tag/v2.1.29) 已发布八项资产，对应提交 [`733bfeb`](https://github.com/lich13/agenthub/commit/733bfebf54e0845b4cc394b5fe33a8d516192585)。[Release CI](https://github.com/lich13/agenthub/actions/runs/44668220771) 通过。Linux 服务为 `agenthub-webd 2.1.29`，状态 `active`，健康检查 `ok`。Mac App 已用同版产物原地更新并启动。
 
 ## v2.1.28 实现与验证
+
+[v2.1.28](https://github.com/lich13/agenthub/releases/tag/v2.1.28) 的发布提交为 [`eafbcd4`](https://github.com/lich13/agenthub/commit/eafbcd4c31574f0ed4efe8b09af90fed85668c65)。[Release CI](https://github.com/lich13/agenthub/actions/runs/44588237182) 发布八项资产，Linux 服务与 Mac App 均已完成当次更新。
 
 1. **Rust `crates/agenthub-ffi` 自包含收敛与旧端退役**：将全部零 Tauri 耦合模块正式迁入 `crates/agenthub-ffi/src/`，彻底移除 `src-tauri/`、`webui/`、`package.json` 及 Tauri／Playwright 专属脚本，保留 `agenthub-core` 与 `agenthub-webd` 核心逻辑、API 协议 2、SQLite schema 3、系统钥匙串与 73 项桌面命令 AST 契约守卫（`drift_guard` + `wire_contract`）。剪贴板项数（`<=32`）、UTF-16／字节上限、C `ImageIO` 尺寸验界与无损 PNG 转码、选档 `Semaphore(1)` 与 `300s` 超时取消、Minisign `"ED"` 验签更新器及 `pulldown-cmark` GFM AST 解析留在 Rust；所有 Host 回调非阻塞返回，串流 `StreamSink` 单调递增 `seq` 并保证单次 `closed` 帧与六步确定性 `shutdown`。
 2. **Swift 6 宿主外壳、偏好迁移、Probe 与设置页**：采用单一 `macos/Package.swift`（`swift-tools-version: 6.0`、最低部署目标 `macOS 12.0`、零外部依赖）。完整嵌入 53 个 Lucide 向量图标（含缓存化 AppKit `NSImage` 光栅输出）与六平台品牌图标，首次启动只读迁移旧版桌面端主题与导航折叠态，隐藏创建 `1280×820`（`minSize 1000×680`）主窗口并在首次展示时单次最大化至 `screen.visibleFrame`（后续揭示与切机不重改尺寸，跨屏自动夹紧），行内模态／确认框／灯箱／`<960pt` 抽屉开启期间拦截 `Edit → Select All (⌘A)` 穿透底层会话列表；`1060pt` 居中容器对齐 GitHub CI、Probe 6 指标与默认展开 8 项高级参数及中文化 Bark 状态标签、设置下划线双分页、`本机 App 更新`／`远程服务更新`、全平台 6 范围清理与 Codex 账号隔离 100 条分页。

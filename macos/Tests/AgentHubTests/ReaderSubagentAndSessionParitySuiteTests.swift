@@ -626,16 +626,22 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let png1x1Base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             let transport = MockRuntimeTransport { cmd, args in
                 XCTAssertEqual(cmd, "sessions.attachmentRead")
-                if args.contains("\"rootThreadId\":\"root-9\"") {
-                    return Data("{\"mimeType\":\"image/png\",\"base64\":\"\(png1x1Base64)\"}".utf8)
-                }
+                struct Envelope: Decodable { let request: SessionAttachmentRequest }
+                let request = try JSONDecoder().decode(Envelope.self, from: Data(args.utf8)).request
+                XCTAssertEqual(request.rootThreadId, "root-9")
                 return Data("{\"mimeType\":\"image/png\",\"base64\":\"\(png1x1Base64)\"}".utf8)
             }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.att.\(UUID().uuidString)")!)
             let mgr = AttachmentViewportManager()
             let req = SessionAttachmentRequest(provider: .codex, sessionKey: "child-1", messageId: "m-1", attachmentId: "att-1", rootThreadId: "root-9")
+            let loaded = XCTestExpectation(description: "Attachment entered the viewport cache")
+            mgr.onImageUpdated = { key in
+                XCTAssertEqual(key, "k1")
+                loaded.fulfill()
+            }
             mgr.ensureLoaded(key: "k1", request: req, store: store)
-            try await Task.sleep(nanoseconds: 30_000_000)
+            let completion = await XCTWaiter.fulfillment(of: [loaded], timeout: 5)
+            XCTAssertEqual(completion, .completed)
             XCTAssertNotNil(mgr.image(for: "k1"))
             ParityCaseTracker.shared.record(f, "loads-base64-attachment-with-root-thread")
 
