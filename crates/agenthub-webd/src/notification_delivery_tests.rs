@@ -550,14 +550,23 @@ async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay
     let fixture = Fixture::new().await;
     let event = fixture.event();
     let load_config = || Ok(fixture.config.clone());
+    let gate = fixture.bark.gate_next_request();
+    let overlap = async {
+        tokio::time::timeout(REQUEST_TIMEOUT, gate.entered.notified())
+            .await
+            .expect("first delivery reached the endpoint");
+        let result = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT).await;
+        gate.release.notify_one();
+        result
+    };
     let (first, second) = tokio::join!(
         codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT),
-        codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT),
+        overlap,
     );
-    let outcomes = [first.unwrap(), second.unwrap()];
-    assert!(outcomes.iter().any(|outcome| outcome.sent));
-    assert!(outcomes.iter().all(|outcome| outcome.sent
-        || (!outcome.skipped && outcome.status.as_deref() == Some("retrying"))));
+    assert!(first.unwrap().sent);
+    let concurrent = second.unwrap();
+    assert!(!concurrent.sent && !concurrent.skipped);
+    assert_eq!(concurrent.status.as_deref(), Some("retrying"));
     assert_eq!(fixture.bark.count(), 1);
     let reopened = PanelDb::open_with_secret_box(
         fixture.db.path(),

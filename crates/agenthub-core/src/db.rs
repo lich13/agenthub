@@ -16,6 +16,7 @@ use std::{
 use uuid::Uuid;
 
 pub mod desktop_submissions;
+mod encrypted_records;
 mod native_probe;
 mod notification_channels;
 pub use native_probe::NativeDelivery;
@@ -445,14 +446,18 @@ impl PanelDb {
         if plaintext.is_empty() {
             return Ok(());
         }
+        let value = self.encrypt_setting(key, plaintext)?;
+        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![key,value,Self::now()])?;
+        Ok(())
+    }
+
+    fn encrypt_setting(&self, key: &str, plaintext: &[u8]) -> Result<String> {
         let (ciphertext, nonce) = self.crypto.encrypt(&["setting", key], plaintext)?;
-        let value = serde_json::json!({
+        Ok(serde_json::json!({
             "ciphertext": general_purpose::STANDARD.encode(ciphertext),
             "nonce": general_purpose::STANDARD.encode(nonce)
         })
-        .to_string();
-        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![key,value,Self::now()])?;
-        Ok(())
+        .to_string())
     }
 
     pub fn remove_secret_setting(&self, key: &str) -> Result<()> {

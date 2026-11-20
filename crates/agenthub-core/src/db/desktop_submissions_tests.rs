@@ -37,7 +37,7 @@ impl Fixture {
 
     fn ledger_with_key(&self, crypto: SecretBox) -> DesktopLedger {
         let db = PanelDb::open_with_secret_box(&self.path, crypto.clone()).unwrap();
-        DesktopLedger::new(db, crypto)
+        DesktopLedger::open(db, crypto).unwrap()
     }
 
     fn connection(&self) -> Connection {
@@ -119,7 +119,7 @@ fn encrypted_bodies_reject_wrong_keys_and_bind_ciphertext_to_record_identity() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(nonce.len(), 12);
+    assert_eq!(nonce.len(), 13);
     assert!(!ciphertext
         .windows(b"AGENTHUB_SYNTHETIC_SECRET_BODY_MARKER".len())
         .any(|window| window == b"AGENTHUB_SYNTHETIC_SECRET_BODY_MARKER"));

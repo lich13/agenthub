@@ -169,3 +169,84 @@ fn simultaneous_new_store_opens_share_current_schema() {
         );
     }
 }
+
+#[test]
+fn encrypted_upgrade_rolls_back_all_panel_rows_and_preserves_delivery_progress() {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use rusqlite::params;
+    let fixture = Fixture::new();
+    let db = PanelDb::open_with_secret_box(
+        &fixture.path,
+        SecretBox::from_key_material(&"19".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let cipher = Aes256Gcm::new((&[0x19; 32]).into());
+    let nonce = [3_u8; 12];
+    let setting = cipher
+        .encrypt(Nonce::from_slice(&nonce), b"fixture".as_slice())
+        .unwrap();
+    let old = serde_json::json!({"ciphertext": STANDARD.encode(setting), "nonce": STANDARD.encode(nonce)}).to_string();
+    let channel_nonce = [4_u8; 12];
+    let channel = cipher
+        .encrypt(
+            Nonce::from_slice(&channel_nonce),
+            br#"{"chunks":["one","two"]}"#.as_slice(),
+        )
+        .unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings(key,value,updated_at) VALUES('fixture',?1,7)",
+            [&old],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,created_ms,updated_ms,chunk_index,lease_owner)
+            VALUES('event','bark',X'00',?1,'delivering',8,9,1,'fixture-owner')", [channel_nonce.as_slice()]).unwrap();
+    }
+
+    assert!(db.bind_legacy_panel_records().is_err());
+    assert_eq!(db.get_setting("fixture").unwrap().as_ref(), Some(&old));
+    let check_state = || {
+        db.conn.lock().unwrap().query_row("SELECT ciphertext,nonce,status,chunk_index,lease_owner,updated_ms FROM probe_notification_deliveries", [],
+            |r| Ok((r.get::<_,Vec<u8>>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?,r.get::<_,i64>(5)?))).unwrap()
+    };
+    assert_eq!(check_state().0, [0]);
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE probe_notification_deliveries SET ciphertext=?1",
+            params![channel],
+        )
+        .unwrap();
+    db.bind_legacy_panel_records().unwrap();
+    let converted = check_state();
+    assert_eq!((converted.1.len(), converted.1[0]), (13, 2));
+    assert_eq!(
+        (&*converted.2, converted.3, &*converted.4, converted.5),
+        ("delivering", 1, "fixture-owner", 9)
+    );
+    let (encrypted_setting, timestamp) =
+        db.get_setting_with_updated_at("fixture").unwrap().unwrap();
+    assert_ne!(encrypted_setting, old);
+    assert_eq!(timestamp, 7);
+    assert_eq!(
+        db.get_secret_setting_bytes("fixture").unwrap().unwrap(),
+        b"fixture"
+    );
+    assert!(db
+        .crypto
+        .decrypt(
+            &["notification", "bark", "other"],
+            &converted.0,
+            &converted.1
+        )
+        .is_err());
+    db.bind_legacy_panel_records().unwrap();
+    assert_eq!(converted, check_state());
+    assert_eq!(
+        db.get_setting("fixture").unwrap().unwrap(),
+        encrypted_setting
+    );
+}

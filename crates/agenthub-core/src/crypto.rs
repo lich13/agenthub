@@ -7,8 +7,6 @@ use base64::{engine::general_purpose, Engine as _};
 use rand::RngCore;
 use zeroize::Zeroizing;
 
-// The reader release deliberately continues writing the format readable by v2.1.29.
-const WRITE_BOUND_RECORDS: bool = false;
 const BOUND_NONCE: u8 = 2;
 
 #[derive(Clone)]
@@ -40,18 +38,10 @@ impl SecretBox {
         identity: &[&str],
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        self.seal(identity, plaintext, WRITE_BOUND_RECORDS)
-    }
-
-    fn seal(&self, identity: &[&str], plaintext: &[u8], bound: bool) -> Result<(Vec<u8>, Vec<u8>)> {
         let cipher = Aes256Gcm::new((&*self.key).into());
         let mut nonce = [0; 12];
         OsRng.fill_bytes(&mut nonce);
-        let aad = if bound {
-            serde_json::to_vec(identity)?
-        } else {
-            Vec::new()
-        };
+        let aad = serde_json::to_vec(identity)?;
         let ciphertext = cipher
             .encrypt(
                 Nonce::from_slice(&nonce),
@@ -62,9 +52,7 @@ impl SecretBox {
             )
             .map_err(|_| anyhow!("encrypt secret"))?;
         let mut encoded = Vec::with_capacity(13);
-        if bound {
-            encoded.push(BOUND_NONCE);
-        }
+        encoded.push(BOUND_NONCE);
         encoded.extend_from_slice(&nonce);
         Ok((ciphertext, encoded))
     }
@@ -122,7 +110,15 @@ mod tests {
         let key = SecretBox::from_key_material(&"11".repeat(32)).unwrap();
         let owner = ["notifications", "one"];
         for bound in [false, true] {
-            let (cipher, nonce) = key.seal(&owner, b"fixture", bound).unwrap();
+            let (cipher, nonce) = if bound {
+                key.encrypt(&owner, b"fixture").unwrap()
+            } else {
+                let nonce = [1; 12];
+                let cipher = Aes256Gcm::new((&*key.key).into())
+                    .encrypt(Nonce::from_slice(&nonce), b"fixture".as_slice())
+                    .unwrap();
+                (cipher, nonce.to_vec())
+            };
             assert_eq!(key.decrypt(&owner, &cipher, &nonce).unwrap(), b"fixture");
             if bound {
                 assert!(key

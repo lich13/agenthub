@@ -65,8 +65,9 @@ pub struct Submission {
 }
 
 impl DesktopLedger {
-    pub fn new(db: PanelDb, crypto: SecretBox) -> Self {
-        Self { db, crypto }
+    pub fn open(db: PanelDb, crypto: SecretBox) -> Result<Self> {
+        db.with_transaction(|tx| super::encrypted_records::Queue::Desktop.bind(tx, &crypto))?;
+        Ok(Self { db, crypto })
     }
 
     pub fn has_encrypted_messages(db: &PanelDb) -> Result<bool> {
@@ -214,15 +215,12 @@ impl DesktopLedger {
                         &nonce,
                     )
                     .map_err(|_| safe_error())?;
-                let mut payload: Value =
-                    serde_json::from_slice(&plaintext).map_err(|_| safe_error())?;
-                ensure!(
-                    payload["source"] == record.source_id
-                        && payload["thread"] == record.thread_id
-                        && payload["id"] == record.id,
-                    "desktop submission identity changed"
-                );
-                record.body = Some(payload["body"].take());
+                record.body = Some(submission_body(
+                    &plaintext,
+                    &record.source_id,
+                    &record.thread_id,
+                    &record.id,
+                )?);
                 Ok(record)
             })
             .collect()
@@ -396,6 +394,20 @@ impl DesktopLedger {
         ).map_err(|_| safe_error())?;
         Ok(())
     }
+}
+
+pub(super) fn submission_body(
+    plaintext: &[u8],
+    source: &str,
+    thread: &str,
+    id: &str,
+) -> Result<Value> {
+    let mut payload: Value = serde_json::from_slice(plaintext).map_err(|_| safe_error())?;
+    ensure!(
+        payload["source"] == source && payload["thread"] == thread && payload["id"] == id,
+        "desktop submission identity changed"
+    );
+    Ok(payload["body"].take())
 }
 
 fn validate_identity(source: &str, thread: &str, id: &str) -> Result<()> {

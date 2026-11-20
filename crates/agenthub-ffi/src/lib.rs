@@ -96,6 +96,10 @@ impl AgentHubRuntime {
             .map_err(|err| format!("failed to initialize async runtime: {err}"))?;
 
         let state = isolation::init_desktop_state(isolated_root).map_err(|err| err.to_string())?;
+        state
+            .db
+            .bind_legacy_panel_records()
+            .map_err(|err| format!("无法转换加密记录，原数据已保留: {err}"))?;
 
         let isolated = state.isolated;
         if !isolated {

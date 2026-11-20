@@ -64,7 +64,7 @@ impl Fixture {
         let crypto = SecretBox::from_key_material(&"11".repeat(32)).unwrap();
         let db = PanelDb::open_with_secret_box(&self.database, crypto.clone())
             .expect("temporary PanelDb is initialized");
-        DesktopLedger::new(db, crypto)
+        DesktopLedger::open(db, crypto).unwrap()
     }
 
     fn enqueue_pair(&self, ledger: &DesktopLedger, source: &str) {

@@ -171,6 +171,27 @@ fn assert_no_bytes(path: &Path, text: &str) {
 }
 
 #[test]
+fn unreadable_bark_payload_stays_pending_for_the_correct_key() {
+    let fixture = Fixture::new();
+    let db = fixture.open();
+    db.sync_notification_channels(&fixture.config).unwrap();
+    stage(&db, &fixture, NotificationChannel::Bark, "unreadable");
+    let wrong = PanelDb::open_with_secret_box(
+        &fixture.path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"22".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    assert!(wrong.due_notification_deliveries(10).is_err());
+    let row = fixture.row(NotificationChannel::Bark, "unreadable");
+    assert_eq!(row.status, "pending");
+    assert_eq!(row.attempts, 0);
+    assert_eq!(
+        db.due_notification_deliveries(10).unwrap()[0].payload,
+        payload()
+    );
+}
+
+#[test]
 fn bark_enablement_controls_staging_and_preserves_the_initial_baseline() {
     for enabled in [false, true] {
         let mut fixture = Fixture::new();

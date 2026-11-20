@@ -173,18 +173,19 @@ impl CodexDesktopBridge {
             .map_err(|_| "钥匙串未及时响应，请检查系统授权")??;
 
         let source = agenthub_core::security::hash_token(&home.to_string_lossy());
-        let attachment_crypto = crypto.clone();
-        let (attachments, lease) = agenthub_core::read_tasks::spawn_blocking(move || {
+        let db = state.db.clone();
+        let (attachments, ledger, lease) = agenthub_core::read_tasks::spawn_blocking(move || {
+            let ledger = DesktopLedger::open(db, crypto.clone())
+                .map_err(|_| "无法读取本机发送队列，原数据已保留")?;
             let attachments = agenthub_core::codex::desktop::attachments::AttachmentStore::open(
                 attachment_root,
-                attachment_crypto,
+                crypto,
                 jiff::Timestamp::now().as_second().max(0) as u64,
             )?;
-            Ok::<_, &'static str>((attachments, Arc::new(lease)))
+            Ok::<_, &'static str>((attachments, ledger, Arc::new(lease)))
         })
         .await
         .map_err(|_| "无法初始化粘贴附件存储")??;
-        let ledger = DesktopLedger::new(state.db.clone(), crypto);
         let recovery = ledger.clone();
         let recovery_source = source.clone();
         let recovery_lease = lease.clone();

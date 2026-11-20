@@ -1251,6 +1251,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let config = Config::load_runtime(&config_path)?;
     refresh_managed_provider_hooks(&config)?;
     let db = open_panel_db(&config)?;
+    db.bind_legacy_panel_records()?;
     let state = AppState::new(config.clone(), db).with_config_path(config_path.clone());
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());

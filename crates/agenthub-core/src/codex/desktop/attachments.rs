@@ -2,8 +2,6 @@
 //! Images must remain readable by the native owner, so only the ownership index
 //! is encrypted. A durable retention marker precedes every queue handoff.
 use super::references::NativeReference;
-
-const BOUND_INDEX_HEADER: &[u8] = b"AgentHub index v2\0";
 use crate::{crypto::SecretBox, security::hash_token};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,6 +17,7 @@ pub const MAX_IMAGES: usize = 256;
 pub const DRAFT_SECONDS: u64 = 30 * 60;
 const INDEX_LIMIT: u64 = 1024 * 1024;
 const INDEX: &str = "ownership.enc";
+const BOUND_INDEX_HEADER: &[u8] = b"AgentHub index v2\0";
 const ERROR: &str = "粘贴附件存储无法安全读取，已保留现有文件";
 type Result<T> = std::result::Result<T, &'static str>;
 
@@ -74,7 +73,7 @@ impl AttachmentStore {
         }
         let directory = private_directory(&root)?;
         let root = root.canonicalize().map_err(|_| ERROR)?;
-        let (index, index_identity) = match private_file(&root.join(INDEX)) {
+        let (index, index_identity, legacy) = match private_file(&root.join(INDEX)) {
             Ok(mut file) => {
                 let metadata = file.metadata().map_err(|_| ERROR)?;
                 if metadata.len() > INDEX_LIMIT || metadata.len() < 12 {
@@ -101,7 +100,7 @@ impl AttachmentStore {
                     )
                     .map_err(|_| ERROR)?;
                 let index: Index = serde_json::from_slice(&plaintext).map_err(|_| ERROR)?;
-                (index, Some(identity(&metadata)))
+                (index, Some(identity(&metadata)), nonce_len == 12)
             }
             Err(_)
                 if fs::symlink_metadata(root.join(INDEX))
@@ -114,6 +113,7 @@ impl AttachmentStore {
                         entries: Vec::new(),
                     },
                     None,
+                    false,
                 )
             }
             Err(_) => return Err(ERROR),
@@ -130,6 +130,9 @@ impl AttachmentStore {
             faulted: false,
         };
         store.validate_inventory()?;
+        if legacy {
+            store.persist(store.index.clone())?;
+        }
         store.expire(now)?;
         Ok(store)
     }
@@ -218,27 +221,25 @@ impl AttachmentStore {
                 &bytes,
             )
             .map_err(|_| ERROR)?;
-        let header = if nonce.len() == 13 {
-            BOUND_INDEX_HEADER
-        } else {
-            &[]
-        };
-        if header.len() + encrypted.len() + nonce.len() > INDEX_LIMIT as usize {
+        if BOUND_INDEX_HEADER.len() + encrypted.len() + nonce.len() > INDEX_LIMIT as usize {
             return Err(ERROR);
         }
         let temporary = self.root.join(format!(
             "{}.tmp",
             hash_token(&SecretBox::random_key_material())
         ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(|_| {
+                self.faulted = true;
+                ERROR
+            })?;
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&temporary)
-                .map_err(|_| ERROR)?;
-            file.write_all(header)
+            file.write_all(BOUND_INDEX_HEADER)
                 .and_then(|()| file.write_all(&nonce))
                 .and_then(|()| file.write_all(&encrypted))
                 .and_then(|()| file.sync_all())
@@ -253,6 +254,17 @@ impl AttachmentStore {
             Ok(())
         })();
         if result.is_err() {
+            // Remove only the temporary inode we created, while the worker lease is held.
+            if file
+                .metadata()
+                .ok()
+                .zip(fs::symlink_metadata(&temporary).ok())
+                .is_some_and(|(ours, current)| {
+                    ours.dev() == current.dev() && ours.ino() == current.ino()
+                })
+            {
+                let _ = fs::remove_file(&temporary);
+            }
             // A failed rename/fsync has an unknown durable outcome. Stop all
             // mutations until the encrypted index is reopened under the lease.
             self.faulted = true;

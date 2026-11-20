@@ -416,14 +416,18 @@ impl PanelDb {
         tx.commit()?;
         rows.into_iter()
             .map(|(event_key, ciphertext, nonce)| {
+                let plaintext = self.crypto.decrypt(
+                    &[
+                        "notification",
+                        NotificationChannel::Bark.as_str(),
+                        &event_key,
+                    ],
+                    &ciphertext,
+                    &nonce,
+                )?;
                 Ok(NotificationDelivery {
                     channel: NotificationChannel::Bark,
-                    payload: self
-                        .crypto
-                        .decrypt(&["notification", "bark", &event_key], &ciphertext, &nonce)
-                        .ok()
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                        .unwrap_or(Value::Null),
+                    payload: serde_json::from_slice(&plaintext)?,
                     event_key,
                 })
             })
