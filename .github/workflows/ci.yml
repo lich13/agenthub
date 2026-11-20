@@ -27,6 +27,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
           toolchain: 1.100.0
+          components: rustfmt, clippy
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '26.13.1'
