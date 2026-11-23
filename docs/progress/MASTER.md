@@ -4,7 +4,7 @@
 
 当前源码版本为 **2.1.32**。API 协议 2，数据库 schema 3。Antigravity 工作区统一纳管桌面端（`~/.gemini/antigravity` 及 2.34.0+ `daemon/hub_*.json` 在线探测）与 `agy` CLI（`~/.gemini/antigravity-cli`／`ANTIGRAVITY_CLI_HOME`），补齐离线 `raw_summary` Protobuf 保损补丁、FTS5 整型归档绑定、`presence` 占用锁校验、`conversation_parents` 与 CLI 共享文件原子清理及远端 Linux 已归档清理，并升级 `url` 至 `>= 2.5.9`（修复 `RUSTSEC-2026-0592`）。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
 
-- **v2.1.32** 待提交发布与用户验收（本机与远端 `agy` CLI 会话阅读、改名、归档／恢复、占用锁保护提示、永久删除及已归档清理，以及 `Antigravity.app` 2.34.0 在线管理与 Bark 推送）。
+- **v2.1.32** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.32`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.31 原地更新并启动；本机与远端 `agy` CLI 会话管理及 `Antigravity.app` 2.34.0 在线交互待用户验收。[提交 2f18fc0](https://github.com/lich13/agenthub/commit/2f18fc0dfa228a37761856be0dbc6ed80fdcae7f) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.32) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45268133405)
 
 - **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
 - **v2.1.30** 已发布八项资产，具备两种密文格式的读取能力，继续写旧格式。Linux 服务在该版部署后状态为 `active`，健康检查 `ok`。Mac App 已由 2.1.29 原地更新并启动。[提交 3fb2cdf](https://github.com/lich13/agenthub/commit/3fb2cdf361a5f62198bfd168bcd13132c4c57aec) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.30) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44777552143)
