@@ -22,8 +22,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=-/root/.dsh/sessions -/root/.dsh/storages -/root/.gemini/antigravity -/root/.codex -/home/ubuntu/.codex -/root/.grok -/root/.claude /etc/agenthub-webd /var/lib/agenthub-webd /var/log/agenthub-webd
-ReadOnlyPaths=-/root/.grok/auth.json -/root/.grok/config.toml -/root/.grok/endpoint.env -/root/.grok/sandbox.toml -/root/.grok/trusted_folders.toml -/root/.claude/.credentials.json -/root/.claude/.claude.json -/root/.claude/settings.json -/root/.claude/settings.local.json
+ReadWritePaths=-/root/.dsh/sessions -/root/.dsh/storages -/root/.gemini/antigravity -/root/.gemini/antigravity-cli -/root/.codex -/home/ubuntu/.codex -/root/.grok -/root/.claude /etc/agenthub-webd /var/lib/agenthub-webd /var/log/agenthub-webd
+ReadOnlyPaths=-/root/.gemini/antigravity-cli/settings.json -/root/.grok/auth.json -/root/.grok/config.toml -/root/.grok/endpoint.env -/root/.grok/sandbox.toml -/root/.grok/trusted_folders.toml -/root/.claude/.credentials.json -/root/.claude/.claude.json -/root/.claude/settings.json -/root/.claude/settings.local.json
 
 [Install]
 WantedBy=multi-user.target

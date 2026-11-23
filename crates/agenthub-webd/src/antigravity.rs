@@ -641,7 +641,15 @@ pub async fn scan() -> Result<NativeScan> {
 }
 
 pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
+    if antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
+        return Ok(NativeScan::default());
+    }
     let (endpoint, client, port, mut summaries) = connect().await?;
+    if summaries["trajectorySummaries"].get(cascade_id).is_none()
+        && antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id)
+    {
+        return Ok(NativeScan::default());
+    }
     let mut last_scan = NativeScan::default();
     for attempt in 0..4 {
         if attempt > 0 {

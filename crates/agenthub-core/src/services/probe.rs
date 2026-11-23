@@ -396,46 +396,44 @@ fn aggregate_active_sessions(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let list_req = crate::provider_sessions::ProviderListRequest {
-            archived: Some(false),
-            q: None,
-            limit: Some(per_bucket_limit),
-        };
-        let ag_paths = match &sandbox_root {
-            Some(root) => crate::antigravity::sessions::AntigravityPaths::offline(
-                root.join(".gemini/antigravity"),
-            ),
-            None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
-        };
-        if ag_paths.available() {
-            if let Ok(items) =
-                crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
-            {
-                for item in items {
-                    let bucket = match item.status.as_str() {
-                        "running" => Some("running"),
-                        "waiting" | "reply_needed" => Some("reply_needed"),
-                        "failed" => Some("recoverable"),
-                        _ if item.read_error.is_some() => Some("recoverable"),
-                        _ => None,
-                    };
-                    if let Some(bucket) = bucket {
-                        sessions.push(live_session(
-                            "antigravity",
-                            item.id,
-                            item.session_key,
-                            item.title,
-                            bucket,
-                            item.updated_at,
-                            Some(item.cwd),
-                        ));
-                    }
+    let list_req = crate::provider_sessions::ProviderListRequest {
+        archived: Some(false),
+        q: None,
+        limit: Some(per_bucket_limit),
+    };
+    let ag_paths = match &sandbox_root {
+        Some(root) => crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
+        None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+    };
+    if ag_paths.available() {
+        if let Ok(items) =
+            crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
+        {
+            for item in items {
+                let bucket = match item.status.as_str() {
+                    "running" => Some("running"),
+                    "waiting" | "reply_needed" => Some("reply_needed"),
+                    "failed" => Some("recoverable"),
+                    _ if item.read_error.is_some() => Some("recoverable"),
+                    _ => None,
+                };
+                if let Some(bucket) = bucket {
+                    sessions.push(live_session(
+                        "antigravity",
+                        item.id,
+                        item.session_key,
+                        item.title,
+                        bucket,
+                        item.updated_at,
+                        Some(item.cwd),
+                    ));
                 }
             }
         }
+    }
 
+    #[cfg(target_os = "macos")]
+    {
         let dsh_paths = match &sandbox_root {
             Some(root) => crate::dsh::DshPaths {
                 home: root.join(".dsh"),

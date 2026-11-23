@@ -46,7 +46,7 @@ for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/agenthub-webd/grok-lea
         raise SystemExit("native Grok runtime isolation boundary missing")
 write_paths = next(line for line in unit.splitlines() if line.startswith("ReadWritePaths="))
 read_paths = next(line for line in unit.splitlines() if line.startswith("ReadOnlyPaths="))
-for provider in (".grok", ".claude"):
+for provider in (".grok", ".claude", ".gemini/antigravity", ".gemini/antigravity-cli"):
     if f"-/root/{provider} " not in write_paths:
         raise SystemExit("provider data root must support atomic shared-index replacement")
 import importlib.util
@@ -54,7 +54,7 @@ sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/agenthub-webd/provider-session-write-paths.py")
 provider_paths = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(provider_paths)
-for key, provider in (("GROK_HOME", ".grok"), ("CLAUDE_CONFIG_DIR", ".claude")):
+for key, provider in (("GROK_HOME", ".grok"), ("CLAUDE_CONFIG_DIR", ".claude"), ("ANTIGRAVITY_CLI_HOME", ".gemini/antigravity-cli")):
     for name in provider_paths.PROTECTED_FILES[key]:
         if f"-/root/{provider}/{name}" not in read_paths:
             raise SystemExit("provider settings or credential protection missing")

@@ -23,8 +23,11 @@ spec.loader.exec_module(provider_paths)
 class ProviderWritePathsTests(unittest.TestCase):
     def test_default_roots_are_in_the_base_unit(self):
         self.assertEqual(provider_paths.render({}), "")
-        self.assertEqual(provider_paths.render({"GROK_HOME": "/root/.grok", "CLAUDE_CONFIG_DIR": "/root/.claude"}), "")
+        self.assertEqual(provider_paths.render({"GROK_HOME": "/root/.grok", "CLAUDE_CONFIG_DIR": "/root/.claude", "ANTIGRAVITY_HOME": "/root/.gemini/antigravity", "ANTIGRAVITY_CLI_HOME": "/root/.gemini/antigravity-cli"}), "")
         self.assertEqual(provider_paths.render({"CODEX_HOME": "auto"}, {"codex": {"home": "auto"}}), "")
+        unit = (args.module.parent / "systemd.service").read_text()
+        self.assertIn("-/root/.gemini/antigravity -/root/.gemini/antigravity-cli", unit)
+        self.assertIn("-/root/.gemini/antigravity-cli/settings.json", unit)
 
     def test_dsh_only_grants_sessions_and_storages_including_missing_directories(self):
         self.assertEqual(provider_paths.render({"DSH_HOME": "/root/.dsh"}), "")
@@ -38,7 +41,13 @@ class ProviderWritePathsTests(unittest.TestCase):
                 self.assertIn("-" + str(path), unit)
 
     def test_custom_roots_cover_indexes_and_protect_settings(self):
-        values = {"GROK_HOME": "/srv/fixture-grok", "CLAUDE_CONFIG_DIR": "/srv/fixture-claude", "CODEX_HOME": "/srv/fixture-codex"}
+        values = {
+            "GROK_HOME": "/srv/fixture-grok",
+            "CLAUDE_CONFIG_DIR": "/srv/fixture-claude",
+            "CODEX_HOME": "/srv/fixture-codex",
+            "ANTIGRAVITY_HOME": "/srv/fixture-antigravity",
+            "ANTIGRAVITY_CLI_HOME": "/srv/fixture-antigravity-cli",
+        }
         output = provider_paths.render(values, {"codex": {"home": "/srv/configured-codex"}})
         for value in [*values.values(), "/srv/configured-codex"]:
             self.assertIn(f'ReadWritePaths="-{value}"\n', output)
@@ -80,7 +89,12 @@ def systemd_fixture():
     # Every write belongs to this temporary fixture, never a native provider.
     with tempfile.TemporaryDirectory(prefix="agenthub-provider-test-", dir=Path.home()) as temporary:
         root = Path(temporary)
-        values = {"GROK_HOME": str(root / "grok"), "CLAUDE_CONFIG_DIR": str(root / "claude"), "CODEX_HOME": str(root / "codex")}
+        values = {
+            "GROK_HOME": str(root / "grok"),
+            "CLAUDE_CONFIG_DIR": str(root / "claude"),
+            "CODEX_HOME": str(root / "codex"),
+            "ANTIGRAVITY_CLI_HOME": str(root / "antigravity-cli"),
+        }
         for key, value in values.items():
             directory = Path(value)
             directory.mkdir()

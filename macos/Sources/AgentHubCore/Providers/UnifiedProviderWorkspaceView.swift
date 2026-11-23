@@ -16,12 +16,14 @@ public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
     public var running: Bool
     public var archived: Bool
     public var canRename: Bool
-    public var renameBlockReason: String?
+    public var renameBlockReason: String? = nil
     public var canArchive: Bool
+    public var archiveBlockReason: String? = nil
     public var canDelete: Bool
-    public var storageSize: SessionStorageSize?
-    public var readError: String?
-    public var readWarning: String?
+    public var deleteBlockReason: String? = nil
+    public var storageSize: SessionStorageSize? = nil
+    public var readError: String? = nil
+    public var readWarning: String? = nil
 
     public var id: String { sessionKey }
 }
@@ -981,7 +983,9 @@ public struct UnifiedProviderWorkspaceView: View {
             canRename: item.canRename,
             renameBlockReason: item.renameBlockReason,
             canArchive: item.canArchive,
+            archiveBlockReason: item.archiveBlockReason,
             canDelete: item.canDelete,
+            deleteBlockReason: item.deleteBlockReason,
             busy: model.batchBusy,
             latestReplyText: isHeaderMenu ? model.latestReplyText : nil,
             onRename: model.provider == .grokbot ? nil : {

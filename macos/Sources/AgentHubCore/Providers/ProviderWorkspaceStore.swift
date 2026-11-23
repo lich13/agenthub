@@ -1011,6 +1011,7 @@ final class ProviderWorkspaceStore: ObservableObject {
             renameBlockReason: item.renameBlockReason,
             canArchive: false,
             canDelete: true,
+            deleteBlockReason: item.deleteBlockReason,
             storageSize: item.storageSize,
             readError: item.readError,
             readWarning: item.readWarning
@@ -1113,6 +1114,8 @@ final class ProviderWorkspaceStore: ObservableObject {
             ("已归档", .neutral)
         } else if s.status == "running" {
             ("运行中", .info)
+        } else if s.readError != nil {
+            ("异常", .danger)
         } else {
             (nil, .neutral)
         }
@@ -1130,8 +1133,12 @@ final class ProviderWorkspaceStore: ObservableObject {
             canRename: s.canRename,
             renameBlockReason: s.renameBlockReason,
             canArchive: s.canArchive,
+            archiveBlockReason: s.archiveBlockReason,
             canDelete: s.canDelete,
-            storageSize: s.storageSize
+            deleteBlockReason: s.deleteBlockReason,
+            storageSize: s.storageSize,
+            readError: s.readError,
+            readWarning: s.readWarning
         )
     }
 }

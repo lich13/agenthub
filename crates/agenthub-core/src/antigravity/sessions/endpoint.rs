@@ -13,6 +13,107 @@ pub(super) struct LiveRpc {
     pub(super) token: String,
 }
 
+fn is_valid_csrf_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 256
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+fn candidate_daemon_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(custom) = std::env::var_os("ANTIGRAVITY_HOME").filter(|v| !v.is_empty()) {
+        dirs.push(PathBuf::from(custom).join("daemon"));
+    }
+    if let Ok(user_home) = crate::platform::current_home() {
+        let default_dir = user_home.join(".gemini/antigravity/daemon");
+        if !dirs.contains(&default_dir) {
+            dirs.push(default_dir);
+        }
+    }
+    dirs
+}
+
+pub(super) fn resolve_daemon_hub_endpoint(
+    daemon_dirs: &[PathBuf],
+    pid: u32,
+    expected_uid: u32,
+    listening_ports: &[u16],
+) -> Option<(Vec<u16>, String)> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    for dir in daemon_dirs {
+        let Ok(dir_meta) = fs::symlink_metadata(dir) else {
+            continue;
+        };
+        if !dir_meta.file_type().is_dir() || dir_meta.uid() != expected_uid {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("hub_") && n.ends_with(".json"))
+            })
+            .collect();
+        files.sort_by(|a, b| {
+            let ma = fs::symlink_metadata(a).ok().and_then(|m| m.modified().ok());
+            let mb = fs::symlink_metadata(b).ok().and_then(|m| m.modified().ok());
+            mb.cmp(&ma).then_with(|| b.cmp(a))
+        });
+        for path in files {
+            let Ok(file) = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)
+            else {
+                continue;
+            };
+            let Ok(meta) = file.metadata() else {
+                continue;
+            };
+            if !meta.is_file()
+                || meta.uid() != expected_uid
+                || meta.len() == 0
+                || meta.len() > 16 * 1024
+            {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            if file.take(16 * 1024 + 1).read_to_end(&mut bytes).is_err() || bytes.len() > 16 * 1024
+            {
+                continue;
+            }
+            let Ok(json) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            if json["pid"].as_u64() != Some(u64::from(pid)) {
+                continue;
+            }
+            let Some(http_port) = json["httpPort"]
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok())
+                .filter(|&p| p > 0 && listening_ports.contains(&p))
+            else {
+                continue;
+            };
+            let Some(token) = json["csrfToken"]
+                .as_str()
+                .filter(|t| is_valid_csrf_token(t))
+            else {
+                continue;
+            };
+            return Some((vec![http_port], token.to_owned()));
+        }
+    }
+    None
+}
+
 pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     use std::process::Command;
     let Ok(output) = Command::new("/bin/ps")
@@ -27,6 +128,13 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     // SAFETY: Reading the process UID takes no pointers or arguments.
     let uid = unsafe { libc::getuid() };
     let text = String::from_utf8_lossy(&output.stdout);
+    let lsof_bin = if Path::new("/usr/sbin/lsof").is_file() {
+        "/usr/sbin/lsof"
+    } else {
+        "lsof"
+    };
+    let daemon_dirs = candidate_daemon_dirs();
+    let mut seen_pids = BTreeSet::new();
     let mut candidates = Vec::new();
     for line in text.lines() {
         let mut parts = line.split_whitespace();
@@ -36,7 +144,7 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
         let Some(owner) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
         };
-        if owner != uid {
+        if owner != uid || seen_pids.contains(&pid) {
             continue;
         }
         let args: Vec<&str> = parts.collect();
@@ -52,26 +160,15 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
         if !is_antigravity {
             continue;
         }
-        let Some(token) = args
+        let cli_token = args
             .windows(2)
             .find(|w| w[0] == "--csrf_token")
-            .map(|w| w[1])
-        else {
-            continue;
-        };
-        if token.is_empty()
-            || token.len() > 256
-            || !token
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-        {
-            continue;
+            .map(|w| w[1]);
+        if let Some(token) = cli_token {
+            if !is_valid_csrf_token(token) {
+                continue;
+            }
         }
-        let lsof_bin = if Path::new("/usr/sbin/lsof").is_file() {
-            "/usr/sbin/lsof"
-        } else {
-            "lsof"
-        };
         let Ok(lsof) = Command::new(lsof_bin)
             .args([
                 "-Pan",
@@ -94,11 +191,26 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
             .collect();
         ports.sort_unstable();
         ports.dedup();
-        if !ports.is_empty() && ports.len() <= 8 {
+        if ports.is_empty() {
+            continue;
+        }
+        if let Some(token) = cli_token {
+            if ports.len() <= 8 {
+                seen_pids.insert(pid);
+                candidates.push(DiscoveredAntigravityEndpoint {
+                    pid,
+                    ports,
+                    token: token.to_owned(),
+                });
+            }
+        } else if let Some((hub_ports, token)) =
+            resolve_daemon_hub_endpoint(&daemon_dirs, pid, uid, &ports)
+        {
+            seen_pids.insert(pid);
             candidates.push(DiscoveredAntigravityEndpoint {
                 pid,
-                ports,
-                token: token.to_owned(),
+                ports: hub_ports,
+                token,
             });
         }
     }

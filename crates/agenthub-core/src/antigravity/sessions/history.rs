@@ -824,8 +824,12 @@ pub fn load_all_events(
     id: &str,
 ) -> Result<std::sync::Arc<Vec<ProviderHistoryEvent>>> {
     valid_cascade_id(id)?;
-    let endpoint = connect_endpoint(paths)?;
-    Ok(load_events_from_source(paths, id, endpoint.as_ref())?
+    if let Some(cli) = paths.cli_store_for_id(id) {
+        return Ok(load_events_from_source(&cli, id, None)?.events.clone());
+    }
+    let primary = paths.primary_store();
+    let endpoint = connect_endpoint(&primary)?;
+    Ok(load_events_from_source(&primary, id, endpoint.as_ref())?
         .events
         .clone())
 }
@@ -956,13 +960,26 @@ fn summary_and_events(
     std::sync::Arc<ProviderHistorySnapshot>,
 )> {
     valid_cascade_id(id)?;
-    let endpoint = connect_endpoint(paths)?;
+    if let Some(cli) = paths.cli_store_for_id(id) {
+        let summary = list_summaries_from_source(&cli, Some(id), None)?
+            .into_iter()
+            .next()
+            .context("未找到 Antigravity 会话")?;
+        let events = load_events_from_source(&cli, id, None)?;
+        return Ok((summary, events));
+    }
+    let primary = paths.primary_store();
+    let endpoint = connect_endpoint(&primary)?;
     let summary =
         list_summaries_from_source(paths, Some(id), endpoint.as_ref().map(|(_, value)| value))?
             .into_iter()
             .next()
             .context("未找到 Antigravity 会话")?;
-    let events = load_events_from_source(paths, id, endpoint.as_ref())?;
+    let store = paths.store_for_id(id, endpoint.as_ref().map(|(_, value)| value));
+    let store_ep = (store.home == primary.home)
+        .then_some(endpoint.as_ref())
+        .flatten();
+    let events = load_events_from_source(&store, id, store_ep)?;
     Ok((summary, events))
 }
 
@@ -971,7 +988,8 @@ pub fn session_detail(
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
     let (mut summary, events) = summary_and_events(paths, &request.session_key)?;
-    attach_storage_size(paths, &mut summary);
+    let store = paths.store_for_id(&summary.id, None);
+    attach_storage_size(&store, &mut summary);
     paginate_provider_detail(summary, &events, request)
 }
 

@@ -18,11 +18,13 @@ DEFAULT_ROOTS = {
     Path("/root/.dsh/sessions"),
     Path("/root/.dsh/storages"),
     Path("/root/.gemini/antigravity"),
+    Path("/root/.gemini/antigravity-cli"),
 }
 DEFAULT_DSH_HOMES = {Path("/root/.dsh")}
 PROTECTED_FILES = {
     "GROK_HOME": ("auth.json", "config.toml", "endpoint.env", "sandbox.toml", "trusted_folders.toml"),
     "CLAUDE_CONFIG_DIR": (".credentials.json", ".claude.json", "settings.json", "settings.local.json"),
+    "ANTIGRAVITY_CLI_HOME": ("settings.json",),
 }
 FORBIDDEN_ROOTS = {
     Path("/"),
@@ -38,6 +40,7 @@ SUPPORTED_KEYS = {
     "CLAUDE_CONFIG_DIR",
     "DSH_HOME",
     "ANTIGRAVITY_HOME",
+    "ANTIGRAVITY_CLI_HOME",
 }
 
 

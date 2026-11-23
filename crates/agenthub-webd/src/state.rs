@@ -99,9 +99,10 @@ impl AppState {
             let claude_cfg = sandbox.0.join(".claude");
             return Ok(agenthub_core::services::cleanup::UnifiedCleanupPaths {
                 codex,
-                antigravity: agenthub_core::antigravity::sessions::AntigravityPaths::offline(
-                    sandbox.0.join(".gemini/antigravity"),
-                ),
+                antigravity:
+                    agenthub_core::antigravity::sessions::AntigravityPaths::offline_user_home(
+                        &sandbox.0,
+                    ),
                 dsh: agenthub_core::dsh::DshPaths {
                     home: sandbox.0.join(".dsh"),
                 },

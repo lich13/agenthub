@@ -4,7 +4,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的原生 Swift 6（SwiftUI + AppKit）多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持直连原生 Codex 桌面端继续协作。
 
-v2.1.31 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0。早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。开始写入绑定记录身份的新密文后，二进制回退使用 v2.1.30，并保留原密钥。
+v2.1.32 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0。早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。开始写入绑定记录身份的新密文后，二进制回退使用 v2.1.30，并保留原密钥。
 
 v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）与 Rust 静态库（`agenthub-ffi`）架构，彻底退役 Tauri、WKWebView、前端 Node／pnpm 依赖与 Rust 中的 `objc2` 胶水；核心对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，支持增量行高缓存、代码块与宽表格纵向滚轮穿透、距顶 `200pt` 反向分页像素锚点锁定及自绘右键操作菜单，无缝沿用既有配置、数据库、系统钥匙串与更新签名体系。
 
@@ -12,7 +12,7 @@ v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）�
 
 | 核心维度 | 架构设计与特色能力 |
 | --- | --- |
-| **六大平台统一会话中枢** | 原生纳管 Codex、Claude Code、Grok Build、Grok Bot（本机 `.blob`／`.kblob` 近期缓存只读）、Antigravity 与 DeepSeek Harness；支持 `⌘F` 跨会话／单线程检索（上限 200 条）、一键复制线程 ID 与最优交接路径、本机 `在 Finder 中显示`（`⌘⇧R`）及 Codex／Grok Plan Markdown 导出。 |
+| **六大平台统一会话中枢** | 原生纳管 Codex、Claude Code、Grok Build、Grok Bot（本机 `.blob`／`.kblob` 近期缓存只读）、Antigravity（桌面端与 `agy` CLI 双目录统一纳管）与 DeepSeek Harness；支持 `⌘F` 跨会话／单线程检索（上限 200 条）、一键复制线程 ID 与最优交接路径、本机 `在 Finder 中显示`（`⌘⇧R`）及 Codex／Grok Plan Markdown 导出。 |
 | **本机 Codex 桌面直连协作** | 未归档本机 Codex 主线程可一键唤起原生 Codex 桌面或新建工作目录线程；支持 `⌘+Enter` 发送、运行中排队／补充注入／停止、本机加密持久化待发队列、文件与截图粘贴、`$` 技能／`@` 应用插件检索、模型／思考强度／Plan 模式切换与命令／diff 审批同步。 |
 | **无框流式排版与有界内存读取** | 保持文本与工具调用原始时序，同一回合连续思考与命令执行自动收敛为单行 `<details>` 披露块；距顶部 `200px` 无感反向分页并严格锁定可见消息像素偏移；共享 32 MiB／64 项历史缓存、300 秒空闲释放与 K／M／G 三级体积徽章（`< 100 MiB` 绿、`100–300 MiB` 琥珀、`>= 300 MiB` 红）。 |
 | **控制台优先 Probe 与五平台实时 Hooks** | 首屏汇聚全局主控、Bark 加密队列推送、六大平台通知一键开关与五平台 Hooks／Host 矩阵（Codex、Claude Code、Grok Build、Antigravity 一键安装／修复／移除 Hook，DSH 原生 `session.lock` + `.zstd` 流直连），实时回调（`<1 秒`）与 15 秒轮询共享 SQLite 原子幂等去重。 |
@@ -103,7 +103,7 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 
 ## 发布资产
 
-当前源码版本为 **2.1.31**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.32**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（macOS 应用内更新归档与 Minisign 签名）；

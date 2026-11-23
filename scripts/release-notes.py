@@ -8,6 +8,24 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.32": {
+        "summary": [
+            "统一纳管 agy CLI（~/.gemini/antigravity-cli）与 Antigravity.app 2.34.0 会话阅读、改名、归档与清理，并升级 url 修复安全公告"
+        ],
+        "features": [
+            "Antigravity 工作区同时扫描桌面端（ANTIGRAVITY_HOME / ~/.gemini/antigravity）与 agy CLI（ANTIGRAVITY_CLI_HOME / ~/.gemini/antigravity-cli），按主存储文件归属隔离跨端幽灵摘要，统一支持阅读、检索、体积统计、改名、归档／恢复、永久删除及 Linux 远端已归档会话统一清理。",
+        ],
+        "fixes": [
+            "兼容 Antigravity.app 2.34.0 的 daemon/hub_<httpPort>.json 端点发现，过滤过期 PID 文件并校验同用户属主与本机回环监听端口，恢复在线管理与 Bark 探针通知；agy CLI 触发共用 Stop Hook 时直接无操作快速返回。",
+            "离线改名与归档同步修补 conversation_summaries.raw_summary 的 ConversationAnnotations Protobuf 字段、将 FTS5 archived 改为整型 1／0 绑定、同步 cache/conversation_metadata.json 并失效四类 proto 缓存，确保与 agy --resume 状态一致。",
+            "识别 agy CLI 活跃根／子代理与 presence/<id>.lock 运行态并在离线改名、归档、恢复与删除前校验占用锁；永久删除纳入 conversation_parents 子代理表及 history.jsonl、conversation_metadata.json、last_conversations.json 原子清理，macOS 界面完整透传归档／删除禁用原因与读取诊断。",
+            "升级 url 至 >= 2.5.9（修复 RUSTSEC-2026-0592），Linux systemd 单元与自定义路径生成器补齐 antigravity-cli 读写白名单及 settings.json 只读保护。",
+        ],
+        "migration": [
+            "API 协议 2、数据库 schema 3。沿用已有配置、凭据与会话数据，先升级 Linux 服务再升级 Mac App；自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 v2.1.30。",
+            "从 v2.1.27 或更早直接升级且尚未迁移偏好的用户，需要重新选择主题及侧栏折叠状态；早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.31": {
         "summary": ["设置密钥、通知、桌面发送队列和附件索引开始写入绑定记录身份的密文。"],
         "fixes": [

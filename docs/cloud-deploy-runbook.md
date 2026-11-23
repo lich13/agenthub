@@ -15,7 +15,7 @@ AgentHub 的 Linux 版本通过 SSH 和私有 Unix 套接字提供业务 RPC 与
 - 日志：`/var/log/agenthub-webd/`
 - 通信：`/run/agenthub-webd/rpc.sock`，systemd 运行目录 0700、套接字 0600；固定 `rpc-stdio` 代理只转发通信
 
-保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude／Antigravity／DSH 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`ANTIGRAVITY_HOME`、`DSH_HOME`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
+保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude／Antigravity／DSH 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`ANTIGRAVITY_HOME`、`ANTIGRAVITY_CLI_HOME`、`DSH_HOME`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
 
 Grok 原生 leader 使用 `/var/lib/agenthub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
 
@@ -33,7 +33,7 @@ SSH 复用现有密钥、agent 与跳板配置，不复制私钥或保存密码�
 bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 ```
 
-v2.1.31 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。先升级服务再升级 App；保留安装回退、健康检查、现用密钥和通知队列，不再执行 HTTP/Nginx、旧目录或旧配置迁移。
+v2.1.32 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。先升级服务再升级 App；保留安装回退、健康检查、现用密钥和通知队列，不再执行 HTTP/Nginx、旧目录或旧配置迁移。
 
 ## 更新与回滚
 

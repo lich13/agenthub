@@ -77,6 +77,22 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         XCTAssertFalse(antiRow.map(\.label).contains("复制恢复命令"))
         XCTAssertEqual(antiRow.map(\.label), ["改名", "归档", "复制 ID", "复制路径", "在 Finder 中显示", "永久删除"])
 
+        let antiBlocked = ProviderMenuMatrixBuilder.buildActions(
+            provider: .antigravity, isHeaderMenu: false, isLocalMachine: true,
+            id: "ag-locked", path: "/Users/example/.gemini/antigravity-cli/conversations/ag-locked.db", cwd: "/Users/example/repo",
+            archived: false, canRename: false, renameBlockReason: "会话正在运行，请先在 Antigravity 中停止后再改名",
+            canArchive: false, archiveBlockReason: "会话正在运行，请先在 Antigravity 中停止后再归档",
+            canDelete: false, deleteBlockReason: "会话正在运行，请先在 Antigravity 中停止后再删除",
+            busy: false, latestReplyText: nil, onRename: noop, onToggleArchive: noop,
+            onCopy: copyNoop, onRevealInFinder: revealNoop, onDelete: noop
+        )
+        XCTAssertTrue(antiBlocked[0].disabled)
+        XCTAssertEqual(antiBlocked[0].reason, "会话正在运行，请先在 Antigravity 中停止后再改名")
+        XCTAssertTrue(antiBlocked[1].disabled)
+        XCTAssertEqual(antiBlocked[1].reason, "会话正在运行，请先在 Antigravity 中停止后再归档")
+        XCTAssertTrue(antiBlocked[5].disabled)
+        XCTAssertEqual(antiBlocked[5].reason, "会话正在运行，请先在 Antigravity 中停止后再删除")
+
         // GrokBot read-only: disables copy-path & reveal when path is empty
         let gbRow = ProviderMenuMatrixBuilder.buildActions(
             provider: .grokbot, isHeaderMenu: false, isLocalMachine: true,
@@ -102,6 +118,43 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         XCTAssertFalse(ProviderMenuMatrixBuilder.shouldTriggerBatchDeleteKey(keyCode: 51, charactersIgnoringModifiers: "\u{7F}", modifierFlags: []))
         XCTAssertTrue(ProviderMenuMatrixBuilder.shouldTriggerBatchDeleteKey(keyCode: 51, charactersIgnoringModifiers: "\u{7F}", modifierFlags: [.command]))
         XCTAssertTrue(ProviderMenuMatrixBuilder.shouldTriggerBatchDeleteKey(keyCode: 117, charactersIgnoringModifiers: "\u{F728}", modifierFlags: []))
+    }
+
+    @MainActor
+    func testProviderSummaryMapsArchiveDeleteBlockReasonsAndReadDiagnostics() {
+        let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
+        let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.provider-map.\(UUID().uuidString)")!
+        let runtime = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        let wsStore = ProviderWorkspaceStore(store: runtime, workspace: .antigravity, isCompactMobile: false)
+
+        let summary = ProviderSessionSummary(
+            id: "11111111-1111-4111-8111-111111111111",
+            sessionKey: "11111111-1111-4111-8111-111111111111",
+            title: "CLI 会话",
+            cwd: "/Users/example/repo",
+            path: "/Users/example/.gemini/antigravity-cli/conversations/11111111-1111-4111-8111-111111111111.db",
+            archived: false,
+            updatedAt: "2026-10-30T01:00:00Z",
+            messageCount: 2,
+            status: "idle",
+            formatVersion: "sqlite-offline",
+            canRename: false,
+            renameBlockReason: "禁止改名原因",
+            canArchive: false,
+            archiveBlockReason: "禁止归档原因",
+            canDelete: false,
+            deleteBlockReason: "禁止删除原因",
+            readError: "索引读取异常",
+            readWarning: "部分步骤未加载"
+        )
+        let mapped = wsStore.mapProviderSummary(summary)
+        XCTAssertEqual(mapped.renameBlockReason, "禁止改名原因")
+        XCTAssertEqual(mapped.archiveBlockReason, "禁止归档原因")
+        XCTAssertEqual(mapped.deleteBlockReason, "禁止删除原因")
+        XCTAssertEqual(mapped.readError, "索引读取异常")
+        XCTAssertEqual(mapped.readWarning, "部分步骤未加载")
+        XCTAssertEqual(mapped.statusChipBadge, "异常")
+        XCTAssertEqual(mapped.statusChipTone, .danger)
     }
 
     // MARK: - 2. Offscreen NSTableView 0.0pt Scroll Anchor Lock & ±240pt Thumbnail Eviction

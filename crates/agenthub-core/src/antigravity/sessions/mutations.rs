@@ -1,5 +1,70 @@
 use super::*;
 
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn patch_db_raw_summary(
+    conn: &Connection,
+    id: &str,
+    new_title: Option<&str>,
+    new_archived: Option<bool>,
+) {
+    let Ok(mut stmt) =
+        conn.prepare("SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?1")
+    else {
+        return;
+    };
+    let Ok(Some(blob)) = stmt.query_row(params![id], |row| row.get::<_, Option<Vec<u8>>>(0)) else {
+        return;
+    };
+    if let Some(patched) =
+        patch_raw_summary_annotations(&blob, new_title, new_archived, now_unix_secs())
+    {
+        let _ = conn.execute(
+            "UPDATE conversation_summaries SET raw_summary = ?1 WHERE conversation_id = ?2",
+            params![patched, id],
+        );
+    }
+}
+
+fn resolve_target_store_and_endpoint(
+    paths: &AntigravityPaths,
+    key: &str,
+) -> Result<(AntigravityPaths, Option<(LiveRpc, Value)>)> {
+    if let Some(cli) = paths.cli_store_for_id(key) {
+        return Ok((cli, None));
+    }
+    let primary = paths.primary_store();
+    let ep = connect_endpoint(&primary)?;
+    let store = paths.store_for_id(key, ep.as_ref().map(|(_, v)| v));
+    if store.home == primary.home {
+        Ok((primary, ep))
+    } else {
+        Ok((store, None))
+    }
+}
+
+fn ensure_offline_unlocked(store: &AntigravityPaths, root_id: &str, verb: &str) -> Result<()> {
+    ensure!(
+        !is_presence_locked_shared(store, root_id),
+        "会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
+    );
+    if store.summaries_db().is_file() {
+        let children = read_children_map(store, None)?;
+        for child in descendant_ids(&children, root_id) {
+            ensure!(
+                !is_presence_locked_shared(store, &child),
+                "子会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn rename_session(
     paths: &AntigravityPaths,
     key: &str,
@@ -14,9 +79,10 @@ pub fn rename_session(
         .take(MAX_TITLE_CHARS)
         .collect();
     ensure!(!title.is_empty(), "会话名称不能为空");
-    let _existing = session_summary(paths, key)?;
+    let existing = session_summary_without_storage(paths, key)?;
+    let (store, endpoint) = resolve_target_store_and_endpoint(paths, key)?;
 
-    if let Some((rpc, _)) = connect_endpoint(paths)? {
+    if let Some((rpc, _)) = endpoint {
         connect_rpc_post(
             rpc.port,
             &rpc.token,
@@ -28,21 +94,40 @@ pub fn rename_session(
             }),
         )?;
     } else {
-        write_annotation_overlay(paths, key, Some(&title), None)?;
-        let db_path = paths.summaries_db();
+        ensure!(
+            existing.status != "running",
+            "会话正在运行，请先在 Antigravity 中停止后再改名"
+        );
+        ensure_offline_unlocked(&store, key, "改名")?;
+        write_annotation_overlay(&store, key, Some(&title), None)?;
+        let db_path = store.summaries_db();
         if db_path.is_file() {
             if let Ok(conn) = Connection::open(&db_path) {
                 let _ = conn.execute(
                     "UPDATE conversation_summaries SET title = ?1 WHERE conversation_id = ?2",
                     params![title, key],
                 );
+                patch_db_raw_summary(&conn, key, Some(&title), None);
                 let _ = conn.execute(
                     "UPDATE conversations_fts SET title = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
                     params![title, key],
                 );
             }
         }
-        invalidate_proto_cache(paths);
+        let metadata_path = store.home.join("cache/conversation_metadata.json");
+        if session_delete::within(&store.home, &metadata_path) {
+            session_delete::edit_json(&metadata_path, |doc| {
+                if let Some(entry) = doc
+                    .get_mut("conversations")
+                    .and_then(Value::as_object_mut)
+                    .and_then(|map| map.get_mut(key))
+                    .and_then(Value::as_object_mut)
+                {
+                    entry.insert("summary".into(), Value::String(title.clone()));
+                }
+            })?;
+        }
+        invalidate_proto_cache(&store);
     }
     session_summary(paths, key)
 }
@@ -53,9 +138,10 @@ pub fn set_archived(
     archived: bool,
 ) -> Result<ProviderSessionSummary> {
     valid_cascade_id(key)?;
-    let _existing = session_summary(paths, key)?;
+    let existing = session_summary_without_storage(paths, key)?;
+    let (store, endpoint) = resolve_target_store_and_endpoint(paths, key)?;
 
-    if let Some((rpc, _)) = connect_endpoint(paths)? {
+    if let Some((rpc, _)) = endpoint {
         connect_rpc_post(
             rpc.port,
             &rpc.token,
@@ -75,23 +161,30 @@ pub fn set_archived(
             );
         }
     } else {
-        write_annotation_overlay(paths, key, None, Some(archived))?;
-        let db_path = paths.summaries_db();
+        let verb = if archived { "归档" } else { "恢复" };
+        ensure!(
+            existing.status != "running",
+            "会话正在运行，请先在 Antigravity 中停止后再{verb}"
+        );
+        ensure_offline_unlocked(&store, key, verb)?;
+        write_annotation_overlay(&store, key, None, Some(archived))?;
+        let db_path = store.summaries_db();
         if db_path.is_file() {
             if let Ok(conn) = Connection::open(&db_path) {
-                let flag = if archived { "1" } else { "0" };
+                patch_db_raw_summary(&conn, key, None, Some(archived));
+                let flag = i64::from(archived);
                 let _ = conn.execute(
                     "UPDATE conversations_fts SET archived = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
                     params![flag, key],
                 );
             }
         }
-        invalidate_proto_cache(paths);
+        invalidate_proto_cache(&store);
     }
     session_summary(paths, key)
 }
 
-fn is_presence_locked_shared(paths: &AntigravityPaths, id: &str) -> bool {
+pub(super) fn is_presence_locked_shared(paths: &AntigravityPaths, id: &str) -> bool {
     let lock_path = paths.presence_dir().join(format!("{id}.lock"));
     if !lock_path.is_file() {
         return false;
@@ -184,6 +277,24 @@ fn read_children_map(
                 children_map.entry(pid).or_default().push(cid);
             }
         }
+        if super::has_conversation_parents_table(&conn) {
+            let mut pstmt = conn
+                .prepare(
+                    "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
+                )
+                .context("无法读取 Antigravity conversation_parents 子会话表")?;
+            let prows = pstmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .context("无法查询 Antigravity conversation_parents 关系")?;
+            for row in prows {
+                let (cid, pid) = row.context("解码 Antigravity conversation_parents 行失败")?;
+                if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                    children_map.entry(pid).or_default().push(cid);
+                }
+            }
+        }
     }
     if let Some(map) = all_live.and_then(|v| v["trajectorySummaries"].as_object()) {
         for (cid, item) in map {
@@ -215,7 +326,10 @@ fn read_children_map(
     Ok(children_map)
 }
 
-fn descendant_ids(children_map: &BTreeMap<String, Vec<String>>, root_id: &str) -> Vec<String> {
+pub(super) fn descendant_ids(
+    children_map: &BTreeMap<String, Vec<String>>,
+    root_id: &str,
+) -> Vec<String> {
     let mut result = BTreeSet::new();
     let mut stack = vec![root_id.to_owned()];
     while let Some(curr) = stack.pop() {
@@ -267,43 +381,147 @@ pub fn preview_batch_item(
     preview_batch(paths, &[key.to_owned()], operation, include_descendants).remove(0)
 }
 
+fn clean_store_shared_files(
+    store: &AntigravityPaths,
+    deleted_ids: &[String],
+    outcome: &mut Outcome,
+) {
+    let deleted_set: BTreeSet<&str> = deleted_ids.iter().map(String::as_str).collect();
+    let history_path = store.home.join("history.jsonl");
+    if session_delete::within(&store.home, &history_path) {
+        outcome.attempt(&history_path, || {
+            session_delete::filter_jsonl(&history_path, |row| {
+                row.get("conversationId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|cid| deleted_set.contains(cid))
+            })
+        });
+    }
+    let metadata_path = store.home.join("cache/conversation_metadata.json");
+    if session_delete::within(&store.home, &metadata_path) {
+        outcome.attempt(&metadata_path, || {
+            session_delete::edit_json(&metadata_path, |doc| {
+                if let Some(convs) = doc.get_mut("conversations").and_then(Value::as_object_mut) {
+                    for id in &deleted_set {
+                        convs.remove(*id);
+                    }
+                }
+            })
+        });
+    }
+    let last_conv_path = store.home.join("cache/last_conversations.json");
+    if session_delete::within(&store.home, &last_conv_path) {
+        outcome.attempt(&last_conv_path, || {
+            session_delete::edit_json(&last_conv_path, |doc| {
+                if let Some(map) = doc.as_object_mut() {
+                    map.retain(|_, val| !val.as_str().is_some_and(|cid| deleted_set.contains(cid)));
+                }
+            })
+        });
+    }
+}
+
+fn clean_other_store_mirror_rows(other: &AntigravityPaths, deleted_ids: &[String]) {
+    let db_path = other.summaries_db();
+    if !db_path.is_file() {
+        return;
+    }
+    let Ok(conn) = Connection::open(&db_path) else {
+        return;
+    };
+    let has_parents = super::has_conversation_parents_table(&conn);
+    let mut touched = false;
+    for id in deleted_ids {
+        if has_primary_session_storage(other, id) || is_presence_locked_shared(other, id) {
+            continue;
+        }
+        if conn
+            .execute(
+                "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
+                params![id],
+            )
+            .unwrap_or(0)
+            > 0
+        {
+            touched = true;
+        }
+        if conn
+            .execute(
+                "DELETE FROM conversations_fts WHERE conversation_id = ?1",
+                params![id],
+            )
+            .unwrap_or(0)
+            > 0
+        {
+            touched = true;
+        }
+        if has_parents {
+            let _ = conn.execute(
+                "DELETE FROM conversation_parents WHERE conversation_id = ?1",
+                params![id],
+            );
+        }
+    }
+    if touched {
+        invalidate_proto_cache(other);
+    }
+}
+
 pub fn preview_batch(
     paths: &AntigravityPaths,
     keys: &[String],
     operation: SessionOperation,
     include_descendants: bool,
 ) -> Vec<Result<SessionBatchItem>> {
+    let primary = paths.primary_store();
+    let cli = paths.cli_store();
     let context = (|| -> Result<_> {
-        let live = connect_endpoint(paths)?.map(|(_, payload)| payload);
+        let live = connect_endpoint(&primary)?.map(|(_, payload)| payload);
         let summaries = list_summaries_from_source(paths, None, live.as_ref())?
             .into_iter()
             .map(|summary| (summary.id.clone(), summary))
             .collect::<BTreeMap<_, _>>();
-        let children = if operation == SessionOperation::Delete {
-            read_children_map(paths, live.as_ref())?
+        let primary_children = if operation == SessionOperation::Delete || live.is_none() {
+            read_children_map(&primary, live.as_ref())?
         } else {
             BTreeMap::new()
         };
-        Ok((live, summaries, children))
+        let cli_children = match &cli {
+            Some(c) if c.summaries_db().is_file() => read_children_map(c, None)?,
+            _ => BTreeMap::new(),
+        };
+        Ok((live, summaries, primary_children, cli_children))
     })();
     keys.iter()
         .map(|key| {
             valid_cascade_id(key)?;
-            let (live, summaries, children) = context
+            let (live, summaries, primary_children, cli_children) = context
                 .as_ref()
                 .map_err(|error| anyhow::anyhow!("{error:#}"))?;
             let summary = summaries
                 .get(key)
                 .with_context(|| format!("未找到 Antigravity 会话：{key}"))?
                 .clone();
-            preview_from_summary(
-                paths,
-                summary,
-                live.as_ref(),
-                children,
-                operation,
-                include_descendants,
-            )
+            let store = paths.store_for_id(key, live.as_ref());
+            if cli.as_ref().is_some_and(|c| c.home == store.home) {
+                preview_from_summary(
+                    &store,
+                    summary,
+                    None,
+                    cli_children,
+                    operation,
+                    include_descendants,
+                )
+            } else {
+                preview_from_summary(
+                    &primary,
+                    summary,
+                    live.as_ref(),
+                    primary_children,
+                    operation,
+                    include_descendants,
+                )
+            }
         })
         .collect()
 }
@@ -326,6 +544,31 @@ fn preview_from_summary(
                 .as_deref()
                 .unwrap_or("会话正在运行，无法删除")
         );
+    }
+    if all_live.is_none() && operation != SessionOperation::Delete {
+        let verb = if operation == SessionOperation::Archive {
+            "归档"
+        } else {
+            "恢复"
+        };
+        if summary.status == "running" {
+            bail!(
+                "{}",
+                summary.archive_block_reason.as_deref().unwrap_or(&format!(
+                    "会话正在运行，请先在 Antigravity 中停止后再{verb}"
+                ))
+            );
+        }
+        ensure!(
+            !is_presence_locked_shared(paths, &summary.id),
+            "会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
+        );
+        for child in descendant_ids(children, &summary.id) {
+            ensure!(
+                !is_presence_locked_shared(paths, &child),
+                "子会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
+            );
+        }
     }
     if operation == SessionOperation::Delete
         && all_live.is_none()
@@ -416,13 +659,14 @@ pub fn execute_batch_item(
             })
         }
         SessionOperation::Delete => {
-            let summary = session_summary(paths, key)?;
-            let (live_rpc, all_live) = match connect_endpoint(paths)? {
+            let summary = session_summary_without_storage(paths, key)?;
+            let (store, endpoint) = resolve_target_store_and_endpoint(paths, key)?;
+            let (live_rpc, all_live) = match endpoint {
                 Some((rpc, live)) => (Some(rpc), Some(live)),
                 None => (None, None),
             };
             let verified_descendants =
-                find_descendant_ids_with_live(paths, all_live.as_ref(), key)?;
+                find_descendant_ids_with_live(&store, all_live.as_ref(), key)?;
             let verified_set: BTreeSet<&str> =
                 verified_descendants.iter().map(String::as_str).collect();
             for child in descendants {
@@ -438,7 +682,7 @@ pub fn execute_batch_item(
             );
             if live_rpc.is_none() {
                 ensure!(
-                    !is_presence_locked_shared(paths, key),
+                    !is_presence_locked_shared(&store, key),
                     "会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                 );
             }
@@ -449,7 +693,7 @@ pub fn execute_batch_item(
                 );
                 if live_rpc.is_none() {
                     ensure!(
-                        !is_presence_locked_shared(paths, child),
+                        !is_presence_locked_shared(&store, child),
                         "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                     );
                 }
@@ -463,7 +707,7 @@ pub fn execute_batch_item(
                 .collect();
             ordered_ids.push(key.to_owned());
 
-            let db_path = paths.summaries_db();
+            let db_path = store.summaries_db();
             let offline_conn = if live_rpc.is_none() && db_path.is_file() {
                 Some(
                     Connection::open(&db_path)
@@ -472,6 +716,9 @@ pub fn execute_batch_item(
             } else {
                 None
             };
+            let has_parents_table = offline_conn
+                .as_ref()
+                .is_some_and(super::has_conversation_parents_table);
 
             let mut outcome = Outcome::default();
             let mut deleted_ids = Vec::new();
@@ -485,7 +732,7 @@ pub fn execute_batch_item(
                     ) {
                         outcome.residuals.push(format!("{id}: {err}"));
                         record_remaining_antigravity_residuals(
-                            paths,
+                            &store,
                             &ordered_ids[idx..],
                             &mut outcome,
                         );
@@ -494,7 +741,7 @@ pub fn execute_batch_item(
                 }
 
                 let mut disk_failed = false;
-                for path in owned_disk_paths(paths, id) {
+                for path in owned_disk_paths(&store, id) {
                     if !outcome.remove_strict(&path) {
                         disk_failed = true;
                         break;
@@ -502,7 +749,7 @@ pub fn execute_batch_item(
                 }
                 if disk_failed {
                     record_remaining_antigravity_residuals(
-                        paths,
+                        &store,
                         &ordered_ids[idx..],
                         &mut outcome,
                     );
@@ -518,7 +765,7 @@ pub fn execute_batch_item(
                             .residuals
                             .push(format!("{}: {err}", db_path.display()));
                         record_remaining_antigravity_residuals(
-                            paths,
+                            &store,
                             &ordered_ids[idx + 1..],
                             &mut outcome,
                         );
@@ -528,12 +775,22 @@ pub fn execute_batch_item(
                         "DELETE FROM conversations_fts WHERE conversation_id = ?1",
                         params![id],
                     );
+                    if has_parents_table {
+                        let _ = conn.execute(
+                            "DELETE FROM conversation_parents WHERE conversation_id = ?1",
+                            params![id],
+                        );
+                    }
                 }
                 deleted_ids.push(id.clone());
             }
 
-            if live_rpc.is_none() && !deleted_ids.is_empty() {
-                invalidate_proto_cache(paths);
+            if !deleted_ids.is_empty() {
+                clean_store_shared_files(&store, &deleted_ids, &mut outcome);
+                invalidate_proto_cache(&store);
+                if let Some(other) = paths.other_store_for(&store.home) {
+                    clean_other_store_mirror_rows(&other, &deleted_ids);
+                }
             }
             outcome.finish();
             Ok(SessionBatchItemResult {

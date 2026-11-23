@@ -26,16 +26,19 @@ use crate::{
 };
 
 mod endpoint;
-#[cfg(test)]
-use endpoint::parse_loopback_listener_port;
 use endpoint::{connect_endpoint, connect_rpc_post, service_unreachable, LiveRpc};
 pub use endpoint::{
     discover_host_endpoints, evict_idle_endpoint_cache, get_cached_live_endpoint,
     record_endpoint_failure, record_verified_live_endpoint, DiscoveredAntigravityEndpoint,
 };
+#[cfg(test)]
+use endpoint::{parse_loopback_listener_port, resolve_daemon_hub_endpoint};
 
 mod annotations;
-use annotations::{invalidate_proto_cache, read_annotation_overlay, write_annotation_overlay};
+use annotations::{
+    invalidate_proto_cache, patch_raw_summary_annotations, read_annotation_overlay,
+    read_raw_summary_annotations, write_annotation_overlay,
+};
 
 mod history;
 #[cfg(test)]
@@ -43,7 +46,7 @@ use history::{extract_live_step_events, load_events_from_source, read_offline_tr
 pub use history::{load_all_events, read_attachment, session_detail};
 
 mod mutations;
-use mutations::owned_disk_paths;
+use mutations::{descendant_ids, is_presence_locked_shared};
 pub use mutations::{
     execute_batch_item, live_item_is_running, preview_batch, preview_batch_item, rename_session,
     set_archived,
@@ -57,6 +60,7 @@ const MAX_TITLE_CHARS: usize = 200;
 #[derive(Debug, Clone)]
 pub struct AntigravityPaths {
     pub home: PathBuf,
+    pub cli_home: Option<PathBuf>,
     /// Explicit endpoint mode used by isolated tests so tests never probe real host processes.
     pub rpc_mode: RpcMode,
 }
@@ -74,15 +78,42 @@ pub enum RpcMode {
 
 impl AntigravityPaths {
     pub fn default_for_user() -> Result<Self> {
+        let home = crate::platform::provider_root("ANTIGRAVITY_HOME", ".gemini/antigravity")?;
+        let cli_home = match std::env::var_os("ANTIGRAVITY_CLI_HOME").filter(|v| !v.is_empty()) {
+            Some(custom) => Some(PathBuf::from(custom)),
+            None if std::env::var_os("ANTIGRAVITY_HOME")
+                .filter(|v| !v.is_empty())
+                .is_none() =>
+            {
+                Some(crate::platform::current_home()?.join(".gemini/antigravity-cli"))
+            }
+            None => None,
+        }
+        .filter(|cli| cli != &home);
         Ok(Self {
-            home: crate::platform::provider_root("ANTIGRAVITY_HOME", ".gemini/antigravity")?,
-            rpc_mode: RpcMode::AutoDiscover,
+            home,
+            cli_home,
+            rpc_mode: if cfg!(target_os = "macos") {
+                RpcMode::AutoDiscover
+            } else {
+                RpcMode::OfflineOnly
+            },
         })
     }
 
     pub fn offline(home: PathBuf) -> Self {
         Self {
             home,
+            cli_home: None,
+            rpc_mode: RpcMode::OfflineOnly,
+        }
+    }
+
+    pub fn offline_user_home(user_home: impl AsRef<Path>) -> Self {
+        let base = user_home.as_ref();
+        Self {
+            home: base.join(".gemini/antigravity"),
+            cli_home: Some(base.join(".gemini/antigravity-cli")),
             rpc_mode: RpcMode::OfflineOnly,
         }
     }
@@ -91,6 +122,7 @@ impl AntigravityPaths {
     pub fn with_fixed_rpc(home: PathBuf, port: u16, token: impl Into<String>) -> Self {
         Self {
             home,
+            cli_home: None,
             rpc_mode: RpcMode::Fixed {
                 port,
                 token: token.into(),
@@ -98,8 +130,79 @@ impl AntigravityPaths {
         }
     }
 
+    #[cfg(test)]
+    pub fn with_fixed_rpc_and_cli(
+        home: PathBuf,
+        cli_home: PathBuf,
+        port: u16,
+        token: impl Into<String>,
+    ) -> Self {
+        Self {
+            home,
+            cli_home: Some(cli_home),
+            rpc_mode: RpcMode::Fixed {
+                port,
+                token: token.into(),
+            },
+        }
+    }
+
+    pub(super) fn primary_store(&self) -> Self {
+        Self {
+            home: self.home.clone(),
+            cli_home: None,
+            rpc_mode: self.rpc_mode.clone(),
+        }
+    }
+
+    pub(super) fn cli_store(&self) -> Option<Self> {
+        self.cli_home
+            .as_ref()
+            .filter(|cli| *cli != &self.home)
+            .map(|cli| Self::offline(cli.clone()))
+    }
+
+    pub(super) fn cli_store_for_id(&self, id: &str) -> Option<Self> {
+        let cli = self.cli_store()?;
+        (!has_primary_session_storage(self, id) && has_primary_session_storage(&cli, id))
+            .then_some(cli)
+    }
+
+    pub(super) fn store_for_id(&self, id: &str, live: Option<&Value>) -> Self {
+        if live
+            .and_then(|v| v["trajectorySummaries"].get(id))
+            .is_some()
+            || has_primary_session_storage(self, id)
+        {
+            return self.primary_store();
+        }
+        self.cli_store()
+            .filter(|cli| has_primary_session_storage(cli, id))
+            .unwrap_or_else(|| self.primary_store())
+    }
+
+    pub(super) fn other_store_for(&self, chosen_home: &Path) -> Option<Self> {
+        if chosen_home == self.home {
+            self.cli_store()
+        } else {
+            Some(self.primary_store())
+        }
+    }
+
+    pub fn is_cli_only_session_default(id: &str) -> bool {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return false;
+        }
+        let Ok(paths) = Self::default_for_user() else {
+            return false;
+        };
+        paths.cli_store_for_id(id).is_some()
+    }
+
     pub fn available(&self) -> bool {
-        self.home.is_dir() || connect_endpoint(self).is_ok_and(|endpoint| endpoint.is_some())
+        self.home.is_dir()
+            || self.cli_home.as_ref().is_some_and(|p| p.is_dir())
+            || connect_endpoint(&self.primary_store()).is_ok_and(|endpoint| endpoint.is_some())
     }
 
     pub fn summaries_db(&self) -> PathBuf {
@@ -277,6 +380,34 @@ fn attach_storage_size(paths: &AntigravityPaths, summary: &mut ProviderSessionSu
     summary.storage_size = Some(size);
 }
 
+pub(super) fn has_primary_session_storage(store: &AntigravityPaths, id: &str) -> bool {
+    if uuid::Uuid::parse_str(id).is_err() || !store.home.is_dir() {
+        return false;
+    }
+    [
+        store.conversations_dir().join(format!("{id}.db")),
+        store.conversations_dir().join(format!("{id}.pb")),
+        store.brain_dir().join(id),
+    ]
+    .into_iter()
+    .any(|p| p.exists() && session_delete::within(&store.home, &p))
+}
+
+fn offline_status_is_active(status: &str, not_fully_idle: bool) -> bool {
+    not_fully_idle
+        || matches!(
+            status.trim(),
+            "CASCADE_RUN_STATUS_RUNNING"
+                | "CASCADE_RUN_STATUS_BUSY"
+                | "CASCADE_RUN_STATUS_WAITING"
+                | "CASCADE_RUN_STATUS_CANCELING"
+                | "RUNNING"
+                | "BUSY"
+                | "WAITING"
+                | "CANCELING"
+        )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn make_summary(
     paths: &AntigravityPaths,
@@ -297,6 +428,7 @@ fn make_summary(
     } else {
         "idle"
     };
+    let offline_running = running && format_version == "sqlite-offline";
     ProviderSessionSummary {
         storage_size: None,
         session_key: id.clone(),
@@ -310,10 +442,12 @@ fn make_summary(
         last_message,
         status: status.into(),
         format_version: format_version.into(),
-        can_rename: true,
-        rename_block_reason: None,
-        can_archive: true,
-        archive_block_reason: None,
+        can_rename: !offline_running,
+        rename_block_reason: offline_running
+            .then(|| "会话正在运行，请先在 Antigravity 中停止后再改名".into()),
+        can_archive: !offline_running,
+        archive_block_reason: offline_running
+            .then(|| "会话正在运行，请先在 Antigravity 中停止后再归档".into()),
         can_delete: !running,
         delete_block_reason: running
             .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
@@ -394,6 +528,25 @@ fn summary_from_live_json(
     ))
 }
 
+fn summaries_table_columns(conn: &Connection) -> BTreeSet<String> {
+    let Ok(mut stmt) = conn.prepare("PRAGMA table_info(conversation_summaries)") else {
+        return BTreeSet::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return BTreeSet::new();
+    };
+    rows.flatten().collect()
+}
+
+pub(super) fn has_conversation_parents_table(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'conversation_parents' LIMIT 1",
+        [],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 fn list_offline_summaries(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
@@ -402,6 +555,10 @@ fn list_offline_summaries(
         return Ok(Vec::new());
     }
     let mut by_id: BTreeMap<String, ProviderSessionSummary> = BTreeMap::new();
+    let mut known_subagents: BTreeSet<String> = BTreeSet::new();
+    let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut sqlite_active_ids: BTreeSet<String> = BTreeSet::new();
+    let mut had_any_db_summary = false;
     let db_path = paths.summaries_db();
     if db_path.is_file() {
         if let Ok(conn) = Connection::open_with_flags(
@@ -425,13 +582,61 @@ fn list_offline_summaries(
                     }
                 }
             }
-            if let Ok(mut stmt) = conn.prepare(
+            if has_conversation_parents_table(&conn) {
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
+                ) {
+                    if let Ok(rows) = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    }) {
+                        for (cid, pid) in rows.flatten() {
+                            if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                                known_subagents.insert(cid.clone());
+                                children_map.entry(pid).or_default().push(cid);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let cols = summaries_table_columns(&conn);
+            let status_expr = if cols.contains("status") {
+                "COALESCE(status, '')"
+            } else {
+                "''"
+            };
+            let idle_expr = if cols.contains("not_fully_idle") {
+                "not_fully_idle"
+            } else {
+                "0"
+            };
+            let raw_expr = if cols.contains("raw_summary") {
+                "raw_summary"
+            } else {
+                "NULL"
+            };
+            let sql = format!(
                 "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
                  COALESCE(step_count, 0), COALESCE(last_modified_time, ''), \
                  COALESCE(workspace_uris, ''), COALESCE(parent_conversation_id, ''), \
-                 COALESCE(nesting_depth, 0) \
-                 FROM conversation_summaries",
-            ) {
+                 COALESCE(nesting_depth, 0), {status_expr}, {idle_expr}, {raw_expr} \
+                 FROM conversation_summaries"
+            );
+            type OfflineRow = (
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                String,
+                i64,
+                String,
+                bool,
+                Option<Vec<u8>>,
+            );
+            let mut root_rows: Vec<OfflineRow> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(&sql) {
                 if let Ok(rows) = stmt.query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -442,66 +647,123 @@ fn list_offline_summaries(
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, ValueOrString>(9).map(|v| v.0).unwrap_or(false),
+                        row.get::<_, Option<Vec<u8>>>(10).ok().flatten(),
                     ))
                 }) {
-                    for (id, db_title, preview, steps, modified, ws_raw, parent, depth) in
-                        rows.flatten()
-                    {
-                        if filter_id.is_some_and(|target| target != id)
-                            || uuid::Uuid::parse_str(&id).is_err()
-                            || !parent.is_empty()
-                            || depth > 0
-                        {
+                    for row in rows.flatten() {
+                        let (
+                            ref id,
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            ref parent,
+                            depth,
+                            ref status_str,
+                            not_fully_idle,
+                            _,
+                        ) = row;
+                        if uuid::Uuid::parse_str(id).is_err() {
                             continue;
                         }
-                        let overlay = read_annotation_overlay(paths, &id);
-                        let archived = overlay
-                            .archived
-                            .or_else(|| fts_archived.get(&id).copied())
-                            .unwrap_or(false);
-                        let title = overlay
-                            .title
-                            .filter(|s| !s.trim().is_empty())
-                            .or_else(|| {
-                                let t = db_title.trim();
-                                (!t.is_empty()).then(|| t.to_owned())
-                            })
-                            .or_else(|| {
-                                let p = preview.trim();
-                                (!p.is_empty()).then(|| p.chars().take(80).collect())
-                            })
-                            .unwrap_or_else(|| "未命名会话".into());
-                        let cwd = serde_json::from_str::<Vec<String>>(&ws_raw)
-                            .ok()
-                            .and_then(|uris| uris.into_iter().next())
-                            .map(|uri| decode_file_uri(&uri))
-                            .unwrap_or_default();
-                        let summary = make_summary(
-                            paths,
-                            id.clone(),
-                            title,
-                            cwd,
-                            archived,
-                            index_timestamp(&modified),
-                            steps.max(0) as usize,
-                            (!preview.trim().is_empty()).then_some(preview),
-                            false,
-                            "sqlite-offline",
-                        );
-                        by_id.insert(id, summary);
+                        if offline_status_is_active(status_str, not_fully_idle) {
+                            sqlite_active_ids.insert(id.clone());
+                        }
+                        if !parent.is_empty() || depth > 0 {
+                            known_subagents.insert(id.clone());
+                            if !parent.is_empty() {
+                                children_map
+                                    .entry(parent.clone())
+                                    .or_default()
+                                    .push(id.clone());
+                            }
+                            continue;
+                        }
+                        root_rows.push(row);
                     }
                 }
+            }
+
+            for (id, db_title, preview, steps, modified, ws_raw, _, _, _, _, raw_summary) in
+                root_rows
+            {
+                if known_subagents.contains(&id) || !has_primary_session_storage(paths, &id) {
+                    continue;
+                }
+                had_any_db_summary = true;
+                if filter_id.is_some_and(|target| target != id) {
+                    continue;
+                }
+                let overlay = read_annotation_overlay(paths, &id);
+                let raw_overlay = raw_summary
+                    .as_deref()
+                    .map(read_raw_summary_annotations)
+                    .unwrap_or_default();
+                let archived = overlay
+                    .archived
+                    .or(raw_overlay.archived)
+                    .or_else(|| fts_archived.get(&id).copied())
+                    .unwrap_or(false);
+                let title = overlay
+                    .title
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| raw_overlay.title.filter(|s| !s.trim().is_empty()))
+                    .or_else(|| {
+                        let t = db_title.trim();
+                        (!t.is_empty()).then(|| t.to_owned())
+                    })
+                    .or_else(|| {
+                        let p = preview.trim();
+                        (!p.is_empty()).then(|| p.chars().take(80).collect())
+                    })
+                    .unwrap_or_else(|| "未命名会话".into());
+                let cwd = serde_json::from_str::<Vec<String>>(&ws_raw)
+                    .ok()
+                    .and_then(|uris| uris.into_iter().next())
+                    .map(|uri| decode_file_uri(&uri))
+                    .unwrap_or_default();
+                let running = if archived {
+                    false
+                } else {
+                    let descendants = descendant_ids(&children_map, &id);
+                    let tree_active = sqlite_active_ids.contains(&id)
+                        || descendants.iter().any(|d| sqlite_active_ids.contains(d));
+                    tree_active
+                        && (is_presence_locked_shared(paths, &id)
+                            || descendants
+                                .iter()
+                                .any(|d| is_presence_locked_shared(paths, d)))
+                };
+                let summary = make_summary(
+                    paths,
+                    id.clone(),
+                    title,
+                    cwd,
+                    archived,
+                    index_timestamp(&modified),
+                    steps.max(0) as usize,
+                    (!preview.trim().is_empty()).then_some(preview),
+                    running,
+                    "sqlite-offline",
+                );
+                by_id.insert(id, summary);
             }
         }
     }
 
-    if by_id.is_empty() && paths.brain_dir().is_dir() {
+    if !had_any_db_summary && paths.brain_dir().is_dir() {
         if let Ok(entries) = fs::read_dir(paths.brain_dir()) {
             for entry in entries.flatten() {
+                let entry_path = entry.path();
                 let id = entry.file_name().to_string_lossy().into_owned();
                 if filter_id.is_some_and(|target| target != id)
                     || uuid::Uuid::parse_str(&id).is_err()
+                    || known_subagents.contains(&id)
                     || by_id.contains_key(&id)
+                    || !session_delete::within(&paths.home, &entry_path)
                 {
                     continue;
                 }
@@ -571,7 +833,13 @@ fn list_summaries_filtered(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
 ) -> Result<Vec<ProviderSessionSummary>> {
-    let endpoint = connect_endpoint(paths)?;
+    if let Some(id) = filter_id {
+        if let Some(cli) = paths.cli_store_for_id(id) {
+            return list_offline_summaries(&cli, Some(id));
+        }
+    }
+    let primary = paths.primary_store();
+    let endpoint = connect_endpoint(&primary)?;
     list_summaries_from_source(
         paths,
         filter_id,
@@ -584,6 +852,7 @@ fn list_summaries_from_source(
     filter_id: Option<&str>,
     payload: Option<&Value>,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    let primary = paths.primary_store();
     let mut items = if let Some(payload) = payload {
         let map = payload["trajectorySummaries"].as_object();
         let active_roots = map
@@ -594,7 +863,7 @@ fn list_summaries_from_source(
             .flatten()
             .filter(|(id, _)| filter_id.is_none_or(|target| target == id.as_str()))
             .filter_map(|(id, item)| {
-                summary_from_live_json(paths, id, item, active_roots.contains(id))
+                summary_from_live_json(&primary, id, item, active_roots.contains(id))
             })
             .collect::<Vec<_>>();
         // The live service reports only conversations it has loaded this run.
@@ -604,20 +873,29 @@ fn list_summaries_from_source(
             .map(|map| map.keys().map(String::as_str).collect::<BTreeSet<_>>())
             .unwrap_or_default();
         items.extend(
-            list_offline_summaries(paths, filter_id)
+            list_offline_summaries(&primary, filter_id)
                 .unwrap_or_default()
                 .into_iter()
                 // An index row whose native store is gone was deleted through
                 // the service and must not reappear from the index.
                 .filter(|item| {
                     !loaded.contains(item.id.as_str())
-                        && !owned_disk_paths(paths, &item.id).is_empty()
+                        && has_primary_session_storage(&primary, &item.id)
                 }),
         );
         items
     } else {
-        list_offline_summaries(paths, filter_id)?
+        list_offline_summaries(&primary, filter_id)?
     };
+    if let Some(cli) = paths.cli_store() {
+        let seen: BTreeSet<String> = items.iter().map(|i| i.id.clone()).collect();
+        items.extend(
+            list_offline_summaries(&cli, filter_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|item| !seen.contains(&item.id)),
+        );
+    }
     items.sort_by(|a, b| {
         b.updated_at
             .as_deref()
@@ -634,7 +912,8 @@ pub fn list_sessions(
 ) -> Result<Vec<ProviderSessionSummary>> {
     let mut items = list_sessions_without_storage(paths, request)?;
     for item in &mut items {
-        attach_storage_size(paths, item);
+        let store = paths.store_for_id(&item.id, None);
+        attach_storage_size(&store, item);
     }
     Ok(items)
 }
@@ -658,7 +937,8 @@ pub(crate) fn list_sessions_without_storage(
 
 pub fn session_summary(paths: &AntigravityPaths, key: &str) -> Result<ProviderSessionSummary> {
     let mut summary = session_summary_without_storage(paths, key)?;
-    attach_storage_size(paths, &mut summary);
+    let store = paths.store_for_id(&summary.id, None);
+    attach_storage_size(&store, &mut summary);
     Ok(summary)
 }
 
@@ -2071,5 +2351,690 @@ mod tests {
         // Idle eviction clears the cache
         evict_idle_endpoint_cache(std::time::Duration::ZERO);
         assert_eq!(get_cached_live_endpoint(), None);
+    }
+
+    fn encode_proto_test_len(field_num: u64, payload: &[u8], out: &mut Vec<u8>) {
+        let mut tag = (field_num << 3) | 2;
+        while tag >= 0x80 {
+            out.push(((tag as u8) & 0x7f) | 0x80);
+            tag >>= 7;
+        }
+        out.push(tag as u8);
+        let mut len = payload.len() as u64;
+        while len >= 0x80 {
+            out.push(((len as u8) & 0x7f) | 0x80);
+            len >>= 7;
+        }
+        out.push(len as u8);
+        out.extend_from_slice(payload);
+    }
+
+    fn build_sample_raw_summary(title: &str, tag_value: &str) -> Vec<u8> {
+        let mut ann = Vec::new();
+        encode_proto_test_len(1, title.as_bytes(), &mut ann);
+        // field 3 = repeated string tags (must never be overwritten by archived!)
+        encode_proto_test_len(3, tag_value.as_bytes(), &mut ann);
+        // field 7 = last_user_view_time (Timestamp: seconds=1700000000)
+        encode_proto_test_len(7, &[0x08, 0x80, 0x94, 0xeb, 0xaa, 0x06], &mut ann);
+        let mut top = Vec::new();
+        // field 1 = summary
+        encode_proto_test_len(1, b"fallback-summary", &mut top);
+        // field 2 = step_count = 4
+        top.extend_from_slice(&[0x10, 0x04]);
+        // field 15 = annotations
+        encode_proto_test_len(15, &ann, &mut top);
+        top
+    }
+
+    #[test]
+    fn raw_summary_protobuf_patch_fts5_integer_archive_and_metadata_cache_sync() {
+        let raw = build_sample_raw_summary("原始 CLI 标题", "keep-tag");
+        assert!(patch_raw_summary_annotations(&[], Some("x"), None, 10).is_none());
+        assert!(patch_raw_summary_annotations(&[0x7a, 0xff], Some("x"), None, 10).is_none());
+        // Empty field 15 (`[0x7a, 0x00]`) observed on untitled CLI sessions must patch cleanly
+        let mut empty_f15 = Vec::new();
+        encode_proto_test_len(1, b"untitled-summary", &mut empty_f15);
+        empty_f15.extend_from_slice(&[0x7a, 0x00]);
+        let patched_empty =
+            patch_raw_summary_annotations(&empty_f15, Some("首轮改名"), Some(true), 123).unwrap();
+        let decoded_empty = read_raw_summary_annotations(&patched_empty);
+        assert_eq!(decoded_empty.title.as_deref(), Some("首轮改名"));
+        assert_eq!(decoded_empty.archived, Some(true));
+
+        let root = env::temp_dir().join(format!("agenthub-ag-cli-fts5-{}", uuid::Uuid::new_v4()));
+        for dir in ["conversations", "annotations", "cache"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        fs::write(
+            root.join("conversations").join(format!("{id}.db")),
+            b"sqlite-placeholder",
+        )
+        .unwrap();
+        for name in annotations::PROTO_CACHE_FILES {
+            fs::write(root.join(name), b"cached-proto").unwrap();
+        }
+        let meta_path = root.join("cache/conversation_metadata.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_vec_pretty(&json!({
+                "conversations": {
+                    (&id): {
+                        "summary": "原始 CLI 标题",
+                        "is_internal": false,
+                        "last_modified_time": "2026-10-29T00:00:00Z"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT '',
+                step_count INTEGER NOT NULL DEFAULT 0,
+                last_modified_time TEXT NOT NULL DEFAULT '',
+                workspace_uris TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'CASCADE_RUN_STATUS_IDLE',
+                parent_conversation_id TEXT NOT NULL DEFAULT '',
+                nesting_depth INTEGER NOT NULL DEFAULT 0,
+                not_fully_idle NUMERIC NOT NULL DEFAULT 0,
+                raw_summary BLOB
+            );
+            CREATE VIRTUAL TABLE conversations_fts USING fts5(
+                conversation_id UNINDEXED,
+                chunk_index UNINDEXED,
+                archived UNINDEXED,
+                title
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversation_summaries \
+             (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, raw_summary) \
+             VALUES (?1, '原始 CLI 标题', '预览', 4, '2026-10-29T01:00:00Z', '[\"file:///workspace/cli\"]', ?2)",
+            params![id, raw],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversations_fts (conversation_id, chunk_index, archived, title) VALUES (?1, -1, 0, '原始 CLI 标题')",
+            params![id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let renamed = rename_session(&paths, &id, "全新 CLI 标题").unwrap();
+        assert_eq!(renamed.title, "全新 CLI 标题");
+        for name in annotations::PROTO_CACHE_FILES {
+            assert!(!root.join(name).exists(), "{name} must be invalidated");
+        }
+        let meta_after: Value = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        assert_eq!(
+            meta_after["conversations"][&id]["summary"].as_str(),
+            Some("全新 CLI 标题")
+        );
+        assert_eq!(meta_after["conversations"][&id]["is_internal"], false);
+
+        let archived = set_archived(&paths, &id, true).unwrap();
+        assert!(archived.archived);
+
+        // Verify FTS5 integer `WHERE chunk_index = -1 AND archived = 1` matches (exact `agy` CLI query)
+        let conn = Connection::open(paths.summaries_db()).unwrap();
+        let fts_hit: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM conversations_fts WHERE chunk_index = -1 AND archived = 1 AND conversation_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_hit, 1);
+
+        // Verify raw_summary field 15 carries updated title + archived=true while preserving tags (field 3) and view time (field 7)
+        let patched_blob: Vec<u8> = conn
+            .query_row(
+                "SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let decoded_ann = read_raw_summary_annotations(&patched_blob);
+        assert_eq!(decoded_ann.title.as_deref(), Some("全新 CLI 标题"));
+        assert_eq!(decoded_ann.archived, Some(true));
+        assert!(
+            patched_blob
+                .windows(b"keep-tag".len())
+                .any(|w| w == b"keep-tag"),
+            "field 3 tags must remain intact in raw_summary"
+        );
+        assert!(
+            patched_blob
+                .windows(b"fallback-summary".len())
+                .any(|w| w == b"fallback-summary"),
+            "top-level summary field must remain intact"
+        );
+        drop(conn);
+
+        // Even if .pbtxt is removed, raw_summary alone preserves title and archived state!
+        fs::remove_file(paths.annotations_dir().join(format!("{id}.pbtxt"))).unwrap();
+        let from_raw = session_summary(&paths, &id).unwrap();
+        assert_eq!(from_raw.title, "全新 CLI 标题");
+        assert!(from_raw.archived);
+
+        let restored = set_archived(&paths, &id, false).unwrap();
+        assert!(!restored.archived);
+        let conn = Connection::open(paths.summaries_db()).unwrap();
+        let fts_after_restore: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM conversations_fts WHERE chunk_index = -1 AND archived = 1 AND conversation_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_after_restore, 0);
+        drop(conn);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dual_store_excludes_ghost_rows_routes_cli_offline_and_cleans_cli_shared_files() {
+        let base = env::temp_dir().join(format!("agenthub-ag-dual-{}", uuid::Uuid::new_v4()));
+        let app_home = base.join(".gemini/antigravity");
+        let cli_home = base.join(".gemini/antigravity-cli");
+        for dir in ["conversations", "annotations", "brain", "presence"] {
+            fs::create_dir_all(app_home.join(dir)).unwrap();
+            fs::create_dir_all(cli_home.join(dir)).unwrap();
+        }
+        fs::create_dir_all(cli_home.join("cache")).unwrap();
+        fs::create_dir_all(cli_home.join("implicit")).unwrap();
+
+        let app_id = uuid::Uuid::new_v4().to_string();
+        let cli_id = uuid::Uuid::new_v4().to_string();
+        let cli_sub = uuid::Uuid::new_v4().to_string();
+        let cli_keep = uuid::Uuid::new_v4().to_string();
+        let orphan_id = uuid::Uuid::new_v4().to_string();
+        let implicit_id = uuid::Uuid::new_v4().to_string();
+
+        // App primary storage
+        fs::write(
+            app_home.join("conversations").join(format!("{app_id}.db")),
+            b"app-db",
+        )
+        .unwrap();
+        // CLI primary storage + transcript
+        for id in [&cli_id, &cli_sub, &cli_keep] {
+            fs::write(
+                cli_home.join("conversations").join(format!("{id}.db")),
+                b"cli-db-bytes",
+            )
+            .unwrap();
+        }
+        let cli_logs = cli_home
+            .join("brain")
+            .join(&cli_id)
+            .join(".system_generated/logs");
+        fs::create_dir_all(&cli_logs).unwrap();
+        fs::write(
+            cli_logs.join("transcript_full.jsonl"),
+            r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-30T01:00:00Z","content":"管理 agy cli 会话"}"#,
+        )
+        .unwrap();
+        // Orphaned .pbtxt / .lock and implicit/*.pb must NEVER count as primary session storage
+        fs::write(
+            cli_home
+                .join("annotations")
+                .join(format!("{orphan_id}.pbtxt")),
+            "title: \"orphan\"\n",
+        )
+        .unwrap();
+        fs::write(
+            cli_home.join("presence").join(format!("{orphan_id}.lock")),
+            b"",
+        )
+        .unwrap();
+        fs::write(
+            cli_home.join("implicit").join(format!("{implicit_id}.pb")),
+            b"workspace-implicit",
+        )
+        .unwrap();
+
+        // Cross-index ghost rows: app DB contains cli_id ghost; cli DB contains app_id, orphan_id, implicit_id ghosts, plus conversation_parents
+        let app_conn = Connection::open(app_home.join("conversation_summaries.db")).unwrap();
+        app_conn
+            .execute_batch(
+                "CREATE TABLE conversation_summaries (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT, preview TEXT, step_count INTEGER,
+                    last_modified_time TEXT, workspace_uris TEXT,
+                    parent_conversation_id TEXT, nesting_depth INTEGER
+                );
+                CREATE TABLE conversations_fts (
+                    conversation_id TEXT, chunk_index INTEGER, archived INTEGER, title TEXT
+                );",
+            )
+            .unwrap();
+        app_conn
+            .execute(
+                "INSERT INTO conversation_summaries VALUES (?1,'Ghost CLI in App','',2,'2026-10-30T01:00:00Z','', '', 0)",
+                params![cli_id],
+            )
+            .unwrap();
+        drop(app_conn);
+
+        let cli_conn = Connection::open(cli_home.join("conversation_summaries.db")).unwrap();
+        cli_conn
+            .execute_batch(
+                "CREATE TABLE conversation_summaries (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT, preview TEXT, step_count INTEGER,
+                    last_modified_time TEXT, workspace_uris TEXT,
+                    status TEXT, parent_conversation_id TEXT,
+                    nesting_depth INTEGER, not_fully_idle NUMERIC
+                );
+                CREATE VIRTUAL TABLE conversations_fts USING fts5(
+                    conversation_id UNINDEXED, chunk_index UNINDEXED, archived UNINDEXED, title
+                );
+                CREATE TABLE conversation_parents (
+                    conversation_id TEXT PRIMARY KEY, parent_id TEXT NOT NULL
+                ) WITHOUT ROWID;",
+            )
+            .unwrap();
+        for (cid, title, ts) in [
+            (&cli_id, "CLI 主会话", "2026-10-30T02:00:00Z"),
+            (&cli_sub, "CLI 子代理", "2026-10-30T01:59:00Z"),
+            (&cli_keep, "CLI 保留会话", "2026-10-30T00:30:00Z"),
+            (&app_id, "Ghost App in CLI", "2026-10-30T03:00:00Z"),
+            (&orphan_id, "Orphan Row", "2026-10-30T04:00:00Z"),
+            (&implicit_id, "Implicit Row", "2026-10-30T05:00:00Z"),
+        ] {
+            cli_conn
+                .execute(
+                    "INSERT INTO conversation_summaries VALUES (?1, ?2, 'p', 1, ?3, '[\"file:///workspace/cli\"]', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0)",
+                    params![cid, title, ts],
+                )
+                .unwrap();
+            cli_conn
+                .execute(
+                    "INSERT INTO conversations_fts VALUES (?1, -1, 0, ?2)",
+                    params![cid, title],
+                )
+                .unwrap();
+        }
+        // cli_sub has empty parent_conversation_id in summaries, linked ONLY via conversation_parents!
+        cli_conn
+            .execute(
+                "INSERT INTO conversation_parents VALUES (?1, ?2)",
+                params![cli_sub, cli_id],
+            )
+            .unwrap();
+        drop(cli_conn);
+
+        // Seed CLI shared files: history.jsonl (including entry without conversationId), conversation_metadata.json, last_conversations.json
+        let history_path = cli_home.join("history.jsonl");
+        fs::write(
+            &history_path,
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"display": "/help", "timestamp": 1, "workspace": "/workspace/cli"}),
+                json!({"conversationId": cli_id, "display": "delete me", "timestamp": 2, "workspace": "/workspace/cli"}),
+                json!({"conversationId": cli_keep, "display": "keep me", "timestamp": 3, "workspace": "/workspace/cli"}),
+            ),
+        )
+        .unwrap();
+        let meta_path = cli_home.join("cache/conversation_metadata.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_vec(&json!({
+                "conversations": {
+                    (&cli_id): { "summary": "CLI 主会话" },
+                    (&cli_sub): { "summary": "CLI 子代理" },
+                    (&cli_keep): { "summary": "CLI 保留会话" }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let last_path = cli_home.join("cache/last_conversations.json");
+        fs::write(
+            &last_path,
+            serde_json::to_vec(&json!({
+                "/workspace/cli": cli_id,
+                "/workspace/keep": cli_keep
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Live desktop RPC serves ONLY app_id and must NEVER receive RPC mutations/reads for cli_id!
+        let rpc_bad_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_bad_calls = rpc_bad_calls.clone();
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_shutdown = shutdown.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let s_app = app_id.clone();
+        let handle = std::thread::spawn(move || {
+            while !server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                if server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                let resp = if req_line.contains("GetAllCascadeTrajectories") {
+                    json!({
+                        "trajectorySummaries": {
+                            (&s_app): {
+                                "summary": "桌面在线会话",
+                                "stepCount": 3,
+                                "lastModifiedTime": "2026-10-30T03:00:00Z",
+                                "status": "CASCADE_RUN_STATUS_IDLE"
+                            }
+                        }
+                    })
+                } else {
+                    server_bad_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    json!({})
+                };
+                let bytes = serde_json::to_vec(&resp).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                )
+                .unwrap();
+                stream.write_all(&bytes).unwrap();
+            }
+        });
+
+        let paths = AntigravityPaths::with_fixed_rpc_and_cli(
+            app_home.clone(),
+            cli_home.clone(),
+            port,
+            "tok",
+        );
+        let list = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        let listed_ids: Vec<&str> = list.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            listed_ids,
+            vec![app_id.as_str(), cli_id.as_str(), cli_keep.as_str()]
+        );
+        // Storage size for CLI sessions resolves from cli_home (never Unavailable from app_home)!
+        let cli_summary = list.iter().find(|s| s.id == cli_id).unwrap();
+        assert!(cli_summary.path.starts_with(&cli_home));
+        assert_ne!(
+            cli_summary.storage_size.as_ref().map(|s| s.status),
+            Some(session_storage::StorageStatus::Unavailable)
+        );
+        let cli_keep_summary = list.iter().find(|s| s.id == cli_keep).unwrap();
+        assert_eq!(
+            cli_keep_summary.storage_size.as_ref().and_then(|s| s.bytes),
+            Some(b"cli-db-bytes".len() as u64)
+        );
+
+        // Reading, renaming, archiving, and deleting cli_id never invokes desktop RPC methods!
+        let detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: cli_id.clone(),
+                limit: Some(20),
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(detail.events.len(), 1);
+        assert_eq!(detail.events[0].text.as_deref(), Some("管理 agy cli 会话"));
+        let renamed = rename_session(&paths, &cli_id, "CLI 已改名").unwrap();
+        assert_eq!(renamed.title, "CLI 已改名");
+        let archived = set_archived(&paths, &cli_id, true).unwrap();
+        assert!(archived.archived);
+        assert_eq!(rpc_bad_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        let preview = preview_batch_item(&paths, &cli_id, SessionOperation::Delete, true).unwrap();
+        assert_eq!(preview.descendants, vec![cli_sub.clone()]);
+        let del = execute_batch_item(
+            &paths,
+            &cli_id,
+            SessionOperation::Delete,
+            &preview.descendants,
+            true,
+        )
+        .unwrap();
+        assert_eq!(del.status, "succeeded");
+        assert!(del.residuals.is_empty());
+        assert_eq!(rpc_bad_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        // Verify implicit/*.pb untouched, conversation_parents & cross-store ghost row removed, and shared JSON/JSONL cleaned!
+        assert!(cli_home
+            .join("implicit")
+            .join(format!("{implicit_id}.pb"))
+            .exists());
+        let hist_after = fs::read_to_string(&history_path).unwrap();
+        assert!(hist_after.contains("\"/help\""));
+        assert!(!hist_after.contains(&cli_id));
+        assert!(hist_after.contains(&cli_keep));
+        let meta_after: Value = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        assert!(meta_after["conversations"].get(&cli_id).is_none());
+        assert!(meta_after["conversations"].get(&cli_sub).is_none());
+        assert!(meta_after["conversations"].get(&cli_keep).is_some());
+        let last_after: Value = serde_json::from_slice(&fs::read(&last_path).unwrap()).unwrap();
+        assert!(last_after.get("/workspace/cli").is_none());
+        assert_eq!(
+            last_after["/workspace/keep"].as_str(),
+            Some(cli_keep.as_str())
+        );
+
+        let app_conn = Connection::open(app_home.join("conversation_summaries.db")).unwrap();
+        let ghost_left: i64 = app_conn
+            .query_row(
+                "SELECT count(*) FROM conversation_summaries WHERE conversation_id = ?1",
+                params![cli_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            ghost_left, 0,
+            "cross-store ghost row in app DB must be cleaned"
+        );
+        drop(app_conn);
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", port));
+        let _ = handle.join();
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_active_subagent_with_lock_reports_running_and_blocks_all_offline_mutations() {
+        use std::os::unix::io::AsRawFd;
+        let root = env::temp_dir().join(format!("agenthub-ag-cli-lock-{}", uuid::Uuid::new_v4()));
+        for dir in ["conversations", "annotations", "presence", "daemon"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        let crashed_id = uuid::Uuid::new_v4().to_string();
+        let idle_open_id = uuid::Uuid::new_v4().to_string();
+        let deleted_brain_only_id = uuid::Uuid::new_v4().to_string();
+        for id in [&root_id, &sub_id, &crashed_id, &idle_open_id] {
+            fs::write(
+                root.join("conversations").join(format!("{id}.db")),
+                b"cli-sqlite",
+            )
+            .unwrap();
+        }
+        fs::create_dir_all(root.join("brain").join(&deleted_brain_only_id)).unwrap();
+        let conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT, preview TEXT, step_count INTEGER,
+                last_modified_time TEXT, workspace_uris TEXT,
+                status TEXT, parent_conversation_id TEXT,
+                nesting_depth INTEGER, not_fully_idle NUMERIC
+            );",
+        )
+        .unwrap();
+        // root_id is IDLE in SQLite, sub_id is RUNNING in SQLite, crashed_id is RUNNING without flock, idle_open_id is IDLE with flock
+        conn.execute(
+            "INSERT INTO conversation_summaries VALUES \
+             (?1, 'CLI 运行中父会话', '', 2, '2026-10-30T02:00:00Z', '', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0), \
+             (?2, 'CLI 运行中子会话', '', 1, '2026-10-30T02:00:01Z', '', 'CASCADE_RUN_STATUS_RUNNING', ?1, 1, 1), \
+             (?3, 'CLI 已崩溃会话', '', 1, '2026-10-30T01:00:00Z', '', 'CASCADE_RUN_STATUS_RUNNING', '', 0, 1), \
+             (?4, 'CLI 终端打开中空闲会话', '', 1, '2026-10-30T01:30:00Z', '', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0)",
+            params![root_id, sub_id, crashed_id, idle_open_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let sub_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("presence").join(format!("{sub_id}.lock")))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(sub_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let idle_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("presence").join(format!("{idle_open_id}.lock")))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(idle_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let list = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        let active_item = list.iter().find(|s| s.id == root_id).unwrap();
+        assert_eq!(active_item.status, "running");
+        assert!(!active_item.can_rename && active_item.rename_block_reason.is_some());
+        assert!(!active_item.can_archive && active_item.archive_block_reason.is_some());
+        assert!(!active_item.can_delete && active_item.delete_block_reason.is_some());
+
+        let idle_open_item = list.iter().find(|s| s.id == idle_open_id).unwrap();
+        assert_eq!(
+            idle_open_item.status, "idle",
+            "idle open CLI session must stay idle rather than running"
+        );
+        assert!(idle_open_item.delete_block_reason.is_none());
+        let rename_err = rename_session(&paths, &idle_open_id, "不可改名")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rename_err.contains("会话当前已在 Antigravity 中打开"),
+            "{rename_err}"
+        );
+        let archive_err = set_archived(&paths, &idle_open_id, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            archive_err.contains("会话当前已在 Antigravity 中打开"),
+            "{archive_err}"
+        );
+        let delete_err = preview_batch_item(&paths, &idle_open_id, SessionOperation::Delete, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            delete_err.contains("会话当前已在 Antigravity 中打开"),
+            "{delete_err}"
+        );
+
+        let crashed_item = list.iter().find(|s| s.id == crashed_id).unwrap();
+        assert_eq!(
+            crashed_item.status, "idle",
+            "SQLite RUNNING without live flock must not stick in running state"
+        );
+        assert!(crashed_item.can_rename && crashed_item.can_archive && crashed_item.can_delete);
+
+        assert!(
+            session_summary(&paths, &deleted_brain_only_id).is_err(),
+            "orphaned brain/<id> must not be resurrected by filter_id when DB has valid summaries"
+        );
+
+        assert!(rename_session(&paths, &root_id, "不可改名").is_err());
+        assert!(set_archived(&paths, &root_id, true).is_err());
+        assert!(preview_batch_item(&paths, &root_id, SessionOperation::Archive, false).is_err());
+        assert!(preview_batch_item(&paths, &root_id, SessionOperation::Delete, true).is_err());
+        assert!(rename_session(&paths, &idle_open_id, "不可改名").is_err());
+        assert!(set_archived(&paths, &idle_open_id, true).is_err());
+        assert!(preview_batch_item(&paths, &idle_open_id, SessionOperation::Delete, true).is_err());
+
+        // Also test daemon/hub_*.json endpoint discovery with stale PID files coexisting!
+        let uid = unsafe { libc::getuid() };
+        let daemon_dir = root.join("daemon");
+        fs::write(
+            daemon_dir.join("hub_50001.json"),
+            serde_json::to_vec(&json!({
+                "pid": 11_111,
+                "httpPort": 50001,
+                "httpsPort": 50000,
+                "csrfToken": "stale_token_111"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            daemon_dir.join("hub_50002.json"),
+            serde_json::to_vec(&json!({
+                "pid": 22_222,
+                "httpPort": 50002,
+                "httpsPort": 50003,
+                "csrfToken": "live_token_222"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_daemon_hub_endpoint(
+                std::slice::from_ref(&daemon_dir),
+                22_222,
+                uid,
+                &[50002, 50003],
+            ),
+            Some((vec![50002], "live_token_222".into()))
+        );
+        assert_eq!(
+            resolve_daemon_hub_endpoint(std::slice::from_ref(&daemon_dir), 22_222, uid, &[59999]),
+            None,
+            "hub_*.json port not in live process loopback listeners must be rejected"
+        );
+
+        unsafe {
+            let _ = libc::flock(sub_lock.as_raw_fd(), libc::LOCK_UN);
+            let _ = libc::flock(idle_lock.as_raw_fd(), libc::LOCK_UN);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

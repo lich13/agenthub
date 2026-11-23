@@ -182,7 +182,7 @@ fn push_candidate(
 }
 
 fn dry_run_single_scope(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     kind: CleanupScope,
 ) -> UnifiedCleanupScopePlan {
@@ -224,12 +224,6 @@ fn dry_run_single_scope(
             out.scanned = false;
         }
         CleanupScope::AntigravityArchived => {
-            if platform.kind != crate::platform::PlatformKind::Macos {
-                out.supported = false;
-                out.scanned = false;
-                out.unavailable_reason = Some("仅本机 macOS 支持 Antigravity 会话清理".into());
-                return out;
-            }
             match crate::antigravity::sessions::list_sessions_without_storage(
                 &paths.antigravity,
                 &crate::provider_sessions::ProviderListRequest {
@@ -715,7 +709,7 @@ fn execute_grok_empty_scope(
 }
 
 pub fn execute_unified_with_capability(
-    platform: &PlatformPaths,
+    _platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,
 ) -> Result<UnifiedCleanupResult> {
@@ -797,15 +791,6 @@ pub fn execute_unified_with_capability(
                     scope == SCOPE_CODEX_HIDDEN,
                     &mut scope_res,
                 ),
-                SCOPE_ANTIGRAVITY_ARCHIVED
-                    if platform.kind != crate::platform::PlatformKind::Macos =>
-                {
-                    scope_res.skipped_count += target_count;
-                    scope_res
-                        .issues
-                        .push("仅本机 macOS 支持 Antigravity 会话清理".into());
-                    Ok(())
-                }
                 SCOPE_ANTIGRAVITY_ARCHIVED => execute_antigravity_archived_scope(
                     &paths.antigravity,
                     scope_targets,
@@ -852,10 +837,8 @@ mod tests {
 
         let codex = crate::codex::CodexPaths::new(tmp.join("codex"));
         fs::create_dir_all(&codex.home).unwrap();
-        let antigravity = crate::antigravity::sessions::AntigravityPaths {
-            home: tmp.join("antigravity"),
-            rpc_mode: crate::antigravity::sessions::RpcMode::OfflineOnly,
-        };
+        let antigravity =
+            crate::antigravity::sessions::AntigravityPaths::offline(tmp.join("antigravity"));
         fs::create_dir_all(antigravity.conversations_dir()).unwrap();
         fs::create_dir_all(antigravity.annotations_dir()).unwrap();
         let dsh = crate::dsh::DshPaths {
@@ -927,14 +910,15 @@ mod tests {
         let linux = PlatformPaths::linux_server();
         let macos = PlatformPaths::macos("/fixture/home");
 
-        // Linux marks Antigravity scope unsupported; macOS marks it supported.
+        // Both Linux (`agy` CLI) and macOS support Antigravity archived cleanup.
         let linux_plan = super::dry_run_unified_with_capability(&linux, &paths).unwrap();
         let ag_linux = linux_plan
             .scopes
             .iter()
             .find(|s| s.scope == super::SCOPE_ANTIGRAVITY_ARCHIVED)
             .unwrap();
-        assert!(!ag_linux.supported);
+        assert!(ag_linux.supported);
+        assert!(ag_linux.scanned);
 
         let mac_plan = super::dry_run_unified_with_capability(&macos, &paths).unwrap();
         assert_eq!(mac_plan.total_deletable, 2);
@@ -1259,4 +1243,108 @@ fn grok_cleanup_reports_unknown_ownership_as_failure() {
     );
     assert!(session.exists());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn linux_unified_cleanup_supports_archived_antigravity_cli_sessions() {
+    use std::fs;
+    let tmp = std::env::temp_dir().join(format!(
+        "agenthub-linux-ag-cleanup-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let ag = crate::antigravity::sessions::AntigravityPaths::offline_user_home(&tmp);
+    let cli_home = ag.cli_home.as_ref().unwrap().clone();
+    fs::create_dir_all(cli_home.join("conversations")).unwrap();
+    fs::create_dir_all(cli_home.join("annotations")).unwrap();
+    let archived_id = uuid::Uuid::new_v4().to_string();
+    let active_id = uuid::Uuid::new_v4().to_string();
+    for id in [&archived_id, &active_id] {
+        fs::write(
+            cli_home.join("conversations").join(format!("{id}.db")),
+            b"cli-sqlite-fixture",
+        )
+        .unwrap();
+    }
+    let conn = rusqlite::Connection::open(cli_home.join("conversation_summaries.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT,
+            preview TEXT,
+            step_count INTEGER,
+            last_modified_time TEXT,
+            workspace_uris TEXT,
+            parent_conversation_id TEXT,
+            nesting_depth INTEGER
+        );
+        CREATE VIRTUAL TABLE conversations_fts USING fts5(
+            conversation_id UNINDEXED,
+            chunk_index UNINDEXED,
+            archived UNINDEXED,
+            title
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES (?1, 'CLI 已归档', '', 2, '2026-10-29T00:00:00Z', '', '', 0), (?2, 'CLI 活跃', '', 1, '2026-10-29T00:01:00Z', '', '', 0)",
+        rusqlite::params![archived_id, active_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO conversations_fts VALUES (?1, -1, 1, 'CLI 已归档'), (?2, -1, 0, 'CLI 活跃')",
+        rusqlite::params![archived_id, active_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let paths = UnifiedCleanupPaths {
+        codex: crate::codex::CodexPaths::new(tmp.join("codex")),
+        antigravity: ag,
+        dsh: crate::dsh::DshPaths {
+            home: tmp.join("dsh"),
+        },
+        claude: crate::claude::ClaudePaths {
+            config: tmp.join("claude"),
+            projects: tmp.join("claude/projects"),
+        },
+        grok: crate::grok::GrokPaths {
+            home: tmp.join("grok"),
+        },
+    };
+    let linux = crate::platform::PlatformPaths::linux_server();
+    let plan = dry_run_unified_with_capability(&linux, &paths).unwrap();
+    let ag_scope = plan
+        .scopes
+        .iter()
+        .find(|s| s.scope == SCOPE_ANTIGRAVITY_ARCHIVED)
+        .unwrap();
+    assert!(ag_scope.supported && ag_scope.scanned);
+    assert_eq!(ag_scope.candidates.len(), 1);
+    assert_eq!(ag_scope.candidates[0].id, archived_id);
+
+    let exec = execute_unified_with_capability(
+        &linux,
+        &paths,
+        UnifiedCleanupExecuteRequest {
+            confirmed: true,
+            scopes: vec![SCOPE_ANTIGRAVITY_ARCHIVED.into()],
+            targets: vec![UnifiedCleanupTargetSelection {
+                scope: SCOPE_ANTIGRAVITY_ARCHIVED.into(),
+                id: archived_id.clone(),
+                fingerprint: ag_scope.candidates[0].fingerprint.clone(),
+            }],
+        },
+    )
+    .unwrap();
+    assert_eq!(exec.deleted_count, 1);
+    assert_eq!(exec.failed_count, 0);
+    assert!(!cli_home
+        .join("conversations")
+        .join(format!("{archived_id}.db"))
+        .exists());
+    assert!(cli_home
+        .join("conversations")
+        .join(format!("{active_id}.db"))
+        .exists());
+    let _ = fs::remove_dir_all(&tmp);
 }
