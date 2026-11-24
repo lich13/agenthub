@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.35"
+version = "2.1.36"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-ffi"
-version = "2.1.35"
+version = "2.1.36"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -87,13 +87,11 @@ dependencies = [
  "keyring",
  "minisign-verify",
  "pulldown-cmark",
- "quote",
  "reqwest",
  "rusqlite",
  "rustls",
  "serde",
  "serde_json",
- "syn 2.0.117",
  "tar",
  "tempfile",
  "tokio",
@@ -104,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.35"
+version = "2.1.36"
 dependencies = [
  "agenthub-core",
  "anyhow",

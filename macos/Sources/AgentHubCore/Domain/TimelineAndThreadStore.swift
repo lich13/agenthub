@@ -77,6 +77,19 @@ public struct TimelineSourceItem: Equatable, Sendable {
 }
 
 public enum TimelineViewModel {
+    private static let disallowedBareStems: Set<String> = [
+        "turn", "process", "event", "group", "claude-process", "claude-metadata",
+    ]
+
+    private static func stripCollisionIndex(_ value: String) -> String {
+        guard let colonIdx = value.lastIndex(of: ":") else { return value }
+        let suffix = value[value.index(after: colonIdx)...]
+        guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return value }
+        let base = String(value[..<colonIdx])
+        guard !base.isEmpty, !disallowedBareStems.contains(base) else { return value }
+        return base
+    }
+
     public static func matchesTimelinePosition(
         _ positionKey: String?,
         id: String?,
@@ -84,8 +97,23 @@ public enum TimelineViewModel {
     ) -> Bool {
         guard let positionKey, !positionKey.isEmpty else { return false }
         if id == positionKey || aliases.contains(positionKey) { return true }
-        if let id {
-            if id.contains(":\(positionKey):") || id.hasSuffix(":\(positionKey)") {
+        for candidate in ([id].compactMap { $0 } + aliases) {
+            if candidate.hasPrefix("group:")
+                || candidate.hasPrefix("process:")
+                || candidate.hasPrefix("event:")
+                || candidate.hasPrefix("claude-process")
+                || candidate.hasPrefix("claude-metadata:")
+                || candidate.contains(":process:")
+                || candidate.contains(":event:")
+            {
+                continue
+            }
+            if candidate.hasPrefix("turn:"), String(candidate.dropFirst(5)) == positionKey {
+                return true
+            }
+            let base = stripCollisionIndex(candidate)
+            if base == positionKey { return true }
+            if base.hasPrefix("turn:"), String(base.dropFirst(5)) == positionKey {
                 return true
             }
         }
@@ -242,13 +270,7 @@ public final class ThreadMessageStore: ObservableObject {
         }
 
         let nextTimeline = detail.timeline ?? (reset ? nil : slot.timeline)
-        let incoming: [MessageBlock] = if !detail.blocks.isEmpty {
-            detail.blocks
-        } else {
-            detail.messages.enumerated().map { index, m in
-                MessageBlock(id: "legacy-\(index)", role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt)
-            }
-        }
+        let incoming = detail.blocks
 
         let merged = Self.mergeSubagentUpdates(
             Self.mergeBlocks(existing: slot.blocks, incoming: incoming, mode: .appendOrUpdate),
@@ -634,9 +656,7 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
     }
 
     public static func from(threadDetail page: ThreadDetail) -> TimelineWindowPage<MessageBlock> {
-        let blocks = !page.blocks.isEmpty ? page.blocks : page.messages.enumerated().map { idx, m in
-            MessageBlock(id: "legacy-\(idx)", role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt)
-        }
+        let blocks = page.blocks
         let stableBefore = HistoryAndResumeHelpers.stableHistoryCursor(
             history: page.history,
             blocks: blocks,

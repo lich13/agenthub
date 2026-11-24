@@ -1,12 +1,10 @@
-use super::ApiErrorKind;
-use super::{api_error, linux_update_platform, ok, ApiResponse};
+use super::{api_error, ok, ApiResponse};
 use crate::{
     linux_adapter,
     state::{AppState, CachedProbeStatus},
 };
 use agenthub_core::{
     config::Config,
-    platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeRuntime},
     services::{
         probe::{self as probe_service},
@@ -34,17 +32,15 @@ pub(crate) async fn patch_probe_settings(
     let auth = crate::audit::actor();
     let config_path = state.config_path().to_path_buf();
     if !config_path.exists() {
-        return Err(api_error(
-            ApiErrorKind::InvalidRequest,
-            &format!("config file not found: {}", config_path.display()),
-        ));
+        return Err(api_error(format!(
+            "config file not found: {}",
+            config_path.display()
+        )));
     }
-    let platform = linux_update_platform();
     let config = state.config();
-    let plan = AgentHubUseCases::with_config(&config, &platform)
+    let plan = AgentHubUseCases::with_config(&config, state.platform())
         .settings()
-        .and_then(|settings| settings.save_probe_settings(request))
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+        .and_then(|settings| settings.save_probe_settings(request))?;
     let response_config =
         linux_adapter::apply_probe_settings_save_plan(&state, &auth, &config_path, plan)?;
     ok(probe_settings_value_for_config(&state, &response_config)?)
@@ -77,11 +73,9 @@ pub(crate) async fn start_probe_action(
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = linux_update_platform();
     let config_path = state.config_path().to_path_buf();
-    let plan = probe_service::plan_probe_action(&platform, action, &config_path)?;
-    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)
-        .map_err(|err| api_error(ApiErrorKind::Conflict, &err.to_string()))?;
+    let plan = probe_service::plan_probe_action(state.platform(), action, &config_path)?;
+    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)?;
     ok(json!({"job_id": id}))
 }
 
@@ -238,8 +232,7 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    let platform = PlatformPaths::linux_server();
-    let plan = AgentHubUseCases::with_config(config, &platform)
+    let plan = AgentHubUseCases::with_config(config, state.platform())
         .settings()?
         .probe_settings_view(secret_state)?;
     serde_json::to_value(plan).map_err(anyhow::Error::from)

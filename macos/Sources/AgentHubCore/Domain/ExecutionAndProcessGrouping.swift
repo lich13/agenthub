@@ -136,7 +136,7 @@ public enum ConversationViewModel {
             return actionCompacted
         }
         let chatIndices = actionCompacted.enumerated().compactMap { index, b -> Int? in
-            (b.id != revealedBlockId && shouldRenderConversationMessage(b)) ? index : nil
+            (b.id != revealedBlockId && b.phase != "commentary" && shouldRenderConversationMessage(b)) ? index : nil
         }
         return compactIndexed(
             actionCompacted,
@@ -288,6 +288,14 @@ public struct ExecutionGroup: Equatable, Sendable, Identifiable {
 
     public var initiallyOpen: Bool {
         !commands.allSatisfy(\.instructionFile) && (running || failedCount > 0)
+    }
+
+    public var stateAliases: [String] {
+        ProcessGroupingEngine.uniqueStrings(
+            mergedIds + commands.flatMap { cmd in
+                ["group:\(cmd.id)"] + cmd.sourceIds.map { "group:\($0)" }
+            }
+        )
     }
 
     public var summaryHeader: (label: String, icon: LucideIconName) {
@@ -603,10 +611,11 @@ public enum ExecutionGroupingEngine {
             }
             let fp = activityFingerprint(isTool ? (ev.text ?? ev.detail ?? "") : "")
             let key = "grok:\(ev.id ?? ev.userMessage?.id ?? ev.callId ?? "\(ev.timestamp ?? ""):\(ev.kind):\(fp)")"
+            let hasStableId = (ev.id?.isEmpty == false) || (ev.callId?.isEmpty == false)
             return ActivityInput(
                 item: ev,
                 key: key,
-                sourceIds: [ev.id, "event:\(index)", ev.callId].compactMap { $0 }.filter { !$0.isEmpty },
+                sourceIds: [ev.id, hasStableId ? nil : "event:\(index)", ev.callId].compactMap { $0 }.filter { !$0.isEmpty },
                 callId: ev.callId,
                 turnId: nil,
                 tool: isTool,
@@ -690,7 +699,12 @@ public struct UnifiedProcessGroup: Equatable, Sendable, Identifiable {
     public var thoughtCount: Int
     public var toolCount: Int
     public var failedCount: Int
+    public var nonInstructionFailedCount: Int
     public var running: Bool
+
+    public var initiallyOpen: Bool {
+        nonInstructionFailedCount > 0 && thoughtCount == 0
+    }
 
     public var summaryText: (primary: String, meta: String?) {
         ProcessGroupingEngine.processGroupSummaryText(self)
@@ -727,12 +741,14 @@ public enum ProcessGroupingEngine {
         var thoughtCount = 0
         var toolCount = 0
         var failedCount = 0
+        var nonInstructionFailedCount = 0
         var running = false
         var rawSourceIds: [String] = []
         var rawTimelineAliases: [String] = []
         var rawStateAliases: [String] = []
 
         for step in steps {
+            rawStateAliases.append("\(prefix):process:\(step.anchorId)")
             switch step {
             case let .thinking(id, sourceIds, _, stepRunning, _):
                 thoughtCount += 1
@@ -741,30 +757,37 @@ public enum ProcessGroupingEngine {
                 rawSourceIds.append(contentsOf: sourceIds)
                 rawTimelineAliases.append(id)
                 rawTimelineAliases.append(contentsOf: sourceIds)
-                rawStateAliases.append(id)
+                rawStateAliases.append("\(prefix):process:\(id)")
+                rawStateAliases.append(contentsOf: sourceIds.map { "\(prefix):process:\($0)" })
             case let .execution(group, _):
                 toolCount += group.commands.count
                 failedCount += group.failedCount
+                nonInstructionFailedCount += group.commands.filter { !$0.instructionFile && $0.status == .failed }.count
                 if group.running { running = true }
                 rawStateAliases.append(group.id)
-                rawStateAliases.append(contentsOf: group.commands.map { "group:\($0.id)" })
+                rawStateAliases.append(contentsOf: group.stateAliases)
                 rawTimelineAliases.append(group.id)
-                rawTimelineAliases.append(contentsOf: group.commands.map { "group:\($0.id)" })
+                rawTimelineAliases.append(contentsOf: group.stateAliases)
                 for cmd in group.commands {
                     rawSourceIds.append(cmd.id)
                     rawSourceIds.append(contentsOf: cmd.sourceIds)
                     rawTimelineAliases.append(cmd.id)
                     rawTimelineAliases.append(contentsOf: cmd.sourceIds)
+                    rawStateAliases.append(contentsOf: cmd.sourceIds.map { "\(prefix):process:\($0)" })
                 }
             case let .detail(id, sourceIds, _, _, stepRunning, stepFailed, _):
                 toolCount += 1
-                if stepFailed { failedCount += 1 }
+                if stepFailed {
+                    failedCount += 1
+                    nonInstructionFailedCount += 1
+                }
                 if stepRunning { running = true }
                 rawSourceIds.append(id)
                 rawSourceIds.append(contentsOf: sourceIds)
                 rawTimelineAliases.append(id)
                 rawTimelineAliases.append(contentsOf: sourceIds)
-                rawStateAliases.append(id)
+                rawStateAliases.append("\(prefix):process:\(id)")
+                rawStateAliases.append(contentsOf: sourceIds.map { "\(prefix):process:\($0)" })
             }
         }
 
@@ -774,12 +797,13 @@ public enum ProcessGroupingEngine {
             id: id,
             stateKey: id,
             stateAliases: uniqueStrings(rawStateAliases),
-            timelineAliases: uniqueStrings(rawTimelineAliases),
+            timelineAliases: uniqueStrings(rawTimelineAliases + rawStateAliases),
             sourceIds: uniqueStrings(rawSourceIds),
             steps: steps,
             thoughtCount: thoughtCount,
             toolCount: toolCount,
             failedCount: failedCount,
+            nonInstructionFailedCount: nonInstructionFailedCount,
             running: running
         )
     }
@@ -914,6 +938,21 @@ public struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
         if segmentCount > 1 { return "\(segmentCount) 段" }
         return nil
     }
+
+    public var wrapsThinkingDisclosures: Bool {
+        if toolCount > 0 { return true }
+        var thoughtLikeCount = 0
+        for entry in entries {
+            if case let .item(ev, _, _) = entry,
+               ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev),
+               !VisibleMarkdownEngine.visibleMarkdown(ev.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                thoughtLikeCount += 1
+                if thoughtLikeCount > 1 { return true }
+            }
+        }
+        return false
+    }
 }
 
 public enum ClaudeRenderItem: Equatable, Sendable {
@@ -943,8 +982,13 @@ public enum ClaudeProcessGroupingEngine {
         metadataKinds.contains(event.kind) || (event.kind == "system" && automaticRoles.contains(event.role ?? ""))
     }
 
+    public static func isThoughtOrCommentary(_ event: ClaudeHistoryEvent) -> Bool {
+        event.kind == "thinking" || (event.kind == "assistant_message" && event.assistantPhase == "intermediate")
+    }
+
     public static func isProcess(_ event: ClaudeHistoryEvent) -> Bool {
         processKinds.contains(event.kind)
+            || isThoughtOrCommentary(event)
             || (event.kind == "system" && (automaticRoles.contains(event.role ?? "") || event.role == "api_error"))
     }
 
@@ -1148,8 +1192,14 @@ public final class ActivityDisclosureStore: ObservableObject {
     public static let maxEntries = 2000
     public static let shared = ActivityDisclosureStore()
 
-    private var values: [String: Bool] = [:]
+    private struct Entry {
+        var open: Bool
+        var seq: UInt64
+    }
+
+    private var values: [String: Entry] = [:]
     private var order: [String] = []
+    private var nextSeq: UInt64 = 0
     @Published public private(set) var revision: UInt64 = 0
 
     public init() {}
@@ -1160,28 +1210,47 @@ public final class ActivityDisclosureStore: ObservableObject {
         aliases: [String] = [],
         initiallyOpen: Bool
     ) -> Bool {
-        let fullKey = "\(scope)::\(stateKey)"
-        if let v = values[fullKey] { return v }
-        for alias in aliases {
-            if let v = values["\(scope)::\(alias)"] { return v }
+        var latest: Entry?
+        var minSeq: UInt64 = .max
+        var hasOpen = false
+        for candidate in [stateKey] + aliases where !candidate.isEmpty {
+            guard let entry = values["\(scope)::\(candidate)"] else { continue }
+            if entry.open { hasOpen = true }
+            if entry.seq < minSeq { minSeq = entry.seq }
+            if let current = latest {
+                if entry.seq > current.seq || (entry.seq == current.seq && entry.open && !current.open) {
+                    latest = entry
+                }
+            } else {
+                latest = entry
+            }
         }
-        return initiallyOpen
+        guard let latest else { return initiallyOpen }
+        if minSeq < latest.seq && hasOpen {
+            return true
+        }
+        return latest.open
     }
 
     public func setOpen(
         scope: String,
         stateKey: String,
+        aliases: [String] = [],
         isOpen: Bool
     ) {
-        let fullKey = "\(scope)::\(stateKey)"
-        if values[fullKey] == nil {
-            if order.count >= Self.maxEntries, let oldest = order.first {
+        nextSeq &+= 1
+        let entry = Entry(open: isOpen, seq: nextSeq)
+        for candidate in ProcessGroupingEngine.uniqueStrings([stateKey] + aliases) {
+            let fullKey = "\(scope)::\(candidate)"
+            if values[fullKey] != nil, let existingIdx = order.firstIndex(of: fullKey) {
+                order.remove(at: existingIdx)
+            } else if values[fullKey] == nil, order.count >= Self.maxEntries, let oldest = order.first {
                 order.removeFirst()
                 values.removeValue(forKey: oldest)
             }
             order.append(fullKey)
+            values[fullKey] = entry
         }
-        values[fullKey] = isOpen
         revision &+= 1
     }
 
@@ -1190,6 +1259,7 @@ public final class ActivityDisclosureStore: ObservableObject {
     public func clearAll() {
         values.removeAll()
         order.removeAll()
+        nextSeq = 0
         revision &+= 1
     }
 }

@@ -91,7 +91,12 @@ pub(super) async fn handle_system_capabilities(state: AppState, _args: Value) ->
 }
 
 pub(super) async fn handle_jobs_list(state: AppState, args: Value) -> ApiResponse {
-    list_jobs(state, rpc_query_strings(&args, &["limit"])).await
+    let query = if args.is_null() {
+        JobsListQuery::default()
+    } else {
+        rpc_payload(&args)?
+    };
+    list_jobs(state, query).await
 }
 
 pub(super) async fn handle_jobs_detail(state: AppState, args: Value) -> ApiResponse {

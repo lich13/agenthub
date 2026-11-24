@@ -57,7 +57,7 @@ impl Fixture {
         dir
     }
     fn request(&self, ids: &[&str]) -> DshArchiveDeleteRequest {
-        let plan = preview(&self.paths).unwrap();
+        let (plan, _) = preview_with_bytes(&self.paths).unwrap();
         DshArchiveDeleteRequest {
             confirmed: true,
             targets: ids
@@ -93,7 +93,7 @@ fn removes_archived_tree_and_exact_references_but_preserves_forks_and_shared_dat
     let fork = f.session("fork", Some("root"), false, true);
     fs::create_dir_all(f.paths.home.join("attachments")).unwrap();
     fs::write(f.paths.home.join("attachments/shared"), "keep").unwrap();
-    let plan = preview(&f.paths).unwrap();
+    let (plan, _) = preview_with_bytes(&f.paths).unwrap();
     assert_eq!(plan.archived_threads, 1);
     assert_eq!(
         plan.candidates
@@ -126,7 +126,7 @@ fn restored_targets_are_skipped_and_new_archives_are_not_added_to_execution() {
     let f = Fixture::new(&["root"]);
     let root = f.session("root", None, false, false);
     let new = f.session("new", None, false, false);
-    preview(&f.paths).unwrap();
+    preview_with_bytes(&f.paths).unwrap();
     let mut index = f.read_index();
     index["global"]["archivedSessionIds"] = json!(["new"]);
     f.index(index.clone());
@@ -141,7 +141,7 @@ fn later_descendants_and_partial_failures_keep_the_archived_root_retryable() {
     let f = Fixture::new(&["root", "other"]);
     f.session("root", None, false, false);
     f.session("other", None, false, false);
-    preview(&f.paths).unwrap();
+    preview_with_bytes(&f.paths).unwrap();
     let child = f.session("child", Some("root"), true, false);
     let result = f.execute(&["root", "other"]);
     assert_eq!(result.deleted_threads, 1);
@@ -246,27 +246,28 @@ fn concurrent_index_change_is_preserved_and_reported_for_retry() {
 fn absent_data_is_empty_and_unknown_or_pending_storage_is_rejected() {
     let f = Fixture::new(&[]);
     assert!(
-        !preview(&DshPaths {
+        !preview_with_bytes(&DshPaths {
             home: f.paths.home.join("absent")
         })
         .unwrap()
+        .0
         .available
     );
     let mut index = f.read_index();
     index["global"]["pendingMutation"] = json!({"fixture":true});
     f.index(index);
-    assert!(preview(&f.paths)
+    assert!(preview_with_bytes(&f.paths)
         .unwrap_err()
         .to_string()
         .contains("变更未完成"));
     fs::write(f.index_path(), "invalid").unwrap();
-    assert!(preview(&f.paths).is_err());
+    assert!(preview_with_bytes(&f.paths).is_err());
     fs::write(
         f.paths.home.join("cordis.patch.yml"),
         "- id: storage-json\n  config:\n    root: /fixture/custom\n",
     )
     .unwrap();
-    assert!(preview(&f.paths)
+    assert!(preview_with_bytes(&f.paths)
         .unwrap_err()
         .to_string()
         .contains("自定义持久化"));

@@ -30,7 +30,7 @@ pub(crate) use cleanup::{
 pub(crate) use grok::{
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename, GrokListQuery,
 };
-pub(crate) use jobs::{job_detail, list_jobs};
+pub(crate) use jobs::{job_detail, list_jobs, JobsListQuery};
 pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action, ProbeEventsQuery,
@@ -39,39 +39,25 @@ pub(crate) use provider_sessions::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
     antigravity_restore, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
-pub(crate) use system::{
-    linux_update_platform, start_update_action, system_capabilities, system_update_status,
-};
+pub(crate) use system::{start_update_action, system_capabilities, system_update_status};
 pub(crate) use threads::{
     archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,
 };
 type ApiResponse = Result<Value, ApiError>;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ApiErrorKind {
-    InvalidRequest,
-    NotFound,
-    Conflict,
-    OperationFailed,
-}
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ApiError {
-    #[cfg_attr(not(test), allow(dead_code))]
-    // Protocol 2 exposes the message; direct tests also assert the category.
-    pub kind: ApiErrorKind,
     pub message: String,
 }
 impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
-        api_error(ApiErrorKind::OperationFailed, &error.to_string())
+        api_error(error.to_string())
     }
 }
 fn ok<T: Serialize>(value: T) -> ApiResponse {
-    serde_json::to_value(value)
-        .map_err(|error| api_error(ApiErrorKind::OperationFailed, &error.to_string()))
+    serde_json::to_value(value).map_err(|error| api_error(error.to_string()))
 }
-fn api_error(kind: ApiErrorKind, message: &str) -> ApiError {
+fn api_error(message: impl Into<String>) -> ApiError {
     ApiError {
-        kind,
         message: message.into(),
     }
 }

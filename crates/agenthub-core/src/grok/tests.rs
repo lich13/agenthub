@@ -1165,3 +1165,69 @@ fn non_primary_subsessions_are_excluded_from_list_and_unicode_query_matches() {
     assert_eq!(listed[0].id, primary_id);
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn grok_tool_loop_intermediate_prose_demotes_to_thinking_in_updates_and_native_history() {
+    let (paths, id, dir) = fixture();
+    let updates = [
+        serde_json::json!({"timestamp":"2026-10-30T01:00:00Z","params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"p1","content":{"type":"text","text":"检查构建脚本"}}}}),
+        serde_json::json!({"timestamp":"2026-10-30T01:00:01Z","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"正在先读取脚本文件。"}}}}),
+        serde_json::json!({"timestamp":"2026-10-30T01:00:02Z","params":{"update":{"sessionUpdate":"tool_call","title":"Read script","toolCallId":"tc-1","status":"completed"}}}),
+        serde_json::json!({"timestamp":"2026-10-30T01:00:03Z","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"脚本检查通过，无需额外改动。"}}}}),
+    ];
+    fs::write(
+        dir.join("updates.jsonl"),
+        updates
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
+    assert_eq!(detail.events.len(), 4);
+    assert_eq!(detail.events[0].kind, "user_message_chunk");
+    assert_eq!(detail.events[1].kind, "thinking");
+    assert_eq!(
+        detail.events[1].text.as_deref(),
+        Some("正在先读取脚本文件。")
+    );
+    assert_eq!(detail.events[2].kind, "tool_call");
+    assert_eq!(detail.events[3].kind, "agent_message_chunk");
+    assert_eq!(
+        detail.events[3].text.as_deref(),
+        Some("脚本检查通过，无需额外改动。")
+    );
+
+    fs::remove_file(dir.join("updates.jsonl")).unwrap();
+    let native = [
+        serde_json::json!({"type":"user","timestamp":"2026-10-30T02:00:00Z","content":"原生历史回退检查"}),
+        serde_json::json!({"type":"assistant","timestamp":"2026-10-30T02:00:01Z","content":"先执行搜索命令。","tool_calls":[{"id":"nc-1","name":"Execute","arguments":"{\"cmd\":\"rg test\"}"}]}),
+        serde_json::json!({"type":"tool_result","timestamp":"2026-10-30T02:00:02Z","tool_call_id":"nc-1","content":"matched"}),
+        serde_json::json!({"type":"assistant","timestamp":"2026-10-30T02:00:03Z","content":"原生历史核验完成。"}),
+    ];
+    fs::write(
+        dir.join("chat_history.jsonl"),
+        native
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let native_detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
+    assert_eq!(native_detail.events.len(), 4);
+    assert_eq!(native_detail.events[0].kind, "user_message_chunk");
+    assert_eq!(native_detail.events[1].kind, "thinking");
+    assert_eq!(
+        native_detail.events[1].text.as_deref(),
+        Some("先执行搜索命令。")
+    );
+    assert_eq!(native_detail.events[2].kind, "tool_call");
+    assert_eq!(native_detail.events[3].kind, "agent_message_chunk");
+    assert_eq!(
+        native_detail.events[3].text.as_deref(),
+        Some("原生历史核验完成。")
+    );
+    fs::remove_dir_all(paths.home).unwrap();
+}

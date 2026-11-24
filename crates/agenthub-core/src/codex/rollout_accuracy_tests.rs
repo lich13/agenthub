@@ -142,3 +142,26 @@ fn user_plan_examples_are_never_promoted_to_assistant_plan_cards() {
         .text
         .contains("<proposed_plan>"));
 }
+
+#[test]
+fn commentary_phase_is_preserved_for_process_folding_without_affecting_final_answers_or_plans() {
+    let user = json!({"type":"response_item","turn_id":"turn-1","payload":{"id":"u-1","type":"message","role":"user","content":[{"type":"input_text","text":"Audit commentary folding."}]}});
+    let commentary = json!({"type":"response_item","turn_id":"turn-1","payload":{"id":"a-mid","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking workspace files first."}]}});
+    let call = json!({"type":"response_item","turn_id":"turn-1","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":{"cmd":"rg phase"}}});
+    let output = json!({"type":"response_item","turn_id":"turn-1","payload":{"type":"function_call_output","call_id":"call-1","output":"ok"}});
+    let plan = json!({"type":"response_item","turn_id":"turn-1","payload":{"id":"a-plan","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"<proposed_plan># Plan\n1. Verify</proposed_plan>"}]}});
+    let final_msg = json!({"type":"response_item","turn_id":"turn-1","payload":{"id":"a-final","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"All checks passed."}]}});
+    let blocks =
+        message_blocks_from_events([&user, &commentary, &call, &output, &plan, &final_msg]);
+    assert_eq!(blocks[0].phase, None);
+    assert_eq!(blocks[1].id, "a-mid");
+    assert_eq!(blocks[1].phase.as_deref(), Some("commentary"));
+    assert_eq!(blocks[2].call_id.as_deref(), Some("call-1"));
+    assert_eq!(blocks[2].phase, None);
+    assert_eq!(blocks[3].kind, "plan");
+    assert_eq!(blocks[3].phase, None);
+    assert_eq!(blocks[4].id, "a-final");
+    assert_eq!(blocks[4].phase, None);
+    let serialized = serde_json::to_value(&blocks[4]).unwrap();
+    assert!(serialized.get("phase").is_none());
+}

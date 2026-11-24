@@ -1,5 +1,4 @@
-use super::ApiErrorKind;
-use super::{api_error, ok, system::linux_update_platform, ApiError, ApiResponse};
+use super::{api_error, ok, ApiResponse};
 use crate::{linux_adapter, state::AppState};
 use agenthub_core::services::{
     jobs as job_service,
@@ -73,8 +72,7 @@ pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
 
 pub(crate) async fn list_threads(state: AppState, query: ThreadsQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        let platform = agenthub_core::platform::PlatformPaths::linux_server();
-        let plan = AgentHubUseCases::new(&platform)
+        let plan = AgentHubUseCases::new(state.platform())
             .threads()
             .list_read(query)?;
         thread_service::load_thread_read_model_inputs(&state.codex_paths(), &plan)
@@ -88,31 +86,23 @@ pub(crate) async fn thread_detail(
     id: String,
     query: ThreadDetailQuery,
 ) -> ApiResponse {
-    let platform = linux_update_platform();
-    let plan = AgentHubUseCases::new(&platform)
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .detail_read(thread_service::ThreadDetailRequest {
-            id: id.clone(),
+            id,
             limit: query.limit,
             full: query.full,
-            before: query.before.clone(),
-        })
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+            before: query.before,
+        })?;
     match agenthub_core::read_tasks::spawn_blocking(move || {
         thread_service::read_window_thread_detail(&state.codex_paths(), &plan)
     })
     .await
-    .map_err(anyhow::Error::from)?
-    .map_err(api_error_for_thread_detail_load)?
+    .map_err(anyhow::Error::from)??
     {
         Some(detail) => ok(detail),
-        None => Err(api_error(ApiErrorKind::NotFound, "thread not found")),
+        None => Err(api_error("thread not found")),
     }
-}
-
-fn api_error_for_thread_detail_load(err: anyhow::Error) -> ApiError {
-    let message = err.to_string();
-    api_error(ApiErrorKind::OperationFailed, &message)
 }
 
 pub(crate) async fn thread_blocks(
@@ -120,40 +110,34 @@ pub(crate) async fn thread_blocks(
     id: String,
     query: ThreadBlocksQuery,
 ) -> ApiResponse {
-    let platform = linux_update_platform();
-    let plan = AgentHubUseCases::new(&platform)
-        .threads()
-        .blocks(&id, query.limit, query.before.clone())
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+    let plan =
+        AgentHubUseCases::new(state.platform())
+            .threads()
+            .blocks(&id, query.limit, query.before)?;
     match agenthub_core::read_tasks::spawn_blocking(move || {
         thread_service::read_thread_blocks_page(&state.codex_paths(), &plan)
     })
     .await
-    .map_err(anyhow::Error::from)?
-    .map_err(api_error_for_thread_detail_load)?
+    .map_err(anyhow::Error::from)??
     {
         Some(page) => ok(page),
-        None => Err(api_error(ApiErrorKind::NotFound, "thread not found")),
+        None => Err(api_error("thread not found")),
     }
 }
 
 pub(crate) async fn archive_thread(state: AppState, id: String) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = linux_update_platform();
-    let plan = AgentHubUseCases::new(&platform)
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
-        .archive(&id)
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+        .archive(&id)?;
     ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
 pub(crate) async fn restore_thread(state: AppState, id: String) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = linux_update_platform();
-    let plan = AgentHubUseCases::new(&platform)
+    let plan = AgentHubUseCases::new(state.platform())
         .threads()
-        .restore(&id)
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+        .restore(&id)?;
     ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
@@ -168,13 +152,11 @@ pub(crate) async fn rename_thread(
     payload: RenameThreadRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = linux_update_platform();
-    let plan = AgentHubUseCases::new(&platform)
-        .threads()
-        .rename(job_service::ThreadRenameRequest {
+    let plan = AgentHubUseCases::new(state.platform()).threads().rename(
+        job_service::ThreadRenameRequest {
             thread_id: id,
             name: payload.name,
-        })
-        .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
+        },
+    )?;
     ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }

@@ -140,7 +140,7 @@ public struct UnifiedProviderWorkspaceView: View {
             }
 
             if let preview = model.batchPreview {
-                ModalConfirmDialogView(busy: model.batchBusy, onCancel: { model.batchPreview = nil }) {
+                ConfirmDialogOverlay(busy: model.batchBusy, onCancel: { model.batchPreview = nil }) {
                     SessionBatchPreviewDialogContentView(
                         preview: preview,
                         busy: model.batchBusy,
@@ -340,21 +340,18 @@ public struct UnifiedProviderWorkspaceView: View {
                         .help(model.groupingMode == .byWorkspace ? "切换为平铺时间流" : "按工作区分组")
                         .accessibilityLabel(model.groupingMode == .byWorkspace ? "切换为平铺时间流" : "按工作区分组")
 
-                        TaskMenuTriggerButton(
-                            rightAligned: true,
-                            accessibilityLabel: "筛选工作区",
-                            makeActions: { buildWorkspaceFilterMenuActions() }
-                        ) {
-                            LucideIcon(.slidersHorizontal, size: 15)
-                                .foregroundStyle((model.workspaceFilter != .all ? palette.accent : palette.textMuted).color)
-                                .frame(width: 28, height: 28)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .fill(model.workspaceFilter != .all ? palette.accentSoft.color : Color.clear)
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .help("按工作区筛选")
+                        WorkspaceSidebarFilterMenuButton(
+                            isFiltered: model.workspaceFilter != .all,
+                            makeActions: {
+                                WorkspaceFilterMenuBuilder.buildActions(
+                                    currentFilter: model.workspaceFilter,
+                                    groups: model.availableWorkspaceGroups,
+                                    idPrefix: "ws-filter"
+                                ) { nextFilter in
+                                    model.workspaceFilter = nextFilter
+                                }
+                            }
+                        )
                     }
 
                     if workspace == .codex, store.target == .local, store.capabilities.codexDesktop,
@@ -392,45 +389,10 @@ public struct UnifiedProviderWorkspaceView: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
 
-            HStack(spacing: 8) {
-                LucideIcon(.search, size: 15)
-                    .foregroundStyle(palette.textMuted.color)
-                TextField(searchPlaceholderText, text: $model.query)
-                    .textFieldStyle(.plain)
-                    .font(DesignFonts.body(13))
-                if !model.query.isEmpty {
-                    Button { model.query = "" } label: { LucideIcon(.x, size: 13) }
-                        .buttonStyle(IconButtonStyle(dimension: 22))
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+            WorkspaceSidebarSearchField(placeholder: searchPlaceholderText, query: $model.query)
 
-            if case let .workspace(filterKey, includeSub) = model.workspaceFilter {
-                HStack(spacing: 6) {
-                    LucideIcon(.folderGit2, size: 12)
-                        .foregroundStyle(palette.accent.color)
-                    Text(ProjectWorkspaceEngine.compactDisplayName(for: filterKey) + (includeSub ? "（含子目录）" : ""))
-                        .font(DesignFonts.body(11, weight: .medium))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button {
-                        model.workspaceFilter = .all
-                    } label: {
-                        LucideIcon(.x, size: 12)
-                            .foregroundStyle(palette.textMuted.color)
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainHitButtonStyle())
-                    .accessibilityLabel("清除工作区筛选")
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.accentSoft.color))
+            WorkspaceActiveFilterPillBanner(filter: model.workspaceFilter) {
+                model.workspaceFilter = .all
             }
 
             if let err = model.errorMessage {
@@ -502,7 +464,7 @@ public struct UnifiedProviderWorkspaceView: View {
 
                     if model.supportsArchive && model.archivedOpen {
                         VStack(alignment: .leading, spacing: 4) {
-                            archivedToggleButton
+                            WorkspaceArchivedToggleRow(isOpen: $model.archivedOpen, archivedCount: model.filteredArchivedItems.count)
                             if model.supportsWorkspaceGrouping && model.groupingMode == .byWorkspace {
                                 ForEach(model.archivedWorkspaceGroups) { group in
                                     let expanded = !model.collapsedArchivedWorkspaceKeys.contains(group.key)
@@ -563,7 +525,7 @@ public struct UnifiedProviderWorkspaceView: View {
 
             if model.supportsArchive && !model.archivedOpen {
                 VStack(alignment: .leading, spacing: 0) {
-                    archivedToggleButton
+                    WorkspaceArchivedToggleRow(isOpen: $model.archivedOpen, archivedCount: model.filteredArchivedItems.count)
                 }
                 .padding(.top, 8)
                 .overlay(alignment: .top) {
@@ -600,71 +562,6 @@ public struct UnifiedProviderWorkspaceView: View {
         .padding(.top, 14)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
-    }
-
-    private var archivedToggleButton: some View {
-        Button {
-            model.archivedOpen.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                LucideIcon(model.archivedOpen ? .chevronDown : .chevronRight, size: 14)
-                    .foregroundStyle((model.archivedOpen ? palette.accent : palette.textMuted).color)
-                Text("已归档")
-                    .font(DesignFonts.body(12, weight: .medium))
-                    .foregroundStyle(palette.textMuted.color)
-                Spacer()
-                if model.archivedOpen {
-                    Text("\(model.filteredArchivedItems.count)")
-                        .font(DesignFonts.tabularBody(11, weight: .medium))
-                        .foregroundStyle(palette.textMuted.color)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(palette.elevated.color))
-                }
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .frame(minHeight: 32)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainHitButtonStyle())
-    }
-
-    private func buildWorkspaceFilterMenuActions() -> [SessionMenuAction] {
-        var actions: [SessionMenuAction] = [
-            SessionMenuAction(
-                id: "ws-filter-all",
-                label: "全部工作区",
-                icon: model.workspaceFilter == .all ? .check : .folderGit2,
-                run: { model.workspaceFilter = .all }
-            )
-        ]
-        if case let .workspace(selectedKey, includeSub) = model.workspaceFilter,
-           selectedKey.path != nil
-        {
-            actions.append(SessionMenuAction(
-                id: "ws-filter-sub-toggle",
-                label: includeSub ? "包含子目录：已开启" : "包含子目录：已关闭",
-                icon: includeSub ? .check : .gitFork,
-                run: {
-                    model.workspaceFilter = .workspace(selectedKey, includeSubdirectories: !includeSub)
-                }
-            ))
-        }
-        for group in model.availableWorkspaceGroups {
-            let isSelected = (model.workspaceFilter.selectedKey == group.key)
-            actions.append(SessionMenuAction(
-                id: "ws-choice-\(group.id)",
-                label: "\(group.displayName) (\(group.items.count))",
-                icon: isSelected ? .check : .folderOpen,
-                reason: group.fullPath,
-                run: {
-                    let keepSub = model.workspaceFilter.includeSubdirectories && group.key.path != nil
-                    model.workspaceFilter = .workspace(group.key, includeSubdirectories: keepSub)
-                }
-            ))
-        }
-        return actions
     }
 
     private func sessionRowView(

@@ -886,35 +886,20 @@ public struct TaskMenuTriggerButton<Label: View>: View {
 
     public var body: some View {
         Button {
-            guard let anchorView else { return }
+            guard let rawAnchor = anchorView else { return }
+            let resolved = MenuAnchorProbeNSView.resolveAnchorView(rawAnchor)
             AgentHubTaskMenuPresenter.shared.presentBelowAnchorView(
-                anchorView,
+                resolved,
                 rightAligned: rightAligned,
                 actions: makeActions(),
                 palette: palette
             )
         } label: {
             label()
-                .background(TaskMenuAnchorCaptureView(capturedView: $anchorView))
+                .background(MenuAnchorProbeNSView(capturedView: $anchorView))
         }
         .buttonStyle(PlainHitButtonStyle())
         .accessibilityLabel(accessibilityLabel)
-    }
-}
-
-private struct TaskMenuAnchorCaptureView: NSViewRepresentable {
-    @Binding var capturedView: NSView?
-
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView(frame: .zero)
-        DispatchQueue.main.async { capturedView = v.superview ?? v }
-        return v
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if capturedView == nil {
-            DispatchQueue.main.async { capturedView = nsView.superview ?? nsView }
-        }
     }
 }
 
@@ -1514,49 +1499,182 @@ public struct SessionBatchBarAndDialogView: View {
     }
 }
 
-public struct ModalConfirmDialogView<Content: View>: View {
-    @Environment(\.agentHubPalette) private var palette
-    public let busy: Bool
-    public let onCancel: () -> Void
-    @ViewBuilder public let content: () -> Content
+// MARK: - Shared Workspace Sidebar Controls & Filter Menu Builder
 
-    public init(busy: Bool, onCancel: @escaping () -> Void, @ViewBuilder content: @escaping () -> Content) {
-        self.busy = busy
-        self.onCancel = onCancel
-        self.content = content
+public enum WorkspaceFilterMenuBuilder {
+    public static func buildActions<Item>(
+        currentFilter: ProjectWorkspaceFilter,
+        groups: [ProjectWorkspaceGroup<Item>],
+        idPrefix: String = "ws-filter",
+        onSelect: @escaping (ProjectWorkspaceFilter) -> Void
+    ) -> [SessionMenuAction] {
+        var actions: [SessionMenuAction] = [
+            SessionMenuAction(
+                id: "\(idPrefix)-all",
+                label: "全部工作区",
+                icon: currentFilter == .all ? .check : .folderGit2,
+                run: { onSelect(.all) }
+            )
+        ]
+        if case let .workspace(selectedKey, includeSub) = currentFilter,
+           selectedKey.path != nil
+        {
+            actions.append(SessionMenuAction(
+                id: "\(idPrefix)-sub-toggle",
+                label: includeSub ? "包含子目录：已开启" : "包含子目录：已关闭",
+                icon: includeSub ? .check : .gitFork,
+                run: {
+                    onSelect(.workspace(selectedKey, includeSubdirectories: !includeSub))
+                }
+            ))
+        }
+        for group in groups {
+            let isSelected = (currentFilter.selectedKey == group.key)
+            actions.append(SessionMenuAction(
+                id: "\(idPrefix)-\(group.id)",
+                label: "\(group.displayName) (\(group.items.count))",
+                icon: isSelected ? .check : .folderOpen,
+                reason: group.fullPath,
+                run: {
+                    let keepSub = currentFilter.includeSubdirectories && group.key.path != nil
+                    onSelect(.workspace(group.key, includeSubdirectories: keepSub))
+                }
+            ))
+        }
+        return actions
+    }
+}
+
+public struct WorkspaceSidebarFilterMenuButton: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let isFiltered: Bool
+    public let makeActions: () -> [SessionMenuAction]
+
+    public init(isFiltered: Bool, makeActions: @escaping () -> [SessionMenuAction]) {
+        self.isFiltered = isFiltered
+        self.makeActions = makeActions
     }
 
     public var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                ModalScopePresenceView()
-                    .frame(width: 0, height: 0)
-
-                // Backdrop rgba(0,0,0,.55) — explicitly does NOT close on backdrop click!
-                Color.black.opacity(0.55)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {}
-
-                VStack(alignment: .leading, spacing: 14) {
-                    content()
-                }
-                .padding(24)
-                .frame(width: min(520, max(280, geo.size.width - 32)))
+        TaskMenuTriggerButton(
+            rightAligned: true,
+            accessibilityLabel: "筛选工作区",
+            makeActions: makeActions
+        ) {
+            LucideIcon(.slidersHorizontal, size: 15)
+                .foregroundStyle((isFiltered ? palette.accent : palette.textMuted).color)
+                .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(palette.elevated.color)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isFiltered ? palette.accentSoft.color : Color.clear)
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(palette.borderStrong.color, lineWidth: 1)
-                )
-                .shadow(color: Color.black.opacity(0.30), radius: 18, x: 0, y: 8)
+                .contentShape(Rectangle())
+        }
+        .help("按工作区筛选")
+    }
+}
+
+public struct WorkspaceSidebarSearchField: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let placeholder: String
+    @Binding public var query: String
+
+    public init(placeholder: String, query: Binding<String>) {
+        self.placeholder = placeholder
+        self._query = query
+    }
+
+    public var body: some View {
+        HStack(spacing: 8) {
+            LucideIcon(.search, size: 15)
+                .foregroundStyle(palette.textMuted.color)
+            TextField(placeholder, text: $query)
+                .textFieldStyle(.plain)
+                .font(DesignFonts.body(13))
+            if !query.isEmpty {
+                Button { query = "" } label: { LucideIcon(.x, size: 13) }
+                    .buttonStyle(IconButtonStyle(dimension: 22))
             }
         }
-        .onExitCommand {
-            if !busy { onCancel() }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+    }
+}
+
+public struct WorkspaceActiveFilterPillBanner: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let filter: ProjectWorkspaceFilter
+    public let onClear: () -> Void
+
+    public init(filter: ProjectWorkspaceFilter, onClear: @escaping () -> Void) {
+        self.filter = filter
+        self.onClear = onClear
+    }
+
+    public var body: some View {
+        if case let .workspace(filterKey, includeSub) = filter {
+            HStack(spacing: 6) {
+                LucideIcon(.folderGit2, size: 12)
+                    .foregroundStyle(palette.accent.color)
+                Text(ProjectWorkspaceEngine.compactDisplayName(for: filterKey) + (includeSub ? "（含子目录）" : ""))
+                    .font(DesignFonts.body(11, weight: .medium))
+                    .foregroundStyle(palette.textSecondary.color)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button(action: onClear) {
+                    LucideIcon(.x, size: 12)
+                        .foregroundStyle(palette.textMuted.color)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+                .accessibilityLabel("清除工作区筛选")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.accentSoft.color))
         }
+    }
+}
+
+public struct WorkspaceArchivedToggleRow: View {
+    @Environment(\.agentHubPalette) private var palette
+    @Binding public var isOpen: Bool
+    public let archivedCount: Int
+
+    public init(isOpen: Binding<Bool>, archivedCount: Int) {
+        self._isOpen = isOpen
+        self.archivedCount = archivedCount
+    }
+
+    public var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                LucideIcon(isOpen ? .chevronDown : .chevronRight, size: 14)
+                    .foregroundStyle((isOpen ? palette.accent : palette.textMuted).color)
+                Text("已归档")
+                    .font(DesignFonts.body(12, weight: .medium))
+                    .foregroundStyle(palette.textMuted.color)
+                Spacer()
+                if isOpen {
+                    Text("\(archivedCount)")
+                        .font(DesignFonts.tabularBody(11, weight: .medium))
+                        .foregroundStyle(palette.textMuted.color)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(palette.elevated.color))
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainHitButtonStyle())
     }
 }
 

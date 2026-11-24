@@ -546,9 +546,20 @@ public final class CodexDesktopStore: ObservableObject {
             }
             let request: Inner
         }
-        guard let reqData = try? JSONEncoder().encode(AttachReq(request: .init(revision: rev, threadId: tid, confirmOwner: confirmOwner))),
-              let reqJSON = String(data: reqData, encoding: .utf8)
-        else { return }
+        let reqJSON: String
+        do {
+            let reqData = try JSONEncoder().encode(
+                AttachReq(request: .init(revision: rev, threadId: tid, confirmOwner: confirmOwner))
+            )
+            guard let encoded = String(data: reqData, encoding: .utf8) else {
+                actionError = "桌面连接请求编码失败"
+                return
+            }
+            reqJSON = encoded
+        } catch {
+            actionError = "桌面连接请求编码失败"
+            return
+        }
 
         do {
             let initialData = try await connection.transport.desktopAttach(
@@ -617,13 +628,20 @@ public final class CodexDesktopStore: ObservableObject {
 
     public func act(_ action: DesktopAction) async throws {
         guard let sessionId = view?.sessionId else {
-            throw AgentHubFFIError("尚未连接本机 Codex 会话")
+            let err = AgentHubFFIError("尚未连接本机 Codex 会话")
+            actionError = Self.safeCollaborationErrorMessage(err)
+            throw err
         }
-        switch action {
-        case let .send(_, text, refs, _), let .steer(_, text, refs, _, _):
-            try Self.validateOutgoingPayload(text: text, referencesCount: refs.count)
-        default:
-            break
+        do {
+            switch action {
+            case let .send(_, text, refs, _), let .steer(_, text, refs, _, _):
+                try Self.validateOutgoingPayload(text: text, referencesCount: refs.count)
+            default:
+                break
+            }
+        } catch {
+            actionError = Self.safeCollaborationErrorMessage(error)
+            throw error
         }
         busy = true
         actionError = nil

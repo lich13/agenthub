@@ -924,8 +924,19 @@ fn parse_events(
     let mut open_tool_indices: Vec<usize> = Vec::new();
     let mut open_tool_by_id: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    let mut turn_assistant_indices: Vec<(usize, u64)> = Vec::new();
     let mut line_index = 0usize;
     let mut current_turn: Option<String> = None;
+
+    let demote_turn_assistants =
+        |events: &mut [ProviderHistoryEvent], indices: &mut Vec<(usize, u64)>| {
+            for (prev_idx, prev_seq) in indices.drain(..) {
+                if let Some(ev) = events.get_mut(prev_idx) {
+                    ev.kind = "thinking".into();
+                    ev.id = format!("seq-{prev_seq}-commentary");
+                }
+            }
+        };
 
     decode_log_lines(&session.log_path, session.compressed, |line| {
         if line_index == 0 {
@@ -942,16 +953,22 @@ fn parse_events(
         let kind = row["type"].as_str().unwrap_or("");
         let data = &row["data"];
         if let Some(t) = data["turn"].as_u64() {
-            current_turn = Some(format!("turn-{t}"));
+            let next_turn = format!("turn-{t}");
+            if current_turn.as_deref() != Some(next_turn.as_str()) {
+                turn_assistant_indices.clear();
+                current_turn = Some(next_turn);
+            }
         }
 
         match kind {
             "turn/start" => {
+                turn_assistant_indices.clear();
                 if let Some(t) = data["turn"].as_u64() {
                     current_turn = Some(format!("turn-{t}"));
                 }
             }
             "turn/end" | "session/end-seed" => {
+                turn_assistant_indices.clear();
                 let reason = data["reason"]["kind"].as_str().unwrap_or("completed");
                 let settled = if kind == "session/end-seed" || reason == "completed" {
                     "completed"
@@ -979,6 +996,7 @@ fn parse_events(
                 if user_msg.text.trim().is_empty() && user_msg.attachments.is_empty() {
                     return Ok(());
                 }
+                turn_assistant_indices.clear();
                 let mut ev = make_dsh_event(
                     event_id,
                     timestamp,
@@ -993,17 +1011,21 @@ fn parse_events(
             }
             "assistant/message" => {
                 let msg = &data["message"];
-                if let Some(reasoning) = msg["reasoning_content"]
+                let reasoning = msg["reasoning_content"]
                     .as_str()
                     .or_else(|| msg["reasoningContent"].as_str())
                     .filter(|s| !s.trim().is_empty())
-                {
+                    .map(str::to_owned);
+                if reasoning.is_some() {
+                    demote_turn_assistants(&mut events, &mut turn_assistant_indices);
+                }
+                if let Some(reasoning) = reasoning {
                     events.push(make_dsh_event(
                         format!("seq-{seq}-thinking"),
                         timestamp.clone(),
                         "thinking",
                         "assistant",
-                        Some(reasoning.to_owned()),
+                        Some(reasoning),
                         current_turn.clone(),
                         "completed",
                     ));
@@ -1018,6 +1040,10 @@ fn parse_events(
                                     .or_else(|| block["text"].as_str())
                                     .filter(|s| !s.trim().is_empty())
                                 {
+                                    demote_turn_assistants(
+                                        &mut events,
+                                        &mut turn_assistant_indices,
+                                    );
                                     events.push(make_dsh_event(
                                         format!("seq-{seq}-thinking-{bi}"),
                                         timestamp.clone(),
@@ -1039,6 +1065,8 @@ fn parse_events(
                     }
                     let joined = text_parts.join("\n");
                     if !joined.trim().is_empty() {
+                        demote_turn_assistants(&mut events, &mut turn_assistant_indices);
+                        let event_idx = events.len();
                         events.push(make_dsh_event(
                             format!("seq-{seq}-assistant"),
                             timestamp,
@@ -1048,9 +1076,12 @@ fn parse_events(
                             current_turn.clone(),
                             "completed",
                         ));
+                        turn_assistant_indices.push((event_idx, seq));
                     }
                 } else if let Some(text) = msg["content"].as_str().filter(|s| !s.trim().is_empty())
                 {
+                    demote_turn_assistants(&mut events, &mut turn_assistant_indices);
+                    let event_idx = events.len();
                     events.push(make_dsh_event(
                         format!("seq-{seq}-assistant"),
                         timestamp,
@@ -1060,9 +1091,11 @@ fn parse_events(
                         current_turn.clone(),
                         "completed",
                     ));
+                    turn_assistant_indices.push((event_idx, seq));
                 }
             }
             "tool/call" => {
+                demote_turn_assistants(&mut events, &mut turn_assistant_indices);
                 let name = data["name"].as_str().unwrap_or("tool");
                 let call_id = data["callId"]
                     .as_str()
@@ -2887,6 +2920,57 @@ mod tests {
         assert_eq!(question_row.status, "reply_needed");
 
         drop(lock_file);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn intermediate_assistant_messages_before_tools_or_later_replies_demote_to_thinking() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-commentary-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/proj-commentary");
+        let id = "55555555-6666-4777-8888-999999999999";
+        fs::create_dir_all(proj.join(id)).unwrap();
+        write_zstd_frames(
+            &proj.join(id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":id,"createdAt":10,"cwd":"/workspace/dsh"}),
+                json!({"type":"turn/start","seq":1,"time":11,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":2,"time":12,"data":{"turn":1,"source":{"kind":"user"},"content":"排查思考块展开"}}),
+                json!({"type":"assistant/message","seq":3,"time":13,"data":{"turn":1,"message":{"content":"我先读取日志配置。"}}}),
+                json!({"type":"tool/call","seq":4,"time":14,"data":{"turn":1,"callId":"tc-1","name":"read_file","arguments":{"path":"src/main.rs"}}}),
+                json!({"type":"tool/result","seq":5,"time":15,"data":{"turn":1,"callId":"tc-1","message":{"toolCallId":"tc-1","content":[{"type":"text","text":"fn main() {}"}]}}}),
+                json!({"type":"assistant/message","seq":6,"time":16,"data":{"turn":1,"message":{"content":[{"type":"text","text":"接着核对第二处逻辑。"}]}}}),
+                json!({"type":"assistant/message","seq":7,"time":17,"data":{"turn":1,"message":{"content":"排查完毕，以下为最终结论。"}}}),
+                json!({"type":"turn/end","seq":8,"time":18,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        let paths = DshPaths { home: home.clone() };
+        let detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: id.into(),
+                agent_id: None,
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        let kinds_and_ids: Vec<(&str, &str)> = detail
+            .events
+            .iter()
+            .map(|e| (e.kind.as_str(), e.id.as_str()))
+            .collect();
+        assert_eq!(
+            kinds_and_ids,
+            vec![
+                ("user_message", "seq-2-user"),
+                ("thinking", "seq-3-commentary"),
+                ("tool_call", "seq-4-toolcall"),
+                ("tool_result", "seq-5-toolresult"),
+                ("thinking", "seq-6-commentary"),
+                ("assistant_message", "seq-7-assistant"),
+            ]
+        );
         fs::remove_dir_all(home).unwrap();
     }
 }

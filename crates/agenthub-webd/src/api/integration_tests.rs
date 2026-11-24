@@ -1,9 +1,9 @@
 use super::{
     load_probe_threads,
+    rpc_dispatch::rpc_dispatch,
     test_support::{sandboxed_test_config, write_executable_fixture, AsyncEnvGuard},
     update_service, UpdateAction,
 };
-use super::{rpc_dispatch::rpc_dispatch, ApiErrorKind};
 use agenthub_core::codex::CodexPaths;
 use agenthub_core::{
     config::Config,
@@ -169,12 +169,12 @@ async fn request_rpc_status(
     state: crate::state::AppState,
     command: &str,
     body: &str,
-) -> Result<(), ApiErrorKind> {
-    let args = serde_json::from_str(body).map_err(|_| ApiErrorKind::InvalidRequest)?;
+) -> Result<(), String> {
+    let args = serde_json::from_str(body).map_err(|err| err.to_string())?;
     rpc_dispatch(state, command.into(), args)
         .await
         .map(|_| ())
-        .map_err(|error| error.kind)
+        .map_err(|error| error.message)
 }
 
 #[tokio::test]
@@ -334,15 +334,13 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         ]
     );
     state.app_server_client = agenthub_core::codex::CodexAppServerClient::with_candidates(vec![]);
-    assert_eq!(
-        request_rpc_status(
-            state,
-            "threads.rename",
-            r#"{"threadId":"thread-a","name":"must not use SQL"}"#
-        )
-        .await,
-        Err(ApiErrorKind::OperationFailed)
-    );
+    assert!(request_rpc_status(
+        state,
+        "threads.rename",
+        r#"{"threadId":"thread-a","name":"must not use SQL"}"#
+    )
+    .await
+    .is_err());
     let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
     assert_eq!(
         conn.query_row("SELECT title FROM threads WHERE id='thread-a'", [], |row| {
@@ -838,7 +836,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
         r#"{"settings":{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}}"#)
     .await;
 
-    assert_eq!(status, Err(ApiErrorKind::InvalidRequest));
+    assert!(status.is_err());
     assert!(state
         .db
         .get_secret_setting_bytes("probe_bark_device_key")
@@ -893,7 +891,7 @@ async fn probe_actions_expose_safe_probe_surfaces() {
         "probe.logsDbExecute",
     ] {
         let status = request_rpc_status(app.clone(), command, "{}").await;
-        assert_eq!(status, Err(ApiErrorKind::NotFound));
+        assert_eq!(status, Err("不支持的远程操作".to_string()));
     }
 }
 
@@ -914,7 +912,7 @@ async fn probe_settings_patch_rejects_missing_config_file() {
     )
     .await;
 
-    assert_eq!(status, Err(ApiErrorKind::InvalidRequest));
+    assert!(status.is_err_and(|msg| msg.contains("config file not found")));
 }
 
 #[tokio::test]
@@ -1097,9 +1095,10 @@ async fn batch_rpc_rejects_paths_or_wildcards() {
         r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":[],"path":"/tmp"}}"#,
         r#"{"request":{"provider":"codex","operation":"delete","sessionKeys":["fixture"],"all":true}}"#,
     ] {
-        assert_eq!(
-            request_rpc_status(app.clone(), "sessions.bulkPreview", payload).await,
-            Err(ApiErrorKind::InvalidRequest)
+        assert!(
+            request_rpc_status(app.clone(), "sessions.bulkPreview", payload)
+                .await
+                .is_err_and(|msg| msg.contains("unknown field"))
         );
     }
 }
@@ -1136,16 +1135,14 @@ async fn claude_rpc_identity_paging_rename_and_delete_are_scoped() {
     )
     .await;
     assert_eq!(renamed["title"], "Renamed RPC fixture");
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "claude.detail",
-            r#"{"sessionKey":"/etc/passwd"}"#
-        )
-        .await,
-        Err(ApiErrorKind::OperationFailed)
-    );
-    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string()).await,Err(ApiErrorKind::OperationFailed));
+    assert!(request_rpc_status(
+        app.clone(),
+        "claude.detail",
+        r#"{"sessionKey":"/etc/passwd"}"#
+    )
+    .await
+    .is_err());
+    assert!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string()).await.is_err());
     let preview = request_rpc_json(
         app.clone(),
         "claude.deletePreview",
@@ -1334,9 +1331,10 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
                 } else {
                     invalid.clone()
                 };
-                assert_eq!(
-                    request_rpc_status(app.clone(), command, &body.to_string(),).await,
-                    Err(ApiErrorKind::InvalidRequest),
+                assert!(
+                    request_rpc_status(app.clone(), command, &body.to_string(),)
+                        .await
+                        .is_err_and(|msg| msg.contains("unknown field")),
                     "{command} must reject caller field {field}"
                 );
             }
@@ -1346,24 +1344,27 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
     for field in ["rootThreadId", "agentId"] {
         let mut invalid = json!({"rootThreadId":"rpc-root","agentId":"rpc-child"});
         invalid[field] = json!(native_path);
-        assert_eq!(
-            request_rpc_status(app.clone(), "threads.subagentDetail", &invalid.to_string(),).await,
-            Err(ApiErrorKind::OperationFailed)
+        assert!(
+            request_rpc_status(app.clone(), "threads.subagentDetail", &invalid.to_string(),)
+                .await
+                .is_err()
         );
     }
     for field in ["rootThreadId", "sessionKey", "messageId", "attachmentId"] {
         let mut invalid = attachment.clone();
         invalid[field] = json!(native_path);
-        assert_eq!(
-            request_rpc_status(app.clone(), "sessions.attachmentRead", &invalid.to_string(),).await,
-            Err(ApiErrorKind::OperationFailed)
+        assert!(
+            request_rpc_status(app.clone(), "sessions.attachmentRead", &invalid.to_string(),)
+                .await
+                .is_err()
         );
     }
     let mut wrong_root = attachment;
     wrong_root["rootThreadId"] = json!("rpc-other-root");
-    assert_eq!(
-        request_rpc_status(app, "sessions.attachmentRead", &wrong_root.to_string(),).await,
-        Err(ApiErrorKind::OperationFailed)
+    assert!(
+        request_rpc_status(app, "sessions.attachmentRead", &wrong_root.to_string(),)
+            .await
+            .is_err()
     );
 }
 

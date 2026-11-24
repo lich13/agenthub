@@ -1,11 +1,9 @@
-use super::ApiErrorKind;
 use super::{api_error, ApiError};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 pub(super) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    T::deserialize(value).map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))
+    T::deserialize(value).map_err(|err| api_error(err.to_string()))
 }
 
 pub(super) fn rpc_wrapped_payload<T: DeserializeOwned>(
@@ -33,22 +31,7 @@ pub(super) fn rpc_required_string(value: &Value, key: &str) -> Result<String, Ap
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| api_error(ApiErrorKind::InvalidRequest, &format!("{key} is required")))
-}
-
-pub(super) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
-    keys.iter()
-        .filter_map(|key| {
-            value.get(*key).and_then(|value| match value {
-                Value::String(text) if !text.trim().is_empty() => {
-                    Some(((*key).to_string(), text.trim().to_string()))
-                }
-                Value::Number(number) => Some(((*key).to_string(), number.to_string())),
-                Value::Bool(boolean) => Some(((*key).to_string(), boolean.to_string())),
-                _ => None,
-            })
-        })
-        .collect()
+        .ok_or_else(|| api_error(format!("{key} is required")))
 }
 
 #[cfg(test)]

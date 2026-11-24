@@ -38,6 +38,7 @@ pub(in crate::codex) fn native_activity_block(value: &Value) -> Option<MessageBl
             delegation: None,
         }),
         user_message: None,
+        phase: None,
         id: format!("subagent:{event_id}"),
         role: "tool".into(),
         kind: "subagent_activity".into(),

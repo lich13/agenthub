@@ -588,7 +588,7 @@ public struct DesktopCollaborationFooterView: View {
         .padding(.bottom, 18)
         .background(
             WindowFullContentModal(isPresented: discardMessageId != nil, palette: palette) {
-                ModalConfirmDialogView(busy: desktop.busy, onCancel: { discardMessageId = nil }) {
+                ConfirmDialogOverlay(busy: desktop.busy, onCancel: { discardMessageId = nil }) {
                     Text("已在 Codex 中核对发送结果？")
                         .font(DesignFonts.body(15, weight: .semibold))
                     Text("移除此记录后，AgentHub 不会重新发送它。请先确认 Codex 中是否已有这条消息。")
@@ -600,8 +600,12 @@ public struct DesktopCollaborationFooterView: View {
                         Button("已核对，移除记录") {
                             guard let unknownId = discardMessageId else { return }
                             Task {
-                                try? await desktop.act(.dismissUnknown(messageId: unknownId))
-                                discardMessageId = nil
+                                do {
+                                    try await desktop.act(.dismissUnknown(messageId: unknownId))
+                                    discardMessageId = nil
+                                } catch {
+                                    discardMessageId = nil
+                                }
                             }
                         }
                         .buttonStyle(DangerButtonStyle())

@@ -648,7 +648,7 @@ public struct UnifiedWorkspaceHubView: View {
             }
 
             if let plan = hubModel.batchPlan {
-                ModalConfirmDialogView(busy: hubModel.batchBusy, onCancel: { hubModel.batchPlan = nil }) {
+                ConfirmDialogOverlay(busy: hubModel.batchBusy, onCancel: { hubModel.batchPlan = nil }) {
                     SessionBatchPreviewDialogContentView(
                         preview: plan.mergedPreview,
                         busy: hubModel.batchBusy,
@@ -741,21 +741,18 @@ public struct UnifiedWorkspaceHubView: View {
                 Spacer(minLength: 4)
 
                 HStack(spacing: 4) {
-                    TaskMenuTriggerButton(
-                        rightAligned: true,
-                        accessibilityLabel: "筛选工作区",
-                        makeActions: { buildFilterMenuActions() }
-                    ) {
-                        LucideIcon(.slidersHorizontal, size: 15)
-                            .foregroundStyle((hubModel.workspaceFilter != .all ? palette.accent : palette.textMuted).color)
-                            .frame(width: 28, height: 28)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(hubModel.workspaceFilter != .all ? palette.accentSoft.color : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .help("按工作区筛选")
+                    WorkspaceSidebarFilterMenuButton(
+                        isFiltered: hubModel.workspaceFilter != .all,
+                        makeActions: {
+                            WorkspaceFilterMenuBuilder.buildActions(
+                                currentFilter: hubModel.workspaceFilter,
+                                groups: hubModel.availableWorkspaceGroups,
+                                idPrefix: "hub-ws"
+                            ) { nextFilter in
+                                hubModel.workspaceFilter = nextFilter
+                            }
+                        }
+                    )
 
                     if store.target == .local, store.capabilities.codexDesktop,
                        let slot = codexNewThreadSlot
@@ -792,51 +789,23 @@ public struct UnifiedWorkspaceHubView: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
 
-            HStack(spacing: 8) {
-                LucideIcon(.search, size: 15)
-                    .foregroundStyle(palette.textMuted.color)
-                TextField("搜索标题、ID 或工作目录", text: $hubModel.query)
-                    .textFieldStyle(.plain)
-                    .font(DesignFonts.body(13))
-                if !hubModel.query.isEmpty {
-                    Button { hubModel.query = "" } label: { LucideIcon(.x, size: 13) }
-                        .buttonStyle(IconButtonStyle(dimension: 22))
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+            WorkspaceSidebarSearchField(placeholder: "搜索标题、ID 或工作目录", query: $hubModel.query)
 
-            if case let .workspace(filterKey, includeSub) = hubModel.workspaceFilter {
-                HStack(spacing: 6) {
-                    LucideIcon(.folderGit2, size: 12)
-                        .foregroundStyle(palette.accent.color)
-                    Text(ProjectWorkspaceEngine.compactDisplayName(for: filterKey) + (includeSub ? "（含子目录）" : ""))
-                        .font(DesignFonts.body(11, weight: .medium))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button {
-                        hubModel.workspaceFilter = .all
-                    } label: {
-                        LucideIcon(.x, size: 12)
-                            .foregroundStyle(palette.textMuted.color)
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainHitButtonStyle())
-                    .accessibilityLabel("清除工作区筛选")
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.accentSoft.color))
+            WorkspaceActiveFilterPillBanner(filter: hubModel.workspaceFilter) {
+                hubModel.workspaceFilter = .all
             }
 
             if !hubModel.providerErrors.isEmpty {
                 Text(hubModel.providerErrors.joined(separator: "；"))
                     .font(DesignFonts.body(11))
                     .foregroundStyle(palette.errFg.color)
+                    .lineLimit(2)
+            }
+
+            if let fb = hubModel.feedbackMessage, !fb.isEmpty {
+                Text(fb)
+                    .font(DesignFonts.body(11))
+                    .foregroundStyle((fb.contains("无法") || fb.contains("失败") ? palette.errFg : palette.okFg).color)
                     .lineLimit(2)
             }
 
@@ -897,7 +866,7 @@ public struct UnifiedWorkspaceHubView: View {
 
                     if hubModel.archivedOpen {
                         VStack(alignment: .leading, spacing: 4) {
-                            archivedToggleButton
+                            WorkspaceArchivedToggleRow(isOpen: $hubModel.archivedOpen, archivedCount: hubModel.filteredArchivedItems.count)
                             ForEach(hubModel.archivedWorkspaceGroups) { group in
                                 let expanded = !hubModel.collapsedArchivedWorkspaceKeys.contains(group.key)
                                 ProjectWorkspaceGroupHeaderView(
@@ -952,7 +921,7 @@ public struct UnifiedWorkspaceHubView: View {
 
             if !hubModel.archivedOpen {
                 VStack(alignment: .leading, spacing: 0) {
-                    archivedToggleButton
+                    WorkspaceArchivedToggleRow(isOpen: $hubModel.archivedOpen, archivedCount: hubModel.filteredArchivedItems.count)
                 }
                 .padding(.top, 8)
                 .overlay(alignment: .top) {
@@ -984,71 +953,6 @@ public struct UnifiedWorkspaceHubView: View {
         .padding(.top, 14)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
-    }
-
-    private var archivedToggleButton: some View {
-        Button {
-            hubModel.archivedOpen.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                LucideIcon(hubModel.archivedOpen ? .chevronDown : .chevronRight, size: 14)
-                    .foregroundStyle((hubModel.archivedOpen ? palette.accent : palette.textMuted).color)
-                Text("已归档")
-                    .font(DesignFonts.body(12, weight: .medium))
-                    .foregroundStyle(palette.textMuted.color)
-                Spacer()
-                if hubModel.archivedOpen {
-                    Text("\(hubModel.filteredArchivedItems.count)")
-                        .font(DesignFonts.tabularBody(11, weight: .medium))
-                        .foregroundStyle(palette.textMuted.color)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(palette.elevated.color))
-                }
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .frame(minHeight: 32)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainHitButtonStyle())
-    }
-
-    private func buildFilterMenuActions() -> [SessionMenuAction] {
-        var actions: [SessionMenuAction] = [
-            SessionMenuAction(
-                id: "hub-ws-all",
-                label: "全部工作区",
-                icon: hubModel.workspaceFilter == .all ? .check : .folderGit2,
-                run: { hubModel.workspaceFilter = .all }
-            )
-        ]
-        if case let .workspace(selectedKey, includeSub) = hubModel.workspaceFilter,
-           selectedKey.path != nil
-        {
-            actions.append(SessionMenuAction(
-                id: "hub-ws-sub-toggle",
-                label: includeSub ? "包含子目录：已开启" : "包含子目录：已关闭",
-                icon: includeSub ? .check : .gitFork,
-                run: {
-                    hubModel.workspaceFilter = .workspace(selectedKey, includeSubdirectories: !includeSub)
-                }
-            ))
-        }
-        for group in hubModel.availableWorkspaceGroups {
-            let isSelected = (hubModel.workspaceFilter.selectedKey == group.key)
-            actions.append(SessionMenuAction(
-                id: "hub-ws-\(group.id)",
-                label: "\(group.displayName) (\(group.items.count))",
-                icon: isSelected ? .check : .folderOpen,
-                reason: group.fullPath,
-                run: {
-                    let keepSub = hubModel.workspaceFilter.includeSubdirectories && group.key.path != nil
-                    hubModel.workspaceFilter = .workspace(group.key, includeSubdirectories: keepSub)
-                }
-            ))
-        }
-        return actions
     }
 
     private func hubRowView(
@@ -1183,7 +1087,11 @@ public struct UnifiedWorkspaceHubView: View {
             },
             onRevealInFinder: { path in
                 Task {
-                    try? await FileOpenerService.revealPaths([path])
+                    do {
+                        try await FileOpenerService.revealPaths([path])
+                    } catch {
+                        hubModel.feedbackMessage = "无法在 Finder 中显示，请检查文件是否仍存在"
+                    }
                 }
             },
             onDelete: {

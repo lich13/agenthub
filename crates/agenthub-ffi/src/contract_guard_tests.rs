@@ -134,6 +134,10 @@ fn c_abi_isolated_init_invoke_capabilities_and_shutdown_roundtrip() {
     assert!(!rt_ptr.is_null());
     assert!(err_ptr.is_null());
     assert!(temp.path().join("config.toml").is_file());
+    assert!(
+        !temp.path().join("workspace").exists(),
+        "isolated desktop init must not materialize retired workspace directories on disk"
+    );
 
     let (tx, rx) = std::sync::mpsc::channel::<(u64, bool, String)>();
     unsafe extern "C" fn on_rpc(

@@ -5,11 +5,8 @@ use agenthub_core::{
     jobs::JobRunner,
     platform::PlatformPaths,
 };
-use anyhow::{anyhow, Result};
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use anyhow::Result;
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct DesktopState {
@@ -24,14 +21,9 @@ pub struct DesktopState {
 impl DesktopState {
     pub fn current() -> Result<Self> {
         let platform = PlatformPaths::desktop_current()?;
-        let mut config = load_desktop_config(&platform)?;
+        let config = load_desktop_config(&platform)?;
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
-        if agenthub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
-            config.codex.workspace = default_local_desktop_workspace()
-                .ok_or_else(|| anyhow!("cannot resolve local desktop workspace"))?;
-        }
-        std::fs::create_dir_all(&config.codex.workspace)?;
         let db = open_panel_db(&config)?;
         Ok(Self::new(config, db, platform))
     }
@@ -75,10 +67,6 @@ impl DesktopState {
     pub fn platform(&self) -> &PlatformPaths {
         &self.platform
     }
-}
-
-fn default_local_desktop_workspace() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("agenthub-workspace"))
 }
 
 fn load_desktop_config(platform: &PlatformPaths) -> Result<Config> {

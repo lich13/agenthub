@@ -1,4 +1,4 @@
-use super::{linux_update_platform, ok, ApiResponse};
+use super::{ok, ApiResponse};
 use crate::state::AppState;
 use agenthub_core::services::use_cases::AgentHubUseCases;
 
@@ -7,8 +7,7 @@ pub(crate) async fn hidden_threads_delete_dry_run(
     request: agenthub_core::archive::hidden_scan::HiddenScanRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let platform = linux_update_platform();
-    ok(AgentHubUseCases::new(&platform)
+    ok(AgentHubUseCases::new(state.platform())
         .cleanup()
         .scan_hidden(state.codex_paths(), auth.admin_id.to_string(), request)
         .await?)
@@ -16,8 +15,9 @@ pub(crate) async fn hidden_threads_delete_dry_run(
 
 pub(crate) async fn unified_cleanup_dry_run(state: AppState) -> ApiResponse {
     let paths = state.unified_cleanup_paths()?;
+    let platform = state.platform().clone();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&linux_update_platform())
+        AgentHubUseCases::new(&platform)
             .cleanup()
             .unified_dry_run(&paths)
     })
@@ -33,7 +33,7 @@ pub(crate) async fn unified_cleanup_execute(
     let paths = state.unified_cleanup_paths()?;
     ok(
         agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-            let result = AgentHubUseCases::new(&linux_update_platform())
+            let result = AgentHubUseCases::new(state.platform())
                 .cleanup()
                 .unified_execute(&paths, request)?;
             state.db.record_audit(

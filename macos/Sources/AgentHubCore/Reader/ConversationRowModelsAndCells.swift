@@ -43,6 +43,10 @@ public struct ConversationRowItem: Equatable, Sendable, Identifiable {
 }
 
 public enum ConversationRowBuilder {
+    private static func executionTimelineAliases(_ group: ExecutionGroup) -> [String] {
+        ProcessGroupingEngine.uniqueStrings(group.stateAliases + group.commands.flatMap { [$0.id] + $0.sourceIds })
+    }
+
     public static func buildCodexRows(
         blocks: [MessageBlock],
         showAllHistory: Bool,
@@ -60,7 +64,7 @@ public enum ConversationRowBuilder {
             switch entry {
             case let .group(group):
                 return .step(.execution(group: group, turnId: group.turnId))
-            case let .item(block, _, _):
+            case let .item(block, key, sourceIds):
                 if block.subagent != nil
                     || ConversationViewModel.isHistoryCollapsedBlock(block)
                     || ConversationViewModel.isPlanBlock(block)
@@ -68,6 +72,15 @@ public enum ConversationRowBuilder {
                     || ConversationViewModel.isQuestionResultBlock(block)
                 {
                     return .passthrough
+                }
+                if block.role == "assistant" && block.phase == "commentary" {
+                    return ProcessGroupingEngine.thinkingStepFromText(
+                        id: key,
+                        sourceIds: sourceIds,
+                        rawText: block.text,
+                        running: false,
+                        turnId: block.turnId
+                    )
                 }
                 if ConversationViewModel.isToolBlock(block) {
                     let st = (block.status ?? "").lowercased()
@@ -99,11 +112,10 @@ public enum ConversationRowBuilder {
                     kind: .processGroup(proc)
                 ))
             case let .execution(group):
-                let aliases = group.mergedIds + group.commands.flatMap { ["group:\($0.id)", $0.id] + $0.sourceIds }
                 rows.append(ConversationRowItem(
                     id: group.id,
                     timelineId: group.id,
-                    timelineAliases: aliases,
+                    timelineAliases: executionTimelineAliases(group),
                     kind: .executionGroup(group)
                 ))
             case let .passthrough(entry):
@@ -188,44 +200,99 @@ public enum ConversationRowBuilder {
         fallbackTitle: String = ""
     ) -> [ConversationRowItem] {
         let entries = ClaudeProcessGroupingEngine.groupClaudeProcesses(events, recordedOnly: recordedOnly)
-        var rows: [ConversationRowItem] = []
-
-        for entry in entries {
+        let folded = ProcessGroupingEngine.foldProcessSequence(prefix: "claude", items: entries) { entry in
             switch entry {
-            case let .process(proc):
-                let innerCmdAliases = proc.entries.flatMap { sub -> [String] in
-                    switch sub {
-                    case let .item(_, key, sids): [key] + sids
-                    case let .metadata(m): [m.id] + m.sourceIds
-                    case let .group(g): [g.id] + g.commands.flatMap { [$0.id] + $0.sourceIds }
-                    }
+            case let .group(group):
+                return .step(.execution(group: group, turnId: group.turnId))
+            case let .item(ev, key, sourceIds):
+                if ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev) {
+                    return ProcessGroupingEngine.thinkingStepFromText(
+                        id: key,
+                        sourceIds: sourceIds,
+                        rawText: ev.text,
+                        running: !recordedOnly && ev.status == "running",
+                        turnId: ev.turnId
+                    )
                 }
+                if let detail = ev.detail, !detail.isEmpty, ClaudeProcessGroupingEngine.isProcess(ev) {
+                    let status = ExecutionGroupingEngine.executionStatus(ev.status)
+                    return .step(.detail(
+                        id: key,
+                        sourceIds: sourceIds,
+                        title: ev.text ?? ev.role ?? "活动记录",
+                        detail: detail,
+                        running: !recordedOnly && status == .running,
+                        failed: ev.kind == "failure" || status == .failed,
+                        turnId: ev.turnId
+                    ))
+                }
+                return .passthrough
+            case .process, .metadata:
+                return .passthrough
+            }
+        }
+
+        var rows: [ConversationRowItem] = []
+        for foldedItem in folded {
+            switch foldedItem {
+            case let .process(proc):
                 rows.append(ConversationRowItem(
                     id: proc.id,
                     timelineId: proc.id,
-                    timelineAliases: ProcessGroupingEngine.uniqueStrings(proc.sourceIds + innerCmdAliases),
-                    kind: .claudeProcessGroup(proc, title: fallbackTitle)
+                    timelineAliases: proc.timelineAliases,
+                    kind: .processGroup(proc)
                 ))
-            case let .metadata(meta):
+            case let .execution(group):
                 rows.append(ConversationRowItem(
-                    id: meta.id,
-                    timelineId: meta.id,
-                    timelineAliases: meta.sourceIds,
-                    kind: .claudeMetadataGroup(meta, title: fallbackTitle)
+                    id: group.id,
+                    timelineId: group.id,
+                    timelineAliases: executionTimelineAliases(group),
+                    kind: .executionGroup(group)
                 ))
-            case let .group(group):
-                let aliases = group.mergedIds + group.commands.flatMap { ["group:\($0.id)", $0.id] + $0.sourceIds }
-                rows.append(ConversationRowItem(id: group.id, timelineId: group.id, timelineAliases: aliases, kind: .executionGroup(group)))
-            case let .item(ev, key, sourceIds):
-                appendSingleClaudeEventRow(
-                    ev: ev,
-                    key: key,
-                    sourceIds: sourceIds,
-                    recordedOnly: recordedOnly,
-                    attachmentsAsNamesOnly: attachmentsAsNamesOnly,
-                    fallbackTitle: fallbackTitle,
-                    into: &rows
-                )
+            case let .passthrough(entry):
+                switch entry {
+                case let .process(proc):
+                    let procIdAliases = proc.sourceIds.map { "claude-process[\(proc.turnId)][\($0)]" }
+                    let innerCmdAliases = proc.entries.flatMap { sub -> [String] in
+                        switch sub {
+                        case let .item(_, key, sids): [key] + sids
+                        case let .metadata(m): [m.id] + m.sourceIds + m.sourceIds.map { "claude-metadata:\($0)" }
+                        case let .group(g): [g.id] + executionTimelineAliases(g)
+                        }
+                    }
+                    rows.append(ConversationRowItem(
+                        id: proc.id,
+                        timelineId: proc.id,
+                        timelineAliases: ProcessGroupingEngine.uniqueStrings(proc.sourceIds + procIdAliases + innerCmdAliases),
+                        kind: .claudeProcessGroup(proc, title: fallbackTitle)
+                    ))
+                case let .metadata(meta):
+                    rows.append(ConversationRowItem(
+                        id: meta.id,
+                        timelineId: meta.id,
+                        timelineAliases: ProcessGroupingEngine.uniqueStrings(
+                            meta.sourceIds + meta.sourceIds.map { "claude-metadata:\($0)" }
+                        ),
+                        kind: .claudeMetadataGroup(meta, title: fallbackTitle)
+                    ))
+                case let .group(group):
+                    rows.append(ConversationRowItem(
+                        id: group.id,
+                        timelineId: group.id,
+                        timelineAliases: executionTimelineAliases(group),
+                        kind: .executionGroup(group)
+                    ))
+                case let .item(ev, key, sourceIds):
+                    appendSingleClaudeEventRow(
+                        ev: ev,
+                        key: key,
+                        sourceIds: sourceIds,
+                        recordedOnly: recordedOnly,
+                        attachmentsAsNamesOnly: attachmentsAsNamesOnly,
+                        fallbackTitle: fallbackTitle,
+                        into: &rows
+                    )
+                }
             }
         }
         return rows
@@ -314,8 +381,12 @@ public enum ConversationRowBuilder {
             case let .process(proc):
                 rows.append(ConversationRowItem(id: proc.id, timelineId: proc.id, timelineAliases: proc.timelineAliases, kind: .processGroup(proc)))
             case let .execution(group):
-                let aliases = group.commands.flatMap { ["group:\($0.id)", $0.id] + $0.sourceIds }
-                rows.append(ConversationRowItem(id: group.id, timelineId: group.id, timelineAliases: aliases, kind: .executionGroup(group)))
+                rows.append(ConversationRowItem(
+                    id: group.id,
+                    timelineId: group.id,
+                    timelineAliases: executionTimelineAliases(group),
+                    kind: .executionGroup(group)
+                ))
             case let .passthrough(entry):
                 guard case let .item(ev, key, sourceIds) = entry else { continue }
                 let tid = ev.id ?? ev.userMessage?.id ?? key
@@ -407,8 +478,12 @@ public enum ConversationRowBuilder {
             case let .process(proc):
                 rows.append(ConversationRowItem(id: proc.id, timelineId: proc.id, timelineAliases: proc.timelineAliases, kind: .processGroup(proc)))
             case let .execution(group):
-                let aliases = group.commands.flatMap { ["group:\($0.id)", $0.id] + $0.sourceIds }
-                rows.append(ConversationRowItem(id: group.id, timelineId: group.id, timelineAliases: aliases, kind: .executionGroup(group)))
+                rows.append(ConversationRowItem(
+                    id: group.id,
+                    timelineId: group.id,
+                    timelineAliases: executionTimelineAliases(group),
+                    kind: .executionGroup(group)
+                ))
             case let .passthrough(entry):
                 guard case let .item(ev, key, sourceIds) = entry else { continue }
                 if let sub = ev.subagent {

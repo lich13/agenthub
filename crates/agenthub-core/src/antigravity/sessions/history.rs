@@ -923,17 +923,48 @@ pub(super) fn read_offline_transcript_events(
                         row.get::<_, Vec<u8>>(2)?,
                     ))
                 }) {
+                    enum DecodedDbStep {
+                        User(i64, String),
+                        Planner(i64, Option<String>, Option<String>),
+                        Error(i64, String),
+                    }
+
+                    let decoded_steps: Vec<DecodedDbStep> = rows
+                        .flatten()
+                        .filter_map(|(idx, step_type, blob)| match step_type {
+                            14 => super::annotations::extract_db_user_input_text(&blob)
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|cleaned| DecodedDbStep::User(idx, cleaned)),
+                            15 => {
+                                let (reply, thinking) =
+                                    super::annotations::extract_db_planner_texts(&blob);
+                                Some(DecodedDbStep::Planner(idx, reply, thinking))
+                            }
+                            17 => super::annotations::extract_db_error_text(&blob)
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|err| DecodedDbStep::Error(idx, err)),
+                            _ => None,
+                        })
+                        .collect();
+
+                    let mut has_later_planner = vec![false; decoded_steps.len()];
+                    let mut seen_planner_in_turn = false;
+                    for (pos, step) in decoded_steps.iter().enumerate().rev() {
+                        match step {
+                            DecodedDbStep::User(_, _) => seen_planner_in_turn = false,
+                            DecodedDbStep::Planner(_, _, _) => {
+                                has_later_planner[pos] = seen_planner_in_turn;
+                                seen_planner_in_turn = true;
+                            }
+                            DecodedDbStep::Error(_, _) => {}
+                        }
+                    }
+
                     let mut events = Vec::new();
                     let mut turn_seq = 0usize;
-                    for (idx, step_type, blob) in rows.flatten() {
-                        match step_type {
-                            14 => {
-                                let Some(cleaned) =
-                                    super::annotations::extract_db_user_input_text(&blob)
-                                        .filter(|s| !s.trim().is_empty())
-                                else {
-                                    continue;
-                                };
+                    for (pos, step) in decoded_steps.into_iter().enumerate() {
+                        match step {
+                            DecodedDbStep::User(idx, cleaned) => {
                                 turn_seq = turn_seq.saturating_add(1);
                                 let event_id = format!("db-{idx}-user");
                                 let user_msg = crate::user_message::parse_literal_user_message(
@@ -952,10 +983,8 @@ pub(super) fn read_offline_transcript_events(
                                 ev.user_message = Some(user_msg);
                                 events.push(ev);
                             }
-                            15 => {
+                            DecodedDbStep::Planner(idx, reply, thinking) => {
                                 let turn_id = (turn_seq > 0).then(|| format!("turn-{turn_seq}"));
-                                let (reply, thinking) =
-                                    super::annotations::extract_db_planner_texts(&blob);
                                 if let Some(thinking_text) =
                                     thinking.filter(|s| !s.trim().is_empty())
                                 {
@@ -970,10 +999,19 @@ pub(super) fn read_offline_transcript_events(
                                     ));
                                 }
                                 if let Some(reply_text) = reply.filter(|s| !s.trim().is_empty()) {
+                                    let is_intermediate = has_later_planner[pos];
                                     events.push(make_history_event(
-                                        format!("db-{idx}-assistant"),
+                                        if is_intermediate {
+                                            format!("db-{idx}-commentary")
+                                        } else {
+                                            format!("db-{idx}-assistant")
+                                        },
                                         None,
-                                        "assistant_message",
+                                        if is_intermediate {
+                                            "thinking"
+                                        } else {
+                                            "assistant_message"
+                                        },
                                         "assistant",
                                         Some(reply_text),
                                         turn_id,
@@ -981,13 +1019,7 @@ pub(super) fn read_offline_transcript_events(
                                     ));
                                 }
                             }
-                            17 => {
-                                let Some(err_text) =
-                                    super::annotations::extract_db_error_text(&blob)
-                                        .filter(|s| !s.trim().is_empty())
-                                else {
-                                    continue;
-                                };
+                            DecodedDbStep::Error(idx, err_text) => {
                                 events.push(make_tool_event(
                                     format!("db-{idx}-error"),
                                     None,
@@ -1000,7 +1032,6 @@ pub(super) fn read_offline_transcript_events(
                                     Some(err_text),
                                 ));
                             }
-                            _ => {}
                         }
                     }
                     return Ok(events);

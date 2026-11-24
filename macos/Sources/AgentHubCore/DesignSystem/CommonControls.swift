@@ -694,13 +694,13 @@ public struct FlowButtonRow<Content: View>: View {
 
 public struct ConfirmDialogOverlay<Content: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String
+    public let title: String?
     public var busy: Bool
     public let onCancel: () -> Void
     @ViewBuilder public let content: () -> Content
 
     public init(
-        title: String,
+        title: String? = nil,
         busy: Bool = false,
         onCancel: @escaping () -> Void,
         @ViewBuilder content: @escaping () -> Content
@@ -723,11 +723,14 @@ public struct ConfirmDialogOverlay<Content: View>: View {
                 .onTapGesture {}
 
             VStack(alignment: .leading, spacing: 14) {
-                Text(title)
-                    .font(DesignFonts.body(16, weight: .semibold))
-                    .foregroundStyle(palette.textPrimary.color)
+                if let title, !title.isEmpty {
+                    Text(title)
+                        .font(DesignFonts.body(16, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                }
                 content()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
             .frame(maxWidth: 520, alignment: .leading)
             .background(
@@ -777,35 +780,6 @@ public struct UnevenTopAccentBar: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .allowsHitTesting(false)
-    }
-}
-
-// MARK: - Glass Header Surface (--g 88% + Gaussian Blur radius 10)
-
-public struct GlassHeaderSurface: NSViewRepresentable {
-    public let tint: RGBAColor
-
-    public init(tint: RGBAColor) {
-        self.tint = tint
-    }
-
-    public func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        updateLayer(view)
-        return view
-    }
-
-    public func updateNSView(_ nsView: NSView, context: Context) {
-        updateLayer(nsView)
-    }
-
-    private func updateLayer(_ view: NSView) {
-        guard let layer = view.layer else { return }
-        layer.backgroundColor = tint.nsColor.cgColor
-        if let blur = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 10.0]) {
-            layer.backgroundFilters = [blur]
-        }
     }
 }
 
@@ -907,17 +881,43 @@ private final class MenuTargetRelay: NSObject {
     }
 }
 
-private struct MenuAnchorProbeNSView: NSViewRepresentable {
-    let onResolve: (NSView) -> Void
+public struct MenuAnchorProbeNSView: NSViewRepresentable {
+    @Binding public var capturedView: NSView?
 
-    func makeNSView(context: Context) -> NSView {
+    public init(capturedView: Binding<NSView?>) {
+        self._capturedView = capturedView
+    }
+
+    public static func resolveAnchorView(_ probeView: NSView) -> NSView {
+        if probeView.bounds.isEmpty,
+           let sup = probeView.superview,
+           !sup.bounds.isEmpty,
+           sup.bounds.width <= 400,
+           sup.bounds.height <= 120
+        {
+            return sup
+        }
+        return probeView
+    }
+
+    public func makeNSView(context: Context) -> NSView {
         let v = NSView(frame: .zero)
-        DispatchQueue.main.async { onResolve(v) }
+        DispatchQueue.main.async {
+            if capturedView !== v {
+                capturedView = v
+            }
+        }
         return v
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { onResolve(nsView) }
+    public func updateNSView(_ nsView: NSView, context: Context) {
+        if capturedView !== nsView {
+            DispatchQueue.main.async {
+                if capturedView !== nsView {
+                    capturedView = nsView
+                }
+            }
+        }
     }
 }
 
@@ -947,7 +947,7 @@ public struct AnchoredMenuButton<Label: View>: View {
             popMenu()
         } label: {
             label()
-                .background(MenuAnchorProbeNSView { anchorView = $0 })
+                .background(MenuAnchorProbeNSView(capturedView: $anchorView))
         }
         .buttonStyle(PlainHitButtonStyle())
         .accessibilityLabel(accessibilityLabel ?? "菜单")
@@ -972,10 +972,11 @@ public struct AnchoredMenuButton<Label: View>: View {
             mi.isEnabled = !item.disabled
             menu.addItem(mi)
         }
-        if let anchorView, anchorView.window != nil {
-            let y: CGFloat = anchorView.isFlipped ? anchorView.bounds.maxY + 4 : -4
-            let x: CGFloat = alignRight ? max(0, anchorView.bounds.maxX - menu.size.width) : 0
-            menu.popUp(positioning: nil, at: NSPoint(x: x, y: y), in: anchorView)
+        if let rawAnchor = anchorView, rawAnchor.window != nil {
+            let resolved = MenuAnchorProbeNSView.resolveAnchorView(rawAnchor)
+            let y: CGFloat = resolved.isFlipped ? resolved.bounds.maxY + 4 : -4
+            let x: CGFloat = alignRight ? (resolved.bounds.maxX - menu.size.width) : 0
+            menu.popUp(positioning: nil, at: NSPoint(x: x, y: y), in: resolved)
         } else {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }

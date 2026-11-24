@@ -450,10 +450,6 @@ fn inventory(paths: &DshPaths) -> Result<Inventory> {
     })
 }
 
-pub fn preview(paths: &DshPaths) -> Result<DshArchiveDeletePlan> {
-    Ok(inventory(paths)?.plan)
-}
-
 pub(crate) fn preview_with_bytes(
     paths: &DshPaths,
 ) -> Result<(DshArchiveDeletePlan, BTreeMap<String, u64>)> {

@@ -216,15 +216,15 @@ impl<'a> ThreadUseCases<'a> {
     }
 
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_archive_with_capability(self.platform, thread_id)
+        jobs::plan_thread_archive_with_capability(thread_id)
     }
 
     pub fn restore(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_restore_with_capability(self.platform, thread_id)
+        jobs::plan_thread_restore_with_capability(thread_id)
     }
 
     pub fn rename(self, request: ThreadRenameRequest) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_rename_with_capability(self.platform, request)
+        jobs::plan_thread_rename_with_capability(request)
     }
 
     pub fn account_scope_status(

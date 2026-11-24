@@ -4,9 +4,7 @@ use crate::{
     overview::DesktopState,
     remote::{self, RemoteConnections},
     services::{
-        jobs::{self as job_service, DesktopJobDetailRequest, DesktopJobsRequest},
-        probe as probe_service,
-        settings::{self as settings_service, DesktopProbeEventsRequest},
+        jobs as job_service, probe as probe_service, settings as settings_service,
         threads as thread_service, updates as update_service,
     },
 };

@@ -55,7 +55,23 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         coordinator
     }
 
+    private func syncCoordinatorProperties() {
+        coordinator.scheme = scheme
+        coordinator.workspace = workspace
+        coordinator.sessionScopeKey = sessionScopeKey
+        coordinator.sessionProvider = sessionProvider
+        coordinator.sessionKey = sessionKey
+        coordinator.rootThreadId = rootThreadId
+        coordinator.cwd = cwd
+        coordinator.hasTimelineRail = hasTimelineRail
+        coordinator.isSubagent = isSubagent
+        coordinator.canLoadOlder = canLoadOlder
+        coordinator.isLoadingOlder = isLoadingOlder
+        coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
+    }
+
     public func makeNSView(context: Context) -> NSScrollView {
+        syncCoordinatorProperties()
         let scroll = NSScrollView()
         scroll.wantsLayer = true
         scroll.hasVerticalScroller = true
@@ -95,9 +111,6 @@ public struct ConversationReaderTableView: NSViewRepresentable {
             object: scroll.contentView
         )
 
-        coordinator.canLoadOlder = canLoadOlder
-        coordinator.isLoadingOlder = isLoadingOlder
-        coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
         coordinator.scrollView = scroll
         coordinator.tableView = table
         coordinator.column = col
@@ -108,18 +121,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
         let sessionChanged = (coordinator.sessionScopeKey != sessionScopeKey)
         let themeOrWorkspaceChanged = (coordinator.scheme != scheme || coordinator.workspace != workspace)
-        coordinator.scheme = scheme
-        coordinator.workspace = workspace
-        coordinator.sessionScopeKey = sessionScopeKey
-        coordinator.sessionProvider = sessionProvider
-        coordinator.sessionKey = sessionKey
-        coordinator.rootThreadId = rootThreadId
-        coordinator.cwd = cwd
-        coordinator.hasTimelineRail = hasTimelineRail
-        coordinator.isSubagent = isSubagent
-        coordinator.canLoadOlder = canLoadOlder
-        coordinator.isLoadingOlder = isLoadingOlder
-        coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
+        syncCoordinatorProperties()
         nsView.backgroundColor = coordinator.palette.background.nsColor
 
         if sessionChanged || themeOrWorkspaceChanged || coordinator.rows != rows {

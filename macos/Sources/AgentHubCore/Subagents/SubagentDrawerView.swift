@@ -625,6 +625,41 @@ public struct SubagentPanelView: View {
         }
     }
 
+    private func buildCodexSubagentRows(blocks: [MessageBlock], agentName: String) -> [ConversationRowItem] {
+        ConversationRowBuilder.buildCodexRows(
+            blocks: blocks,
+            showAllHistory: true,
+            planFallbackTitle: agentName,
+            subagentsSupported: true
+        )
+    }
+
+    private func buildClaudeSubagentRows(events: [ClaudeHistoryEvent]) -> [ConversationRowItem] {
+        ConversationRowBuilder.buildClaudeRows(
+            events: events,
+            recordedOnly: true,
+            attachmentsAsNamesOnly: true
+        )
+    }
+
+    private func buildAntigravitySubagentRows(
+        events: [ProviderHistoryEvent],
+        latestAgent: SubagentActivity?
+    ) -> [ConversationRowItem] {
+        let subRunning = (latestAgent?.status ?? currentAgent?.status) == "running"
+        return ConversationRowBuilder.buildProviderRows(
+            events: events,
+            providerLabel: "Antigravity",
+            sessionRunning: subRunning,
+            subagentsSupported: true
+        )
+    }
+
+    private func applyOlderPageRows(_ nextRows: [ConversationRowItem]) {
+        coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+        rows = nextRows
+    }
+
     private func fetchSubagentDetail(_ agent: SubagentActivity) async {
         guard let agentId = agent.agentId, !agentId.isEmpty else { return }
         if rows.isEmpty { loading = true }
@@ -647,12 +682,7 @@ public struct SubagentPanelView: View {
                 if currentDetailSubagents != nextSubs { currentDetailSubagents = nextSubs }
                 if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = ConversationRowBuilder.buildCodexRows(
-                    blocks: slot.blocks,
-                    showAllHistory: true,
-                    planFallbackTitle: resp.agent.name,
-                    subagentsSupported: true
-                )
+                let nextRows = buildCodexSubagentRows(blocks: slot.blocks, agentName: resp.agent.name)
                 if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .codex,
@@ -685,11 +715,7 @@ public struct SubagentPanelView: View {
                 if currentDetailSubagents != nil { currentDetailSubagents = nil }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = ConversationRowBuilder.buildClaudeRows(
-                    events: slot.events,
-                    recordedOnly: true,
-                    attachmentsAsNamesOnly: true
-                )
+                let nextRows = buildClaudeSubagentRows(events: slot.events)
                 if rows != nextRows { rows = nextRows }
                 if !timelineEntries.isEmpty { timelineEntries = [] }
             } else if provider == .antigravity {
@@ -719,13 +745,7 @@ public struct SubagentPanelView: View {
                 if currentDetailSubagents != slot.subagents { currentDetailSubagents = slot.subagents }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let subRunning = (detail.agent?.status ?? currentAgent?.status) == "running"
-                let nextRows = ConversationRowBuilder.buildProviderRows(
-                    events: slot.events,
-                    providerLabel: "Antigravity",
-                    sessionRunning: subRunning,
-                    subagentsSupported: true
-                )
+                let nextRows = buildAntigravitySubagentRows(events: slot.events, latestAgent: detail.agent)
                 if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .antigravity,
@@ -772,14 +792,7 @@ public struct SubagentPanelView: View {
                 let slot = subagentThreadStore.applyBlockPage(page, expectedCursor: cursor)
                 hasMoreOlder = slot.hasMoreBlocks && slot.beforeCursor != cursor
                 beforeCursor = hasMoreOlder ? slot.beforeCursor : nil
-                let nextRows = ConversationRowBuilder.buildCodexRows(
-                    blocks: slot.blocks,
-                    showAllHistory: true,
-                    planFallbackTitle: resp.agent.name,
-                    subagentsSupported: true
-                )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-                rows = nextRows
+                applyOlderPageRows(buildCodexSubagentRows(blocks: slot.blocks, agentName: resp.agent.name))
             } else if provider == .claudeCode {
                 struct ClaudeSubReq: Encodable {
                     let sessionKey: String
@@ -803,13 +816,7 @@ public struct SubagentPanelView: View {
                 )
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
-                let nextRows = ConversationRowBuilder.buildClaudeRows(
-                    events: slot.events,
-                    recordedOnly: true,
-                    attachmentsAsNamesOnly: true
-                )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-                rows = nextRows
+                applyOlderPageRows(buildClaudeSubagentRows(events: slot.events))
             } else if provider == .antigravity {
                 struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
@@ -835,15 +842,7 @@ public struct SubagentPanelView: View {
                 }
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
-                let subRunning = (page.agent?.status ?? currentAgent?.status) == "running"
-                let nextRows = ConversationRowBuilder.buildProviderRows(
-                    events: slot.events,
-                    providerLabel: "Antigravity",
-                    sessionRunning: subRunning,
-                    subagentsSupported: true
-                )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
-                rows = nextRows
+                applyOlderPageRows(buildAntigravitySubagentRows(events: slot.events, latestAgent: page.agent))
             }
         } catch {
             guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }

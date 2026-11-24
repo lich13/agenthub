@@ -10,19 +10,13 @@ use agenthub_core::{
     },
 };
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopProbeEventsResponse {
     pub events: Vec<agenthub_core::db::ProbeEvent>,
     pub limit: u32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopProbeEventsRequest {
-    pub limit: Option<u32>,
 }
 
 pub(crate) fn probe_settings_with_state(
@@ -122,10 +116,9 @@ pub(crate) fn probe_action_with_state(
 
 pub(crate) fn probe_events_with_state(
     state: &DesktopState,
-    request: DesktopProbeEventsRequest,
+    limit: Option<u32>,
 ) -> Result<DesktopProbeEventsResponse> {
-    let limit = request
-        .limit
+    let limit = limit
         .unwrap_or(state.config().probe.recent_limit as u32)
         .clamp(1, 500);
     let events = state

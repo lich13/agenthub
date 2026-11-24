@@ -797,8 +797,17 @@ impl GrokReader {
                 self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"user_message_chunk","messageId":format!("native:{start}"),"content":content}), start);
             }
             "assistant" => {
+                let has_tool_calls = value
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .is_some_and(|calls| !calls.is_empty());
                 if !text.is_empty() {
-                    self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"agent_message_chunk","messageId":format!("native:{start}"),"content":{"text":text}}), start);
+                    let update_kind = if has_tool_calls {
+                        "thinking"
+                    } else {
+                        "agent_message_chunk"
+                    };
+                    self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":update_kind,"messageId":format!("native:{start}"),"content":{"text":text}}), start);
                 }
                 for (index, call) in value.get("tool_calls").and_then(Value::as_array).into_iter().flatten().enumerate() {
                     let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -839,6 +848,7 @@ impl GrokReader {
                 kind.as_str(),
                 "user_message_chunk"
                     | "agent_message_chunk"
+                    | "thinking"
                     | "tool_call"
                     | "tool_call_update"
                     | "plan"
@@ -938,6 +948,18 @@ impl GrokReader {
             }
             user_parts.clear();
             if kind.starts_with("tool_") {
+                if kind == "tool_call" {
+                    for prior in events.iter_mut().rev() {
+                        if matches!(prior.kind.as_str(), "user_message_chunk" | "plan") {
+                            break;
+                        }
+                        if prior.kind == "agent_message_chunk" {
+                            let prior = Arc::make_mut(prior);
+                            dirty.insert(prior.id.clone());
+                            prior.kind = "thinking".into();
+                        }
+                    }
+                }
                 if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
                     let previous = Arc::make_mut(&mut events[*index]);
                     dirty.insert(previous.id.clone());
@@ -956,7 +978,7 @@ impl GrokReader {
                     tool_indices.insert(id.clone(), events.len());
                 }
             }
-            if kind == "agent_message_chunk"
+            if matches!(kind.as_str(), "agent_message_chunk" | "thinking")
                 && text.as_ref().is_some_and(|text| !text.trim().is_empty())
             {
                 self.last_message_at = value

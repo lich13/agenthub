@@ -1,11 +1,8 @@
 use super::{ok, ApiResponse};
 use crate::{linux_adapter, state::AppState};
-use agenthub_core::{
-    platform::PlatformPaths,
-    services::{
-        system::{require_capability, Capability},
-        updates::{self as update_service, UpdateAction},
-    },
+use agenthub_core::services::{
+    system::{require_capability, Capability},
+    updates::{self as update_service, UpdateAction},
 };
 use anyhow::Result as AnyhowResult;
 use serde::Deserialize;
@@ -65,8 +62,4 @@ pub(crate) async fn start_update_action(
     let plan = update_service::plan_update_action(&platform, action)?;
     let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
     ok(json!({"job_id": id}))
-}
-
-pub(crate) fn linux_update_platform() -> PlatformPaths {
-    PlatformPaths::linux_server()
 }

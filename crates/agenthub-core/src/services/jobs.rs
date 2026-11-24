@@ -1,4 +1,4 @@
-use crate::{platform::PlatformPaths, services::commands};
+use crate::services::commands;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -31,22 +31,15 @@ pub struct ThreadStateActionPlan {
     pub name: Option<String>,
 }
 
-pub fn plan_thread_archive_with_capability(
-    platform: &PlatformPaths,
-    thread_id: &str,
-) -> Result<ThreadStateActionPlan> {
-    plan_thread_archive_state_action(platform, thread_id, true)
+pub fn plan_thread_archive_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
+    plan_thread_archive_state_action(thread_id, true)
 }
 
-pub fn plan_thread_restore_with_capability(
-    platform: &PlatformPaths,
-    thread_id: &str,
-) -> Result<ThreadStateActionPlan> {
-    plan_thread_archive_state_action(platform, thread_id, false)
+pub fn plan_thread_restore_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
+    plan_thread_archive_state_action(thread_id, false)
 }
 
 pub fn plan_thread_rename_with_capability(
-    _platform: &PlatformPaths,
     request: ThreadRenameRequest,
 ) -> Result<ThreadStateActionPlan> {
     let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
@@ -75,7 +68,7 @@ pub fn action_ok(
     }
 }
 
-pub fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
+fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
     let (command, message) = if archived {
         (
             commands::THREADS_ARCHIVE,
@@ -90,7 +83,7 @@ pub fn archive_thread_response(thread_id: String, archived: bool) -> ActionRespo
     action_ok(command, message, Some(thread_id), None, None)
 }
 
-pub fn rename_thread_response(thread_id: String, name: &str) -> Result<ActionResponse> {
+fn rename_thread_response(thread_id: String, name: &str) -> Result<ActionResponse> {
     let name = name.trim();
     if name.is_empty() {
         return Err(anyhow!("name cannot be empty"));
@@ -126,7 +119,6 @@ fn required_command_thread_id(thread_id: &str) -> Result<String> {
 }
 
 fn plan_thread_archive_state_action(
-    _platform: &PlatformPaths,
     thread_id: &str,
     archived: bool,
 ) -> Result<ThreadStateActionPlan> {

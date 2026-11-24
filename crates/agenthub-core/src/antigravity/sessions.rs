@@ -4863,6 +4863,103 @@ mod tests {
             |e| e.kind == "assistant_message" && e.text.as_deref() == Some("最终纯净回复正文")
         ));
 
+        let db_multi_id = uuid::Uuid::new_v4().to_string();
+        let mid_blob = pb_len_field(
+            20,
+            &[
+                pb_len_field(3, "先检索配置引用".as_bytes()),
+                pb_len_field(8, "正在读取仓库文件与契约定义。".as_bytes()),
+            ]
+            .concat(),
+        );
+        let empty_settings_user = pb_len_field(
+            19,
+            &pb_len_field(
+                2,
+                b"<USER_SETTINGS_CHANGE>model=gemini-3.1-pro</USER_SETTINGS_CHANGE>",
+            ),
+        );
+        let turn2_user = pb_len_field(
+            19,
+            &pb_len_field(2, "<USER_REQUEST>\n第二轮确认\n</USER_REQUEST>".as_bytes()),
+        );
+        let turn2_final = pb_len_field(20, &pb_len_field(8, "第二轮最终结论。".as_bytes()));
+        let turn3_user = pb_len_field(
+            19,
+            &pb_len_field(
+                2,
+                "<USER_REQUEST>\n第三轮工具步中断\n</USER_REQUEST>".as_bytes(),
+            ),
+        );
+        let turn3_mid_reply = pb_len_field(
+            20,
+            &pb_len_field(8, "先调用工具但后续规划步无文本。".as_bytes()),
+        );
+        let turn3_tool_only_planner = pb_len_field(20, &pb_len_field(6, b"tool_call_only"));
+        {
+            let conn =
+                Connection::open(root.join("conversations").join(format!("{db_multi_id}.db")))
+                    .unwrap();
+            conn.execute_batch(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO steps VALUES (0, 14, 3, ?1), (1, 15, 3, ?2), (2, 14, 3, ?3), (3, 15, 3, ?4), (4, 14, 3, ?5), (5, 15, 3, ?6), (6, 14, 3, ?7), (7, 15, 3, ?8), (8, 15, 8, ?9)",
+                params![
+                    step14_blob,
+                    mid_blob,
+                    empty_settings_user,
+                    step15_blob,
+                    turn2_user,
+                    turn2_final,
+                    turn3_user,
+                    turn3_mid_reply,
+                    turn3_tool_only_planner
+                ],
+            )
+            .unwrap();
+        }
+        let multi_detail = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: db_multi_id,
+                limit: Some(20),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mid_commentary = multi_detail
+            .events
+            .iter()
+            .find(|e| e.id == "db-1-commentary")
+            .expect("intermediate step_type=15 reply must be demoted to db-1-commentary");
+        assert_eq!(mid_commentary.kind, "thinking");
+        assert_eq!(
+            mid_commentary.text.as_deref(),
+            Some("正在读取仓库文件与契约定义。")
+        );
+        let turn1_final = multi_detail
+            .events
+            .iter()
+            .find(|e| e.id == "db-3-assistant")
+            .expect("final step_type=15 reply in turn 1 must remain assistant_message");
+        assert_eq!(turn1_final.kind, "assistant_message");
+        assert_eq!(turn1_final.text.as_deref(), Some("最终纯净回复正文"));
+        let turn2_assistant = multi_detail
+            .events
+            .iter()
+            .find(|e| e.id == "db-5-assistant")
+            .expect("turn 2 single step_type=15 must remain assistant_message");
+        assert_eq!(turn2_assistant.kind, "assistant_message");
+        assert_eq!(turn2_assistant.text.as_deref(), Some("第二轮最终结论。"));
+        let turn3_commentary = multi_detail
+            .events
+            .iter()
+            .find(|e| e.id == "db-7-commentary")
+            .expect("reply followed by tool-only step_type=15 must also demote to commentary");
+        assert_eq!(turn3_commentary.kind, "thinking");
+
         let err_detail = session_detail(
             &offline,
             &ProviderDetailRequest {

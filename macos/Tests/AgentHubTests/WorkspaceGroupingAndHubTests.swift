@@ -436,6 +436,103 @@ final class WorkspaceGroupingAndHubTests: XCTestCase {
             }
             groupedWin.orderOut(nil)
         }
+
+        // Render UnifiedWorkspaceHubView with active batch confirmation dialog + archived drawer expanded in Light & Dark,
+        // and verify right-aligned TaskMenuTriggerButton anchor geometry.
+        hub.archivedOpen = true
+        for (scheme, appearance, modalName, menuName) in [
+            (ColorSchemeKind.light, NSAppearance.Name.aqua, "hub-confirm-modal-light.png", "hub-filter-menu-light.png"),
+            (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "hub-confirm-modal-dark.png", "hub-filter-menu-dark.png"),
+        ] {
+            let pal = DesignPalette.resolve(scheme: scheme, workspace: .workspaces)
+            let modalWin = UnconstrainedOffscreenWindow(
+                contentRect: NSRect(x: 120, y: 120, width: size.width, height: size.height),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            modalWin.isOpaque = true
+            modalWin.backgroundColor = pal.background.nsColor
+            modalWin.appearance = NSAppearance(named: appearance)
+            let modalHost = NSHostingView(
+                rootView: UnifiedWorkspaceHubView(hubModel: hub, scheme: scheme)
+                    .background(pal.background.color)
+                    .environment(\.agentHubPalette, pal)
+                    .environment(\.colorScheme, scheme == .dark ? .dark : .light)
+                    .frame(width: size.width, height: size.height)
+            )
+            modalHost.frame = NSRect(origin: .zero, size: size)
+            modalWin.contentView = modalHost
+            modalWin.orderBack(nil)
+            try await Task.sleep(nanoseconds: 250_000_000)
+            await Task.yield()
+            modalHost.layoutSubtreeIfNeeded()
+            modalWin.displayIfNeeded()
+            if let rep = modalHost.bitmapImageRepForCachingDisplay(in: modalHost.bounds) {
+                modalHost.cacheDisplay(in: modalHost.bounds, to: rep)
+                assertRegionHasForegroundPixels(
+                    rep: rep,
+                    rect: NSRect(x: 380, y: 240, width: 520, height: 320),
+                    background: pal.elevated,
+                    label: "hub-confirm-modal-\(scheme)"
+                )
+                if let outDir, !outDir.isEmpty,
+                   let png = rep.representation(using: .png, properties: [:])
+                {
+                    let url = URL(fileURLWithPath: outDir).appendingPathComponent(modalName)
+                    try png.write(to: url)
+                }
+            }
+
+            // Verify right-aligned menu presentation below the real MenuAnchorProbeNSView header button anchor
+            func findFilterMenuAnchor(_ view: NSView) -> NSView? {
+                if String(reflecting: type(of: view)).contains("MenuAnchorProbeNSView") {
+                    return view
+                }
+                for sub in view.subviews {
+                    if let found = findFilterMenuAnchor(sub) {
+                        return found
+                    }
+                }
+                return nil
+            }
+            let anchorButton = try XCTUnwrap(findFilterMenuAnchor(modalHost), "Expected MenuAnchorProbeNSView in UnifiedWorkspaceHubView header")
+            let filterActions = [
+                SessionMenuAction(id: "all", label: "全部工作区", icon: .check, run: {}),
+                SessionMenuAction(id: "sub", label: "包含子目录：已开启", icon: .check, run: {}),
+                SessionMenuAction(id: "ws1", label: "repos/AgentHub (3)", icon: .folderOpen, reason: "/workspace/repos/AgentHub", run: {}),
+            ]
+            AgentHubTaskMenuPresenter.shared.presentBelowAnchorView(
+                anchorButton,
+                rightAligned: true,
+                actions: filterActions,
+                palette: pal
+            )
+            try await Task.sleep(nanoseconds: 60_000_000)
+            if let panel = modalWin.childWindows?.first, let menuView = panel.contentView {
+                let anchorScreen = modalWin.convertToScreen(anchorButton.convert(anchorButton.bounds, to: nil))
+                XCTAssertEqual(panel.frame.maxX, anchorScreen.maxX, accuracy: 1.5, "Right-aligned menu maxX must align with anchor button maxX")
+                if let rep = menuView.bitmapImageRepForCachingDisplay(in: menuView.bounds) {
+                    menuView.cacheDisplay(in: menuView.bounds, to: rep)
+                    assertRegionHasForegroundPixels(
+                        rep: rep,
+                        rect: menuView.bounds,
+                        background: pal.elevated,
+                        label: "hub-filter-menu-\(scheme)"
+                    )
+                    if let outDir, !outDir.isEmpty,
+                       let png = rep.representation(using: .png, properties: [:])
+                    {
+                        let url = URL(fileURLWithPath: outDir).appendingPathComponent(menuName)
+                        try png.write(to: url)
+                    }
+                }
+            } else {
+                XCTFail("Expected child menu panel to be presented for \(scheme)")
+            }
+            AgentHubTaskMenuPresenter.shared.dismiss()
+            modalWin.orderOut(nil)
+        }
     }
 
     @MainActor

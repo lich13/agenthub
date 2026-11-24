@@ -132,6 +132,8 @@ pub struct MessageBlock {
     pub subagent: Option<super::subagents::SubagentActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message: Option<crate::user_message::UserMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     pub id: String,
     pub role: String,
     pub kind: String,

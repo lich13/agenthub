@@ -532,9 +532,19 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
     {
         return None;
     }
+    let phase = (role == "assistant")
+        .then(|| {
+            payload
+                .get("phase")
+                .and_then(Value::as_str)
+                .filter(|phase| *phase == "commentary")
+                .map(str::to_string)
+        })
+        .flatten();
     Some(MessageBlock {
         subagent: None,
         user_message,
+        phase,
         id: block_id(value, raw_index),
         role: role.to_string(),
         kind: normalize_kind(payload_type).to_string(),
@@ -572,6 +582,7 @@ fn pending_elicitation_block(value: &Value, raw_index: usize) -> Option<MessageB
     Some(MessageBlock {
         subagent: None,
         user_message: None,
+        phase: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input".to_string(),
@@ -662,6 +673,7 @@ fn plan_delta_block(value: &Value, raw_index: usize) -> Option<MessageBlock> {
     Some(MessageBlock {
         subagent: None,
         user_message: None,
+        phase: None,
         id: plan_block_id(value, payload, raw_index),
         role: "assistant".to_string(),
         kind: "plan".to_string(),
@@ -709,6 +721,7 @@ fn user_input_answer_block(value: &Value, raw_index: usize) -> Option<MessageBlo
     Some(MessageBlock {
         subagent: None,
         user_message: None,
+        phase: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input_result".to_string(),
@@ -754,6 +767,7 @@ fn user_input_output_block(
     MessageBlock {
         subagent: None,
         user_message: None,
+        phase: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input_result".to_string(),
@@ -805,6 +819,7 @@ fn tool_output_block(
     MessageBlock {
         subagent: pending.as_ref().and_then(|call| call.subagent.clone()),
         user_message: None,
+        phase: None,
         id: pending
             .as_ref()
             .map(|call| call.id.clone())
@@ -1279,7 +1294,7 @@ fn is_subagent_session_meta(payload: &Value) -> bool {
     ) || source_value.is_some_and(value_contains_subagent)
 }
 
-pub(crate) fn is_subagent_metadata(
+fn is_subagent_metadata(
     source: Option<&str>,
     parent_thread_id: Option<&str>,
     agent_path: Option<&str>,

@@ -142,6 +142,7 @@ impl MessageBlockBuilder {
             if block.role == "assistant"
                 && block.text.as_deref().is_some_and(contains_proposed_plan)
             {
+                block.phase = None;
                 block.kind = "plan".to_string();
                 block.status = block.status.or_else(|| Some("pending".to_string()));
                 block.display_kind = Some("plan".to_string());
@@ -345,6 +346,7 @@ pub(super) fn compact_chat_history(
     let collapsed = MessageBlock {
         subagent: None,
         user_message: None,
+        phase: None,
         id: "chat-history-collapsed".to_string(),
         role: "tool".to_string(),
         kind: "chat_history_collapsed".to_string(),
@@ -398,6 +400,9 @@ pub(super) fn compact_chat_history(
 
 fn is_chat_history_block(block: &MessageBlock) -> bool {
     if !matches!(block.role.as_str(), "user" | "assistant") {
+        return false;
+    }
+    if block.phase.as_deref() == Some("commentary") {
         return false;
     }
     if !block.questions.is_empty() {
@@ -456,6 +461,7 @@ impl PendingToolCall {
         MessageBlock {
             subagent: self.subagent,
             user_message: None,
+            phase: None,
             id: self.id,
             role: "tool".to_string(),
             kind: self.kind,

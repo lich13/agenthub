@@ -123,9 +123,10 @@ final class CleanupInteractionTests: XCTestCase {
             page.scan.processed = count
             page.scan.total = count
             page.scan.nextCursor = count
+            let snapshot = page
             let runner = HiddenCleanupScan { request in
                 XCTAssertEqual(request.mode, "start")
-                return page
+                return snapshot
             }
             try await runner.run { _, scope in
                 XCTAssertTrue(scope.scanned)

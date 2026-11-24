@@ -166,7 +166,7 @@
     },
     "DesktopJobDetailRequest": {
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
-      "rust": "crates/agenthub-ffi/src/services/jobs.rs#DesktopJobDetailRequest"
+      "rust": "crates/agenthub-ffi/src/commands/dispatch.rs#JobDetailArgs"
     },
     "DesktopMode": {
       "rust": "crates/agenthub-core/src/services/codex_desktop.rs#DesktopMode",
@@ -2110,6 +2110,13 @@
               "serde (default , skip_serializing_if = \"Option::is_none\")"
             ],
             "type": "Option < crate :: user_message :: UserMessage >"
+          },
+          {
+            "name": "phase",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
           },
           {
             "name": "id",
@@ -10368,53 +10375,7 @@
         ]
       }
     },
-    "crates/agenthub-ffi/src/services/jobs.rs": {
-      "DesktopJobDetailRequest": {
-        "fields": [
-          {
-            "name": "id",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "include_output",
-            "serde": [],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "DesktopJobsRequest": {
-        "fields": [
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < u32 >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      }
-    },
     "crates/agenthub-ffi/src/services/settings.rs": {
-      "DesktopProbeEventsRequest": {
-        "fields": [
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < u32 >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "DesktopProbeEventsResponse": {
         "fields": [
           {
@@ -10580,6 +10541,19 @@
             "name": "title",
             "serde": [],
             "type": "String"
+          }
+        ],
+        "kind": "struct",
+        "serde": []
+      }
+    },
+    "crates/agenthub-webd/src/api/jobs.rs": {
+      "JobsListQuery": {
+        "fields": [
+          {
+            "name": "limit",
+            "serde": [],
+            "type": "Option < u32 >"
           }
         ],
         "kind": "struct",
@@ -10789,7 +10763,7 @@
         "UserInputAnswer": "structUserInputAnswer:Codable,Equatable,Sendable{publicvarquestionId:Stringpublicvaranswers:[String]publicvarnote:String?enumCodingKeys:String,CodingKey{casequestionId=\"question_id\"caseanswerscasenote}publicinit(questionId:String,answers:[String],note:String?=nil){self.questionId=questionIdself.answers=answersself.note=note}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)questionId=tryc.decode(String.self,forKey:.questionId)answers=tryc.decodeIfPresent([String].self,forKey:.answers)??[]note=tryc.decodeIfPresent(String.self,forKey:.note)}}",
         "PendingElicitation": "structPendingElicitation:Codable,Equatable,Sendable{publicvarturnId:String?publicvaritemId:String?publicvarquestions:[UserInputQuestion]enumCodingKeys:String,CodingKey{caseturnId=\"turn_id\"caseitemId=\"item_id\"casequestions}publicinit(turnId:String?=nil,itemId:String?=nil,questions:[UserInputQuestion]=[]){self.turnId=turnIdself.itemId=itemIdself.questions=questions}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)turnId=tryc.decodeIfPresent(String.self,forKey:.turnId)itemId=tryc.decodeIfPresent(String.self,forKey:.itemId)questions=tryc.decodeIfPresent([UserInputQuestion].self,forKey:.questions)??[]}}",
         "CodexMessage": "structCodexMessage:Codable,Equatable,Sendable{publicvarrole:Stringpublicvarkind:Stringpublicvartext:StringpublicvarcreatedAt:String?enumCodingKeys:String,CodingKey{caserolecasekindcasetextcasecreatedAt=\"created_at\"}}",
-        "MessageBlock": "structMessageBlock:Codable,Equatable,Sendable,Identifiable{publicvarsubagent:SubagentActivity?publicvaruserMessage:UserMessageContent?publicvarid:Stringpublicvarrole:Stringpublicvarkind:StringpublicvardisplayKind:String?publicvarstatus:String?publicvartext:String?publicvarsummary:String?publicvarinput:String?publicvartruncated:Bool?publicvarresolved:Bool?publicvaranswers:[UserInputAnswer]publicvarplanStatus:String?publicvargroupId:String?publicvartoolName:String?publicvarcallId:String?publicvarturnId:String?publicvaritemId:String?publicvarcreatedAt:String?publicvarquestions:[UserInputQuestion]publicvarpayload:JSONValue?publicvarcollapsedIds:[String]?enumCodingKeys:String,CodingKey{casesubagentcaseuserMessage=\"user_message\"caseid,role,kindcasedisplayKind=\"display_kind\"casestatus,text,summary,input,truncated,resolved,answerscaseplanStatus=\"plan_status\"casegroupId=\"group_id\"casetoolName=\"tool_name\"casecallId=\"call_id\"caseturnId=\"turn_id\"caseitemId=\"item_id\"casecreatedAt=\"created_at\"casequestions,payload,collapsedIds}publicinit(id:String,role:String,kind:String,displayKind:String?=nil,status:String?=nil,text:String?=nil,summary:String?=nil,input:String?=nil,truncated:Bool?=nil,resolved:Bool?=nil,answers:[UserInputAnswer]=[],planStatus:String?=nil,toolName:String?=nil,callId:String?=nil,turnId:String?=nil,itemId:String?=nil,createdAt:String?=nil,questions:[UserInputQuestion]=[],userMessage:UserMessageContent?=nil,subagent:SubagentActivity?=nil,payload:JSONValue?=nil,collapsedIds:[String]?=nil){self.id=idself.role=roleself.kind=kindself.displayKind=displayKindself.status=statusself.text=textself.summary=summaryself.input=inputself.truncated=truncatedself.resolved=resolvedself.answers=answersself.planStatus=planStatusself.toolName=toolNameself.callId=callIdself.turnId=turnIdself.itemId=itemIdself.createdAt=createdAtself.questions=questionsself.userMessage=userMessageself.subagent=subagentself.payload=payloadself.collapsedIds=collapsedIds}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)subagent=tryc.decodeIfPresent(SubagentActivity.self,forKey:.subagent)userMessage=tryc.decodeIfPresent(UserMessageContent.self,forKey:.userMessage)id=tryc.decode(String.self,forKey:.id)role=tryc.decode(String.self,forKey:.role)kind=tryc.decode(String.self,forKey:.kind)displayKind=tryc.decodeIfPresent(String.self,forKey:.displayKind)status=tryc.decodeIfPresent(String.self,forKey:.status)text=tryc.decodeIfPresent(String.self,forKey:.text)summary=tryc.decodeIfPresent(String.self,forKey:.summary)input=tryc.decodeIfPresent(String.self,forKey:.input)truncated=tryc.decodeIfPresent(Bool.self,forKey:.truncated)resolved=tryc.decodeIfPresent(Bool.self,forKey:.resolved)answers=tryc.decodeIfPresent([UserInputAnswer].self,forKey:.answers)??[]planStatus=tryc.decodeIfPresent(String.self,forKey:.planStatus)groupId=tryc.decodeIfPresent(String.self,forKey:.groupId)toolName=tryc.decodeIfPresent(String.self,forKey:.toolName)callId=tryc.decodeIfPresent(String.self,forKey:.callId)turnId=tryc.decodeIfPresent(String.self,forKey:.turnId)itemId=tryc.decodeIfPresent(String.self,forKey:.itemId)createdAt=tryc.decodeIfPresent(String.self,forKey:.createdAt)questions=tryc.decodeIfPresent([UserInputQuestion].self,forKey:.questions)??[]payload=tryc.decodeIfPresent(JSONValue.self,forKey:.payload)collapsedIds=tryc.decodeIfPresent([String].self,forKey:.collapsedIds)}}",
+        "MessageBlock": "structMessageBlock:Codable,Equatable,Sendable,Identifiable{publicvarsubagent:SubagentActivity?publicvaruserMessage:UserMessageContent?publicvarid:Stringpublicvarrole:Stringpublicvarkind:StringpublicvardisplayKind:String?publicvarphase:String?publicvarstatus:String?publicvartext:String?publicvarsummary:String?publicvarinput:String?publicvartruncated:Bool?publicvarresolved:Bool?publicvaranswers:[UserInputAnswer]publicvarplanStatus:String?publicvargroupId:String?publicvartoolName:String?publicvarcallId:String?publicvarturnId:String?publicvaritemId:String?publicvarcreatedAt:String?publicvarquestions:[UserInputQuestion]publicvarpayload:JSONValue?publicvarcollapsedIds:[String]?enumCodingKeys:String,CodingKey{casesubagentcaseuserMessage=\"user_message\"caseid,role,kindcasedisplayKind=\"display_kind\"casephasecasestatus,text,summary,input,truncated,resolved,answerscaseplanStatus=\"plan_status\"casegroupId=\"group_id\"casetoolName=\"tool_name\"casecallId=\"call_id\"caseturnId=\"turn_id\"caseitemId=\"item_id\"casecreatedAt=\"created_at\"casequestions,payload,collapsedIds}publicinit(id:String,role:String,kind:String,displayKind:String?=nil,phase:String?=nil,status:String?=nil,text:String?=nil,summary:String?=nil,input:String?=nil,truncated:Bool?=nil,resolved:Bool?=nil,answers:[UserInputAnswer]=[],planStatus:String?=nil,toolName:String?=nil,callId:String?=nil,turnId:String?=nil,itemId:String?=nil,createdAt:String?=nil,questions:[UserInputQuestion]=[],userMessage:UserMessageContent?=nil,subagent:SubagentActivity?=nil,payload:JSONValue?=nil,collapsedIds:[String]?=nil){self.id=idself.role=roleself.kind=kindself.displayKind=displayKindself.phase=phaseself.status=statusself.text=textself.summary=summaryself.input=inputself.truncated=truncatedself.resolved=resolvedself.answers=answersself.planStatus=planStatusself.toolName=toolNameself.callId=callIdself.turnId=turnIdself.itemId=itemIdself.createdAt=createdAtself.questions=questionsself.userMessage=userMessageself.subagent=subagentself.payload=payloadself.collapsedIds=collapsedIds}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)subagent=tryc.decodeIfPresent(SubagentActivity.self,forKey:.subagent)userMessage=tryc.decodeIfPresent(UserMessageContent.self,forKey:.userMessage)id=tryc.decode(String.self,forKey:.id)role=tryc.decode(String.self,forKey:.role)kind=tryc.decode(String.self,forKey:.kind)displayKind=tryc.decodeIfPresent(String.self,forKey:.displayKind)phase=tryc.decodeIfPresent(String.self,forKey:.phase)status=tryc.decodeIfPresent(String.self,forKey:.status)text=tryc.decodeIfPresent(String.self,forKey:.text)summary=tryc.decodeIfPresent(String.self,forKey:.summary)input=tryc.decodeIfPresent(String.self,forKey:.input)truncated=tryc.decodeIfPresent(Bool.self,forKey:.truncated)resolved=tryc.decodeIfPresent(Bool.self,forKey:.resolved)answers=tryc.decodeIfPresent([UserInputAnswer].self,forKey:.answers)??[]planStatus=tryc.decodeIfPresent(String.self,forKey:.planStatus)groupId=tryc.decodeIfPresent(String.self,forKey:.groupId)toolName=tryc.decodeIfPresent(String.self,forKey:.toolName)callId=tryc.decodeIfPresent(String.self,forKey:.callId)turnId=tryc.decodeIfPresent(String.self,forKey:.turnId)itemId=tryc.decodeIfPresent(String.self,forKey:.itemId)createdAt=tryc.decodeIfPresent(String.self,forKey:.createdAt)questions=tryc.decodeIfPresent([UserInputQuestion].self,forKey:.questions)??[]payload=tryc.decodeIfPresent(JSONValue.self,forKey:.payload)collapsedIds=tryc.decodeIfPresent([String].self,forKey:.collapsedIds)}}",
         "ThreadSummary": "structThreadSummary:Codable,Equatable,Sendable,Identifiable{publicvarstorageSize:SessionStorageSize?publicvarid:Stringpublicvartitle:Stringpublicvarstatus:StringpublicvarupdatedAt:String?publicvararchivedAt:String?publicvarmessageCount:IntpublicvarlatestMessage:String?publicvarcwd:String?publicvarworkspaceRoot:String?publicvarmodel:String?publicvarrolloutPath:String?publicvaractiveTurnId:String?publicvaractiveJobId:String?publicvarpendingElicitation:PendingElicitation?publicvarlastEventKind:String?enumCodingKeys:String,CodingKey{casestorageSizecaseworkspaceRootcaseid,title,status,cwd,modelcaseupdatedAt=\"updated_at\"casearchivedAt=\"archived_at\"casemessageCount=\"message_count\"caselatestMessage=\"latest_message\"caserolloutPath=\"rollout_path\"caseactiveTurnId=\"active_turn_id\"caseactiveJobId=\"active_job_id\"casependingElicitation=\"pending_elicitation\"caselastEventKind=\"last_event_kind\"}publicinit(id:String,title:String,status:String=\"Recent\",updatedAt:String?=nil,archivedAt:String?=nil,messageCount:Int=0,latestMessage:String?=nil,cwd:String?=nil,workspaceRoot:String?=nil,rolloutPath:String?=nil,storageSize:SessionStorageSize?=nil){self.id=idself.title=titleself.status=statusself.updatedAt=updatedAtself.archivedAt=archivedAtself.messageCount=messageCountself.latestMessage=latestMessageself.cwd=cwdself.workspaceRoot=workspaceRootself.rolloutPath=rolloutPathself.storageSize=storageSize}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)storageSize=tryc.decodeIfPresent(SessionStorageSize.self,forKey:.storageSize)id=tryc.decode(String.self,forKey:.id)title=tryc.decode(String.self,forKey:.title)status=tryc.decode(String.self,forKey:.status)updatedAt=tryc.decodeIfPresent(String.self,forKey:.updatedAt)archivedAt=tryc.decodeIfPresent(String.self,forKey:.archivedAt)messageCount=tryc.decode(Int.self,forKey:.messageCount)latestMessage=tryc.decodeIfPresent(String.self,forKey:.latestMessage)cwd=tryc.decodeIfPresent(String.self,forKey:.cwd)workspaceRoot=tryc.decodeIfPresent(String.self,forKey:.workspaceRoot)model=tryc.decodeIfPresent(String.self,forKey:.model)rolloutPath=tryc.decodeIfPresent(String.self,forKey:.rolloutPath)activeTurnId=tryc.decodeIfPresent(String.self,forKey:.activeTurnId)activeJobId=tryc.decodeIfPresent(String.self,forKey:.activeJobId)pendingElicitation=tryc.decodeIfPresent(PendingElicitation.self,forKey:.pendingElicitation)lastEventKind=tryc.decodeIfPresent(String.self,forKey:.lastEventKind)}}",
         "ThreadDetail": "structThreadDetail:Codable,Equatable,Sendable{publicvartimeline:[TimelineEntry]?publicvarafterCursor:String?publicvarhistory:HistoryMetadata?publicvarsubagents:SubagentCollection?publicvarsubagentUpdates:[String:SubagentActivity]?publicvarsummary:ThreadSummarypublicvarmessages:[CodexMessage]publicvarblocks:[MessageBlock]publicvarrawEventCount:IntpublicvartotalBlocks:Int?publicvarhasMoreBlocks:Bool?publicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casetimeline,history,subagents,summary,messages,blockscaseafterCursor=\"after_cursor\"casesubagentUpdates=\"subagent_updates\"caserawEventCount=\"raw_event_count\"casetotalBlocks=\"total_blocks\"casehasMoreBlocks=\"has_more_blocks\"casebeforeCursor=\"before_cursor\"}publicinit(summary:ThreadSummary,blocks:[MessageBlock]=[],timeline:[TimelineEntry]?=nil,history:HistoryMetadata?=nil,subagents:SubagentCollection?=nil,subagentUpdates:[String:SubagentActivity]?=nil,totalBlocks:Int?=nil,hasMoreBlocks:Bool?=nil,beforeCursor:String?=nil){self.summary=summaryself.messages=[]self.blocks=blocksself.timeline=timelineself.history=historyself.subagents=subagentsself.subagentUpdates=subagentUpdatesself.rawEventCount=totalBlocks??blocks.countself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursor}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)timeline=tryc.decodeIfPresent([TimelineEntry].self,forKey:.timeline)afterCursor=tryc.decodeIfPresent(String.self,forKey:.afterCursor)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)subagents=tryc.decodeIfPresent(SubagentCollection.self,forKey:.subagents)subagentUpdates=tryc.decodeIfPresent([String:SubagentActivity].self,forKey:.subagentUpdates)summary=tryc.decode(ThreadSummary.self,forKey:.summary)messages=tryc.decodeIfPresent([CodexMessage].self,forKey:.messages)??[]letdecodedBlocks=tryc.decode([MessageBlock].self,forKey:.blocks)blocks=decodedBlocksletdecodedTotalBlocks=tryc.decodeIfPresent(Int.self,forKey:.totalBlocks)totalBlocks=decodedTotalBlocksrawEventCount=tryc.decodeIfPresent(Int.self,forKey:.rawEventCount)??decodedTotalBlocks??decodedBlocks.counthasMoreBlocks=tryc.decodeIfPresent(Bool.self,forKey:.hasMoreBlocks)beforeCursor=tryc.decodeIfPresent(String.self,forKey:.beforeCursor)}}",
         "ThreadBlockPage": "structThreadBlockPage:Codable,Equatable,Sendable{publicvarhistory:HistoryMetadata?publicvarthreadId:Stringpublicvarblocks:[MessageBlock]publicvartotalBlocks:IntpublicvarhasMoreBlocks:BoolpublicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{casehistory,blockscasethreadIdcasetotalBlockscasehasMoreBlockscasebeforeCursor}publicinit(threadId:String,blocks:[MessageBlock],totalBlocks:Int,hasMoreBlocks:Bool,beforeCursor:String?=nil,history:HistoryMetadata?=nil){self.threadId=threadIdself.blocks=blocksself.totalBlocks=totalBlocksself.hasMoreBlocks=hasMoreBlocksself.beforeCursor=beforeCursorself.history=history}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)threadId=tryc.decode(String.self,forKey:.threadId)letdecodedBlocks=tryc.decodeIfPresent([MessageBlock].self,forKey:.blocks)??[]blocks=decodedBlockstotalBlocks=tryc.decodeIfPresent(Int.self,forKey:.totalBlocks)??decodedBlocks.counthasMoreBlocks=tryc.decodeIfPresent(Bool.self,forKey:.hasMoreBlocks)??falsebeforeCursor=tryc.decodeIfPresent(String.self,forKey:.beforeCursor)}}"

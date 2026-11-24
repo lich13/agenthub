@@ -365,6 +365,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
     public var role: String
     public var kind: String
     public var displayKind: String?
+    public var phase: String?
     public var status: String?
     public var text: String?
     public var summary: String?
@@ -388,6 +389,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         case userMessage = "user_message"
         case id, role, kind
         case displayKind = "display_kind"
+        case phase
         case status, text, summary, input, truncated, resolved, answers
         case planStatus = "plan_status"
         case groupId = "group_id"
@@ -404,6 +406,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         role: String,
         kind: String,
         displayKind: String? = nil,
+        phase: String? = nil,
         status: String? = nil,
         text: String? = nil,
         summary: String? = nil,
@@ -427,6 +430,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         self.role = role
         self.kind = kind
         self.displayKind = displayKind
+        self.phase = phase
         self.status = status
         self.text = text
         self.summary = summary
@@ -455,6 +459,7 @@ public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
         role = try c.decode(String.self, forKey: .role)
         kind = try c.decode(String.self, forKey: .kind)
         displayKind = try c.decodeIfPresent(String.self, forKey: .displayKind)
+        phase = try c.decodeIfPresent(String.self, forKey: .phase)
         status = try c.decodeIfPresent(String.self, forKey: .status)
         text = try c.decodeIfPresent(String.self, forKey: .text)
         summary = try c.decodeIfPresent(String.self, forKey: .summary)

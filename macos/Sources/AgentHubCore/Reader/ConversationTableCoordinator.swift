@@ -49,10 +49,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     private var heightCacheDisclosureRev: UInt64 = 0
     private var heightCacheScheme: ColorSchemeKind = .light
     private var heightCacheWorkspace: WorkspaceId = .codex
+    private var heightCacheScopeKey: String = ""
 
     private static let maxCachedCells = 128
     private var cellCacheByRowId: [String: ConversationRowCellView] = [:]
     private var cellCacheOrder: [String] = []
+    private var cellCacheScopeKey: String = ""
 
     public struct ScrollAnchorSnapshot: Equatable, Sendable {
         public let timelineId: String
@@ -127,6 +129,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             && disclosureStore.revision == heightCacheDisclosureRev
             && scheme == heightCacheScheme
             && workspace == heightCacheWorkspace
+            && sessionScopeKey == heightCacheScopeKey
             && cachedRowHeights.count == rows.count)
 
         var previousById: [String: (item: ConversationRowItem, height: CGFloat)] = [:]
@@ -160,6 +163,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         heightCacheDisclosureRev = disclosureStore.revision
         heightCacheScheme = scheme
         heightCacheWorkspace = workspace
+        heightCacheScopeKey = sessionScopeKey
         userAnchorRowIndices = nextUserIndices
         hasAnyUserImageAttachments = anyImages
     }
@@ -195,10 +199,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return
         }
         let wasEmpty = rows.isEmpty
-        if forceScrollToBottom {
-            upwardScrollIntent = false
+        if forceScrollToBottom || sessionScopeKey != cellCacheScopeKey {
+            if forceScrollToBottom {
+                upwardScrollIntent = false
+            }
             cellCacheByRowId.removeAll()
             cellCacheOrder.removeAll()
+            cellCacheScopeKey = sessionScopeKey
         }
         let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && !upwardScrollIntent && (wasEmpty || isNearBottom()))
         let anchor = shouldFollow ? nil : captureScrollAnchor()
@@ -256,13 +263,22 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
-    public func toggleDisclosurePreservingAnchor(stateKey: String, currentlyOpen: Bool) {
+    public func toggleDisclosurePreservingAnchor(
+        stateKey: String,
+        aliases: [String] = [],
+        currentlyOpen: Bool
+    ) {
         let anchor = captureScrollAnchor()
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
-            self.disclosureStore.setOpen(scope: self.sessionScopeKey, stateKey: stateKey, isOpen: !currentlyOpen)
+            self.disclosureStore.setOpen(
+                scope: self.sessionScopeKey,
+                stateKey: stateKey,
+                aliases: aliases,
+                isOpen: !currentlyOpen
+            )
             self.cachedRowHeights = Array<CGFloat?>(repeating: nil, count: self.rows.count)
             self.heightCacheDisclosureRev = self.disclosureStore.revision
             if let tableView = self.tableView {
@@ -288,6 +304,28 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - "auto" Instant Scroll Jump + 1.8s --ab Highlight
 
+    private func openClaudeMetadataGroup(_ meta: ClaudeMetadataGroup, matching positionKey: String) {
+        let metaAliases = meta.sourceIds.map { "claude-metadata:\($0)" }
+        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: metaAliases, isOpen: true)
+        for sub in meta.entries {
+            switch sub {
+            case let .group(group):
+                if group.commands.contains(where: { TimelineViewModel.matchesTimelinePosition(positionKey, id: $0.id, aliases: $0.sourceIds) }) {
+                    disclosureStore.setOpen(scope: sessionScopeKey, stateKey: group.id, aliases: group.stateAliases, isOpen: true)
+                    for cmd in group.commands where TimelineViewModel.matchesTimelinePosition(positionKey, id: cmd.id, aliases: cmd.sourceIds) {
+                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, aliases: cmd.sourceIds, isOpen: true)
+                    }
+                }
+            case let .item(ev, key, sids):
+                if let detail = ev.detail, !detail.isEmpty,
+                   TimelineViewModel.matchesTimelinePosition(positionKey, id: key, aliases: sids)
+                {
+                    disclosureStore.setOpen(scope: sessionScopeKey, stateKey: key, aliases: sids, isOpen: true)
+                }
+            }
+        }
+    }
+
     @discardableResult
     public func scrollToPositionKey(_ positionKey: String, reduceMotion: Bool = false) -> Bool {
         guard let tableView, let clipView = scrollView?.contentView else { return false }
@@ -299,43 +337,89 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         var didMutateDisclosure = false
         switch targetRow.kind {
         case let .executionGroup(group):
-            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: group.id, isOpen: true)
+            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: group.id, aliases: group.stateAliases, isOpen: true)
             for cmd in group.commands where TimelineViewModel.matchesTimelinePosition(positionKey, id: cmd.id, aliases: cmd.sourceIds) {
-                disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, isOpen: true)
+                disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, aliases: cmd.sourceIds, isOpen: true)
             }
             didMutateDisclosure = true
         case let .processGroup(proc):
-            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: proc.stateKey, isOpen: true)
+            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: proc.stateKey, aliases: proc.stateAliases, isOpen: true)
+            let wrapThinking = proc.toolCount > 0 || proc.thoughtCount > 1
             for step in proc.steps {
                 switch step {
                 case let .execution(group, _):
                     for cmd in group.commands where TimelineViewModel.matchesTimelinePosition(positionKey, id: cmd.id, aliases: cmd.sourceIds) {
-                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, isOpen: true)
+                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, aliases: cmd.sourceIds, isOpen: true)
                     }
                 case let .detail(id, sids, _, _, _, _, _):
                     if TimelineViewModel.matchesTimelinePosition(positionKey, id: id, aliases: sids) {
-                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: id, isOpen: true)
+                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: id, aliases: sids, isOpen: true)
                     }
-                case .thinking:
-                    break
+                case let .thinking(id, sids, _, _, _):
+                    if wrapThinking, TimelineViewModel.matchesTimelinePosition(positionKey, id: id, aliases: sids) {
+                        disclosureStore.setOpen(
+                            scope: sessionScopeKey,
+                            stateKey: "\(id):thinking",
+                            aliases: sids.map { "\($0):thinking" },
+                            isOpen: true
+                        )
+                    }
                 }
             }
             didMutateDisclosure = true
         case let .claudeProcessGroup(proc, _):
-            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: proc.stateKey, isOpen: true)
+            let procAliases = proc.sourceIds.map { "claude-process:\(proc.turnId):\($0)" }
+            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: proc.stateKey, aliases: procAliases, isOpen: true)
+            let wrapThinking = proc.wrapsThinkingDisclosures
+            for entry in proc.entries {
+                switch entry {
+                case let .group(group):
+                    if group.commands.contains(where: { TimelineViewModel.matchesTimelinePosition(positionKey, id: $0.id, aliases: $0.sourceIds) }) {
+                        disclosureStore.setOpen(scope: sessionScopeKey, stateKey: group.id, aliases: group.stateAliases, isOpen: true)
+                        for cmd in group.commands where TimelineViewModel.matchesTimelinePosition(positionKey, id: cmd.id, aliases: cmd.sourceIds) {
+                            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: cmd.id, aliases: cmd.sourceIds, isOpen: true)
+                        }
+                    }
+                case let .metadata(meta):
+                    let metaIdAliases = meta.sourceIds + meta.sourceIds.map { "claude-metadata:\($0)" }
+                    if TimelineViewModel.matchesTimelinePosition(positionKey, id: meta.id, aliases: metaIdAliases) {
+                        openClaudeMetadataGroup(meta, matching: positionKey)
+                    }
+                case let .item(ev, key, sids):
+                    if TimelineViewModel.matchesTimelinePosition(positionKey, id: key, aliases: sids) {
+                        if ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev) {
+                            if wrapThinking {
+                                disclosureStore.setOpen(
+                                    scope: sessionScopeKey,
+                                    stateKey: "\(key):thinking",
+                                    aliases: sids.map { "\($0):thinking" },
+                                    isOpen: true
+                                )
+                            }
+                        } else if let detail = ev.detail, !detail.isEmpty {
+                            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: key, aliases: sids, isOpen: true)
+                        }
+                    }
+                }
+            }
             didMutateDisclosure = true
         case let .claudeMetadataGroup(meta, _):
-            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: meta.id, isOpen: true)
+            openClaudeMetadataGroup(meta, matching: positionKey)
             didMutateDisclosure = true
         case .thinking:
-            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: targetRow.id, isOpen: true)
+            disclosureStore.setOpen(scope: sessionScopeKey, stateKey: targetRow.id, aliases: targetRow.timelineAliases, isOpen: true)
             didMutateDisclosure = true
         case let .user(msg, rawText, _):
             let proj = UserContextEngine.projectUserMessage(msg?.text ?? rawText, contextBlocks: msg?.contextBlocks)
             let segs = UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks)
             if !proj.contextBlocks.isEmpty && (segs.isEmpty || positionKey.contains("context") || positionKey.contains("instruction")) {
                 let ctxKey = "\(msg?.id ?? targetRow.timelineId):context"
-                disclosureStore.setOpen(scope: sessionScopeKey, stateKey: ctxKey, isOpen: true)
+                disclosureStore.setOpen(
+                    scope: sessionScopeKey,
+                    stateKey: ctxKey,
+                    aliases: ["\(targetRow.timelineId):context"],
+                    isOpen: true
+                )
                 didMutateDisclosure = true
             }
         case let .assistant(markdown, foldInstructions) where foldInstructions:
@@ -348,20 +432,27 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             break
         }
         if didMutateDisclosure {
+            cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
+            heightCacheDisclosureRev = disclosureStore.revision
             tableView.reloadData()
             tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: rowIdx))
+            tableView.tile()
             tableView.layoutSubtreeIfNeeded()
         }
 
         let rect = tableView.rect(ofRow: rowIdx)
-        let maxScroll = max(0, tableView.frame.height - clipView.bounds.height)
-        let targetY = max(0, min(maxScroll, rect.minY - 16))
+        let minY = -(scrollView?.contentInsets.top ?? 0)
+        let maxScroll = max(minY, tableView.frame.height - clipView.bounds.height)
+        let targetY = max(minY, min(maxScroll, rect.minY - 16))
+        isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0
             ctx.allowsImplicitAnimation = false
             clipView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
             self.scrollView?.reflectScrolledClipView(clipView)
+            self.lastClipOriginY = clipView.bounds.origin.y
         }
+        isRestoringScroll = false
 
         if !reduceMotion {
             highlightedTimelineId = targetRow.timelineId
@@ -403,12 +494,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 clipView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
                 scrollView.reflectScrolledClipView(clipView)
             } else if let anchor,
-                      let idx = rows.firstIndex(where: { $0.timelineId == anchor.timelineId })
+                      let idx = findAnchorRowIndex(for: anchor.timelineId, in: rows)
             {
                 let rect = tableView.rect(ofRow: idx)
                 clipView.setBoundsOrigin(NSPoint(x: 0, y: max(minY, rect.minY - anchor.deltaY)))
                 scrollView.reflectScrolledClipView(clipView)
             }
+            self.lastClipOriginY = clipView.bounds.origin.y
         }
         isRestoringScroll = false
         refreshViewportAttachmentsAndTimeline()
@@ -508,6 +600,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             || discRev != heightCacheDisclosureRev
             || scheme != heightCacheScheme
             || workspace != heightCacheWorkspace
+            || sessionScopeKey != heightCacheScopeKey
             || cachedRowHeights.count != rows.count
         {
             cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
@@ -515,6 +608,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             heightCacheDisclosureRev = discRev
             heightCacheScheme = scheme
             heightCacheWorkspace = workspace
+            heightCacheScopeKey = sessionScopeKey
         }
 
         if let cached = cachedRowHeights[row] {
@@ -531,6 +625,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row >= 0, row < rows.count else { return nil }
+        if sessionScopeKey != cellCacheScopeKey {
+            cellCacheByRowId.removeAll()
+            cellCacheOrder.removeAll()
+            cellCacheScopeKey = sessionScopeKey
+        }
         let item = rows[row]
         let identifier = NSUserInterfaceItemIdentifier("ConversationRowCell")
         let cell: ConversationRowCellView
@@ -653,36 +752,49 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: foldInstructions, width: width) + 8
 
         case let .executionGroup(group):
-            let aliases = group.mergedIds + group.commands.map { "group:\($0.id)" }
             let isOpen = disclosureStore.isOpen(
                 scope: sessionScopeKey,
                 stateKey: group.id,
-                aliases: aliases,
+                aliases: group.stateAliases,
                 initiallyOpen: group.initiallyOpen
             )
             if !isOpen { return 34 }
-            return 34 + 20 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))
+            return 34 + 16 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))
 
         case let .processGroup(proc):
             let isOpen = disclosureStore.isOpen(
                 scope: sessionScopeKey,
                 stateKey: proc.stateKey,
                 aliases: proc.stateAliases,
-                initiallyOpen: proc.failedCount > 0
+                initiallyOpen: proc.initiallyOpen
             )
             if !isOpen { return 34 }
             let bodyW = max(120, width - 22)
+            let wrapThinking = proc.toolCount > 0 || proc.thoughtCount > 1
             var bodyH: CGFloat = 14
             for (idx, step) in proc.steps.enumerated() {
                 if idx > 0 { bodyH += 8 }
                 switch step {
-                case let .thinking(id, _, text, _, _):
-                    bodyH += measureThoughtMarkdownHeight(ownerId: "\(id):thinking", markdown: text, width: bodyW)
+                case let .thinking(id, sids, text, _, _):
+                    let thinkKey = "\(id):thinking"
+                    if wrapThinking {
+                        let thinkOpen = disclosureStore.isOpen(
+                            scope: sessionScopeKey,
+                            stateKey: thinkKey,
+                            aliases: sids.map { "\($0):thinking" },
+                            initiallyOpen: false
+                        )
+                        bodyH += thinkOpen
+                            ? (32 + 6 + measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: text, width: bodyW))
+                            : 32
+                    } else {
+                        bodyH += measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: text, width: bodyW)
+                    }
                 case let .execution(group, _):
-                    bodyH += 8 + measureExecutionCommandsHeight(commands: group.commands, width: max(100, bodyW - 20))
+                    bodyH += 4 + measureExecutionCommandsHeight(commands: group.commands, width: max(100, bodyW - 20))
                 case let .detail(id, sids, _, detail, running, failed, _):
                     let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: id, aliases: sids, initiallyOpen: running || failed)
-                    bodyH += open ? (32 + 8 + Self.measureMonospaceBoxHeight(text: detail, width: bodyW)) : 32
+                    bodyH += open ? (30 + 6 + Self.measureMonospaceBoxHeight(text: detail, width: bodyW)) : 30
                 }
             }
             return 34 + bodyH
@@ -697,23 +809,32 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             )
             if !isOpen { return 34 }
             let bodyW = max(120, width - 22)
-            return 34 + 14 + measureClaudeEntriesHeight(entries: proc.entries, width: bodyW)
+            return 34 + 14 + measureClaudeEntriesHeight(
+                entries: proc.entries,
+                width: bodyW,
+                wrapThinkingDisclosures: proc.wrapsThinkingDisclosures
+            )
 
         case let .claudeMetadataGroup(meta, _):
             let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
             let isOpen = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
             if !isOpen { return 34 }
-            let bodyW = max(120, width - 22)
+            let bodyW = max(100, width - 22)
             let items = meta.entries.map { entry -> ClaudeEventRenderItem in
                 switch entry {
                 case let .item(it, key, sids): .item(item: it, key: key, sourceIds: sids)
                 case let .group(g): .group(g)
                 }
             }
-            return 34 + 12 + measureClaudeEntriesHeight(entries: items, width: bodyW)
+            return 34 + 14 + measureClaudeEntriesHeight(entries: items, width: bodyW, wrapThinkingDisclosures: false)
 
-        case let .thinking(_, text, running):
-            let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: row.id, initiallyOpen: running)
+        case let .thinking(_, text, _):
+            let open = disclosureStore.isOpen(
+                scope: sessionScopeKey,
+                stateKey: row.id,
+                aliases: row.timelineAliases,
+                initiallyOpen: false
+            )
             if !open { return 34 }
             return 34 + 14 + measureThoughtMarkdownHeight(ownerId: row.id, markdown: text, width: max(120, width - 22))
 
@@ -748,12 +869,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 aliases: cmd.sourceIds,
                 initiallyOpen: !cmd.instructionFile && (cmd.status == .running || cmd.status == .failed)
             )
-            h += 32
+            h += 30
             if cmdOpen {
                 let detail = cmd.sections.map { sec in
                     sec.label.isEmpty ? sec.text : "\(sec.label)\n\(sec.text)"
                 }.joined(separator: "\n\n")
-                h += 8 + Self.measureMonospaceBoxHeight(text: detail.isEmpty ? "暂无输出" : detail, width: width) + 6
+                h += 6 + Self.measureMonospaceBoxHeight(text: detail.isEmpty ? "暂无输出" : detail, width: width)
             }
             if idx < commands.count - 1 {
                 h += 7
@@ -762,15 +883,27 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return h
     }
 
-    private func measureClaudeEntriesHeight(entries: [ClaudeEventRenderItem], width: CGFloat) -> CGFloat {
+    private func measureClaudeEntriesHeight(
+        entries: [ClaudeEventRenderItem],
+        width: CGFloat,
+        wrapThinkingDisclosures: Bool
+    ) -> CGFloat {
         var total: CGFloat = 0
-        for (idx, entry) in entries.enumerated() {
-            if idx > 0 { total += 8 }
+        var renderedCount = 0
+        func appendRenderedHeight(_ itemHeight: CGFloat) {
+            if renderedCount > 0 {
+                total += 8
+            }
+            total += itemHeight
+            renderedCount += 1
+        }
+        for entry in entries {
             switch entry {
             case let .group(group):
-                let aliases = group.mergedIds + group.commands.map { "group:\($0.id)" }
-                let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: group.id, aliases: aliases, initiallyOpen: group.initiallyOpen)
-                total += open ? (34 + 10 + measureExecutionCommandsHeight(commands: group.commands, width: max(100, width - 16))) : 34
+                let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: group.id, aliases: group.stateAliases, initiallyOpen: group.initiallyOpen)
+                appendRenderedHeight(
+                    open ? (46 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))) : 30
+                )
             case let .metadata(meta):
                 let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
@@ -781,18 +914,47 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                         case let .group(g): .group(g)
                         }
                     }
-                    total += 34 + 8 + measureClaudeEntriesHeight(entries: subItems, width: max(100, width - 16))
+                    appendRenderedHeight(
+                        46 + measureClaudeEntriesHeight(
+                            entries: subItems,
+                            width: max(100, width - 22),
+                            wrapThinkingDisclosures: false
+                        )
+                    )
                 } else {
-                    total += 34
+                    appendRenderedHeight(30)
                 }
-            case let .item(ev, key, _):
-                if ev.kind == "thinking" {
-                    total += measureThoughtMarkdownHeight(ownerId: key, markdown: ev.text ?? "", width: width)
+            case let .item(ev, key, sids):
+                if ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev) {
+                    let markdown = ev.text ?? ""
+                    guard !VisibleMarkdownEngine.visibleMarkdown(markdown).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                    let thinkKey = "\(key):thinking"
+                    if wrapThinkingDisclosures {
+                        let thinkOpen = disclosureStore.isOpen(
+                            scope: sessionScopeKey,
+                            stateKey: thinkKey,
+                            aliases: sids.map { "\($0):thinking" },
+                            initiallyOpen: false
+                        )
+                        appendRenderedHeight(
+                            thinkOpen
+                                ? (32 + 6 + measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: markdown, width: width))
+                                : 32
+                        )
+                    } else {
+                        appendRenderedHeight(measureThoughtMarkdownHeight(ownerId: key, markdown: markdown, width: width))
+                    }
                 } else if let detail = ev.detail, !detail.isEmpty {
-                    let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: key, initiallyOpen: false)
-                    total += open ? (32 + 8 + Self.measureMonospaceBoxHeight(text: detail, width: width)) : 32
+                    let status = ExecutionGroupingEngine.executionStatus(ev.status)
+                    let open = disclosureStore.isOpen(
+                        scope: sessionScopeKey,
+                        stateKey: key,
+                        aliases: sids,
+                        initiallyOpen: status == .running || status == .failed
+                    )
+                    appendRenderedHeight(open ? (30 + 6 + Self.measureMonospaceBoxHeight(text: detail, width: width)) : 30)
                 } else if let text = ev.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    total += measureThoughtMarkdownHeight(ownerId: key, markdown: text, width: width)
+                    appendRenderedHeight(measureThoughtMarkdownHeight(ownerId: key, markdown: text, width: width))
                 }
             }
         }
@@ -932,11 +1094,17 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     public static func measureMonospaceBoxHeight(text: String, width: CGFloat) -> CGFloat {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
+        let pStyle = NSMutableParagraphStyle()
+        pStyle.minimumLineHeight = 19.2 // 12pt * 1.6 (matches makeMonospaceDetailBox)
+        pStyle.maximumLineHeight = 19.2
         let attr = NSAttributedString(
             string: cleaned.isEmpty ? " " : cleaned,
-            attributes: [.font: DesignFonts.nsMonoFont(size: 12)]
+            attributes: [
+                .font: DesignFonts.nsMonoFont(size: 12),
+                .paragraphStyle: pStyle,
+            ]
         )
-        let measured = ReaderSelectableTextView.measureHeight(attributed: attr, width: max(80, width - 26))
+        let measured = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: max(80, width - 26)))
         return min(240, max(48, measured + 22))
     }
 

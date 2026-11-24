@@ -308,7 +308,7 @@ impl PanelDb {
         Ok(())
     }
 
-    pub(crate) fn notification_baseline_in_transaction(
+    fn notification_baseline_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         key: &str,
         enabled: bool,

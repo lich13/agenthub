@@ -5,9 +5,8 @@ use agenthub_core::{
     services::{
         commands,
         jobs::{
-            archive_thread_response, plan_thread_archive_with_capability,
-            plan_thread_rename_with_capability, plan_thread_restore_with_capability,
-            rename_thread_response, thread_state_action_response, ThreadRenameRequest,
+            plan_thread_archive_with_capability, plan_thread_rename_with_capability,
+            plan_thread_restore_with_capability, thread_state_action_response, ThreadRenameRequest,
         },
         probe::{plan_probe_action, ProbeAction, ProbeUseCases},
         settings::{
@@ -332,38 +331,26 @@ fn thread_limit_helpers_are_shared_core_contracts() {
 
 #[test]
 fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
-    let archived = archive_thread_response("thread-a".to_string(), true);
-    assert_eq!(archived.command, commands::THREADS_ARCHIVE);
-    let archive_plan =
-        plan_thread_archive_with_capability(&PlatformPaths::linux_server(), "thread-a").unwrap();
+    let archive_plan = plan_thread_archive_with_capability("thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&archive_plan).unwrap().command,
         commands::THREADS_ARCHIVE
     );
 
-    let restored = archive_thread_response("thread-a".to_string(), false);
-    assert_eq!(restored.command, commands::THREADS_RESTORE);
-    let restore_plan =
-        plan_thread_restore_with_capability(&PlatformPaths::linux_server(), "thread-a").unwrap();
+    let restore_plan = plan_thread_restore_with_capability("thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&restore_plan).unwrap().command,
         commands::THREADS_RESTORE
     );
 
-    let renamed = rename_thread_response("thread-a".to_string(), "new name").unwrap();
-    assert_eq!(renamed.command, commands::THREADS_RENAME);
-    let rename_plan = plan_thread_rename_with_capability(
-        &PlatformPaths::linux_server(),
-        ThreadRenameRequest {
-            thread_id: "thread-a".to_string(),
-            name: " new name ".to_string(),
-        },
-    )
+    let rename_plan = plan_thread_rename_with_capability(ThreadRenameRequest {
+        thread_id: "thread-a".to_string(),
+        name: " new name ".to_string(),
+    })
     .unwrap();
-    assert_eq!(
-        thread_state_action_response(&rename_plan).unwrap().data,
-        Some(serde_json::json!({"name": "new name"}))
-    );
+    let renamed = thread_state_action_response(&rename_plan).unwrap();
+    assert_eq!(renamed.command, commands::THREADS_RENAME);
+    assert_eq!(renamed.data, Some(serde_json::json!({"name": "new name"})));
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

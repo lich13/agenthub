@@ -1829,7 +1829,7 @@ async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
     let error = crate::api::rpc_dispatch::rpc_dispatch(state, "probe.gotifyTest".into(), json!({}))
         .await
         .unwrap_err();
-    assert_eq!(error.kind, crate::api::ApiErrorKind::NotFound);
+    assert_eq!(error.message, "不支持的远程操作");
     assert_eq!(fixture.bark.count(), 0);
     assert_eq!(
         fixture

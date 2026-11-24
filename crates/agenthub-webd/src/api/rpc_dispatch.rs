@@ -1,4 +1,3 @@
-use super::ApiErrorKind;
 use super::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
     antigravity_restore, claude_delete_execute, claude_delete_preview, claude_detail, claude_list,
@@ -10,12 +9,11 @@ use super::{
     hidden_threads_delete_dry_run, job_detail, list_jobs, patch_probe_settings, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, thread_blocks, thread_detail, unified_cleanup_dry_run,
-    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery,
+    unified_cleanup_execute, ApiResponse, GrokListQuery, JobsListQuery, ProbeEventsQuery,
 };
 use crate::{
     api::payload::{
-        rpc_nested_payload_or_empty, rpc_payload, rpc_query_strings, rpc_required_string,
-        rpc_wrapped_payload,
+        rpc_nested_payload_or_empty, rpc_payload, rpc_required_string, rpc_wrapped_payload,
     },
     state::AppState,
 };
@@ -37,7 +35,7 @@ macro_rules! remote_handlers {
         pub(crate) async fn rpc_dispatch(state: AppState, command: String, args: Value) -> ApiResponse {
             match command.as_str() {
                 $($id => $handler(state, args).await,)*
-                _ => Err(api_error(ApiErrorKind::NotFound, "不支持的远程操作")),
+                _ => Err(api_error("不支持的远程操作")),
             }
         }
     };
@@ -117,7 +115,7 @@ mod tests {
     #[tokio::test]
     async fn attachments_reject_client_paths() {
         let error = rpc_dispatch(state(), "sessions.attachmentRead".into(), json!({"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a","path":"/etc/passwd"}})).await.unwrap_err();
-        assert_eq!(error.kind, ApiErrorKind::InvalidRequest);
+        assert!(error.message.contains("unknown field `path`"));
     }
     #[tokio::test]
     async fn unconfirmed_delete_and_unknown_commands_are_rejected() {
@@ -133,8 +131,8 @@ mod tests {
             rpc_dispatch(state(), "unknown.command".into(), json!({}))
                 .await
                 .unwrap_err()
-                .kind,
-            ApiErrorKind::NotFound
+                .message,
+            "不支持的远程操作"
         );
     }
     #[tokio::test]

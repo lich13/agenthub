@@ -17,6 +17,7 @@ public final class ConversationRowCellView: NSTableCellView {
     private var stackConstraints: [NSLayoutConstraint] = []
 
     private struct CellConfigSignature: Equatable {
+        let sessionScopeKey: String
         let item: ConversationRowItem
         let leadingInset: CGFloat
         let contentWidth: CGFloat
@@ -128,6 +129,7 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) {
         let nextSig = CellConfigSignature(
+            sessionScopeKey: coordinator.sessionScopeKey,
             item: item,
             leadingInset: leadingInset,
             contentWidth: contentWidth,
@@ -201,7 +203,15 @@ public final class ConversationRowCellView: NSTableCellView {
         case let .claudeMetadataGroup(meta, _):
             buildClaudeMetadataGroupView(meta: meta, width: contentWidth, coordinator: coordinator)
         case let .thinking(title, text, running):
-            buildThinkingView(id: item.id, title: title, text: text, running: running, width: contentWidth, coordinator: coordinator)
+            buildThinkingView(
+                id: item.id,
+                aliases: item.timelineAliases,
+                title: title,
+                text: text,
+                running: running,
+                width: contentWidth,
+                coordinator: coordinator
+            )
         case let .plan(markdown, statusText, fallbackTitle):
             buildPlanView(id: item.id, markdown: markdown, statusText: statusText, fallbackTitle: fallbackTitle, width: contentWidth, coordinator: coordinator)
         case let .question(header, questions):
@@ -287,16 +297,18 @@ public final class ConversationRowCellView: NSTableCellView {
         let maxBubbleW = max(140, min(width * 0.85, 640))
         if !proj.contextBlocks.isEmpty {
             let ctxKey = "\(identity):context"
+            let ctxAliases = ["\(item.timelineId):context"]
             let open = coordinator.disclosureStore.isOpen(
                 scope: coordinator.sessionScopeKey,
                 stateKey: ctxKey,
-                aliases: ["\(item.timelineId):context"],
+                aliases: ctxAliases,
                 initiallyOpen: false
             )
             let ctxText = proj.contextBlocks.map { UserContextEngine.visibleContextText($0.text) }.joined(separator: "\n\n")
             rightAlignRow.addArrangedSubview(
                 makeUserInstructionsCard(
                     stateKey: ctxKey,
+                    aliases: ctxAliases,
                     open: open,
                     text: ctxText,
                     maxCardWidth: maxBubbleW,
@@ -377,10 +389,11 @@ public final class ConversationRowCellView: NSTableCellView {
 
                 if !trimmedQ.isEmpty {
                     let qKey = "\(identity):\(segId):question"
+                    let qAliases = ["\(item.timelineId):\(segId):question"]
                     let qOpen = coordinator.disclosureStore.isOpen(
                         scope: coordinator.sessionScopeKey,
                         stateKey: qKey,
-                        aliases: ["\(item.timelineId):\(segId):question"],
+                        aliases: qAliases,
                         initiallyOpen: false
                     )
                     let qSingleWidth = ceil(NSAttributedString(
@@ -392,7 +405,7 @@ public final class ConversationRowCellView: NSTableCellView {
                     let qHeaderBox = ActionRowContainerView()
                     qHeaderBox.translatesAutoresizingMaskIntoConstraints = false
                     qHeaderBox.onTap = { [weak coordinator] in
-                        coordinator?.toggleDisclosurePreservingAnchor(stateKey: qKey, currentlyOpen: qOpen)
+                        coordinator?.toggleDisclosurePreservingAnchor(stateKey: qKey, aliases: qAliases, currentlyOpen: qOpen)
                     }
                     let qHeaderStack = NSStackView()
                     qHeaderStack.orientation = .horizontal
@@ -488,6 +501,7 @@ public final class ConversationRowCellView: NSTableCellView {
 
     private func makeUserInstructionsCard(
         stateKey: String,
+        aliases: [String],
         open: Bool,
         text: String,
         maxCardWidth: CGFloat,
@@ -505,7 +519,7 @@ public final class ConversationRowCellView: NSTableCellView {
         let header = ActionRowContainerView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.onTap = { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: stateKey, currentlyOpen: open)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: stateKey, aliases: aliases, currentlyOpen: open)
         }
         let hStack = NSStackView()
         hStack.orientation = .horizontal
@@ -875,8 +889,12 @@ public final class ConversationRowCellView: NSTableCellView {
         if let fileTarget = FileLinksAndPlanExport.fileLinkTarget(href, cwd: coordinator.cwd) {
             if coordinator.store.target == .local && fileTarget.resolved {
                 let targetPath = fileTarget.path
-                Task {
-                    try? await FileOpenerService.revealPaths([targetPath])
+                Task { @MainActor [weak coordinator] in
+                    do {
+                        try await FileOpenerService.revealPaths([targetPath])
+                    } catch {
+                        coordinator?.onCopyFeedback?("无法在 Finder 中显示，请检查文件是否仍存在")
+                    }
                 }
             } else {
                 NSPasteboard.general.clearContents()
@@ -1081,7 +1099,7 @@ public final class ConversationRowCellView: NSTableCellView {
     ) {
         let destStack = targetStack ?? containerStack
         let palette = coordinator.palette
-        let aliases = group.mergedIds + group.commands.map { "group:\($0.id)" }
+        let aliases = group.stateAliases
         let isOpen = coordinator.disclosureStore.isOpen(
             scope: coordinator.sessionScopeKey,
             stateKey: group.id,
@@ -1105,7 +1123,7 @@ public final class ConversationRowCellView: NSTableCellView {
             width: width,
             palette: palette
         ) { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: group.id, currentlyOpen: isOpen)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: group.id, aliases: aliases, currentlyOpen: isOpen)
         }
         destStack.addArrangedSubview(summaryRow)
 
@@ -1132,7 +1150,7 @@ public final class ConversationRowCellView: NSTableCellView {
             scope: coordinator.sessionScopeKey,
             stateKey: proc.stateKey,
             aliases: proc.stateAliases,
-            initiallyOpen: proc.failedCount > 0
+            initiallyOpen: proc.initiallyOpen
         )
         let summary = proc.summaryText
         let summaryRow = makeProcessSummaryRow(
@@ -1147,12 +1165,13 @@ public final class ConversationRowCellView: NSTableCellView {
             width: width,
             palette: palette
         ) { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: proc.stateKey, currentlyOpen: isOpen)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: proc.stateKey, aliases: proc.stateAliases, currentlyOpen: isOpen)
         }
         containerStack.addArrangedSubview(summaryRow)
 
         guard isOpen else { return }
         let bodyWidth = max(120, width - 22)
+        let wrapThinking = proc.toolCount > 0 || proc.thoughtCount > 1
         let stepsStack = NSStackView()
         stepsStack.orientation = .vertical
         stepsStack.alignment = .leading
@@ -1161,8 +1180,24 @@ public final class ConversationRowCellView: NSTableCellView {
 
         for step in proc.steps {
             switch step {
-            case let .thinking(_, _, text, _, _):
-                stepsStack.addArrangedSubview(makeThoughtProseView(markdown: text, width: bodyWidth, palette: palette, coordinator: coordinator))
+            case let .thinking(id, sids, text, stepRunning, _):
+                if wrapThinking {
+                    stepsStack.addArrangedSubview(
+                        makeInnerThinkingDisclosureView(
+                            stateKey: "\(id):thinking",
+                            aliases: sids.map { "\($0):thinking" },
+                            markdown: text,
+                            running: stepRunning,
+                            width: bodyWidth,
+                            palette: palette,
+                            coordinator: coordinator
+                        )
+                    )
+                } else {
+                    stepsStack.addArrangedSubview(
+                        makeThoughtProseView(markdown: text, width: bodyWidth, palette: palette, coordinator: coordinator)
+                    )
+                }
             case let .execution(group, _):
                 stepsStack.addArrangedSubview(
                     makeExecutionCommandsList(
@@ -1227,13 +1262,18 @@ public final class ConversationRowCellView: NSTableCellView {
             width: width,
             palette: palette
         ) { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: proc.stateKey, currentlyOpen: isOpen)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: proc.stateKey, aliases: aliases, currentlyOpen: isOpen)
         }
         containerStack.addArrangedSubview(summaryRow)
 
         guard isOpen else { return }
         let bodyWidth = max(120, width - 22)
-        let innerStack = buildClaudeEntriesStack(entries: proc.entries, width: bodyWidth, coordinator: coordinator)
+        let innerStack = buildClaudeEntriesStack(
+            entries: proc.entries,
+            width: bodyWidth,
+            wrapThinkingDisclosures: proc.wrapsThinkingDisclosures,
+            coordinator: coordinator
+        )
         containerStack.addArrangedSubview(makeLeftRailContainer(content: innerStack, width: width, palette: palette))
     }
 
@@ -1264,7 +1304,7 @@ public final class ConversationRowCellView: NSTableCellView {
             width: width,
             palette: palette
         ) { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: meta.id, currentlyOpen: isOpen)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: meta.id, aliases: aliases, currentlyOpen: isOpen)
         }
         destStack.addArrangedSubview(summaryRow)
 
@@ -1276,13 +1316,19 @@ public final class ConversationRowCellView: NSTableCellView {
             }
         }
         let bodyWidth = max(100, width - 22)
-        let innerStack = buildClaudeEntriesStack(entries: subItems, width: bodyWidth, coordinator: coordinator)
+        let innerStack = buildClaudeEntriesStack(
+            entries: subItems,
+            width: bodyWidth,
+            wrapThinkingDisclosures: false,
+            coordinator: coordinator
+        )
         destStack.addArrangedSubview(makeLeftRailContainer(content: innerStack, width: width, palette: palette))
     }
 
     private func buildClaudeEntriesStack(
         entries: [ClaudeEventRenderItem],
         width: CGFloat,
+        wrapThinkingDisclosures: Bool,
         coordinator: ConversationTableCoordinator
     ) -> NSStackView {
         let palette = coordinator.palette
@@ -1299,8 +1345,24 @@ public final class ConversationRowCellView: NSTableCellView {
             case let .metadata(meta):
                 buildClaudeMetadataGroupView(meta: meta, width: width, coordinator: coordinator, into: stack)
             case let .item(ev, key, sids):
-                if ev.kind == "thinking" {
-                    stack.addArrangedSubview(makeThoughtProseView(markdown: ev.text ?? "", width: width, palette: palette, coordinator: coordinator))
+                if ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev) {
+                    let markdown = ev.text ?? ""
+                    guard !VisibleMarkdownEngine.visibleMarkdown(markdown).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                    if wrapThinkingDisclosures {
+                        stack.addArrangedSubview(
+                            makeInnerThinkingDisclosureView(
+                                stateKey: "\(key):thinking",
+                                aliases: sids.map { "\($0):thinking" },
+                                markdown: markdown,
+                                running: ev.kind == "thinking" && ev.status == "running",
+                                width: width,
+                                palette: palette,
+                                coordinator: coordinator
+                            )
+                        )
+                    } else {
+                        stack.addArrangedSubview(makeThoughtProseView(markdown: markdown, width: width, palette: palette, coordinator: coordinator))
+                    }
                 } else if let detail = ev.detail, !detail.isEmpty {
                     let cmd = ExecutionCommand(
                         id: key,
@@ -1330,6 +1392,7 @@ public final class ConversationRowCellView: NSTableCellView {
 
     private func buildThinkingView(
         id: String,
+        aliases: [String],
         title: String,
         text: String,
         running: Bool,
@@ -1337,7 +1400,12 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) {
         let palette = coordinator.palette
-        let open = coordinator.disclosureStore.isOpen(scope: coordinator.sessionScopeKey, stateKey: id, initiallyOpen: running)
+        let open = coordinator.disclosureStore.isOpen(
+            scope: coordinator.sessionScopeKey,
+            stateKey: id,
+            aliases: aliases,
+            initiallyOpen: false
+        )
         let summaryRow = makeProcessSummaryRow(
             gutterIcon: .brain,
             title: running ? "正在思考…" : title,
@@ -1350,12 +1418,138 @@ public final class ConversationRowCellView: NSTableCellView {
             width: width,
             palette: palette
         ) { [weak coordinator] in
-            coordinator?.toggleDisclosurePreservingAnchor(stateKey: id, currentlyOpen: open)
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: id, aliases: aliases, currentlyOpen: open)
         }
         containerStack.addArrangedSubview(summaryRow)
         guard open else { return }
         let thoughtView = makeThoughtProseView(markdown: text, width: max(120, width - 22), palette: palette, coordinator: coordinator)
         containerStack.addArrangedSubview(makeLeftRailContainer(content: thoughtView, width: width, palette: palette))
+    }
+
+    public static func thoughtPreviewSnippet(_ markdown: String) -> String {
+        let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
+        for rawLine in cleaned.components(separatedBy: .newlines) {
+            let trimmed = rawLine
+                .replacingOccurrences(of: "^(#{1,6}\\s+|[-*+]\\s+|>\\s+|\\d+\\.\\s+)+", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let ns = trimmed as NSString
+                return ns.length > 140 ? "\(ns.substring(to: 140))…" : trimmed
+            }
+        }
+        return "思考内容"
+    }
+
+    private func makeInnerThinkingDisclosureView(
+        stateKey: String,
+        aliases: [String],
+        markdown: String,
+        running: Bool,
+        width: CGFloat,
+        palette: DesignPalette,
+        coordinator: ConversationTableCoordinator
+    ) -> NSView {
+        let open = coordinator.disclosureStore.isOpen(
+            scope: coordinator.sessionScopeKey,
+            stateKey: stateKey,
+            aliases: aliases,
+            initiallyOpen: false
+        )
+        let itemCol = NSStackView()
+        itemCol.orientation = .vertical
+        itemCol.alignment = .leading
+        itemCol.spacing = 6
+        itemCol.translatesAutoresizingMaskIntoConstraints = false
+        itemCol.widthAnchor.constraint(equalToConstant: width).isActive = true
+
+        let header = HoverSummaryRowView(
+            open: false,
+            isEnabled: true,
+            hoverFill: palette.hover.nsColor.withAlphaComponent(0.55),
+            openFill: .clear
+        )
+        header.onTap = { [weak coordinator] in
+            coordinator?.toggleDisclosurePreservingAnchor(stateKey: stateKey, aliases: aliases, currentlyOpen: open)
+        }
+        let hStack = NSStackView()
+        hStack.orientation = .horizontal
+        hStack.alignment = .centerY
+        hStack.spacing = 8
+        hStack.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(hStack)
+
+        let brainIcon = NSImageView(
+            image: LucideVectorCatalog.nsImage(for: .brain, size: 14, color: palette.accent.nsColor)
+        )
+        brainIcon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            brainIcon.widthAnchor.constraint(equalToConstant: 14),
+            brainIcon.heightAnchor.constraint(equalToConstant: 14),
+        ])
+        hStack.addArrangedSubview(brainIcon)
+
+        let titleAttr = NSMutableAttributedString(
+            string: running ? "正在思考…" : "思考",
+            attributes: [
+                .font: DesignFonts.nsBodyFont(size: 12, weight: .medium),
+                .foregroundColor: palette.textPrimary.nsColor,
+            ]
+        )
+        let preview = Self.thoughtPreviewSnippet(markdown)
+        if !preview.isEmpty {
+            titleAttr.append(
+                NSAttributedString(
+                    string: " \(preview)",
+                    attributes: [
+                        .font: DesignFonts.nsBodyFont(size: 12),
+                        .foregroundColor: palette.textMuted.nsColor,
+                    ]
+                )
+            )
+        }
+        let titleLbl = NSTextField(labelWithAttributedString: titleAttr)
+        titleLbl.lineBreakMode = .byTruncatingTail
+        titleLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        hStack.addArrangedSubview(titleLbl)
+
+        hStack.addArrangedSubview(NSView())
+        if running {
+            hStack.addArrangedSubview(
+                AppKitRunningRingView(
+                    size: 13,
+                    trackColor: palette.borderStrong.nsColor,
+                    accentColor: palette.accent.nsColor
+                )
+            )
+        }
+
+        let chev = NSImageView(
+            image: LucideVectorCatalog.nsImage(
+                for: open ? .chevronDown : .chevronRight,
+                size: 16,
+                color: (open ? palette.accent : palette.textMuted).nsColor
+            )
+        )
+        chev.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            chev.widthAnchor.constraint(equalToConstant: 16),
+            chev.heightAnchor.constraint(equalToConstant: 16),
+            header.widthAnchor.constraint(equalToConstant: width),
+            header.heightAnchor.constraint(equalToConstant: 32),
+            hStack.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 4),
+            hStack.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -4),
+            hStack.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+        ])
+        hStack.addArrangedSubview(chev)
+        itemCol.addArrangedSubview(header)
+
+        if open {
+            itemCol.addArrangedSubview(
+                makeThoughtProseView(markdown: markdown, width: width, palette: palette, coordinator: coordinator)
+            )
+        }
+        return itemCol
     }
 
     private func makeThoughtProseView(
@@ -2122,7 +2316,7 @@ public final class ConversationRowCellView: NSTableCellView {
                 openFill: .clear
             )
             header.onTap = { [weak coordinator] in
-                coordinator?.toggleDisclosurePreservingAnchor(stateKey: cmd.id, currentlyOpen: cmdOpen)
+                coordinator?.toggleDisclosurePreservingAnchor(stateKey: cmd.id, aliases: cmd.sourceIds, currentlyOpen: cmdOpen)
             }
             let hStack = NSStackView()
             hStack.orientation = .horizontal
@@ -2292,7 +2486,7 @@ public final class ConversationRowCellView: NSTableCellView {
 
         let innerW = max(80, width - 26)
         let contentH = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: innerW))
-        let boxH = min(240, max(46, contentH + 22))
+        let boxH = min(240, max(48, contentH + 22))
 
         let scroll = PassthroughInnerScrollView(allowsVerticalScroll: true)
         scroll.hasVerticalScroller = contentH + 22 > boxH

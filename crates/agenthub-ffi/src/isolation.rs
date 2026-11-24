@@ -17,9 +17,7 @@ pub fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> 
 pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState> {
     create_dir_0700(isolated_root)?;
     let log_dir = isolated_root.join("logs");
-    let workspace_dir = isolated_root.join("workspace");
     create_dir_0700(&log_dir)?;
-    create_dir_0700(&workspace_dir)?;
 
     let config_file = isolated_root.join("config.toml");
     let production_platform = PlatformPaths::desktop_current()?;
@@ -30,7 +28,7 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
         seed.paths.data_dir = isolated_root.to_path_buf();
         seed.paths.db_path = isolated_root.join("agenthub.sqlite");
         seed.paths.log_dir = log_dir.clone();
-        seed.codex.workspace = workspace_dir.clone();
+        seed.codex.workspace = isolated_root.join("workspace");
         let serialized = toml::to_string(&seed).context("serialize isolated config.toml")?;
         write_atomic_0600(&config_file, serialized.as_bytes())?;
     }
@@ -60,10 +58,6 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
     config.paths.data_dir = isolated_root.to_path_buf();
     config.paths.db_path = isolated_root.join("agenthub.sqlite");
     config.paths.log_dir = platform.log_dir.clone();
-    if agenthub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
-        config.codex.workspace = workspace_dir;
-    }
-    fs::create_dir_all(&config.codex.workspace)?;
     let db = PanelDb::open_with_secret_box(
         &config.paths.db_path,
         config

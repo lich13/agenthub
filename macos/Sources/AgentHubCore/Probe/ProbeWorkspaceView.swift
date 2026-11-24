@@ -24,6 +24,7 @@ public struct ProbeWorkspaceView: View {
     @State private var activeJobAction: String?
 
     @State private var hookStatuses: [String: ClaudeHooksStatus] = [:]
+    @State private var hookErrors: [String: String] = [:]
     @State private var pendingHookDialog: (provider: String, name: String, action: String, path: String)?
     @State private var hookBusy: Bool = false
     @State private var advancedSettingsOpen: Bool = true
@@ -571,9 +572,10 @@ public struct ProbeWorkspaceView: View {
                 }
             } else {
                 let st = hookStatuses[provider]
+                let hookErr = hookErrors[provider]
                 let installed = st?.installed ?? false
                 let count = st?.managedCount ?? 0
-                let path = st?.configPath ?? "未返回路径"
+                let path = st?.configPath ?? (hookErr == nil ? "未返回路径" : "状态不可用")
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         AgentBrandIcon(brand, size: 16)
@@ -582,8 +584,17 @@ public struct ProbeWorkspaceView: View {
                         Text(path).font(DesignFonts.mono(11)).foregroundStyle(palette.textMuted.color).lineLimit(1)
                     }
                     HStack(spacing: 8) {
-                        MetricCard(label: "Hook 状态", value: installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
+                        if hookErr != nil {
+                            MetricCard(label: "Hook 状态", value: "读取失败", tone: .danger)
+                        } else {
+                            MetricCard(label: "Hook 状态", value: installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
+                        }
                         MetricCard(label: "托管条目", value: "\(count) 条")
+                    }
+                    if let hookErr, !hookErr.isEmpty {
+                        Text(hookErr)
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle(palette.errFg.color)
                     }
                     FlowButtonRow(spacing: 8, lineSpacing: 8) {
                         Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
@@ -753,17 +764,25 @@ public struct ProbeWorkspaceView: View {
         }
         if store.target == .local {
             for provider in ["claude", "grok", "antigravity"] {
-                if let st: ClaudeHooksStatus = try? await store.rpc(
-                    "claude.hooks",
-                    args: [
-                        "request": .object(["action": .string("status"), "confirmed": .bool(false)]),
-                        "provider": .string(provider),
-                    ],
-                    localOnly: true
-                ) {
+                do {
+                    let st: ClaudeHooksStatus = try await store.rpc(
+                        "claude.hooks",
+                        args: [
+                            "request": .object(["action": .string("status"), "confirmed": .bool(false)]),
+                            "provider": .string(provider),
+                        ],
+                        localOnly: true
+                    )
                     hookStatuses[provider] = st
+                    hookErrors.removeValue(forKey: provider)
+                } catch {
+                    hookStatuses.removeValue(forKey: provider)
+                    hookErrors[provider] = error.localizedDescription
                 }
             }
+        } else {
+            hookStatuses.removeAll()
+            hookErrors.removeAll()
         }
     }
 
@@ -860,6 +879,7 @@ public struct ProbeWorkspaceView: View {
                 localOnly: true, at: sourceRevision
             )
             hookStatuses[dialog.provider] = st
+            hookErrors.removeValue(forKey: dialog.provider)
             actionMessage = (.success, "\(dialog.name) Hook 已更新")
         } catch {
             actionMessage = (.danger, error.localizedDescription)
