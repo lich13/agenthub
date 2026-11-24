@@ -316,7 +316,8 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
         remoteCaps.updateServiceLabels = true
         XCTAssertEqual(UpdateActionViewItem.panelTitle(capabilities: remoteCaps), "远程服务更新")
 
-        XCTAssertEqual(UpdateVersionFormatter.displayWithVPrefix("2.1.27"), "v2.1.27")
+        XCTAssertEqual(UpdateVersionFormatter.displayVersion("v2.1.27"), "2.1.27")
+        XCTAssertEqual(UpdateVersionFormatter.displayVersion(nil), "未知")
         XCTAssertEqual(UpdateVersionFormatter.bareVersion("v2.1.27"), "2.1.27")
         XCTAssertTrue(UpdateVersionFormatter.isValidSemver("2.1.27"))
     }

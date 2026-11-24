@@ -1,4 +1,4 @@
-use agenthub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
+use agenthub_core::codex::CodexPaths;
 use agenthub_core::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
@@ -15,9 +15,8 @@ use agenthub_core::{
             ProbeSettingsSaveRequest, SettingsUseCases,
         },
         threads::{
-            normalize_thread_block_limit, normalize_thread_detail_block_limit,
             plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
-            thread_blocks_page_for_plan, ThreadDetailRequest, ThreadsQuery,
+            read_thread_blocks_page, ThreadDetailRequest, ThreadsQuery,
         },
         updates::{plan_update_action, UpdateAction},
     },
@@ -243,27 +242,92 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
     assert_eq!(list.fetch_limit, 25);
     assert_eq!(list.query.q.as_deref(), Some("work"));
 
+    let home = temp_dir("agenthub-facade-blocks");
+    std::fs::create_dir_all(&home).unwrap();
+    let rollout = home.join("thread-a.jsonl");
+    std::fs::write(
+        &rollout,
+        concat!(
+            "{\"session_meta\":{\"payload\":{\"id\":\"thread-a\"}}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"block 0\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"block 1\"}]}}\n"
+        ),
+    )
+    .unwrap();
+    let conn = rusqlite::Connection::open(home.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads(
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            model_provider TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            title TEXT NOT NULL,
+            sandbox_policy TEXT NOT NULL,
+            approval_mode TEXT NOT NULL,
+            preview TEXT NOT NULL DEFAULT ''
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, preview)
+         VALUES('thread-a', ?1, 1, 2, 'codex', '', '/tmp', 'Thread thread-a', '', '', '')",
+        [rollout.display().to_string()],
+    )
+    .unwrap();
+
     let blocks = plan_thread_blocks_request(&linux, " thread-a ", Some(1), None).unwrap();
-    let page = thread_blocks_page_for_plan(thread_detail_with_blocks("thread-a", 2), &blocks);
+    let page = read_thread_blocks_page(&CodexPaths::new(&home), &blocks)
+        .unwrap()
+        .unwrap();
     assert_eq!(page.thread_id, "thread-a");
     assert_eq!(page.blocks.len(), 1);
     assert_eq!(page.total_blocks, 2);
     assert!(page.has_more_blocks);
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]
 fn thread_limit_helpers_are_shared_core_contracts() {
-    assert_eq!(normalize_thread_detail_block_limit(None, false), Some(120));
+    let linux = PlatformPaths::linux_server();
+    let plan = |limit, full| {
+        plan_thread_detail_request(
+            &linux,
+            ThreadDetailRequest {
+                id: "thread-a".to_string(),
+                limit,
+                full: Some(full),
+                before: None,
+            },
+        )
+        .unwrap()
+        .block_limit
+    };
+    assert_eq!(plan(None, false), Some(120));
+    assert_eq!(plan(Some(999), false), Some(500));
+    assert_eq!(plan(Some(0), false), Some(1));
+    assert_eq!(plan(Some(25), true), None);
+
     assert_eq!(
-        normalize_thread_detail_block_limit(Some(999), false),
+        plan_thread_blocks_request(&linux, "thread-a", None, None)
+            .unwrap()
+            .block_limit,
+        Some(120)
+    );
+    assert_eq!(
+        plan_thread_blocks_request(&linux, "thread-a", Some(0), None)
+            .unwrap()
+            .block_limit,
+        Some(1)
+    );
+    assert_eq!(
+        plan_thread_blocks_request(&linux, "thread-a", Some(999), None)
+            .unwrap()
+            .block_limit,
         Some(500)
     );
-    assert_eq!(normalize_thread_detail_block_limit(Some(0), false), Some(1));
-    assert_eq!(normalize_thread_detail_block_limit(Some(25), true), None);
-
-    assert_eq!(normalize_thread_block_limit(None), 120);
-    assert_eq!(normalize_thread_block_limit(Some(0)), 1);
-    assert_eq!(normalize_thread_block_limit(Some(999)), 500);
 }
 
 #[test]
@@ -312,67 +376,4 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
             .as_nanos()
     );
     std::env::temp_dir().join(format!("{label}-{unique}"))
-}
-
-fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetail {
-    let blocks = (0..block_count)
-        .map(|idx| MessageBlock {
-            subagent: None,
-            user_message: None,
-            id: format!("b:{idx}"),
-            role: "assistant".to_string(),
-            kind: "message".to_string(),
-            display_kind: None,
-            status: None,
-            text: Some(format!("block {idx}")),
-            summary: None,
-            input: None,
-            truncated: None,
-            resolved: None,
-            answers: Vec::new(),
-            plan_status: None,
-            group_id: None,
-            tool_name: None,
-            call_id: None,
-            turn_id: None,
-            item_id: None,
-            created_at: None,
-            questions: Vec::new(),
-            payload: None,
-        })
-        .collect::<Vec<_>>();
-
-    ThreadDetail {
-        timeline: None,
-        after_cursor: None,
-        history_subagent_blocks: Vec::new(),
-        history: None,
-        subagents: None,
-        subagent_updates: Default::default(),
-        summary: ThreadSummary {
-            activity_updated_at: None,
-            storage_size: None,
-            id: thread_id.to_string(),
-            title: format!("Thread {thread_id}"),
-            status: ThreadStatus::Recent,
-            updated_at: None,
-            archived_at: None,
-            message_count: 1,
-            latest_message: None,
-            cwd: None,
-            workspace_root: None,
-            model: None,
-            rollout_path: None,
-            active_turn_id: None,
-            active_job_id: None,
-            pending_elicitation: None,
-            last_event_kind: None,
-        },
-        messages: Vec::new(),
-        blocks,
-        raw_event_count: block_count,
-        total_blocks: block_count,
-        has_more_blocks: false,
-        before_cursor: None,
-    }
 }

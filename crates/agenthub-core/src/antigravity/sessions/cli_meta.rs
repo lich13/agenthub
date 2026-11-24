@@ -1,6 +1,7 @@
 use super::annotations::{
-    extract_step_payload_field_strings, parse_executor_metadata_blob, parse_raw_summary,
-    parse_trajectory_metadata_blob, ParsedRawSummary,
+    extract_db_error_text, extract_db_planner_texts, extract_db_user_input_text,
+    parse_executor_metadata_blob, parse_raw_summary, parse_trajectory_metadata_blob,
+    ParsedRawSummary,
 };
 use super::*;
 use crate::native_probe::{self, NativeProvider, NativeStreamSnapshot, NativeTurnEvent};
@@ -143,8 +144,7 @@ pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaR
         let title = row
             .get::<_, String>(2)
             .ok()
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty());
+            .and_then(|s| super::prompt::clean_antigravity_auto_title(&s));
         let workspace = row
             .get::<_, String>(3)
             .ok()
@@ -214,15 +214,20 @@ pub(crate) fn load_store_auxiliary_index(
                                 .filter(|s| !s.is_empty() && *s != cid)
                                 .map(str::to_owned),
                         };
-                        if let Some(t) = val["summary"]
+                        if let Some(raw_title) = val["summary"]
                             .as_str()
                             .or_else(|| val["summary"]["Title"].as_str())
                             .or_else(|| val["summary"]["title"].as_str())
                             .or_else(|| val["title"].as_str())
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
                         {
-                            entry.title = Some(t.to_owned());
+                            entry.title = if entry.is_internal
+                                || entry.parent_id.is_some()
+                                || entry.root_id.is_some()
+                            {
+                                super::prompt::clean_antigravity_subagent_title(raw_title)
+                            } else {
+                                super::prompt::clean_antigravity_auto_title(raw_title)
+                            };
                         }
                         if let Some(uri) = val["summary"]["WorkspaceURIs"]
                             .as_array()
@@ -295,8 +300,10 @@ pub(crate) fn load_store_auxiliary_index(
                                 .or_else(|| doc["status"].as_str())
                                 .unwrap_or("");
                             let killed = state.contains("KILLED") || state.contains("CANCELED");
-                            let title = doc["title"]
+                            let title = doc["subagentDescriptor"]["role"]
                                 .as_str()
+                                .or_else(|| doc["subagentDescriptor"]["typeName"].as_str())
+                                .or_else(|| doc["title"].as_str())
                                 .or_else(|| doc["name"].as_str())
                                 .or_else(|| doc["type_name"].as_str())
                                 .or_else(|| doc["typeName"].as_str())
@@ -496,9 +503,7 @@ pub(crate) fn read_conv_meta_file(
     let title = doc["title"]
         .as_str()
         .or_else(|| doc["summary"].as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
+        .and_then(super::prompt::clean_antigravity_auto_title);
     let cwd = doc["cwd"]
         .as_str()
         .or_else(|| doc["workspace"].as_str())
@@ -524,31 +529,14 @@ pub(crate) fn load_history_jsonl_fallbacks(
         return BTreeMap::new();
     };
     let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
     let mut out: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
-    loop {
-        line.clear();
-        let Ok(read) = (&mut reader)
-            .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-            .read_until(b'\n', &mut line)
-        else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let Ok(row) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
+    let _ = super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
         let Some(cid) = row["conversationId"]
             .as_str()
             .or_else(|| row["conversation_id"].as_str())
             .filter(|s| uuid::Uuid::parse_str(s).is_ok())
         else {
-            continue;
+            return std::ops::ControlFlow::Continue(());
         };
         let ws = row["workspace"]
             .as_str()
@@ -557,9 +545,13 @@ pub(crate) fn load_history_jsonl_fallbacks(
             .filter(|s| !s.is_empty());
         let disp = row["display"]
             .as_str()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && !s.starts_with('/'))
-            .map(|s| s.chars().take(80).collect::<String>());
+            .map(super::prompt::extract_antigravity_user_request)
+            .and_then(|s| {
+                s.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !super::prompt::is_slash_meta_command_only(l))
+                    .map(|l| l.chars().take(80).collect::<String>())
+            });
         let entry = out.entry(cid.to_owned()).or_insert((None, None));
         if ws.is_some() {
             entry.0 = ws;
@@ -567,7 +559,8 @@ pub(crate) fn load_history_jsonl_fallbacks(
         if entry.1.is_none() && disp.is_some() {
             entry.1 = disp;
         }
-    }
+        std::ops::ControlFlow::Continue(())
+    });
     out
 }
 
@@ -613,26 +606,15 @@ fn read_all_transcript_rows(store: &AntigravityPaths, id: &str) -> Option<(PathB
         return None;
     }
     let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
     let mut rows = Vec::new();
-    loop {
-        line.clear();
-        let Ok(read) = (&mut reader)
-            .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-            .read_until(b'\n', &mut line)
-        else {
-            break;
-        };
-        if read == 0 || rows.len() >= 200_000 {
-            break;
+    let _ = super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+        rows.push(row);
+        if rows.len() >= 200_000 {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
         }
-        if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-            rows.push(row);
-        }
-    }
+    });
     Some((chosen, rows))
 }
 
@@ -785,7 +767,6 @@ fn turn_rows_have_unsettled_tools(turn_rows: &[Value]) -> bool {
     let mut open_tool_calls = 0usize;
     for row in turn_rows {
         let rtype = row["type"].as_str().unwrap_or("");
-        let rsource = row["source"].as_str().unwrap_or("");
         let rstatus = row["status"].as_str().unwrap_or("DONE");
         if matches!(rstatus, "CANCELED" | "INTERRUPTED" | "INVALID")
             || matches!(rtype, "FINISH" | "ERROR_MESSAGE")
@@ -793,7 +774,7 @@ fn turn_rows_have_unsettled_tools(turn_rows: &[Value]) -> bool {
             open_tool_calls = 0;
             continue;
         }
-        if rtype == "SYSTEM_MESSAGE" {
+        if rtype == "SYSTEM_MESSAGE" || super::prompt::is_transcript_user_row(row) {
             continue;
         }
         if rtype == "PLANNER_RESPONSE" {
@@ -820,11 +801,7 @@ fn turn_rows_have_unsettled_tools(turn_rows: &[Value]) -> bool {
                     }
                 }
             }
-        } else if !matches!(
-            rtype,
-            "USER_INPUT" | "FINISH" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
-        ) && rsource != "USER_EXPLICIT"
-        {
+        } else if !matches!(rtype, "FINISH" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
             open_tool_calls = open_tool_calls.saturating_sub(1);
         }
     }
@@ -896,8 +873,8 @@ pub(crate) fn build_offline_stream_snapshot(
                 .rposition(|row| {
                     let st = row["type"].as_str().unwrap_or("");
                     let src = row["source"].as_str().unwrap_or("");
-                    st == "USER_INPUT"
-                        || src == "USER_EXPLICIT"
+                    (super::prompt::is_transcript_user_row(row)
+                        && super::prompt::transcript_row_has_user_payload(row))
                         || (st == "SYSTEM_MESSAGE" && src == "SYSTEM")
                 })
                 .unwrap_or(0);
@@ -907,6 +884,8 @@ pub(crate) fn build_offline_stream_snapshot(
                 let src = row["source"].as_str().unwrap_or("");
                 !matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
                     && !(st == "SYSTEM_MESSAGE" && src == "SYSTEM_SDK")
+                    && !(super::prompt::is_transcript_user_row(row)
+                        && !super::prompt::transcript_row_has_user_payload(row))
             });
             let canceled = raw_summary
                 .as_ref()
@@ -1125,7 +1104,8 @@ pub(crate) fn build_offline_stream_snapshot(
     }
     let turn_start = db_steps
         .iter()
-        .rposition(|(_, st, _, _)| *st == 14)
+        .rposition(|(_, st, _, blob)| *st == 14 && extract_db_user_input_text(blob).is_some())
+        .or_else(|| db_steps.iter().rposition(|(_, st, _, _)| *st == 14))
         .unwrap_or(0);
     let canceled = raw_summary
         .as_ref()
@@ -1171,8 +1151,9 @@ pub(crate) fn build_offline_stream_snapshot(
                         .rev()
                         .find(|(_, st, status, _)| *st == 17 || *status == 7)
                         .and_then(|(_, _, _, blob)| {
-                            let s = extract_step_payload_field_strings(blob, 24).join("\n");
-                            (!s.trim().is_empty()).then(|| safe_probe_text(&s))
+                            extract_db_error_text(blob)
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|s| safe_probe_text(&s))
                         })
                         .unwrap_or_else(|| "主回合未能完成，请打开 Antigravity 查看详情。".into());
                     events.push(NativeTurnEvent {
@@ -1199,7 +1180,7 @@ pub(crate) fn build_offline_stream_snapshot(
                     .find(|(_, (_, st, _, _))| *st == 15)
                 {
                     if let Some(timestamp_ms) = fallback_ts_ms {
-                        let reply = extract_step_payload_field_strings(blob, 20).join("\n");
+                        let reply = extract_db_planner_texts(blob).0.unwrap_or_default();
                         let detected_q = crate::codex::assistant_feedback_request(&reply);
                         let is_reply = summary.status == "reply_needed" || detected_q.is_some();
                         let body = if let Some(q) = detected_q {

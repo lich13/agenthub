@@ -377,17 +377,6 @@ pub fn preview_archives(
         .collect()
 }
 
-/// Single-target form of `execute_archives`; the service always executes a batch.
-#[cfg(test)]
-pub fn execute_archive(
-    paths: &CodexPaths,
-    id: &str,
-    archive: bool,
-    fingerprint: &str,
-) -> Result<()> {
-    execute_archives(paths, &[(id, fingerprint)], archive).remove(0)
-}
-
 /// Executes `(id, fingerprint)` targets in order. The inventory is read once
 /// outside any write transaction on the native database; every target is then
 /// rechecked and updated in its own short transaction, so one failure never
@@ -603,7 +592,9 @@ mod tests {
             let item = preview(&id, archive).unwrap();
             assert_eq!(item.paths, std::slice::from_ref(&compressed));
             assert_eq!(item.bytes, fs::metadata(&compressed).unwrap().len());
-            execute_archive(&paths, &id, archive, &item.fingerprint).unwrap();
+            execute_archives(&paths, &[(&id, &item.fingerprint)], archive)
+                .remove(0)
+                .unwrap();
             let archived: bool = conn
                 .query_row("SELECT archived FROM threads WHERE id=?1", [&id], |row| {
                     row.get(0)
@@ -702,7 +693,11 @@ mod tests {
         let mut text = fs::read_to_string(&files[0]).unwrap();
         text.push_str("{}\n");
         fs::write(&files[0], text).unwrap();
-        assert!(execute_archive(&paths, &ids[0], true, &preview.fingerprint).is_err());
+        assert!(
+            execute_archives(&paths, &[(&ids[0], &preview.fingerprint)], true)
+                .remove(0)
+                .is_err()
+        );
         for status in ["running", "inprogress"] {
             conn.execute(
                 "INSERT INTO jobs VALUES(?1,?2)",

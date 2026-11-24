@@ -226,7 +226,8 @@ impl Fixture {
         .unwrap();
         db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, TOKEN.as_bytes())
             .unwrap();
-        db.sync_notification_channels(&config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
+            .unwrap();
         Self {
             root,
             rollout,
@@ -371,7 +372,7 @@ async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
         if suppression == "missing-secret" {
             fixture
                 .db
-                .remove_secret_setting(PROBE_BARK_DEVICE_KEY_SETTING)
+                .set_setting(PROBE_BARK_DEVICE_KEY_SETTING, "")
                 .unwrap();
         }
         let bark = codex(
@@ -482,7 +483,7 @@ async fn codex_skips_decided_while_staging_keep_the_dedupe_outcome() {
         fixture.config.probe.notifications.enabled = enabled;
         fixture
             .db
-            .sync_notification_channels(&fixture.config)
+            .sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
             .unwrap();
     }
     let mut event = fixture.event();
@@ -673,12 +674,12 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
     fixture.config.probe.notifications.enabled = false;
     fixture
         .db
-        .sync_notification_channels(&fixture.config)
+        .sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
         .unwrap();
     fixture.config.probe.notifications.enabled = true;
     fixture
         .db
-        .sync_notification_channels(&fixture.config)
+        .sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
         .unwrap();
     let mut event = fixture.event();
     event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);

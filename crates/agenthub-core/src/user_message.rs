@@ -62,6 +62,10 @@ pub fn summary_text(text: &str) -> String {
     question_text(&presentation_text(text), false)
 }
 
+pub fn literal_summary_text(text: &str) -> String {
+    question_text(text, false)
+}
+
 pub fn searchable_text(text: &str) -> String {
     let projection = context::project(text);
     let mut parts = vec![question_text(&projection.text, true)];
@@ -74,6 +78,10 @@ pub fn searchable_text(text: &str) -> String {
     );
     parts.extend(projection.files.into_iter().map(|file| file.name));
     parts.join("\n")
+}
+
+pub fn literal_searchable_text(text: &str) -> String {
+    question_text(text, true)
 }
 
 fn question_text(text: &str, include_questions: bool) -> String {
@@ -296,6 +304,15 @@ fn image_data(part: &Value) -> Option<String> {
 }
 
 pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
+    parse_user_message_inner(id, content, true)
+}
+
+/// Parses literal user text and native attachments without extracting `"上下文"` envelopes.
+pub fn parse_literal_user_message(id: &str, content: &Value) -> UserMessage {
+    parse_user_message_inner(id, content, false)
+}
+
+fn parse_user_message_inner(id: &str, content: &Value, project_context: bool) -> UserMessage {
     let owned = match content {
         Value::String(text) => vec![serde_json::json!({"type":"text", "text":text})],
         Value::Object(_) => vec![content.clone()],
@@ -332,14 +349,18 @@ pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
         }
         index += 1;
     }
-    let projection = context::project(&raw_text);
+    let (text, context_blocks, mut mentions) = if project_context {
+        let projection = context::project(&raw_text);
+        (projection.text, projection.context_blocks, projection.files)
+    } else {
+        (raw_text, Vec::new(), Vec::new())
+    };
     let mut result = UserMessage {
         id: id.to_owned(),
-        text: projection.text,
-        context_blocks: projection.context_blocks,
+        text,
+        context_blocks,
         ..Default::default()
     };
-    let mut mentions = projection.files;
     let mut seen = std::collections::HashSet::new();
     mentions.retain(|mention| seen.insert(mention.path.clone()));
     // Bind explicit native identities first. Older records only carry ordered

@@ -162,9 +162,6 @@ impl GrokUseCases {
     ) -> Result<Vec<crate::grok::GrokSessionSummary>> {
         crate::grok::list_grok_sessions(&self.paths, limit, query)
     }
-    pub fn detail(&self, id: &str) -> Result<crate::grok::GrokSessionDetail> {
-        crate::grok::grok_session_detail(&self.paths, id, None)
-    }
     pub fn page(
         &self,
         id: &str,

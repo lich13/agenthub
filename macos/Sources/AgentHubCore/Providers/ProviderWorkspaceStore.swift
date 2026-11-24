@@ -138,58 +138,30 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     var filteredActiveItems: [UnifiedSessionSummaryItem] {
-        guard supportsWorkspaceGrouping, workspaceFilter != .all else { return activeItems }
-        return activeItems.filter {
-            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.cwd, workspaceRoot: $0.workspaceRoot)
-        }
+        ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter, enabled: supportsWorkspaceGrouping)
     }
 
     var filteredArchivedItems: [UnifiedSessionSummaryItem] {
-        guard supportsWorkspaceGrouping, workspaceFilter != .all else { return archivedItems }
-        return archivedItems.filter {
-            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.cwd, workspaceRoot: $0.workspaceRoot)
-        }
+        ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsWorkspaceGrouping)
     }
 
     var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: filteredActiveItems,
-            idOf: \.sessionKey,
-            cwdOf: \.cwd,
-            workspaceRootOf: \.workspaceRoot,
-            updatedAtOf: \.updatedAt,
-            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
-        )
+        ProjectWorkspaceEngine.buildGroups(items: filteredActiveItems)
     }
 
     var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: filteredArchivedItems,
-            idOf: \.sessionKey,
-            cwdOf: \.cwd,
-            workspaceRootOf: \.workspaceRoot,
-            updatedAtOf: \.updatedAt,
-            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
-        )
+        ProjectWorkspaceEngine.buildGroups(items: filteredArchivedItems)
     }
 
     var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: activeItems + (archivedOpen ? archivedItems : []),
-            idOf: \.sessionKey,
-            cwdOf: \.cwd,
-            workspaceRootOf: \.workspaceRoot,
-            updatedAtOf: \.updatedAt,
-            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
-        )
+        ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
     }
 
     var visualOrderedActiveKeys: [String] {
         if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
             return ProjectWorkspaceEngine.visualOrderedKeys(
                 groups: activeWorkspaceGroups,
-                collapsedKeys: collapsedWorkspaceKeys,
-                idOf: \.sessionKey
+                collapsedKeys: collapsedWorkspaceKeys
             )
         }
         return filteredActiveItems.map(\.sessionKey)
@@ -199,8 +171,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
             return ProjectWorkspaceEngine.visualOrderedKeys(
                 groups: archivedWorkspaceGroups,
-                collapsedKeys: collapsedArchivedWorkspaceKeys,
-                idOf: \.sessionKey
+                collapsedKeys: collapsedArchivedWorkspaceKeys
             )
         }
         return filteredArchivedItems.map(\.sessionKey)
@@ -869,20 +840,12 @@ final class ProviderWorkspaceStore: ObservableObject {
                 if idx > 0 { return activeItems[idx - 1].sessionKey }
                 return nil
             }()
-            if provider == .codex {
-                struct Args: Encodable { let threadId: String }
-                let cmd = item.archived ? "threads.restore" : "threads.archive"
-                let ack: StartedJobResponse = try await store.rpc(cmd, args: Args(threadId: item.sessionKey))
-                store.trackStartedJob(ack.jobId)
-            } else {
-                let prefix = provider == .antigravity ? "antigravity" : "dsh"
-                let action = item.archived ? "restore" : "archive"
-                struct Wrap: Encodable {
-                    struct Inner: Encodable { let sessionKey: String }
-                    let request: Inner
-                }
-                let _: ProviderSessionSummary = try await store.rpc("\(prefix).\(action)", args: Wrap(request: .init(sessionKey: item.sessionKey)))
-            }
+            try await Self.performToggleArchiveStatic(
+                store: store,
+                provider: provider,
+                sessionKey: item.sessionKey,
+                currentlyArchived: item.archived
+            )
             feedbackMessage = item.archived ? "已恢复线程" : "已归档线程"
             if !item.archived && selectedKey == item.sessionKey && !archivedOpen {
                 selectedKey = nextFallbackKey

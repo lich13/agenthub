@@ -360,6 +360,199 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testAntigravityUserRowNoContextCardAndMenuChevronLightAndDarkRender() async throws {
+        guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
+            return
+        }
+        let suite = "com.lich13.agenthub.ag.purifyrender.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let transport = MockRuntimeTransport { cmd, _ in
+            switch cmd {
+            case "system.capabilities":
+                return protocol2CapabilitiesFixture(remote: false)
+            case "remote.sshHosts":
+                return Data(#"{"hosts":["dev-box.example.invalid","prod-box.example.invalid"]}"#.utf8)
+            default:
+                return Data("{}".utf8)
+            }
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        await store.bootstrap()
+
+        @MainActor func collectTexts(_ view: NSView) -> String {
+            var out: [String] = []
+            if let tf = view as? NSTextField { out.append(tf.stringValue) }
+            if let tv = view as? NSTextView { out.append(tv.string) }
+            if let btn = view as? NSButton {
+                out.append(btn.title)
+                out.append(btn.attributedTitle.string)
+            }
+            for sub in view.subviews {
+                out.append(collectTexts(sub))
+            }
+            return out.joined(separator: " ")
+        }
+
+        @MainActor func containsPopUpButton(_ view: NSView) -> Bool {
+            if view is NSPopUpButton { return true }
+            return view.subviews.contains { containsPopUpButton($0) }
+        }
+
+        @MainActor func findMenuAnchorView(_ view: NSView) -> NSView? {
+            if String(reflecting: type(of: view)).contains("MenuAnchorProbeNSView") {
+                return view
+            }
+            for sub in view.subviews {
+                if let found = findMenuAnchorView(sub) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        let literalUserText = "/boost /plan 用 $de-gpt 深度清理这个老项目\n<environment_context>字面量示例</environment_context>"
+        let agEvents = [
+            ProviderHistoryEvent(
+                id: "ag-u1",
+                kind: "user_message",
+                role: "user",
+                text: literalUserText,
+                userMessage: UserMessageContent(id: "ag-u1", text: literalUserText, attachments: [], contextBlocks: nil)
+            ),
+        ]
+        let agRows = ConversationRowBuilder.buildProviderRows(
+            events: agEvents,
+            providerLabel: "Antigravity",
+            sessionRunning: false,
+            subagentsSupported: true
+        )
+        let agRow = try XCTUnwrap(agRows.first)
+
+        // Verify Codex preserves its existing "上下文" disclosure card while Antigravity suppresses it.
+        let codexCoord = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())
+        codexCoord.sessionScopeKey = "codex:c1"
+        let codexCell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("CodexCtxCell"))
+        let codexRow = ConversationRowItem(
+            id: "codex-u1",
+            timelineId: "codex-u1",
+            kind: .user(
+                message: UserMessageContent(
+                    id: "codex-u1",
+                    text: "检查配置",
+                    contextBlocks: [UserContextBlock(kind: "environment", text: "<environment_context>cwd=/workspace</environment_context>")]
+                ),
+                rawText: "检查配置",
+                attachmentsAsNamesOnly: false
+            )
+        )
+        let codexH = codexCoord.measureRowHeight(codexRow, width: 720)
+        codexCell.frame = NSRect(x: 0, y: 0, width: 720, height: codexH)
+        codexCell.configure(item: codexRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: codexCoord)
+        XCTAssertTrue(collectTexts(codexCell).contains("上下文"))
+
+        let approvalReq = DesktopPendingRequest(
+            key: "req-1",
+            kind: "file",
+            title: "审批文件修改",
+            canAccept: true,
+            supportedDecisions: ["acceptForSession"],
+            review: DesktopReview(
+                command: "cargo test --workspace",
+                cwd: "/workspace/demo",
+                reason: "需要更新测试夹具",
+                changes: [
+                    DesktopFileReview(path: "src/lib.rs", kind: "update", diff: "+let clean = true;\n", truncated: false),
+                ],
+                extra: "sandbox=workspace-write"
+            )
+        )
+
+        for (scheme, appearance, tag, bg) in [
+            (ColorSchemeKind.light, NSAppearance.Name.aqua, "light", (UInt8(255), UInt8(255), UInt8(255))),
+            (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "dark", (UInt8(17), UInt8(20), UInt8(26))),
+        ] {
+            let palette = DesignPalette.resolve(scheme: scheme, workspace: .antigravity)
+            let coord = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())
+            coord.scheme = scheme
+            coord.workspace = .antigravity
+            coord.sessionScopeKey = "antigravity:s1"
+            let rowH = coord.measureRowHeight(agRow, width: 720)
+            let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("AgUserCell-\(tag)"))
+            cell.frame = NSRect(x: 0, y: 0, width: 720, height: rowH)
+            cell.configure(item: agRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: coord)
+            cell.layoutSubtreeIfNeeded()
+
+            let cellText = collectTexts(cell)
+            XCTAssertFalse(cellText.contains("上下文"), "Antigravity user row must never render a 上下文 placeholder card in \(tag)")
+            XCTAssertTrue(cellText.contains("/boost /plan 用 $de-gpt 深度清理这个老项目"))
+            XCTAssertTrue(cellText.contains("字面量示例"))
+            let cellPixels = try OffscreenRenderHelper.renderNSView(
+                cell,
+                size: NSSize(width: 720, height: max(rowH, 64)),
+                appearance: appearance
+            )
+            XCTAssertGreaterThan(countNonBgPixels(cellPixels, width: 720, height: Int(max(rowH, 64)), bg: bg), 180, "Antigravity user bubble must render non-blank glyph ink in \(tag)")
+
+            let approvalView = DesktopRequestsListView(
+                requests: [approvalReq],
+                busy: false,
+                onAct: { _ in },
+                onOpenCodex: {}
+            )
+            .environment(\.agentHubPalette, DesignPalette.resolve(scheme: scheme, workspace: .codex))
+            let approvalHost = NSHostingView(rootView: approvalView.frame(width: 640, height: 260))
+            approvalHost.appearance = NSAppearance(named: appearance)
+            approvalHost.frame = NSRect(x: 0, y: 0, width: 640, height: 260)
+            approvalHost.layoutSubtreeIfNeeded()
+            let approvalStrings = collectTexts(approvalHost)
+            XCTAssertFalse(approvalStrings.contains("▾"))
+            XCTAssertFalse(approvalStrings.contains("▸"))
+            let approvalPixels = try OffscreenRenderHelper.renderNSView(
+                approvalHost,
+                size: NSSize(width: 640, height: 260),
+                appearance: appearance
+            )
+            XCTAssertGreaterThan(countNonBgPixels(approvalPixels, width: 640, height: 260, bg: bg), 250, "Codex approval card with vector chevrons must render ink in \(tag)")
+
+            let remoteView = RemoteConnectionSettingsView(store: store)
+                .environment(\.agentHubPalette, palette)
+            let remoteHost = NSHostingView(rootView: remoteView.frame(width: 720, height: 360))
+            let remoteWin = UnconstrainedOffscreenWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 360),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            remoteWin.appearance = NSAppearance(named: appearance)
+            remoteWin.contentView = remoteHost
+            remoteHost.layoutSubtreeIfNeeded()
+            for _ in 0 ..< 10 {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertFalse(containsPopUpButton(remoteHost), "RemoteConnectionSettingsView must use NSMenu.popUp instead of SwiftUI.Menu NSPopUpButton")
+            if let sshAnchor = findMenuAnchorView(remoteHost) {
+                let rectInHost = sshAnchor.convert(sshAnchor.bounds, to: remoteHost)
+                XCTAssertGreaterThanOrEqual(rectInHost.width, 200)
+                XCTAssertEqual(rectInHost.height, LayoutMetrics.formControlHeight, accuracy: 1.0)
+                XCTAssertNotNil(remoteHost.hitTest(NSPoint(x: rectInHost.minX + 2, y: rectInHost.minY + 2)))
+                XCTAssertNotNil(remoteHost.hitTest(NSPoint(x: rectInHost.maxX - 2, y: rectInHost.maxY - 2)))
+            } else {
+                XCTFail("Expected AnchoredMenuButton MenuAnchorProbeNSView for SSH 连接 in \(tag)")
+            }
+            let remotePixels = try OffscreenRenderHelper.renderNSView(
+                remoteHost,
+                size: NSSize(width: 720, height: 360),
+                appearance: appearance
+            )
+            XCTAssertGreaterThan(countNonBgPixels(remotePixels, width: 720, height: 360, bg: bg), 400, "RemoteConnectionSettingsView must render non-blank ink in \(tag)")
+            remoteWin.contentView = nil
+            remoteWin.orderOut(nil)
+        }
+    }
+
     private func countDangerPixels(_ pixels: [UInt8], width: Int, yRange: Range<Int>) -> Int {
         var count = 0
         for y in yRange {

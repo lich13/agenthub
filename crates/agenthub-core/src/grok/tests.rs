@@ -164,7 +164,7 @@ fn lists_sort_by_conversation_time_for_updates_and_native_history() {
         Some("2026-10-01T05:00:00Z")
     );
     assert_eq!(
-        grok_session_detail(&paths, &first_id, None)
+        grok_session_page(&paths, &first_id, None, None, None, None)
             .unwrap()
             .summary
             .updated_at,
@@ -177,25 +177,27 @@ fn lists_sort_by_conversation_time_for_updates_and_native_history() {
 fn grok_history_cache_reuses_unchanged_files_and_invalidates_updates() {
     let (paths, id, path) = fixture();
     HISTORY_READS.with(|reads| reads.set(0));
-    assert!(grok_session_detail(&paths, &id, None)
+    assert!(grok_session_page(&paths, &id, None, None, None, None)
         .unwrap()
         .events
         .is_empty());
-    assert!(grok_session_detail(&paths, &id, None)
+    assert!(grok_session_page(&paths, &id, None, None, None, None)
         .unwrap()
         .events
         .is_empty());
     HISTORY_READS.with(|reads| assert_eq!(reads.get(), 1));
     fs::write(path.join("updates.jsonl"), "{\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Final answer\"}}}}\n").unwrap();
     assert_eq!(
-        grok_session_detail(&paths, &id, None).unwrap().events[0]
+        grok_session_page(&paths, &id, None, None, None, None)
+            .unwrap()
+            .events[0]
             .text
             .as_deref(),
         Some("Final answer")
     );
     HISTORY_READS.with(|reads| assert_eq!(reads.get(), 2));
     fs::remove_dir_all(&paths.home).unwrap();
-    assert!(grok_session_detail(&paths, &id, None).is_err());
+    assert!(grok_session_page(&paths, &id, None, None, None, None).is_err());
 }
 
 #[test]
@@ -224,7 +226,7 @@ fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates(
     )
     .unwrap();
 
-    let previous = grok_session_detail(&paths, &id, None).unwrap();
+    let previous = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(previous.events.len(), 2);
     assert_eq!(previous.events[0].text.as_deref(), Some("Open file"));
     assert_eq!(previous.events[1].text.as_deref(), Some("Inspect "));
@@ -255,7 +257,7 @@ fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates(
     std::io::Write::write_all(&mut file, appended_text.as_bytes()).unwrap();
     drop(file);
 
-    let latest = grok_session_detail(&paths, &id, None).unwrap();
+    let latest = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(previous.events[0].text.as_deref(), Some("Open file"));
     assert_eq!(previous.events[0].status, None);
     assert_eq!(previous.events[1].text.as_deref(), Some("Inspect "));
@@ -609,7 +611,7 @@ fn grok_history_merges_chunks_and_hides_thoughts() {
             .join("\n"),
     )
     .unwrap();
-    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    let detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(detail.events.len(), 2);
     assert_eq!(detail.events[0].text.as_deref(), Some("Hello world"));
     assert_eq!(detail.events[1].text.as_deref(), Some("Read file"));
@@ -635,7 +637,7 @@ fn grok_history_merges_tool_updates_by_call_identity() {
             .join("\n"),
     )
     .unwrap();
-    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    let detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(detail.events.len(), 2);
     assert_eq!(detail.events[0].text.as_deref(), Some("Read README.md"));
     let event = serde_json::to_value(&detail.events[0]).unwrap();
@@ -705,7 +707,7 @@ fn native_system_only_history_is_empty_and_updates_remain_preferred() {
     let (paths, id, path) = fixture();
     fs::remove_file(path.join("updates.jsonl")).unwrap();
     fs::write(path.join("chat_history.jsonl"), "{\"type\":\"system\",\"content\":\"fixture\"}\n{\"type\":\"user\",\"synthetic_reason\":\"system_reminder\",\"content\":\"fixture\"}\n").unwrap();
-    assert!(grok_session_detail(&paths, &id, None)
+    assert!(grok_session_page(&paths, &id, None, None, None, None)
         .unwrap()
         .events
         .is_empty());
@@ -715,7 +717,7 @@ fn native_system_only_history_is_empty_and_updates_remain_preferred() {
     )
     .unwrap();
     fs::write(path.join("updates.jsonl"),"{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"text\":\"updates fixture\",\"type\":\"text\"}}\n").unwrap();
-    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    let detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(detail.events.len(), 1);
     assert_eq!(detail.events[0].text.as_deref(), Some("updates fixture"));
     fs::remove_dir_all(paths.home).unwrap();
@@ -793,7 +795,7 @@ fn native_history_fallback_preserves_messages_tools_and_paging_without_system_co
     let latest = grok_session_page(&paths, &id, None, Some(2), None, None).unwrap();
     assert!(latest.has_more);
     assert_eq!(latest.total_events, 4);
-    let all = grok_session_detail(&paths, &id, None).unwrap();
+    let all = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(all.events.len(), 4);
     assert_eq!(all.events[0].text.as_deref(), Some("question"));
     assert_eq!(all.events[2].detail.as_deref(), Some("tool output"));
@@ -812,7 +814,10 @@ fn native_history_fallback_preserves_messages_tools_and_paging_without_system_co
     )
     .unwrap();
     assert_eq!(
-        grok_session_detail(&paths, &id, None).unwrap().events.len(),
+        grok_session_page(&paths, &id, None, None, None, None)
+            .unwrap()
+            .events
+            .len(),
         5
     );
     fs::remove_dir_all(paths.home).unwrap();
@@ -862,7 +867,7 @@ fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_tur
         ),
     )
     .unwrap();
-    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    let detail = grok_session_page(&paths, &id, None, None, None, None).unwrap();
     assert_eq!(detail.events.len(), 4);
     assert_eq!(detail.events[0].kind, "user_message_chunk");
     assert_eq!(

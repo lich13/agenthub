@@ -444,14 +444,6 @@ impl PanelDb {
         .to_string())
     }
 
-    pub fn remove_secret_setting(&self, key: &str) -> Result<()> {
-        self.conn
-            .lock()
-            .expect("db mutex")
-            .execute("DELETE FROM settings WHERE key=?1", [key])?;
-        Ok(())
-    }
-
     pub fn get_secret_setting_bytes(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let Some(value) = self.get_setting(key)? else {
             return Ok(None);
@@ -694,25 +686,6 @@ impl PanelDb {
             statement.query_map(params![limit.clamp(1, 100)], probe_error_incident_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
-    }
-
-    pub fn get_probe_error_incident(
-        &self,
-        incident_key: &str,
-    ) -> Result<Option<ProbeErrorIncident>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            r#"
-            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
-                   thread_id, turn_id, classification, error_sha256, error_summary,
-                   event_id, bark_status, created_at, updated_at
-            FROM probe_error_incidents WHERE incident_key=?1
-            "#,
-            params![incident_key],
-            probe_error_incident_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
     }
 
     pub fn update_probe_error_incident_delivery(

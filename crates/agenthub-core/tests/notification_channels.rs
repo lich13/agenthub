@@ -174,7 +174,8 @@ fn assert_no_bytes(path: &Path, text: &str) {
 fn unreadable_bark_payload_stays_pending_for_the_correct_key() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     stage(&db, &fixture, NotificationChannel::Bark, "unreadable");
     let wrong = PanelDb::open_with_secret_box(
         &fixture.path,
@@ -197,7 +198,8 @@ fn bark_enablement_controls_staging_and_preserves_the_initial_baseline() {
         let mut fixture = Fixture::new();
         fixture.config.probe.notifications.enabled = enabled;
         let db = fixture.open();
-        db.sync_notification_channels(&fixture.config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+            .unwrap();
         assert_eq!(NotificationChannel::ALL, [NotificationChannel::Bark]);
         assert_eq!(NotificationChannel::Bark.enabled(&fixture.config), enabled);
         assert_eq!(fixture.activated_ms(NotificationChannel::Bark), 0);
@@ -224,16 +226,19 @@ fn bark_enablement_controls_staging_and_preserves_the_initial_baseline() {
 fn disabling_and_reenabling_bark_discards_pending_payloads_and_baselines_history() {
     let mut fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     stage(&db, &fixture, NotificationChannel::Bark, "old-event");
     fixture.config.probe.notifications.enabled = false;
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let disabled = fixture.row(NotificationChannel::Bark, "old-event");
     assert_eq!(disabled.status, "skipped");
     assert!(!disabled.has_ciphertext && !disabled.has_nonce);
     assert!(db.due_notification_deliveries(100).unwrap().is_empty());
     fixture.config.probe.notifications.enabled = true;
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let baseline = fixture.activated_ms(NotificationChannel::Bark);
     assert!(baseline > 0);
     assert!(!db
@@ -256,7 +261,8 @@ fn disabling_and_reenabling_bark_discards_pending_payloads_and_baselines_history
             &payload(),
         )
         .unwrap());
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     assert_eq!(fixture.activated_ms(NotificationChannel::Bark), baseline);
 }
 
@@ -264,7 +270,8 @@ fn disabling_and_reenabling_bark_discards_pending_payloads_and_baselines_history
 fn concurrent_database_connections_claim_one_bark_delivery() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     for channel in NotificationChannel::ALL {
         stage(&db, &fixture, channel, "concurrent-event");
     }
@@ -308,7 +315,8 @@ fn concurrent_database_connections_claim_one_bark_delivery() {
 fn completed_bark_claims_survive_reopen_without_replay() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     for channel in NotificationChannel::ALL {
         stage(&db, &fixture, channel, "restart-event");
     }
@@ -317,7 +325,8 @@ fn completed_bark_claims_survive_reopen_without_replay() {
     drop(db);
 
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     assert!(db
         .claim_notification_delivery(NotificationChannel::Bark, "restart-event")
         .unwrap()
@@ -347,7 +356,8 @@ fn completed_bark_claims_survive_reopen_without_replay() {
 fn transient_failures_use_fifteen_then_sixty_seconds_and_stop_after_three_attempts() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     for status in [408, 429, 500, 502, 503, 504] {
         let key = format!("transient-{status}");
         stage(&db, &fixture, NotificationChannel::Bark, &key);
@@ -397,7 +407,8 @@ fn transient_failures_use_fifteen_then_sixty_seconds_and_stop_after_three_attemp
 fn permanent_failures_explicit_skips_and_unretryable_unknowns_stay_terminal() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let cases = [
         (
             "redirect",
@@ -453,7 +464,8 @@ fn uncertain_attempts_retry_within_budget_and_end_unknown() {
     for reason in ["timeout", "network", "response_invalid"] {
         let fixture = Fixture::new();
         let db = fixture.open();
-        db.sync_notification_channels(&fixture.config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+            .unwrap();
         stage(&db, &fixture, NotificationChannel::Bark, "uncertain-event");
         for attempt in 1..=3 {
             let lease = claim(&db, "uncertain-event");
@@ -491,7 +503,8 @@ fn uncertainty_survives_later_rejections_and_resets_only_after_chunk_acceptance(
     for accept_retry in [false, true] {
         let fixture = Fixture::new();
         let db = fixture.open();
-        db.sync_notification_channels(&fixture.config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+            .unwrap();
         let key = "uncertainty-history";
         let mut queued = payload();
         queued["chunks"] = if accept_retry {
@@ -542,7 +555,8 @@ fn uncertainty_survives_later_rejections_and_resets_only_after_chunk_acceptance(
 fn retry_after_is_a_floor_and_cannot_extend_the_ten_minute_deadline() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     for (key, retry_after_ms, expected) in [
         ("server-delay", 120_000, "waiting_retry"),
         ("server-delay-exceeds-deadline", 600_001, "failed"),
@@ -571,7 +585,8 @@ fn retry_after_is_a_floor_and_cannot_extend_the_ten_minute_deadline() {
 fn lifetime_starts_at_first_claim_and_expired_pending_work_is_never_sent() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "lifetime-event";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     fixture
@@ -620,7 +635,8 @@ fn lifetime_starts_at_first_claim_and_expired_pending_work_is_never_sent() {
 fn retry_is_not_scheduled_when_its_backoff_would_cross_the_deadline() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "nearly-expired-event";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     fixture
@@ -641,7 +657,8 @@ fn retry_is_not_scheduled_when_its_backoff_would_cross_the_deadline() {
 fn expired_lease_is_recovered_after_restart_and_late_results_are_fenced() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "interrupted-event";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     let before_claim = Timestamp::now().as_millisecond();
@@ -712,7 +729,8 @@ fn only_an_active_owned_delivery_lease_has_remaining_time() {
     ] {
         let mut fixture = Fixture::new();
         let db = fixture.open();
-        db.sync_notification_channels(&fixture.config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+            .unwrap();
         let key = "fixture-lease-remaining";
         stage(&db, &fixture, NotificationChannel::Bark, key);
         let mut lease = claim(&db, key);
@@ -735,7 +753,8 @@ fn only_an_active_owned_delivery_lease_has_remaining_time() {
             }
             "disabled" => {
                 fixture.config.probe.notifications.enabled = false;
-                db.sync_notification_channels(&fixture.config).unwrap();
+                db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+                    .unwrap();
             }
             _ => unreachable!(),
         }
@@ -751,7 +770,8 @@ fn only_an_active_owned_delivery_lease_has_remaining_time() {
 fn repeated_lease_expiry_consumes_attempts_and_keeps_the_final_result_unknown() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "repeated-interruption";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     for attempt in 1..=3 {
@@ -776,12 +796,14 @@ fn repeated_lease_expiry_consumes_attempts_and_keeps_the_final_result_unknown() 
 fn disabling_bark_fences_an_inflight_lease_and_clears_its_pending_body() {
     let mut fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "disabled-inflight";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     let lease = claim(&db, key);
     fixture.config.probe.notifications.enabled = false;
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let row = fixture.row(NotificationChannel::Bark, key);
     assert_eq!(row.status, "skipped");
     assert!(!row.has_ciphertext && !row.has_nonce);
@@ -790,7 +812,8 @@ fn disabling_bark_fences_an_inflight_lease_and_clears_its_pending_body() {
         .unwrap()
         .is_none());
     fixture.config.probe.notifications.enabled = true;
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     assert!(db
         .claim_notification_delivery(NotificationChannel::Bark, key)
         .unwrap()
@@ -801,7 +824,8 @@ fn disabling_bark_fences_an_inflight_lease_and_clears_its_pending_body() {
 fn interrupted_chunk_recovery_preserves_the_visible_delivery_progress() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "interrupted-chunk-progress";
     let mut queued = payload();
     queued["chunks"] = json!(["fixture first", "fixture second", "fixture third"]);
@@ -870,7 +894,8 @@ fn expiration_and_channel_disable_clear_native_pending_counts() {
         ] {
             let mut fixture = Fixture::new();
             let db = fixture.open();
-            db.sync_notification_channels(&fixture.config).unwrap();
+            db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+                .unwrap();
             let native_key = "fixture-native-terminal";
             let key = format!("native:{native_key}");
             fixture.connection().execute(
@@ -895,7 +920,8 @@ fn expiration_and_channel_disable_clear_native_pending_counts() {
             assert_eq!(before["pending_deliveries"], 1);
             if action.starts_with("disabled") {
                 fixture.config.probe.notifications.enabled = false;
-                db.sync_notification_channels(&fixture.config).unwrap();
+                db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+                    .unwrap();
             } else {
                 fixture.connection().execute(
                     "UPDATE probe_notification_deliveries SET first_attempt_ms=?1,next_ms=0 WHERE event_key=?2",
@@ -936,7 +962,8 @@ fn expiration_and_channel_disable_clear_native_pending_counts() {
 fn a_successful_retry_updates_the_linked_error_incident_and_existing_event() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "fixture-error-delivery";
     stage(&db, &fixture, NotificationChannel::Bark, key);
     let first = claim(&db, key);
@@ -975,17 +1002,28 @@ fn a_successful_retry_updates_the_linked_error_incident_and_existing_event() {
     let db = fixture.open();
     let retry = claim(&db, key);
     assert_eq!(
-        db.get_probe_error_incident(incident_key)
-            .unwrap()
-            .unwrap()
-            .bark_status,
+        fixture
+            .connection()
+            .query_row(
+                "SELECT bark_status FROM probe_error_incidents WHERE incident_key=?1",
+                [incident_key],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
         "retrying"
     );
     let outcome = finish(&db, &retry, &accepted());
     assert_eq!(outcome["status"], "sent");
-    let incident = db.get_probe_error_incident(incident_key).unwrap().unwrap();
-    assert_eq!(incident.bark_status, "sent");
-    assert_eq!(incident.event_id.as_deref(), Some(event_id.as_str()));
+    let (incident_status, incident_event_id): (String, Option<String>) = fixture
+        .connection()
+        .query_row(
+            "SELECT bark_status, event_id FROM probe_error_incidents WHERE incident_key=?1",
+            [incident_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(incident_status, "sent");
+    assert_eq!(incident_event_id.as_deref(), Some(event_id.as_str()));
     let (count, stored): (u32, String) = fixture
         .connection()
         .query_row(
@@ -1003,7 +1041,8 @@ fn a_successful_retry_updates_the_linked_error_incident_and_existing_event() {
 fn chunks_resume_at_the_first_unconfirmed_part_with_independent_attempt_budgets() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let key = "chunked-event";
     let mut queued = payload();
     queued["chunks"] = json!(["fixture first", "fixture second", "fixture third"]);
@@ -1081,7 +1120,8 @@ fn chunks_resume_at_the_first_unconfirmed_part_with_independent_attempt_budgets(
 fn retry_batches_are_bounded_to_ten_and_instance_identity_survives_reopen() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     let instance = db.notification_instance_id().unwrap();
     for index in 0..12 {
         stage(
@@ -1103,7 +1143,8 @@ fn retry_batches_are_bounded_to_ten_and_instance_identity_survives_reopen() {
 fn secret_and_pending_body_are_encrypted_and_status_never_returns_the_token() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, FIXTURE_TOKEN.as_bytes())
         .unwrap();
     stage(&db, &fixture, NotificationChannel::Bark, "private-event");
@@ -1138,8 +1179,7 @@ fn secret_and_pending_body_are_encrypted_and_status_never_returns_the_token() {
         db.due_notification_deliveries(100).unwrap()[0].payload,
         payload()
     );
-    db.remove_secret_setting(PROBE_BARK_DEVICE_KEY_SETTING)
-        .unwrap();
+    db.set_setting(PROBE_BARK_DEVICE_KEY_SETTING, "").unwrap();
     assert!(db
         .get_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING)
         .unwrap()
@@ -1150,7 +1190,8 @@ fn secret_and_pending_body_are_encrypted_and_status_never_returns_the_token() {
 fn outcome_updates_related_events_incidents_and_native_rows_only() {
     let fixture = Fixture::new();
     let db = fixture.open();
-    db.sync_notification_channels(&fixture.config).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
     for key in ["native:first", "native:other"] {
         stage(&db, &fixture, NotificationChannel::Bark, key);
     }
@@ -1194,7 +1235,8 @@ fn outcome_updates_related_events_incidents_and_native_rows_only() {
     assert!(conn.query_row("SELECT status='pending' AND ciphertext IS NOT NULL AND updated_at=1 FROM native_probe_deliveries WHERE event_key='other'",[],|r|r.get::<_,bool>(0)).unwrap());
     let mut disabled = fixture.config.clone();
     disabled.probe.notifications.enabled = false;
-    db.sync_notification_channels(&disabled).unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(disabled.clone()))
+        .unwrap();
     assert_eq!(
         conn.query_row(
             "SELECT bark_status FROM probe_error_incidents WHERE incident_key='other'",

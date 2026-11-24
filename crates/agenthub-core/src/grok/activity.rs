@@ -196,45 +196,12 @@ impl Snapshot {
 
     pub(super) fn update_summary(&self, session: &mut GrokSessionSummary) {
         let owner = self.ownership(session);
-        let (phase, complete) = lifecycle(session);
+        let (phase, _) = lifecycle(session);
         session.status = Self::display_status(owner, phase).into();
-        session.deletion_eligibility = Some(Self::eligibility(owner, phase, complete));
-    }
-
-    fn eligibility(_owner: Ownership, _phase: Phase, _complete: bool) -> GrokDeletionEligibility {
-        GrokDeletionEligibility {
+        session.deletion_eligibility = Some(GrokDeletionEligibility {
             allowed: true,
             reason: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn deletion_eligibility(
-        &self,
-        session: &GrokSessionSummary,
-    ) -> GrokDeletionEligibility {
-        let (phase, complete) = lifecycle(session);
-        Self::eligibility(self.ownership(session), phase, complete)
-    }
-
-    #[cfg(test)]
-    pub(super) fn ensure_deletable(&self, session: &GrokSessionSummary) -> anyhow::Result<()> {
-        let eligibility = self.deletion_eligibility(session);
-        anyhow::ensure!(
-            eligibility.allowed,
-            "{}",
-            eligibility.reason.unwrap_or_default()
-        );
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn ensure_not_open(&self, session: &GrokSessionSummary) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.ownership(session) == Ownership::Inactive,
-            "Grok session is still open in a native process or its ownership cannot be confirmed"
-        );
-        Ok(())
+        });
     }
 }
 

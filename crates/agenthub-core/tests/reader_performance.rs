@@ -9,24 +9,17 @@
 //! Defaults: five cold, ten warm (after one warmup), and five append samples.
 //! Override only with AGENTHUB_READER_COLD_RUNS / WARM_RUNS / APPEND_RUNS.
 
-#![allow(unexpected_cfgs)]
-
 use agenthub_core::{
     claude::{
         claude_session_detail, list_claude_sessions, ClaudeDetailRequest, ClaudePaths,
         ClaudeSessionSummary,
     },
-    codex::{
-        thread_detail_from_summary, window_thread_detail, ThreadDetail, ThreadStatus, ThreadSummary,
-    },
-    grok::{grok_session_detail, GrokHistoryEvent, GrokPaths, GrokSessionDetail},
+    codex::{thread_detail_page_from_summary, ThreadDetail, ThreadStatus, ThreadSummary},
+    grok::{grok_session_page, GrokHistoryEvent, GrokPaths, GrokSessionDetail},
 };
-#[cfg(not(reader_legacy_api))]
-use agenthub_core::{codex::thread_detail_page_from_summary, grok::grok_session_page};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-#[cfg(not(reader_legacy_api))]
 use std::collections::HashSet;
 use std::{
     env,
@@ -421,9 +414,14 @@ fn sample(
             let detail = if paged {
                 read_codex_page(codex_summary(root), before)
             } else {
-                let parsed = thread_detail_from_summary(codex_summary(root))
-                    .unwrap_or_else(|_| panic!("synthetic Codex detail read failed"));
-                window_thread_detail(parsed, Some(PAGE_LIMIT), before)
+                thread_detail_page_from_summary(
+                    codex_summary(root),
+                    true,
+                    Some(PAGE_LIMIT),
+                    before,
+                    None,
+                )
+                .unwrap_or_else(|_| panic!("synthetic Codex detail read failed"))
             };
             let read_ms = start.elapsed().as_secs_f64() * 1000.0;
             let (serialize_ms, response_bytes) = serialized(&detail);
@@ -517,7 +515,7 @@ fn sample(
             let detail = if paged {
                 read_grok_page(&paths, before)
             } else {
-                grok_session_detail(&paths, SESSION_ID, Some(WORKSPACE))
+                grok_session_page(&paths, SESSION_ID, Some(WORKSPACE), None, None, None)
             }
             .unwrap_or_else(|_| panic!("synthetic Grok detail read failed"));
             let read_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -713,22 +711,10 @@ fn claude_list_sample(root: &Path, expected_sessions: usize, file_bytes: u64) ->
     result
 }
 
-#[cfg(reader_legacy_api)]
-fn grok_total_events(detail: &GrokSessionDetail) -> usize {
-    detail.events.len()
-}
-
-#[cfg(not(reader_legacy_api))]
 fn grok_total_events(detail: &GrokSessionDetail) -> usize {
     detail.total_events
 }
 
-#[cfg(reader_legacy_api)]
-fn grok_before_cursor(_: &GrokSessionDetail) -> Option<String> {
-    None
-}
-
-#[cfg(not(reader_legacy_api))]
 fn grok_before_cursor(detail: &GrokSessionDetail) -> Option<String> {
     detail.before_cursor.clone()
 }
@@ -757,28 +743,15 @@ fn grok_event_row_ids<'a>(events: impl IntoIterator<Item = &'a GrokHistoryEvent>
         .collect()
 }
 
-#[cfg(reader_legacy_api)]
-fn grok_detail_row_ids(detail: &GrokSessionDetail) -> Vec<String> {
-    grok_event_row_ids(detail.events.iter())
-}
-
-#[cfg(not(reader_legacy_api))]
 fn grok_detail_row_ids(detail: &GrokSessionDetail) -> Vec<String> {
     grok_event_row_ids(detail.events.iter().map(|event| event.as_ref()))
 }
 
-#[cfg(not(reader_legacy_api))]
 fn read_codex_page(summary: ThreadSummary, before: Option<&str>) -> ThreadDetail {
     thread_detail_page_from_summary(summary, true, Some(CODEX_PAGE_LIMIT), before, None)
         .unwrap_or_else(|_| panic!("synthetic Codex page read failed"))
 }
 
-#[cfg(reader_legacy_api)]
-fn read_codex_page(_: ThreadSummary, _: Option<&str>) -> ThreadDetail {
-    panic!("paged API is unavailable in legacy benchmark binary")
-}
-
-#[cfg(not(reader_legacy_api))]
 fn read_grok_page(paths: &GrokPaths, before: Option<&str>) -> anyhow::Result<GrokSessionDetail> {
     grok_session_page(
         paths,
@@ -788,11 +761,6 @@ fn read_grok_page(paths: &GrokPaths, before: Option<&str>) -> anyhow::Result<Gro
         before,
         None,
     )
-}
-
-#[cfg(reader_legacy_api)]
-fn read_grok_page(_: &GrokPaths, _: Option<&str>) -> anyhow::Result<GrokSessionDetail> {
-    panic!("paged API is unavailable in legacy benchmark binary")
 }
 
 fn append_turn(root: &Path, provider: &str, turn: usize) {
@@ -806,7 +774,6 @@ fn append_turn(root: &Path, provider: &str, turn: usize) {
 }
 
 #[test]
-#[cfg(not(reader_legacy_api))]
 fn synthetic_readers_preserve_latest_tools_pagination_and_append() {
     for provider in ["codex", "claude", "grok"] {
         for paged in [false, true] {
@@ -1213,7 +1180,6 @@ fn reader_performance_matrix() {
 
 #[test]
 #[ignore = "runs a bounded old/new ABBA comparison on identical fixtures"]
-#[cfg(not(reader_legacy_api))]
 fn reader_performance_abba() {
     let old_binary = PathBuf::from(
         env::var_os("AGENTHUB_READER_OLD_BINARY").expect("legacy harness binary path"),
@@ -1320,7 +1286,6 @@ fn reader_performance_abba() {
     }
 }
 
-#[cfg(not(reader_legacy_api))]
 #[test]
 #[ignore = "runs a bounded old/new ABBA comparison for Claude's summary cache"]
 fn reader_performance_claude_list_abba() {

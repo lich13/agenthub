@@ -442,14 +442,6 @@ pub(crate) fn grok_session_summary(paths: &GrokPaths, id: &str) -> Result<GrokSe
     resolve_session(paths, id)
 }
 
-pub fn grok_session_detail(
-    paths: &GrokPaths,
-    id: &str,
-    cwd: Option<&str>,
-) -> Result<GrokSessionDetail> {
-    grok_session_page(paths, id, cwd, None, None, None)
-}
-
 pub(crate) fn grok_session_detail_without_storage(
     paths: &GrokPaths,
     id: &str,

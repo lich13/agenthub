@@ -323,14 +323,11 @@ fn probe_error_monitor_incident_claim_is_permanent_and_deduplicated() {
     assert!(db.claim_probe_error_incident(&incident).unwrap());
     assert!(!db.claim_probe_error_incident(&incident).unwrap());
     assert_eq!(db.probe_error_incident_count().unwrap(), 1);
-    let stored = db
-        .get_probe_error_incident("incident-key")
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored.thread_id, THREAD_ID);
-    assert_eq!(stored.turn_id, TURN_ID);
-    assert_eq!(stored.error_summary, "Selected model is at capacity.");
-    assert_eq!(db.list_pending_probe_error_deliveries(10).unwrap().len(), 1);
+    let pending = db.list_pending_probe_error_deliveries(10).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].thread_id, THREAD_ID);
+    assert_eq!(pending[0].turn_id, TURN_ID);
+    assert_eq!(pending[0].error_summary, "Selected model is at capacity.");
     db.update_probe_error_incident_delivery("incident-key", Some("event-id"), "sent")
         .unwrap();
     assert!(db

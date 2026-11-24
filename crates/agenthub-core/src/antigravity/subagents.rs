@@ -244,10 +244,15 @@ fn build_store_graph(
         } else {
             "NULL"
         };
+        let agent_name_expr = if cols.contains("agent_name") {
+            "COALESCE(agent_name, '')"
+        } else {
+            "''"
+        };
         let sql = format!(
             "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
              COALESCE(last_modified_time, ''), COALESCE(workspace_uris, ''), \
-             COALESCE(parent_conversation_id, ''), {status_expr}, {idle_expr}, {raw_expr} \
+             COALESCE(parent_conversation_id, ''), {status_expr}, {idle_expr}, {raw_expr}, {agent_name_expr} \
              FROM conversation_summaries"
         );
         if let Ok(mut stmt) = conn.prepare(&sql) {
@@ -264,6 +269,7 @@ fn build_store_graph(
                         .map(|v| v.0)
                         .unwrap_or(false),
                     r.get::<_, Option<Vec<u8>>>(8).ok().flatten(),
+                    r.get::<_, String>(9)?,
                 ))
             }) {
                 for (
@@ -276,6 +282,7 @@ fn build_store_graph(
                     status_str,
                     not_idle,
                     raw_blob,
+                    agent_name,
                 ) in rows.flatten()
                 {
                     if uuid::Uuid::parse_str(&cid).is_err() {
@@ -317,10 +324,18 @@ fn build_store_graph(
                         .filter(|s| !s.is_empty())
                     {
                         node.title = Some(raw_title.to_owned());
-                    } else if !title.trim().is_empty() {
-                        node.title = Some(title.trim().to_owned());
-                    } else if !preview.trim().is_empty() {
-                        node.title = Some(preview.trim().chars().take(80).collect());
+                    } else if node.title.is_none() {
+                        node.title =
+                            super::sessions::prompt::clean_antigravity_subagent_title(&title)
+                                .or_else(|| {
+                                    let an = agent_name.trim();
+                                    (!an.is_empty()).then(|| an.to_owned())
+                                })
+                                .or_else(|| {
+                                    super::sessions::prompt::clean_antigravity_subagent_title(
+                                        &preview,
+                                    )
+                                });
                     }
                     if let Ok(uris) = serde_json::from_str::<Vec<String>>(&ws_raw) {
                         if let Some(first) = uris.into_iter().next() {
@@ -370,13 +385,16 @@ fn build_store_graph(
                 }
                 let node = graph.nodes.entry(cid.clone()).or_default();
                 node.live_item = Some(item.clone());
-                if let Some(t) = item["annotations"]["title"]
+                if let Some(ann_t) = item["annotations"]["title"]
                     .as_str()
-                    .or_else(|| item["summary"].as_str())
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                 {
-                    node.title = Some(t.to_owned());
+                    node.title = Some(ann_t.to_owned());
+                } else if node.title.is_none() {
+                    node.title = item["summary"]
+                        .as_str()
+                        .and_then(super::sessions::prompt::clean_antigravity_subagent_title);
                 }
                 if node.cwd.is_empty() {
                     if let Some(uri) = item["workspaces"]
@@ -556,16 +574,16 @@ fn extract_invocation_hints(args: &Value) -> InvocationHints {
     let role = first_str_field(
         args,
         &[
-            "TypeName",
-            "typeName",
-            "SubagentType",
-            "subagentType",
             "Role",
             "role",
             "Subagent",
             "subagent",
             "Agent",
             "agent",
+            "TypeName",
+            "typeName",
+            "SubagentType",
+            "subagentType",
         ],
     );
     let delegation = first_str_field(
@@ -580,12 +598,57 @@ fn extract_invocation_hints(args: &Value) -> InvocationHints {
             "Message",
             "message",
         ],
-    );
+    )
+    .map(|raw| super::sessions::prompt::clean_antigravity_delegation(&raw))
+    .filter(|s| !s.is_empty());
     InvocationHints {
         name,
         role,
         delegation,
     }
+}
+
+fn read_subagent_initial_delegation(store: &AntigravityPaths, child_id: &str) -> Option<String> {
+    let logs = store
+        .brain_dir()
+        .join(child_id)
+        .join(".system_generated/logs");
+    let chosen = [
+        logs.join("transcript_full.jsonl"),
+        logs.join("transcript.jsonl"),
+    ]
+    .into_iter()
+    .find(|p| {
+        ensure_no_symlink_under_store(&store.home, p)
+            .ok()
+            .flatten()
+            .is_some()
+    })?;
+    let file = fs::File::open(chosen).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut found = None;
+    let mut inspected = 0usize;
+    let _ = super::sessions::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+        let st = row["type"].as_str().unwrap_or("");
+        if matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
+            return std::ops::ControlFlow::Continue(());
+        }
+        inspected += 1;
+        if st == "SYSTEM_MESSAGE" {
+            if let Some(raw) = row["content"].as_str() {
+                let cleaned = super::sessions::prompt::clean_antigravity_delegation(raw);
+                if !cleaned.is_empty() {
+                    found = Some(cleaned);
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            if inspected < 8 {
+                return std::ops::ControlFlow::Continue(());
+            }
+        }
+        std::ops::ControlFlow::Break(())
+    });
+    found
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -681,21 +744,21 @@ fn child_activity_in_store(
         }
     };
 
+    let delegation = hints.and_then(|h| h.delegation.clone()).or_else(|| {
+        available
+            .then(|| read_subagent_initial_delegation(store, child_id))
+            .flatten()
+    });
     let node_title = node
         .and_then(|n| n.title.as_deref())
         .filter(|t| !t.is_empty() && *t != "未命名会话" && *t != child_id);
     let name = node_title
         .map(str::to_owned)
         .or_else(|| hints.and_then(|h| h.name.clone()))
-        .or_else(|| {
-            hints
-                .and_then(|h| h.delegation.as_deref())
-                .map(humanize_label)
-        })
+        .or_else(|| delegation.as_deref().map(humanize_label))
         .or_else(|| hints.and_then(|h| h.role.clone()))
         .unwrap_or_else(|| child_id.to_owned());
     let role = hints.and_then(|h| h.role.clone()).filter(|r| r != &name);
-    let delegation = hints.and_then(|h| h.delegation.clone());
 
     SubagentActivity {
         event_kind: None,
@@ -809,7 +872,9 @@ fn enrich_with_graph(
                 if !is_direct_child {
                     continue;
                 }
-                let msg = first_str_field(&args, &["Message", "message"]);
+                let msg = first_str_field(&args, &["Message", "message"])
+                    .map(|raw| super::sessions::prompt::clean_antigravity_delegation(&raw))
+                    .filter(|s| !s.is_empty());
                 let hints = InvocationHints {
                     name: None,
                     role: None,
@@ -899,16 +964,19 @@ fn enrich_with_graph(
                 base
             } else {
                 collection.complete = false;
+                let name = call_hints
+                    .name
+                    .clone()
+                    .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
+                    .or_else(|| call_hints.role.clone())
+                    .unwrap_or_else(|| cid.to_owned());
+                let role = call_hints.role.clone().filter(|r| r != &name);
                 SubagentActivity {
                     event_kind: Some(*event_kind),
                     event_id: Some(event_id.clone()),
                     agent_id: None,
-                    name: call_hints
-                        .name
-                        .clone()
-                        .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
-                        .unwrap_or_else(|| cid.to_owned()),
-                    role: call_hints.role.clone(),
+                    name,
+                    role,
                     status: SubagentStatus::Unknown,
                     available: false,
                     unavailable_reason: Some("子智能体记录缺失或关联无法确认".into()),
@@ -916,16 +984,19 @@ fn enrich_with_graph(
                 }
             }
         } else if *in_flight {
+            let name = call_hints
+                .name
+                .clone()
+                .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
+                .or_else(|| call_hints.role.clone())
+                .unwrap_or_else(|| "子智能体".into());
+            let role = call_hints.role.clone().filter(|r| r != &name);
             let pending = SubagentActivity {
                 event_kind: Some(*event_kind),
                 event_id: Some(event_id.clone()),
                 agent_id: None,
-                name: call_hints
-                    .name
-                    .clone()
-                    .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
-                    .unwrap_or_else(|| "子智能体".into()),
-                role: call_hints.role.clone(),
+                name,
+                role,
                 status: SubagentStatus::Creating,
                 available: false,
                 unavailable_reason: Some("子智能体记录尚未就绪".into()),
@@ -935,16 +1006,19 @@ fn enrich_with_graph(
             pending
         } else {
             collection.complete = false;
+            let name = call_hints
+                .name
+                .clone()
+                .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
+                .or_else(|| call_hints.role.clone())
+                .unwrap_or_else(|| "子智能体".into());
+            let role = call_hints.role.clone().filter(|r| r != &name);
             SubagentActivity {
                 event_kind: Some(*event_kind),
                 event_id: Some(event_id.clone()),
                 agent_id: None,
-                name: call_hints
-                    .name
-                    .clone()
-                    .or_else(|| call_hints.delegation.as_deref().map(humanize_label))
-                    .unwrap_or_else(|| "子智能体".into()),
-                role: call_hints.role.clone(),
+                name,
+                role,
                 status: SubagentStatus::Unknown,
                 available: false,
                 unavailable_reason: Some("子智能体记录缺失或关联无法确认".into()),

@@ -351,22 +351,6 @@ pub fn configured_path(settings_path: &Path, binary: &Path, handler: &str) -> bo
         })
 }
 
-pub fn manage(
-    paths: &ClaudePaths,
-    binary: &Path,
-    config: &Path,
-    request: ClaudeHooksRequest,
-) -> Result<ClaudeHooksStatus> {
-    manage_file(
-        &paths.config.join("settings.json"),
-        HANDLER,
-        "Claude",
-        binary,
-        config,
-        request,
-    )
-}
-
 pub fn manage_provider(
     provider: HookProvider,
     binary: &Path,
@@ -554,10 +538,6 @@ mod tests {
     fn merge_repair_remove_preserve_user_hooks_and_reject_conflicts() {
         let dir = std::env::temp_dir().join(format!("claude-hooks-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
-        let paths = ClaudePaths {
-            config: dir.clone(),
-            projects: dir.join("projects"),
-        };
         let binary = dir.join("agenthub-webd");
         fs::write(&binary, "fixture").unwrap();
         let config = dir.join("fixture.toml");
@@ -565,8 +545,10 @@ mod tests {
         let original = json!({"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-fixture","args":[]}]}]}});
         fs::write(&path, original.to_string()).unwrap();
         let run = |action| {
-            manage(
-                &paths,
+            manage_file(
+                &path,
+                HANDLER,
+                "Claude",
                 &binary,
                 &config,
                 ClaudeHooksRequest {

@@ -125,9 +125,16 @@ impl Fixture {
             .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.sync_notification_channels(&config).unwrap();
-        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
             .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let binary = PathBuf::from(env!("CARGO_BIN_EXE_agenthub-webd"))
             .canonicalize()
             .unwrap();
@@ -140,8 +147,10 @@ impl Fixture {
                 .is_some_and(|profile| test_binary.starts_with(profile)),
             "must launch this build's CLI"
         );
-        hooks::manage(
-            &paths,
+        hooks::manage_file(
+            &paths.config.join("settings.json"),
+            hooks::HookProvider::Claude.handler(),
+            hooks::HookProvider::Claude.label(),
             &binary,
             &config_path,
             ClaudeHooksRequest {
@@ -253,13 +262,14 @@ fn real_cli_hooks_and_polling_share_one_claim_per_prompt_category() {
     f.user("message-one", None, "prompt-one");
     f.complete();
     let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
-    f.db.stage_native_notifications_with_hooks(
+    f.db.stage_native_notifications_from_config(
         NativeProvider::Claude,
         &NativeScan {
             streams: vec![context.stream],
             errors: 0,
         },
-        &f.config,
+        &|| Ok(f.config.clone()),
+        true,
         true,
     )
     .unwrap();
@@ -280,13 +290,14 @@ fn real_cli_hooks_and_polling_share_one_claim_per_prompt_category() {
     }
     f.hook(&f.input("Notification", "idle_prompt", "prompt-one"));
     let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
-    f.db.stage_native_notifications_with_hooks(
+    f.db.stage_native_notifications_from_config(
         NativeProvider::Claude,
         &NativeScan {
             streams: vec![context.stream],
             errors: 0,
         },
-        &f.config,
+        &|| Ok(f.config.clone()),
+        true,
         true,
     )
     .unwrap();
@@ -376,10 +387,22 @@ fn idle_never_replays_a_baselined_terminal_record() {
     };
     let mut disabled = f.config.clone();
     disabled.probe.notifications.notify_claude = false;
-    f.db.stage_native_notifications(NativeProvider::Claude, &scan, &disabled)
-        .unwrap();
-    f.db.stage_native_notifications(NativeProvider::Claude, &scan, &f.config)
-        .unwrap();
+    f.db.stage_native_notifications_from_config(
+        NativeProvider::Claude,
+        &scan,
+        &|| Ok(disabled.clone()),
+        false,
+        true,
+    )
+    .unwrap();
+    f.db.stage_native_notifications_from_config(
+        NativeProvider::Claude,
+        &scan,
+        &|| Ok(f.config.clone()),
+        false,
+        true,
+    )
+    .unwrap();
     f.hook(&f.input("Notification", "idle_prompt", "prompt-one"));
     assert!(f.requests.lock().unwrap().is_empty());
 }
@@ -390,13 +413,15 @@ fn installing_hooks_preserves_an_existing_successful_native_delivery() {
     f.user("message-one", None, "prompt-one");
     f.complete();
     let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
-    f.db.stage_native_notifications(
+    f.db.stage_native_notifications_from_config(
         NativeProvider::Claude,
         &NativeScan {
             streams: vec![context.stream],
             errors: 0,
         },
-        &f.config,
+        &|| Ok(f.config.clone()),
+        false,
+        true,
     )
     .unwrap();
     let delivery = f.db.pending_native_deliveries(10, None).unwrap().remove(0);
@@ -505,13 +530,15 @@ fn polling_rechecks_failed_turns_but_delivers_valid_historical_completion() {
             f.append(json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture failure"],"timestamp":jiff::Timestamp::now().to_string()}));
         }
         let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
-        f.db.stage_native_notifications(
+        f.db.stage_native_notifications_from_config(
             NativeProvider::Claude,
             &NativeScan {
                 streams: vec![context.stream],
                 errors: 0,
             },
-            &f.config,
+            &|| Ok(f.config.clone()),
+            false,
+            true,
         )
         .unwrap();
         f.user(

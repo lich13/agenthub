@@ -4,7 +4,7 @@ use super::{
     update_service, UpdateAction,
 };
 use super::{rpc_dispatch::rpc_dispatch, ApiErrorKind};
-use agenthub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
+use agenthub_core::codex::CodexPaths;
 use agenthub_core::{
     config::Config,
     db::PanelDb,
@@ -102,28 +102,6 @@ fn rpc_test_state_with_config_file() -> (crate::state::AppState, PathBuf, PathBu
         dir,
         config_path,
     )
-}
-
-fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
-    ThreadSummary {
-        activity_updated_at: None,
-        storage_size: None,
-        id: id.to_string(),
-        title: title.to_string(),
-        status: ThreadStatus::Recent,
-        updated_at: None,
-        archived_at: None,
-        message_count: 0,
-        latest_message: None,
-        cwd: None,
-        workspace_root: None,
-        model: None,
-        rollout_path: None,
-        active_turn_id: None,
-        active_job_id: None,
-        pending_elicitation: None,
-        last_event_kind: None,
-    }
 }
 
 fn seed_local_codex_thread(home: &std::path::Path, thread_id: &str, title: &str) -> PathBuf {
@@ -1028,46 +1006,13 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
 
 #[test]
 fn thread_block_page_returns_latest_window_without_detail_fields() {
-    let detail = ThreadDetail {
-        timeline: None,
-        after_cursor: None,
-        history_subagent_blocks: Vec::new(),
-        history: None,
-        subagents: None,
-        subagent_updates: Default::default(),
-        summary: fallback_summary("thread-a", "example-user"),
-        messages: vec![],
-        blocks: (0..6)
-            .map(|index| MessageBlock {
-                subagent: None,
-                user_message: None,
-                id: format!("block-{index}"),
-                role: "assistant".to_string(),
-                kind: "message".to_string(),
-                display_kind: None,
-                status: None,
-                text: Some(format!("message-{index}")),
-                summary: None,
-                input: None,
-                truncated: None,
-                resolved: None,
-                answers: Vec::new(),
-                plan_status: None,
-                group_id: None,
-                tool_name: None,
-                call_id: None,
-                turn_id: None,
-                item_id: None,
-                created_at: None,
-                questions: Vec::new(),
-                payload: None,
-            })
-            .collect(),
-        raw_event_count: 6,
-        total_blocks: 6,
-        has_more_blocks: false,
-        before_cursor: None,
-    };
+    let home = temp_test_dir("agenthub-block-page-latest");
+    let rollout = seed_local_codex_thread(&home, "thread-a", "example-user");
+    let mut rows = vec![json!({"session_meta":{"payload":{"id":"thread-a"}}}).to_string()];
+    rows.extend((0..6).map(|index| {
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}).to_string()
+    }));
+    fs::write(&rollout, rows.join("\n") + "\n").unwrap();
 
     let plan = thread_service::plan_thread_blocks_request(
         &PlatformPaths::linux_server(),
@@ -1076,7 +1021,9 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
         None,
     )
     .unwrap();
-    let page = thread_service::thread_blocks_page_for_plan(detail, &plan);
+    let page = thread_service::read_thread_blocks_page(&CodexPaths::new(&home), &plan)
+        .unwrap()
+        .unwrap();
     let value = serde_json::to_value(&page).unwrap();
 
     assert_eq!(page.thread_id, "thread-a");
@@ -1089,50 +1036,18 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
     assert!(value.get("summary").is_none());
     assert!(value.get("messages").is_none());
     assert!(value.get("raw_event_count").is_none());
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]
 fn thread_block_page_uses_before_cursor() {
-    let detail = ThreadDetail {
-        timeline: None,
-        after_cursor: None,
-        history_subagent_blocks: Vec::new(),
-        history: None,
-        subagents: None,
-        subagent_updates: Default::default(),
-        summary: fallback_summary("thread-a", "example-user"),
-        messages: vec![],
-        blocks: (0..6)
-            .map(|index| MessageBlock {
-                subagent: None,
-                user_message: None,
-                id: format!("block-{index}"),
-                role: "assistant".to_string(),
-                kind: "message".to_string(),
-                display_kind: None,
-                status: None,
-                text: Some(format!("message-{index}")),
-                summary: None,
-                input: None,
-                truncated: None,
-                resolved: None,
-                answers: Vec::new(),
-                plan_status: None,
-                group_id: None,
-                tool_name: None,
-                call_id: None,
-                turn_id: None,
-                item_id: None,
-                created_at: None,
-                questions: Vec::new(),
-                payload: None,
-            })
-            .collect(),
-        raw_event_count: 6,
-        total_blocks: 6,
-        has_more_blocks: false,
-        before_cursor: None,
-    };
+    let home = temp_test_dir("agenthub-block-page-before");
+    let rollout = seed_local_codex_thread(&home, "thread-a", "example-user");
+    let mut rows = vec![json!({"session_meta":{"payload":{"id":"thread-a"}}}).to_string()];
+    rows.extend((0..6).map(|index| {
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}).to_string()
+    }));
+    fs::write(&rollout, rows.join("\n") + "\n").unwrap();
 
     let plan = thread_service::plan_thread_blocks_request(
         &PlatformPaths::linux_server(),
@@ -1141,7 +1056,9 @@ fn thread_block_page_uses_before_cursor() {
         Some("b:4".to_string()),
     )
     .unwrap();
-    let page = thread_service::thread_blocks_page_for_plan(detail, &plan);
+    let page = thread_service::read_thread_blocks_page(&CodexPaths::new(&home), &plan)
+        .unwrap()
+        .unwrap();
 
     assert_eq!(page.total_blocks, 6);
     assert!(page.has_more_blocks);
@@ -1149,6 +1066,7 @@ fn thread_block_page_uses_before_cursor() {
     assert_eq!(page.blocks.len(), 2);
     assert_eq!(page.blocks[0].text.as_deref(), Some("message-2"));
     assert_eq!(page.blocks[1].text.as_deref(), Some("message-3"));
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]

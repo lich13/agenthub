@@ -542,10 +542,6 @@ fn probe_codex_buckets(
     probe_codex_buckets_with_paths(&resolved.codex_paths(), limit).unwrap_or_default()
 }
 
-pub fn aggregate_probe_status(config: &Config) -> Result<ProbeStatusAggregation> {
-    aggregate_probe_status_with_options(config, false)
-}
-
 pub fn aggregate_probe_status_with_options(
     config: &Config,
     force_refresh: bool,
@@ -1383,7 +1379,7 @@ mod tests {
         let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.paths.db_path = root.join("panel.sqlite");
-        let agg = super::aggregate_probe_status(&config).unwrap();
+        let agg = super::aggregate_probe_status_with_options(&config, false).unwrap();
         assert!(
             agg.active_sessions.iter().any(|s| s.provider == "grok"
                 && s.id == grok_session_id

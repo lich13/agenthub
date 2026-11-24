@@ -146,6 +146,34 @@ public struct RemoteConnectionSettingsView: View {
         return result
     }
 
+    private var sshHostMenuEntries: [NativeMenuEntry] {
+        var entries: [NativeMenuEntry] = [
+            NativeMenuEntry(
+                id: "empty",
+                title: "选择已保存的连接",
+                selected: sshHost.isEmpty
+            ) {
+                sshHost = ""
+                errorMessage = nil
+                noticeMessage = nil
+            },
+        ]
+        for host in mergedHostOptions {
+            entries.append(
+                NativeMenuEntry(
+                    id: host,
+                    title: host,
+                    selected: sshHost == host
+                ) {
+                    sshHost = host
+                    errorMessage = nil
+                    noticeMessage = nil
+                }
+            )
+        }
+        return entries
+    }
+
     public var body: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 16) {
@@ -230,20 +258,10 @@ public struct RemoteConnectionSettingsView: View {
                                 Text("SSH 连接")
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textMuted.color)
-                                Menu {
-                                    Button("选择已保存的连接") {
-                                        sshHost = ""
-                                        errorMessage = nil
-                                        noticeMessage = nil
-                                    }
-                                    ForEach(mergedHostOptions, id: \.self) { host in
-                                        Button(host) {
-                                            sshHost = host
-                                            errorMessage = nil
-                                            noticeMessage = nil
-                                        }
-                                    }
-                                } label: {
+                                AnchoredMenuButton(
+                                    entries: sshHostMenuEntries,
+                                    accessibilityLabel: "SSH 连接"
+                                ) {
                                     HStack {
                                         Text(sshHost.isEmpty ? "选择已保存的连接" : sshHost)
                                             .font(DesignFonts.body(13))
@@ -267,8 +285,6 @@ public struct RemoteConnectionSettingsView: View {
                                     )
                                     .contentShape(Rectangle())
                                 }
-                                .menuStyle(.borderlessButton)
-                                .menuIndicator(.hidden)
                                 .disabled(busy)
                             }
                             .frame(maxWidth: .infinity)

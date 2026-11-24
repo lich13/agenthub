@@ -103,12 +103,6 @@ public enum UpdateVersionFormatter {
         return bare.isEmpty ? "未知" : bare
     }
 
-    public static func displayWithVPrefix(_ raw: String?) -> String {
-        let bare = bareVersion(raw)
-        guard !bare.isEmpty else { return "未知" }
-        return bare.first?.isNumber == true ? "v\(bare)" : bare
-    }
-
     public static func isValidSemver(_ raw: String?) -> Bool {
         let bare = bareVersion(raw)
         guard !bare.isEmpty else { return false }

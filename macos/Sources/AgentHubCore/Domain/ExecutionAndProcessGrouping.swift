@@ -105,15 +105,6 @@ public enum ConversationViewModel {
         return isToolBlock(block) || shouldRenderConversationMessage(block)
     }
 
-    public static func isResolvedActionBlock(_ block: MessageBlock) -> Bool {
-        if block.resolved == true { return true }
-        let st = (block.planStatus ?? block.status ?? "").lowercased()
-        return [
-            "completed", "complete", "succeeded", "success", "done",
-            "approved", "declined", "rejected", "cancelled", "canceled", "failed",
-        ].contains(st)
-    }
-
     public static func compactConversationBlocks(
         _ blocks: [MessageBlock],
         showAllHistory: Bool,

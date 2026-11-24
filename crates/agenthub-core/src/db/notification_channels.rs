@@ -111,15 +111,6 @@ CREATE INDEX idx_probe_notification_pending ON probe_notification_deliveries(sta
 ";
 
 impl PanelDb {
-    pub fn sync_notification_channels(&self, config: &Config) -> Result<()> {
-        let now = Timestamp::now().as_millisecond();
-        let mut conn = self.conn.lock().expect("db mutex");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        self.sync_notification_channels_in_transaction(&tx, config, now)?;
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn sync_notification_channels_from_config(
         &self,
         load_config: &(dyn Fn() -> Result<Config> + Sync),

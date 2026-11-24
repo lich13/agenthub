@@ -125,26 +125,25 @@ fn baseline_and_reloaded_cache_do_not_replay_requests() {
         crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
-        0
-    );
+    let stage_cfg = |db: &crate::db::PanelDb,
+                     scan: &crate::native_probe::NativeScan,
+                     c: &crate::config::Config| {
+        db.stage_native_notifications_from_config(
+            NativeProvider::GrokBot,
+            scan,
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap()
+    };
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), &config), 0);
     f.replica(json!([entry("old", now - 1000), entry("new", now + 1000)]));
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
-        1
-    );
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), &config), 1);
     f.replica(json!([]));
-    db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-        .unwrap();
+    stage_cfg(&db, &scan(&f.paths).unwrap(), &config);
     f.replica(json!([entry("new", now + 1000)]));
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), &config), 0);
     assert_eq!(db.pending_native_deliveries(100, None).unwrap().len(), 1);
 }
 
@@ -291,38 +290,24 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    db.stage_native_notifications(
-        NativeProvider::GrokBot,
-        &scan(&f.paths).unwrap(),
-        &config(true),
-    )
-    .unwrap();
+    let stage_cfg =
+        |db: &crate::db::PanelDb, scan: &crate::native_probe::NativeScan, enabled: bool| {
+            let c = config(enabled);
+            db.stage_native_notifications_from_config(
+                NativeProvider::GrokBot,
+                scan,
+                &|| Ok(c.clone()),
+                false,
+                true,
+            )
+            .unwrap()
+        };
+    stage_cfg(&db, &scan(&f.paths).unwrap(), true);
     let entry = json!({"kind":"send-message","id":"request","timestampMs":jiff::Timestamp::now().as_millisecond()+1000,"message":{"type":"local-tool-permission","ask":{"status":"pending","requestId":"request"}}});
     f.replica(json!([entry.clone()]));
-    assert_eq!(
-        db.stage_native_notifications(
-            NativeProvider::GrokBot,
-            &scan(&f.paths).unwrap(),
-            &config(true)
-        )
-        .unwrap(),
-        1
-    );
-    db.stage_native_notifications(
-        NativeProvider::GrokBot,
-        &scan(&f.paths).unwrap(),
-        &config(false),
-    )
-    .unwrap();
-    assert_eq!(
-        db.stage_native_notifications(
-            NativeProvider::GrokBot,
-            &scan(&f.paths).unwrap(),
-            &config(true)
-        )
-        .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), true), 1);
+    stage_cfg(&db, &scan(&f.paths).unwrap(), false);
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), true), 0);
     drop(db);
     f.replica(json!([]));
     let db = crate::db::PanelDb::open_with_secret_box(
@@ -330,24 +315,11 @@ fn reenable_and_restart_do_not_replay_pending_or_evicted_requests() {
         crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    db.stage_native_notifications(
-        NativeProvider::GrokBot,
-        &scan(&f.paths).unwrap(),
-        &config(true),
-    )
-    .unwrap();
+    stage_cfg(&db, &scan(&f.paths).unwrap(), true);
     let path = slice_path(&f.root, &replica_key(&f.scope, "bot-a"));
     fs::rename(&path, f.root.join("old-fixture")).unwrap();
     f.replica(json!([entry]));
-    assert_eq!(
-        db.stage_native_notifications(
-            NativeProvider::GrokBot,
-            &scan(&f.paths).unwrap(),
-            &config(true)
-        )
-        .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap(), true), 0);
     assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
 }
 
@@ -405,13 +377,20 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     )
     .unwrap();
 
+    let stage_cfg = |db: &crate::db::PanelDb, scan: &crate::native_probe::NativeScan| {
+        db.stage_native_notifications_from_config(
+            NativeProvider::GrokBot,
+            scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap()
+    };
+
     // Baseline with empty replica (simulates v2.1.10 where settled_count was 0 -> cursor = 0)
     f.replica(json!([]));
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &scan(&f.paths).unwrap()), 0);
     assert_eq!(
         db.native_probe_stream_cursor(NativeProvider::GrokBot, &f.session())
             .unwrap(),
@@ -435,8 +414,7 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     }
     f.replica(json!([msg("hist-1", hist_ts, "Historical reply")]));
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
+        stage_cfg(&db, &scan(&f.paths).unwrap()),
         0,
         "pre-upgrade historical message on cursor=0 stream must be baselined as skipped"
     );
@@ -458,17 +436,9 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     assert_eq!(s1.streams[0].events[0].kind, "completion");
     assert_eq!(s1.streams[0].events[0].turn_id, "reply-1");
     assert_eq!(s1.streams[0].events[0].body, "Bot finished task");
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &s1, &config)
-            .unwrap(),
-        1
-    );
+    assert_eq!(stage_cfg(&db, &s1), 1);
     // Repeated scan with same completion does not re-queue
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &s1, &config)
-            .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &s1), 0);
 
     // Detail status remains "unknown" when no pending interaction exists
     let d = detail(
@@ -503,11 +473,7 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
     assert_eq!(s_perm.streams[0].settled_count, pre_perm_ts as u64);
     assert_eq!(s_perm.streams[0].events.len(), 1);
     assert_eq!(s_perm.streams[0].events[0].kind, "authorization");
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &s_perm, &config)
-            .unwrap(),
-        1
-    );
+    assert_eq!(stage_cfg(&db, &s_perm), 1);
     assert_eq!(
         db.native_probe_stream_cursor(NativeProvider::GrokBot, &f.session())
             .unwrap(),
@@ -601,20 +567,25 @@ fn restored_notifications_keep_the_suspended_message_baseline() {
         .unwrap()
     };
     let db = open();
+    let stage_cfg = |db: &crate::db::PanelDb, scan: &crate::native_probe::NativeScan| {
+        db.stage_native_notifications_from_config(
+            NativeProvider::GrokBot,
+            scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap()
+    };
     // v2.1.17 advanced message positions without creating completion candidates.
     let mut suspended = scan(&f.paths).unwrap();
     std::sync::Arc::make_mut(&mut suspended.streams[0].events).clear();
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &suspended, &config)
-            .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &suspended), 0);
     drop(db);
     evict_idle(std::time::Duration::ZERO);
     let db = open();
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &scan(&f.paths).unwrap(), &config)
-            .unwrap(),
+        stage_cfg(&db, &scan(&f.paths).unwrap()),
         0,
         "restoring notifications must not replay the paused version's last message"
     );
@@ -624,16 +595,8 @@ fn restored_notifications_keep_the_suspended_message_baseline() {
     entries.push(fresh);
     f.replica(json!(entries));
     let restored = scan(&f.paths).unwrap();
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &restored, &config)
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        db.stage_native_notifications(NativeProvider::GrokBot, &restored, &config)
-            .unwrap(),
-        0
-    );
+    assert_eq!(stage_cfg(&db, &restored), 1);
+    assert_eq!(stage_cfg(&db, &restored), 0);
     for kind in ["completion", "reply_needed", "authorization"] {
         assert!(NativeProvider::GrokBot.event_enabled(&config, kind));
     }

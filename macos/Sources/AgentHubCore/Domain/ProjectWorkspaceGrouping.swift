@@ -95,6 +95,54 @@ public struct ProjectWorkspaceGroup<Item: Sendable>: Identifiable, Equatable, Se
     }
 }
 
+public protocol ProjectWorkspaceGroupableItem: Equatable, Sendable {
+    var workspaceGroupItemId: String { get }
+    var workspaceSummaryItem: UnifiedSessionSummaryItem { get }
+}
+
+extension UnifiedSessionSummaryItem: ProjectWorkspaceGroupableItem {
+    public var workspaceGroupItemId: String { sessionKey }
+    public var workspaceSummaryItem: UnifiedSessionSummaryItem { self }
+}
+
+extension ProjectWorkspaceEngine {
+    public static func filterItems<Item: ProjectWorkspaceGroupableItem>(
+        _ items: [Item],
+        by filter: ProjectWorkspaceFilter,
+        enabled: Bool = true
+    ) -> [Item] {
+        guard enabled, filter != .all else { return items }
+        return items.filter {
+            let summary = $0.workspaceSummaryItem
+            return matchesFilter(filter, cwd: summary.cwd, workspaceRoot: summary.workspaceRoot)
+        }
+    }
+
+    public static func buildGroups<Item: ProjectWorkspaceGroupableItem>(
+        items: [Item]
+    ) -> [ProjectWorkspaceGroup<Item>] {
+        buildGroups(
+            items: items,
+            idOf: \.workspaceGroupItemId,
+            cwdOf: { $0.workspaceSummaryItem.cwd },
+            workspaceRootOf: { $0.workspaceSummaryItem.workspaceRoot },
+            updatedAtOf: { $0.workspaceSummaryItem.updatedAt },
+            statusOf: { itemPriorityStatus($0.workspaceSummaryItem) }
+        )
+    }
+
+    public static func visualOrderedKeys<Item: ProjectWorkspaceGroupableItem>(
+        groups: [ProjectWorkspaceGroup<Item>],
+        collapsedKeys: Set<ProjectWorkspaceKey>
+    ) -> [String] {
+        visualOrderedKeys(
+            groups: groups,
+            collapsedKeys: collapsedKeys,
+            idOf: \.workspaceGroupItemId
+        )
+    }
+}
+
 public enum ProjectWorkspaceEngine {
     private static let isoFractionalLock = NSLock()
     nonisolated(unsafe) private static let isoFractional: ISO8601DateFormatter = {

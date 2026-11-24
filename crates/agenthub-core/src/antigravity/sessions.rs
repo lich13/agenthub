@@ -29,7 +29,8 @@ mod endpoint;
 #[cfg(test)]
 use endpoint::resolve_daemon_hub_endpoint;
 pub(crate) use endpoint::{
-    connect_endpoint, connect_rpc_post, service_unreachable, ConnectRpcHttpError, LiveRpc,
+    connect_endpoint, connect_rpc_post, fetch_live_trajectory_steps, ConnectRpcHttpError,
+    LiveHistoryUnavailable, LiveRpc,
 };
 pub use endpoint::{
     discover_host_endpoints, evict_idle_endpoint_cache, get_cached_live_endpoint,
@@ -46,6 +47,7 @@ use annotations::{
     read_annotation_overlay, write_annotation_overlay, ParsedRawSummary,
 };
 mod cli_meta;
+pub(super) mod prompt;
 pub use cli_meta::scan_offline_store;
 pub(crate) use cli_meta::{
     build_offline_stream_snapshot, inspect_conv_db_metadata, load_store_auxiliary_index,
@@ -71,7 +73,6 @@ pub use mutations::{
 
 const SERVICE_PREFIX: &str = "/exa.language_server_pb.LanguageServerService/";
 const RESPONSE_LIMIT: usize = crate::resource_limits::ANTIGRAVITY_LOCAL_RPC_BYTES;
-const TRANSCRIPT_LINE_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
 
 #[derive(Debug, Clone)]
@@ -508,29 +509,13 @@ fn read_transcript_tail_rows(paths: &AntigravityPaths, id: &str) -> Option<(Path
     }
     let mut reader = BufReader::new(file);
     if skip_partial {
-        let mut discard = Vec::new();
-        let _ = reader.read_until(b'\n', &mut discard);
+        let _ = prompt::drain_until_newline(&mut reader);
     }
     let mut rows = Vec::new();
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let Ok(read) = (&mut reader)
-            .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-            .read_until(b'\n', &mut line)
-        else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-            rows.push(row);
-        }
-    }
+    let _ = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+        rows.push(row);
+        std::ops::ControlFlow::Continue(())
+    });
     Some((chosen, rows))
 }
 
@@ -553,31 +538,18 @@ pub(crate) fn extract_transcript_spawned_subagents(
     };
     let mut reader = BufReader::new(file);
     let mut spawned = BTreeSet::new();
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let Ok(read) = (&mut reader)
-            .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-            .read_until(b'\n', &mut line)
-        else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        if line.len() > TRANSCRIPT_LINE_LIMIT
-            || (!line.windows(14).any(|w| w == b"conversationId")
-                && !line.windows(15).any(|w| w == b"conversation_id"))
+    let _ = prompt::for_each_bounded_jsonl_line(&mut reader, |line| {
+        if line.windows(14).any(|w| w == b"conversationId")
+            || line.windows(15).any(|w| w == b"conversation_id")
         {
-            continue;
-        }
-        if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-            if row["type"].as_str() == Some("SYSTEM_MESSAGE") {
-                continue;
+            if let Ok(row) = serde_json::from_slice::<Value>(line) {
+                if row["type"].as_str() != Some("SYSTEM_MESSAGE") {
+                    super::collect_spawned_subagent_ids(&row, &mut spawned);
+                }
             }
-            super::collect_spawned_subagent_ids(&row, &mut spawned);
         }
-    }
+        std::ops::ControlFlow::Continue(())
+    });
     spawned.remove(id);
     spawned.into_iter().collect()
 }
@@ -689,6 +661,8 @@ fn inspect_transcript_tail_status(
         let src = row["source"].as_str().unwrap_or("");
         !matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
             && !(st == "SYSTEM_MESSAGE" && src == "SYSTEM_SDK")
+            && !(prompt::is_transcript_user_row(row)
+                && !prompt::transcript_row_has_user_payload(row))
     })?;
     let last = &rows[last_idx];
     let last_type = last["type"].as_str().unwrap_or("");
@@ -709,8 +683,7 @@ fn inspect_transcript_tail_status(
     let turn_start = rows[..=last_idx]
         .iter()
         .rposition(|row| {
-            row["type"].as_str() == Some("USER_INPUT")
-                || row["source"].as_str() == Some("USER_EXPLICIT")
+            prompt::is_transcript_user_row(row) && prompt::transcript_row_has_user_payload(row)
         })
         .unwrap_or(0);
     let turn_rows = &rows[turn_start..=last_idx];
@@ -791,10 +764,8 @@ fn inspect_transcript_tail_status(
                     }
                 }
             }
-        } else if !matches!(
-            rtype,
-            "USER_INPUT" | "FINISH" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
-        ) && rsource != "USER_EXPLICIT"
+        } else if !prompt::is_transcript_user_row(row)
+            && !matches!(rtype, "FINISH" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
         {
             open_tool_calls = open_tool_calls.saturating_sub(1);
             if open_tool_calls == 0 {
@@ -830,8 +801,7 @@ fn inspect_transcript_tail_status(
         let unclosed_tool_step =
             !matches!(last_type, "PLANNER_RESPONSE" | "FINISH" | "ERROR_MESSAGE")
                 && !matches!(last_status, "CANCELED" | "INTERRUPTED" | "INVALID");
-        let inflight_tail = last_type == "USER_INPUT"
-            || last_source == "USER_EXPLICIT"
+        let inflight_tail = prompt::is_transcript_user_row(last)
             || (last_type == "SYSTEM_MESSAGE" && last_source != "SYSTEM_SDK")
             || open_tool_calls > 0
             || unclosed_tool_step;
@@ -1182,13 +1152,13 @@ fn summary_from_live_json(
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .or(overlay.title);
-    let fallback_summary = item["summary"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
+    let raw_summary_str = item["summary"].as_str().unwrap_or("");
+    let fallback_summary = {
+        let cleaned = prompt::extract_antigravity_user_request(raw_summary_str);
+        (!cleaned.trim().is_empty()).then(|| cleaned.trim().to_owned())
+    };
     let title = ann_title
-        .or_else(|| fallback_summary.clone())
+        .or_else(|| prompt::clean_antigravity_auto_title(raw_summary_str))
         .unwrap_or_else(|| "未命名会话".into());
     let archived = item["annotations"]
         .get("archived")
@@ -1277,42 +1247,23 @@ fn summarize_unindexed_transcript(
         return (None, None, 0, None);
     };
     let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
     let mut first_title: Option<String> = None;
     let mut last_preview: Option<String> = None;
     let mut last_created_at: Option<String> = None;
     let mut count = 0usize;
-    loop {
-        line.clear();
-        let Ok(read) = (&mut reader)
-            .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-            .read_until(b'\n', &mut line)
-        else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let Ok(row) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
+    let _ = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
         let st = row["type"].as_str().unwrap_or("");
-        let src = row["source"].as_str().unwrap_or("");
         if matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
-            continue;
+            return std::ops::ControlFlow::Continue(());
         }
         count += 1;
         if let Some(ts) = row["created_at"].as_str().filter(|s| !s.is_empty()) {
             last_created_at = index_timestamp(ts);
         }
-        if first_title.is_none() && (st == "USER_INPUT" || src == "USER_EXPLICIT") {
+        if first_title.is_none() && prompt::is_transcript_user_row(&row) {
             if let Some(raw) = row["content"].as_str().filter(|s| !s.trim().is_empty()) {
-                let parsed =
-                    crate::user_message::parse_user_message("title", &Value::String(raw.into()));
-                let candidate = parsed.text.lines().map(str::trim).find(|l| !l.is_empty());
+                let cleaned = prompt::extract_antigravity_user_request(raw);
+                let candidate = cleaned.lines().map(str::trim).find(|l| !l.is_empty());
                 if let Some(line_text) = candidate {
                     first_title = Some(line_text.chars().take(80).collect());
                 }
@@ -1326,7 +1277,8 @@ fn summarize_unindexed_transcript(
                 last_preview = Some(reply.chars().take(160).collect());
             }
         }
-    }
+        std::ops::ControlFlow::Continue(())
+    });
     (first_title, last_preview, count, last_created_at)
 }
 
@@ -1797,6 +1749,7 @@ pub(crate) fn list_offline_summaries(
             }
         }
 
+        let cleaned_preview = prompt::extract_antigravity_user_request(&preview);
         let title = overlay
             .title
             .filter(|s| !s.trim().is_empty())
@@ -1805,15 +1758,15 @@ pub(crate) fn list_offline_summaries(
                     .and_then(|r| r.annotations.title.clone())
                     .filter(|s| !s.trim().is_empty())
             })
-            .or_else(|| {
-                let t = db_title.trim();
-                (!t.is_empty()).then(|| t.to_owned())
-            })
+            .or_else(|| prompt::clean_antigravity_auto_title(&db_title))
             .or_else(|| fts_row.and_then(|f| f.title.clone()))
             .or_else(|| conv_meta_entry.and_then(|m| m.title.clone()))
             .or_else(|| {
-                let p = preview.trim();
-                (!p.is_empty()).then(|| p.chars().take(80).collect())
+                cleaned_preview
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .map(|l| l.chars().take(80).collect())
             })
             .or_else(|| cli_meta::read_conv_meta_file(paths, &id).0)
             .or_else(|| get_history_fallback(&id).1)
@@ -1869,7 +1822,7 @@ pub(crate) fn list_offline_summaries(
             archived,
             updated_at,
             effective_steps,
-            (!preview.trim().is_empty()).then_some(preview),
+            (!cleaned_preview.trim().is_empty()).then_some(cleaned_preview),
             raw_status,
             "sqlite-offline",
             tree_locked,
@@ -2177,35 +2130,18 @@ pub(crate) fn probe_live_stream_snapshot(
             .next()?;
         return build_offline_stream_snapshot(&primary, &offline);
     };
-    let mut resp = connect_rpc_post(
-        rpc.port,
-        &rpc.token,
-        "GetCascadeTrajectory",
-        &json!({ "cascadeId": id }),
-    )
-    .ok()?;
-    let total = resp["numTotalSteps"].as_u64().unwrap_or(0) as usize;
-    if let Some(steps) = resp["trajectory"]["steps"].as_array_mut() {
-        let mut guard_iters = 0usize;
-        while steps.len() < total && guard_iters < 32 {
-            guard_iters += 1;
-            let Ok(mut more) = connect_rpc_post(
-                rpc.port,
-                &rpc.token,
-                "GetCascadeTrajectorySteps",
-                &json!({ "cascadeId": id, "stepOffset": steps.len() }),
-            ) else {
-                break;
-            };
-            let Some(batch) = more["steps"].as_array_mut() else {
-                break;
-            };
-            if batch.is_empty() {
-                break;
-            }
-            steps.append(batch);
+    let (mut resp, steps) = match fetch_live_trajectory_steps(&rpc, id) {
+        Ok(pair) => pair,
+        Err(err) if err.is::<LiveHistoryUnavailable>() => {
+            let offline = list_offline_summaries(&primary, Some(id))
+                .ok()?
+                .into_iter()
+                .next()?;
+            return build_offline_stream_snapshot(&primary, &offline);
         }
-    }
+        Err(_) => return None,
+    };
+    resp["trajectory"]["steps"] = Value::Array(steps);
     let subagents = all_live["trajectorySummaries"]
         .as_object()
         .and_then(|m| collect_subagents_by_root(m).remove(id))
@@ -4679,6 +4615,657 @@ mod tests {
         assert!(fts_sc >= 1);
         assert!(fts_lm > 1_000_000_000_000_000_000);
         drop(check_conn);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn pb_len_field(field_no: u64, payload: &[u8]) -> Vec<u8> {
+        fn push_varint(mut v: u64, out: &mut Vec<u8>) {
+            loop {
+                let mut byte = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    byte |= 0x80;
+                }
+                out.push(byte);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(payload.len() + 10);
+        push_varint((field_no << 3) | 2, &mut out);
+        push_varint(payload.len() as u64, &mut out);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn prompt_purification_across_jsonl_sqlite_db_and_bark_summary() {
+        let root = env::temp_dir().join(format!("agenthub-ag-purify-{}", uuid::Uuid::new_v4()));
+        for d in ["conversations", "brain", "presence"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let now_iso = "2026-11-24T12:00:00Z";
+
+        let jsonl_id = uuid::Uuid::new_v4().to_string();
+        fs::write(
+            root.join("conversations").join(format!("{jsonl_id}.db")),
+            b"placeholder",
+        )
+        .unwrap();
+        let img_path = root.join("brain").join(&jsonl_id).join("screen.png");
+        let logs_dir = root
+            .join("brain")
+            .join(&jsonl_id)
+            .join(".system_generated/logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::write(&img_path, b"\x89PNG\r\n\x1a\nfixture").unwrap();
+        let wrapped_prompt = concat!(
+            "<USER_REQUEST>\n",
+            "/boost /plan 根治提示词泄漏\n",
+            "</USER_REQUEST>\n",
+            "<ADDITIONAL_METADATA>\n",
+            "<ORCHESTRATOR>SECRET_ORCHESTRATOR_PROMPT</ORCHESTRATOR>\n",
+            "<PLAN>SECRET_PLAN_PROMPT</PLAN>\n",
+            "</ADDITIONAL_METADATA>"
+        );
+        fs::write(
+            logs_dir.join("transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({
+                    "step_index": "0",
+                    "source": "USER",
+                    "type": "REQUEST",
+                    "status": "DONE",
+                    "created_at": now_iso,
+                    "content": wrapped_prompt,
+                    "media": [{"uri": format!("file://{}", img_path.display()), "mime_type": "image/png"}]
+                }),
+                json!({
+                    "step_index": "1",
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "created_at": now_iso,
+                    "tool_calls": [{"id": "call-live", "name": "run_command", "arguments": {"CommandLine": "cargo test"}}]
+                }),
+                json!({
+                    "step_index": "2",
+                    "source": "USER_EXPLICIT",
+                    "type": "USER_INPUT",
+                    "status": "DONE",
+                    "created_at": now_iso,
+                    "content": "<USER_SETTINGS_CHANGE>model=gemini-3.1-pro</USER_SETTINGS_CHANGE>"
+                }),
+            ),
+        )
+        .unwrap();
+
+        let hist_id = uuid::Uuid::new_v4().to_string();
+        fs::write(
+            root.join("conversations").join(format!("{hist_id}.db")),
+            b"placeholder",
+        )
+        .unwrap();
+        fs::create_dir_all(
+            root.join("brain")
+                .join(&hist_id)
+                .join(".system_generated/logs"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("brain")
+                .join(&hist_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"content":"Ready"}),
+                json!({"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":now_iso,"content":"<USER_SETTINGS_CHANGE>model=claude-opus-4.6</USER_SETTINGS_CHANGE>"}),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("history.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"conversationId": hist_id, "display": "/boost /plan 深度瘦身老项目", "cwd": "/workspace/demo"}),
+                json!({"conversationId": hist_id, "display": "/compact"}),
+                json!({"conversationId": hist_id, "display": "/clear"}),
+            ),
+        )
+        .unwrap();
+
+        let offline = AntigravityPaths::offline(root.clone());
+        let listed = list_sessions(&offline, &ProviderListRequest::default()).unwrap();
+        assert_eq!(
+            listed.iter().find(|s| s.id == jsonl_id).unwrap().title,
+            "/boost /plan 根治提示词泄漏"
+        );
+        assert_eq!(
+            listed.iter().find(|s| s.id == hist_id).unwrap().title,
+            "/boost /plan 深度瘦身老项目"
+        );
+        let hist_scan = scan_offline_store(&offline, Some(&hist_id)).unwrap();
+        assert_eq!(hist_scan.streams.len(), 1);
+        assert_eq!(hist_scan.streams[0].events.len(), 1);
+        assert_eq!(hist_scan.streams[0].events[0].kind, "completion");
+        assert_eq!(hist_scan.streams[0].events[0].body, "Ready");
+
+        let jsonl_detail = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: jsonl_id.clone(),
+                limit: Some(20),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let user_evs: Vec<_> = jsonl_detail
+            .events
+            .iter()
+            .filter(|e| e.kind == "user_message")
+            .collect();
+        assert_eq!(user_evs.len(), 1);
+        let um = user_evs[0].user_message.as_ref().unwrap();
+        assert_eq!(um.text, "/boost /plan 根治提示词泄漏");
+        assert!(um.context_blocks.is_empty());
+        assert_eq!(um.attachments.len(), 1);
+        assert_eq!(jsonl_detail.timeline.as_ref().map(|t| t.len()), Some(1));
+        assert_eq!(
+            jsonl_detail
+                .events
+                .iter()
+                .find(|e| e.kind == "tool_call")
+                .unwrap()
+                .status
+                .as_deref(),
+            None
+        );
+        let searchable = crate::user_message::searchable_text(&um.text);
+        assert!(!searchable.contains("SECRET_ORCHESTRATOR_PROMPT"));
+        assert!(!searchable.contains("ADDITIONAL_METADATA"));
+
+        let db_done_id = uuid::Uuid::new_v4().to_string();
+        let db_err_id = uuid::Uuid::new_v4().to_string();
+        let mut f19 = Vec::new();
+        f19.extend(pb_len_field(1, &pb_len_field(1, b"@boost rewritten")));
+        f19.extend(pb_len_field(
+            2,
+            "<USER_REQUEST>\n只展示我的真实输入\n</USER_REQUEST>\n<ADDITIONAL_METADATA>meta</ADDITIONAL_METADATA>".as_bytes(),
+        ));
+        f19.extend(pb_len_field(3, b"EXPANDED_WORKFLOW_SYSTEM_PROMPT"));
+        for sec in ["identity", "artifacts", "slash_commands", "user_rules"] {
+            f19.extend(pb_len_field(12, sec.as_bytes()));
+        }
+        let step14_blob = pb_len_field(19, &f19);
+
+        let mut f20 = Vec::new();
+        f20.extend(pb_len_field(1, "旧回退回复".as_bytes()));
+        f20.extend(pb_len_field(3, b"INTERNAL_THINKING_TRACE"));
+        f20.extend(pb_len_field(6, br#"{"tool":"secret_internal_tool"}"#));
+        f20.extend(pb_len_field(8, "最终纯净回复正文".as_bytes()));
+        let step15_blob = pb_len_field(20, &f20);
+
+        let mut err_inner = Vec::new();
+        err_inner.extend(pb_len_field(1, "内部原始错误".as_bytes()));
+        err_inner.extend(pb_len_field(2, "模型配额已达上限".as_bytes()));
+        err_inner.extend(pb_len_field(3, b"goroutine 42 internal stack trace"));
+        let step17_blob = pb_len_field(24, &pb_len_field(3, &err_inner));
+
+        for (cid, step2_type, step2_status, step2_blob) in [
+            (&db_done_id, 15_i64, 3_i64, &step15_blob),
+            (&db_err_id, 17_i64, 7_i64, &step17_blob),
+        ] {
+            let conn =
+                Connection::open(root.join("conversations").join(format!("{cid}.db"))).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO steps VALUES (0, 14, 3, ?1), (1, ?2, ?3, ?4)",
+                params![step14_blob, step2_type, step2_status, step2_blob],
+            )
+            .unwrap();
+        }
+
+        let db_detail = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: db_done_id.clone(),
+                limit: Some(20),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let db_um = db_detail
+            .events
+            .iter()
+            .find_map(|e| e.user_message.as_ref())
+            .unwrap();
+        assert_eq!(db_um.text, "只展示我的真实输入");
+        assert!(db_um.context_blocks.is_empty());
+        for leaked in [
+            "identity",
+            "slash_commands",
+            "EXPANDED_WORKFLOW_SYSTEM_PROMPT",
+            "@boost rewritten",
+        ] {
+            assert!(!db_um.text.contains(leaked));
+        }
+        assert!(db_detail
+            .events
+            .iter()
+            .any(|e| e.kind == "thinking" && e.text.as_deref() == Some("INTERNAL_THINKING_TRACE")));
+        assert!(db_detail.events.iter().any(
+            |e| e.kind == "assistant_message" && e.text.as_deref() == Some("最终纯净回复正文")
+        ));
+
+        let err_detail = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: db_err_id.clone(),
+                limit: Some(20),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            err_detail
+                .events
+                .iter()
+                .find(|e| e.role.as_deref() == Some("error_message"))
+                .unwrap()
+                .result
+                .as_deref(),
+            Some("模型配额已达上限")
+        );
+
+        let bark_done = scan_offline_store(&offline, Some(&db_done_id)).unwrap();
+        assert_eq!(bark_done.streams[0].events[0].kind, "completion");
+        assert!(bark_done.streams[0].events[0]
+            .body
+            .contains("最终纯净回复正文"));
+        assert!(!bark_done.streams[0].events[0]
+            .body
+            .contains("INTERNAL_THINKING_TRACE"));
+        assert!(!bark_done.streams[0].events[0]
+            .body
+            .contains("secret_internal_tool"));
+
+        let bark_err = scan_offline_store(&offline, Some(&db_err_id)).unwrap();
+        assert_eq!(bark_err.streams[0].events[0].kind, "failure");
+        assert!(bark_err.streams[0].events[0]
+            .body
+            .contains("模型配额已达上限"));
+        assert!(!bark_err.streams[0].events[0].body.contains("goroutine 42"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_user_response_priority_beyond_32_pages_and_subagent_role_delegation_purification() {
+        let root = env::temp_dir().join(format!("agenthub-ag-live-sub-{}", uuid::Uuid::new_v4()));
+        for d in ["conversations", "brain", "presence"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let live_id = uuid::Uuid::new_v4().to_string();
+        fs::write(
+            root.join("conversations").join(format!("{live_id}.db")),
+            b"live-db",
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let live_id_srv = live_id.clone();
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_srv = shutdown.clone();
+        let srv = std::thread::spawn(move || loop {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            if shutdown_srv.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut req_line = String::new();
+            if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                break;
+            }
+            let mut len = 0usize;
+            let mut hdr = String::new();
+            loop {
+                hdr.clear();
+                if reader.read_line(&mut hdr).unwrap_or(0) == 0 || hdr == "\r\n" {
+                    break;
+                }
+                if let Some((k, v)) = hdr.split_once(':') {
+                    if k.eq_ignore_ascii_case("content-length") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            let mut body = vec![0u8; len];
+            let _ = reader.read_exact(&mut body);
+            let payload = if req_line.contains("GetAllCascadeTrajectories") {
+                json!({
+                    "trajectorySummaries": {
+                        (&live_id_srv): {
+                            "summary": "Live 35-page session",
+                            "stepCount": 35,
+                            "status": "CASCADE_RUN_STATUS_IDLE",
+                            "lastModifiedTime": "2026-11-24T12:00:35Z"
+                        }
+                    }
+                })
+            } else if req_line.contains("GetCascadeTrajectory ") {
+                json!({
+                    "numTotalSteps": 35,
+                    "trajectory": {
+                        "cascadeId": (&live_id_srv),
+                        "steps": [{
+                            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "userInput": {
+                                "items": [{"text": "@boost @plan expanded-item"}],
+                                "userResponse": "<USER_REQUEST>\n/boost /plan 优先读取原始用户输入\n</USER_REQUEST>\n<ADDITIONAL_METADATA>meta</ADDITIONAL_METADATA>"
+                            }
+                        }]
+                    }
+                })
+            } else {
+                let req_json: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let offset = req_json["stepOffset"].as_u64().unwrap_or(0) as usize;
+                let step = if offset == 34 {
+                    json!({
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "status": "CORTEX_STEP_STATUS_DONE",
+                        "plannerResponse": {"modifiedResponse": "第35页收尾回复"}
+                    })
+                } else {
+                    json!({
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "status": "CORTEX_STEP_STATUS_DONE",
+                        "plannerResponse": {"thinking": format!("step-{offset}")}
+                    })
+                };
+                json!({"cascadeId": (&live_id_srv), "steps": [step]})
+            };
+            let resp_bytes = serde_json::to_vec(&payload).unwrap();
+            write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    resp_bytes.len()
+                )
+                .unwrap();
+            stream.write_all(&resp_bytes).unwrap();
+        });
+
+        let online = AntigravityPaths::with_fixed_rpc(root.clone(), port, "fixture-token");
+        let live_detail = session_detail(
+            &online,
+            &ProviderDetailRequest {
+                session_key: live_id.clone(),
+                limit: Some(80),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        srv.join().unwrap();
+        let live_um = live_detail
+            .events
+            .iter()
+            .find_map(|e| e.user_message.as_ref())
+            .unwrap();
+        assert_eq!(live_um.text, "/boost /plan 优先读取原始用户输入");
+        assert!(live_um.context_blocks.is_empty());
+        assert!(
+            live_detail
+                .events
+                .iter()
+                .any(|e| e.text.as_deref() == Some("第35页收尾回复")),
+            "live trajectory pagination must not truncate at 32 pages"
+        );
+
+        // Subagent sidecar subagentDescriptor.role + agent_name + <original_task> purification + no fake user bubble.
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let child_sidecar_id = uuid::Uuid::new_v4().to_string();
+        let child_db_id = uuid::Uuid::new_v4().to_string();
+        let child_self_delegation_id = uuid::Uuid::new_v4().to_string();
+        for cid in [
+            &root_id,
+            &child_sidecar_id,
+            &child_db_id,
+            &child_self_delegation_id,
+        ] {
+            fs::write(
+                root.join("conversations").join(format!("{cid}.db")),
+                b"placeholder",
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("brain").join(cid).join(".system_generated/logs"))
+                .unwrap();
+        }
+        let sidecar_dir = root
+            .join("brain")
+            .join(&root_id)
+            .join(".system_generated/subagents");
+        fs::create_dir_all(&sidecar_dir).unwrap();
+        fs::write(
+            sidecar_dir.join(format!("{child_sidecar_id}.json")),
+            serde_json::to_vec(&json!({
+                "subagentDescriptor": {"role": "代码审查员", "typeName": "browser_subagent"},
+                "state": "SUBAGENT_STATE_DONE"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let raw_delegation = concat!(
+            "<original_task>\n",
+            "**Task**: 核验 FFI 与 SQLite 边界\n",
+            "</original_task>\n",
+            "<prior_attempt>Updated <original_task>...</original_task> handling</prior_attempt>\n",
+            "<instructions>confidential worker prompt</instructions>"
+        );
+        fs::write(
+            root.join("brain")
+                .join(&root_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                json!({
+                    "step_index": 0,
+                    "source": "USER_EXPLICIT",
+                    "type": "USER_INPUT",
+                    "status": "DONE",
+                    "created_at": "2026-11-24T12:00:00Z",
+                    "content": "<USER_REQUEST>\n检查子代理\n<environment_context>字面量环境说明</environment_context>\n</USER_REQUEST>\n<ADDITIONAL_METADATA>ts=1</ADDITIONAL_METADATA>"
+                }),
+                json!({
+                    "step_index": 1,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "created_at": "2026-11-24T12:00:01Z",
+                    "content": "全部检查已完成。",
+                    "tool_calls": [
+                        {"id": "c-sidecar", "name": "invoke_subagent", "arguments": {"Role": "代码审查员", "TypeName": "internal_worker", "Task": raw_delegation}},
+                        {"id": "c-db", "name": "invoke_subagent", "arguments": {"Task": "<original_task>\n**Task**: 检索历史会话\n</original_task>"}},
+                        {"id": "c-creating", "name": "invoke_subagent", "arguments": {"Role": "测试验证员", "TypeName": "raw_type", "Task": "<original_task>\n**Task**: 跑门禁检查\n</original_task>"}}
+                    ]
+                }),
+                json!({"step_index": 2, "type": "GENERIC", "status": "DONE", "tool_call_id": "c-sidecar", "content": format!("Created the following subagent:\n{{\"conversationId\":\"{child_sidecar_id}\"}}")}),
+                json!({"step_index": 3, "type": "GENERIC", "status": "DONE", "tool_call_id": "c-db", "content": format!("Created the following subagent:\n{{\"conversationId\":\"{child_db_id}\"}}")}),
+                json!({"step_index": 4, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE", "created_at": "2026-11-24T12:00:02Z", "content": "<USER_SETTINGS_CHANGE>model=gemini-3.1-pro</USER_SETTINGS_CHANGE>"}),
+            ),
+        )
+        .unwrap();
+        for cid in [&child_sidecar_id, &child_db_id] {
+            fs::write(
+                root.join("brain")
+                    .join(cid)
+                    .join(".system_generated/logs/transcript_full.jsonl"),
+                format!(
+                    "{}\n{}\n",
+                    json!({"step_index": 0, "type": "SYSTEM_MESSAGE", "status": "DONE", "content": raw_delegation}),
+                    json!({"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "子代理检查通过"}),
+                ),
+            )
+            .unwrap();
+        }
+        fs::write(
+            root.join("brain")
+                .join(&child_self_delegation_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({
+                    "step_index": 0,
+                    "type": "SYSTEM_MESSAGE",
+                    "status": "DONE",
+                    "content": "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T12:00:01Z sender=root priority=HIGH content=<original_task>\n**Task**: 从子转录恢复委派\n</original_task>\n<prior_attempt>Fixed </original_task> edge case</prior_attempt>\n</SYSTEM_MESSAGE>"
+                }),
+                json!({"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "独立恢复完成"}),
+            ),
+        )
+        .unwrap();
+        let s_conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        s_conn
+            .execute_batch(
+                "CREATE TABLE conversation_summaries (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    agent_name TEXT,
+                    preview TEXT,
+                    step_count INTEGER,
+                    last_modified_time TEXT,
+                    workspace_uris TEXT,
+                    parent_conversation_id TEXT,
+                    nesting_depth INTEGER
+                );
+                CREATE TABLE conversations_fts (
+                    conversation_id TEXT,
+                    chunk_index INTEGER,
+                    archived INTEGER,
+                    title TEXT
+                );",
+            )
+            .unwrap();
+        s_conn
+            .execute(
+                "INSERT INTO conversation_summaries VALUES \
+                 (?1, '<USER_REQUEST>', '', '<USER_REQUEST>\n从预览恢复主标题\n</USER_REQUEST>', 3, '2026-11-24T12:00:00Z', '', '', 0), \
+                 (?2, '<original_task>', '', '子代理检查通过', 2, '2026-11-24T12:00:01Z', '', ?1, 1), \
+                 (?3, '<original_task>', 'SQLite检索员', '检索完成', 2, '2026-11-24T12:00:01Z', '', ?1, 1), \
+                 (?4, '<original_task>', '', '[Message] timestamp=2026-11-24T12:00:01Z sender=root priority=HIGH content=从子转录恢复委派', 2, '2026-11-24T12:00:01Z', '', ?1, 1)",
+                params![root_id, child_sidecar_id, child_db_id, child_self_delegation_id],
+            )
+            .unwrap();
+        s_conn
+            .execute(
+                "INSERT INTO conversations_fts VALUES (?1, -1, 0, '<USER_REQUEST>')",
+                params![root_id],
+            )
+            .unwrap();
+        drop(s_conn);
+
+        let offline = AntigravityPaths::offline(root.clone());
+        let root_sum = session_summary(&offline, &root_id).unwrap();
+        assert_eq!(root_sum.title, "从预览恢复主标题");
+        assert_eq!(root_sum.status, "idle");
+        let root_detail = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: root_id.clone(),
+                limit: Some(20),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tl = root_detail.timeline.as_ref().unwrap();
+        assert_eq!(tl.len(), 1);
+        assert!(
+            tl[0].title.contains("字面量环境说明"),
+            "Antigravity Rust timeline must preserve literal <environment_context> text"
+        );
+        let subs = root_detail.subagents.as_ref().unwrap();
+        let a_sidecar = subs
+            .agents
+            .iter()
+            .find(|a| a.agent_id.as_deref() == Some(child_sidecar_id.as_str()))
+            .unwrap();
+        assert_eq!(a_sidecar.name, "代码审查员");
+        assert_eq!(
+            a_sidecar.delegation.as_deref(),
+            Some("核验 FFI 与 SQLite 边界")
+        );
+        let a_db = subs
+            .agents
+            .iter()
+            .find(|a| a.agent_id.as_deref() == Some(child_db_id.as_str()))
+            .unwrap();
+        assert_eq!(a_db.name, "SQLite检索员");
+        assert_eq!(a_db.delegation.as_deref(), Some("检索历史会话"));
+        let a_self = subs
+            .agents
+            .iter()
+            .find(|a| a.agent_id.as_deref() == Some(child_self_delegation_id.as_str()))
+            .unwrap();
+        assert_eq!(a_self.name, "从子转录恢复委派");
+        assert_eq!(a_self.delegation.as_deref(), Some("从子转录恢复委派"));
+        let inline_unresolved = root_detail
+            .events
+            .iter()
+            .filter_map(|e| e.subagent.as_ref())
+            .find(|a| a.agent_id.is_none())
+            .unwrap();
+        assert_eq!(inline_unresolved.role.as_deref(), Some("测试验证员"));
+        assert_eq!(inline_unresolved.delegation.as_deref(), Some("跑门禁检查"));
+
+        let sub_drawer = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: root_id.clone(),
+                agent_id: Some(child_sidecar_id),
+                limit: Some(20),
+                before: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            sub_drawer.events.iter().all(|e| e.kind != "user_message"),
+            "subagent drawer starting with SYSTEM_MESSAGE must not synthesize a fake user bubble"
+        );
+        assert_eq!(
+            sub_drawer
+                .agent
+                .as_ref()
+                .and_then(|a| a.delegation.as_deref()),
+            Some("核验 FFI 与 SQLite 边界")
+        );
+
+        let fallback_drawer = session_detail(
+            &offline,
+            &ProviderDetailRequest {
+                session_key: root_id,
+                agent_id: Some(child_self_delegation_id),
+                limit: Some(20),
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fallback_drawer
+                .agent
+                .as_ref()
+                .and_then(|a| a.delegation.as_deref()),
+            Some("从子转录恢复委派")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

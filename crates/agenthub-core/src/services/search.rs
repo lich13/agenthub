@@ -107,6 +107,7 @@ impl SearchUseCases {
                     &needle,
                     summaries,
                     |key| crate::grokbot::load_all_events(paths, key),
+                    false,
                     &mut matches,
                     &mut warnings,
                 )?;
@@ -395,6 +396,7 @@ impl SearchUseCases {
             needle,
             summaries,
             |key| crate::antigravity::sessions::load_all_events(&self.antigravity, key),
+            true,
             output,
             warnings,
         )
@@ -426,11 +428,13 @@ impl SearchUseCases {
             needle,
             summaries,
             |key| crate::dsh::sessions::load_all_events(&self.dsh, key),
+            false,
             output,
             warnings,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn search_provider_events(
         &self,
         _request: &SessionSearchRequest,
@@ -440,6 +444,7 @@ impl SearchUseCases {
             &str,
         )
             -> Result<std::sync::Arc<Vec<crate::provider_sessions::ProviderHistoryEvent>>>,
+        literal_user: bool,
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
@@ -475,7 +480,7 @@ impl SearchUseCases {
                 if output.len() >= MAX_RESULTS {
                     break;
                 }
-                let corpus = provider_event_corpus(event);
+                let corpus = provider_event_corpus(event, literal_user);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     push_result(
                         output,
@@ -517,7 +522,10 @@ fn validate_request(request: &SessionSearchRequest) -> Result<()> {
     Ok(())
 }
 
-fn provider_event_corpus(event: &crate::provider_sessions::ProviderHistoryEvent) -> String {
+fn provider_event_corpus(
+    event: &crate::provider_sessions::ProviderHistoryEvent,
+    literal_user: bool,
+) -> String {
     if matches!(event.kind.as_str(), "compaction" | "branch_summary") {
         let text = event
             .detail
@@ -528,7 +536,11 @@ fn provider_event_corpus(event: &crate::provider_sessions::ProviderHistoryEvent)
     }
     let mut strings = Vec::new();
     if let Some(user) = &event.user_message {
-        strings.push(crate::user_message::searchable_text(&user.text));
+        strings.push(if literal_user {
+            crate::user_message::literal_searchable_text(&user.text)
+        } else {
+            crate::user_message::searchable_text(&user.text)
+        });
         for block in &user.context_blocks {
             if block.kind == crate::user_message::UserContextKind::Instructions {
                 strings.push(block.text.clone());
@@ -540,9 +552,12 @@ fn provider_event_corpus(event: &crate::provider_sessions::ProviderHistoryEvent)
     } else if event.role.as_deref() == Some("user")
         || matches!(event.kind.as_str(), "user_message" | "user_message_chunk")
     {
-        strings.push(crate::user_message::searchable_text(
-            event.text.as_deref().unwrap_or(""),
-        ));
+        let raw = event.text.as_deref().unwrap_or("");
+        strings.push(if literal_user {
+            crate::user_message::literal_searchable_text(raw)
+        } else {
+            crate::user_message::searchable_text(raw)
+        });
     } else {
         if matches!(event.kind.as_str(), "tool_call" | "tool_result") {
             if let Some(tool_name) = event.role.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -988,7 +1003,8 @@ mod tests {
                 .filter_map(|b| b.user_message.as_ref())
                 .find(|m| !m.attachments.is_empty())
                 .unwrap();
-            let compact = codex::thread_detail_from_summary(summary).unwrap();
+            let compact =
+                codex::thread_detail_page_from_summary(summary, true, None, None, None).unwrap();
             assert!(!compact
                 .blocks
                 .iter()
@@ -1095,6 +1111,7 @@ mod tests {
                     reads.set(reads.get() + 1);
                     Ok(events.clone())
                 },
+                false,
                 &mut output,
                 &mut warnings,
             )
@@ -1104,6 +1121,22 @@ mod tests {
         assert_eq!(output[0].position_key, "event-0");
         assert_eq!(output[199].position_key, "event-199");
         assert!(warnings.is_empty());
+
+        let literal_ev: crate::provider_sessions::ProviderHistoryEvent =
+            serde_json::from_value(json!({
+                "id": "ag-u1",
+                "kind": "user_message",
+                "role": "user",
+                "text": "<environment_context>\n字面量检索词\n</environment_context>",
+                "userMessage": {
+                    "id": "ag-u1",
+                    "text": "<environment_context>\n字面量检索词\n</environment_context>",
+                    "attachments": []
+                }
+            }))
+            .unwrap();
+        assert!(provider_event_corpus(&literal_ev, true).contains("字面量检索词"));
+        assert!(!provider_event_corpus(&literal_ev, false).contains("字面量检索词"));
     }
 
     #[test]

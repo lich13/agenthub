@@ -1,5 +1,5 @@
 use agenthub_core::{
-    codex::{thread_detail_from_summary, ThreadStatus, ThreadSummary},
+    codex::{thread_detail_page_from_summary, ThreadStatus, ThreadSummary},
     user_message::{parse_user_message, UserAttachment, UserMessage},
 };
 use serde::Deserialize;
@@ -458,7 +458,7 @@ fn public_codex_reader_keeps_context_only_blocks_and_summarizes_clean_user_text(
         last_event_kind: None,
     };
 
-    let detail = thread_detail_from_summary(summary).unwrap();
+    let detail = thread_detail_page_from_summary(summary, true, None, None, None).unwrap();
 
     let context_only_block = detail
         .blocks

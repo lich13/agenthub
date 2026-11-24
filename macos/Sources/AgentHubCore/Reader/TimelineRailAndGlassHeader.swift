@@ -226,19 +226,6 @@ public struct TimelineRailView: View {
             return nil
         }
     }
-
-    public static func sampleEntries(_ entries: [TimelineEntry], maxCount: Int) -> [TimelineEntry] {
-        guard entries.count > maxCount, maxCount > 1 else { return entries }
-        var out: [TimelineEntry] = []
-        let step = Double(entries.count - 1) / Double(maxCount - 1)
-        for i in 0 ..< maxCount {
-            let idx = min(entries.count - 1, Int((Double(i) * step).rounded()))
-            if out.last?.id != entries[idx].id {
-                out.append(entries[idx])
-            }
-        }
-        return out
-    }
 }
 
 public struct TimelinePreviewCardView: View {
@@ -699,17 +686,6 @@ public final class IMEFieldEditorTextView: NSTextView {
         wasComposingBeforeKeyDown = pre
         defer { wasComposingBeforeKeyDown = false }
         super.keyDown(with: event)
-    }
-
-    /// Simulates the exact macOS IME candidate-commit / cancel sequence where `hasMarkedText()` is `true`
-    /// upon `keyDown` entry, `inputContext` clears marked text while committing the candidate, and then forwards
-    /// `doCommand(by:)` (`insertNewline:` or `cancelOperation:`) during the same keystroke.
-    public func performSimulatedIMECandidateKeyCommand(_ selector: Selector) {
-        let pre = hasMarkedText()
-        wasComposingBeforeKeyDown = pre
-        defer { wasComposingBeforeKeyDown = false }
-        unmarkText()
-        doCommand(by: selector)
     }
 }
 

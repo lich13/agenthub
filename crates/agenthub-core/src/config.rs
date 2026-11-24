@@ -451,10 +451,6 @@ impl Config {
         Ok(config)
     }
 
-    pub fn save_probe_patch(path: &Path, patch: &ProbeConfigFilePatch) -> Result<Self> {
-        Self::save_probe_patch_with_before(path, patch).map(|(_, after)| after)
-    }
-
     pub(crate) fn save_probe_patch_with_before(
         path: &Path,
         patch: &ProbeConfigFilePatch,
@@ -1545,7 +1541,7 @@ mod atomic_write_tests {
                 toml::to_string(&base).unwrap()
             );
             fs::write(&target, &original).unwrap();
-            let saved = Config::save_probe_patch(
+            let (_, saved) = Config::save_probe_patch_with_before(
                 &target,
                 &ProbeConfigFilePatch {
                     probe: Some(ProbeSettingsPatch {
@@ -1584,7 +1580,7 @@ mod atomic_write_tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
         let key = SecretBox::random_key_material();
         write_runtime_env(&root.join("env"), &format!("AGENTHUB_SECRET_KEY={key}\n")).unwrap();
-        let saved = Config::save_probe_patch(
+        let (_, saved) = Config::save_probe_patch_with_before(
             &target,
             &ProbeConfigFilePatch {
                 probe: Some(ProbeSettingsPatch {
@@ -1608,7 +1604,7 @@ mod atomic_write_tests {
             0o600
         );
         let before = fs::metadata(&target).unwrap();
-        Config::save_probe_patch(
+        Config::save_probe_patch_with_before(
             &target,
             &ProbeConfigFilePatch {
                 probe: Some(ProbeSettingsPatch {

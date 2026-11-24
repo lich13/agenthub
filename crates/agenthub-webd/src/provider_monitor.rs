@@ -252,16 +252,28 @@ mod tests {
         .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let scan = crate::api::test_support::write_grok_notification_fixture(
             &grok_root,
             "completion",
             "Recovered fixture",
             jiff::Timestamp::now().as_millisecond() + 1000,
         );
-        db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let path = grok_root
             .join("sessions/workspace")
             .join(&scan.streams[0].id)
@@ -291,8 +303,14 @@ mod tests {
             "sent"
         );
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap(),
             0
         );
         std::fs::remove_dir_all(root).unwrap();
@@ -373,8 +391,14 @@ mod tests {
             .unwrap();
             db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
                 .unwrap();
-            db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                NativeProvider::Claude,
+                &NativeScan::default(),
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             let timestamp =
                 jiff::Timestamp::from_millisecond(jiff::Timestamp::now().as_millisecond() + 1000)
                     .unwrap()
@@ -391,11 +415,12 @@ mod tests {
             .unwrap();
             let scan = native_probe::scan(NativeProvider::Claude).unwrap();
             assert_eq!(
-                db.stage_native_notifications_with_hooks(
+                db.stage_native_notifications_from_config(
                     NativeProvider::Claude,
                     &scan,
-                    &config,
-                    true
+                    &|| Ok(config.clone()),
+                    true,
+                    true,
                 )
                 .unwrap(),
                 1
@@ -442,11 +467,12 @@ mod tests {
                 agenthub_core::evict_idle_detail_caches(Duration::ZERO);
                 let final_scan = native_probe::scan(NativeProvider::Claude).unwrap();
                 assert_eq!(
-                    db.stage_native_notifications_with_hooks(
+                    db.stage_native_notifications_from_config(
                         NativeProvider::Claude,
                         &final_scan,
-                        &config,
-                        true
+                        &|| Ok(config.clone()),
+                        true,
+                        true,
                     )
                     .unwrap(),
                     1
@@ -494,8 +520,14 @@ mod tests {
             agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let scan = NativeScan {
             errors: 0,
             streams: vec![NativeStreamSnapshot {
@@ -518,8 +550,14 @@ mod tests {
             }],
         };
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap(),
             1
         );
         let before =
@@ -549,8 +587,14 @@ mod tests {
         .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let stream = NativeStreamSnapshot {
             provider: NativeProvider::Claude,
             session_key: "fixture-session".into(),
@@ -574,13 +618,25 @@ mod tests {
             errors: 0,
         };
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Claude,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Claude,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap(),
             0
         );
         deliver_pending(&|| Ok(config.clone()), &db, None)
@@ -593,8 +649,14 @@ mod tests {
             events[0].payload["bark"]["reason"],
             "claude_terminal_pending"
         );
-        db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(sandbox_root);
     }
@@ -621,8 +683,14 @@ mod tests {
             .unwrap();
             db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
                 .unwrap();
-            db.stage_native_notifications(provider, &NativeScan::default(), &config)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &NativeScan::default(),
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             let stream = crate::api::test_support::write_grok_notification_fixture(
                 &grok_root,
                 kind,
@@ -631,13 +699,15 @@ mod tests {
             )
             .streams
             .remove(0);
-            db.stage_native_notifications(
+            db.stage_native_notifications_from_config(
                 provider,
                 &NativeScan {
                     streams: vec![stream.clone()],
                     errors: 0,
                 },
-                &config,
+                &|| Ok(config.clone()),
+                false,
+                true,
             )
             .unwrap();
             deliver_pending(&|| Ok(config.clone()), &db, None)
@@ -662,13 +732,15 @@ mod tests {
             assert_eq!(events[0].payload["provider"], provider.as_str());
             assert_eq!(events[0].payload["session_key"], stream.session_key);
             assert_eq!(events[0].payload["bark_status"], "sent");
-            db.stage_native_notifications(
+            db.stage_native_notifications_from_config(
                 provider,
                 &NativeScan {
                     streams: vec![stream.clone()],
                     errors: 0,
                 },
-                &config,
+                &|| Ok(config.clone()),
+                false,
+                true,
             )
             .unwrap();
             deliver_pending(&|| Ok(config.clone()), &db, None)
@@ -698,8 +770,14 @@ mod tests {
         .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let mut stream = crate::api::test_support::write_grok_notification_fixture(
             &grok_root,
             "completion",
@@ -708,13 +786,15 @@ mod tests {
         )
         .streams
         .remove(0);
-        db.stage_native_notifications(
+        db.stage_native_notifications_from_config(
             NativeProvider::Grok,
             &NativeScan {
                 streams: vec![stream.clone()],
                 errors: 0,
             },
-            &config,
+            &|| Ok(config.clone()),
+            false,
+            true,
         )
         .unwrap();
         deliver_pending(&|| Ok(config.clone()), &db, None)
@@ -737,13 +817,15 @@ mod tests {
         stream.settled_count = 3;
         std::sync::Arc::make_mut(&mut stream.events)[0].position = 3;
         std::sync::Arc::make_mut(&mut stream.events)[0].turn_id = "u:b".into();
-        db.stage_native_notifications(
+        db.stage_native_notifications_from_config(
             NativeProvider::Grok,
             &NativeScan {
                 streams: vec![stream],
                 errors: 0,
             },
-            &config,
+            &|| Ok(config.clone()),
+            false,
+            true,
         )
         .unwrap();
         deliver_pending(&|| Ok(config.clone()), &db, None)
@@ -783,9 +865,16 @@ mod tests {
             &claude_config_dir,
         )])
         .await;
-        db.sync_notification_channels(&config).unwrap();
-        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
             .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
 
         let projects = agenthub_core::claude::ClaudePaths::default_for_user()
             .unwrap()
@@ -947,7 +1036,7 @@ mod tests {
         // so nothing is sent again (the Bark fixture accepts two requests only).
         let scan = scan(NativeProvider::Claude).await.unwrap();
         assert_eq!(scan.errors, 0);
-        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, true)
+        db.stage_native_notifications_from_config(NativeProvider::Claude, &scan, &load, true, true)
             .unwrap();
         deliver_pending(&load, &db, None).await.unwrap();
         let events = db.list_probe_events(20).unwrap();

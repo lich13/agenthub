@@ -419,11 +419,19 @@ public enum ConversationRowBuilder {
                         kind: .subagent(sub, supported: subagentsSupported)
                     ))
                 } else if ev.kind == "user_message" {
+                    let userMsg: UserMessageContent?
+                    if providerLabel == "Antigravity" {
+                        var literal = ev.userMessage ?? UserMessageContent(id: ev.id, text: ev.text ?? "")
+                        literal.contextBlocks = []
+                        userMsg = literal
+                    } else {
+                        userMsg = ev.userMessage
+                    }
                     rows.append(ConversationRowItem(
                         id: key,
                         timelineId: ev.id,
                         timelineAliases: sourceIds,
-                        kind: .user(message: ev.userMessage, rawText: ev.text ?? "", attachmentsAsNamesOnly: false)
+                        kind: .user(message: userMsg, rawText: ev.text ?? "", attachmentsAsNamesOnly: false)
                     ))
                 } else if ev.kind == "plan" {
                     let cleaned = VisibleMarkdownEngine.visibleMarkdown(ev.text ?? "")

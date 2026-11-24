@@ -601,6 +601,79 @@ pub fn evict_idle_endpoint_cache(max_idle: Duration) {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct LiveHistoryUnavailable;
+
+impl std::fmt::Display for LiveHistoryUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("原生历史服务不可达或暂无在线内容")
+    }
+}
+
+impl std::error::Error for LiveHistoryUnavailable {}
+
+pub(crate) fn fetch_live_trajectory_steps(rpc: &LiveRpc, id: &str) -> Result<(Value, Vec<Value>)> {
+    let mut resp = connect_rpc_post(
+        rpc.port,
+        &rpc.token,
+        "GetCascadeTrajectory",
+        &json!({"cascadeId": id}),
+    )
+    .map_err(|error| {
+        if service_unreachable(&error) {
+            anyhow::Error::new(LiveHistoryUnavailable)
+        } else {
+            error
+        }
+    })?;
+    if resp.is_object() && resp.get("trajectory").is_none() {
+        return Err(LiveHistoryUnavailable.into());
+    }
+    ensure!(
+        resp["trajectory"]["cascadeId"].as_str() == Some(id),
+        "原生历史身份不匹配"
+    );
+    let mut steps = match resp["trajectory"].get_mut("steps") {
+        Some(value) => value
+            .as_array_mut()
+            .map(std::mem::take)
+            .context("原生历史步骤格式错误")?,
+        None => Vec::new(),
+    };
+    let total = match resp.get("numTotalSteps") {
+        Some(value) => value.as_u64().context("原生历史总数格式错误")? as usize,
+        None => steps.len(),
+    };
+    if steps.is_empty() && total == 0 {
+        return Err(LiveHistoryUnavailable.into());
+    }
+    ensure!(!steps.is_empty(), "原生历史读取不完整，请重试");
+    while steps.len() < total {
+        let mut more = connect_rpc_post(
+            rpc.port,
+            &rpc.token,
+            "GetCascadeTrajectorySteps",
+            &json!({"cascadeId": id, "stepOffset": steps.len()}),
+        )
+        .map_err(|error| {
+            if service_unreachable(&error) {
+                anyhow::Error::new(LiveHistoryUnavailable)
+            } else {
+                error
+            }
+        })?;
+        if let Some(cascade_id) = more.get("cascadeId") {
+            ensure!(cascade_id.as_str() == Some(id), "原生历史身份不匹配");
+        }
+        let batch = more["steps"]
+            .as_array_mut()
+            .context("原生历史分页格式错误")?;
+        ensure!(!batch.is_empty(), "原生历史读取不完整，请重试");
+        steps.append(batch);
+    }
+    Ok((resp, steps))
+}
+
 pub(crate) fn service_unreachable(error: &anyhow::Error) -> bool {
     use std::io::ErrorKind;
     error.downcast_ref::<std::io::Error>().is_some_and(|io| {

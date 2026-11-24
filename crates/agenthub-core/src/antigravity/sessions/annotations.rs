@@ -425,52 +425,203 @@ fn decode_field_varint(field: &WireField<'_>) -> Option<u64> {
     decode_varint(field.payload, &mut p)
 }
 
-fn collect_nested_utf8_texts(bytes: &[u8], depth: usize, out: &mut Vec<String>) {
-    if depth > 5 {
-        return;
+fn decode_clean_utf8(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    if text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return None;
     }
-    let Some(fields) = parse_wire_fields(bytes) else {
-        return;
-    };
-    for f in fields {
-        if f.wire_type != 2 {
-            continue;
-        }
-        if let Ok(text) = std::str::from_utf8(f.payload) {
-            let trimmed = text.trim();
-            if trimmed.len() >= 2
-                && !trimmed
-                    .chars()
-                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-                && uuid::Uuid::parse_str(trimmed).is_err()
-            {
-                out.push(trimmed.to_owned());
-                continue;
-            }
-        }
-        collect_nested_utf8_texts(f.payload, depth + 1, out);
-    }
+    (!text.trim().is_empty()).then(|| text.to_owned())
 }
 
-pub(crate) fn extract_step_payload_field_strings(blob: &[u8], field_number: u64) -> Vec<String> {
+/// Decodes `CortexStepUserInput` (`step_payload` field 19) from offline `.db` steps:
+/// prefers `f19.f2` (`user_response`), falling back to `f19.f1.f1` (`items[].text`),
+/// and never reads `f19.f3` (expanded workflow prompts) or `f19.f12` (prompt section names).
+pub(crate) fn extract_db_user_input_text(blob: &[u8]) -> Option<String> {
+    let top_fields = parse_wire_fields(blob)?;
+    let mut user_response: Option<String> = None;
+    let mut item_texts: Vec<String> = Vec::new();
+    for field in top_fields {
+        if field.number != 19 || field.wire_type != 2 {
+            continue;
+        }
+        let Some(subfields) = parse_wire_fields(field.payload) else {
+            continue;
+        };
+        for sub in subfields {
+            if sub.wire_type != 2 {
+                continue;
+            }
+            match sub.number {
+                2 => {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        user_response = Some(s);
+                    }
+                }
+                1 => {
+                    if let Some(item_fields) = parse_wire_fields(sub.payload) {
+                        for item_f in item_fields {
+                            if item_f.number == 1 && item_f.wire_type == 2 {
+                                if let Some(s) = decode_clean_utf8(item_f.payload) {
+                                    item_texts.push(s);
+                                }
+                            }
+                        }
+                    } else if let Some(s) = decode_clean_utf8(sub.payload) {
+                        item_texts.push(s);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(raw) = user_response {
+        let cleaned = super::prompt::extract_antigravity_user_request(&raw);
+        if !cleaned.trim().is_empty() {
+            return Some(cleaned);
+        }
+    }
+    if !item_texts.is_empty() {
+        let cleaned = super::prompt::extract_antigravity_user_request(&item_texts.join(""));
+        if !cleaned.trim().is_empty() {
+            return Some(cleaned);
+        }
+    }
+    None
+}
+
+/// Decodes `CortexStepPlannerResponse` (`step_payload` field 20) from offline `.db` steps:
+/// returns `(reply, thinking)` where `reply` prefers `f20.f8` (`modified_response`) over `f20.f1` (`response`),
+/// and `thinking` reads `f20.f3`, excluding tool call payloads.
+pub(crate) fn extract_db_planner_texts(blob: &[u8]) -> (Option<String>, Option<String>) {
     let Some(top_fields) = parse_wire_fields(blob) else {
+        return (None, None);
+    };
+    let mut response: Option<String> = None;
+    let mut modified_response: Option<String> = None;
+    let mut thinking: Option<String> = None;
+    for field in top_fields {
+        if field.number != 20 || field.wire_type != 2 {
+            continue;
+        }
+        let Some(subfields) = parse_wire_fields(field.payload) else {
+            continue;
+        };
+        for sub in subfields {
+            if sub.wire_type != 2 {
+                continue;
+            }
+            match sub.number {
+                1 => {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        response = Some(s.trim().to_owned());
+                    }
+                }
+                3 => {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        thinking = Some(s.trim().to_owned());
+                    }
+                }
+                8 => {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        modified_response = Some(s.trim().to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (modified_response.or(response), thinking)
+}
+
+/// Decodes `CortexStepErrorMessage` (`step_payload` field 24) from offline `.db` steps:
+/// reads `f24.f3.f2` (user-facing short error) with fallback to `f24.f3.f1` (or direct `f24.f1`),
+/// excluding `f24.f3.f3` internal stack traces.
+pub(crate) fn extract_db_error_text(blob: &[u8]) -> Option<String> {
+    let top_fields = parse_wire_fields(blob)?;
+    let mut user_error: Option<String> = None;
+    let mut fallback_error: Option<String> = None;
+    let mut direct_error: Option<String> = None;
+    for field in top_fields {
+        if field.number != 24 || field.wire_type != 2 {
+            continue;
+        }
+        let Some(subfields) = parse_wire_fields(field.payload) else {
+            continue;
+        };
+        for sub in subfields {
+            if sub.wire_type != 2 {
+                continue;
+            }
+            match sub.number {
+                3 => {
+                    if let Some(err_fields) = parse_wire_fields(sub.payload) {
+                        for ef in err_fields {
+                            if ef.wire_type != 2 {
+                                continue;
+                            }
+                            match ef.number {
+                                2 => {
+                                    if let Some(s) = decode_clean_utf8(ef.payload) {
+                                        user_error = Some(s.trim().to_owned());
+                                    }
+                                }
+                                1 => {
+                                    if let Some(s) = decode_clean_utf8(ef.payload) {
+                                        fallback_error = Some(s.trim().to_owned());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if let Some(s) = decode_clean_utf8(sub.payload) {
+                        fallback_error = Some(s.trim().to_owned());
+                    }
+                }
+                1 | 2 => {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        direct_error = Some(s.trim().to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    user_error.or(fallback_error).or(direct_error)
+}
+
+fn extract_waiting_prompt_texts(bytes: &[u8]) -> Vec<String> {
+    if let Some(direct) = decode_clean_utf8(bytes) {
+        return vec![direct.trim().to_owned()];
+    }
+    let Some(fields) = parse_wire_fields(bytes) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for field in top_fields {
-        if field.number == field_number && field.wire_type == 2 {
-            if let Ok(text) = std::str::from_utf8(field.payload) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty()
-                    && !trimmed
-                        .chars()
-                        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-                {
-                    out.push(trimmed.to_owned());
-                    continue;
+    for f in fields {
+        if f.wire_type != 2 || !matches!(f.number, 1 | 2) {
+            continue;
+        }
+        if let Some(s) = decode_clean_utf8(f.payload) {
+            let t = s.trim();
+            if uuid::Uuid::parse_str(t).is_err() {
+                out.push(t.to_owned());
+            }
+            continue;
+        }
+        if let Some(subfields) = parse_wire_fields(f.payload) {
+            for sub in subfields {
+                if sub.wire_type == 2 && matches!(sub.number, 1 | 2) {
+                    if let Some(s) = decode_clean_utf8(sub.payload) {
+                        let t = s.trim();
+                        if uuid::Uuid::parse_str(t).is_err() {
+                            out.push(t.to_owned());
+                        }
+                    }
                 }
             }
-            collect_nested_utf8_texts(field.payload, 0, &mut out);
         }
     }
     out
@@ -551,8 +702,7 @@ fn parse_waiting_step(raw: &[u8]) -> Option<ParsedWaitingStep> {
     }
     let proof_hash = hex::encode(Sha256::digest(step_payload));
     if let Some(ask) = ask_payload {
-        let mut texts = Vec::new();
-        collect_nested_utf8_texts(ask, 0, &mut texts);
+        let texts = extract_waiting_prompt_texts(ask);
         let body = if texts.is_empty() {
             "需要回复，请打开 Antigravity 处理。".into()
         } else {
@@ -574,8 +724,7 @@ fn parse_waiting_step(raw: &[u8]) -> Option<ParsedWaitingStep> {
         });
     }
     if let Some(req) = req_payload {
-        let mut texts = Vec::new();
-        collect_nested_utf8_texts(req, 0, &mut texts);
+        let texts = extract_waiting_prompt_texts(req);
         let looks_like_question = texts.iter().any(|t| t.contains('?') || t.contains('？'));
         let (kind, body) = if looks_like_question {
             ("reply_needed", texts.join("\n"))

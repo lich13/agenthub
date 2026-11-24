@@ -114,7 +114,10 @@ public enum TimelineViewModel {
             seen.insert(identity)
 
             let rawText = source.userMessage?.text ?? source.text ?? ""
-            let segments = UserContextEngine.userMessageSegments(rawText, contextBlocks: source.userMessage?.contextBlocks)
+            let contextBlocks: [UserContextBlock]? = provider == .antigravity
+                ? []
+                : source.userMessage?.contextBlocks
+            let segments = UserContextEngine.userMessageSegments(rawText, contextBlocks: contextBlocks)
             let extracted = segments.compactMap { seg -> String? in
                 switch seg {
                 case let .text(_, t): t
@@ -191,20 +194,11 @@ public struct ThreadMessageSlot: Equatable, Sendable {
 public final class ThreadMessageStore: ObservableObject {
     public static let optimisticRenameTTLSeconds: TimeInterval = 120.0
 
-    @Published public private(set) var activeThreadId: String?
     @Published public private(set) var revision: UInt64 = 0
     private var slots: [String: ThreadMessageSlot] = [:]
     private var optimisticTitles: [String: (title: String, expiresAt: Date)] = [:]
 
     public init() {}
-
-    public func setActive(_ threadId: String?) {
-        activeThreadId = threadId
-        if let threadId, slots[threadId] == nil {
-            slots[threadId] = ThreadMessageSlot()
-        }
-        revision &+= 1
-    }
 
     public func slot(for threadId: String) -> ThreadMessageSlot {
         if let existing = slots[threadId] { return existing }
@@ -308,7 +302,7 @@ public final class ThreadMessageStore: ObservableObject {
         if blocksChanged { slot.bottomFollowRevision += 1 }
 
         slots[threadId] = slot
-        if activeThreadId == threadId && changed {
+        if changed {
             revision &+= 1
         }
         return slot
@@ -342,7 +336,7 @@ public final class ThreadMessageStore: ObservableObject {
         slot.loadError = nil
         if changed { slot.visibleUpdateRevision += 1 }
         slots[threadId] = slot
-        if activeThreadId == threadId { revision &+= 1 }
+        if changed { revision &+= 1 }
         return slot
     }
 
@@ -351,13 +345,12 @@ public final class ThreadMessageStore: ObservableObject {
         slot.showAllHistory = expanded
         slot.visibleUpdateRevision += 1
         slots[threadId] = slot
-        if activeThreadId == threadId { revision &+= 1 }
+        revision &+= 1
     }
 
     public func clear(threadId: String) {
         slots.removeValue(forKey: threadId)
         optimisticTitles.removeValue(forKey: threadId)
-        if activeThreadId == threadId { activeThreadId = nil }
         revision &+= 1
     }
 

@@ -10,8 +10,11 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase {
     func testPorted_threadMessageStore() throws {
         try runAsyncParityCheck {
             let store = ThreadMessageStore()
-            store.setActive("th-1")
-            XCTAssertEqual(store.activeThreadId, "th-1")
+            XCTAssertTrue(store.slot(for: "th-1").blocks.isEmpty)
+            store.setHistoryExpanded(threadId: "th-1", expanded: true)
+            XCTAssertTrue(store.slot(for: "th-1").showAllHistory)
+            store.setHistoryExpanded(threadId: "th-1", expanded: false)
+            XCTAssertFalse(store.slot(for: "th-1").showAllHistory)
 
             let baseNow = Date(timeIntervalSince1970: 1_700_000_000)
             store.recordOptimisticTitle(threadId: "th-1", title: "Optimistic Name", now: baseNow)

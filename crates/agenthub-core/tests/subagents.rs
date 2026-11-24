@@ -4,7 +4,7 @@ use agenthub_core::codex::{
         enrich_subagent_blocks, read_subagent_detail, SubagentActivity, SubagentDetailRequest,
         SubagentDetailResponse, SubagentEventKind, SubagentStatus,
     },
-    thread_detail, window_thread_detail, CodexPaths, ThreadDetail, ThreadStatus,
+    thread_detail_page, CodexPaths, ThreadDetail, ThreadStatus,
 };
 use agenthub_core::{
     platform::{PlatformKind, PlatformPaths},
@@ -139,7 +139,9 @@ impl NativeFixture {
     }
 
     fn root_detail(&self) -> ThreadDetail {
-        thread_detail(&self.paths, ROOT).unwrap().unwrap()
+        thread_detail_page(&self.paths, ROOT, None, None, None)
+            .unwrap()
+            .unwrap()
     }
 
     fn read(&self, id: &str) -> anyhow::Result<SubagentDetailResponse> {
@@ -315,7 +317,17 @@ fn lifecycle_cards(detail: &ThreadDetail) -> Vec<&SubagentActivity> {
 }
 
 fn enriched_root(fixture: &NativeFixture) -> ThreadDetail {
-    let mut detail = fixture.root_detail();
+    enriched_root_page(fixture, None, None)
+}
+
+fn enriched_root_page(
+    fixture: &NativeFixture,
+    limit: Option<usize>,
+    before: Option<&str>,
+) -> ThreadDetail {
+    let mut detail = thread_detail_page(&fixture.paths, ROOT, limit, before, None)
+        .unwrap()
+        .unwrap();
     enrich_subagent_blocks(&fixture.paths, &mut detail);
     detail
 }
@@ -990,7 +1002,9 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
     let hidden = hidden_and_archived_thread_ids(&fixture.paths).unwrap().0;
     assert!(hidden.contains(CHILD));
     assert!(hidden.contains("grandchild"));
-    assert!(thread_detail(&fixture.paths, CHILD).unwrap().is_none());
+    assert!(thread_detail_page(&fixture.paths, CHILD, None, None, None)
+        .unwrap()
+        .is_none());
     assert!(fixture.read(CHILD).is_ok());
     assert!(
         agenthub_core::codex::notification_thread_header(&fixture.paths, ROOT)
@@ -1258,7 +1272,7 @@ fn older_spawn_status_updates_survive_latest_page_without_reintroducing_blocks()
         &[event("task_started", "review-turn")],
     );
     let before = fixture.snapshot();
-    let mut detail = fixture.root_detail();
+    let detail = fixture.root_detail();
     let spawn_id = detail
         .blocks
         .iter()
@@ -1266,8 +1280,7 @@ fn older_spawn_status_updates_survive_latest_page_without_reintroducing_blocks()
         .unwrap()
         .id
         .clone();
-    enrich_subagent_blocks(&fixture.paths, &mut detail);
-    let running = window_thread_detail(detail, Some(2), None);
+    let running = enriched_root_page(&fixture, Some(2), None);
     assert_eq!(running.blocks.len(), 2);
     assert!(running.has_more_blocks);
     assert!(running.blocks.iter().all(|block| block.id != spawn_id));
@@ -1288,9 +1301,7 @@ fn older_spawn_status_updates_survive_latest_page_without_reintroducing_blocks()
     writeln!(file, "{}", event("task_complete", "review-turn")).unwrap();
     drop(file);
     let after_completion = fixture.snapshot();
-    let mut detail = fixture.root_detail();
-    enrich_subagent_blocks(&fixture.paths, &mut detail);
-    let completed = window_thread_detail(detail, Some(2), None);
+    let completed = enriched_root_page(&fixture, Some(2), None);
 
     assert_eq!(
         completed
@@ -1828,7 +1839,7 @@ fn direct_collection_and_counts_survive_pages_without_any_activity_blocks() {
     let expected_collection = serde_json::to_value(detail.subagents.as_ref().unwrap()).unwrap();
     assert_counts(&detail, [0, 1, 1, 0, 0, 0]);
 
-    let latest = window_thread_detail(detail.clone(), Some(2), None);
+    let latest = enriched_root_page(&fixture, Some(2), None);
     assert_eq!(latest.blocks.len(), 2);
     assert!(latest.has_more_blocks);
     assert!(cards(&latest).is_empty());
@@ -1837,13 +1848,13 @@ fn direct_collection_and_counts_survive_pages_without_any_activity_blocks() {
         expected_collection
     );
     assert_counts(&latest, [0, 1, 1, 0, 0, 0]);
-    let older = window_thread_detail(detail.clone(), Some(2), latest.before_cursor.as_deref());
+    let older = enriched_root_page(&fixture, Some(2), latest.before_cursor.as_deref());
     assert!(cards(&older).is_empty());
     assert_eq!(
         serde_json::to_value(older.subagents.as_ref().unwrap()).unwrap(),
         expected_collection
     );
-    let first = window_thread_detail(detail, Some(2), Some("b:2"));
+    let first = enriched_root_page(&fixture, Some(2), Some("b:2"));
     assert_eq!(lifecycle_cards(&first).len(), 2);
     assert!(!first.has_more_blocks);
     assert_eq!(
@@ -2226,7 +2237,7 @@ fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
     // Corrupt/truncated compressed streams fail instead of returning a plausible prefix.
     let file = fs::OpenOptions::new().write(true).open(compressed).unwrap();
     file.set_len(file.metadata().unwrap().len() - 8).unwrap();
-    assert!(thread_detail(&fixture.paths, ROOT).is_err());
+    assert!(thread_detail_page(&fixture.paths, ROOT, None, None, None).is_err());
 }
 
 #[test]

@@ -20,6 +20,11 @@ public struct CrossProviderSessionItem: Equatable, Sendable, Identifiable {
     }
 }
 
+extension CrossProviderSessionItem: ProjectWorkspaceGroupableItem {
+    public var workspaceGroupItemId: String { compositeKey }
+    public var workspaceSummaryItem: UnifiedSessionSummaryItem { item }
+}
+
 public struct CrossProviderBatchPlan: Equatable, Sendable {
     public var operation: SessionOperation
     public var previewsByProvider: [(provider: SessionProvider, preview: SessionBatchPreview)]
@@ -95,65 +100,36 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     public var filteredActiveItems: [CrossProviderSessionItem] {
-        guard workspaceFilter != .all else { return activeItems }
-        return activeItems.filter {
-            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.item.cwd, workspaceRoot: $0.item.workspaceRoot)
-        }
+        ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter)
     }
 
     public var filteredArchivedItems: [CrossProviderSessionItem] {
-        guard workspaceFilter != .all else { return archivedItems }
-        return archivedItems.filter {
-            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.item.cwd, workspaceRoot: $0.item.workspaceRoot)
-        }
+        ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
     }
 
     public var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: filteredActiveItems,
-            idOf: \.compositeKey,
-            cwdOf: \.item.cwd,
-            workspaceRootOf: \.item.workspaceRoot,
-            updatedAtOf: \.item.updatedAt,
-            statusOf: { ProjectWorkspaceEngine.itemPriorityStatus($0.item) }
-        )
+        ProjectWorkspaceEngine.buildGroups(items: filteredActiveItems)
     }
 
     public var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: filteredArchivedItems,
-            idOf: \.compositeKey,
-            cwdOf: \.item.cwd,
-            workspaceRootOf: \.item.workspaceRoot,
-            updatedAtOf: \.item.updatedAt,
-            statusOf: { ProjectWorkspaceEngine.itemPriorityStatus($0.item) }
-        )
+        ProjectWorkspaceEngine.buildGroups(items: filteredArchivedItems)
     }
 
     public var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(
-            items: activeItems + (archivedOpen ? archivedItems : []),
-            idOf: \.compositeKey,
-            cwdOf: \.item.cwd,
-            workspaceRootOf: \.item.workspaceRoot,
-            updatedAtOf: \.item.updatedAt,
-            statusOf: { ProjectWorkspaceEngine.itemPriorityStatus($0.item) }
-        )
+        ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
     }
 
     public var visualOrderedActiveKeys: [String] {
         ProjectWorkspaceEngine.visualOrderedKeys(
             groups: activeWorkspaceGroups,
-            collapsedKeys: collapsedWorkspaceKeys,
-            idOf: \.compositeKey
+            collapsedKeys: collapsedWorkspaceKeys
         )
     }
 
     public var visualOrderedArchivedKeys: [String] {
         ProjectWorkspaceEngine.visualOrderedKeys(
             groups: archivedWorkspaceGroups,
-            collapsedKeys: collapsedArchivedWorkspaceKeys,
-            idOf: \.compositeKey
+            collapsedKeys: collapsedArchivedWorkspaceKeys
         )
     }
 

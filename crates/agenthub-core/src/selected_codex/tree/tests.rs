@@ -383,12 +383,20 @@ fn archive_and_restore_still_require_a_matching_preview() {
     let p = super::super::preview_archives(&f.paths, &[ROOT.into()], true)
         .remove(0)
         .unwrap();
-    assert!(super::super::execute_archive(&f.paths, ROOT, true, "stale").is_err());
-    super::super::execute_archive(&f.paths, ROOT, true, &p.fingerprint).unwrap();
+    assert!(
+        super::super::execute_archives(&f.paths, &[(ROOT, "stale")], true)
+            .remove(0)
+            .is_err()
+    );
+    super::super::execute_archives(&f.paths, &[(ROOT, &p.fingerprint)], true)
+        .remove(0)
+        .unwrap();
     let p = super::super::preview_archives(&f.paths, &[ROOT.into()], false)
         .remove(0)
         .unwrap();
-    super::super::execute_archive(&f.paths, ROOT, false, &p.fingerprint).unwrap();
+    super::super::execute_archives(&f.paths, &[(ROOT, &p.fingerprint)], false)
+        .remove(0)
+        .unwrap();
 }
 
 #[test]

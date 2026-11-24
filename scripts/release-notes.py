@@ -8,6 +8,21 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.35": {
+        "summary": [
+            "根治 Antigravity 系统提示词与元数据占位泄漏，仅展示用户输入与纯净委派任务，并完成全仓存量包袱深度清理"
+        ],
+        "fixes": [
+            "参考 Orca 在 Antigravity 摄取层统一剥离 <USER_REQUEST>、<ADDITIONAL_METADATA>、<USER_SETTINGS_CHANGE>、<SYSTEM_MESSAGE> 及截断占位；用户回合仅展示用户输入正文与附件（不生成额外「上下文」占位卡片，Codex 与 Claude Code 的「上下文」折叠保持不变），并跳过纯模型／设置变更空回合。",
+            "修复 Antigravity 离线 SQLite .db 递归盲扫导致的系统提示词章节占位名（f19.f12）、展开工作流（f19.f3）、思考链（f20.f3）与内部堆栈（f24.f3.f3）混入对话及 Bark 摘要问题，改为精确 Protobuf 子字段解码；在线 Connect-RPC 优先读取 userInput.userResponse 原文并移除 32 页硬截断。",
+            "修复未索引转录会话标题显示字面量 <USER_REQUEST>、history.jsonl 误过滤带参斜杠指令标题，以及子智能体漏读 subagentDescriptor.role／agent_name 与 /boost <original_task> 委派包装未提纯问题。",
+            "清理零生产调用旧全量读取与过渡包装 API、合并 6 处重复有界 JSONL 行读取器与重复工作区归并／归档逻辑、拍平线程分页二次切片，并将 macOS 界面残余字符伪图标与 SwiftUI.Menu 统一替换为矢量图标与原生锚定菜单。",
+        ],
+        "migration": [
+            "API 协议 2、数据库 schema 3。沿用已有配置、凭据与会话数据，先升级 Linux 服务再升级 Mac App；自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 v2.1.30。",
+            "早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.34": {
         "summary": [
             "新增跨平台「工作区」总览与 Git Worktree 线程归并，打通 agy CLI 全功能及双端 Bark 推送，修复全平台运行态与子代理防漏并完成架构深度精简"

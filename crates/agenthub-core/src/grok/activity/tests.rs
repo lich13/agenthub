@@ -56,19 +56,15 @@ fn status_needs_live_native_owner_and_unfinished_primary_turn() {
     f.events(&f.start());
     let active = f.snapshot(Some(live()));
     assert_eq!(active.status(&f.1), "running");
-    assert!(active.ensure_not_open(&f.1).is_err());
-    assert!(active.ensure_deletable(&f.1).is_ok());
+    assert_eq!(active.ownership(&f.1), Ownership::Open);
     assert_eq!(f.snapshot(None).status(&f.1), "unknown");
     for end in [END, "{\"type\":\"turn_ended\",\"outcome\":\"cancelled\"}\n"] {
         f.events(&(f.start() + end));
         assert_eq!(active.status(&f.1), "recent");
-        // An idle but open native session must still block deletion.
-        assert!(active.ensure_not_open(&f.1).is_err());
-        assert!(active.ensure_deletable(&f.1).is_ok());
+        assert_eq!(active.ownership(&f.1), Ownership::Open);
         let exited = f.snapshot(None);
         assert_eq!(exited.status(&f.1), "recent");
-        assert!(exited.ensure_not_open(&f.1).is_ok());
-        assert!(exited.ensure_deletable(&f.1).is_ok());
+        assert_eq!(exited.ownership(&f.1), Ownership::Inactive);
     }
     f.events(&(f.start() + END + &f.start()));
     assert_eq!(active.status(&f.1), "running");
@@ -106,17 +102,15 @@ fn process_identity_start_time_and_permissions_gate_ownership() {
     ] {
         let snapshot = f.snapshot(Some(process));
         assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
-        assert!(snapshot.ensure_deletable(&f.1).is_ok());
     }
     let mut snapshot = f.snapshot(Some(live()));
     snapshot.processes = None;
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
-    assert!(snapshot.ensure_deletable(&f.1).is_ok());
     snapshot = f.snapshot(Some(live()));
     snapshot.registrations.as_mut().unwrap()[0].cwd = Some("/different-workspace".into());
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
     snapshot.registrations = None;
-    assert!(snapshot.ensure_not_open(&f.1).is_err());
+    assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
 }
 
 #[test]
@@ -125,15 +119,16 @@ fn valid_running_activity_without_a_native_owner_is_deletable_while_status_stays
     f.events(&f.start());
     let exited = f.snapshot(None);
 
-    assert_eq!(exited.status(&f.1), "unknown");
+    let mut summary = f.1.clone();
+    exited.update_summary(&mut summary);
+    assert_eq!(summary.status, "unknown");
     assert_eq!(
-        exited.deletion_eligibility(&f.1),
-        GrokDeletionEligibility {
+        summary.deletion_eligibility,
+        Some(GrokDeletionEligibility {
             allowed: true,
             reason: None,
-        }
+        })
     );
-    assert!(exited.ensure_deletable(&f.1).is_ok());
 }
 
 #[test]
@@ -231,7 +226,7 @@ fn list_and_detail_share_exited_registration_result_without_changing_native_file
         "recent"
     );
     assert_eq!(
-        super::super::grok_session_detail(&f.0, &f.1.id, None)
+        super::super::grok_session_page(&f.0, &f.1.id, None, None, None, None)
             .unwrap()
             .summary
             .status,

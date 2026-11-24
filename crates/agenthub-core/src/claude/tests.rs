@@ -834,8 +834,14 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     .unwrap();
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(
-        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
-            .unwrap(),
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap(),
         0
     );
     let mut user = f.row("next", Some("a1"), "user", json!("Next request"));
@@ -852,8 +858,14 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     f.append(&final_row);
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(
-        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
-            .unwrap(),
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap(),
         1
     );
     let pending = db.pending_native_deliveries(10, None).unwrap();
@@ -868,8 +880,14 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     )
     .unwrap();
     assert_eq!(
-        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
-            .unwrap(),
+        db.stage_native_notifications_from_config(
+            NativeProvider::Claude,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap(),
         0
     );
     assert!(db.pending_native_deliveries(10, None).unwrap().is_empty());
@@ -885,11 +903,12 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
         .any(|e| e.kind == "failure"));
     config.probe.notifications.notify_claude = false;
     assert_eq!(
-        db.stage_native_notifications_with_hooks(
+        db.stage_native_notifications_from_config(
             NativeProvider::Claude,
             &NativeScan::default(),
-            &config,
-            false
+            &|| Ok(config.clone()),
+            false,
+            true,
         )
         .unwrap(),
         0

@@ -165,6 +165,63 @@ fn is_subagent_coordination_tool(name: &str) -> bool {
     )
 }
 
+fn extract_live_user_parts(step: &Value) -> Vec<Value> {
+    let mut parts = Vec::new();
+    if let Some(raw) = step["userInput"]["userResponse"]
+        .as_str()
+        .or_else(|| step["userInput"]["query"].as_str())
+    {
+        let cleaned = super::prompt::extract_antigravity_user_request(raw);
+        if !cleaned.trim().is_empty() {
+            parts.push(json!({"type": "text", "text": cleaned}));
+        }
+    }
+    if parts.is_empty() {
+        if let Some(items) = step["userInput"]["items"].as_array() {
+            let mut item_texts = Vec::new();
+            for item in items {
+                if let Some(text) = extract_user_input_item_text(item) {
+                    item_texts.push(text);
+                }
+            }
+            if !item_texts.is_empty() {
+                let cleaned = super::prompt::extract_antigravity_user_request(&item_texts.join(""));
+                if !cleaned.trim().is_empty() {
+                    parts.push(json!({"type": "text", "text": cleaned}));
+                }
+            }
+        }
+    }
+    if let Some(comments) = step["userInput"]["artifactComments"].as_array() {
+        let rendered = comments
+            .iter()
+            .filter_map(format_artifact_comment)
+            .collect::<Vec<_>>();
+        if !rendered.is_empty() {
+            let prefix = if parts.is_empty() { "" } else { "\n" };
+            parts.push(json!({
+                "type": "text",
+                "text": format!("{prefix}{}", rendered.join("\n"))
+            }));
+        }
+    }
+    if let Some(media) = step["userInput"]["media"].as_array() {
+        for item in media {
+            if let Some(uri) = item["uri"].as_str().or_else(|| item["inlineData"].as_str()) {
+                let path = decode_file_uri(uri);
+                parts.push(json!({"type": "text", "text": format!("<image path=\"{path}\">")}));
+                parts.push(json!({
+                    "type": "image",
+                    "url": path,
+                    "mimeType": item["mimeType"].as_str().unwrap_or("image/png")
+                }));
+                parts.push(json!({"type": "text", "text": "</image>"}));
+            }
+        }
+    }
+    parts
+}
+
 pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEvent> {
     let mut has_later_planner = vec![false; steps.len()];
     let mut has_later_settled_step = vec![false; steps.len()];
@@ -182,7 +239,10 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
         has_later_settled_step[idx] = seen_settled_after;
         let step_type = step["type"].as_str().unwrap_or("");
         let step_status = map_cortex_status(step["status"].as_str().unwrap_or(""));
+        let is_empty_user_step =
+            step_type == "CORTEX_STEP_TYPE_USER_INPUT" && extract_live_user_parts(step).is_empty();
         if step_status != "running"
+            && !is_empty_user_step
             && !matches!(
                 step_type,
                 "CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE"
@@ -211,7 +271,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
             }
         }
         match step_type {
-            "CORTEX_STEP_TYPE_USER_INPUT" => seen_planner_in_turn = false,
+            "CORTEX_STEP_TYPE_USER_INPUT" if !is_empty_user_step => seen_planner_in_turn = false,
             "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
                 has_later_planner[idx] = seen_planner_in_turn;
                 seen_planner_in_turn = true;
@@ -241,60 +301,15 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
 
         match step_type {
             "CORTEX_STEP_TYPE_USER_INPUT" => {
-                let mut parts = Vec::new();
-                if let Some(items) = step["userInput"]["items"].as_array() {
-                    for item in items {
-                        if let Some(text) = extract_user_input_item_text(item) {
-                            parts.push(json!({"type": "text", "text": text}));
-                        }
-                    }
-                }
-                if parts.is_empty() {
-                    if let Some(text) = step["userInput"]["userResponse"]
-                        .as_str()
-                        .or_else(|| step["userInput"]["query"].as_str())
-                        .filter(|t| !t.trim().is_empty())
-                    {
-                        parts.push(json!({"type": "text", "text": text}));
-                    }
-                }
-                if let Some(comments) = step["userInput"]["artifactComments"].as_array() {
-                    let rendered = comments
-                        .iter()
-                        .filter_map(format_artifact_comment)
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        let prefix = if parts.is_empty() { "" } else { "\n" };
-                        parts.push(json!({
-                            "type": "text",
-                            "text": format!("{prefix}{}", rendered.join("\n"))
-                        }));
-                    }
-                }
-                if let Some(media) = step["userInput"]["media"].as_array() {
-                    for item in media {
-                        if let Some(uri) =
-                            item["uri"].as_str().or_else(|| item["inlineData"].as_str())
-                        {
-                            let path = decode_file_uri(uri);
-                            parts.push(
-                                json!({"type": "text", "text": format!("<image path=\"{path}\">")}),
-                            );
-                            parts.push(json!({
-                                "type": "image",
-                                "url": path,
-                                "mimeType": item["mimeType"].as_str().unwrap_or("image/png")
-                            }));
-                            parts.push(json!({"type": "text", "text": "</image>"}));
-                        }
-                    }
-                }
+                let parts = extract_live_user_parts(step);
                 if parts.is_empty() {
                     continue;
                 }
                 let event_id = format!("step-{index}-user");
-                let user_msg =
-                    crate::user_message::parse_user_message(&event_id, &Value::Array(parts));
+                let user_msg = crate::user_message::parse_literal_user_message(
+                    &event_id,
+                    &Value::Array(parts),
+                );
                 if user_msg.text.trim().is_empty() && user_msg.attachments.is_empty() {
                     continue;
                 }
@@ -581,23 +596,11 @@ pub(super) fn read_offline_transcript_events(
     if let Some(path) = chosen {
         let file = fs::File::open(&path)?;
         let mut reader = BufReader::new(file);
-        let mut line = Vec::new();
         let mut rows = Vec::new();
-        loop {
-            line.clear();
-            let read = (&mut reader)
-                .take(TRANSCRIPT_LINE_LIMIT as u64 + 1)
-                .read_until(b'\n', &mut line)?;
-            if read == 0 {
-                break;
-            }
-            if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-                rows.push(row);
-            }
-        }
+        super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+            rows.push(row);
+            std::ops::ControlFlow::Continue(())
+        })?;
 
         let row_count = rows.len();
         let mut has_later_planner = vec![false; row_count];
@@ -607,19 +610,23 @@ pub(super) fn read_offline_transcript_events(
         for (pos, row) in rows.iter().enumerate().rev() {
             has_later_settled_row[pos] = seen_settled_after;
             let st = row["type"].as_str().unwrap_or("");
-            let src = row["source"].as_str().unwrap_or("");
             let sr = row["status"].as_str().unwrap_or("DONE");
+            let is_user = super::prompt::is_transcript_user_row(row);
+            let has_user_payload = is_user && super::prompt::transcript_row_has_user_payload(row);
             if !matches!(
                 sr,
                 "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
             ) && !matches!(
                 st,
                 "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "SYSTEM_MESSAGE" | ""
-            ) {
+            ) && (!is_user || has_user_payload)
+            {
                 seen_settled_after = true;
             }
-            if st == "USER_INPUT" || src == "USER_EXPLICIT" {
-                seen_planner_in_turn = false;
+            if is_user {
+                if has_user_payload {
+                    seen_planner_in_turn = false;
+                }
             } else if st == "PLANNER_RESPONSE" {
                 has_later_planner[pos] = seen_planner_in_turn;
                 seen_planner_in_turn = true;
@@ -630,7 +637,14 @@ pub(super) fn read_offline_transcript_events(
         let mut turn_seq = 0usize;
         let mut pending_calls: VecDeque<(String, String, usize)> = VecDeque::new();
         for (idx, row) in rows.into_iter().enumerate() {
-            let step_index = row["step_index"].as_u64().unwrap_or(idx as u64);
+            let step_index = row["step_index"]
+                .as_u64()
+                .or_else(|| {
+                    row["step_index"]
+                        .as_str()
+                        .and_then(|s| s.parse::<u64>().ok())
+                })
+                .unwrap_or(idx as u64);
             let step_type = row["type"].as_str().unwrap_or("");
             let source = row["source"].as_str().unwrap_or("");
             let timestamp = row["created_at"].as_str().map(str::to_owned);
@@ -650,11 +664,12 @@ pub(super) fn read_offline_transcript_events(
                 }
             };
 
-            if step_type == "USER_INPUT" || source == "USER_EXPLICIT" {
-                let text = row["content"].as_str().unwrap_or("");
+            if super::prompt::is_transcript_user_row(&row) {
+                let raw_text = row["content"].as_str().unwrap_or("");
+                let cleaned_text = super::prompt::extract_antigravity_user_request(raw_text);
                 let mut parts = Vec::new();
-                if !text.trim().is_empty() {
-                    parts.push(json!({"type": "text", "text": text}));
+                if !cleaned_text.trim().is_empty() {
+                    parts.push(json!({"type": "text", "text": cleaned_text}));
                 }
                 if let Some(media) = row["media"].as_array() {
                     for item in media {
@@ -683,8 +698,10 @@ pub(super) fn read_offline_transcript_events(
                 }
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 let event_id = format!("transcript-{step_index}-user");
-                let user_msg =
-                    crate::user_message::parse_user_message(&event_id, &Value::Array(parts));
+                let user_msg = crate::user_message::parse_literal_user_message(
+                    &event_id,
+                    &Value::Array(parts),
+                );
                 let mut ev = make_history_event(
                     event_id,
                     timestamp,
@@ -907,64 +924,83 @@ pub(super) fn read_offline_transcript_events(
                     ))
                 }) {
                     let mut events = Vec::new();
+                    let mut turn_seq = 0usize;
                     for (idx, step_type, blob) in rows.flatten() {
-                        let target_field = match step_type {
-                            14 => Some(19),
-                            15 => Some(20),
-                            17 => Some(24),
-                            _ => None,
-                        };
-                        let Some(field_no) = target_field else {
-                            continue;
-                        };
-                        let mut strings =
-                            super::annotations::extract_step_payload_field_strings(&blob, field_no);
-                        if strings.is_empty() {
-                            strings = extract_protobuf_utf8_strings(&blob);
-                        }
-                        let joined = strings.join("\n").trim().to_owned();
-                        if joined.is_empty() {
-                            continue;
-                        }
-                        if step_type == 14 {
-                            let event_id = format!("db-{idx}-user");
-                            let user_msg = crate::user_message::parse_user_message(
-                                &event_id,
-                                &Value::String(joined.clone()),
-                            );
-                            let mut ev = make_history_event(
-                                event_id,
-                                None,
-                                "user_message",
-                                "user",
-                                Some(user_msg.text.clone()),
-                                None,
-                                Some("completed"),
-                            );
-                            ev.user_message = Some(user_msg);
-                            events.push(ev);
-                        } else if step_type == 15 {
-                            events.push(make_history_event(
-                                format!("db-{idx}-assistant"),
-                                None,
-                                "assistant_message",
-                                "assistant",
-                                Some(joined),
-                                None,
-                                Some("completed"),
-                            ));
-                        } else if step_type == 17 {
-                            events.push(make_tool_event(
-                                format!("db-{idx}-error"),
-                                None,
-                                "tool_call",
-                                "error_message",
-                                None,
-                                None,
-                                Some("failed"),
-                                None,
-                                Some(joined),
-                            ));
+                        match step_type {
+                            14 => {
+                                let Some(cleaned) =
+                                    super::annotations::extract_db_user_input_text(&blob)
+                                        .filter(|s| !s.trim().is_empty())
+                                else {
+                                    continue;
+                                };
+                                turn_seq = turn_seq.saturating_add(1);
+                                let event_id = format!("db-{idx}-user");
+                                let user_msg = crate::user_message::parse_literal_user_message(
+                                    &event_id,
+                                    &Value::String(cleaned),
+                                );
+                                let mut ev = make_history_event(
+                                    event_id,
+                                    None,
+                                    "user_message",
+                                    "user",
+                                    Some(user_msg.text.clone()),
+                                    Some(format!("turn-{turn_seq}")),
+                                    Some("completed"),
+                                );
+                                ev.user_message = Some(user_msg);
+                                events.push(ev);
+                            }
+                            15 => {
+                                let turn_id = (turn_seq > 0).then(|| format!("turn-{turn_seq}"));
+                                let (reply, thinking) =
+                                    super::annotations::extract_db_planner_texts(&blob);
+                                if let Some(thinking_text) =
+                                    thinking.filter(|s| !s.trim().is_empty())
+                                {
+                                    events.push(make_history_event(
+                                        format!("db-{idx}-thinking"),
+                                        None,
+                                        "thinking",
+                                        "assistant",
+                                        Some(thinking_text),
+                                        turn_id.clone(),
+                                        Some("completed"),
+                                    ));
+                                }
+                                if let Some(reply_text) = reply.filter(|s| !s.trim().is_empty()) {
+                                    events.push(make_history_event(
+                                        format!("db-{idx}-assistant"),
+                                        None,
+                                        "assistant_message",
+                                        "assistant",
+                                        Some(reply_text),
+                                        turn_id,
+                                        Some("completed"),
+                                    ));
+                                }
+                            }
+                            17 => {
+                                let Some(err_text) =
+                                    super::annotations::extract_db_error_text(&blob)
+                                        .filter(|s| !s.trim().is_empty())
+                                else {
+                                    continue;
+                                };
+                                events.push(make_tool_event(
+                                    format!("db-{idx}-error"),
+                                    None,
+                                    "tool_call",
+                                    "error_message",
+                                    None,
+                                    (turn_seq > 0).then(|| format!("turn-{turn_seq}")),
+                                    Some("failed"),
+                                    None,
+                                    Some(err_text),
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                     return Ok(events);
@@ -974,84 +1010,6 @@ pub(super) fn read_offline_transcript_events(
     }
 
     Ok(Vec::new())
-}
-
-fn extract_protobuf_utf8_strings(bytes: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_proto_strings(bytes, 0, &mut out);
-    out
-}
-
-fn read_varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
-    let mut result = 0u64;
-    let mut shift = 0u32;
-    while *pos < bytes.len() && shift < 64 {
-        let b = bytes[*pos];
-        *pos += 1;
-        result |= ((b & 0x7f) as u64) << shift;
-        if b & 0x80 == 0 {
-            return Some(result);
-        }
-        shift += 7;
-    }
-    None
-}
-
-fn collect_proto_strings(bytes: &[u8], depth: usize, out: &mut Vec<String>) {
-    if depth > 4 {
-        return;
-    }
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        let Some(tag) = read_varint(bytes, &mut pos) else {
-            return;
-        };
-        let wire = tag & 0x07;
-        match wire {
-            0 => {
-                if read_varint(bytes, &mut pos).is_none() {
-                    return;
-                }
-            }
-            1 => {
-                if pos + 8 > bytes.len() {
-                    return;
-                }
-                pos += 8;
-            }
-            5 => {
-                if pos + 4 > bytes.len() {
-                    return;
-                }
-                pos += 4;
-            }
-            2 => {
-                let Some(len) = read_varint(bytes, &mut pos) else {
-                    return;
-                };
-                let len = len as usize;
-                if pos + len > bytes.len() {
-                    return;
-                }
-                let slice = &bytes[pos..pos + len];
-                pos += len;
-                if let Ok(text) = std::str::from_utf8(slice) {
-                    let trimmed = text.trim();
-                    if trimmed.len() >= 2
-                        && !trimmed
-                            .chars()
-                            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-                        && uuid::Uuid::parse_str(trimmed).is_err()
-                    {
-                        out.push(trimmed.to_owned());
-                        continue;
-                    }
-                }
-                collect_proto_strings(slice, depth + 1, out);
-            }
-            _ => return,
-        }
-    }
 }
 
 pub fn load_all_events(
@@ -1069,74 +1027,8 @@ pub fn load_all_events(
         .clone())
 }
 
-#[derive(Debug)]
-struct LiveHistoryUnavailable;
-impl std::fmt::Display for LiveHistoryUnavailable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("原生历史服务不可达或暂无在线内容")
-    }
-}
-impl std::error::Error for LiveHistoryUnavailable {}
-
 fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
-    let mut resp = connect_rpc_post(
-        rpc.port,
-        &rpc.token,
-        "GetCascadeTrajectory",
-        &json!({"cascadeId": id}),
-    )
-    .map_err(|error| {
-        if service_unreachable(&error) {
-            anyhow::Error::new(LiveHistoryUnavailable)
-        } else {
-            error
-        }
-    })?;
-    if resp.is_object() && resp.get("trajectory").is_none() {
-        return Err(LiveHistoryUnavailable.into());
-    }
-    ensure!(
-        resp["trajectory"]["cascadeId"].as_str() == Some(id),
-        "原生历史身份不匹配"
-    );
-    let mut steps = match resp["trajectory"].get_mut("steps") {
-        Some(value) => value
-            .as_array_mut()
-            .map(std::mem::take)
-            .context("原生历史步骤格式错误")?,
-        None => Vec::new(),
-    };
-    let total = match resp.get("numTotalSteps") {
-        Some(value) => value.as_u64().context("原生历史总数格式错误")? as usize,
-        None => steps.len(),
-    };
-    if steps.is_empty() && total == 0 {
-        return Err(LiveHistoryUnavailable.into());
-    }
-    ensure!(!steps.is_empty(), "原生历史读取不完整，请重试");
-    while steps.len() < total {
-        let mut more = connect_rpc_post(
-            rpc.port,
-            &rpc.token,
-            "GetCascadeTrajectorySteps",
-            &json!({"cascadeId": id, "stepOffset": steps.len()}),
-        )
-        .map_err(|error| {
-            if service_unreachable(&error) {
-                anyhow::Error::new(LiveHistoryUnavailable)
-            } else {
-                error
-            }
-        })?;
-        if let Some(cascade_id) = more.get("cascadeId") {
-            ensure!(cascade_id.as_str() == Some(id), "原生历史身份不匹配");
-        }
-        let batch = more["steps"]
-            .as_array_mut()
-            .context("原生历史分页格式错误")?;
-        ensure!(!batch.is_empty(), "原生历史读取不完整，请重试");
-        steps.append(batch);
-    }
+    let (_, steps) = fetch_live_trajectory_steps(rpc, id)?;
     let events = extract_live_step_events(id, &steps);
     if events.is_empty() {
         return Err(LiveHistoryUnavailable.into());
@@ -1164,7 +1056,7 @@ pub(crate) fn load_events_from_source(
             &paths.brain_dir().join(id).join("live-history"),
             revision,
             history_weight,
-            || read_live_events(rpc, id).map(ProviderHistorySnapshot::new),
+            || read_live_events(rpc, id).map(ProviderHistorySnapshot::new_literal),
         );
         match events {
             Ok(events) => return Ok(events),
@@ -1183,7 +1075,7 @@ pub(crate) fn load_events_from_source(
             db.with_extension("db-wal"),
         ],
         history_weight,
-        || read_offline_transcript_events(paths, id).map(ProviderHistorySnapshot::new),
+        || read_offline_transcript_events(paths, id).map(ProviderHistorySnapshot::new_literal),
     )
 }
 

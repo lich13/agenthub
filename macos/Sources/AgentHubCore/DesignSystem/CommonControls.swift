@@ -468,11 +468,6 @@ public final class ModalPresentationRegistry {
         }
         return false
     }
-
-    public func resetForTesting() {
-        activeTokens.removeAll()
-        activeContainers.removeAll()
-    }
 }
 
 public struct ModalScopePresenceView: NSViewRepresentable {

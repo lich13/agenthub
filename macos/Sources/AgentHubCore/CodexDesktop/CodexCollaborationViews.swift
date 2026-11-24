@@ -1352,11 +1352,15 @@ public struct DesktopRequestsListView: View {
                     if fileOpen { openDiffFiles.remove(fileKey) }
                     else { openDiffFiles.insert(fileKey) }
                 } label: {
-                    Text("\(fileOpen ? "▾" : "▸") \(file.path) · \(file.kind)\(file.truncated ? " · 已截断" : "")")
-                        .font(DesignFonts.mono(11))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 6) {
+                        LucideIcon(fileOpen ? .chevronDown : .chevronRight, size: 14)
+                            .foregroundStyle(palette.textSecondary.color)
+                        Text("\(file.path) · \(file.kind)\(file.truncated ? " · 已截断" : "")")
+                            .font(DesignFonts.mono(11))
+                            .foregroundStyle(palette.textSecondary.color)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainHitButtonStyle())
 
@@ -1385,11 +1389,15 @@ public struct DesktopRequestsListView: View {
                     if extraOpen { openExtraKeys.remove(reqKey) }
                     else { openExtraKeys.insert(reqKey) }
                 } label: {
-                    Text("\(extraOpen ? "▾" : "▸") 其他请求信息")
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textSecondary.color)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 6) {
+                        LucideIcon(extraOpen ? .chevronDown : .chevronRight, size: 14)
+                            .foregroundStyle(palette.textSecondary.color)
+                        Text("其他请求信息")
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle(palette.textSecondary.color)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainHitButtonStyle())
                 if extraOpen {

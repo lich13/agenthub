@@ -17,18 +17,29 @@ pub(crate) struct ProviderHistorySnapshot {
 
 impl ProviderHistorySnapshot {
     pub fn new(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
-        let timeline = crate::history_navigation::timeline(
-            events
-                .iter()
-                .filter(|event| event.kind == "user_message")
-                .map(|event| {
-                    (
-                        event.id.as_str(),
-                        event.user_message.as_ref(),
-                        event.text.as_deref(),
-                    )
-                }),
-        );
+        Self::build(events, false)
+    }
+
+    pub fn new_literal(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
+        Self::build(events, true)
+    }
+
+    fn build(events: Vec<ProviderHistoryEvent>, literal_user: bool) -> Arc<Self> {
+        let iter = events
+            .iter()
+            .filter(|event| event.kind == "user_message")
+            .map(|event| {
+                (
+                    event.id.as_str(),
+                    event.user_message.as_ref(),
+                    event.text.as_deref(),
+                )
+            });
+        let timeline = if literal_user {
+            crate::history_navigation::literal_timeline(iter)
+        } else {
+            crate::history_navigation::timeline(iter)
+        };
         // Calculate once per parsed snapshot, never on a cache hit or page read.
         let mut digest = DefaultHasher::new();
         events.hash(&mut digest);

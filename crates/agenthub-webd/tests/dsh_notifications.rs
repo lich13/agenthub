@@ -118,9 +118,16 @@ impl Fixture {
             .unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.sync_notification_channels(&config).unwrap();
-        db.stage_native_notifications(NativeProvider::Dsh, &NativeScan::default(), &config)
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
             .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Dsh,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         Self {
             root,
             paths,
@@ -155,7 +162,13 @@ impl Fixture {
         let scan = notifications::scan(&self.paths).unwrap();
         assert_eq!(scan.errors, 0);
         self.db
-            .stage_native_notifications(NativeProvider::Dsh, &scan, &self.config)
+            .stage_native_notifications_from_config(
+                NativeProvider::Dsh,
+                &scan,
+                &|| Ok(self.config.clone()),
+                false,
+                true,
+            )
             .unwrap();
     }
     fn monitor(&self) -> Monitor {

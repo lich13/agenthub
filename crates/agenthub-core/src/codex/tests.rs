@@ -1,7 +1,7 @@
 use super::{
     hidden_and_archived_thread_ids, is_request_user_input, list_threads, parse_message_event,
     resolve_codex_paths_with_options, rollout_request_user_input_state, scan_rollout,
-    set_thread_title, thread_detail, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
+    set_thread_title, thread_detail_page, CodexPathDiscoveryOptions, CodexPaths,
     RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
@@ -1552,7 +1552,8 @@ fn list_threads_hides_db_rows_with_missing_rollout_path() {
     write_thread_db(&root, "dangling-thread", &missing_rollout, 1, 0);
 
     let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
-    let detail = thread_detail(&CodexPaths::new(&root), "dangling-thread").unwrap();
+    let detail =
+        thread_detail_page(&CodexPaths::new(&root), "dangling-thread", None, None, None).unwrap();
 
     assert!(!rows.iter().any(|thread| thread.id == "dangling-thread"));
     assert!(detail.is_none());
@@ -1580,9 +1581,15 @@ fn list_threads_keeps_rows_after_native_compression() {
         compressed_row.rollout_path,
         Some(crate::codex::rollout_file::compressed_path(&rollout))
     );
-    assert!(thread_detail(&CodexPaths::new(&root), "compressed-thread")
-        .unwrap()
-        .is_some());
+    assert!(thread_detail_page(
+        &CodexPaths::new(&root),
+        "compressed-thread",
+        None,
+        None,
+        None
+    )
+    .unwrap()
+    .is_some());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1640,7 +1647,7 @@ fn list_threads_does_not_discover_rollout_path_from_sessions_tree() {
     assert!(row.rollout_path.is_none());
     assert_ne!(row.status, ThreadStatus::Running);
 
-    let detail = thread_detail(&CodexPaths::new(&root), "special-thread")
+    let detail = thread_detail_page(&CodexPaths::new(&root), "special-thread", None, None, None)
         .unwrap()
         .unwrap();
     assert!(detail.summary.rollout_path.is_none());
@@ -1823,9 +1830,15 @@ fn db_first_user_message_titles_list_and_detail_when_db_title_is_unusable() {
         row.title,
         "请把本地线程标题恢复为首条用户消息摘要，并验证详情页。"
     );
-    let detail = thread_detail(&CodexPaths::new(&root), "first-user-thread")
-        .unwrap()
-        .unwrap();
+    let detail = thread_detail_page(
+        &CodexPaths::new(&root),
+        "first-user-thread",
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         detail.summary.title,
         "请把本地线程标题恢复为首条用户消息摘要，并验证详情页。"
@@ -2203,9 +2216,11 @@ fn archived_thread_is_hidden_from_default_and_all_lists_but_visible_in_archived_
 
     assert!(default_rows.iter().all(|row| row.id != "archived-thread"));
     assert!(archived_rows.iter().any(|row| row.id == "archived-thread"));
-    assert!(thread_detail(&CodexPaths::new(&root), "archived-thread")
-        .unwrap()
-        .is_some());
+    assert!(
+        thread_detail_page(&CodexPaths::new(&root), "archived-thread", None, None, None)
+            .unwrap()
+            .is_some()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2571,9 +2586,10 @@ fn thread_detail_preserves_call_position_with_parallel_and_pending_tools() {
         order,
         vec!["before", "first", "second", "between", "pending", "after"]
     );
-    let latest = window_thread_detail(detail.clone(), Some(3), None);
+    let paged = ThreadDetailPageFixture::new(&events);
+    let latest = paged.read(true, Some(3), None);
     assert_eq!(latest.blocks.len(), 3);
-    let earlier = window_thread_detail(detail, Some(3), latest.before_cursor.as_deref());
+    let earlier = paged.read(true, Some(3), latest.before_cursor.as_deref());
     assert_eq!(earlier.blocks[1].call_id.as_deref(), Some("first"));
     assert!(!earlier.has_more_blocks);
 }
@@ -2609,11 +2625,11 @@ fn thread_detail_collapses_old_chat_history_but_keeps_recent_and_running_blocks(
 }
 
 #[test]
-fn window_thread_detail_returns_latest_window_with_cursor() {
+fn thread_detail_page_returns_latest_window_with_cursor() {
     let events = (0..6)
         .map(|index| json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}))
         .collect::<Vec<_>>();
-    let window = window_thread_detail(detail_fixture(&events), Some(2), None);
+    let window = ThreadDetailPageFixture::new(&events).read(true, Some(2), None);
 
     assert_eq!(window.total_blocks, 6);
     assert!(window.has_more_blocks);
@@ -2625,11 +2641,11 @@ fn window_thread_detail_returns_latest_window_with_cursor() {
 }
 
 #[test]
-fn window_thread_detail_uses_before_cursor_for_older_window() {
+fn thread_detail_page_uses_before_cursor_for_older_window() {
     let events = (0..6)
         .map(|index| json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}))
         .collect::<Vec<_>>();
-    let window = window_thread_detail(detail_fixture(&events), Some(2), Some("b:4"));
+    let window = ThreadDetailPageFixture::new(&events).read(true, Some(2), Some("b:4"));
 
     assert_eq!(window.total_blocks, 6);
     assert!(window.has_more_blocks);
@@ -2640,11 +2656,11 @@ fn window_thread_detail_uses_before_cursor_for_older_window() {
 }
 
 #[test]
-fn window_thread_detail_returns_empty_at_start_cursor() {
+fn thread_detail_page_returns_empty_at_start_cursor() {
     let events = (0..3)
         .map(|index| json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}))
         .collect::<Vec<_>>();
-    let window = window_thread_detail(detail_fixture(&events), Some(2), Some("b:0"));
+    let window = ThreadDetailPageFixture::new(&events).read(true, Some(2), Some("b:0"));
 
     assert_eq!(window.total_blocks, 3);
     assert!(!window.has_more_blocks);
@@ -2654,11 +2670,11 @@ fn window_thread_detail_returns_empty_at_start_cursor() {
 }
 
 #[test]
-fn window_thread_detail_ignores_invalid_before_cursor() {
+fn thread_detail_page_ignores_invalid_before_cursor() {
     let events = (0..5)
         .map(|index| json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":format!("message-{index}")}]}}))
         .collect::<Vec<_>>();
-    let window = window_thread_detail(detail_fixture(&events), Some(2), Some("not-a-cursor"));
+    let window = ThreadDetailPageFixture::new(&events).read(true, Some(2), Some("not-a-cursor"));
 
     assert_eq!(window.total_blocks, 5);
     assert!(window.has_more_blocks);
@@ -3469,7 +3485,7 @@ fn detail_fixture(events: &[serde_json::Value]) -> super::ThreadDetail {
     )
     .unwrap();
 
-    let detail = thread_detail(&CodexPaths::new(&root), "test-thread")
+    let detail = thread_detail_page(&CodexPaths::new(&root), "test-thread", None, None, None)
         .unwrap()
         .unwrap();
     let _ = fs::remove_dir_all(root);

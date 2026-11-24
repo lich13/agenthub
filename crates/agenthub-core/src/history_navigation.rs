@@ -27,9 +27,26 @@ pub fn timeline<'a>(
         ),
     >,
 ) -> Timeline {
-    update_timeline(
+    update_timeline_inner(
         &[],
         messages.map(|(id, message, raw)| (id, message, raw, false)),
+        false,
+    )
+}
+
+pub fn literal_timeline<'a>(
+    messages: impl Iterator<
+        Item = (
+            &'a str,
+            Option<&'a crate::user_message::UserMessage>,
+            Option<&'a str>,
+        ),
+    >,
+) -> Timeline {
+    update_timeline_inner(
+        &[],
+        messages.map(|(id, message, raw)| (id, message, raw, false)),
+        true,
     )
 }
 
@@ -43,6 +60,21 @@ pub fn update_timeline<'a>(
             bool,
         ),
     >,
+) -> Timeline {
+    update_timeline_inner(previous, messages, false)
+}
+
+fn update_timeline_inner<'a>(
+    previous: &[TimelineEntry],
+    messages: impl Iterator<
+        Item = (
+            &'a str,
+            Option<&'a crate::user_message::UserMessage>,
+            Option<&'a str>,
+            bool,
+        ),
+    >,
+    literal_user: bool,
 ) -> Timeline {
     let previous: HashMap<_, _> = previous
         .iter()
@@ -59,9 +91,12 @@ pub fn update_timeline<'a>(
                 if unchanged {
                     return previous.get(id).map(|entry| (*entry).clone());
                 }
-                let text = crate::user_message::summary_text(
-                    message.map_or(raw.unwrap_or_default(), |message| &message.text),
-                );
+                let raw_or_msg = message.map_or(raw.unwrap_or_default(), |message| &message.text);
+                let text = if literal_user {
+                    crate::user_message::literal_summary_text(raw_or_msg)
+                } else {
+                    crate::user_message::summary_text(raw_or_msg)
+                };
                 let text = crate::services::search::strip_memory_metadata(&text);
                 let text: String = text
                     .split_whitespace()

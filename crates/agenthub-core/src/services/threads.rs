@@ -87,7 +87,7 @@ pub fn plan_thread_detail_request(
     let full = request.full.unwrap_or(false);
     Ok(ThreadDetailPlan {
         thread_id,
-        block_limit: detail_block_limit(request.limit, Some(full)),
+        block_limit: (!full).then(|| clamp_block_limit(request.limit)),
         before: request.before,
     })
 }
@@ -102,36 +102,14 @@ pub fn plan_thread_blocks_request(
         platform,
         ThreadDetailRequest {
             id: id.to_string(),
-            limit: Some(block_page_limit(limit)),
+            limit: Some(clamp_block_limit(limit)),
             full: Some(false),
             before,
         },
     )
 }
 
-pub fn window_thread_detail_for_plan(
-    detail: ThreadDetail,
-    plan: &ThreadDetailPlan,
-) -> ThreadDetail {
-    crate::codex::window_thread_detail(detail, plan.block_limit, plan.before.as_deref())
-}
-
-pub fn thread_blocks_page_for_plan(
-    detail: ThreadDetail,
-    plan: &ThreadDetailPlan,
-) -> ThreadBlocksPage {
-    let window = window_thread_detail_for_plan(detail, plan);
-    ThreadBlocksPage {
-        history: window.history,
-        thread_id: plan.thread_id.clone(),
-        blocks: window.blocks,
-        total_blocks: window.total_blocks,
-        has_more_blocks: window.has_more_blocks,
-        before_cursor: window.before_cursor,
-    }
-}
-
-pub fn load_thread_detail_for_plan(
+pub fn read_window_thread_detail(
     paths: &crate::codex::CodexPaths,
     plan: &ThreadDetailPlan,
 ) -> anyhow::Result<Option<ThreadDetail>> {
@@ -149,31 +127,23 @@ pub fn load_thread_detail_for_plan(
     Ok(Some(detail))
 }
 
-pub fn read_window_thread_detail(
-    paths: &crate::codex::CodexPaths,
-    plan: &ThreadDetailPlan,
-) -> anyhow::Result<Option<ThreadDetail>> {
-    Ok(load_thread_detail_for_plan(paths, plan)?
-        .map(|detail| window_thread_detail_for_plan(detail, plan)))
-}
-
 pub fn read_thread_blocks_page(
     paths: &crate::codex::CodexPaths,
     plan: &ThreadDetailPlan,
 ) -> anyhow::Result<Option<ThreadBlocksPage>> {
-    Ok(load_thread_detail_for_plan(paths, plan)?
-        .map(|detail| thread_blocks_page_for_plan(detail, plan)))
+    Ok(
+        read_window_thread_detail(paths, plan)?.map(|detail| ThreadBlocksPage {
+            history: detail.history,
+            thread_id: plan.thread_id.clone(),
+            blocks: detail.blocks,
+            total_blocks: detail.total_blocks,
+            has_more_blocks: detail.has_more_blocks,
+            before_cursor: detail.before_cursor,
+        }),
+    )
 }
 
-pub fn normalize_thread_detail_block_limit(limit: Option<usize>, full: bool) -> Option<usize> {
-    if full {
-        None
-    } else {
-        Some(normalize_thread_block_limit(limit))
-    }
-}
-
-pub fn normalize_thread_block_limit(limit: Option<usize>) -> usize {
+fn clamp_block_limit(limit: Option<usize>) -> usize {
     limit
         .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
         .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
@@ -189,14 +159,6 @@ fn required_thread_id(value: &str) -> anyhow::Result<String> {
         anyhow::bail!("thread_id is required");
     }
     Ok(trimmed.to_string())
-}
-
-fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
-}
-
-fn block_page_limit(limit: Option<usize>) -> usize {
-    normalize_thread_block_limit(limit)
 }
 
 #[cfg(test)]

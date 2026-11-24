@@ -43,31 +43,6 @@ impl PanelDb {
 
     /// Queue events and advance cursors together. First enable baselines every
     /// existing stream; new streams also ignore records older than activation.
-    pub fn stage_native_notifications(
-        &self,
-        provider: NativeProvider,
-        scan: &NativeScan,
-        config: &Config,
-    ) -> Result<usize> {
-        self.stage_native_notifications_with_hooks(provider, scan, config, false)
-    }
-
-    pub fn stage_native_notifications_with_hooks(
-        &self,
-        provider: NativeProvider,
-        scan: &NativeScan,
-        config: &Config,
-        local_claude_hooks: bool,
-    ) -> Result<usize> {
-        self.stage_native_notifications_from_config(
-            provider,
-            scan,
-            &|| Ok(config.clone()),
-            local_claude_hooks,
-            true,
-        )
-    }
-
     /// Read configuration under the same transaction used by settings saves.
     pub fn stage_native_notifications_from_config(
         &self,
@@ -646,7 +621,8 @@ mod tests {
         let mut before = config();
         before.probe.enabled = true;
         before.probe.error_monitor.enabled = true;
-        db.sync_notification_channels(&before).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(before.clone()))
+            .unwrap();
         for key in ["codex:queued", "test:queued"] {
             assert!(db
                 .stage_notification_delivery(
@@ -845,8 +821,14 @@ mod tests {
                 1
             );
             assert_eq!(
-                db.stage_native_notifications(provider, &other, &enabled)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &other,
+                    &|| Ok(enabled.clone()),
+                    false,
+                    true,
+                )
+                .unwrap(),
                 0
             );
             let disabled = save(false);
@@ -933,11 +915,23 @@ mod tests {
         )
         .unwrap();
         let config = config();
-        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let current = scan("fixture", 3, jiff::Timestamp::now().as_millisecond() + 1000);
-        db.stage_native_notifications(NativeProvider::Grok, &current, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &current,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let pending = db.pending_native_deliveries(100, None).unwrap();
         assert!(db
             .skip_unclaimed_native_delivery(&pending[0].event_key)
@@ -950,7 +944,8 @@ mod tests {
         assert!(!db
             .skip_unclaimed_native_delivery(&pending[1].event_key)
             .unwrap());
-        db.sync_notification_channels(&config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
+            .unwrap();
         db.stage_notification_delivery(
             super::super::NotificationChannel::Bark,
             &format!("native:{}", pending[2].event_key),
@@ -972,12 +967,24 @@ mod tests {
         )
         .unwrap();
         let config = config();
-        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &NativeScan::default(),
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let scan = scan("target", 1, jiff::Timestamp::now().as_millisecond() + 1000);
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         {
@@ -1055,9 +1062,16 @@ mod tests {
         .unwrap();
         let config = config();
         let scan = scan("fixture-idle", 1, jiff::Timestamp::now().as_millisecond());
-        db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
             .unwrap();
-        db.sync_notification_channels(&config).unwrap();
         db.conn
             .lock()
             .unwrap()
@@ -1068,8 +1082,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         db.conn
@@ -1085,7 +1105,8 @@ mod tests {
                 },
             ))
             .unwrap();
-        db.sync_notification_channels(&config).unwrap();
+        db.sync_notification_channels_from_config(&|| Ok(config.clone()))
+            .unwrap();
         assert!(db.due_notification_deliveries(10).unwrap().is_empty());
     }
 
@@ -1103,8 +1124,14 @@ mod tests {
         let mut scan = scan("fixture-ag", 5, old_ms);
         scan.streams[0].provider = NativeProvider::Antigravity;
         std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
-        db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Antigravity,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         db.conn
             .lock()
             .unwrap()
@@ -1119,8 +1146,14 @@ mod tests {
             timestamp_ms: old_ms,
         });
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Antigravity,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         let delivery = db.pending_native_deliveries(1, None).unwrap().remove(0);
@@ -1148,16 +1181,28 @@ mod tests {
             .unwrap();
         db.maintain_notification_history_if_due(7).unwrap();
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Antigravity,
+                &scan,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM native_probe_deliveries WHERE status='unknown' AND ciphertext IS NULL AND nonce IS NULL", [], |row| row.get::<_,usize>(0)).unwrap(), 1);
         scan.streams[0].record_count = 6;
         scan.streams[0].settled_count = 6;
         std::sync::Arc::make_mut(&mut scan.streams[0].events).clear();
-        db.stage_native_notifications(NativeProvider::Antigravity, &scan, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Antigravity,
+            &scan,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         db.conn
             .lock()
             .unwrap()
@@ -1190,8 +1235,14 @@ mod tests {
         let mut old = scan("fixture", 1, now);
         old.streams[0].provider = NativeProvider::Claude;
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Claude, &old, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Claude,
+                &old,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         old.streams[0].record_count = 2;
@@ -1206,8 +1257,14 @@ mod tests {
         }]
         .into();
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Claude, &old, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Claude,
+                &old,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         let delivery = db
@@ -1253,8 +1310,14 @@ mod tests {
         let cutoff = (PanelDb::now() + 1) * 1000;
         let mut old = scan("old", 3, cutoff - 100);
         old.streams[0].provider = NativeProvider::GrokBot;
-        db.stage_native_notifications(NativeProvider::GrokBot, &old, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::GrokBot,
+            &old,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             conn.execute(
@@ -1272,8 +1335,14 @@ mod tests {
         resumed.streams[0].provider = NativeProvider::GrokBot;
         std::sync::Arc::make_mut(&mut resumed.streams[0].events)[5].timestamp_ms = cutoff + 1;
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::GrokBot, &resumed, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::GrokBot,
+                &resumed,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
@@ -1285,8 +1354,14 @@ mod tests {
         );
         let mut empty = scan("later", 0, cutoff + 100);
         empty.streams[0].provider = NativeProvider::GrokBot;
-        db.stage_native_notifications(NativeProvider::GrokBot, &empty, &config)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::GrokBot,
+            &empty,
+            &|| Ok(config.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         db.conn
             .lock()
             .unwrap()
@@ -1300,13 +1375,25 @@ mod tests {
         let mut message = scan("later", 1, cutoff + 200);
         message.streams[0].provider = NativeProvider::GrokBot;
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::GrokBot, &message, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::GrokBot,
+                &message,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::GrokBot, &message, &config)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::GrokBot,
+                &message,
+                &|| Ok(config.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
@@ -1358,13 +1445,25 @@ mod tests {
         let c = config();
         let now = jiff::Timestamp::now().as_millisecond() + 1000;
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan("a", 1, now),
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan("a", 2, now),
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         let d = db
@@ -1382,14 +1481,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan("a", 2, now),
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan("b", 1, now), &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan("b", 1, now),
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         let other = db
@@ -1431,8 +1542,14 @@ mod tests {
             streams: vec![],
             errors: 0,
         };
-        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &empty,
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let changes = {
             let conn = db.conn.lock().unwrap();
             conn.execute("UPDATE native_probe_providers SET scanned_at=1", [])
@@ -1441,8 +1558,14 @@ mod tests {
                 .unwrap()
         };
         for _ in 0..3 {
-            db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &empty,
+                &|| Ok(c.clone()),
+                false,
+                true,
+            )
+            .unwrap();
         }
         assert_eq!(
             db.conn
@@ -1453,8 +1576,14 @@ mod tests {
             changes
         );
         empty.errors = 1;
-        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &empty,
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         assert_eq!(
             db.conn
                 .lock()
@@ -1464,15 +1593,27 @@ mod tests {
             changes + 1
         );
         c.probe.notifications.notify_grok = true;
-        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &empty,
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         db.conn
             .lock()
             .unwrap()
             .execute("UPDATE native_probe_providers SET scanned_at=1", [])
             .unwrap();
-        db.stage_native_notifications(NativeProvider::Grok, &empty, &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &empty,
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         let scanned: i64 = db
             .conn
             .lock()
@@ -1493,24 +1634,54 @@ mod tests {
         .unwrap();
         let mut c = config();
         let now = jiff::Timestamp::now().as_millisecond() + 1000;
-        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &scan("a", 1, now),
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         c.probe.notifications.notify_grok = false;
-        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &scan("a", 2, now),
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         c.probe.notifications.notify_grok = true;
-        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 3, now), &c)
-            .unwrap();
+        db.stage_native_notifications_from_config(
+            NativeProvider::Grok,
+            &scan("a", 3, now),
+            &|| Ok(c.clone()),
+            false,
+            true,
+        )
+        .unwrap();
         assert!(db.pending_native_deliveries(100, None).unwrap().is_empty());
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 4, now), &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &scan("a", 4, now),
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         let old = scan("imported", 20, now - 86_400_000);
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Grok, &old, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                NativeProvider::Grok,
+                &old,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
     }
@@ -1571,21 +1742,39 @@ mod local_provider_tests {
             let mut config = config();
             config.probe.notifications.notify_grokbot = true;
             let provider = NativeProvider::GrokBot;
-            db.stage_native_notifications(provider, &NativeScan::default(), &config)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &NativeScan::default(),
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             let mut live = scan(provider, "reply_needed", "long-pending");
             live.streams[0].settled_count = 2;
             assert_eq!(
-                db.stage_native_notifications(provider, &live, &config)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &live,
+                    &|| Ok(config.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 1
             );
             let old = PanelDb::now() - 8 * 86_400;
             db.conn.lock().unwrap().execute("UPDATE native_probe_deliveries SET status=?1,updated_at=?2,ciphertext=NULL,nonce=NULL", params![terminal,old]).unwrap();
             // Also represents the first scan after being stopped longer than retention.
             assert_eq!(
-                db.stage_native_notifications(provider, &live, &config)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &live,
+                    &|| Ok(config.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             db.maintain_notification_history_if_due(7).unwrap();
@@ -1600,21 +1789,29 @@ mod local_provider_tests {
                 1
             );
             db.conn.lock().unwrap().execute_batch("CREATE TRIGGER no_frequent_marker_touch BEFORE UPDATE ON native_probe_deliveries BEGIN SELECT RAISE(ABORT,'marker touched within hour'); END;").unwrap();
-            db.stage_native_notifications(provider, &live, &config)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &live,
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             db.conn.lock().unwrap().execute_batch("DROP TRIGGER no_frequent_marker_touch; DELETE FROM settings WHERE key='probe_event_retention_last_run';").unwrap();
             db.conn
                 .lock()
                 .unwrap()
                 .execute("UPDATE native_probe_deliveries SET updated_at=?1", [old])
                 .unwrap();
-            db.stage_native_notifications(
+            db.stage_native_notifications_from_config(
                 provider,
                 &NativeScan {
                     streams: vec![],
                     errors: 1,
                 },
-                &config,
+                &|| Ok(config.clone()),
+                false,
+                true,
             )
             .unwrap();
             db.maintain_notification_history_if_due(7).unwrap();
@@ -1628,8 +1825,14 @@ mod local_provider_tests {
                     .unwrap(),
                 1
             );
-            db.stage_native_notifications(provider, &NativeScan::default(), &config)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &NativeScan::default(),
+                &|| Ok(config.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             db.conn
                 .lock()
                 .unwrap()
@@ -1663,40 +1866,93 @@ mod local_provider_tests {
             .unwrap();
             let old = scan(provider, "reply_needed", "execution-1");
             assert_eq!(
-                db.stage_native_notifications(provider, &old, &c).unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &old,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             assert_eq!(
-                db.stage_native_notifications(provider, &old, &c).unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &old,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             let completed = scan(provider, "completion", "execution-1");
             assert_eq!(
-                db.stage_native_notifications(provider, &completed, &c)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &completed,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 1
             );
             assert_eq!(
-                db.stage_native_notifications(provider, &completed, &c)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &completed,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             c.probe.notifications.enabled = false;
-            db.stage_native_notifications(provider, &NativeScan::default(), &c)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &NativeScan::default(),
+                &|| Ok(c.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             c.probe.notifications.enabled = true;
             let new = scan(provider, "authorization", "request-2");
             assert_eq!(
-                db.stage_native_notifications(provider, &new, &c).unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &new,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             assert_eq!(
-                db.stage_native_notifications(provider, &new, &c).unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &new,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             let later = scan(provider, "authorization", "request-3");
             assert_eq!(
-                db.stage_native_notifications(provider, &later, &c).unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &later,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 1
             );
         }
@@ -1710,21 +1966,39 @@ mod local_provider_tests {
                 crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
             )
             .unwrap();
-            db.stage_native_notifications(provider, &NativeScan::default(), &c)
-                .unwrap();
+            db.stage_native_notifications_from_config(
+                provider,
+                &NativeScan::default(),
+                &|| Ok(c.clone()),
+                false,
+                true,
+            )
+            .unwrap();
             c.probe.notifications.notify_antigravity_reply_needed = false;
             c.probe.notifications.notify_dsh_reply_needed = false;
             let waiting = scan(provider, "reply_needed", "request");
             assert_eq!(
-                db.stage_native_notifications(provider, &waiting, &c)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &waiting,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
             c.probe.notifications.notify_antigravity_reply_needed = true;
             c.probe.notifications.notify_dsh_reply_needed = true;
             assert_eq!(
-                db.stage_native_notifications(provider, &waiting, &c)
-                    .unwrap(),
+                db.stage_native_notifications_from_config(
+                    provider,
+                    &waiting,
+                    &|| Ok(c.clone()),
+                    false,
+                    true
+                )
+                .unwrap(),
                 0
             );
         }
@@ -1742,24 +2016,48 @@ mod local_provider_tests {
         let mut waiting = scan(provider, "reply_needed", "old-request");
         std::sync::Arc::make_mut(&mut waiting.streams[0].events)[0].timestamp_ms = 1;
         assert_eq!(
-            db.stage_native_notifications(provider, &waiting, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &waiting,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
-            db.stage_native_notifications(provider, &waiting, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &waiting,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         std::sync::Arc::make_mut(&mut waiting.streams[0].events)[0].turn_id = "new-request".into();
         assert_eq!(
-            db.stage_native_notifications(provider, &waiting, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &waiting,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            db.stage_native_notifications(provider, &waiting, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &waiting,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
     }
@@ -1790,8 +2088,14 @@ mod local_provider_tests {
             }],
         };
         assert_eq!(
-            db.stage_native_notifications(provider, &baseline_scan, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &baseline_scan,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
@@ -1814,8 +2118,14 @@ mod local_provider_tests {
         }]
         .into();
         assert_eq!(
-            db.stage_native_notifications(provider, &at_cursor, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &at_cursor,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
 
@@ -1826,8 +2136,14 @@ mod local_provider_tests {
         std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].timestamp_ms =
             post_activation_ms;
         assert_eq!(
-            db.stage_native_notifications(provider, &at_cursor, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &at_cursor,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
 
@@ -1839,13 +2155,25 @@ mod local_provider_tests {
         std::sync::Arc::make_mut(&mut at_cursor.streams[0].events)[0].timestamp_ms =
             post_activation_ms;
         assert_eq!(
-            db.stage_native_notifications(provider, &at_cursor, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &at_cursor,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            db.stage_native_notifications(provider, &at_cursor, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &at_cursor,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             0
         );
     }
@@ -1902,8 +2230,14 @@ mod local_provider_tests {
             ],
         };
         assert_eq!(
-            db.stage_native_notifications(provider, &first_scan, &c)
-                .unwrap(),
+            db.stage_native_notifications_from_config(
+                provider,
+                &first_scan,
+                &|| Ok(c.clone()),
+                false,
+                true
+            )
+            .unwrap(),
             1,
             "pre-upgrade CLI session must be skipped while post-upgrade CLI session queues once"
         );

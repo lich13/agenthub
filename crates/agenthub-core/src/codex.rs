@@ -47,9 +47,8 @@ pub use rollout_events::{
     is_macos_network_volume_path, rollout_completion_last_agent_message,
     rollout_completion_last_agent_message_selection,
     rollout_completion_last_agent_message_with_source, rollout_hook_stop_message_selection,
-    rollout_pending_feedback, rollout_request_user_input_state, thread_detail_from_summary,
-    thread_detail_page_from_summary, window_thread_detail, AssistantFeedback,
-    RolloutMessageSelection, RolloutRequestUserInputState,
+    rollout_pending_feedback, rollout_request_user_input_state, thread_detail_page_from_summary,
+    AssistantFeedback, RolloutMessageSelection, RolloutRequestUserInputState,
 };
 #[cfg(test)]
 use rollout_events::{
@@ -429,10 +428,6 @@ fn probe_live_codex_host_process() -> bool {
     {
         true
     }
-}
-
-pub fn thread_detail(paths: &CodexPaths, id: &str) -> Result<Option<ThreadDetail>> {
-    thread_detail_page(paths, id, None, None, None)
 }
 
 pub fn thread_detail_page(

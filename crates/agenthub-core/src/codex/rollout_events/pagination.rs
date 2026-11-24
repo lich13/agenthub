@@ -20,10 +20,6 @@ pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
 }
 
-pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
-    thread_detail_page_from_summary(summary, true, None, None, None)
-}
-
 pub fn thread_detail_page_from_summary(
     summary: ThreadSummary,
     compact: bool,
@@ -254,57 +250,4 @@ fn history_end(blocks: &[Arc<MessageBlock>], before: Option<&str>) -> usize {
         .parse::<usize>()
         .unwrap_or(blocks.len())
         .min(blocks.len())
-}
-
-pub fn window_thread_detail(
-    mut detail: ThreadDetail,
-    limit: Option<usize>,
-    before: Option<&str>,
-) -> ThreadDetail {
-    if detail.total_blocks > detail.blocks.len() || detail.has_more_blocks {
-        return detail;
-    }
-    let total = detail.blocks.len();
-    detail.total_blocks = total;
-    let Some(limit) = limit.filter(|value| *value > 0) else {
-        detail.has_more_blocks = false;
-        detail.before_cursor = None;
-        return detail;
-    };
-    let end = before
-        .and_then(|cursor| cursor.strip_prefix("b:"))
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(total)
-        .min(total);
-    let start = end.saturating_sub(limit);
-    let (start, end) = crate::history_navigation::seek_window(
-        detail.blocks.iter().map(|block| block.id.as_str()),
-        before,
-        limit,
-    )
-    .unwrap_or(Some((0, 0)))
-    .unwrap_or((start, end));
-    detail.after_cursor = crate::history_navigation::after_cursor(
-        end,
-        total,
-        detail
-            .blocks
-            .get(end.saturating_sub(1))
-            .map(|block| block.id.as_str()),
-    );
-    detail.blocks = detail.blocks[start..end].to_vec();
-    detail.messages.clear();
-    detail.has_more_blocks = start > 0;
-    detail.before_cursor = (start > 0).then(|| {
-        if before.is_some_and(|cursor| {
-            ["j:", "n:", "w:", "p:"]
-                .iter()
-                .any(|prefix| cursor.starts_with(prefix))
-        }) {
-            format!("p:{}", detail.blocks[0].id)
-        } else {
-            format!("b:{start}")
-        }
-    });
-    detail
 }
