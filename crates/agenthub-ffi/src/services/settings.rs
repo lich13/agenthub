@@ -1,16 +1,16 @@
-use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
+use crate::overview::DesktopState;
 use agenthub_core::services::use_cases::AgentHubUseCases;
 use agenthub_core::{
     config::Config,
     probe::redact_probe_event_for_output,
     services::{
-        jobs as job_service, probe as probe_service,
+        jobs::{self as job_service, ActionResponse},
+        probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
     },
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,19 +86,16 @@ pub(crate) fn test_probe_save_settings_with_state(
 pub(crate) fn probe_action_with_state(
     state: &DesktopState,
     action: probe_service::ProbeAction,
-) -> Result<DesktopActionResponse> {
+) -> Result<ActionResponse> {
     let plan = probe_service::ProbeUseCases::new(state.platform()).action(action)?;
     let command = action.as_desktop_command();
     let job = &plan.job;
     let binary = state.platform().daemon_binary();
     if !binary.is_file() {
-        return Ok(unavailable_action(
-            command,
-            &format!(
-                "Probe action requires local agenthub-webd binary; plan is available but job cannot start: {}",
-                binary.display()
-            ),
-        ));
+        anyhow::bail!(
+            "Probe action requires local agenthub-webd binary: {}",
+            binary.display()
+        );
     }
     let process = probe_service::probe_process_command(
         state.platform(),
@@ -114,7 +111,7 @@ pub(crate) fn probe_action_with_state(
             .jobs
             .start_process_job(&job.kind, &job.title, process)?
     };
-    Ok(ok_action(
+    Ok(job_service::action_ok(
         command,
         "started local Probe job",
         None,
@@ -138,20 +135,6 @@ pub(crate) fn probe_events_with_state(
         .map(redact_probe_event_for_output)
         .collect();
     Ok(DesktopProbeEventsResponse { events, limit })
-}
-
-fn ok_action(
-    command: &str,
-    message: &str,
-    thread_id: Option<String>,
-    job_id: Option<String>,
-    data: Option<Value>,
-) -> DesktopActionResponse {
-    job_service::action_ok(command, message, thread_id, job_id, data).into()
-}
-
-fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
-    job_service::action_unavailable(command, message).into()
 }
 
 #[cfg(test)]
@@ -421,5 +404,14 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn probe_action_returns_error_when_local_webd_binary_is_missing() {
+        let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
+        assert!(!platform.daemon_binary().exists());
+        let err = probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
+            .expect_err("missing agenthub-webd helper binary must return Err");
+        assert!(err.to_string().contains("agenthub-webd"));
     }
 }

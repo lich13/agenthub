@@ -188,55 +188,28 @@ public final class RuntimeConnectionStore: ObservableObject {
     public func rpcRaw(
         _ command: String, argsObject: [String: JSONValue] = [:], localOnly: Bool = false, at expectedRevision: UInt64? = nil
     ) async throws -> Data {
-        if let expectedRevision, revision != expectedRevision {
-            throw AgentHubFFIError("连接已变化，已丢弃旧请求")
-        }
-        if changing {
-            guard command == "cleanup.hiddenDryRun", case let .object(request)? = argsObject["request"],
-                  request["mode"] == .string("cancel") else {
-                throw AgentHubFFIError("连接切换中，请稍后重试")
-            }
-        }
-        try Task.checkCancellation()
-        let capturedRevision = revision
-        let capturedTarget = target
-        let isReadHookStatus: Bool = {
-            guard case let .object(req)? = argsObject["request"],
-                  case let .string(act)? = req["action"]
+        let isCancelHiddenScan: Bool = {
+            guard command == "cleanup.hiddenDryRun",
+                  case let .object(request)? = argsObject["request"],
+                  request["mode"] == .string("cancel")
             else { return false }
-            return act == "status"
+            return true
         }()
-        let access = command.withCString { agenthub_ffi_command_access($0, isReadHookStatus) }
-        if capturedTarget == .remote && !localOnly && !access.remote {
-            throw AgentHubFFIError("不支持的远程操作")
-        }
-        let isWrite = !access.read_only
-        if isWrite { writes += 1 }
-        defer { if isWrite { writes = max(0, writes - 1) } }
-
-        let data: Data
-        if capturedTarget == .remote && !localOnly {
-            let invokePayload: [String: JSONValue] = [
-                "request": .object([
-                    "revision": .number(Double(capturedRevision)),
-                    "command": .string(command),
-                    "args": .object(argsObject),
-                ]),
-            ]
-            let encoded = try JSONEncoder().encode(invokePayload)
-            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
-            data = try await transport.invokeRawJSON(command: "remote.invoke", argsJSON: jsonStr)
-        } else {
-            let encoded = try JSONEncoder().encode(argsObject)
-            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
-            data = try await transport.invokeRawJSON(command: command, argsJSON: jsonStr)
-        }
-
-        if capturedRevision != revision {
-            throw AgentHubFFIError("连接已变化，已丢弃旧响应")
-        }
-        if !isWrite { try Task.checkCancellation() }
-        return data
+        let isReadHookStatus: Bool = {
+            guard command == "claude.hooks",
+                  case let .object(req)? = argsObject["request"],
+                  req["action"] == .string("status")
+            else { return false }
+            return true
+        }()
+        return try await executeRPC(
+            command,
+            args: argsObject,
+            isCancelHiddenScan: isCancelHiddenScan,
+            isReadHookStatus: isReadHookStatus,
+            localOnly: localOnly,
+            at: expectedRevision
+        )
     }
 
     public func rpc<Res: Decodable>(
@@ -255,9 +228,69 @@ public final class RuntimeConnectionStore: ObservableObject {
         localOnly: Bool = false,
         at expectedRevision: UInt64? = nil
     ) async throws -> Res {
-        let encoded = try JSONEncoder().encode(args)
-        let argsObj = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
-        return try await rpc(command, args: argsObj, localOnly: localOnly, at: expectedRevision)
+        var isCancelHiddenScan = false
+        var isReadHookStatus = false
+        if (changing && command == "cleanup.hiddenDryRun") || command == "claude.hooks" {
+            let probeData = try JSONEncoder().encode(args)
+            let probe = try? JSONDecoder().decode(RequestControlProbe.self, from: probeData)
+            isCancelHiddenScan = command == "cleanup.hiddenDryRun" && probe?.request?.mode == "cancel"
+            isReadHookStatus = command == "claude.hooks" && probe?.request?.action == "status"
+        }
+        let data = try await executeRPC(
+            command,
+            args: args,
+            isCancelHiddenScan: isCancelHiddenScan,
+            isReadHookStatus: isReadHookStatus,
+            localOnly: localOnly,
+            at: expectedRevision
+        )
+        return try JSONDecoder().decode(Res.self, from: data)
+    }
+
+    private func executeRPC<Req: Encodable>(
+        _ command: String,
+        args: Req,
+        isCancelHiddenScan: Bool,
+        isReadHookStatus: Bool,
+        localOnly: Bool,
+        at expectedRevision: UInt64?
+    ) async throws -> Data {
+        if let expectedRevision, revision != expectedRevision {
+            throw AgentHubFFIError("连接已变化，已丢弃旧请求")
+        }
+        if changing && !isCancelHiddenScan {
+            throw AgentHubFFIError("连接切换中，请稍后重试")
+        }
+        try Task.checkCancellation()
+        let capturedRevision = revision
+        let capturedTarget = target
+        let access = command.withCString { agenthub_ffi_command_access($0, isReadHookStatus) }
+        if capturedTarget == .remote && !localOnly && !access.remote {
+            throw AgentHubFFIError("不支持的远程操作")
+        }
+        let isWrite = !access.read_only
+        if isWrite { writes += 1 }
+        defer { if isWrite { writes = max(0, writes - 1) } }
+
+        let data: Data
+        if capturedTarget == .remote && !localOnly {
+            let envelope = RemoteRequestEnvelope(
+                request: RemoteInvokeRequest(revision: capturedRevision, command: command, args: args)
+            )
+            let encoded = try JSONEncoder().encode(envelope)
+            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
+            data = try await transport.invokeRawJSON(command: "remote.invoke", argsJSON: jsonStr)
+        } else {
+            let encoded = try JSONEncoder().encode(args)
+            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
+            data = try await transport.invokeRawJSON(command: command, argsJSON: jsonStr)
+        }
+
+        if capturedRevision != revision {
+            throw AgentHubFFIError("连接已变化，已丢弃旧响应")
+        }
+        if !isWrite { try Task.checkCancellation() }
+        return data
     }
 
     private func runBeforeMachineChangeCleanups(_ cleanups: [BeforeMachineChangeCleanup]) async {
@@ -365,10 +398,10 @@ public final class RuntimeConnectionStore: ObservableObject {
                 }
                 for id in activeIds {
                     guard self.revision == sourceRevision, !Task.isCancelled else { return }
-                    if let envelope: OptionalResultEnvelope<JobRecord> = try? await self.rpc(
+                    if let job: JobRecord? = try? await self.rpc(
                         "jobs.detail",
                         args: ["id": .string(id), "includeOutput": .bool(false)]
-                    ), let job = envelope.data {
+                    ), let job {
                         self.trackedJobs[id] = job
                     }
                 }
@@ -380,4 +413,18 @@ public final class RuntimeConnectionStore: ObservableObject {
 
 private struct RemoteRequestEnvelope<T: Encodable>: Encodable {
     let request: T
+}
+
+private struct RemoteInvokeRequest<Args: Encodable>: Encodable {
+    let revision: UInt64
+    let command: String
+    let args: Args
+}
+
+private struct RequestControlProbe: Decodable {
+    struct Inner: Decodable {
+        let mode: String?
+        let action: String?
+    }
+    let request: Inner?
 }

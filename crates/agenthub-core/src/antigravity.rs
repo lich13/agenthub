@@ -1,5 +1,6 @@
 //! Pure projection of the native Antigravity App's read-only trajectory API.
 pub mod sessions;
+pub mod subagents;
 mod trajectory;
 use crate::native_probe::{self, NativeProvider, NativeStreamSnapshot, NativeTurnEvent};
 use anyhow::{ensure, Context, Result};
@@ -192,7 +193,7 @@ fn step_is_daemon_task(step: &Value, args: &Value) -> bool {
         || args["isDaemon"].as_bool() == Some(true)
 }
 
-fn collect_spawned_subagent_ids(value: &Value, out: &mut BTreeSet<String>) {
+pub(crate) fn collect_spawned_subagent_ids(value: &Value, out: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
             if let Some(cid) = map
@@ -530,7 +531,7 @@ pub fn collect_untracked_task_commands(
     specs
 }
 
-fn step_requests_artifact_feedback(step: &Value) -> bool {
+pub(crate) fn step_requests_artifact_feedback(step: &Value) -> bool {
     let meta = &step["codeAction"]["artifactMetadata"];
     if meta["requestFeedback"].as_bool() == Some(true)
         || meta["RequestFeedback"].as_bool() == Some(true)

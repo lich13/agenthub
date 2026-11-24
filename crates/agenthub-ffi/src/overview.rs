@@ -6,21 +6,10 @@ use agenthub_core::{
     platform::PlatformPaths,
 };
 use anyhow::{anyhow, Result};
-use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentHubPaths {
-    pub app_support_dir: PathBuf,
-    pub config_file: PathBuf,
-    pub database_file: PathBuf,
-    pub log_dir: PathBuf,
-    pub app_log_file: PathBuf,
-}
 
 #[derive(Clone)]
 pub struct DesktopState {
@@ -92,21 +81,6 @@ fn default_local_desktop_workspace() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join("agenthub-workspace"))
 }
 
-pub fn agenthub_paths_for_home(home: impl Into<PathBuf>) -> AgentHubPaths {
-    let platform = PlatformPaths::macos(home);
-    agenthub_paths_for_platform(&platform)
-}
-
-fn agenthub_paths_for_platform(platform: &PlatformPaths) -> AgentHubPaths {
-    AgentHubPaths {
-        config_file: platform.config_file.clone(),
-        database_file: platform.data_dir.join("agenthub.sqlite"),
-        app_log_file: platform.log_dir.join("agenthub.log"),
-        app_support_dir: platform.data_dir.clone(),
-        log_dir: platform.log_dir.clone(),
-    }
-}
-
 fn load_desktop_config(platform: &PlatformPaths) -> Result<Config> {
     Config::load_runtime(&platform.config_file)
 }
@@ -118,42 +92,7 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agenthub_core::{platform::PlatformKind, services::jobs as job_service};
-
-    #[test]
-    fn mac_style_paths_use_agenthub_application_support_and_logs() {
-        let paths = agenthub_paths_for_home("/Users/example");
-
-        assert_eq!(
-            paths.app_support_dir,
-            PathBuf::from("/Users/example/Library/Application Support/AgentHub")
-        );
-        assert_eq!(
-            paths.log_dir,
-            PathBuf::from("/Users/example/Library/Logs/AgentHub")
-        );
-        assert_eq!(
-            paths.config_file,
-            PathBuf::from("/Users/example/Library/Application Support/AgentHub/config.toml")
-        );
-        assert_eq!(
-            paths.app_log_file,
-            PathBuf::from("/Users/example/Library/Logs/AgentHub/agenthub.log")
-        );
-    }
-
-    #[test]
-    fn desktop_unsupported_action_is_explicitly_unavailable() {
-        let response =
-            job_service::action_unavailable("forkThread", "fork uses Codex app-server state");
-
-        assert!(!response.available);
-        assert!(!response.ok);
-        assert_eq!(response.command, "forkThread");
-        assert!(response
-            .message
-            .contains("fork uses Codex app-server state"));
-    }
+    use agenthub_core::platform::PlatformKind;
 
     #[test]
     fn fixed_probe_command_uses_platform_daemon_path() {

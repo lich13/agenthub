@@ -2,7 +2,7 @@
 import Foundation
 import XCTest
 
-final class LegacyMigrationAndNotificationTests: XCTestCase {
+final class GithubCiAndPathActionTests: XCTestCase {
     func testCiNotificationClickIdentifierExtractsHTTPSRunURL() {
         let id = "https://github.com/lich13/agenthub/actions/runs/12345#agenthub-ci:repo:12345:1"
         XCTAssertEqual(

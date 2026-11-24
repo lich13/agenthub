@@ -75,18 +75,6 @@ pub fn action_ok(
     }
 }
 
-pub fn action_unavailable(command: &str, message: &str) -> ActionResponse {
-    ActionResponse {
-        ok: false,
-        available: false,
-        command: command.to_string(),
-        message: message.to_string(),
-        thread_id: None,
-        job_id: None,
-        data: None,
-    }
-}
-
 pub fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
     let (command, message) = if archived {
         (

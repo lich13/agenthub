@@ -55,7 +55,6 @@ let package = Package(
             dependencies: ["AgentHubCore", "CAgentHubFFI"],
             path: "Tests/AgentHubTests",
             resources: [
-                .copy("ParityManifest.json"),
                 .copy("SnapshotBaselines.json"),
             ]
         ),

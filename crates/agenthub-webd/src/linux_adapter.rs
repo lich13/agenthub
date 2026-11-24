@@ -8,7 +8,7 @@ use agenthub_core::{
     services::{
         commands, jobs as job_service, probe as probe_service, settings as settings_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
-        updates::{self as update_service, UpdateAction},
+        updates as update_service,
         use_cases::AgentHubUseCases,
     },
 };
@@ -71,57 +71,18 @@ pub fn list_threads_read_model(
     thread_service::load_thread_read_model_inputs(&paths, &plan)
 }
 
-pub fn probe_threads_read_model(
-    state: &AppState,
-    status: &'static str,
-    limit: usize,
-) -> Result<Vec<ThreadSummary>> {
-    let paths = state.codex_paths();
-    probe_service::probe_threads_for_status_with_paths(&paths, status, limit)
-}
-
-pub fn load_thread_detail_read_model(
-    state: &AppState,
-    plan: &thread_service::ThreadDetailPlan,
-) -> Result<Option<ThreadDetail>> {
-    let paths = state.codex_paths();
-    let mut detail = codex::thread_detail_page(
-        &paths,
-        &plan.thread_id,
-        plan.block_limit,
-        plan.before.as_deref(),
-        None,
-    )?;
-    if let Some(detail) = detail.take() {
-        let mut detail = detail;
-        codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
-        return Ok(Some(detail));
-    }
-    Ok(None)
-}
-
 pub fn window_thread_detail_read_model(
     state: &AppState,
     plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadDetail>> {
-    let Some(detail) = load_thread_detail_read_model(state, plan)? else {
-        return Ok(None);
-    };
-    Ok(Some(thread_service::window_thread_detail_for_plan(
-        detail, plan,
-    )))
+    thread_service::read_window_thread_detail(&state.codex_paths(), plan)
 }
 
 pub fn thread_blocks_read_model(
     state: &AppState,
     plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadBlocksPage>> {
-    let Some(detail) = load_thread_detail_read_model(state, plan)? else {
-        return Ok(None);
-    };
-    Ok(Some(thread_service::thread_blocks_page_for_plan(
-        detail, plan,
-    )))
+    thread_service::read_thread_blocks_page(&state.codex_paths(), plan)
 }
 
 pub fn list_jobs_plan(state: &AppState, limit: u32) -> Result<Vec<Value>> {
@@ -227,11 +188,4 @@ pub fn start_update_action_plan(
             .jobs
             .start_process_job(&spec.kind, &spec.title, process)
     }
-}
-
-pub fn linux_update_action_plan(
-    platform: &PlatformPaths,
-    action: UpdateAction,
-) -> Result<update_service::UpdateActionPlan> {
-    update_service::plan_update_action(platform, action)
 }

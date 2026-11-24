@@ -244,7 +244,7 @@ pub(crate) async fn load_probe_threads(
     status: &'static str,
     limit: usize,
 ) -> anyhow::Result<Vec<agenthub_core::codex::ThreadSummary>> {
-    linux_adapter::probe_threads_read_model(state, status, limit)
+    probe_service::probe_threads_for_status_with_paths(&state.codex_paths(), status, limit)
 }
 
 fn redact_probe_event(event: agenthub_core::db::ProbeEvent) -> agenthub_core::db::ProbeEvent {

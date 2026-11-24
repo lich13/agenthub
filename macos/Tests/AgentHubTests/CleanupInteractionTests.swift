@@ -47,12 +47,16 @@ final class CleanupInteractionTests: XCTestCase {
 
     func testDirectProbeStatusWithAvailabilityKeepsAllActiveProviders() throws {
         let data = Data(#"{"available":true,"hook_status":"managed","active_sessions":[{"provider":"grok","id":"shared","session_key":"g","bucket":"running"},{"provider":"claude_code","id":"shared","session_key":"c","bucket":"reply_needed"}]}"#.utf8)
-        let status = try XCTUnwrap(JSONDecoder().decode(OptionalResultEnvelope<ProbeStatus>.self, from: data).data)
+        let status = try JSONDecoder().decode(ProbeStatus.self, from: data)
+        XCTAssertEqual(status.available, true)
         XCTAssertEqual(status.hookStatus, "managed")
         XCTAssertEqual(status.activeSessions?.map(\.uniqueKey), ["grok:g:running", "claude_code:c:reply_needed"])
-        let unavailable = try JSONDecoder().decode(OptionalResultEnvelope<ProbeStatus>.self, from: Data(#"{"available":false,"data":null}"#.utf8))
-        XCTAssertFalse(unavailable.available)
-        XCTAssertNil(unavailable.data)
+        let unavailable = try JSONDecoder().decode(
+            ProbeStatus.self,
+            from: Data(#"{"label":"Probe","enabled":true,"available":false,"flavor":"builtin","error":"invalid config"}"#.utf8)
+        )
+        XCTAssertEqual(unavailable.available, false)
+        XCTAssertEqual(unavailable.error, "invalid config")
     }
 
     @MainActor func testEqualLengthPagesAppendAndPartialScansCannotExecute() async throws {

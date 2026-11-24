@@ -99,7 +99,6 @@
       "coreUseCase": "system.capabilities",
       "linuxRpc": "system.capabilities",
       "ffiHandler": "dispatch::maintenance::system_capabilities",
-      "webuiWrapper": "getSystemCapabilities",
       "dtoOwner": "system",
       "requestDto": "NoRequest",
       "responseDto": "SystemCapabilitiesResponse"
@@ -111,7 +110,6 @@
       "coreUseCase": "threads.list",
       "linuxRpc": "threads.list",
       "ffiHandler": "dispatch::conversations::threads_list",
-      "webuiWrapper": "listThreads",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsListResponse"
@@ -123,7 +121,6 @@
       "coreUseCase": "threads.detail",
       "linuxRpc": "threads.detail",
       "ffiHandler": "dispatch::conversations::threads_detail",
-      "webuiWrapper": "getThread",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsDetailResponse"
@@ -135,7 +132,6 @@
       "coreUseCase": "threads.subagent_detail",
       "linuxRpc": "threads.subagentDetail",
       "ffiHandler": "dispatch::conversations::threads_subagent_detail",
-      "webuiWrapper": "getSubagentDetail",
       "dtoOwner": "threads",
       "requestDto": "SubagentDetailRequest",
       "responseDto": "SubagentDetailResponse"
@@ -147,7 +143,6 @@
       "coreUseCase": "threads.blocks",
       "linuxRpc": "threads.blocks",
       "ffiHandler": "dispatch::conversations::threads_blocks",
-      "webuiWrapper": "getThreadBlocks",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsBlocksResponse"
@@ -159,7 +154,6 @@
       "coreUseCase": "threads.archive",
       "linuxRpc": "threads.archive",
       "ffiHandler": "dispatch::conversations::threads_archive",
-      "webuiWrapper": "archiveThread",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsArchiveResponse"
@@ -171,7 +165,6 @@
       "coreUseCase": "threads.restore",
       "linuxRpc": "threads.restore",
       "ffiHandler": "dispatch::conversations::threads_restore",
-      "webuiWrapper": "restoreThread",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsRestoreResponse"
@@ -183,7 +176,6 @@
       "coreUseCase": "threads.rename",
       "linuxRpc": "threads.rename",
       "ffiHandler": "dispatch::conversations::threads_rename",
-      "webuiWrapper": "renameThread",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsRenameResponse"
@@ -195,7 +187,6 @@
       "coreUseCase": "threads.account_scope_status",
       "linuxRpc": "threads.accountScopeStatus",
       "ffiHandler": "dispatch::conversations::threads_account_scope_status",
-      "webuiWrapper": "getCodexAccountScopeStatus",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "CodexAccountScopeStatus"
@@ -207,7 +198,6 @@
       "coreUseCase": "threads.account_scope_clear",
       "linuxRpc": "threads.accountScopeClear",
       "ffiHandler": "dispatch::conversations::threads_account_scope_clear",
-      "webuiWrapper": "clearCodexAccountScope",
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "CodexAccountScopeResult"
@@ -219,7 +209,6 @@
       "coreUseCase": "jobs.list",
       "linuxRpc": "jobs.list",
       "ffiHandler": "dispatch::maintenance::jobs_list",
-      "webuiWrapper": "listJobs",
       "dtoOwner": "jobs",
       "requestDto": "NoRequest",
       "responseDto": "JobsListResponse"
@@ -231,7 +220,6 @@
       "coreUseCase": "jobs.detail",
       "linuxRpc": "jobs.detail",
       "ffiHandler": "dispatch::maintenance::jobs_detail",
-      "webuiWrapper": "getJob",
       "dtoOwner": "jobs",
       "requestDto": "DesktopJobDetailRequest",
       "responseDto": "JobsDetailResponse"
@@ -243,7 +231,6 @@
       "coreUseCase": "probe.status",
       "linuxRpc": "probe.status",
       "ffiHandler": "dispatch::maintenance::probe_status",
-      "webuiWrapper": "getProbeStatus",
       "dtoOwner": "probe",
       "requestDto": "ProbeStatusRequest",
       "responseDto": "ProbeStatusResponse"
@@ -255,7 +242,6 @@
       "coreUseCase": "probe.settings.get",
       "linuxRpc": "probe.settings.get",
       "ffiHandler": "dispatch::maintenance::probe_settings_get",
-      "webuiWrapper": "getProbeSettings",
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeSettingsGetResponse"
@@ -267,7 +253,6 @@
       "coreUseCase": "probe.settings.save",
       "linuxRpc": "probe.settings.save",
       "ffiHandler": "dispatch::maintenance::probe_settings_save",
-      "webuiWrapper": "saveProbeSettings",
       "dtoOwner": "probe",
       "requestDto": "ProbeSettingsSaveRequest",
       "responseDto": "ProbeSettingsSaveResponse"
@@ -279,7 +264,6 @@
       "coreUseCase": "probe.events",
       "linuxRpc": "probe.events",
       "ffiHandler": "dispatch::maintenance::probe_events",
-      "webuiWrapper": "getProbeEvents",
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeEventsResponse"
@@ -291,7 +275,6 @@
       "coreUseCase": "probe.barkTest",
       "linuxRpc": "probe.barkTest",
       "ffiHandler": "dispatch::maintenance::probe_bark_test",
-      "webuiWrapper": "runProbeBarkTest",
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeBarkTestResponse"
@@ -303,7 +286,6 @@
       "coreUseCase": "probe.installHooks",
       "linuxRpc": "probe.installHooks",
       "ffiHandler": "dispatch::maintenance::probe_install_hooks",
-      "webuiWrapper": "runProbeHooksInstall",
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeInstallHooksResponse"
@@ -315,7 +297,6 @@
       "coreUseCase": "probe.removeHooks",
       "linuxRpc": "probe.removeHooks",
       "ffiHandler": "dispatch::maintenance::probe_remove_hooks",
-      "webuiWrapper": "runProbeHooksRemove",
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeRemoveHooksResponse"
@@ -327,7 +308,6 @@
       "coreUseCase": "updates.status",
       "linuxRpc": "updates.status",
       "ffiHandler": "dispatch::maintenance::updates_status",
-      "webuiWrapper": "getUpdateStatus",
       "dtoOwner": "updates",
       "requestDto": "NoRequest",
       "responseDto": "UpdatesStatusResponse"
@@ -339,7 +319,6 @@
       "coreUseCase": "updates.check",
       "linuxRpc": "updates.check",
       "ffiHandler": "dispatch::maintenance::updates_check",
-      "webuiWrapper": "updates.check",
       "dtoOwner": "updates",
       "requestDto": "NoRequest",
       "responseDto": "UpdatesCheckResponse"
@@ -351,7 +330,6 @@
       "coreUseCase": "updates.install",
       "linuxRpc": "updates.install",
       "ffiHandler": "dispatch::maintenance::updates_install",
-      "webuiWrapper": "updates.install",
       "dtoOwner": "updates",
       "requestDto": "NoRequest",
       "responseDto": "UpdatesInstallResponse"
@@ -362,7 +340,6 @@
       "scope": "host_only",
       "coreUseCase": "updates.prune",
       "linuxRpc": "updates.prune",
-      "webuiWrapper": "updates.prune",
       "hostOnlyReason": "Linux server release backup prune only; app updater must not expose Linux prune"
     },
     {
@@ -372,7 +349,6 @@
       "coreUseCase": "cleanup.unifiedDryRun",
       "linuxRpc": "cleanup.unifiedDryRun",
       "ffiHandler": "dispatch::maintenance::cleanup_unified_dry_run",
-      "webuiWrapper": "dryRunUnifiedCleanup",
       "dtoOwner": "cleanup",
       "requestDto": "NoRequest",
       "responseDto": "UnifiedCleanupPlan"
@@ -384,7 +360,6 @@
       "coreUseCase": "cleanup.unifiedExecute",
       "linuxRpc": "cleanup.unifiedExecute",
       "ffiHandler": "dispatch::maintenance::cleanup_unified_execute",
-      "webuiWrapper": "startUnifiedCleanup",
       "dtoOwner": "cleanup",
       "requestDto": "UnifiedCleanupExecuteRequest",
       "responseDto": "UnifiedCleanupResult"
@@ -396,7 +371,6 @@
       "coreUseCase": "cleanup.hiddenDryRun",
       "linuxRpc": "cleanup.hiddenDryRun",
       "ffiHandler": "dispatch::maintenance::cleanup_hidden_dry_run",
-      "webuiWrapper": "dryRunHiddenThreadDelete",
       "dtoOwner": "cleanup",
       "requestDto": "HiddenScanRequest",
       "responseDto": "CleanupHiddenDryRunResponse"
@@ -408,7 +382,6 @@
       "coreUseCase": "grok.list",
       "linuxRpc": "grok.list",
       "ffiHandler": "dispatch::providers::grok_list",
-      "webuiWrapper": "listGrokSessions",
       "dtoOwner": "grok",
       "requestDto": "GrokListRequest",
       "responseDto": "GrokListResponse"
@@ -420,7 +393,6 @@
       "coreUseCase": "grok.detail",
       "linuxRpc": "grok.detail",
       "ffiHandler": "dispatch::providers::grok_detail",
-      "webuiWrapper": "getGrokSession",
       "dtoOwner": "grok",
       "requestDto": "GrokSessionRequest",
       "responseDto": "GrokDetailResponse"
@@ -432,7 +404,6 @@
       "coreUseCase": "grok.rename",
       "linuxRpc": "grok.rename",
       "ffiHandler": "dispatch::providers::grok_rename",
-      "webuiWrapper": "renameGrokSession",
       "dtoOwner": "grok",
       "requestDto": "GrokRenameRequest",
       "responseDto": "GrokMutationResponse"
@@ -444,7 +415,6 @@
       "coreUseCase": "grok.delete_preview",
       "linuxRpc": "grok.deletePreview",
       "ffiHandler": "dispatch::providers::grok_delete_preview",
-      "webuiWrapper": "previewGrokDelete",
       "dtoOwner": "grok",
       "requestDto": "GrokSessionRequest",
       "responseDto": "GrokDeletePreview"
@@ -456,7 +426,6 @@
       "coreUseCase": "grok.delete_execute",
       "linuxRpc": "grok.deleteExecute",
       "ffiHandler": "dispatch::providers::grok_delete_execute",
-      "webuiWrapper": "deleteGrokSession",
       "dtoOwner": "grok",
       "requestDto": "GrokDeleteRequest",
       "responseDto": "GrokMutationResponse"
@@ -468,7 +437,6 @@
       "coreUseCase": "sessions.bulk_preview",
       "linuxRpc": "sessions.bulkPreview",
       "ffiHandler": "dispatch::conversations::sessions_bulk_preview",
-      "webuiWrapper": "previewSessionBatch",
       "dtoOwner": "sessions",
       "requestDto": "SessionBatchRequest",
       "responseDto": "SessionBatchPreview"
@@ -480,7 +448,6 @@
       "coreUseCase": "sessions.bulk_execute",
       "linuxRpc": "sessions.bulkExecute",
       "ffiHandler": "dispatch::conversations::sessions_bulk_execute",
-      "webuiWrapper": "executeSessionBatch",
       "dtoOwner": "sessions",
       "requestDto": "SessionBatchExecuteRequest",
       "responseDto": "SessionBatchResult"
@@ -492,7 +459,6 @@
       "coreUseCase": "sessions.attachment_read",
       "linuxRpc": "sessions.attachmentRead",
       "ffiHandler": "dispatch::conversations::sessions_attachment_read",
-      "webuiWrapper": "readSessionAttachment",
       "dtoOwner": "sessions",
       "requestDto": "SessionAttachmentRequest",
       "responseDto": "SessionAttachmentResponse"
@@ -504,7 +470,6 @@
       "coreUseCase": "sessions.search",
       "linuxRpc": "sessions.search",
       "ffiHandler": "dispatch::conversations::sessions_search",
-      "webuiWrapper": "searchSessions",
       "dtoOwner": "sessions",
       "requestDto": "SessionSearchRequest",
       "responseDto": "SessionSearchResponse"
@@ -515,7 +480,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.get",
       "ffiHandler": "dispatch::connections::remote_get",
-      "webuiWrapper": "remoteGet",
       "dtoOwner": "remote",
       "requestDto": "NoRequest",
       "responseDto": "RemoteConnectionView",
@@ -527,7 +491,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.install",
       "ffiHandler": "dispatch::connections::remote_install",
-      "webuiWrapper": "remoteInstall",
       "dtoOwner": "remote",
       "requestDto": "RemoteConnectionCredentials",
       "responseDto": "RemoteConnectionView",
@@ -539,7 +502,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.sshHosts",
       "ffiHandler": "dispatch::connections::remote_ssh_hosts",
-      "webuiWrapper": "remoteSshHosts",
       "dtoOwner": "remote",
       "requestDto": "NoRequest",
       "responseDto": "SshHostList",
@@ -551,7 +513,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.sshDelete",
       "ffiHandler": "dispatch::connections::remote_ssh_delete",
-      "webuiWrapper": "remoteSshDelete",
       "dtoOwner": "remote",
       "requestDto": "SshDeleteRequest",
       "responseDto": "RemoteConnectionView",
@@ -563,7 +524,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.verify",
       "ffiHandler": "dispatch::connections::remote_verify",
-      "webuiWrapper": "remoteVerify",
       "dtoOwner": "remote",
       "requestDto": "RemoteConnectionCredentials",
       "responseDto": "SystemCapabilitiesResponse",
@@ -575,7 +535,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.save",
       "ffiHandler": "dispatch::connections::remote_save",
-      "webuiWrapper": "remoteSave",
       "dtoOwner": "remote",
       "requestDto": "RemoteConnectionCredentials",
       "responseDto": "RemoteConnectionView",
@@ -587,7 +546,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.remove",
       "ffiHandler": "dispatch::connections::remote_remove",
-      "webuiWrapper": "remoteRemove",
       "dtoOwner": "remote",
       "requestDto": "RemoteRevisionRequest",
       "responseDto": "RemoteConnectionView",
@@ -599,7 +557,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.select",
       "ffiHandler": "dispatch::connections::remote_select",
-      "webuiWrapper": "remoteSelect",
       "dtoOwner": "remote",
       "requestDto": "RemoteSelectionRequest",
       "responseDto": "RemoteConnectionView",
@@ -611,7 +568,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.remote.invoke",
       "ffiHandler": "dispatch::connections::remote_invoke",
-      "webuiWrapper": "remoteInvoke",
       "dtoOwner": "remote",
       "requestDto": "RemoteInvokeRequest",
       "responseDto": "RemoteInvokeResponse",
@@ -623,7 +579,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.plans.save",
       "ffiHandler": "dispatch::conversations::plans_save",
-      "webuiWrapper": "savePlanMarkdown",
       "dtoOwner": "plans",
       "requestDto": "PlanSaveRequest",
       "responseDto": "PlanSaveResult",
@@ -636,7 +591,6 @@
       "coreUseCase": "claude.list",
       "linuxRpc": "claude.list",
       "ffiHandler": "dispatch::providers::claude_list",
-      "webuiWrapper": "listClaudeSessions",
       "dtoOwner": "claude",
       "requestDto": "ClaudeListRequest",
       "responseDto": "ClaudeListResponse"
@@ -648,7 +602,6 @@
       "coreUseCase": "claude.detail",
       "linuxRpc": "claude.detail",
       "ffiHandler": "dispatch::providers::claude_detail",
-      "webuiWrapper": "getClaudeSession",
       "dtoOwner": "claude",
       "requestDto": "ClaudeDetailRequest",
       "responseDto": "ClaudeDetailResponse"
@@ -659,7 +612,6 @@
       "scope": "host_only",
       "coreUseCase": "claude.ownership_diagnostics",
       "ffiHandler": "dispatch::providers::claude_ownership_diagnostics",
-      "webuiWrapper": "getClaudeOwnershipDiagnostics",
       "dtoOwner": "claude",
       "requestDto": "ClaudeSessionRequest",
       "responseDto": "ClaudeOwnershipDiagnostics",
@@ -672,7 +624,6 @@
       "coreUseCase": "claude.rename",
       "linuxRpc": "claude.rename",
       "ffiHandler": "dispatch::providers::claude_rename",
-      "webuiWrapper": "renameClaudeSession",
       "dtoOwner": "claude",
       "requestDto": "ClaudeRenameRequest",
       "responseDto": "ClaudeMutationResponse"
@@ -684,7 +635,6 @@
       "coreUseCase": "claude.delete_preview",
       "linuxRpc": "claude.deletePreview",
       "ffiHandler": "dispatch::providers::claude_delete_preview",
-      "webuiWrapper": "previewClaudeSessionDelete",
       "dtoOwner": "claude",
       "requestDto": "ClaudeSessionRequest",
       "responseDto": "ClaudeDeletePreview"
@@ -696,7 +646,6 @@
       "coreUseCase": "claude.delete_execute",
       "linuxRpc": "claude.deleteExecute",
       "ffiHandler": "dispatch::providers::claude_delete_execute",
-      "webuiWrapper": "deleteClaudeSession",
       "dtoOwner": "claude",
       "requestDto": "ClaudeDeleteRequest",
       "responseDto": "ClaudeMutationResponse"
@@ -707,7 +656,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.attach",
       "ffiHandler": "dispatch::collaboration::codex_desktop_attach",
-      "webuiWrapper": "attachDesktopThread",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopThreadRequest",
       "responseDto": "DesktopView",
@@ -719,7 +667,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.action",
       "ffiHandler": "dispatch::collaboration::codex_desktop_action",
-      "webuiWrapper": "actOnDesktopThread",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopActionRequest",
       "responseDto": "DesktopView",
@@ -731,7 +678,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.detach",
       "ffiHandler": "dispatch::collaboration::codex_desktop_detach",
-      "webuiWrapper": "detachDesktopThread",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopSessionRequest",
       "responseDto": "DesktopAck",
@@ -743,7 +689,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.open",
       "ffiHandler": "dispatch::collaboration::codex_desktop_open",
-      "webuiWrapper": "openDesktopThread",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopThreadRequest",
       "responseDto": "DesktopAck",
@@ -755,7 +700,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.catalog",
       "ffiHandler": "dispatch::collaboration::codex_desktop_catalog",
-      "webuiWrapper": "desktopCatalog",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopCatalogRequest",
       "responseDto": "DesktopCatalog",
@@ -767,7 +711,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.choose",
       "ffiHandler": "dispatch::collaboration::codex_desktop_choose",
-      "webuiWrapper": "chooseDesktopItem",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopChooseRequest",
       "responseDto": "DesktopChoice",
@@ -779,7 +722,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.create",
       "ffiHandler": "dispatch::collaboration::codex_desktop_create",
-      "webuiWrapper": "createDesktopThread",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopCreateRequest",
       "responseDto": "DesktopCreatedThread",
@@ -791,7 +733,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.attachments",
       "ffiHandler": "dispatch::collaboration::codex_desktop_attachments",
-      "webuiWrapper": "bindDesktopAttachments",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopAttachmentRequest",
       "responseDto": "DesktopAttachmentResult",
@@ -803,7 +744,6 @@
       "scope": "host_only",
       "coreUseCase": "desktop.codex.diagnostics",
       "ffiHandler": "dispatch::collaboration::codex_desktop_diagnostics",
-      "webuiWrapper": "desktopDiagnostics",
       "dtoOwner": "codex_desktop",
       "requestDto": "DesktopDiagnosticsRequest",
       "responseDto": "DesktopDiagnostics",
@@ -815,7 +755,6 @@
       "scope": "host_only",
       "coreUseCase": "probe.claude_hooks",
       "ffiHandler": "dispatch::providers::claude_hooks",
-      "webuiWrapper": "manageClaudeHooks",
       "dtoOwner": "claude",
       "requestDto": "ClaudeHooksRequest",
       "responseDto": "ClaudeHooksStatus",
@@ -827,7 +766,6 @@
       "scope": "host_only",
       "coreUseCase": "grokbot.list",
       "ffiHandler": "dispatch::providers::grokbot_list",
-      "webuiWrapper": "listGrokBotSessions",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderListRequest",
       "responseDto": "ProviderListResponse",
@@ -839,7 +777,6 @@
       "scope": "host_only",
       "coreUseCase": "grokbot.detail",
       "ffiHandler": "dispatch::providers::grokbot_detail",
-      "webuiWrapper": "getGrokBotSession",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderDetailRequest",
       "responseDto": "ProviderDetailResponse",
@@ -852,7 +789,6 @@
       "coreUseCase": "antigravity.list",
       "linuxRpc": "antigravity.list",
       "ffiHandler": "dispatch::providers::antigravity_list",
-      "webuiWrapper": "listAntigravitySessions",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderListRequest",
       "responseDto": "ProviderListResponse"
@@ -864,7 +800,6 @@
       "coreUseCase": "antigravity.detail",
       "linuxRpc": "antigravity.detail",
       "ffiHandler": "dispatch::providers::antigravity_detail",
-      "webuiWrapper": "getAntigravitySession",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderDetailRequest",
       "responseDto": "ProviderDetailResponse"
@@ -876,7 +811,6 @@
       "coreUseCase": "antigravity.rename",
       "linuxRpc": "antigravity.rename",
       "ffiHandler": "dispatch::providers::antigravity_rename",
-      "webuiWrapper": "renameAntigravitySession",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderRenameRequest",
       "responseDto": "ProviderMutationResponse"
@@ -888,7 +822,6 @@
       "coreUseCase": "antigravity.archive",
       "linuxRpc": "antigravity.archive",
       "ffiHandler": "dispatch::providers::antigravity_archive",
-      "webuiWrapper": "archiveAntigravitySession",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderSessionRequest",
       "responseDto": "ProviderMutationResponse"
@@ -900,7 +833,6 @@
       "coreUseCase": "antigravity.restore",
       "linuxRpc": "antigravity.restore",
       "ffiHandler": "dispatch::providers::antigravity_restore",
-      "webuiWrapper": "restoreAntigravitySession",
       "dtoOwner": "antigravity",
       "requestDto": "ProviderSessionRequest",
       "responseDto": "ProviderMutationResponse"
@@ -912,7 +844,6 @@
       "coreUseCase": "dsh.list",
       "linuxRpc": "dsh.list",
       "ffiHandler": "dispatch::providers::dsh_list",
-      "webuiWrapper": "listDshSessions",
       "dtoOwner": "dsh",
       "requestDto": "ProviderListRequest",
       "responseDto": "ProviderListResponse"
@@ -924,7 +855,6 @@
       "coreUseCase": "dsh.detail",
       "linuxRpc": "dsh.detail",
       "ffiHandler": "dispatch::providers::dsh_detail",
-      "webuiWrapper": "getDshSession",
       "dtoOwner": "dsh",
       "requestDto": "ProviderDetailRequest",
       "responseDto": "ProviderDetailResponse"
@@ -936,7 +866,6 @@
       "coreUseCase": "dsh.rename",
       "linuxRpc": "dsh.rename",
       "ffiHandler": "dispatch::providers::dsh_rename",
-      "webuiWrapper": "renameDshSession",
       "dtoOwner": "dsh",
       "requestDto": "ProviderRenameRequest",
       "responseDto": "ProviderMutationResponse"
@@ -948,7 +877,6 @@
       "coreUseCase": "dsh.archive",
       "linuxRpc": "dsh.archive",
       "ffiHandler": "dispatch::providers::dsh_archive",
-      "webuiWrapper": "archiveDshSession",
       "dtoOwner": "dsh",
       "requestDto": "ProviderSessionRequest",
       "responseDto": "ProviderMutationResponse"
@@ -960,7 +888,6 @@
       "coreUseCase": "dsh.restore",
       "linuxRpc": "dsh.restore",
       "ffiHandler": "dispatch::providers::dsh_restore",
-      "webuiWrapper": "restoreDshSession",
       "dtoOwner": "dsh",
       "requestDto": "ProviderSessionRequest",
       "responseDto": "ProviderMutationResponse"
@@ -972,7 +899,6 @@
       "coreUseCase": "github_ci",
       "linuxRpc": "github.ci.status",
       "ffiHandler": "dispatch::maintenance::github_ci_status",
-      "webuiWrapper": "getGithubCiStatus",
       "dtoOwner": "github_ci",
       "requestDto": "GithubCiRequest",
       "responseDto": "GithubCiStatus"
@@ -980,516 +906,388 @@
   ],
   "dtoCatalog": {
     "SessionStorageSize": {
-      "core": "SessionStorageSize",
-      "webui": "SessionStorageSize"
+      "core": "SessionStorageSize"
     },
     "SessionBatchRequest": {
-      "core": "SessionBatchRequest",
-      "webui": "SessionBatchRequest"
+      "core": "SessionBatchRequest"
     },
     "SessionBatchPreview": {
-      "core": "SessionBatchPreview",
-      "webui": "SessionBatchPreview"
+      "core": "SessionBatchPreview"
     },
     "SessionBatchExecuteRequest": {
-      "core": "SessionBatchExecuteRequest",
-      "webui": "SessionBatchExecuteRequest"
+      "core": "SessionBatchExecuteRequest"
     },
     "SessionBatchResult": {
-      "core": "SessionBatchResult",
-      "webui": "SessionBatchResult"
+      "core": "SessionBatchResult"
     },
     "CleanupHiddenDryRunResponse": {
-      "core": "CleanupHiddenDryRunResponse",
-      "webui": "CleanupHiddenDryRunResponse"
+      "core": "CleanupHiddenDryRunResponse"
     },
     "GrokDeletePreview": {
-      "core": "GrokDeletePreview",
-      "webui": "GrokDeletePreview"
+      "core": "GrokDeletePreview"
     },
     "GrokDeleteRequest": {
-      "core": "GrokDeleteRequest",
-      "webui": "GrokDeleteRequest"
+      "core": "GrokDeleteRequest"
     },
     "GrokDetailResponse": {
-      "core": "GrokDetailResponse",
-      "webui": "GrokDetailResponse"
+      "core": "GrokDetailResponse"
     },
     "GrokListRequest": {
-      "core": "GrokListRequest",
-      "webui": "GrokListRequest"
+      "core": "GrokListRequest"
     },
     "GrokListResponse": {
-      "core": "GrokListResponse",
-      "webui": "GrokListResponse"
+      "core": "GrokListResponse"
     },
     "GrokMutationResponse": {
-      "core": "GrokMutationResponse",
-      "webui": "GrokMutationResponse"
+      "core": "GrokMutationResponse"
     },
     "GrokRenameRequest": {
-      "core": "GrokRenameRequest",
-      "webui": "GrokRenameRequest"
+      "core": "GrokRenameRequest"
     },
     "GrokSessionRequest": {
-      "core": "GrokSessionRequest",
-      "webui": "GrokSessionRequest"
+      "core": "GrokSessionRequest"
     },
     "JobsDetailResponse": {
-      "core": "JobsDetailResponse",
-      "webui": "JobsDetailResponse"
+      "core": "JobsDetailResponse"
     },
     "JobsListResponse": {
-      "core": "JobsListResponse",
-      "webui": "JobsListResponse"
+      "core": "JobsListResponse"
     },
     "NoRequest": {
-      "core": "NoRequest",
-      "webui": "NoRequest"
+      "core": "NoRequest"
     },
     "ProbeBarkTestResponse": {
-      "core": "ProbeBarkTestResponse",
-      "webui": "ProbeBarkTestResponse"
+      "core": "ProbeBarkTestResponse"
     },
     "ProbeEventsResponse": {
-      "core": "ProbeEventsResponse",
-      "webui": "ProbeEventsResponse"
+      "core": "ProbeEventsResponse"
     },
     "ProbeInstallHooksResponse": {
-      "core": "ProbeInstallHooksResponse",
-      "webui": "ProbeInstallHooksResponse"
+      "core": "ProbeInstallHooksResponse"
     },
     "ProbeRemoveHooksResponse": {
-      "core": "ProbeRemoveHooksResponse",
-      "webui": "ProbeRemoveHooksResponse"
+      "core": "ProbeRemoveHooksResponse"
     },
     "ProbeSettingsGetResponse": {
-      "core": "ProbeSettingsGetResponse",
-      "webui": "ProbeSettingsGetResponse"
+      "core": "ProbeSettingsGetResponse"
     },
     "ProbeSettingsSaveRequest": {
-      "core": "ProbeSettingsSaveRequest",
-      "webui": "ProbeSettingsSaveRequest"
+      "core": "ProbeSettingsSaveRequest"
     },
     "ProbeSettingsSaveResponse": {
-      "core": "ProbeSettingsSaveResponse",
-      "webui": "ProbeSettingsSaveResponse"
+      "core": "ProbeSettingsSaveResponse"
     },
     "ProbeStatusRequest": {
-      "core": "ProbeStatusRequest",
-      "webui": "ProbeStatusRequest"
+      "core": "ProbeStatusRequest"
     },
     "ProbeStatusResponse": {
-      "core": "ProbeStatusResponse",
-      "webui": "ProbeStatusResponse"
+      "core": "ProbeStatusResponse"
     },
     "ThreadsArchiveResponse": {
-      "core": "ThreadsArchiveResponse",
-      "webui": "ThreadsArchiveResponse"
+      "core": "ThreadsArchiveResponse"
     },
     "ThreadsBlocksResponse": {
-      "core": "ThreadsBlocksResponse",
-      "webui": "ThreadsBlocksResponse"
+      "core": "ThreadsBlocksResponse"
     },
     "ThreadsDetailResponse": {
-      "core": "ThreadsDetailResponse",
-      "webui": "ThreadsDetailResponse"
+      "core": "ThreadsDetailResponse"
     },
     "ThreadsListResponse": {
-      "core": "ThreadsListResponse",
-      "webui": "ThreadsListResponse"
+      "core": "ThreadsListResponse"
     },
     "ThreadsRenameResponse": {
-      "core": "ThreadsRenameResponse",
-      "webui": "ThreadsRenameResponse"
+      "core": "ThreadsRenameResponse"
     },
     "ThreadsRestoreResponse": {
-      "core": "ThreadsRestoreResponse",
-      "webui": "ThreadsRestoreResponse"
+      "core": "ThreadsRestoreResponse"
     },
     "CodexAccountScopeStatus": {
-      "core": "CodexAccountScopeStatus",
-      "webui": "CodexAccountScopeStatus"
+      "core": "CodexAccountScopeStatus"
     },
     "CodexAccountScopeResult": {
-      "core": "CodexAccountScopeResult",
-      "webui": "CodexAccountScopeResult"
+      "core": "CodexAccountScopeResult"
     },
     "CodexAccountScopeItem": {
-      "core": "CodexAccountScopeItem",
-      "webui": "CodexAccountScopeItem"
+      "core": "CodexAccountScopeItem"
     },
     "CodexAccountScopeReason": {
-      "core": "CodexAccountScopeReason",
-      "webui": "CodexAccountScopeReason"
+      "core": "CodexAccountScopeReason"
     },
     "UpdatesCheckResponse": {
-      "core": "UpdatesCheckResponse",
-      "webui": "UpdatesCheckResponse"
+      "core": "UpdatesCheckResponse"
     },
     "UpdatesInstallResponse": {
-      "core": "UpdatesInstallResponse",
-      "webui": "UpdatesInstallResponse"
+      "core": "UpdatesInstallResponse"
     },
     "UpdatesStatusResponse": {
-      "core": "UpdatesStatusResponse",
-      "webui": "UpdatesStatusResponse"
+      "core": "UpdatesStatusResponse"
     },
     "SystemCapabilitiesResponse": {
-      "core": "SystemCapabilitiesResponse",
-      "webui": "SystemCapabilitiesResponse"
+      "core": "SystemCapabilitiesResponse"
     },
     "SessionAttachmentRequest": {
-      "core": "SessionAttachmentRequest",
-      "webui": "SessionAttachmentRequest"
+      "core": "SessionAttachmentRequest"
     },
     "SessionAttachmentResponse": {
-      "core": "SessionAttachmentResponse",
-      "webui": "SessionAttachmentResponse"
+      "core": "SessionAttachmentResponse"
     },
     "RemoteMachineSummary": {
-      "core": "RemoteMachineSummary",
-      "webui": "RemoteMachineSummary"
+      "core": "RemoteMachineSummary"
     },
     "RemoteConnectionView": {
-      "core": "RemoteConnectionView",
-      "webui": "RemoteConnectionView"
+      "core": "RemoteConnectionView"
     },
     "RemoteConnectionCredentials": {
-      "core": "RemoteConnectionCredentials",
-      "webui": "RemoteConnectionCredentials"
+      "core": "RemoteConnectionCredentials"
     },
     "RemoteRevisionRequest": {
-      "core": "RemoteRevisionRequest",
-      "webui": "RemoteRevisionRequest"
+      "core": "RemoteRevisionRequest"
     },
     "RemoteSelectionRequest": {
-      "core": "RemoteSelectionRequest",
-      "webui": "RemoteSelectionRequest"
+      "core": "RemoteSelectionRequest"
     },
     "RemoteInvokeRequest": {
-      "core": "RemoteInvokeRequest",
-      "webui": "RemoteInvokeRequest"
+      "core": "RemoteInvokeRequest"
     },
     "RemoteInvokeResponse": {
-      "core": "RemoteInvokeResponse",
-      "webui": "RemoteInvokeResponse"
+      "core": "RemoteInvokeResponse"
     },
     "PlanSaveRequest": {
-      "core": "PlanSaveRequest",
-      "webui": "PlanSaveRequest"
+      "core": "PlanSaveRequest"
     },
     "PlanSaveResult": {
-      "core": "PlanSaveResult",
-      "webui": "PlanSaveResult"
+      "core": "PlanSaveResult"
     },
     "ClaudeDeletePreview": {
-      "core": "ClaudeDeletePreview",
-      "webui": "ClaudeDeletePreview"
+      "core": "ClaudeDeletePreview"
     },
     "ClaudeDeleteRequest": {
-      "core": "ClaudeDeleteRequest",
-      "webui": "ClaudeDeleteRequest"
+      "core": "ClaudeDeleteRequest"
     },
     "ClaudeDetailResponse": {
-      "core": "ClaudeDetailResponse",
-      "webui": "ClaudeDetailResponse"
+      "core": "ClaudeDetailResponse"
     },
     "ClaudeListRequest": {
-      "core": "ClaudeListRequest",
-      "webui": "ClaudeListRequest"
+      "core": "ClaudeListRequest"
     },
     "ClaudeListResponse": {
-      "core": "ClaudeListResponse",
-      "webui": "ClaudeListResponse"
+      "core": "ClaudeListResponse"
     },
     "ClaudeMutationResponse": {
-      "core": "ClaudeMutationResponse",
-      "webui": "ClaudeMutationResponse"
+      "core": "ClaudeMutationResponse"
     },
     "ClaudeRenameRequest": {
-      "core": "ClaudeRenameRequest",
-      "webui": "ClaudeRenameRequest"
+      "core": "ClaudeRenameRequest"
     },
     "ClaudeSessionRequest": {
-      "core": "ClaudeSessionRequest",
-      "webui": "ClaudeSessionRequest"
+      "core": "ClaudeSessionRequest"
     },
     "ClaudeDetailRequest": {
-      "core": "ClaudeDetailRequest",
-      "webui": "ClaudeDetailRequest"
+      "core": "ClaudeDetailRequest"
     },
     "SessionSearchRequest": {
-      "core": "SessionSearchRequest",
-      "webui": "SessionSearchRequest"
+      "core": "SessionSearchRequest"
     },
     "SessionSearchResponse": {
-      "core": "SessionSearchResponse",
-      "webui": "SessionSearchResponse"
+      "core": "SessionSearchResponse"
     },
     "HiddenScanRequest": {
-      "core": "HiddenScanRequest",
-      "webui": "HiddenScanRequest"
+      "core": "HiddenScanRequest"
     },
     "SubagentDetailRequest": {
-      "core": "SubagentDetailRequest",
-      "webui": "SubagentDetailRequest"
+      "core": "SubagentDetailRequest"
     },
     "SubagentDetailResponse": {
-      "core": "SubagentDetailResponse",
-      "webui": "SubagentDetailResponse"
+      "core": "SubagentDetailResponse"
     },
     "SubagentActivity": {
-      "core": "SubagentActivity",
-      "webui": "SubagentActivity"
+      "core": "SubagentActivity"
     },
     "SubagentCollection": {
-      "core": "SubagentCollection",
-      "webui": "SubagentCollection"
+      "core": "SubagentCollection"
     },
     "DesktopThreadRequest": {
-      "core": "DesktopThreadRequest",
-      "webui": "DesktopThreadRequest"
+      "core": "DesktopThreadRequest"
     },
     "DesktopSessionRequest": {
-      "core": "DesktopSessionRequest",
-      "webui": "DesktopSessionRequest"
+      "core": "DesktopSessionRequest"
     },
     "DesktopActionRequest": {
-      "core": "DesktopActionRequest",
-      "webui": "DesktopActionRequest"
+      "core": "DesktopActionRequest"
     },
     "DesktopAction": {
-      "core": "DesktopAction",
-      "webui": "DesktopAction"
+      "core": "DesktopAction"
     },
     "DesktopMode": {
-      "core": "DesktopMode",
-      "webui": "DesktopMode"
+      "core": "DesktopMode"
     },
     "DesktopAnswer": {
-      "core": "DesktopAnswer",
-      "webui": "DesktopAnswer"
+      "core": "DesktopAnswer"
     },
     "DesktopView": {
-      "core": "DesktopView",
-      "webui": "DesktopView"
+      "core": "DesktopView"
     },
     "DesktopQueuedMessage": {
-      "core": "DesktopQueuedMessage",
-      "webui": "DesktopQueuedMessage"
+      "core": "DesktopQueuedMessage"
     },
     "DesktopPendingRequest": {
-      "core": "DesktopPendingRequest",
-      "webui": "DesktopPendingRequest"
+      "core": "DesktopPendingRequest"
     },
     "DesktopQuestion": {
-      "core": "DesktopQuestion",
-      "webui": "DesktopQuestion"
+      "core": "DesktopQuestion"
     },
     "DesktopQuestionOption": {
-      "core": "DesktopQuestionOption",
-      "webui": "DesktopQuestionOption"
+      "core": "DesktopQuestionOption"
     },
     "DesktopCatalogRequest": {
-      "core": "DesktopCatalogRequest",
-      "webui": "DesktopCatalogRequest"
+      "core": "DesktopCatalogRequest"
     },
     "DesktopCatalog": {
-      "core": "DesktopCatalog",
-      "webui": "DesktopCatalog"
+      "core": "DesktopCatalog"
     },
     "DesktopCatalogItem": {
-      "core": "DesktopCatalogItem",
-      "webui": "DesktopCatalogItem"
+      "core": "DesktopCatalogItem"
     },
     "DesktopChooseRequest": {
-      "core": "DesktopChooseRequest",
-      "webui": "DesktopChooseRequest"
+      "core": "DesktopChooseRequest"
     },
     "DesktopChosenItem": {
-      "core": "DesktopChosenItem",
-      "webui": "DesktopChosenItem"
+      "core": "DesktopChosenItem"
     },
     "DesktopChoice": {
-      "core": "DesktopChoice",
-      "webui": "DesktopChoice"
+      "core": "DesktopChoice"
     },
     "DesktopCreateRequest": {
-      "core": "DesktopCreateRequest",
-      "webui": "DesktopCreateRequest"
+      "core": "DesktopCreateRequest"
     },
     "DesktopCreatedThread": {
-      "core": "DesktopCreatedThread",
-      "webui": "DesktopCreatedThread"
+      "core": "DesktopCreatedThread"
     },
     "DesktopAck": {
-      "core": "DesktopAck",
-      "webui": "DesktopAck"
+      "core": "DesktopAck"
     },
     "DesktopReferenceSpan": {
-      "core": "DesktopReferenceSpan",
-      "webui": "DesktopReferenceSpan"
+      "core": "DesktopReferenceSpan"
     },
     "DesktopReview": {
-      "core": "DesktopReview",
-      "webui": "DesktopReview"
+      "core": "DesktopReview"
     },
     "DesktopFileReview": {
-      "core": "DesktopFileReview",
-      "webui": "DesktopFileReview"
+      "core": "DesktopFileReview"
     },
     "DesktopPermissionsReview": {
-      "core": "DesktopPermissionsReview",
-      "webui": "DesktopPermissionsReview"
+      "core": "DesktopPermissionsReview"
     },
     "DesktopAttachmentRequest": {
-      "core": "DesktopAttachmentRequest",
-      "webui": "DesktopAttachmentRequest"
+      "core": "DesktopAttachmentRequest"
     },
     "DesktopAttachmentAction": {
-      "core": "DesktopAttachmentAction",
-      "webui": "DesktopAttachmentAction"
+      "core": "DesktopAttachmentAction"
     },
     "DesktopAttachmentBounds": {
-      "core": "DesktopAttachmentBounds",
-      "webui": "DesktopAttachmentBounds"
+      "core": "DesktopAttachmentBounds"
     },
     "DesktopAttachmentEvent": {
-      "core": "DesktopAttachmentEvent",
-      "webui": "DesktopAttachmentEvent"
+      "core": "DesktopAttachmentEvent"
     },
     "DesktopAttachmentResult": {
-      "core": "DesktopAttachmentResult",
-      "webui": "DesktopAttachmentResult"
+      "core": "DesktopAttachmentResult"
     },
     "DesktopPasteDisposition": {
-      "core": "DesktopPasteDisposition",
-      "webui": "DesktopPasteDisposition"
+      "core": "DesktopPasteDisposition"
     },
     "DesktopDiagnosticsRequest": {
-      "core": "DesktopDiagnosticsRequest",
-      "webui": "DesktopDiagnosticsRequest"
+      "core": "DesktopDiagnosticsRequest"
     },
     "DesktopDiagnostic": {
-      "core": "DesktopDiagnostic",
-      "webui": "DesktopDiagnostic"
+      "core": "DesktopDiagnostic"
     },
     "DesktopDiagnostics": {
-      "core": "DesktopDiagnostics",
-      "webui": "DesktopDiagnostics"
+      "core": "DesktopDiagnostics"
     },
     "DesktopGoal": {
-      "core": "DesktopGoal",
-      "webui": "DesktopGoal"
+      "core": "DesktopGoal"
     },
     "ClaudeHooksRequest": {
-      "core": "ClaudeHooksRequest",
-      "webui": "ClaudeHooksRequest"
+      "core": "ClaudeHooksRequest"
     },
     "ClaudeHooksStatus": {
-      "core": "ClaudeHooksStatus",
-      "webui": "ClaudeHooksStatus"
+      "core": "ClaudeHooksStatus"
     },
     "ClaudeHooksAction": {
-      "core": "ClaudeHooksAction",
-      "webui": "ClaudeHooksAction"
+      "core": "ClaudeHooksAction"
     },
     "ClaudeOwnershipDiagnostics": {
-      "core": "ClaudeOwnershipDiagnostics",
-      "webui": "ClaudeOwnershipDiagnostics"
+      "core": "ClaudeOwnershipDiagnostics"
     },
     "ClaudeOwnershipProcess": {
-      "core": "ClaudeOwnershipProcess",
-      "webui": "ClaudeOwnershipProcess"
+      "core": "ClaudeOwnershipProcess"
     },
     "UnifiedCleanupCandidate": {
-      "core": "UnifiedCleanupCandidate",
-      "webui": "UnifiedCleanupCandidate"
+      "core": "UnifiedCleanupCandidate"
     },
     "UnifiedCleanupTargetSelection": {
-      "core": "UnifiedCleanupTargetSelection",
-      "webui": "UnifiedCleanupTargetSelection"
+      "core": "UnifiedCleanupTargetSelection"
     },
     "UnifiedCleanupScopePlan": {
-      "core": "UnifiedCleanupScopePlan",
-      "webui": "UnifiedCleanupScopePlan"
+      "core": "UnifiedCleanupScopePlan"
     },
     "UnifiedCleanupPlan": {
-      "core": "UnifiedCleanupPlan",
-      "webui": "UnifiedCleanupPlan"
+      "core": "UnifiedCleanupPlan"
     },
     "UnifiedCleanupExecuteRequest": {
-      "core": "UnifiedCleanupExecuteRequest",
-      "webui": "UnifiedCleanupExecuteRequest"
+      "core": "UnifiedCleanupExecuteRequest"
     },
     "UnifiedCleanupScopeResult": {
-      "core": "UnifiedCleanupScopeResult",
-      "webui": "UnifiedCleanupScopeResult"
+      "core": "UnifiedCleanupScopeResult"
     },
     "UnifiedCleanupResult": {
-      "core": "UnifiedCleanupResult",
-      "webui": "UnifiedCleanupResult"
+      "core": "UnifiedCleanupResult"
     },
     "ProviderListRequest": {
-      "core": "ProviderListRequest",
-      "webui": "ProviderListRequest"
+      "core": "ProviderListRequest"
     },
     "ProviderListResponse": {
-      "core": "ProviderListResponse",
-      "webui": "ProviderListResponse"
+      "core": "ProviderListResponse"
     },
     "ProviderDetailRequest": {
-      "core": "ProviderDetailRequest",
-      "webui": "ProviderDetailRequest"
+      "core": "ProviderDetailRequest"
     },
     "ProviderDetailResponse": {
-      "core": "ProviderDetailResponse",
-      "webui": "ProviderDetailResponse"
+      "core": "ProviderDetailResponse"
     },
     "ProviderRenameRequest": {
-      "core": "ProviderRenameRequest",
-      "webui": "ProviderRenameRequest"
+      "core": "ProviderRenameRequest"
     },
     "ProviderSessionRequest": {
-      "core": "ProviderSessionRequest",
-      "webui": "ProviderSessionRequest"
+      "core": "ProviderSessionRequest"
     },
     "ProviderMutationResponse": {
-      "core": "ProviderMutationResponse",
-      "webui": "ProviderMutationResponse"
+      "core": "ProviderMutationResponse"
     },
     "SshHostList": {
-      "core": "SshHostList",
-      "webui": "SshHostList"
+      "core": "SshHostList"
     },
     "SshDeleteRequest": {
-      "core": "SshDeleteRequest",
-      "webui": "SshDeleteRequest"
+      "core": "SshDeleteRequest"
     },
     "DesktopJobDetailRequest": {
-      "core": "DesktopJobDetailRequest",
-      "webui": "DesktopJobDetailRequest"
+      "core": "DesktopJobDetailRequest"
     },
     "GithubCiRequest": {
-      "core": "GithubCiRequest",
-      "webui": "GithubCiRequest"
+      "core": "GithubCiRequest"
     },
     "GithubCiStatus": {
-      "core": "GithubCiStatus",
-      "webui": "GithubCiStatus"
+      "core": "GithubCiStatus"
     },
     "GithubCiAccount": {
-      "core": "GithubCiAccount",
-      "webui": "GithubCiAccount"
+      "core": "GithubCiAccount"
     },
     "GithubCiRepository": {
-      "core": "GithubCiRepository",
-      "webui": "GithubCiRepository"
+      "core": "GithubCiRepository"
     },
     "GithubCiRun": {
-      "core": "GithubCiRun",
-      "webui": "GithubCiRun"
+      "core": "GithubCiRun"
     }
   }
 }

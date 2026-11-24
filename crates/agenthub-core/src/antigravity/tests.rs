@@ -960,10 +960,11 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     probe_cfg.probe.notifications.enabled = true;
     probe_cfg.probe.notifications.notify_antigravity = true;
     probe_cfg.probe.notifications.notify_antigravity_completion = true;
-    db.stage_native_notifications(
+    db.stage_native_notifications_with_hooks(
         NativeProvider::Antigravity,
         &crate::native_probe::NativeScan::default(),
         &probe_cfg,
+        false,
     )
     .unwrap();
     // 2026-01-01T00:05:00Z in epoch milliseconds (deterministic fixture timestamp).
@@ -985,13 +986,14 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
         "prior turn with pending background work must clamp settled_count below 137"
     );
     assert_eq!(
-        db.stage_native_notifications(
+        db.stage_native_notifications_with_hooks(
             NativeProvider::Antigravity,
             &crate::native_probe::NativeScan {
                 streams: vec![pending_snap],
                 errors: 0,
             },
             &probe_cfg,
+            false,
         )
         .unwrap(),
         0
@@ -1039,13 +1041,14 @@ fn turn_ending_with_planner_response_no_tool_call_emits_completion_and_survives_
     assert_eq!(released_snap.events[0].position, 137);
     assert_eq!(released_snap.settled_count, 138);
     assert_eq!(
-        db.stage_native_notifications(
+        db.stage_native_notifications_with_hooks(
             NativeProvider::Antigravity,
             &crate::native_probe::NativeScan {
                 streams: vec![released_snap],
                 errors: 0,
             },
             &probe_cfg,
+            false,
         )
         .unwrap(),
         1,

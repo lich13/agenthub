@@ -412,7 +412,10 @@ public final class ThreadMessageStore: ObservableObject {
         guard let updates, !updates.isEmpty else { return blocks }
         return blocks.map { block in
             guard let sub = block.subagent else { return block }
-            if let key = sub.eventId ?? sub.agentId, let nextSub = updates[key] {
+            if let key = sub.eventId ?? sub.agentId, var nextSub = updates[key] {
+                if nextSub.delegation == nil {
+                    nextSub.delegation = sub.delegation
+                }
                 var copy = block
                 copy.subagent = nextSub
                 return copy
@@ -432,6 +435,7 @@ public struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
     public var hasMore: Bool
     public var timeline: [TimelineEntry]?
     public var subagents: SubagentCollection?
+    public var subagentUpdates: [String: SubagentActivity]?
 
     public init() {
         self.events = []
@@ -443,9 +447,32 @@ public struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
 public final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObject {
     private var slots: [String: PagedEventSlot<Event>] = [:]
     private let idOf: (Event, Int) -> String
+    private let mergeSubagentUpdate: ((Event, [String: SubagentActivity]) -> Event)?
 
-    public init(idOf: @escaping (Event, Int) -> String) {
+    public init(
+        mergeSubagentUpdate: ((Event, [String: SubagentActivity]) -> Event)? = nil,
+        idOf: @escaping (Event, Int) -> String
+    ) {
+        self.mergeSubagentUpdate = mergeSubagentUpdate
         self.idOf = idOf
+    }
+
+    public static func forProviderEvents() -> PagedEventHistoryStore<ProviderHistoryEvent> {
+        PagedEventHistoryStore<ProviderHistoryEvent>(
+            mergeSubagentUpdate: { ev, updates in
+                guard let sub = ev.subagent,
+                      let key = sub.eventId ?? Optional(ev.id),
+                      var nextSub = updates[key] ?? (sub.agentId.flatMap { updates[$0] })
+                else { return ev }
+                if nextSub.delegation == nil {
+                    nextSub.delegation = sub.delegation
+                }
+                var copy = ev
+                copy.subagent = nextSub
+                return copy
+            },
+            idOf: { ev, _ in ev.id }
+        )
     }
 
     public func slot(for key: String) -> PagedEventSlot<Event> {
@@ -454,6 +481,11 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
 
     public func clearAll() {
         slots.removeAll()
+    }
+
+    private func applyUpdates(_ events: [Event], updates: [String: SubagentActivity]?) -> [Event] {
+        guard let mergeSubagentUpdate, let updates, !updates.isEmpty else { return events }
+        return events.map { mergeSubagentUpdate($0, updates) }
     }
 
     @discardableResult
@@ -465,7 +497,8 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         beforeCursor: String?,
         hasMore: Bool,
         timeline: [TimelineEntry]? = nil,
-        subagents: SubagentCollection? = nil
+        subagents: SubagentCollection? = nil,
+        subagentUpdates: [String: SubagentActivity]? = nil
     ) -> PagedEventSlot<Event> {
         var current = slot(for: key)
         let rewritten: Bool = {
@@ -485,12 +518,14 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
             return false
         }()
 
+        let nextUpdates = subagentUpdates ?? (rewritten ? nil : current.subagentUpdates)
         if rewritten || current.events.isEmpty {
-            current.events = headEvents
+            current.events = applyUpdates(headEvents, updates: nextUpdates)
             current.beforeCursor = beforeCursor
             current.hasMore = hasMore && beforeCursor != nil
         } else {
-            current.events = mergeEvents(existing: current.events, incoming: headEvents, prepend: false)
+            let merged = mergeEvents(existing: current.events, incoming: headEvents, prepend: false)
+            current.events = applyUpdates(merged, updates: nextUpdates)
             if let totalEvents, current.events.count >= totalEvents {
                 current.beforeCursor = nil
                 current.hasMore = false
@@ -503,6 +538,7 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         current.totalEvents = totalEvents ?? max(current.totalEvents ?? 0, current.events.count)
         current.timeline = timeline ?? (rewritten ? nil : current.timeline)
         current.subagents = subagents ?? (rewritten ? nil : current.subagents)
+        current.subagentUpdates = nextUpdates
         slots[key] = current
         return current
     }
@@ -515,7 +551,8 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         history: HistoryMetadata?,
         totalEvents: Int?,
         beforeCursor: String?,
-        hasMore: Bool
+        hasMore: Bool,
+        subagentUpdates: [String: SubagentActivity]? = nil
     ) -> PagedEventSlot<Event> {
         var current = slot(for: key)
         if let oldH = current.history, let pageH = history, oldH.epoch != pageH.epoch {
@@ -524,7 +561,10 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         if let sb = current.beforeCursor, sb != expectedCursor {
             return current
         }
-        current.events = mergeEvents(existing: current.events, incoming: olderEvents, prepend: true)
+        let nextUpdates = subagentUpdates ?? current.subagentUpdates
+        let merged = mergeEvents(existing: current.events, incoming: olderEvents, prepend: true)
+        current.events = applyUpdates(merged, updates: nextUpdates)
+        current.subagentUpdates = nextUpdates
         if let totalEvents {
             current.totalEvents = max(totalEvents, current.events.count)
         }

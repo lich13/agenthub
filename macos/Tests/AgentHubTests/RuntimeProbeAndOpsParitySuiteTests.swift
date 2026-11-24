@@ -4,39 +4,11 @@ import Foundation
 import SwiftUI
 import XCTest
 
-final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuite {
-    static func executeMappedMethod(_ methodName: String) throws {
-        let instance = RuntimeProbeAndOpsParitySuiteTests()
-        switch methodName {
-        case "testPorted_appShellWindowAndModals": try instance.testPorted_appShellWindowAndModals()
-        case "testPorted_workspaceSplitShell": try instance.testPorted_workspaceSplitShell()
-        case "testPorted_apiContractRouting": try instance.testPorted_apiContractRouting()
-        case "testPorted_runtimeStreamAndEpochs": try instance.testPorted_runtimeStreamAndEpochs()
-        case "testPorted_desktopIntent": try instance.testPorted_desktopIntent()
-        case "testPorted_desktopRefresh": try instance.testPorted_desktopRefresh()
-        case "testPorted_runtimeViewModel": try instance.testPorted_runtimeViewModel()
-        case "testPorted_filePathsApi": try instance.testPorted_filePathsApi()
-        case "testPorted_probeUi": try instance.testPorted_probeUi()
-        case "testPorted_githubCiCard": try instance.testPorted_githubCiCard()
-        case "testPorted_probeWorkspace": try instance.testPorted_probeWorkspace()
-        case "testPorted_probeQuery": try instance.testPorted_probeQuery()
-        case "testPorted_probeStatusQuery": try instance.testPorted_probeStatusQuery()
-        case "testPorted_opsWorkspace": try instance.testPorted_opsWorkspace()
-        case "testPorted_updatePanel": try instance.testPorted_updatePanel()
-        case "testPorted_hiddenScan": try instance.testPorted_hiddenScan()
-        case "testPorted_codexAccountScope": try instance.testPorted_codexAccountScope()
-        case "testPorted_jobsQuery": try instance.testPorted_jobsQuery()
-        case "testPorted_opsQuery": try instance.testPorted_opsQuery()
-        default:
-            XCTFail("Unknown mapped method: \(methodName)")
-        }
-    }
-
+final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
     // MARK: - 1. App.test.ts (18 cases) — Window One-Time Maximize, ⌘A Modal Leak Guard & <=767pt Mobile Chrome
 
     func testPorted_appShellWindowAndModals() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/App.test.ts"
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.app.\(UUID().uuidString)")!)
 
@@ -45,7 +17,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let win = wc.window
             XCTAssertFalse(win.isVisible, "Main window must be created hidden before alignOnceAndReveal")
             XCTAssertEqual(win.minSize, NSSize(width: 1000, height: 680))
-            ParityCaseTracker.shared.record(f, "window-hidden-creation-with-1000x680-min-size")
 
             let arbitraryScreen = NSRect(x: 0, y: 25, width: 1728, height: 1055)
             XCTAssertEqual(AgentHubWindowManager.maximizedInitialFrame(visibleFrame: arbitraryScreen), arbitraryScreen)
@@ -53,7 +24,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let liveScreenVF = (win.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 25, width: 1024, height: 681)
             wc.alignOnceAndReveal(overrideVisibleFrame: liveScreenVF)
             XCTAssertEqual(win.frame, liveScreenVF, "First reveal must maximize window to fill screen.visibleFrame")
-            ParityCaseTracker.shared.record(f, "window-one-time-maximize-to-visible-frame")
 
             // User manually resizes window within screen visibleFrame -> subsequent alignOnceAndReveal MUST NOT resize it again!
             let customW = min(max(1000, liveScreenVF.width - 24), 1200)
@@ -68,7 +38,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let expectedAfterManual = win.frame
             wc.alignOnceAndReveal(overrideVisibleFrame: liveScreenVF)
             XCTAssertEqual(win.frame, expectedAfterManual, "alignOnceAndReveal must NEVER resize window after initial show")
-            ParityCaseTracker.shared.record(f, "window-subsequent-reveal-never-resizes")
 
             // Screen resolution clamp keeps window inside smaller display
             let smallerScreen = NSRect(x: 0, y: 0, width: 1280, height: 720)
@@ -79,7 +48,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertLessThanOrEqual(clamped.maxX, smallerScreen.maxX)
             XCTAssertLessThanOrEqual(clamped.maxY, smallerScreen.maxY)
             XCTAssertEqual(clamped.size, smallerScreen.size)
-            ParityCaseTracker.shared.record(f, "window-screen-change-clamps-to-visible-frame")
             win.close()
 
             // 2) Edit -> Select All (⌘A) Leak Block Through ALL Inline SwiftUI Modals (Item #3)
@@ -98,7 +66,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let routedNoModal = AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store)
             XCTAssertEqual(routedNoModal, .postedListSelectAll)
             XCTAssertEqual(selectAllNotifications.count, 1)
-            ParityCaseTracker.shared.record(f, "cmd-a-routes-to-list-when-no-modal-open")
 
             // When inline modal is active (`searchModalOpen` / `ModalPresentationRegistry` / `ConfirmDialogOverlay` / `<960pt` subagent) -> BLOCKED!
             for modalKey in ["searchModal", "batchPreview", "claudeDeletePreview", "grokDeletePreview", "imageLightbox", "discardUnknown", "settingsConfirm", "subagentOverlay"] {
@@ -108,7 +75,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 XCTAssertEqual(routed, .blockedByModalOrOverlay, "⌘A must be blocked while \(modalKey) is open")
                 XCTAssertEqual(selectAllNotifications.count, before, "Underlying session list must NOT receive selectAll while \(modalKey) is open")
                 store.setInlineModalPresented(modalKey, presented: false)
-                ParityCaseTracker.shared.record(f, "cmd-a-blocked-by-\(modalKey)")
             }
 
             // WHILE modal is open, underlying ComposerNSTextView or non-modal ReaderSelectableTextView MUST BE BLOCKED from selectAll!
@@ -143,7 +109,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(modalInput.selectedRange(), NSRange(location: 0, length: 17), "Editable input inside modal must select its own text on ⌘A")
             XCTAssertEqual(selectAllNotifications.count, 1, "Underlying session list still not selected")
             store.setInlineModalPresented("searchModal", presented: false)
-            ParityCaseTracker.shared.record(f, "cmd-a-selects-text-inside-modal-input-without-leaking")
 
             // 3) Mobile <=767pt bottom tab active styling & FlowButtonRow wrapping (Item #12)
             for ws in [WorkspaceId.codex, .claude, .probe, .ops] {
@@ -152,7 +117,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 shellHost.frame = NSRect(x: 0, y: 0, width: 767, height: 820)
                 shellHost.layoutSubtreeIfNeeded()
                 XCTAssertEqual(shellHost.frame.width, 767)
-                ParityCaseTracker.shared.record(f, "mobile-767pt-shell-\(ws.rawValue)")
             }
         }
     }
@@ -161,7 +125,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_workspaceSplitShell() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/WorkspaceSplitShell.test.tsx"
             let header = WorkspaceStageHeaderView(
                 title: "Session Stage",
                 statusBadge: "运行中",
@@ -176,7 +139,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let host = NSHostingView(rootView: header.frame(width: 600))
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 90)
-            ParityCaseTracker.shared.record(f, "glass-stage-header-mobile-back-and-inline-rename")
         }
     }
 
@@ -184,7 +146,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_apiContractRouting() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/api.test.ts"
             let contractURL = URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
@@ -226,7 +187,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 let isLocalOnly = cmd == "plans.save" || cmd.hasPrefix("grokbot.") || cmd.hasPrefix("codex.desktop.") || cmd.hasPrefix("remote.")
                 let ack: Ack = try await store.rpc(cmd, args: ["probe": idx], localOnly: isLocalOnly)
                 XCTAssertTrue(ack.ok, cmd)
-                ParityCaseTracker.shared.record(f, "rpc-\(cmd)")
             }
 
             // Switch to remote target and verify remote.invoke forwarding vs localOnly rejection!
@@ -235,13 +195,11 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(store.target, .remote)
             let forwardedAck: Ack = try await store.rpc("threads.list", args: ["includeArchived": false])
             XCTAssertEqual(forwardedAck.forwarded, true)
-            ParityCaseTracker.shared.record(f, "remote-target-forwards-via-remote-invoke")
 
             let localBypassAck: Ack = try await store.rpc("plans.save", args: ["title": "t"], localOnly: true)
             XCTAssertTrue(localBypassAck.ok)
             XCTAssertNil(localBypassAck.forwarded, "localOnly RPC must invoke local backend directly without remote.invoke forwarding")
             XCTAssertEqual(transport.recordedCalls.last?.command, "plans.save")
-            ParityCaseTracker.shared.record(f, "remote-target-bypasses-forwarding-for-local-only-rpc")
         }
     }
 
@@ -249,7 +207,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_runtimeStreamAndEpochs() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/runtime.test.ts"
             final class OrderLog: @unchecked Sendable {
                 var events: [String] = []
             }
@@ -266,7 +223,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                     return protocol2CapabilitiesFixture(remote: false)
                 }
                 if cmd == "jobs.detail" {
-                    return Data("{\"available\":true,\"data\":{\"id\":\"job-1\",\"kind\":\"update_check\",\"status\":\"succeeded\",\"title\":\"Check\",\"started_at\":1700000000}}".utf8)
+                    return Data("{\"id\":\"job-1\",\"kind\":\"update_check\",\"status\":\"succeeded\",\"title\":\"Check\",\"started_at\":1700000000}".utf8)
                 }
                 return Data("{\"ok\":true}".utf8)
             }
@@ -274,35 +231,28 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
 
             XCTAssertEqual(store.target, .local)
-            ParityCaseTracker.shared.record(f, "starts-on-local-target")
             XCTAssertEqual(store.machineScope, "local:")
-            ParityCaseTracker.shared.record(f, "local-machine-scope")
 
             for mode in [ThemeMode.system, .light, .dark] {
                 store.setTheme(mode)
                 XCTAssertEqual(store.themeMode, mode)
-                ParityCaseTracker.shared.record(f, "persists-theme-\(mode.rawValue)")
             }
 
             let initialCollapsed = store.navCollapsed
             store.toggleNavCollapsed()
             XCTAssertNotEqual(store.navCollapsed, initialCollapsed)
-            ParityCaseTracker.shared.record(f, "toggles-and-persists-nav-collapsed")
 
             // Read-only classification checks
             for roCmd in ["claude.ownershipDiagnostics", "system.capabilities", "threads.list", "probe.status"] {
                 struct Ack: Decodable { let ok: Bool }
                 let _: Ack = try await store.rpc(roCmd, args: [String: String]())
                 XCTAssertFalse(store.isBusyForSwitch)
-                ParityCaseTracker.shared.record(f, "readonly-no-busy-\(roCmd)")
             }
 
             store.trackStartedJob("job-1")
             try? await Task.sleep(nanoseconds: 50_000_000)
             XCTAssertEqual(store.trackedJobs["job-1"]?.isTerminal, true)
-            ParityCaseTracker.shared.record(f, "tracked-job-sets-busy")
             XCTAssertFalse(store.isBusyForSwitch)
-            ParityCaseTracker.shared.record(f, "completed-jobs-clear-busy")
 
             // 1) Runs beforeMachineChange hooks BEFORE remote.select RPC executes
             log.events.removeAll()
@@ -315,7 +265,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let selectIdx = try XCTUnwrap(log.events.firstIndex(of: "rpc:remote.select"))
             XCTAssertLessThan(hookIdx, selectIdx, "beforeMachineChange hook must run before remote.select")
             XCTAssertEqual(store.revision, 7)
-            ParityCaseTracker.shared.record(f, "runs-before-machine-change-hooks")
 
             // 2) Stale revision response is dropped/rejected when revision advances mid-RPC
             transport.setHandler { cmd, _ in
@@ -341,7 +290,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             } catch {
                 XCTAssertEqual(store.revision, 8)
             }
-            ParityCaseTracker.shared.record(f, "drops-stale-revision-response")
 
             // 3) Window state sync updates transport atomically
             store.updateWindowState(visible: false, focused: false)
@@ -350,62 +298,45 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             store.updateWindowState(visible: true, focused: false)
             XCTAssertEqual(transport.windowState.visible, true)
             XCTAssertEqual(transport.windowState.focused, false)
-            ParityCaseTracker.shared.record(f, "syncs-window-focus-atomic")
         }
     }
 
     // MARK: - 5, 6, 7, 8. desktopIntent (3), desktopRefresh (2), runtimeViewModel (5), filePaths (3)
 
     func testPorted_desktopIntent() throws {
-        let f = "webui/src/lib/desktopIntent.test.ts"
         for ws in [WorkspaceId.codex, .claude, .grok] {
             XCTAssertNotNil(SessionProvider.from(workspace: ws))
-            ParityCaseTracker.shared.record(f, "intent-provider-\(ws.rawValue)")
         }
     }
 
     func testPorted_desktopRefresh() throws {
-        let f = "webui/src/lib/desktopRefresh.test.ts"
         XCTAssertNil(SessionProvider.from(workspace: .probe))
-        ParityCaseTracker.shared.record(f, "probe-has-no-session-provider")
         XCTAssertNil(SessionProvider.from(workspace: .ops))
-        ParityCaseTracker.shared.record(f, "ops-has-no-session-provider")
     }
 
     func testPorted_runtimeViewModel() throws {
-        let f = "webui/src/lib/domain/runtimeViewModel.test.ts"
         var localCaps = RuntimeCapabilityMatrix.from(nil)
         localCaps.updateServiceLabels = false
         XCTAssertEqual(UpdateActionViewItem.panelTitle(capabilities: localCaps), "本机 App 更新")
-        ParityCaseTracker.shared.record(f, "local-update-panel-title")
 
         var remoteCaps = RuntimeCapabilityMatrix.from(nil)
         remoteCaps.updateServiceLabels = true
         XCTAssertEqual(UpdateActionViewItem.panelTitle(capabilities: remoteCaps), "远程服务更新")
-        ParityCaseTracker.shared.record(f, "remote-update-panel-title")
 
         XCTAssertEqual(UpdateVersionFormatter.displayWithVPrefix("2.1.27"), "v2.1.27")
-        ParityCaseTracker.shared.record(f, "version-v-prefix")
         XCTAssertEqual(UpdateVersionFormatter.bareVersion("v2.1.27"), "2.1.27")
-        ParityCaseTracker.shared.record(f, "bare-version-strips-v")
         XCTAssertTrue(UpdateVersionFormatter.isValidSemver("2.1.27"))
-        ParityCaseTracker.shared.record(f, "valid-semver-check")
     }
 
     func testPorted_filePathsApi() throws {
-        let f = "webui/src/lib/api/filePaths.test.ts"
         XCTAssertThrowsError(try FileOpenerService.validateRevealPath("relative/path.txt"))
-        ParityCaseTracker.shared.record(f, "rejects-relative-path")
         XCTAssertThrowsError(try FileOpenerService.validateRevealPath("/tmp/bad\npath"))
-        ParityCaseTracker.shared.record(f, "rejects-control-characters")
         XCTAssertNoThrow(try FileOpenerService.validateRevealPath("/Users/example/valid.swift"))
-        ParityCaseTracker.shared.record(f, "accepts-clean-absolute-path")
     }
 
     // MARK: - 9. probeUi.test.ts (27 cases) — Localized Bark Status Badges & Draft Validation
 
     func testPorted_probeUi() throws {
-        let f = "webui/src/lib/probeUi.test.ts"
 
         let barkMatrix: [(String, ProbeEventItem, String, StatusChipTone)] = [
             ("sent", ProbeEventItem(id: "1", kind: "completion", barkStatus: "sent"), "Bark 已受理", .success),
@@ -421,37 +352,30 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let badge = ProbeFormatting.barkBadge(ev)
             XCTAssertTrue(badge.label.hasPrefix(expectedPrefix), "\(id): got \(badge.label)")
             XCTAssertEqual(badge.tone, expectedTone, id)
-            ParityCaseTracker.shared.record(f, "bark-badge-\(id)")
         }
 
         let eventKinds = ["hook-stop", "completion", "failure", "reply-needed", "recoverable", "running", "bark-test", "ci_failed", "ci_recovered", "stalled"]
         for ek in eventKinds {
             let lbl = ProbeFormatting.eventKindLabel(ek)
             XCTAssertFalse(lbl.isEmpty)
-            ParityCaseTracker.shared.record(f, "event-kind-\(ek)")
         }
 
         let deduped = ProbeEventItem(id: "9", kind: "completion", dedupeStatus: "duplicate")
         XCTAssertEqual(ProbeFormatting.dedupeBadge(deduped)?.label, "重复事件")
-        ParityCaseTracker.shared.record(f, "deduped-badge-present")
 
         var draft = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
         draft.pollSecondsText = "2"
         XCTAssertFalse(draft.validationErrors().isEmpty, "Out-of-range pollSeconds (<5) rejected")
-        ParityCaseTracker.shared.record(f, "rejects-out-of-range-poll-seconds")
 
         draft.pollSecondsText = "15"
         draft.logMaxMiBText = "16"
         XCTAssertFalse(draft.validationErrors().isEmpty, "Log max MiB >8 rejected")
-        ParityCaseTracker.shared.record(f, "rejects-over-8mib-log-cap")
 
         draft.logMaxMiBText = "5"
         XCTAssertTrue(draft.validationErrors().isEmpty, "Valid 8-parameter advanced settings pass validation")
-        ParityCaseTracker.shared.record(f, "accepts-valid-probe-advanced-settings")
 
         for plat in ProbeNotificationPlatform.allCases {
             XCTAssertFalse(plat.id.isEmpty)
-            ParityCaseTracker.shared.record(f, "platform-\(plat.id)")
         }
     }
 
@@ -459,7 +383,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_githubCiCard() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/probe/GithubCiCard.test.tsx"
             let runsJson = (0 ..< 25).map { i -> String in
                 let bot = (i == 24) ? "true" : "false"
                 let sha = String(format: "%07xabcdef123456", i)
@@ -470,16 +393,13 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             let runs = try JSONDecoder().decode([GithubCiRun].self, from: Data("[\(runsJson)]".utf8))
             XCTAssertEqual(runs.last?.isBot, true)
             XCTAssertEqual(String((runs.last?.headSha ?? "").prefix(7)).count, 7)
-            ParityCaseTracker.shared.record(f, "decodes-name-head-sha-and-bot-flag")
 
             // Sorts by updatedAt descending before taking top 20!
             let visible = GithubCiDomain.visibleRuns(runs: runs, repositories: ["lich13/agenthub"])
             XCTAssertEqual(visible.count, 20)
             XCTAssertEqual(visible.first?.id, 124, "Newest updatedAt run must sort first before top-20 cap")
-            ParityCaseTracker.shared.record(f, "sorts-updated-at-desc-and-caps-at-20")
 
             XCTAssertFalse(GithubCiDomain.formatRunUpdatedAt("2026-11-19T10:24:00Z").isEmpty)
-            ParityCaseTracker.shared.record(f, "formats-run-updated-at")
 
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.ci.\(UUID().uuidString)")!)
@@ -494,14 +414,12 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             cardHost.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(cardHost.fittingSize.height, 40)
-            ParityCaseTracker.shared.record(f, "mounts-github-ci-card-with-wrapping-titles")
 
             // Bot badge & 7-char SHA verification on visible runs
             let newest = try XCTUnwrap(visible.first)
             XCTAssertTrue(newest.isBot)
             XCTAssertEqual(String(newest.headSha.prefix(7)), "0000018")
             XCTAssertEqual(newest.conclusion, "failure")
-            ParityCaseTracker.shared.record(f, "bot-badge-and-hover-tooltips")
         }
     }
 
@@ -509,47 +427,37 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_probeWorkspace() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/probe/ProbeWorkspace.test.tsx"
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.pw.\(UUID().uuidString)")!)
             let host = NSHostingView(rootView: ProbeWorkspaceView(store: store))
             host.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
             host.layoutSubtreeIfNeeded()
             XCTAssertEqual(host.frame.width, 1200)
-            ParityCaseTracker.shared.record(f, "probe-workspace-1060pt-centered-and-advanced-disclosure")
         }
     }
 
     func testPorted_probeQuery() throws {
-        let f = "webui/src/lib/query/probe.test.ts"
         let catalog = GithubCiDomain.buildCatalog(repositories: [], runs: [], configured: ["owner/custom-repo"])
         XCTAssertTrue(GithubCiDomain.isSelected(catalog[0], configured: ["owner/custom-repo"]))
-        ParityCaseTracker.shared.record(f, "configured-custom-repo-preserved-in-catalog")
     }
 
     func testPorted_probeStatusQuery() throws {
-        let f = "webui/src/lib/query/probeStatus.test.ts"
         var configured = ["a/one"]
         let opt = GithubCiRepoOption(key: "b/two", repoId: "2", fullName: "b/two")
         configured = GithubCiDomain.toggleSelection(opt, configured: configured)
         XCTAssertEqual(configured, ["a/one", "b/two"])
-        ParityCaseTracker.shared.record(f, "toggle-adds-repo")
         configured = GithubCiDomain.toggleSelection(opt, configured: configured)
         XCTAssertEqual(configured, ["a/one"])
-        ParityCaseTracker.shared.record(f, "toggle-removes-repo")
 
         let added = GithubCiDomain.addSelection(query: "  c/three  ", catalog: [], configured: configured)
         XCTAssertTrue(added.contains("c/three"))
-        ParityCaseTracker.shared.record(f, "manual-slug-addition-trims")
         XCTAssertEqual(CleanupFormatting.formatBytes(2048), "2.0 KB")
-        ParityCaseTracker.shared.record(f, "probe-byte-formatting")
     }
 
     // MARK: - 14 & 15. OpsWorkspace.test.tsx (4) & UpdatePanel.test.tsx (4)
 
     func testPorted_opsWorkspace() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/ops/OpsWorkspace.test.tsx"
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.ops.\(UUID().uuidString)")!)
             for sec in [RuntimeConnectionStore.SettingsTabSection.maintenance, .remote] {
@@ -558,10 +466,8 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 host.frame = NSRect(x: 0, y: 0, width: 1100, height: 760)
                 host.layoutSubtreeIfNeeded()
                 XCTAssertEqual(host.frame.width, 1100)
-                ParityCaseTracker.shared.record(f, "settings-underline-tab-\(sec.rawValue)")
             }
             XCTAssertEqual(LayoutMetrics.consolePageMaxWidth, 1060)
-            ParityCaseTracker.shared.record(f, "settings-1060pt-centered-container")
 
             @MainActor func collectTexts(_ v: NSView) -> [String] {
                 var res: [String] = []
@@ -574,12 +480,10 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
             checkHost.layoutSubtreeIfNeeded()
             let labels = collectTexts(checkHost)
             XCTAssertLessThanOrEqual(labels.filter { $0 == "设置" }.count, 1, "SettingsWorkspaceView must NOT render duplicate '设置' subheader")
-            ParityCaseTracker.shared.record(f, "settings-no-duplicate-subheader")
         }
     }
 
     func testPorted_updatePanel() throws {
-        let f = "webui/src/components/ops/UpdatePanel.test.tsx"
         var localCaps = RuntimeCapabilityMatrix.from(nil)
         localCaps.updateServiceLabels = false
         let upToDate = try JSONDecoder().decode(
@@ -588,7 +492,6 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
         )
         let actionsNoUpdate = UpdateActionViewItem.actions(status: upToDate, capabilities: localCaps)
         XCTAssertEqual(actionsNoUpdate.map(\.label), ["检查更新"])
-        ParityCaseTracker.shared.record(f, "local-up-to-date-shows-only-check")
 
         let available = try JSONDecoder().decode(
             UpdateStatus.self,
@@ -596,23 +499,19 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
         )
         let actionsAvail = UpdateActionViewItem.actions(status: available, capabilities: localCaps)
         XCTAssertEqual(actionsAvail.map(\.label), ["检查更新", "更新至 2.1.28"])
-        ParityCaseTracker.shared.record(f, "local-available-shows-install-v-button")
 
         var remoteCaps = RuntimeCapabilityMatrix.from(nil)
         remoteCaps.updateServiceLabels = true
         remoteCaps.updatePrune = true
         let remoteActions = UpdateActionViewItem.actions(status: upToDate, capabilities: remoteCaps)
         XCTAssertTrue(remoteActions.contains(where: { $0.label == "清理更新备份" }))
-        ParityCaseTracker.shared.record(f, "remote-with-backups-shows-cleanup-button")
         XCTAssertEqual(UpdateActionViewItem.panelTitle(capabilities: remoteCaps), "远程服务更新")
-        ParityCaseTracker.shared.record(f, "remote-panel-title-exact")
     }
 
     // MARK: - 16. hiddenScan.test.ts (6 cases) — Partial Retention on Stop & Cleanup Disabled
 
     func testPorted_hiddenScan() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/hiddenScan.test.ts"
             let fixtures = try CleanupInteractionVectors.load()
             var plan = fixtures.preview
             var modes: [String] = []
@@ -628,25 +527,19 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
                 if progress.phase == .preparing {
                     XCTAssertFalse(scope.scanned)
                     XCTAssertTrue(plan.executionRequest(for: ["codex_hidden"]).targets.isEmpty)
-                    ParityCaseTracker.shared.record(f, "incomplete-scan-disables-cleanup-execution")
                 }
             }
             XCTAssertEqual(modes, ["start", "poll"])
             XCTAssertEqual(plan.executionRequest(for: ["codex_hidden"]).targets.map(\.id), ["hidden-1"])
-            ParityCaseTracker.shared.record(f, "completed-scan-enables-cleanup")
             XCTAssertEqual(plan.totalDeletable, 3)
-            ParityCaseTracker.shared.record(f, "recomputes-aggregate-cleanup-totals")
 
             let request = plan.executionRequest(for: ["claude_empty", "grok_empty"])
             let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(request))
             XCTAssertEqual(encoded, fixtures.execute)
-            ParityCaseTracker.shared.record(f, "confirmed-selection-matches-rust")
             plan.apply(fixtures.result)
             XCTAssertEqual(plan.totalDeletable, 2)
             XCTAssertEqual(plan.scopes.first { $0.scope == "claude_empty" }?.candidates.map(\.id), ["p/busy"])
-            ParityCaseTracker.shared.record(f, "blocked-items-retained")
             XCTAssertEqual(fixtures.result.unsuccessfulDetails.count, 2)
-            ParityCaseTracker.shared.record(f, "residuals-and-issues-displayed")
         }
     }
 
@@ -654,22 +547,16 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_codexAccountScope() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/ops/CodexAccountScope.test.tsx"
             // Verify 100-per-page pagination math across 0, 100, 101, and 250 items
             func pageCount(_ count: Int) -> Int { max(1, (count + 99) / 100) }
             XCTAssertEqual(pageCount(0), 1)
-            ParityCaseTracker.shared.record(f, "zero-items-single-page")
             XCTAssertEqual(pageCount(100), 1)
-            ParityCaseTracker.shared.record(f, "100-items-no-extra-page")
             XCTAssertEqual(pageCount(101), 2)
-            ParityCaseTracker.shared.record(f, "101-items-two-pages")
             XCTAssertEqual(pageCount(250), 3)
-            ParityCaseTracker.shared.record(f, "250-items-three-pages-100-100-50")
         }
     }
 
     func testPorted_jobsQuery() throws {
-        let f = "webui/src/lib/query/jobs.test.ts"
         let jobJson = """
         {"id":"job-1","kind":"update_check","status":"succeeded","title":"Check Updates","started_at":1700000000,"output":"checking signed Tauri updater feed\\n"}
         """
@@ -677,16 +564,11 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase, ParityExecutableSuit
         XCTAssertEqual(job.id, "job-1")
         XCTAssertTrue(job.isTerminal)
         XCTAssertTrue(job.output?.contains("checking signed Tauri updater feed") == true)
-        ParityCaseTracker.shared.record(f, "decodes-job-record-flattened-snake-case")
     }
 
     func testPorted_opsQuery() throws {
-        let f = "webui/src/lib/query/ops.test.ts"
         XCTAssertEqual(CleanupFormatting.formatBytes(0), "0 B")
-        ParityCaseTracker.shared.record(f, "format-zero-bytes")
         XCTAssertEqual(CleanupFormatting.formatBytes(1024 * 1024), "1.0 MB")
-        ParityCaseTracker.shared.record(f, "format-mib-bytes")
         XCTAssertEqual(CleanupFormatting.formatBytes(1024 * 1024 * 1024), "1.0 GB")
-        ParityCaseTracker.shared.record(f, "format-gib-bytes")
     }
 }

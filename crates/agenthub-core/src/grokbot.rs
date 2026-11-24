@@ -330,6 +330,7 @@ fn events(replica: &Value) -> Vec<ProviderHistoryEvent> {
                 detail: None,
                 result: None,
                 user_message: None,
+                subagent: None,
             };
             let content = match entry["kind"].as_str()? {
                 "message" => {
@@ -446,6 +447,7 @@ pub fn detail(
     paths: &GrokBotPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
+    anyhow::ensure!(request.agent_id.is_none(), "Grok Bot 不支持子智能体详情");
     let (scope, row) = locate(paths, &request.session_key)?;
     let mut summary = summary(paths, &scope, &row)?;
     let replica = read_slice(&paths.persistence, &replica_key(&scope, &summary.id), 1)?;

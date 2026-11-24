@@ -82,6 +82,19 @@ pub(crate) fn history_weight(snapshot: &Arc<ProviderHistorySnapshot>, _: u64) ->
                         .user_message
                         .as_ref()
                         .map_or(0, crate::user_message::UserMessage::weight)
+                    + event.subagent.as_ref().map_or(0, |sub| {
+                        (sub.name.capacity()
+                            + [
+                                &sub.event_id,
+                                &sub.agent_id,
+                                &sub.role,
+                                &sub.unavailable_reason,
+                                &sub.delegation,
+                            ]
+                            .iter()
+                            .map(|v| v.as_ref().map_or(0, String::capacity))
+                            .sum::<usize>()) as u64
+                    })
             })
             .sum::<u64>()
 }
@@ -97,10 +110,12 @@ pub struct ProviderListRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderDetailRequest {
     pub session_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,6 +178,8 @@ pub struct ProviderHistoryEvent {
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message: Option<crate::user_message::UserMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<crate::codex::subagents::SubagentActivity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,6 +191,13 @@ pub struct ProviderSessionDetail {
     pub after_cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<crate::jsonl_cache::HistoryMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::codex::subagents::SubagentActivity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<crate::codex::subagents::SubagentCollection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_updates:
+        Option<std::collections::BTreeMap<String, crate::codex::subagents::SubagentActivity>>,
     pub summary: ProviderSessionSummary,
     pub events: Vec<ProviderHistoryEvent>,
     pub total_events: usize,
@@ -242,6 +266,9 @@ pub(crate) fn paginate_provider_detail(
             reset: false,
             changes: Vec::new(),
         }),
+        agent: None,
+        subagents: None,
+        subagent_updates: None,
         summary,
         events,
         total_events: all_events.len(),
@@ -267,6 +294,7 @@ mod snapshot_tests {
             detail: None,
             result: None,
             user_message: None,
+            subagent: None,
         };
         let first = ProviderHistorySnapshot::new(vec![event.clone()]);
         let again = ProviderHistorySnapshot::new(vec![event.clone()]);

@@ -699,17 +699,29 @@ public final class CodexDesktopStore: ObservableObject {
         return ReferenceCatalogBatch(items: mergedItems, nextCursors: nextCursors, errors: errors, sourceKinds: kinds)
     }
 
-    public func chooseItem(kind: String) async throws -> DesktopChosenItem? {
+    public static func chooseItem(
+        connection: RuntimeConnectionStore,
+        sessionId: String?,
+        kind: String
+    ) async throws -> DesktopChosenItem? {
         struct ChooseWrap: Encodable {
-            struct Inner: Encodable { let revision: UInt64; let sessionId: String?; let kind: String }
+            struct Inner: Encodable {
+                let revision: UInt64
+                let sessionId: String?
+                let kind: String
+            }
             let request: Inner
         }
         let choice: DesktopChoice = try await connection.rpc(
             "codex.desktop.choose",
-            args: ChooseWrap(request: .init(revision: connection.revision, sessionId: view?.sessionId, kind: kind)),
+            args: ChooseWrap(request: .init(revision: connection.revision, sessionId: sessionId, kind: kind)),
             localOnly: true
         )
         return choice.item
+    }
+
+    public func chooseItem(kind: String) async throws -> DesktopChosenItem? {
+        try await Self.chooseItem(connection: connection, sessionId: view?.sessionId, kind: kind)
     }
 
     public func copyDiagnostics() async throws {
@@ -726,27 +738,73 @@ public final class CodexDesktopStore: ObservableObject {
 
     // MARK: - Attachment Binding, Live Bounds/Handles Sync, Paste & Drop
 
+    private enum AttachmentActionPayload: Encodable {
+        case bind(bounds: DesktopAttachmentBounds, handles: [String])
+        case bounds(bindingId: String, bounds: DesktopAttachmentBounds, handles: [String])
+        case paste(bindingId: String)
+        case release(bindingId: String, handles: [String])
+        case unbind(bindingId: String)
+
+        private enum CodingKeys: String, CodingKey {
+            case type, bindingId, bounds, handles
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case let .bind(bounds, handles):
+                try c.encode("bind", forKey: .type)
+                try c.encode(bounds, forKey: .bounds)
+                try c.encode(handles, forKey: .handles)
+            case let .bounds(bindingId, bounds, handles):
+                try c.encode("bounds", forKey: .type)
+                try c.encode(bindingId, forKey: .bindingId)
+                try c.encode(bounds, forKey: .bounds)
+                try c.encode(handles, forKey: .handles)
+            case let .paste(bindingId):
+                try c.encode("paste", forKey: .type)
+                try c.encode(bindingId, forKey: .bindingId)
+            case let .release(bindingId, handles):
+                try c.encode("release", forKey: .type)
+                try c.encode(bindingId, forKey: .bindingId)
+                try c.encode(handles, forKey: .handles)
+            case let .unbind(bindingId):
+                try c.encode("unbind", forKey: .type)
+                try c.encode(bindingId, forKey: .bindingId)
+            }
+        }
+    }
+
+    private struct AttachmentRequestEnvelope: Encodable {
+        struct Inner: Encodable {
+            let revision: UInt64
+            let sessionId: String
+            let action: AttachmentActionPayload
+        }
+        let request: Inner
+    }
+
+    private func encodeAttachmentRequest(
+        revision: UInt64,
+        sessionId: String,
+        action: AttachmentActionPayload
+    ) -> String? {
+        let envelope = AttachmentRequestEnvelope(
+            request: .init(revision: revision, sessionId: sessionId, action: action)
+        )
+        guard let data = try? JSONEncoder().encode(envelope) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     public func bindAttachmentsIfNeeded(bounds: DesktopAttachmentBounds, handles: [String]) async {
         lastAttachmentBounds = bounds
         guard let sessionId = view?.sessionId, view?.writable == true, attachmentBindingId == nil else { return }
         let rev = connection.revision
-        let payload: [String: JSONValue] = [
-            "request": .object([
-                "revision": .number(Double(rev)),
-                "sessionId": .string(sessionId),
-                "action": .object([
-                    "type": .string("bind"),
-                    "bounds": .object([
-                        "x": .number(bounds.x), "y": .number(bounds.y),
-                        "width": .number(bounds.width), "height": .number(bounds.height),
-                    ]),
-                    "handles": .array(handles.map { .string($0) }),
-                ]),
-            ]),
-        ]
-        guard let jsonData = try? JSONEncoder().encode(payload),
-              let jsonStr = String(data: jsonData, encoding: .utf8)
-        else { return }
+        guard let jsonStr = encodeAttachmentRequest(
+            revision: rev,
+            sessionId: sessionId,
+            action: .bind(bounds: bounds, handles: handles)
+        ) else { return }
 
         if let data = try? await connection.transport.desktopAttachments(
             requestJSON: jsonStr,
@@ -781,24 +839,11 @@ public final class CodexDesktopStore: ObservableObject {
             await bindAttachmentsIfNeeded(bounds: effectiveBounds, handles: handles)
             return
         }
-        let payload: [String: JSONValue] = [
-            "request": .object([
-                "revision": .number(Double(connection.revision)),
-                "sessionId": .string(sessionId),
-                "action": .object([
-                    "type": .string("bounds"),
-                    "bindingId": .string(bindingId),
-                    "bounds": .object([
-                        "x": .number(effectiveBounds.x), "y": .number(effectiveBounds.y),
-                        "width": .number(effectiveBounds.width), "height": .number(effectiveBounds.height),
-                    ]),
-                    "handles": .array(handles.map { .string($0) }),
-                ]),
-            ]),
-        ]
-        guard let jsonData = try? JSONEncoder().encode(payload),
-              let jsonStr = String(data: jsonData, encoding: .utf8)
-        else { return }
+        guard let jsonStr = encodeAttachmentRequest(
+            revision: connection.revision,
+            sessionId: sessionId,
+            action: .bounds(bindingId: bindingId, bounds: effectiveBounds, handles: handles)
+        ) else { return }
         do {
             _ = try await connection.transport.desktopAttachments(requestJSON: jsonStr, onEventFrame: nil, onEventClosed: nil)
         } catch {
@@ -818,19 +863,11 @@ public final class CodexDesktopStore: ObservableObject {
         guard let sessionId = view?.sessionId, let bindingId = attachmentBindingId else {
             return true
         }
-        let payload: [String: JSONValue] = [
-            "request": .object([
-                "revision": .number(Double(connection.revision)),
-                "sessionId": .string(sessionId),
-                "action": .object([
-                    "type": .string("paste"),
-                    "bindingId": .string(bindingId),
-                ]),
-            ]),
-        ]
-        guard let jsonData = try? JSONEncoder().encode(payload),
-              let jsonStr = String(data: jsonData, encoding: .utf8)
-        else { return true }
+        guard let jsonStr = encodeAttachmentRequest(
+            revision: connection.revision,
+            sessionId: sessionId,
+            action: .paste(bindingId: bindingId)
+        ) else { return true }
 
         do {
             let resData = try await connection.transport.desktopPasteCurrentGeneralPasteboard(requestJSON: jsonStr)
@@ -853,38 +890,21 @@ public final class CodexDesktopStore: ObservableObject {
 
     public func releaseAttachments(handles: [String]) async {
         guard let sessionId = view?.sessionId, let bindingId = attachmentBindingId, !handles.isEmpty else { return }
-        let payload: [String: JSONValue] = [
-            "request": .object([
-                "revision": .number(Double(connection.revision)),
-                "sessionId": .string(sessionId),
-                "action": .object([
-                    "type": .string("release"),
-                    "bindingId": .string(bindingId),
-                    "handles": .array(handles.map { .string($0) }),
-                ]),
-            ]),
-        ]
-        if let jsonData = try? JSONEncoder().encode(payload),
-           let jsonStr = String(data: jsonData, encoding: .utf8)
-        {
+        if let jsonStr = encodeAttachmentRequest(
+            revision: connection.revision,
+            sessionId: sessionId,
+            action: .release(bindingId: bindingId, handles: handles)
+        ) {
             _ = try? await connection.transport.desktopAttachments(requestJSON: jsonStr, onEventFrame: nil, onEventClosed: nil)
         }
     }
 
     private func unbindAttachments(sessionId: String, bindingId: String) async {
-        let payload: [String: JSONValue] = [
-            "request": .object([
-                "revision": .number(Double(connection.revision)),
-                "sessionId": .string(sessionId),
-                "action": .object([
-                    "type": .string("unbind"),
-                    "bindingId": .string(bindingId),
-                ]),
-            ]),
-        ]
-        if let jsonData = try? JSONEncoder().encode(payload),
-           let jsonStr = String(data: jsonData, encoding: .utf8)
-        {
+        if let jsonStr = encodeAttachmentRequest(
+            revision: connection.revision,
+            sessionId: sessionId,
+            action: .unbind(bindingId: bindingId)
+        ) {
             _ = try? await connection.transport.desktopAttachments(requestJSON: jsonStr, onEventFrame: nil, onEventClosed: nil)
         }
     }

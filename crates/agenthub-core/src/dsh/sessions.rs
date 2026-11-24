@@ -1097,6 +1097,7 @@ fn make_dsh_event(
         detail: None,
         result: None,
         user_message: None,
+        subagent: None,
     }
 }
 
@@ -1104,6 +1105,10 @@ pub fn session_detail(
     paths: &DshPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
+    ensure!(
+        request.agent_id.is_none(),
+        "DeepSeek Harness 暂不支持子智能体详情读取"
+    );
     let session = find_root_session(paths, &request.session_key)?;
     let archived = registry(paths)?.map(|r| r.archived).unwrap_or_default();
     let summary = summary_with_storage(paths, &session, &archived);
@@ -2094,6 +2099,7 @@ mod tests {
         ));
         let request = ProviderDetailRequest {
             session_key: "session-cache".into(),
+            agent_id: None,
             limit: Some(1),
             before: None,
         };
@@ -2250,6 +2256,7 @@ mod tests {
             &paths,
             &ProviderDetailRequest {
                 session_key: root_id.into(),
+                agent_id: None,
                 limit: None,
                 before: None,
             },
@@ -2625,6 +2632,7 @@ mod tests {
             &paths,
             &ProviderDetailRequest {
                 session_key: completed_id.into(),
+                agent_id: None,
                 limit: None,
                 before: None,
             },
@@ -2718,6 +2726,7 @@ mod tests {
             &paths,
             &ProviderDetailRequest {
                 session_key: id.into(),
+                agent_id: None,
                 limit: None,
                 before: None,
             },

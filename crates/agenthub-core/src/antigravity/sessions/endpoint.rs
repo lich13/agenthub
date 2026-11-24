@@ -8,10 +8,34 @@ pub struct DiscoveredAntigravityEndpoint {
 }
 
 #[derive(Clone)]
-pub(super) struct LiveRpc {
-    pub(super) port: u16,
-    pub(super) token: String,
+pub(crate) struct LiveRpc {
+    pub(crate) port: u16,
+    pub(crate) token: String,
 }
+
+#[derive(Debug)]
+pub(crate) struct ConnectRpcHttpError {
+    pub(crate) status_code: u16,
+    pub(crate) code: String,
+    pub(crate) detail: String,
+}
+
+impl ConnectRpcHttpError {
+    pub(crate) fn is_not_found(&self) -> bool {
+        self.status_code == 404
+            || self.code.eq_ignore_ascii_case("not_found")
+            || self.detail.to_ascii_lowercase().contains("not found")
+            || self.detail.to_ascii_lowercase().contains("not_found")
+    }
+}
+
+impl std::fmt::Display for ConnectRpcHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Antigravity RPC 调用失败：{}", self.detail)
+    }
+}
+
+impl std::error::Error for ConnectRpcHttpError {}
 
 fn is_valid_csrf_token(token: &str) -> bool {
     !token.is_empty()
@@ -114,6 +138,231 @@ pub(super) fn resolve_daemon_hub_endpoint(
     None
 }
 
+fn is_antigravity_language_server_args(args: &[&str]) -> bool {
+    let Some(&exe) = args.first() else {
+        return false;
+    };
+    if exe.ends_with("/Antigravity.app/Contents/Resources/bin/language_server") {
+        return true;
+    }
+    let bin = exe.rsplit('/').next().unwrap_or(exe);
+    (bin == "language_server" || bin.starts_with("language_server_"))
+        && args
+            .windows(2)
+            .any(|w| w[0] == "--app_data_dir" && w[1] == "antigravity")
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_proc_net_ipv4_loopback_hex(addr_hex: &str) -> bool {
+    // 0100007F is 127.0.0.1 in little-endian /proc/net/tcp;
+    // 0000000000000000FFFF00000100007F is ::ffff:127.0.0.1 in little-endian /proc/net/tcp6.
+    addr_hex.eq_ignore_ascii_case("0100007F")
+        || addr_hex.eq_ignore_ascii_case("0000000000000000FFFF00000100007F")
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn parse_proc_net_tcp_loopback_ports(
+    tcp_text: &str,
+    socket_inodes: &BTreeSet<u64>,
+) -> Vec<u16> {
+    if socket_inodes.is_empty() {
+        return Vec::new();
+    }
+    let mut ports = Vec::new();
+    for line in tcp_text.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 10 {
+            continue;
+        }
+        // st == 0A means TCP_LISTEN.
+        if !cols[3].eq_ignore_ascii_case("0A") {
+            continue;
+        }
+        let Some((addr_hex, port_hex)) = cols[1].split_once(':') else {
+            continue;
+        };
+        if !is_proc_net_ipv4_loopback_hex(addr_hex) {
+            continue;
+        }
+        let Ok(inode) = cols[9].parse::<u64>() else {
+            continue;
+        };
+        if inode == 0 || !socket_inodes.contains(&inode) {
+            continue;
+        }
+        if let Ok(port) = u16::from_str_radix(port_hex, 16) {
+            if port > 0 {
+                ports.push(port);
+            }
+        }
+    }
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pid_loopback_ports(pid: u32) -> Vec<u16> {
+    let fd_dir = PathBuf::from(format!("/proc/{pid}/fd"));
+    let mut socket_inodes = BTreeSet::new();
+    if let Ok(entries) = fs::read_dir(&fd_dir) {
+        for entry in entries.flatten() {
+            if let Ok(target) = fs::read_link(entry.path()) {
+                if let Some(inode) = target
+                    .to_str()
+                    .and_then(|s| s.strip_prefix("socket:["))
+                    .and_then(|s| s.strip_suffix(']'))
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    socket_inodes.insert(inode);
+                }
+            }
+        }
+    }
+    if !socket_inodes.is_empty() {
+        let mut ports = Vec::new();
+        for proc_net in [
+            format!("/proc/{pid}/net/tcp"),
+            format!("/proc/{pid}/net/tcp6"),
+        ] {
+            if let Ok(tcp_text) = fs::read_to_string(proc_net) {
+                ports.extend(parse_proc_net_tcp_loopback_ports(&tcp_text, &socket_inodes));
+            }
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        if !ports.is_empty() {
+            return ports;
+        }
+    }
+    lsof_loopback_ports(pid)
+}
+
+fn lsof_loopback_ports(pid: u32) -> Vec<u16> {
+    let lsof_bin = if Path::new("/usr/sbin/lsof").is_file() {
+        "/usr/sbin/lsof"
+    } else if Path::new("/usr/bin/lsof").is_file() {
+        "/usr/bin/lsof"
+    } else {
+        "lsof"
+    };
+    let Ok(lsof) = std::process::Command::new(lsof_bin)
+        .args([
+            "-Pan",
+            "-p",
+            &pid.to_string(),
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-Fn",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !lsof.status.success() {
+        return Vec::new();
+    }
+    let mut ports: Vec<u16> = String::from_utf8_lossy(&lsof.stdout)
+        .lines()
+        .filter_map(parse_loopback_listener_port)
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+fn push_discovered_candidate(
+    pid: u32,
+    uid: u32,
+    args: &[&str],
+    ports: Vec<u16>,
+    daemon_dirs: &[PathBuf],
+    seen_pids: &mut BTreeSet<u32>,
+    candidates: &mut Vec<DiscoveredAntigravityEndpoint>,
+) {
+    if ports.is_empty() || seen_pids.contains(&pid) {
+        return;
+    }
+    let cli_token = args
+        .windows(2)
+        .find(|w| w[0] == "--csrf_token")
+        .map(|w| w[1]);
+    if let Some(token) = cli_token {
+        if is_valid_csrf_token(token) && ports.len() <= 8 {
+            seen_pids.insert(pid);
+            candidates.push(DiscoveredAntigravityEndpoint {
+                pid,
+                ports,
+                token: token.to_owned(),
+            });
+        }
+    } else if let Some((hub_ports, token)) =
+        resolve_daemon_hub_endpoint(daemon_dirs, pid, uid, &ports)
+    {
+        seen_pids.insert(pid);
+        candidates.push(DiscoveredAntigravityEndpoint {
+            pid,
+            ports: hub_ports,
+            token,
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: Reading the process UID takes no pointers or arguments.
+    let uid = unsafe { libc::getuid() };
+    let daemon_dirs = candidate_daemon_dirs();
+    let Ok(proc_entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut seen_pids = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for entry in proc_entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if meta.uid() != uid {
+            continue;
+        }
+        let mut cmdline = Vec::new();
+        let Ok(file) = fs::File::open(entry.path().join("cmdline")) else {
+            continue;
+        };
+        if file.take(32 * 1024).read_to_end(&mut cmdline).is_err() || cmdline.is_empty() {
+            continue;
+        }
+        let args: Vec<&str> = cmdline
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| std::str::from_utf8(s).ok())
+            .collect();
+        if !is_antigravity_language_server_args(&args) {
+            continue;
+        }
+        let ports = linux_pid_loopback_ports(pid);
+        push_discovered_candidate(
+            pid,
+            uid,
+            &args,
+            ports,
+            &daemon_dirs,
+            &mut seen_pids,
+            &mut candidates,
+        );
+    }
+    candidates
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     use std::process::Command;
     let Ok(output) = Command::new("/bin/ps")
@@ -128,11 +377,6 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     // SAFETY: Reading the process UID takes no pointers or arguments.
     let uid = unsafe { libc::getuid() };
     let text = String::from_utf8_lossy(&output.stdout);
-    let lsof_bin = if Path::new("/usr/sbin/lsof").is_file() {
-        "/usr/sbin/lsof"
-    } else {
-        "lsof"
-    };
     let daemon_dirs = candidate_daemon_dirs();
     let mut seen_pids = BTreeSet::new();
     let mut candidates = Vec::new();
@@ -146,85 +390,41 @@ pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
         };
         if owner != uid || seen_pids.contains(&pid) {
             continue;
-        }
+        };
         let args: Vec<&str> = parts.collect();
-        let Some(&exe) = args.first() else {
-            continue;
-        };
-        let is_antigravity = exe
-            .ends_with("/Antigravity.app/Contents/Resources/bin/language_server")
-            || (exe.ends_with("/language_server")
-                && args
-                    .windows(2)
-                    .any(|w| w[0] == "--app_data_dir" && w[1] == "antigravity"));
-        if !is_antigravity {
+        if !is_antigravity_language_server_args(&args) {
             continue;
         }
-        let cli_token = args
-            .windows(2)
-            .find(|w| w[0] == "--csrf_token")
-            .map(|w| w[1]);
-        if let Some(token) = cli_token {
-            if !is_valid_csrf_token(token) {
-                continue;
-            }
-        }
-        let Ok(lsof) = Command::new(lsof_bin)
-            .args([
-                "-Pan",
-                "-p",
-                &pid.to_string(),
-                "-iTCP",
-                "-sTCP:LISTEN",
-                "-Fn",
-            ])
-            .output()
-        else {
-            continue;
-        };
-        if !lsof.status.success() {
-            continue;
-        }
-        let mut ports: Vec<u16> = String::from_utf8_lossy(&lsof.stdout)
-            .lines()
-            .filter_map(parse_loopback_listener_port)
-            .collect();
-        ports.sort_unstable();
-        ports.dedup();
-        if ports.is_empty() {
-            continue;
-        }
-        if let Some(token) = cli_token {
-            if ports.len() <= 8 {
-                seen_pids.insert(pid);
-                candidates.push(DiscoveredAntigravityEndpoint {
-                    pid,
-                    ports,
-                    token: token.to_owned(),
-                });
-            }
-        } else if let Some((hub_ports, token)) =
-            resolve_daemon_hub_endpoint(&daemon_dirs, pid, uid, &ports)
-        {
-            seen_pids.insert(pid);
-            candidates.push(DiscoveredAntigravityEndpoint {
-                pid,
-                ports: hub_ports,
-                token,
-            });
-        }
+        let ports = lsof_loopback_ports(pid);
+        push_discovered_candidate(
+            pid,
+            uid,
+            &args,
+            ports,
+            &daemon_dirs,
+            &mut seen_pids,
+            &mut candidates,
+        );
     }
     candidates
 }
 
-pub(super) fn parse_loopback_listener_port(line: &str) -> Option<u16> {
-    let (host, port) = line.strip_prefix('n')?.split_once(':')?;
-    (host.parse::<Ipv4Addr>().ok() == Some(Ipv4Addr::LOCALHOST))
-        .then(|| port.parse::<u16>().ok())
-        .flatten()
+pub(crate) fn parse_loopback_listener_port(line: &str) -> Option<u16> {
+    let (host, port) = line.strip_prefix('n')?.rsplit_once(':')?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    let is_v4_loopback = host.parse::<Ipv4Addr>().ok() == Some(Ipv4Addr::LOCALHOST)
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .ok()
+            .and_then(|v6| v6.to_ipv4_mapped())
+            == Some(Ipv4Addr::LOCALHOST);
+    is_v4_loopback.then(|| port.parse::<u16>().ok()).flatten()
 }
 
-pub(super) fn connect_rpc_post(
+pub(crate) fn connect_rpc_post(
     port: u16,
     token: &str,
     method: &str,
@@ -309,11 +509,21 @@ pub(super) fn connect_rpc_post(
         buf
     };
     if !(200..300).contains(&status_code) {
-        let detail = serde_json::from_slice::<Value>(&body_bytes)
-            .ok()
+        let parsed = serde_json::from_slice::<Value>(&body_bytes).ok();
+        let code = parsed
+            .as_ref()
+            .and_then(|v| v["code"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        let detail = parsed
             .and_then(|v| v["message"].as_str().map(str::to_owned))
             .unwrap_or_else(|| format!("HTTP {status_code}"));
-        bail!("Antigravity RPC 调用失败：{detail}");
+        return Err(ConnectRpcHttpError {
+            status_code,
+            code,
+            detail,
+        }
+        .into());
     }
     if body_bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok(json!({}));
@@ -391,7 +601,7 @@ pub fn evict_idle_endpoint_cache(max_idle: Duration) {
     }
 }
 
-pub(super) fn service_unreachable(error: &anyhow::Error) -> bool {
+pub(crate) fn service_unreachable(error: &anyhow::Error) -> bool {
     use std::io::ErrorKind;
     error.downcast_ref::<std::io::Error>().is_some_and(|io| {
         matches!(
@@ -406,7 +616,7 @@ pub(super) fn service_unreachable(error: &anyhow::Error) -> bool {
         )
     })
 }
-pub(super) fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
+pub(crate) fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
     let try_endpoint = |port: u16, token: &str| match connect_rpc_post(
         port,
         token,

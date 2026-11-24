@@ -1,76 +1,8 @@
 @testable import AgentHubCore
 import AppKit
 import Foundation
-import ObjectiveC.runtime
 import SwiftUI
 import XCTest
-
-public struct ParityManifestEntry: Codable, Equatable, Sendable {
-    public let webuiCases: Int
-    public let swiftTestSuite: String
-    public let swiftMethods: [String]
-}
-
-public struct ParityManifestDocument: Codable, Equatable, Sendable {
-    public let schemaVersion: Int
-    public let milestone: String
-    public let requiredSourceTestFileCount: Int
-    public let totalBaselineWebUICases: Int
-    public let retiredPreviewOnlyFiles: [String]
-    public let mappedUnitTestFiles: [String: ParityManifestEntry]
-}
-
-public final class ParityCaseTracker: @unchecked Sendable {
-    public static let shared = ParityCaseTracker()
-
-    private let lock = NSLock()
-    private var executedByFile: [String: Set<String>] = [:]
-
-    private init() {}
-
-    public func record(_ webuiFile: String, _ caseId: String) {
-        lock.lock()
-        executedByFile[webuiFile, default: []].insert(caseId)
-        lock.unlock()
-    }
-
-    public func count(for webuiFile: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return executedByFile[webuiFile]?.count ?? 0
-    }
-
-    public func cases(for webuiFile: String) -> Set<String> {
-        lock.lock()
-        defer { lock.unlock() }
-        return executedByFile[webuiFile] ?? []
-    }
-}
-
-public protocol ParityExecutableSuite: XCTestCase {
-    static func executeMappedMethod(_ methodName: String) throws
-}
-
-public enum ParitySourceTestScanner {
-    public static func discoverXCTestMethods(on cls: AnyClass) -> Set<String> {
-        var count: UInt32 = 0
-        guard let list = class_copyMethodList(cls, &count) else { return [] }
-        defer { free(list) }
-        var names = Set<String>()
-        for i in 0 ..< Int(count) {
-            let sel = method_getName(list[i])
-            let raw = NSStringFromSelector(sel)
-            if raw.hasPrefix("test") {
-                if raw.hasSuffix("AndReturnError:") {
-                    names.insert(String(raw.dropLast("AndReturnError:".count)))
-                } else if !raw.contains(":") {
-                    names.insert(raw)
-                }
-            }
-        }
-        return names
-    }
-}
 
 public func runAsyncParityCheck(_ block: @escaping @MainActor @Sendable () async throws -> Void) throws {
     if Thread.isMainThread {
@@ -94,7 +26,7 @@ public func runAsyncParityCheck(_ block: @escaping @MainActor @Sendable () async
         if let err = state.capturedError {
             throw err
         }
-        XCTAssertTrue(state.finished, "Async parity check timed out")
+        XCTAssertTrue(state.finished, "Async check timed out")
     } else {
         let sema = DispatchSemaphore(value: 0)
         final class ErrorBox: @unchecked Sendable { var error: Error? }
@@ -115,6 +47,16 @@ public func runAsyncParityCheck(_ block: @escaping @MainActor @Sendable () async
 }
 
 public final class UnconstrainedOffscreenWindow: NSWindow {
+    public override init(
+        contentRect: NSRect,
+        styleMask style: NSWindow.StyleMask,
+        backing backingStoreType: NSWindow.BackingStoreType,
+        defer flag: Bool
+    ) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        self.isReleasedWhenClosed = false
+    }
+
     public override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         frameRect
     }
@@ -147,18 +89,35 @@ public enum OffscreenRenderHelper {
         bottomOriginRows: Bool = true,
         pngPath: String? = nil
     ) throws -> [UInt8] {
-        let window = UnconstrainedOffscreenWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let ownedWindow: UnconstrainedOffscreenWindow?
+        let window: NSWindow
+        if let existing = targetView.window {
+            ownedWindow = nil
+            window = existing
+        } else {
+            let created = UnconstrainedOffscreenWindow(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            ownedWindow = created
+            window = created
+        }
+        defer {
+            if let ownedWindow {
+                ownedWindow.contentView = nil
+                ownedWindow.orderOut(nil)
+            }
+        }
         let nsAppearance = NSAppearance(named: appearance)
         window.appearance = nsAppearance
         targetView.appearance = nsAppearance
         targetView.frame = NSRect(origin: .zero, size: size)
         targetView.wantsLayer = true
-        window.contentView = targetView
+        if ownedWindow != nil {
+            window.contentView = targetView
+        }
 
         targetView.layoutSubtreeIfNeeded()
         window.displayIfNeeded()

@@ -4,44 +4,22 @@ import Foundation
 import SwiftUI
 import XCTest
 
-final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuite {
-    static func executeMappedMethod(_ methodName: String) throws {
-        let instance = HistoryAndTimelineParitySuiteTests()
-        switch methodName {
-        case "testPorted_threadMessageStore": try instance.testPorted_threadMessageStore()
-        case "testPorted_usePagedHistory": try instance.testPorted_usePagedHistory()
-        case "testPorted_historyWindows": try instance.testPorted_historyWindows()
-        case "testPorted_threadsQuery": try instance.testPorted_threadsQuery()
-        case "testPorted_useHistoryScroll": try instance.testPorted_useHistoryScroll()
-        case "testPorted_useTimelineWindow": try instance.testPorted_useTimelineWindow()
-        case "testPorted_timelineRail": try instance.testPorted_timelineRail()
-        case "testPorted_searchHistoryReveal": try instance.testPorted_searchHistoryReveal()
-        case "testPorted_sessionSearch": try instance.testPorted_sessionSearch()
-        default:
-            XCTFail("Unknown mapped method: \(methodName)")
-        }
-    }
-
+final class HistoryAndTimelineParitySuiteTests: XCTestCase {
     // MARK: - 1. threadMessageStore.test.ts (29 cases)
 
     func testPorted_threadMessageStore() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/threadMessageStore.test.ts"
             let store = ThreadMessageStore()
             store.setActive("th-1")
             XCTAssertEqual(store.activeThreadId, "th-1")
-            ParityCaseTracker.shared.record(f, "set-active-thread")
 
             let baseNow = Date(timeIntervalSince1970: 1_700_000_000)
             store.recordOptimisticTitle(threadId: "th-1", title: "Optimistic Name", now: baseNow)
             XCTAssertEqual(store.effectiveTitle(threadId: "th-1", serverTitle: "Stale Name", now: baseNow.addingTimeInterval(30)), "Optimistic Name")
-            ParityCaseTracker.shared.record(f, "optimistic-title-within-120s")
             XCTAssertEqual(store.effectiveTitle(threadId: "th-1", serverTitle: "Stale Name", now: baseNow.addingTimeInterval(121)), "Stale Name")
-            ParityCaseTracker.shared.record(f, "optimistic-title-expires-after-120s")
 
             store.recordOptimisticTitle(threadId: "th-2", title: "Server Caught Up", now: baseNow)
             XCTAssertEqual(store.effectiveTitle(threadId: "th-2", serverTitle: "Server Caught Up", now: baseNow.addingTimeInterval(5)), "Server Caught Up")
-            ParityCaseTracker.shared.record(f, "optimistic-title-clears-when-server-matches")
 
             func makeDetail(
                 id: String = "th-1",
@@ -84,7 +62,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             let s1 = store.applyDetail(initial)
             XCTAssertEqual(s1.blocks.map(\.id), ["b-20", "b-21"])
             XCTAssertTrue(s1.hasMoreBlocks)
-            ParityCaseTracker.shared.record(f, "initial-detail-applied")
 
             for step in 1 ... 18 {
                 let updated = try makeDetail(
@@ -100,7 +77,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 )
                 let slot = store.applyDetail(updated)
                 XCTAssertTrue(slot.blocks.contains(where: { $0.id == "b-\(21 + step)" }))
-                ParityCaseTracker.shared.record(f, "tail-merge-step-\(step)")
             }
 
             let olderPage = ThreadBlockPage(
@@ -113,7 +89,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             let sOlder = store.applyBlockPage(olderPage)
             XCTAssertEqual(sOlder.blocks.first?.id, "b-18")
-            ParityCaseTracker.shared.record(f, "older-page-prepends-cleanly")
 
             // Stale cursor page is ignored
             let stalePage = ThreadBlockPage(
@@ -126,7 +101,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             let sAfterStale = store.applyBlockPage(stalePage, expectedCursor: "wrong-cursor")
             XCTAssertFalse(sAfterStale.blocks.contains(where: { $0.id == "b-stale" }))
-            ParityCaseTracker.shared.record(f, "stale-expected-cursor-ignored")
 
             // Epoch mismatch page is ignored
             let wrongEpochPage = ThreadBlockPage(
@@ -139,11 +113,9 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             let sWrongEpoch = store.applyBlockPage(wrongEpochPage)
             XCTAssertFalse(sWrongEpoch.blocks.contains(where: { $0.id == "b-wrong-epoch" }))
-            ParityCaseTracker.shared.record(f, "wrong-epoch-block-page-ignored")
 
             store.setHistoryExpanded(threadId: "th-1", expanded: true)
             XCTAssertTrue(store.slot(for: "th-1").showAllHistory)
-            ParityCaseTracker.shared.record(f, "set-history-expanded")
 
             // History reset wipes stale prepended blocks
             let resetDetail = try makeDetail(
@@ -156,11 +128,9 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             let sReset = store.applyDetail(resetDetail)
             XCTAssertEqual(sReset.blocks.map(\.id), ["b-fresh"])
             XCTAssertFalse(sReset.hasMoreBlocks)
-            ParityCaseTracker.shared.record(f, "epoch-reset-replaces-blocks")
 
             store.clear(threadId: "th-1")
             XCTAssertTrue(store.slot(for: "th-1").blocks.isEmpty)
-            ParityCaseTracker.shared.record(f, "clear-thread-slot")
         }
     }
 
@@ -168,7 +138,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_usePagedHistory() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/usePagedHistory.test.ts"
             let store = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
 
             let s1 = store.applyHeadPoll(
@@ -181,7 +150,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             XCTAssertEqual(s1.events.map(\.id), ["e10", "e11"])
             XCTAssertEqual(s1.beforeCursor, "c10")
-            ParityCaseTracker.shared.record(f, "initial-head-poll")
 
             // Prepend 10 pages sequentially and verify retention across head polls
             for p in 1 ... 10 {
@@ -197,7 +165,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                     hasMore: nextCursor != nil
                 )
                 XCTAssertEqual(slot.events.first?.id, "e\(10 - p)")
-                ParityCaseTracker.shared.record(f, "older-prepend-page-\(p)")
             }
 
             // Head poll appends new event while preserving all 10 prepended older events!
@@ -212,8 +179,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(sAppended.events.first?.id, "e0")
             XCTAssertEqual(sAppended.events.last?.id, "e12")
             XCTAssertEqual(sAppended.events.first(where: { $0.id == "e11" })?.text, "11-updated")
-            ParityCaseTracker.shared.record(f, "head-poll-retains-prepended-pages")
-            ParityCaseTracker.shared.record(f, "head-poll-updates-in-place-by-id")
 
             // Non-advancing cursor halts pagination (AGENTS.md:130)
             _ = store.applyHeadPoll(
@@ -235,7 +200,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             )
             XCTAssertFalse(stuck.hasMore)
             XCTAssertNil(stuck.beforeCursor)
-            ParityCaseTracker.shared.record(f, "non-advancing-cursor-stops-hasMore")
 
             // Empty page halts pagination
             _ = store.applyHeadPoll(
@@ -256,7 +220,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: true
             )
             XCTAssertFalse(emptyPage.hasMore)
-            ParityCaseTracker.shared.record(f, "empty-older-page-stops-hasMore")
 
             // Epoch change rewrites slot cleanly
             let rewritten = store.applyHeadPoll(
@@ -268,7 +231,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: false
             )
             XCTAssertEqual(rewritten.events.map(\.id), ["fresh-1"])
-            ParityCaseTracker.shared.record(f, "epoch-rewrite-replaces-history")
 
             // Shrinking totalEvents rewrites slot
             _ = store.applyHeadPoll(
@@ -288,7 +250,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: false
             )
             XCTAssertEqual(shrunk.events.map(\.id), ["z-new"])
-            ParityCaseTracker.shared.record(f, "shrinking-total-events-rewrites")
 
             // Wrong expectedCursor is rejected
             _ = store.applyHeadPoll(
@@ -309,7 +270,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: false
             )
             XCTAssertEqual(mismatch.events.map(\.id), ["w2"])
-            ParityCaseTracker.shared.record(f, "mismatched-cursor-ignored")
 
             // Epoch mismatch on older page is rejected
             _ = store.applyHeadPoll(
@@ -330,11 +290,9 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: false
             )
             XCTAssertEqual(epMismatch.events.map(\.id), ["m2"])
-            ParityCaseTracker.shared.record(f, "older-page-epoch-mismatch-ignored")
 
             store.clearAll()
             XCTAssertTrue(store.slot(for: "k1").events.isEmpty)
-            ParityCaseTracker.shared.record(f, "clear-all-slots")
         }
     }
 
@@ -342,7 +300,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_historyWindows() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/historyWindows.test.ts"
             for (idx, provider) in SessionProvider.allCases.enumerated() {
                 let kind = (provider == .grok) ? "user_message_chunk" : "user_message"
                 let entries = TimelineViewModel.userTimelineEntries(
@@ -350,7 +307,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                     sources: [TimelineSourceItem(id: "id-\(idx)", role: "user", kind: kind, text: "Prompt \(idx)")]
                 )
                 XCTAssertEqual(entries.count, 1, provider.rawValue)
-                ParityCaseTracker.shared.record(f, "provider-window-\(provider.rawValue)")
             }
             let claudePage = TimelineWindowPage<ClaudeHistoryEvent>(
                 items: [ClaudeHistoryEvent(id: "c-1", kind: "user_message", text: "Hi")],
@@ -362,7 +318,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(claudePage.before, "b-1")
             XCTAssertEqual(claudePage.after, "a-1")
             XCTAssertTrue(claudePage.hasMore)
-            ParityCaseTracker.shared.record(f, "claude-window-page-cursors")
 
             let grokPage = TimelineWindowPage<GrokHistoryEvent>(
                 items: [GrokHistoryEvent(id: "g-1", kind: "user_message", text: "Hi")],
@@ -371,7 +326,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: false
             )
             XCTAssertEqual(grokPage.after, "n:g-1")
-            ParityCaseTracker.shared.record(f, "grok-window-page-after")
 
             let provPage = TimelineWindowPage<ProviderHistoryEvent>(
                 items: [ProviderHistoryEvent(id: "p-1", kind: "user_message", text: "Hi")],
@@ -380,7 +334,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 hasMore: true
             )
             XCTAssertTrue(provPage.hasMore)
-            ParityCaseTracker.shared.record(f, "provider-window-page-before")
         }
     }
 
@@ -388,7 +341,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_threadsQuery() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/threads.test.ts"
             let transport = MockRuntimeTransport { cmd, args in
                 if cmd == "threads.list" {
                     return Data("""
@@ -403,7 +355,7 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                     return Data("{\"jobId\":\"j-arch\"}".utf8)
                 }
                 if cmd == "jobs.detail" {
-                    return Data("{\"available\":true,\"data\":{\"id\":\"j-arch\",\"kind\":\"archive\",\"status\":\"succeeded\",\"title\":\"Archive\",\"started_at\":1700000000}}".utf8)
+                    return Data("{\"id\":\"j-arch\",\"kind\":\"archive\",\"status\":\"succeeded\",\"title\":\"Archive\",\"started_at\":1700000000}".utf8)
                 }
                 return Data("{}".utf8)
             }
@@ -413,27 +365,22 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             struct ListArgs: Encodable { let archived: Bool; let limit: Int }
             let list: [ThreadSummary] = try await store.rpc("threads.list", args: ListArgs(archived: false, limit: 80))
             XCTAssertEqual(list.count, 2)
-            ParityCaseTracker.shared.record(f, "threads-list-decode")
 
             struct RenameArgs: Encodable { let threadId: String; let name: String }
             struct Ack: Decodable { let jobId: String? }
             let rAck: Ack = try await store.rpc("threads.rename", args: RenameArgs(threadId: "t1", name: "New Title"))
             XCTAssertEqual(rAck.jobId, "j-rename")
-            ParityCaseTracker.shared.record(f, "threads-rename-job-ack")
 
             struct IdArgs: Encodable { let threadId: String }
             let aAck: Ack = try await store.rpc("threads.archive", args: IdArgs(threadId: "t1"))
             XCTAssertEqual(aAck.jobId, "j-arch")
-            ParityCaseTracker.shared.record(f, "threads-archive-job-ack")
 
             let uAck: Ack = try await store.rpc("threads.restore", args: IdArgs(threadId: "t1"))
             XCTAssertEqual(uAck.jobId, "j-arch")
-            ParityCaseTracker.shared.record(f, "threads-restore-job-ack")
 
             store.trackStartedJob("j-arch")
             try? await Task.sleep(nanoseconds: 50_000_000)
             XCTAssertEqual(store.trackedJobs["j-arch"]?.isTerminal, true)
-            ParityCaseTracker.shared.record(f, "started-job-polls-to-terminal")
         }
     }
 
@@ -441,7 +388,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_useHistoryScroll() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/useHistoryScroll.test.ts"
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.hs.\(UUID().uuidString)")!
             let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
@@ -470,26 +416,22 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             host.layoutSubtreeIfNeeded()
 
             XCTAssertTrue(coord.isNearBottom())
-            ParityCaseTracker.shared.record(f, "initial-mount-follows-bottom")
 
             // Scroll near top (y = 80 <= 200) -> `setBoundsOrigin` posts boundsDidChangeNotification and triggers loadOlder once
             if let clip = coord.scrollView?.contentView {
                 loadOlderTriggers = 0
                 clip.setBoundsOrigin(NSPoint(x: 0, y: 80))
                 XCTAssertEqual(loadOlderTriggers, 1)
-                ParityCaseTracker.shared.record(f, "near-top-200pt-triggers-load-older")
 
                 // When loadOlderError != nil (`isLoadOlderBlockedByError = true`), <=200pt MUST NOT re-trigger automatically!
                 coord.isLoadOlderBlockedByError = true
                 clip.setBoundsOrigin(NSPoint(x: 0, y: 40))
                 XCTAssertEqual(loadOlderTriggers, 1, "Automatic <200pt re-trigger must halt while loadOlderError is set")
-                ParityCaseTracker.shared.record(f, "error-blocks-auto-retrigger-until-retry")
 
                 // Clearing error on explicit Retry re-enables trigger
                 coord.isLoadOlderBlockedByError = false
                 clip.setBoundsOrigin(NSPoint(x: 0, y: 20))
                 XCTAssertEqual(loadOlderTriggers, 2)
-                ParityCaseTracker.shared.record(f, "explicit-retry-unblocks-pagination")
 
                 // Anchor preservation across prepend while scrolled up
                 clip.setBoundsOrigin(NSPoint(x: 0, y: 220))
@@ -499,26 +441,21 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 let afterAnchor = try XCTUnwrap(coord.captureScrollAnchor())
                 XCTAssertEqual(beforeAnchor.timelineId, afterAnchor.timelineId)
                 XCTAssertEqual(beforeAnchor.deltaY, afterAnchor.deltaY, accuracy: 0.5)
-                ParityCaseTracker.shared.record(f, "prepend-preserves-anchor-pixel-offset")
             }
 
             XCTAssertTrue(coord.scrollToPositionKey("r-10", reduceMotion: true))
-            ParityCaseTracker.shared.record(f, "scroll-to-position-key-found")
             XCTAssertFalse(coord.scrollToPositionKey("non-existent-id", reduceMotion: true))
-            ParityCaseTracker.shared.record(f, "scroll-to-missing-position-key-false")
 
             // Verify HistoryLoadingBarView renders loading and error+retry states
             let loadingHost = NSHostingView(rootView: HistoryLoadingBarView(loading: true, error: nil, onRetry: {}))
             loadingHost.frame = NSRect(x: 0, y: 0, width: 400, height: 32)
             loadingHost.layoutSubtreeIfNeeded()
             XCTAssertEqual(loadingHost.frame.width, 400)
-            ParityCaseTracker.shared.record(f, "history-loading-bar-active")
 
             var retried = false
             let errHost = NSHostingView(rootView: HistoryLoadingBarView(loading: false, error: "timeout", onRetry: { retried = true }).frame(width: 400, height: 32))
             errHost.layoutSubtreeIfNeeded()
             XCTAssertFalse(retried)
-            ParityCaseTracker.shared.record(f, "history-error-retry-bar")
 
             // Session switch with preferAutoFollowBottom=true scrolls back to bottom even if previously scrolled up
             let clip = try XCTUnwrap(coord.scrollView?.contentView)
@@ -527,7 +464,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             coord.sessionScopeKey = "local:codex:switched-session"
             coord.updateRowsPreservingAnchor(coord.rows, preferAutoFollowBottom: true, forceScrollToBottom: true)
             XCTAssertTrue(coord.isNearBottom(), "Session switch forceScrollToBottom must restore bottom follow")
-            ParityCaseTracker.shared.record(f, "session-switch-resets-bottom-follow")
 
             // Disclosure toggle above viewport anchor preserves anchor row & deltaY within 0.5pt
             let grouped = ExecutionGroupingEngine.groupCodexBlocks([
@@ -545,7 +481,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             let postToggleAnchor = try XCTUnwrap(coord.captureScrollAnchor())
             XCTAssertEqual(preToggleAnchor.timelineId, postToggleAnchor.timelineId)
             XCTAssertEqual(preToggleAnchor.deltaY, postToggleAnchor.deltaY, accuracy: 0.5)
-            ParityCaseTracker.shared.record(f, "disclosure-toggle-preserves-anchor")
         }
     }
 
@@ -553,7 +488,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_useTimelineWindow() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/useTimelineWindow.test.tsx"
             let ctrl = TimelineWindowController<ConversationRowItem>(idOf: \.timelineId)
             final class CursorBox: @unchecked Sendable {
                 var items: [String] = []
@@ -581,7 +515,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(seenCursors.items, ["j:turn-50"])
             XCTAssertTrue(ctrl.isActive)
             XCTAssertTrue(ctrl.hasNewer(latestTailId: "turn-99"))
-            ParityCaseTracker.shared.record(f, "jump-requests-j-cursor")
 
             // 2) Load newer via `afterCursor` / `n:<id>`
             await ctrl.loadNewer(latestTailId: "turn-99") { cursor in
@@ -596,7 +529,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             }
             XCTAssertEqual(seenCursors.items.last, "n:turn-51")
             XCTAssertEqual(ctrl.items?.map(\.id), ["turn-50", "turn-51", "turn-52"])
-            ParityCaseTracker.shared.record(f, "load-newer-appends-n-cursor-page")
 
             // 3) Load older inside window prepends `b:49`
             await ctrl.loadOlder { cursor in
@@ -610,7 +542,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 )
             }
             XCTAssertEqual(ctrl.items?.first?.id, "turn-49")
-            ParityCaseTracker.shared.record(f, "load-older-prepends-in-window")
 
             // 4) Reconcile poll journal refreshes affected page via `w:<firstId>`
             let journal = HistoryMetadata(
@@ -632,7 +563,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 )
             }
             XCTAssertTrue(seenCursors.items.contains("w:turn-50"))
-            ParityCaseTracker.shared.record(f, "poll-journal-refreshes-affected-page-with-w-cursor")
 
             // 5) History reset returns to latest and surfaces "历史已更新，请重新定位"
             await ctrl.reconcilePollHistory(
@@ -640,20 +570,17 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             ) { _ in TimelineWindowPage(items: []) }
             XCTAssertFalse(ctrl.isActive)
             XCTAssertEqual(ctrl.error, "历史已更新，请重新定位")
-            ParityCaseTracker.shared.record(f, "history-reset-returns-latest-with-message")
 
             // 6) Missing target surfaces "历史位置已变化，请刷新会话"
             await ctrl.jump(to: "missing-id", in: "local:codex:th-1", currentHistory: nil) { _ in
                 TimelineWindowPage(items: [ConversationRowItem(id: "other", timelineId: "other", kind: .assistant(markdown: "x", foldInstructions: false))])
             }
             XCTAssertEqual(ctrl.error, "历史位置已变化，请刷新会话")
-            ParityCaseTracker.shared.record(f, "missing-target-error")
 
             // 7) Return to latest clears window & error
             ctrl.returnToLatest()
             XCTAssertFalse(ctrl.isActive)
             XCTAssertNil(ctrl.error)
-            ParityCaseTracker.shared.record(f, "return-to-latest-resets-window")
         }
     }
 
@@ -661,7 +588,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
 
     func testPorted_timelineRail() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/TimelineRail.test.tsx"
             // Tick 0 vs Tick 10 MUST produce distinct vertical preview Y positions (never hardcoded y: 20!)
             let y0 = TimelineRailView.previewTopY(forTickIndex: 0, topPadding: 20, tickHeight: 12, railHeight: 600)
             let y10 = TimelineRailView.previewTopY(forTickIndex: 10, topPadding: 20, tickHeight: 12, railHeight: 600)
@@ -669,7 +595,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(y0, 26)
             XCTAssertEqual(y10, 146)
             XCTAssertEqual(yBottomClamp, 288)
-            ParityCaseTracker.shared.record(f, "preview-y-tracks-active-tick-and-clamps")
 
             // Keyboard navigation: ArrowUp (126), ArrowDown (125), Home (115), End (119) across all 200 entries without skipping
             let many = (0 ..< 200).map { TimelineEntry(id: "t-\($0)", title: "Prompt \($0)", preview: "Body \($0)") }
@@ -678,7 +603,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 150, count: many.count, keyCode: 115), 0)
             XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 1, count: many.count, keyCode: 119), 199)
             XCTAssertEqual(TimelineRailView.nextKeyboardFocusIndex(currentIndex: 199, count: many.count, keyCode: 126), 198, "End then ArrowUp must reach entry 198 without lossy tick sampling")
-            ParityCaseTracker.shared.record(f, "keyboard-up-down-home-end-navigation")
 
             // Virtualized window capacity & preview max width (min(288pt, 60vw), never crushed to 34pt!)
             XCTAssertGreaterThanOrEqual(TimelineRailView.virtualWindowCapacity(usableHeight: 400), 35)
@@ -691,7 +615,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertGreaterThan(longPreviewHost.fittingSize.width, 180, "Preview card must NEVER be crushed to 34pt rail width")
             XCTAssertLessThanOrEqual(longPreviewHost.fittingSize.width, 288.5)
             XCTAssertLessThan(shortPreviewHost.fittingSize.width, longPreviewHost.fittingSize.width)
-            ParityCaseTracker.shared.record(f, "samples-dense-ticks-preserving-endpoints")
 
             let host = NSHostingView(
                 rootView: TimelineRailView(entries: many, activeId: "t-120", availableWidth: 800, onSelectEntry: { _ in })
@@ -699,14 +622,12 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             host.frame = NSRect(x: 0, y: 0, width: 34, height: 400)
             host.layoutSubtreeIfNeeded()
             XCTAssertEqual(host.frame.width, 34)
-            ParityCaseTracker.shared.record(f, "mounts-timeline-rail-at-fixed-width")
         }
     }
 
     // MARK: - 8. searchHistoryReveal.test.ts (1 case)
 
     func testPorted_searchHistoryReveal() throws {
-        let f = "webui/src/lib/domain/searchHistoryReveal.test.ts"
         let blocks = (0 ..< 65).map { i in
             MessageBlock(id: "msg-\(i)", role: i % 2 == 0 ? "user" : "assistant", kind: "message", text: "Text \(i)")
         }
@@ -719,21 +640,18 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
         )
         XCTAssertTrue(rows.contains(where: { $0.matches(positionKey: "msg-3") }))
         XCTAssertTrue(rows.contains(where: { if case .historyCollapse = $0.kind { return true }; return false }))
-        ParityCaseTracker.shared.record(f, "reveals-single-hit-preserving-collapse-summary")
     }
 
     // MARK: - 9. SessionSearch.test.tsx (3 cases) — Desktop ⌘F Pill vs <=767pt Icon Button & Modal Presence
 
     func testPorted_sessionSearch() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/SessionSearch.test.tsx"
             let desktopBtn = NSHostingView(rootView: FloatingSearchPillButton(isCompactMobile: false, action: {}))
             desktopBtn.layoutSubtreeIfNeeded()
             let mobileBtn = NSHostingView(rootView: FloatingSearchPillButton(isCompactMobile: true, action: {}))
             mobileBtn.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(desktopBtn.fittingSize.width, mobileBtn.fittingSize.width, "Desktop pill includes ⌘F kbd chip; <=767pt collapses to 36x36 icon")
             XCTAssertEqual(mobileBtn.fittingSize.width, 36, accuracy: 2)
-            ParityCaseTracker.shared.record(f, "desktop-kbd-pill-vs-mobile-36pt-circle")
 
             let transport = MockRuntimeTransport { cmd, _ in
                 if cmd == "sessions.search" {
@@ -754,7 +672,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
             XCTAssertTrue(ModalPresentationRegistry.shared.hasActiveModal, "Open SessionSearchModalView must register active modal to block ⌘A")
             modalWindow.contentView = nil
             try? await Task.sleep(nanoseconds: 20_000_000)
-            ParityCaseTracker.shared.record(f, "search-modal-registers-modal-presence")
 
             struct SearchWrap: Encodable { let request: SessionSearchRequest }
             let page: SessionSearchResponse = try await store.rpc(
@@ -762,7 +679,6 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase, ParityExecutableSuit
                 args: SearchWrap(request: SessionSearchRequest(provider: .codex, scope: .thread, sessionKey: "s1", query: "needle"))
             )
             XCTAssertEqual(page.results.first?.positionKey, "b-2")
-            ParityCaseTracker.shared.record(f, "search-rpc-decodes-position-key")
         }
     }
 }

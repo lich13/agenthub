@@ -254,6 +254,25 @@ public struct ProviderSessionSummary: Codable, Equatable, Sendable, Identifiable
     public var readWarning: String?
 }
 
+public struct ProviderDetailRequest: Codable, Equatable, Sendable {
+    public var sessionKey: String
+    public var agentId: String?
+    public var limit: Int?
+    public var before: String?
+
+    public init(
+        sessionKey: String,
+        agentId: String? = nil,
+        limit: Int? = nil,
+        before: String? = nil
+    ) {
+        self.sessionKey = sessionKey
+        self.agentId = agentId
+        self.limit = limit
+        self.before = before
+    }
+}
+
 public struct ProviderHistoryEvent: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var timestamp: String?
@@ -266,6 +285,7 @@ public struct ProviderHistoryEvent: Codable, Equatable, Sendable, Identifiable {
     public var detail: String?
     public var result: String?
     public var userMessage: UserMessageContent?
+    public var subagent: SubagentActivity?
 
     public init(
         id: String,
@@ -277,7 +297,8 @@ public struct ProviderHistoryEvent: Codable, Equatable, Sendable, Identifiable {
         status: String? = nil,
         detail: String? = nil,
         result: String? = nil,
-        userMessage: UserMessageContent? = nil
+        userMessage: UserMessageContent? = nil,
+        subagent: SubagentActivity? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -289,6 +310,7 @@ public struct ProviderHistoryEvent: Codable, Equatable, Sendable, Identifiable {
         self.detail = detail
         self.result = result
         self.userMessage = userMessage
+        self.subagent = subagent
     }
 }
 
@@ -296,6 +318,9 @@ public struct ProviderSessionDetail: Codable, Equatable, Sendable {
     public var timeline: [TimelineEntry]?
     public var afterCursor: String?
     public var history: HistoryMetadata?
+    public var agent: SubagentActivity?
+    public var subagents: SubagentCollection?
+    public var subagentUpdates: [String: SubagentActivity]?
     public var summary: ProviderSessionSummary
     public var events: [ProviderHistoryEvent]
     public var totalEvents: Int

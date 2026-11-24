@@ -109,16 +109,15 @@
         "id": { "$ref": "#/$defs/nonEmptyString" },
         "kind": {
           "type": "string",
-          "enum": ["rpc", "transport"]
+          "const": "rpc"
         },
         "scope": {
           "type": "string",
-          "enum": ["shared", "host_only", "transport"]
+          "enum": ["shared", "host_only"]
         },
         "coreUseCase": { "$ref": "#/$defs/nonEmptyString" },
         "linuxRpc": { "$ref": "#/$defs/nonEmptyString" },
         "ffiHandler": { "$ref": "#/$defs/nonEmptyString" },
-        "webuiWrapper": { "$ref": "#/$defs/nonEmptyString" },
         "dtoOwner": { "$ref": "#/$defs/nonEmptyString" },
         "requestDto": { "$ref": "#/$defs/nonEmptyString" },
         "responseDto": { "$ref": "#/$defs/nonEmptyString" },
@@ -128,10 +127,9 @@
     "dtoCatalogEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["core", "webui"],
+      "required": ["core"],
       "properties": {
-        "core": { "$ref": "#/$defs/nonEmptyString" },
-        "webui": { "$ref": "#/$defs/nonEmptyString" }
+        "core": { "$ref": "#/$defs/nonEmptyString" }
       }
     }
   }

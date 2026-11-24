@@ -131,6 +131,40 @@ pub fn thread_blocks_page_for_plan(
     }
 }
 
+pub fn load_thread_detail_for_plan(
+    paths: &crate::codex::CodexPaths,
+    plan: &ThreadDetailPlan,
+) -> anyhow::Result<Option<ThreadDetail>> {
+    let Some(mut detail) = crate::codex::thread_detail_page(
+        paths,
+        &plan.thread_id,
+        plan.block_limit,
+        plan.before.as_deref(),
+        None,
+    )?
+    else {
+        return Ok(None);
+    };
+    crate::codex::subagents::enrich_subagent_blocks(paths, &mut detail);
+    Ok(Some(detail))
+}
+
+pub fn read_window_thread_detail(
+    paths: &crate::codex::CodexPaths,
+    plan: &ThreadDetailPlan,
+) -> anyhow::Result<Option<ThreadDetail>> {
+    Ok(load_thread_detail_for_plan(paths, plan)?
+        .map(|detail| window_thread_detail_for_plan(detail, plan)))
+}
+
+pub fn read_thread_blocks_page(
+    paths: &crate::codex::CodexPaths,
+    plan: &ThreadDetailPlan,
+) -> anyhow::Result<Option<ThreadBlocksPage>> {
+    Ok(load_thread_detail_for_plan(paths, plan)?
+        .map(|detail| thread_blocks_page_for_plan(detail, plan)))
+}
+
 pub fn normalize_thread_detail_block_limit(limit: Option<usize>, full: bool) -> Option<usize> {
     if full {
         None

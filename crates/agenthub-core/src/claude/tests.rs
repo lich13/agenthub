@@ -834,7 +834,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     .unwrap();
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
+        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
             .unwrap(),
         0
     );
@@ -852,7 +852,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     f.append(&final_row);
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
+        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
             .unwrap(),
         1
     );
@@ -868,7 +868,7 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     )
     .unwrap();
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
+        db.stage_native_notifications_with_hooks(NativeProvider::Claude, &scan, &config, false)
             .unwrap(),
         0
     );
@@ -885,8 +885,13 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
         .any(|e| e.kind == "failure"));
     config.probe.notifications.notify_claude = false;
     assert_eq!(
-        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
-            .unwrap(),
+        db.stage_native_notifications_with_hooks(
+            NativeProvider::Claude,
+            &NativeScan::default(),
+            &config,
+            false
+        )
+        .unwrap(),
         0
     );
 }
@@ -2683,8 +2688,13 @@ fn execute_claude_delete_rejects_out_of_bounds_allows_running_and_stops_on_parti
     }
 }
 
+static DETAIL_CACHE_EVICTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn notification_snapshots_reuse_incremental_reader_and_lightweight_probe_cache() {
+    let _guard = DETAIL_CACHE_EVICTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let f = Fixture::new();
     f.complete();
 
@@ -2717,6 +2727,9 @@ fn notification_snapshots_reuse_incremental_reader_and_lightweight_probe_cache()
 
 #[test]
 fn notification_cache_keeps_idle_sessions_when_body_cache_evicts_and_rejects_partial_tail() {
+    let _guard = DETAIL_CACHE_EVICTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let f = Fixture::new();
     f.complete();
     for n in 0..70 {

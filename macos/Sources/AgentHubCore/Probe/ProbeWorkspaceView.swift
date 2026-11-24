@@ -6,10 +6,13 @@ public struct ProbeWorkspaceView: View {
     private let sourceRevision: UInt64
 
     @State private var status: ProbeStatus?
+    @State private var statusError: String?
     @State private var settingsView: ProbeSettingsView?
+    @State private var settingsError: String?
     @State private var draft: ProbeSettingsDraft?
     @State private var events: [ProbeEventItem] = []
-    @State private var eventsAvailable: Bool = false
+    @State private var eventsLoaded: Bool = false
+    @State private var eventsError: String?
     @State private var loadingStatus: Bool = false
     @State private var saving: Bool = false
     @State private var saveTarget: String = "settings"
@@ -69,6 +72,23 @@ public struct ProbeWorkspaceView: View {
                             .help("刷新 Probe")
                         }
 
+                        if let statusError, !statusError.isEmpty {
+                            Text(statusError)
+                                .font(DesignFonts.body(12, weight: .medium))
+                                .foregroundStyle(palette.errFg.color)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(palette.errBg.color)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .strokeBorder(palette.errBorder.color, lineWidth: 1)
+                                        )
+                                )
+                        }
+
                         // 1. Full-width GitHub CI Panel
                         if store.capabilities.isReady {
                             GithubCiCardView(
@@ -87,9 +107,14 @@ public struct ProbeWorkspaceView: View {
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle((actionMessage.tone == .success ? palette.okFg : palette.errFg).color)
                             }
+                            if let settingsError, !settingsError.isEmpty {
+                                Text(settingsError)
+                                    .font(DesignFonts.body(12))
+                                    .foregroundStyle(palette.errFg.color)
+                            }
                             if let d = draft {
                                 runtimeSettingsBody(draft: d, isNarrow: isNarrow)
-                            } else {
+                            } else if settingsError == nil {
                                 Text(loadingStatus ? "正在读取设置" : "设置不可用")
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textMuted.color)
@@ -151,6 +176,7 @@ public struct ProbeWorkspaceView: View {
                     }
                 }
             }
+            .background(palette.background.color)
         }
         .onChange(of: activeJobId.flatMap { store.trackedJobs[$0]?.status }) { status in
             guard status == "succeeded" || status == "failed",
@@ -160,7 +186,11 @@ public struct ProbeWorkspaceView: View {
         .task(id: store.machineScope) {
             draft = nil
             status = nil
+            statusError = nil
+            settingsError = nil
             events = []
+            eventsLoaded = false
+            eventsError = nil
             hookStatuses = [:]
             await refreshAll(force: false)
             while !Task.isCancelled {
@@ -471,7 +501,12 @@ public struct ProbeWorkspaceView: View {
                             .lineLimit(1)
                     }
                     HStack(spacing: 8) {
-                        MetricCard(label: "Codex Hook", value: probeStateLabel(hookStatus), tone: managed ? .success : .warning)
+                        let unavailable = (hookStatus == nil && statusError != nil)
+                        MetricCard(
+                            label: "Codex Hook",
+                            value: unavailable ? "状态未知" : probeStateLabel(hookStatus),
+                            tone: unavailable ? .danger : (managed ? .success : .warning)
+                        )
                         MetricCard(label: "实际命令", value: "\(actualCount) 条")
                     }
                     FlowButtonRow(spacing: 8, lineSpacing: 8) {
@@ -582,6 +617,11 @@ public struct ProbeWorkspaceView: View {
 
         PanelCard(title: "实时态势", icon: .activity) {
             VStack(alignment: .leading, spacing: 10) {
+                if let statusError, !statusError.isEmpty {
+                    Text(statusError)
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.errFg.color)
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("全平台实时态势")
@@ -623,8 +663,12 @@ public struct ProbeWorkspaceView: View {
     @ViewBuilder
     private var recentEventsPanel: some View {
         PanelCard(title: "最近事件", icon: .terminalSquare) {
-            if !eventsAvailable {
-                Text(loadingStatus ? "正在读取事件" : "事件接口不可用")
+            if let eventsError, !eventsError.isEmpty {
+                Text(eventsError)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            } else if !eventsLoaded {
+                Text(loadingStatus ? "正在读取事件" : "暂无事件数据")
                     .font(DesignFonts.body(12))
                     .foregroundStyle(palette.textMuted.color)
             } else if events.isEmpty {
@@ -697,13 +741,15 @@ public struct ProbeWorkspaceView: View {
         loadingStatus = true
         defer { loadingStatus = false }
         await refreshStatusAndEvents(force: force)
-        if let envelope: OptionalResultEnvelope<ProbeSettingsView> = try? await store.rpc("probe.settings.get"),
-           let loaded = envelope.data
-        {
+        do {
+            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get")
             settingsView = loaded
+            settingsError = nil
             if draft == nil {
                 draft = ProbeSettingsDraft.from(loaded)
             }
+        } catch {
+            settingsError = error.localizedDescription
         }
         if store.target == .local {
             for provider in ["claude", "grok", "antigravity"] {
@@ -722,18 +768,31 @@ public struct ProbeWorkspaceView: View {
     }
 
     private func refreshStatusAndEvents(force: Bool = false) async {
-        if let stEnv: OptionalResultEnvelope<ProbeStatus> = try? await store.rpc(
-            "probe.status",
-            args: force ? ["refresh": .bool(true)] : [:]
-        ) {
-            status = stEnv.data
+        do {
+            let st: ProbeStatus = try await store.rpc(
+                "probe.status",
+                args: force ? ["refresh": .bool(true)] : [:]
+            )
+            if st.available == false {
+                status = nil
+                statusError = st.error ?? "Probe 状态不可用"
+            } else {
+                status = st
+                statusError = nil
+            }
+        } catch {
+            statusError = error.localizedDescription
         }
-        if let evEnv: OptionalResultEnvelope<ProbeEventsResponse> = try? await store.rpc(
-            "probe.events",
-            args: ["limit": .number(10)]
-        ) {
-            eventsAvailable = evEnv.available
-            events = evEnv.data?.events ?? []
+        do {
+            let ev: ProbeEventsResponse = try await store.rpc(
+                "probe.events",
+                args: ["limit": .number(10)]
+            )
+            eventsLoaded = true
+            eventsError = nil
+            events = ev.events
+        } catch {
+            eventsError = error.localizedDescription
         }
     }
 
@@ -745,18 +804,17 @@ public struct ProbeWorkspaceView: View {
         defer { saving = false }
         do {
             let payload = try currentDraft.buildSavePayload()
-            let savedEnv: OptionalResultEnvelope<ProbeSettingsView> = try await store.rpc(
+            let saved: ProbeSettingsView = try await store.rpc(
                 "probe.settings.save",
                 args: ["settings": .object(payload)], at: sourceRevision
             )
-            if let saved = savedEnv.data {
-                settingsView = saved
-                var refreshed = ProbeSettingsDraft.from(saved)
-                if !currentDraft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    refreshed.barkDeviceKeyConfigured = true
-                }
-                if draft == currentDraft { draft = refreshed }
+            settingsView = saved
+            settingsError = nil
+            var refreshed = ProbeSettingsDraft.from(saved)
+            if !currentDraft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                refreshed.barkDeviceKeyConfigured = true
             }
+            if draft == currentDraft { draft = refreshed }
             saveMessage = (.success, "设置已保存")
         } catch {
             saveMessage = (.danger, error.localizedDescription)

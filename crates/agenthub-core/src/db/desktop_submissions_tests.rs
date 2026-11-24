@@ -383,7 +383,9 @@ fn hold_and_resume_control_unsent_records_and_only_unsent_records_can_be_cancell
     assert!(!ledger.claim(&source, &thread, &first).unwrap());
     assert!(ledger.cancel(&source, &thread, &first).unwrap());
 
-    ledger.resume(&source, &thread).unwrap();
+    ledger
+        .resume_selected(&source, &thread, std::slice::from_ref(&second))
+        .unwrap();
     assert_eq!(
         record(&ledger.list(&source, &thread).unwrap(), &second).status,
         "queued"

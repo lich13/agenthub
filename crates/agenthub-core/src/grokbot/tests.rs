@@ -162,6 +162,7 @@ fn history_paging_mapping_and_uncached_rows_keep_native_identity() {
         &f.paths,
         &ProviderDetailRequest {
             session_key: f.session(),
+            agent_id: None,
             limit: Some(3),
             before: None,
         },
@@ -190,6 +191,7 @@ fn history_paging_mapping_and_uncached_rows_keep_native_identity() {
         &f.paths,
         &ProviderDetailRequest {
             session_key: f.session(),
+            agent_id: None,
             limit: Some(10),
             before: latest.before_cursor,
         },
@@ -203,6 +205,7 @@ fn history_paging_mapping_and_uncached_rows_keep_native_identity() {
         &f.paths,
         &ProviderDetailRequest {
             session_key: f.session(),
+            agent_id: None,
             limit: Some(10),
             before: None,
         },
@@ -237,6 +240,7 @@ fn roster_requests_share_native_identity_and_resolved_interactions_win() {
         &f.paths,
         &ProviderDetailRequest {
             session_key: f.session(),
+            agent_id: None,
             limit: None,
             before: None,
         },
@@ -471,6 +475,7 @@ fn send_message_completion_cursor_dedupe_and_upgrade_baseline() {
         &f.paths,
         &ProviderDetailRequest {
             session_key: f.session(),
+            agent_id: None,
             limit: None,
             before: None,
         },

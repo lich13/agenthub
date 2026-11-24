@@ -7,7 +7,6 @@ use crate::{
         jobs::{self as job_service, DesktopJobDetailRequest, DesktopJobsRequest},
         probe as probe_service,
         settings::{self as settings_service, DesktopProbeEventsRequest},
-        system as system_service,
         threads::{
             self as thread_service, DesktopRenameThreadRequest, DesktopThreadIdRequest,
             ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,

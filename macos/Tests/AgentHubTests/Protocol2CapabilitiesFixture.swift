@@ -6,6 +6,7 @@ func protocol2CapabilitiesFixture(remote: Bool, pruneBackups: Bool? = nil) -> Da
         "threads": true,
         "thread_subagents": true,
         "claude_subagents": true,
+        "antigravity_subagents": true,
         "jobs": true,
         "probe": true,
         "settings": true,

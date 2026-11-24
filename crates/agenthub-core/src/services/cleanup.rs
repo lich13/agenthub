@@ -38,7 +38,7 @@ impl CleanupScope {
             Self::AntigravityArchived => (
                 SCOPE_ANTIGRAVITY_ARCHIVED,
                 "antigravity",
-                "Antigravity 已归档线程",
+                "Antigravity 已归档与孤立子会话",
             ),
             Self::DshArchived => (SCOPE_DSH_ARCHIVED, "dsh", "DeepSeek Harness 已归档线程"),
             Self::ClaudeEmpty => (SCOPE_CLAUDE_EMPTY, "claude", "Claude Code 空残余会话"),
@@ -224,51 +224,19 @@ fn dry_run_single_scope(
             out.scanned = false;
         }
         CleanupScope::AntigravityArchived => {
-            match crate::antigravity::sessions::list_sessions_without_storage(
+            match crate::antigravity::sessions::preview_unified_cleanup_candidates(
                 &paths.antigravity,
-                &crate::provider_sessions::ProviderListRequest {
-                    archived: Some(true),
-                    limit: Some(1000),
-                    q: None,
-                },
             ) {
-                Ok(sessions) => {
-                    for summary in sessions {
-                        match crate::antigravity::sessions::preview_batch_item(
-                            &paths.antigravity,
-                            &summary.session_key,
-                            crate::services::sessions::SessionOperation::Delete,
-                            true,
-                        ) {
-                            Ok(preview) => {
-                                let blocked = (!preview.allowed).then(|| {
-                                    preview.reason.unwrap_or_else(|| "当前无法安全清理".into())
-                                });
-                                push_candidate(
-                                    &mut out,
-                                    summary.session_key,
-                                    summary.title,
-                                    preview.bytes,
-                                    preview.fingerprint,
-                                    blocked,
-                                );
-                            }
-                            Err(err) => {
-                                let bytes = summary
-                                    .storage_size
-                                    .as_ref()
-                                    .and_then(|s| s.bytes)
-                                    .unwrap_or(0);
-                                push_candidate(
-                                    &mut out,
-                                    summary.session_key,
-                                    summary.title,
-                                    bytes,
-                                    None,
-                                    Some(err.to_string()),
-                                );
-                            }
-                        }
+                Ok(candidates) => {
+                    for c in candidates {
+                        push_candidate(
+                            &mut out,
+                            c.id,
+                            c.title,
+                            c.bytes,
+                            c.fingerprint,
+                            c.blocked_reason,
+                        );
                     }
                 }
                 Err(err) => out.issues.push(err.to_string()),
@@ -421,20 +389,6 @@ fn verified_scope_targets(
         .collect()
 }
 
-fn run_scope_targets(
-    targets: Vec<UnifiedCleanupTargetSelection>,
-    scope: &mut UnifiedCleanupScopeResult,
-    mut step: impl FnMut(&str, &str) -> Result<TargetStepOutcome>,
-) {
-    for target in targets {
-        let result = match target.fingerprint.as_deref() {
-            Some(fingerprint) => step(&target.id, fingerprint),
-            None => Ok(TargetStepOutcome::Skipped("缺少预览指纹，已跳过".into())),
-        };
-        record_target_result(scope, &target.id, result);
-    }
-}
-
 fn execute_codex_scope(
     codex: &CodexPaths,
     targets: Vec<UnifiedCleanupTargetSelection>,
@@ -499,60 +453,23 @@ fn execute_antigravity_archived_scope(
     scope_targets: Vec<UnifiedCleanupTargetSelection>,
     scope_res: &mut UnifiedCleanupScopeResult,
 ) -> Result<()> {
-    let allowed_keys: std::collections::HashSet<String> =
-        crate::antigravity::sessions::list_sessions_without_storage(
-            antigravity,
-            &crate::provider_sessions::ProviderListRequest {
-                archived: Some(true),
-                limit: Some(1000),
-                q: None,
-            },
-        )?
+    use crate::antigravity::sessions::UnifiedAntigravityStepOutcome;
+    let pairs: Vec<(String, Option<String>)> = scope_targets
         .into_iter()
-        .map(|s| s.session_key)
+        .map(|t| (t.id, t.fingerprint))
         .collect();
-
-    run_scope_targets(scope_targets, scope_res, |id, req_fp| {
-        if !allowed_keys.contains(id) {
-            return Ok(TargetStepOutcome::Skipped(
-                "目标不在当前已归档允许集合中，已跳过".into(),
-            ));
-        }
-        let preview = match crate::antigravity::sessions::preview_batch_item(
-            antigravity,
-            id,
-            crate::services::sessions::SessionOperation::Delete,
-            true,
-        ) {
-            Ok(p) if p.allowed => p,
-            Ok(p) => return Ok(TargetStepOutcome::Failed(p.reason, Vec::new())),
-            Err(err) => return Ok(TargetStepOutcome::Failed(Some(err.to_string()), Vec::new())),
+    for (id, outcome) in
+        crate::antigravity::sessions::execute_unified_cleanup_targets(antigravity, &pairs)?
+    {
+        let mapped = match outcome {
+            UnifiedAntigravityStepOutcome::Deleted(bytes) => TargetStepOutcome::Deleted(bytes),
+            UnifiedAntigravityStepOutcome::Skipped(msg) => TargetStepOutcome::Skipped(msg),
+            UnifiedAntigravityStepOutcome::Failed(msg, residuals) => {
+                TargetStepOutcome::Failed(msg, residuals)
+            }
         };
-        if preview.fingerprint.as_deref() != Some(req_fp) {
-            return Ok(TargetStepOutcome::Skipped(
-                "会话状态或指纹已变化，已跳过".into(),
-            ));
-        }
-        if !crate::antigravity::sessions::session_summary_without_storage(antigravity, id)?.archived
-        {
-            return Ok(TargetStepOutcome::Skipped("会话已恢复为非归档状态".into()));
-        }
-        Ok(
-            match crate::antigravity::sessions::execute_batch_item(
-                antigravity,
-                id,
-                crate::services::sessions::SessionOperation::Delete,
-                &preview.descendants,
-                true,
-            ) {
-                Ok(item) if item.status == "succeeded" && item.residuals.is_empty() => {
-                    TargetStepOutcome::Deleted(preview.bytes)
-                }
-                Ok(item) => TargetStepOutcome::Failed(item.message, item.residuals),
-                Err(err) => TargetStepOutcome::Failed(Some(err.to_string()), Vec::new()),
-            },
-        )
-    });
+        record_target_result(scope_res, &id, Ok(mapped));
+    }
     Ok(())
 }
 
@@ -1346,5 +1263,161 @@ fn linux_unified_cleanup_supports_archived_antigravity_cli_sessions() {
         .join("conversations")
         .join(format!("{active_id}.db"))
         .exists());
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn antigravity_unified_cleanup_includes_verified_orphan_subagents_and_skips_locked() {
+    use std::fs::{self, OpenOptions};
+    use std::os::unix::io::AsRawFd;
+
+    let tmp =
+        std::env::temp_dir().join(format!("agenthub-ag-orphan-clean-{}", uuid::Uuid::new_v4()));
+    let ag_home = tmp.join("ag");
+    for d in ["conversations", "brain", "presence"] {
+        fs::create_dir_all(ag_home.join(d)).unwrap();
+    }
+    let deleted_root = uuid::Uuid::new_v4().to_string();
+    let orphan_l1 = uuid::Uuid::new_v4().to_string();
+    let orphan_l2 = uuid::Uuid::new_v4().to_string();
+    let locked_orphan = uuid::Uuid::new_v4().to_string();
+    let live_root = uuid::Uuid::new_v4().to_string();
+    let live_child = uuid::Uuid::new_v4().to_string();
+
+    for cid in [
+        &orphan_l1,
+        &orphan_l2,
+        &locked_orphan,
+        &live_root,
+        &live_child,
+    ] {
+        fs::write(
+            ag_home.join("conversations").join(format!("{cid}.db")),
+            b"orphan-bytes",
+        )
+        .unwrap();
+    }
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(
+            ag_home
+                .join("presence")
+                .join(format!("{locked_orphan}.lock")),
+        )
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+
+    let conn = rusqlite::Connection::open(ag_home.join("conversation_summaries.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT, preview TEXT, step_count INTEGER,
+            last_modified_time TEXT, workspace_uris TEXT,
+            status TEXT, parent_conversation_id TEXT,
+            nesting_depth INTEGER, not_fully_idle NUMERIC
+        );
+        CREATE TABLE conversation_parents (
+            conversation_id TEXT PRIMARY KEY, parent_id TEXT NOT NULL
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES \
+         (?1, '孤立一层', '', 1, '2026-11-24T00:00:00Z', '', 'CASCADE_RUN_STATUS_IDLE', ?2, 1, 0), \
+         (?3, '孤立二层', '', 1, '2026-11-24T00:00:01Z', '', 'CASCADE_RUN_STATUS_IDLE', ?1, 2, 0), \
+         (?4, '占用中孤立子代理', '', 1, '2026-11-24T00:00:02Z', '', 'CASCADE_RUN_STATUS_IDLE', ?2, 1, 0), \
+         (?5, '正常根会话', '', 1, '2026-11-24T00:00:03Z', '', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0), \
+         (?6, '正常子会话', '', 1, '2026-11-24T00:00:04Z', '', 'CASCADE_RUN_STATUS_IDLE', ?5, 1, 0)",
+        rusqlite::params![orphan_l1, deleted_root, orphan_l2, locked_orphan, live_root, live_child],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO conversation_parents VALUES (?1, ?2), (?3, ?1), (?4, ?2), (?5, ?6)",
+        rusqlite::params![
+            orphan_l1,
+            deleted_root,
+            orphan_l2,
+            locked_orphan,
+            live_child,
+            live_root
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let paths = UnifiedCleanupPaths {
+        codex: crate::codex::CodexPaths::new(tmp.join("codex")),
+        antigravity: crate::antigravity::sessions::AntigravityPaths::offline(ag_home.clone()),
+        dsh: crate::dsh::DshPaths {
+            home: tmp.join("dsh"),
+        },
+        claude: crate::claude::ClaudePaths {
+            config: tmp.join("claude"),
+            projects: tmp.join("claude/projects"),
+        },
+        grok: crate::grok::GrokPaths {
+            home: tmp.join("grok"),
+        },
+    };
+    let desktop = crate::platform::PlatformPaths::macos(tmp.clone());
+    let plan = dry_run_unified_with_capability(&desktop, &paths).unwrap();
+    let ag_scope = plan
+        .scopes
+        .iter()
+        .find(|s| s.scope == SCOPE_ANTIGRAVITY_ARCHIVED)
+        .unwrap();
+    assert_eq!(ag_scope.label, "Antigravity 已归档与孤立子会话");
+    // Only orphan_l1 (cascading orphan_l2) is eligible; locked_orphan and live_child are excluded!
+    assert_eq!(ag_scope.candidates.len(), 1);
+    assert_eq!(ag_scope.candidates[0].id, orphan_l1);
+    assert!(ag_scope.candidates[0].title.contains("孤立子会话 ←"));
+    assert_eq!(
+        ag_scope.candidates[0].estimated_bytes,
+        (b"orphan-bytes".len() * 2) as u64
+    );
+
+    let exec = execute_unified_with_capability(
+        &desktop,
+        &paths,
+        UnifiedCleanupExecuteRequest {
+            confirmed: true,
+            scopes: vec![SCOPE_ANTIGRAVITY_ARCHIVED.into()],
+            targets: vec![UnifiedCleanupTargetSelection {
+                scope: SCOPE_ANTIGRAVITY_ARCHIVED.into(),
+                id: orphan_l1.clone(),
+                fingerprint: ag_scope.candidates[0].fingerprint.clone(),
+            }],
+        },
+    )
+    .unwrap();
+    assert_eq!(exec.deleted_count, 1);
+    assert_eq!(exec.failed_count, 0);
+    assert!(!ag_home
+        .join("conversations")
+        .join(format!("{orphan_l1}.db"))
+        .exists());
+    assert!(!ag_home
+        .join("conversations")
+        .join(format!("{orphan_l2}.db"))
+        .exists());
+    assert!(ag_home
+        .join("conversations")
+        .join(format!("{locked_orphan}.db"))
+        .exists());
+    assert!(ag_home
+        .join("conversations")
+        .join(format!("{live_child}.db"))
+        .exists());
+
+    unsafe {
+        let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+    }
     let _ = fs::remove_dir_all(&tmp);
 }

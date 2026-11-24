@@ -314,7 +314,18 @@ impl DesktopLedger {
     }
 
     pub fn hold(&self, source: &str, thread: &str) -> Result<()> {
-        self.set_hold(source, thread, true)
+        validate_source_thread(source, thread)?;
+        self.db
+            .conn
+            .lock()
+            .map_err(|_| safe_error())?
+            .execute(
+                "UPDATE codex_desktop_submissions SET status='held',updated_at=?3
+             WHERE source_id=?1 AND thread_id=?2 AND status='queued'",
+                params![source, thread, jiff::Timestamp::now().as_millisecond()],
+            )
+            .map_err(|_| safe_error())?;
+        Ok(())
     }
 
     /// An immediate steer that could not claim the native lane is retained for
@@ -326,10 +337,6 @@ impl DesktopLedger {
             params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map_err(|_|safe_error())?;
         Ok(())
-    }
-
-    pub fn resume(&self, source: &str, thread: &str) -> Result<()> {
-        self.set_hold(source, thread, false)
     }
 
     /// Resume only the queue entries the worker has decoded and classified as
@@ -360,27 +367,6 @@ impl DesktopLedger {
             "UPDATE codex_desktop_submissions SET status='dismissed',ciphertext=NULL,nonce=NULL,updated_at=?4 WHERE id=?1 AND source_id=?2 AND thread_id=?3 AND status='outcome_unknown'",
             params![id,source,thread,jiff::Timestamp::now().as_millisecond()],
         ).map(|changed|changed==1).map_err(|_|safe_error())
-    }
-
-    fn set_hold(&self, source: &str, thread: &str, hold: bool) -> Result<()> {
-        validate_source_thread(source, thread)?;
-        self.db
-            .conn
-            .lock()
-            .map_err(|_| safe_error())?
-            .execute(
-                "UPDATE codex_desktop_submissions SET status=?3,updated_at=?5
-             WHERE source_id=?1 AND thread_id=?2 AND status=?4",
-                params![
-                    source,
-                    thread,
-                    if hold { "held" } else { "queued" },
-                    if hold { "queued" } else { "held" },
-                    jiff::Timestamp::now().as_millisecond()
-                ],
-            )
-            .map_err(|_| safe_error())?;
-        Ok(())
     }
 
     /// Called once when the owning desktop worker starts. Previously queued

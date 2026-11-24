@@ -73,17 +73,38 @@ export function parseSwiftSource(text) {
       }
     }
     if (
-      ["invoke", "invokeJSON", "invokeVoid", "invokeCommand", "invokeRemoteOrLocal"].includes(tok) &&
-      toks[i + 1] === "("
+      [
+        "rpc",
+        "rpcRaw",
+        "invokeLocal",
+        "invoke",
+        "invokeJSON",
+        "invokeVoid",
+        "invokeCommand",
+        "invokeRemoteOrLocal",
+      ].includes(tok) &&
+      toks[i - 1] !== "func"
     ) {
-      let paren = 1;
-      let k = i + 2;
-      while (k < toks.length && paren > 0) {
-        if (toks[k] === "(") paren++;
-        else if (toks[k] === ")") paren--;
-        k++;
+      let argStart = i + 1;
+      if (toks[argStart] === "<") {
+        let angle = 1;
+        argStart++;
+        while (argStart < toks.length && angle > 0) {
+          if (toks[argStart] === "<") angle++;
+          else if (toks[argStart] === ">") angle--;
+          argStart++;
+        }
       }
-      calls.push(toks.slice(i, k).join(""));
+      if (toks[argStart] === "(") {
+        let paren = 1;
+        let k = argStart + 1;
+        while (k < toks.length && paren > 0) {
+          if (toks[k] === "(") paren++;
+          else if (toks[k] === ")") paren--;
+          k++;
+        }
+        calls.push(toks.slice(i, k).join(""));
+      }
     }
   }
   return { types, calls };

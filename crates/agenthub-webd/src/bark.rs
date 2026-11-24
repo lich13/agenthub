@@ -34,7 +34,7 @@ fn failure(category: &str, reason: &str, retryable: bool, uncertain: bool) -> Pr
     }
 }
 
-pub(crate) fn classify(error: &reqwest::Error, reading: bool) -> ProbeBarkOutcome {
+fn classify(error: &reqwest::Error, reading: bool) -> ProbeBarkOutcome {
     // The outer reqwest message includes the request URL, which must not affect classification.
     let mut current: Option<&(dyn Error + 'static)> = error.source();
     let mut messages = String::new();
@@ -78,7 +78,7 @@ pub(crate) fn classify(error: &reqwest::Error, reading: bool) -> ProbeBarkOutcom
     }
 }
 
-pub(crate) fn retry_after(value: Option<&str>, now_ms: i64) -> Option<i64> {
+fn retry_after(value: Option<&str>, now_ms: i64) -> Option<i64> {
     let value = value?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(seconds.saturating_mul(1000).min(i64::MAX as u64) as i64);
@@ -120,7 +120,7 @@ fn permanent_apns(message: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn send_chunk(
+pub(crate) async fn send_chunk(
     config: &Config,
     device_key: &[u8],
     request: &ProbeBarkRequest,

@@ -153,11 +153,13 @@ impl SessionUseCases {
             );
         }
         if request.root_thread_id.is_some() {
-            ensure!(
-                request.provider == SessionProvider::Codex,
-                "子智能体附件仅支持 Codex"
-            );
-            return codex::subagents::read_attachment(&self.codex, &request);
+            return match request.provider {
+                SessionProvider::Codex => codex::subagents::read_attachment(&self.codex, &request),
+                SessionProvider::Antigravity => {
+                    crate::antigravity::subagents::read_attachment(&self.antigravity, &request)
+                }
+                _ => anyhow::bail!("子智能体附件仅支持 Codex 与 Antigravity"),
+            };
         }
         let mut message = match request.provider {
             SessionProvider::Grokbot => {

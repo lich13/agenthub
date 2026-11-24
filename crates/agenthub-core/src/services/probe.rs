@@ -415,6 +415,18 @@ fn aggregate_active_sessions(
                     "waiting" | "reply_needed" => Some("reply_needed"),
                     "failed" => Some("recoverable"),
                     _ if item.read_error.is_some() => Some("recoverable"),
+                    _ if is_updated_within_fresh_window(&item.updated_at, now_ms) => {
+                        crate::antigravity::sessions::probe_live_stream_snapshot(
+                            &ag_paths, &item.id, now_ms,
+                        )
+                        .and_then(|s| {
+                            if s.settled_count < s.record_count {
+                                Some("running")
+                            } else {
+                                native_stream_live_bucket(&s, now_ms)
+                            }
+                        })
+                    }
                     _ => None,
                 };
                 if let Some(bucket) = bucket {

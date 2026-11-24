@@ -289,17 +289,25 @@ public struct UnifiedProviderWorkspaceView: View {
         }
         // Exact Detail Polling Clock (Claude/Grok 1s/2s; Codex/Antigravity/DSH/GrokBot 2s/5s)
         .task(id: "\(store.revision):\(workspace.rawValue):\(model.selectedItem?.sessionKey ?? "none"):\(model.showAllHistory)") {
-            guard let item = model.selectedItem else {
+            guard let initialItem = model.selectedItem else {
                 model.rows = []
                 model.timelineEntries = []
                 return
             }
             while !Task.isCancelled {
+                let liveItem = model.selectedItem ?? initialItem
+                guard liveItem.sessionKey == initialItem.sessionKey else { break }
                 if store.isWindowVisible {
-                    await model.fetchSessionDetail(for: item)
+                    await model.fetchSessionDetail(for: liveItem)
                 }
+                let latestItem = model.selectedItem ?? liveItem
+                let hasActiveSubagents = model.subagents?.agents.contains {
+                    $0.status == "running" || $0.status == "creating"
+                } == true
                 let isFastProvider = (model.provider == .claudeCode || model.provider == .grok)
-                let running = item.running
+                let running = latestItem.running
+                    || latestItem.statusChipBadge == "等待处理"
+                    || hasActiveSubagents
                 let intervalNs: UInt64 = if isFastProvider {
                     running ? 1_000_000_000 : 2_000_000_000
                 } else {
@@ -601,12 +609,12 @@ public struct UnifiedProviderWorkspaceView: View {
     private func stageArea(availableWidth: CGFloat, availableHeight: CGFloat) -> some View {
         if let item = model.selectedItem {
             let canDockSubagents = availableWidth >= LayoutMetrics.subagentDockThreshold
-            let subagentsSupported = store.capabilities.isReady && (model.provider == .codex || model.provider == .claudeCode)
+            let subagentsSupported = model.subagentsSupportedForCurrentProvider
             let mainColumnWidth = (subagentDrawerOpen && canDockSubagents)
                 ? max(320, availableWidth - LayoutMetrics.subagentDrawerWidth)
                 : availableWidth
             let currentRows = model.displayedRows
-            let showSubagentSummaryBar = (model.provider == .codex || model.provider == .claudeCode)
+            let showSubagentSummaryBar = (model.provider == .codex || model.provider == .claudeCode || model.provider == .antigravity)
                 && SubagentSummaryBarView.shouldDisplay(
                     provider: model.provider,
                     collection: model.subagents,
@@ -950,6 +958,7 @@ public struct UnifiedProviderWorkspaceView: View {
             }
         }
         c.onOpenSubagent = { sub in
+            guard model.subagentsSupportedForCurrentProvider else { return }
             subagentTriggerResponder = NSApp.keyWindow?.firstResponder
             selectedSubagent = sub
             subagentDrawerOpen = true

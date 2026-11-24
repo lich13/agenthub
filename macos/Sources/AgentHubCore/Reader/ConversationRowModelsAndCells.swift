@@ -350,7 +350,12 @@ public enum ConversationRowBuilder {
         return rows
     }
 
-    public static func buildProviderRows(events: [ProviderHistoryEvent], providerLabel: String, sessionRunning: Bool = false) -> [ConversationRowItem] {
+    public static func buildProviderRows(
+        events: [ProviderHistoryEvent],
+        providerLabel: String,
+        sessionRunning: Bool = false,
+        subagentsSupported: Bool = false
+    ) -> [ConversationRowItem] {
         let prefix = providerLabel == "Antigravity" ? "antigravity" : (providerLabel == "Grok Bot" ? "grokbot" : "dsh")
         let grouped = ExecutionGroupingEngine.groupProviderEvents(events, provider: providerLabel)
         let folded = ProcessGroupingEngine.foldProcessSequence(prefix: prefix, items: grouped) { entry in
@@ -358,6 +363,9 @@ public enum ConversationRowBuilder {
             case let .group(group):
                 return .step(.execution(group: group, turnId: group.turnId))
             case let .item(ev, key, sourceIds):
+                if ev.subagent != nil {
+                    return .passthrough
+                }
                 if ev.kind == "thinking" {
                     let isTrailing = (grouped.last == entry)
                     return ProcessGroupingEngine.thinkingStepFromText(
@@ -399,7 +407,14 @@ public enum ConversationRowBuilder {
                 rows.append(ConversationRowItem(id: group.id, timelineId: group.id, timelineAliases: aliases, kind: .executionGroup(group)))
             case let .passthrough(entry):
                 guard case let .item(ev, key, sourceIds) = entry else { continue }
-                if ev.kind == "user_message" {
+                if let sub = ev.subagent {
+                    rows.append(ConversationRowItem(
+                        id: key,
+                        timelineId: ev.id,
+                        timelineAliases: sourceIds,
+                        kind: .subagent(sub, supported: subagentsSupported)
+                    ))
+                } else if ev.kind == "user_message" {
                     rows.append(ConversationRowItem(
                         id: key,
                         timelineId: ev.id,

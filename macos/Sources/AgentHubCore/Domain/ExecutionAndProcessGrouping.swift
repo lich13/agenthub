@@ -637,7 +637,7 @@ public enum ExecutionGroupingEngine {
     ) -> [ExecutionRenderItem<ProviderHistoryEvent>] {
         let prefix = provider == "Antigravity" ? "antigravity" : (provider == "Grok Bot" ? "grokbot" : "dsh")
         let inputs = events.map { ev -> ActivityInput<ProviderHistoryEvent> in
-            let isTool = (ev.kind == "tool_call" || ev.kind == "tool_result")
+            let isTool = ev.subagent == nil && (ev.kind == "tool_call" || ev.kind == "tool_result")
             var secs: [ExecutionSection] = []
             if let d = ev.detail, !d.isEmpty { secs.append(ExecutionSection(label: "调用参数", text: d)) }
             if let r = ev.result, !r.isEmpty { secs.append(ExecutionSection(label: "结果", text: r)) }

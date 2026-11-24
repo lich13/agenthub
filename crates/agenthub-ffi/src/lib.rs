@@ -14,7 +14,7 @@ pub use codex_desktop::clipboard::{
     AgentHubRawFileUrl, AgentHubRawImageKind, AgentHubRawPasteboard,
 };
 pub use host::{AgentHubHostCallbacks, AgentHubRpcCallback, AgentHubStreamCallback};
-pub use overview::{agenthub_paths_for_home, AgentHubPaths, DesktopState};
+pub use overview::DesktopState;
 pub use services::probe::desktop_probe_status_with_state;
 pub use services::updates::desktop_update_status_with_state;
 

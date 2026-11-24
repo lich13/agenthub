@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Flexible JSON Value & OptionalResult Wrapper
+// MARK: - Flexible JSON Value
 
 public enum JSONValue: Codable, Equatable, Sendable {
     case null
@@ -47,37 +47,12 @@ public enum JSONValue: Codable, Equatable, Sendable {
     }
 }
 
-public struct OptionalResultEnvelope<T: Decodable & Sendable>: Decodable, Sendable {
-    public let available: Bool
-    public let data: T?
-
-    private enum CodingKeys: String, CodingKey {
-        case available, data, reason, error
-    }
-
-    public init(available: Bool, data: T?) {
-        self.available = available
-        self.data = data
-    }
-
-    public init(from decoder: Decoder) throws {
-        if let keyed = try? decoder.container(keyedBy: CodingKeys.self),
-           keyed.contains(.data) || keyed.contains(.error) || keyed.contains(.reason),
-           let avail = try? keyed.decode(Bool.self, forKey: .available)
-        {
-            self.available = avail
-            self.data = try keyed.decodeIfPresent(T.self, forKey: .data)
-            return
-        }
-        let direct = try T(from: decoder)
-        self.available = true
-        self.data = direct
-    }
-}
-
 // MARK: - System Capabilities
 
 public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
+    public var threadSubagents = false
+    public var claudeSubagents = false
+    public var antigravitySubagents = false
     public var codexDesktop = false
     public var systemd = false
     public var linuxUpdateJob = false
@@ -88,6 +63,9 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
     public var grokbotNotifications = false
 
     enum CodingKeys: String, CodingKey {
+        case threadSubagents = "thread_subagents"
+        case claudeSubagents = "claude_subagents"
+        case antigravitySubagents = "antigravity_subagents"
         case codexDesktop = "codex_desktop"
         case systemd
         case linuxUpdateJob = "linux_update_job"
@@ -99,6 +77,21 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
     }
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        threadSubagents = try c.decodeIfPresent(Bool.self, forKey: .threadSubagents) ?? false
+        claudeSubagents = try c.decodeIfPresent(Bool.self, forKey: .claudeSubagents) ?? false
+        antigravitySubagents = try c.decodeIfPresent(Bool.self, forKey: .antigravitySubagents) ?? false
+        codexDesktop = try c.decodeIfPresent(Bool.self, forKey: .codexDesktop) ?? false
+        systemd = try c.decodeIfPresent(Bool.self, forKey: .systemd) ?? false
+        linuxUpdateJob = try c.decodeIfPresent(Bool.self, forKey: .linuxUpdateJob) ?? false
+        pruneBackups = try c.decodeIfPresent(Bool.self, forKey: .pruneBackups) ?? false
+        antigravityNotifications = try c.decodeIfPresent(Bool.self, forKey: .antigravityNotifications) ?? false
+        dshNotifications = try c.decodeIfPresent(Bool.self, forKey: .dshNotifications) ?? false
+        grokbotSessions = try c.decodeIfPresent(Bool.self, forKey: .grokbotSessions) ?? false
+        grokbotNotifications = try c.decodeIfPresent(Bool.self, forKey: .grokbotNotifications) ?? false
+    }
 }
 
 public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
@@ -119,60 +112,6 @@ public struct SystemCapabilitiesResponse: Codable, Equatable, Sendable {
         self.apiVersion = apiVersion
         self.hostSurface = hostSurface
         self.capabilities = capabilities
-    }
-
-}
-
-public struct RuntimeCapabilityMatrix: Equatable, Sendable {
-    public var isReady: Bool
-    public var hostSurface: String
-    public var codexStatePaths: Bool
-    public var antigravityNotifications: Bool
-    public var dshNotifications: Bool
-    public var grokbotSessions: Bool
-    public var grokbotNotifications: Bool
-    public var codexDesktop: Bool
-    public var updatePrune: Bool
-    public var updateServiceLabels: Bool
-
-    public static let bootstrap = RuntimeCapabilityMatrix(
-        isReady: false,
-        hostSurface: SystemCapabilitiesResponse.desktopSurface,
-        codexStatePaths: false,
-        antigravityNotifications: false,
-        dshNotifications: false,
-        grokbotSessions: true,
-        grokbotNotifications: false,
-        codexDesktop: false,
-        updatePrune: false,
-        updateServiceLabels: false
-    )
-
-    public static func from(_ response: SystemCapabilitiesResponse?) -> RuntimeCapabilityMatrix {
-        guard let response else { return .bootstrap }
-        let c = response.capabilities
-        let remote = response.hostSurface == "linux_server_api"
-        return RuntimeCapabilityMatrix(
-            isReady: true,
-            hostSurface: response.hostSurface,
-            codexStatePaths: remote && c.systemd,
-            antigravityNotifications: !remote && c.antigravityNotifications,
-            dshNotifications: !remote && c.dshNotifications,
-            grokbotSessions: !remote && (c.grokbotSessions),
-            grokbotNotifications: !remote && c.grokbotNotifications,
-            codexDesktop: !remote && c.codexDesktop,
-            updatePrune: remote && c.pruneBackups,
-            updateServiceLabels: remote && c.linuxUpdateJob
-        )
-    }
-
-    public var visibleWorkspaces: [WorkspaceId] {
-        WorkspaceId.allCases.filter { id in
-            switch id {
-            case .grokbot: return grokbotSessions
-            default: return true
-            }
-        }
     }
 }
 
@@ -321,98 +260,6 @@ public struct UpdateStatus: Codable, Equatable, Sendable {
     }
 }
 
-public enum UnifiedUpdateActionKind: String, Sendable {
-    case check
-    case install
-    case prune
-}
-
-public enum UpdateVersionFormatter {
-    public static func bareVersion(_ raw: String?) -> String {
-        guard let raw else { return "" }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        if (trimmed.hasPrefix("v") || trimmed.hasPrefix("V")),
-           let second = trimmed.dropFirst().first,
-           second.isNumber
-        {
-            return String(trimmed.dropFirst())
-        }
-        return trimmed
-    }
-
-    public static func displayVersion(_ raw: String?) -> String {
-        let bare = bareVersion(raw)
-        return bare.isEmpty ? "未知" : bare
-    }
-
-    public static func displayWithVPrefix(_ raw: String?) -> String {
-        let bare = bareVersion(raw)
-        guard !bare.isEmpty else { return "未知" }
-        return bare.first?.isNumber == true ? "v\(bare)" : bare
-    }
-
-    public static func isValidSemver(_ raw: String?) -> Bool {
-        let bare = bareVersion(raw)
-        guard !bare.isEmpty else { return false }
-        return bare.range(of: #"^\d+\.\d+\.\d+(?:[-+].*)?$"#, options: .regularExpression) != nil
-    }
-
-    public static func canStartUpdateInstall(_ status: UpdateStatus?) -> Bool {
-        guard let status,
-              status.updateAvailable == true,
-              status.state != "failed",
-              status.state != "unsupported",
-              isValidSemver(status.latestVersion)
-        else { return false }
-        return bareVersion(status.latestVersion) != bareVersion(status.currentVersion)
-    }
-}
-
-public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
-    public var id: String { action.rawValue }
-    public let action: UnifiedUpdateActionKind
-    public let label: String
-    public let tone: String
-    public let disabled: Bool
-
-    public static func panelTitle(capabilities: RuntimeCapabilityMatrix) -> String {
-        capabilities.updateServiceLabels ? "远程服务更新" : "本机 App 更新"
-    }
-
-    public static func actions(status: UpdateStatus?, capabilities: RuntimeCapabilityMatrix) -> [UpdateActionViewItem] {
-        var out: [UpdateActionViewItem] = [
-            UpdateActionViewItem(
-                action: .check,
-                label: "检查更新",
-                tone: "secondary",
-                disabled: false
-            ),
-        ]
-        if UpdateVersionFormatter.canStartUpdateInstall(status) {
-            out.append(
-                UpdateActionViewItem(
-                    action: .install,
-                    label: "更新至 \(UpdateVersionFormatter.displayVersion(status?.latestVersion))",
-                    tone: "primary",
-                    disabled: false
-                )
-            )
-        }
-        if capabilities.updatePrune {
-            out.append(
-                UpdateActionViewItem(
-                    action: .prune,
-                    label: "清理更新备份",
-                    tone: "danger",
-                    disabled: false
-                )
-            )
-        }
-        return out
-    }
-}
-
 public struct UnifiedCleanupCandidate: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
@@ -538,18 +385,4 @@ public struct CodexAccountScopeResult: Codable, Equatable, Sendable {
     public var clearedFiles: Int
     public var remainingFiles: Int
     public var items: [CodexAccountScopeItem]
-}
-
-public enum CleanupFormatting {
-    public static func formatBytes(_ bytes: Int64) -> String {
-        if bytes <= 0 { return "0 B" }
-        let units = ["B", "KB", "MB", "GB"]
-        var value = Double(bytes)
-        var idx = 0
-        while value >= 1024.0 && idx < units.count - 1 {
-            value /= 1024.0
-            idx += 1
-        }
-        return idx == 0 ? "\(bytes) B" : String(format: "%.1f %@", value, units[idx])
-    }
 }

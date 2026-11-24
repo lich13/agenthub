@@ -4,7 +4,8 @@ fn map_cortex_status(status: &str) -> &'static str {
     match status {
         "CORTEX_STEP_STATUS_RUNNING"
         | "CORTEX_STEP_STATUS_WAITING"
-        | "CORTEX_STEP_STATUS_PENDING" => "running",
+        | "CORTEX_STEP_STATUS_PENDING"
+        | "CORTEX_STEP_STATUS_GENERATING" => "running",
         "CORTEX_STEP_STATUS_ERROR"
         | "CORTEX_STEP_STATUS_CANCELED"
         | "CORTEX_STEP_STATUS_INTERRUPTED"
@@ -110,7 +111,7 @@ fn make_history_event(
     role: &str,
     text: Option<String>,
     turn_id: Option<String>,
-    status: &str,
+    status: Option<&str>,
 ) -> ProviderHistoryEvent {
     ProviderHistoryEvent {
         id,
@@ -120,10 +121,11 @@ fn make_history_event(
         text,
         call_id: None,
         turn_id,
-        status: Some(status.into()),
+        status: status.map(str::to_owned),
         detail: None,
         result: None,
         user_message: None,
+        subagent: None,
     }
 }
 
@@ -135,7 +137,7 @@ fn make_tool_event(
     name: &str,
     call_id: Option<String>,
     turn_id: Option<String>,
-    status: &str,
+    status: Option<&str>,
     detail: Option<String>,
     result: Option<String>,
 ) -> ProviderHistoryEvent {
@@ -154,9 +156,19 @@ fn make_tool_event(
     ev
 }
 
+fn is_subagent_coordination_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "invoke_subagent" | "send_message" | "manage_subagents"
+    )
+}
+
 pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEvent> {
     let mut has_later_planner = vec![false; steps.len()];
+    let mut has_later_settled_step = vec![false; steps.len()];
+    let mut resolved_call_ids = BTreeSet::new();
     let mut seen_planner_in_turn = false;
+    let mut seen_settled_after = false;
     for (idx, step) in steps.iter().enumerate().rev() {
         let source = &step["metadata"]["sourceTrajectoryStepInfo"];
         if source["cascadeId"]
@@ -165,7 +177,38 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
         {
             continue;
         }
-        match step["type"].as_str().unwrap_or("") {
+        has_later_settled_step[idx] = seen_settled_after;
+        let step_type = step["type"].as_str().unwrap_or("");
+        let step_status = map_cortex_status(step["status"].as_str().unwrap_or(""));
+        if step_status != "running"
+            && !matches!(
+                step_type,
+                "CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE"
+                    | "CORTEX_STEP_TYPE_CHECKPOINT"
+                    | "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
+                    | ""
+            )
+        {
+            seen_settled_after = true;
+        }
+        if !matches!(
+            step_type,
+            "CORTEX_STEP_TYPE_USER_INPUT"
+                | "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                | "CORTEX_STEP_TYPE_FINISH"
+                | "CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE"
+                | "CORTEX_STEP_TYPE_CHECKPOINT"
+                | "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
+                | ""
+        ) {
+            if let Some(cid) = step["metadata"]["toolCall"]["id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+            {
+                resolved_call_ids.insert(cid.to_owned());
+            }
+        }
+        match step_type {
             "CORTEX_STEP_TYPE_USER_INPUT" => seen_planner_in_turn = false,
             "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
                 has_later_planner[idx] = seen_planner_in_turn;
@@ -177,6 +220,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
 
     let mut events = Vec::new();
     let mut turn_seq = 0usize;
+    let mut pending_subagent_calls: BTreeMap<String, usize> = BTreeMap::new();
     for (index, step) in steps.iter().enumerate() {
         let source = &step["metadata"]["sourceTrajectoryStepInfo"];
         if source["cascadeId"]
@@ -260,7 +304,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                     "user",
                     Some(user_msg.text.clone()),
                     Some(format!("turn-{turn_seq}")),
-                    status,
+                    Some(status),
                 );
                 ev.user_message = Some(user_msg);
                 events.push(ev);
@@ -276,7 +320,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                         "assistant",
                         Some(thinking.to_owned()),
                         turn_id.clone(),
-                        status,
+                        Some(status),
                     ));
                 }
                 let reply = pr["modifiedResponse"]
@@ -293,11 +337,12 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                             "assistant",
                             Some(text.to_owned()),
                             turn_id.clone(),
-                            status,
+                            Some(status),
                         ));
                     }
                 }
                 if let Some(calls) = pr["toolCalls"].as_array() {
+                    let has_final_reply = !is_intermediate && reply.is_some();
                     for (ci, call) in calls.iter().enumerate() {
                         let name = call["name"].as_str().unwrap_or("tool");
                         let args = if call["argumentsJson"].is_string() {
@@ -312,6 +357,19 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                             .filter(|s| !s.is_empty())
                             .map(str::to_owned)
                             .unwrap_or_else(|| format!("step-{index}-call-{ci}"));
+                        let call_status = if !resolved_call_ids.contains(&call_id)
+                            && !has_later_settled_step[index]
+                            && !has_final_reply
+                            && status != "failed"
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
+                        let call_idx = events.len();
+                        if is_subagent_coordination_tool(name) {
+                            pending_subagent_calls.insert(call_id.clone(), call_idx);
+                        }
                         events.push(make_tool_event(
                             format!("step-{index}-toolcall-{ci}"),
                             timestamp.clone(),
@@ -319,7 +377,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                             name,
                             Some(call_id),
                             turn_id.clone(),
-                            status,
+                            call_status,
                             (!args.trim().is_empty()).then_some(args),
                             None,
                         ));
@@ -334,7 +392,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                             "assistant",
                             Some(text.to_owned()),
                             turn_id,
-                            status,
+                            Some(status),
                         ));
                     }
                 }
@@ -348,8 +406,14 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 let tool_name = step["metadata"]["toolCall"]["name"]
                     .as_str()
+                    .or_else(|| step["generic"]["name"].as_str())
+                    .or_else(|| step["generic"]["toolName"].as_str())
+                    .or_else(|| step["toolCall"]["name"].as_str())
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned)
+                    .or_else(|| {
+                        (!step["invokeSubagent"].is_null()).then(|| "invoke_subagent".into())
+                    })
                     .unwrap_or_else(|| {
                         other
                             .strip_prefix("CORTEX_STEP_TYPE_")
@@ -358,11 +422,27 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                     });
                 let call_id = step["metadata"]["toolCall"]["id"]
                     .as_str()
+                    .or_else(|| step["toolCall"]["id"].as_str())
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned);
                 let (detail, result) = summarize_cortex_tool_step(step);
-                if detail.is_none() && result.is_none() && call_id.is_none() {
+                if detail.is_none() && result.is_none() && call_id.is_none() && status != "running"
+                {
                     continue;
+                }
+                if let Some(cid) = call_id.as_deref() {
+                    if let Some(call_idx) = pending_subagent_calls.remove(cid) {
+                        if let Some(call_ev) = events.get_mut(call_idx) {
+                            if call_ev.detail.is_none() {
+                                call_ev.detail = detail;
+                            }
+                            if result.is_some() {
+                                call_ev.result = result;
+                            }
+                            call_ev.status = Some(status.to_owned());
+                            continue;
+                        }
+                    }
                 }
                 let kind = if call_id.is_some() {
                     "tool_result"
@@ -376,7 +456,7 @@ pub(super) fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<Provide
                     &tool_name,
                     call_id,
                     turn_id,
-                    status,
+                    Some(status),
                     detail,
                     result,
                 ));
@@ -423,6 +503,42 @@ fn summarize_cortex_tool_step(step: &Value) -> (Option<String>, Option<String>) 
             .map(|v| format!("{v:#}"))
             .filter(|s| !s.trim().is_empty());
         return (spec, res);
+    }
+    if let Some(gen_obj) = step.get("generic").and_then(Value::as_object) {
+        let detail = [
+            gen_obj.get("argumentsJson"),
+            gen_obj.get("arguments"),
+            gen_obj.get("args"),
+            step["metadata"]["toolCall"].get("argumentsJson"),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|v| {
+            if v.is_null() {
+                None
+            } else if let Some(s) = v.as_str() {
+                (!s.trim().is_empty()).then(|| s.to_owned())
+            } else {
+                let formatted = format!("{v:#}");
+                (!formatted.trim().is_empty() && formatted != "{}" && formatted != "null")
+                    .then_some(formatted)
+            }
+        });
+        let result = [gen_obj.get("result"), gen_obj.get("output")]
+            .into_iter()
+            .flatten()
+            .find_map(|v| {
+                if v.is_null() {
+                    None
+                } else if let Some(s) = v.as_str() {
+                    (!s.trim().is_empty()).then(|| s.to_owned())
+                } else {
+                    let formatted = format!("{v:#}");
+                    (!formatted.trim().is_empty() && formatted != "{}" && formatted != "null")
+                        .then_some(formatted)
+                }
+            });
+        return (detail, result);
     }
     let detail = step["metadata"]["toolCall"]["argumentsJson"]
         .as_str()
@@ -481,11 +597,24 @@ pub(super) fn read_offline_transcript_events(
             }
         }
 
-        let mut has_later_planner = vec![false; rows.len()];
+        let row_count = rows.len();
+        let mut has_later_planner = vec![false; row_count];
+        let mut has_later_settled_row = vec![false; row_count];
         let mut seen_planner_in_turn = false;
+        let mut seen_settled_after = false;
         for (pos, row) in rows.iter().enumerate().rev() {
+            has_later_settled_row[pos] = seen_settled_after;
             let st = row["type"].as_str().unwrap_or("");
             let src = row["source"].as_str().unwrap_or("");
+            let sr = row["status"].as_str().unwrap_or("DONE");
+            if !matches!(sr, "RUNNING" | "WAITING" | "PENDING" | "GENERATING")
+                && !matches!(
+                    st,
+                    "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "SYSTEM_MESSAGE" | ""
+                )
+            {
+                seen_settled_after = true;
+            }
             if st == "USER_INPUT" || src == "USER_EXPLICIT" {
                 seen_planner_in_turn = false;
             } else if st == "PLANNER_RESPONSE" {
@@ -494,9 +623,9 @@ pub(super) fn read_offline_transcript_events(
             }
         }
 
-        let mut events = Vec::new();
+        let mut events: Vec<ProviderHistoryEvent> = Vec::new();
         let mut turn_seq = 0usize;
-        let mut pending_calls: VecDeque<(String, String)> = VecDeque::new();
+        let mut pending_calls: VecDeque<(String, String, usize)> = VecDeque::new();
         for (idx, row) in rows.into_iter().enumerate() {
             let step_index = row["step_index"].as_u64().unwrap_or(idx as u64);
             let step_type = row["type"].as_str().unwrap_or("");
@@ -504,7 +633,10 @@ pub(super) fn read_offline_transcript_events(
             let timestamp = row["created_at"].as_str().map(str::to_owned);
             let status_raw = row["status"].as_str().unwrap_or("DONE");
             let status = match status_raw {
-                "RUNNING" | "WAITING" | "PENDING" => "running",
+                "RUNNING" | "WAITING" | "PENDING" | "GENERATING" if has_later_settled_row[idx] => {
+                    "completed"
+                }
+                "RUNNING" | "WAITING" | "PENDING" | "GENERATING" => "running",
                 "ERROR" | "FAILED" | "CANCELED" => "failed",
                 _ => "completed",
             };
@@ -535,7 +667,11 @@ pub(super) fn read_offline_transcript_events(
                     continue;
                 }
                 turn_seq = turn_seq.saturating_add(1);
-                pending_calls.clear();
+                for (_, _, call_idx) in pending_calls.drain(..) {
+                    if let Some(ev) = events.get_mut(call_idx) {
+                        ev.status.get_or_insert_with(|| "completed".into());
+                    }
+                }
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 let event_id = format!("transcript-{step_index}-user");
                 let user_msg =
@@ -547,7 +683,7 @@ pub(super) fn read_offline_transcript_events(
                     "user",
                     Some(user_msg.text.clone()),
                     turn_id,
-                    status,
+                    Some(status),
                 );
                 ev.user_message = Some(user_msg);
                 events.push(ev);
@@ -561,7 +697,7 @@ pub(super) fn read_offline_transcript_events(
                         "assistant",
                         Some(thinking.to_owned()),
                         turn_id.clone(),
-                        status,
+                        Some(status),
                     ));
                 }
                 let is_intermediate = has_later_planner[idx];
@@ -575,10 +711,14 @@ pub(super) fn read_offline_transcript_events(
                             "assistant",
                             Some(content.to_owned()),
                             turn_id.clone(),
-                            status,
+                            Some(status),
                         ));
                     }
                 }
+                let has_final_reply = !is_intermediate
+                    && row["content"]
+                        .as_str()
+                        .is_some_and(|s| !s.trim().is_empty());
                 if let Some(calls) = row["tool_calls"].as_array() {
                     for (ci, call) in calls.iter().enumerate() {
                         let name = call["name"]
@@ -605,8 +745,18 @@ pub(super) fn read_offline_transcript_events(
                             .filter(|s| !s.is_empty())
                             .map(str::to_owned)
                             .unwrap_or_else(|| format!("transcript-{step_index}-call-{ci}"));
+                        let call_status = if result.is_none()
+                            && !has_later_settled_row[idx]
+                            && !has_final_reply
+                            && status != "failed"
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
+                        let call_idx = events.len();
                         if result.is_none() {
-                            pending_calls.push_back((call_id.clone(), name.to_owned()));
+                            pending_calls.push_back((call_id.clone(), name.to_owned(), call_idx));
                         }
                         events.push(make_tool_event(
                             format!("transcript-{step_index}-tool-{ci}"),
@@ -615,7 +765,7 @@ pub(super) fn read_offline_transcript_events(
                             name,
                             Some(call_id),
                             turn_id.clone(),
-                            status,
+                            call_status,
                             args,
                             result,
                         ));
@@ -631,13 +781,20 @@ pub(super) fn read_offline_transcript_events(
                             "assistant",
                             Some(content.to_owned()),
                             turn_id,
-                            status,
+                            Some(status),
                         ));
                     }
                 }
+            } else if step_type == "FINISH" {
+                for (_, _, call_idx) in pending_calls.drain(..) {
+                    if let Some(ev) = events.get_mut(call_idx) {
+                        ev.status.get_or_insert_with(|| "completed".into());
+                    }
+                }
+                continue;
             } else if matches!(
                 step_type,
-                "SYSTEM_MESSAGE" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "FINISH" | ""
+                "SYSTEM_MESSAGE" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
             ) {
                 continue;
             } else {
@@ -646,7 +803,16 @@ pub(super) fn read_offline_transcript_events(
                     .as_str()
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_owned);
-                if let Some((call_id, tool_name)) = pending_calls.pop_front() {
+                if let Some((call_id, tool_name, call_idx)) = pending_calls.pop_front() {
+                    if is_subagent_coordination_tool(&tool_name) {
+                        if let Some(call_ev) = events.get_mut(call_idx) {
+                            if content.is_some() {
+                                call_ev.result = content;
+                            }
+                            call_ev.status = Some(status.to_owned());
+                            continue;
+                        }
+                    }
                     events.push(make_tool_event(
                         format!("transcript-{step_index}-toolresult"),
                         timestamp,
@@ -654,7 +820,7 @@ pub(super) fn read_offline_transcript_events(
                         &tool_name,
                         Some(call_id),
                         turn_id,
-                        status,
+                        Some(status),
                         None,
                         content,
                     ));
@@ -667,7 +833,7 @@ pub(super) fn read_offline_transcript_events(
                         &name,
                         None,
                         turn_id,
-                        status,
+                        Some(status),
                         None,
                         Some(content),
                     ));
@@ -716,7 +882,7 @@ pub(super) fn read_offline_transcript_events(
                                 "user",
                                 Some(user_msg.text.clone()),
                                 None,
-                                "completed",
+                                Some("completed"),
                             );
                             ev.user_message = Some(user_msg);
                             events.push(ev);
@@ -728,7 +894,7 @@ pub(super) fn read_offline_transcript_events(
                                 "assistant",
                                 Some(joined),
                                 None,
-                                "completed",
+                                Some("completed"),
                             ));
                         }
                     }
@@ -909,7 +1075,7 @@ fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>
     Ok(events)
 }
 
-pub(super) fn load_events_from_source(
+pub(crate) fn load_events_from_source(
     paths: &AntigravityPaths,
     id: &str,
     endpoint: Option<&(LiveRpc, Value)>,
@@ -919,7 +1085,7 @@ pub(super) fn load_events_from_source(
         let summaries = payload["trajectorySummaries"].as_object();
         let item = &payload["trajectorySummaries"][id];
         let active =
-            summaries.is_some_and(|map| active_subagent_roots_from_summaries(map).contains(id));
+            summaries.is_some_and(|map| super::subagent_states_by_root(map).contains_key(id));
         let reusable =
             item["status"] == "CASCADE_RUN_STATUS_IDLE" && !active && !live_item_is_running(item);
         let revision = reusable.then(|| {
@@ -952,13 +1118,14 @@ pub(super) fn load_events_from_source(
     )
 }
 
-fn summary_and_events(
-    paths: &AntigravityPaths,
-    id: &str,
-) -> Result<(
-    ProviderSessionSummary,
-    std::sync::Arc<ProviderHistorySnapshot>,
-)> {
+struct LoadedSessionSource {
+    summary: ProviderSessionSummary,
+    events: std::sync::Arc<ProviderHistorySnapshot>,
+    store: AntigravityPaths,
+    endpoint: Option<(LiveRpc, Value)>,
+}
+
+fn summary_and_events(paths: &AntigravityPaths, id: &str) -> Result<LoadedSessionSource> {
     valid_cascade_id(id)?;
     if let Some(cli) = paths.cli_store_for_id(id) {
         let summary = list_summaries_from_source(&cli, Some(id), None)?
@@ -966,7 +1133,12 @@ fn summary_and_events(
             .next()
             .context("未找到 Antigravity 会话")?;
         let events = load_events_from_source(&cli, id, None)?;
-        return Ok((summary, events));
+        return Ok(LoadedSessionSource {
+            summary,
+            events,
+            store: cli,
+            endpoint: None,
+        });
     }
     let primary = paths.primary_store();
     let endpoint = connect_endpoint(&primary)?;
@@ -976,35 +1148,49 @@ fn summary_and_events(
             .next()
             .context("未找到 Antigravity 会话")?;
     let store = paths.store_for_id(id, endpoint.as_ref().map(|(_, value)| value));
-    let store_ep = (store.home == primary.home)
-        .then_some(endpoint.as_ref())
-        .flatten();
-    let events = load_events_from_source(&store, id, store_ep)?;
-    Ok((summary, events))
+    let store_ep = (store.home == primary.home).then_some(endpoint).flatten();
+    let events = load_events_from_source(&store, id, store_ep.as_ref())?;
+    Ok(LoadedSessionSource {
+        summary,
+        events,
+        store,
+        endpoint: store_ep,
+    })
 }
 
 pub fn session_detail(
     paths: &AntigravityPaths,
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
-    let (mut summary, events) = summary_and_events(paths, &request.session_key)?;
-    let store = paths.store_for_id(&summary.id, None);
-    attach_storage_size(&store, &mut summary);
-    paginate_provider_detail(summary, &events, request)
+    if let Some(agent_id) = request.agent_id.as_deref() {
+        return crate::antigravity::subagents::subagent_detail(paths, request, agent_id);
+    }
+    let mut loaded = summary_and_events(paths, &request.session_key)?;
+    attach_storage_size(&loaded.store, &mut loaded.summary);
+    let mut detail = paginate_provider_detail(loaded.summary, &loaded.events, request)?;
+    crate::antigravity::subagents::enrich_session_detail(
+        &loaded.store,
+        loaded.endpoint.as_ref(),
+        &request.session_key,
+        &loaded.events.events,
+        &mut detail,
+    );
+    Ok(detail)
 }
 
 pub fn read_attachment(
     paths: &AntigravityPaths,
     request: &crate::user_message::SessionAttachmentRequest,
 ) -> Result<crate::user_message::SessionAttachmentResponse> {
-    let (summary, events) = summary_and_events(paths, &request.session_key)?;
-    let mut message = events
+    let loaded = summary_and_events(paths, &request.session_key)?;
+    let mut message = loaded
+        .events
         .events
         .iter()
         .filter_map(|event| event.user_message.as_ref())
         .find(|msg| msg.id == request.message_id)
         .cloned()
         .context("会话消息已变化或不存在，请刷新会话")?;
-    message.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
+    message.refresh_files((!loaded.summary.cwd.is_empty()).then_some(loaded.summary.cwd.as_str()));
     message.read_attachment(&request.attachment_id)
 }

@@ -114,6 +114,8 @@ impl Capability {
 pub struct SystemCapabilities {
     #[serde(default)]
     pub claude_subagents: bool,
+    #[serde(default)]
+    pub antigravity_subagents: bool,
     pub threads: bool,
     #[serde(default)]
     pub thread_subagents: bool,
@@ -167,6 +169,7 @@ pub fn system_capabilities_for_surface(host_surface: HostSurface) -> SystemCapab
     // Protocol 2 keeps the common fields for installed clients.
     SystemCapabilities {
         claude_subagents: true,
+        antigravity_subagents: true,
         threads: true,
         thread_subagents: true,
         codex_desktop: Capability::CodexDesktop.is_supported_on_surface(host_surface),

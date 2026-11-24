@@ -16,7 +16,7 @@ final class ProviderWorkspaceStore: ObservableObject {
     let grokHistoryStore = PagedEventHistoryStore<GrokHistoryEvent> { ev, idx in
         ev.id ?? ev.userMessage?.id ?? "\(ev.kind):\(ev.callId ?? ""):\(ev.timestamp ?? ""):\(idx)"
     }
-    let providerHistoryStore = PagedEventHistoryStore<ProviderHistoryEvent> { ev, _ in ev.id }
+    let providerHistoryStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
     let timelineWindow = TimelineWindowController<ConversationRowItem>(idOf: \.timelineId)
     let motionObserver = AccessibilityMotionObserver()
 
@@ -255,6 +255,40 @@ final class ProviderWorkspaceStore: ObservableObject {
         !Task.isCancelled && store.revision == sourceRevision && selectedItem?.sessionKey == item.sessionKey
     }
 
+    var subagentsSupportedForCurrentProvider: Bool {
+        guard store.capabilities.isReady else { return false }
+        return switch provider {
+        case .codex: store.capabilities.threadSubagents
+        case .claudeCode: store.capabilities.claudeSubagents
+        case .antigravity: store.capabilities.antigravitySubagents
+        default: false
+        }
+    }
+
+    private func syncSidebarItem(_ updated: UnifiedSessionSummaryItem) {
+        if let idx = activeItems.firstIndex(where: { $0.sessionKey == updated.sessionKey }) {
+            var merged = updated
+            if merged.storageSize == nil {
+                merged.storageSize = activeItems[idx].storageSize
+            }
+            if activeItems[idx] != merged {
+                activeItems[idx] = merged
+            }
+        }
+        if let idx = archivedItems.firstIndex(where: { $0.sessionKey == updated.sessionKey }) {
+            var merged = updated
+            if merged.storageSize == nil {
+                merged.storageSize = archivedItems[idx].storageSize
+            }
+            if archivedItems[idx] != merged {
+                archivedItems[idx] = merged
+            }
+        }
+        if searchSelection?.sessionKey == updated.sessionKey, searchSelection != updated {
+            searchSelection = updated
+        }
+    }
+
     func fetchSessionDetail(for item: UnifiedSessionSummaryItem) async {
         guard isCurrentDetail(item) else { return }
         let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
@@ -276,9 +310,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: DetailArgs(id: item.sessionKey, options: .init(limit: 120))
                 ) else { return }
                 guard isCurrentDetail(item) else { return }
-                if searchSelection?.sessionKey == item.sessionKey {
-                    searchSelection = mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived")
-                }
+                syncSidebarItem(mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived"))
                 let slot = threadStore.applyDetail(detail)
                 incomingHistory = detail.history
                 if subagents != slot.subagents { subagents = slot.subagents }
@@ -288,7 +320,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
                     planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.isReady,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: revealedPositionKey
                 )
                 if rows != nextRows { rows = nextRows }
@@ -310,9 +342,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: Req(sessionKey: item.sessionKey, limit: 160)
                 )
                 guard isCurrentDetail(item) else { return }
-                if searchSelection?.sessionKey == item.sessionKey {
-                    searchSelection = mapClaudeSummary(detail.summary)
-                }
+                syncSidebarItem(mapClaudeSummary(detail.summary))
                 let slot = claudeHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -344,9 +374,8 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: Req(id: item.sessionKey, limit: 160)
                 )
                 guard isCurrentDetail(item) else { return }
-                if searchSelection?.sessionKey == item.sessionKey {
-                    searchSelection = mapGrokSummary(detail.summary)
-                }
+                let mappedGrok = mapGrokSummary(detail.summary)
+                syncSidebarItem(mappedGrok)
                 let slot = grokHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -360,7 +389,11 @@ final class ProviderWorkspaceStore: ObservableObject {
                 if subagents != nil { subagents = nil }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
+                let nextRows = ConversationRowBuilder.buildGrokRows(
+                    events: slot.events,
+                    fallbackTitle: mappedGrok.title,
+                    sessionRunning: mappedGrok.running
+                )
                 if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .grok,
@@ -374,19 +407,15 @@ final class ProviderWorkspaceStore: ObservableObject {
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-                struct Wrap: Encodable {
-                    struct Inner: Encodable { let sessionKey: String; let limit: Int }
-                    let request: Inner
-                }
+                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let detail: ProviderSessionDetail = try await store.rpc(
                     cmd,
-                    args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160)),
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160)),
                     localOnly: provider == .grokbot
                 )
                 guard isCurrentDetail(item) else { return }
-                if searchSelection?.sessionKey == item.sessionKey {
-                    searchSelection = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
-                }
+                let mappedSummary = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
+                syncSidebarItem(mappedSummary)
                 let slot = providerHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -394,13 +423,21 @@ final class ProviderWorkspaceStore: ObservableObject {
                     totalEvents: detail.totalEvents,
                     beforeCursor: detail.beforeCursor,
                     hasMore: detail.hasMore,
-                    timeline: detail.timeline
+                    timeline: detail.timeline,
+                    subagents: detail.subagents,
+                    subagentUpdates: detail.subagentUpdates
                 )
                 incomingHistory = detail.history
-                if subagents != nil { subagents = nil }
+                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
+                if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
+                let nextRows = ConversationRowBuilder.buildProviderRows(
+                    events: slot.events,
+                    providerLabel: workspace.label,
+                    sessionRunning: mappedSummary.running,
+                    subagentsSupported: subagentsSupportedForCurrentProvider
+                )
                 if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: provider,
@@ -470,7 +507,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
                     planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.isReady,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: revealedPositionKey
                 )
                 coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
@@ -525,13 +562,10 @@ final class ProviderWorkspaceStore: ObservableObject {
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-                struct Wrap: Encodable {
-                    struct Inner: Encodable { let sessionKey: String; let limit: Int; let before: String }
-                    let request: Inner
-                }
+                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     cmd,
-                    args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160, before: cursor)),
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160, before: cursor)),
                     localOnly: provider == .grokbot
                 )
                 guard isCurrentDetail(item), beforeCursor == cursor else { return false }
@@ -542,11 +576,17 @@ final class ProviderWorkspaceStore: ObservableObject {
                     history: page.history,
                     totalEvents: page.totalEvents,
                     beforeCursor: page.beforeCursor,
-                    hasMore: page.hasMore
+                    hasMore: page.hasMore,
+                    subagentUpdates: page.subagentUpdates
                 )
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
-                let nextRows = ConversationRowBuilder.buildProviderRows(events: slot.events, providerLabel: workspace.label)
+                let nextRows = ConversationRowBuilder.buildProviderRows(
+                    events: slot.events,
+                    providerLabel: workspace.label,
+                    sessionRunning: selectedItem?.running ?? item.running,
+                    subagentsSupported: subagentsSupportedForCurrentProvider
+                )
                 coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
                 rows = nextRows
                 return !page.events.isEmpty
@@ -816,7 +856,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
                     planFallbackTitle: item.title,
-                    subagentsSupported: store.capabilities.isReady,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: targetId
                 )
                 coordinatorRef?.updateRowsPreservingAnchor(rebuilt, preferAutoFollowBottom: false)
@@ -884,7 +924,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                 blocks: rawPage.items,
                 showAllHistory: true,
                 planFallbackTitle: item.title,
-                subagentsSupported: store.capabilities.isReady,
+                subagentsSupported: subagentsSupportedForCurrentProvider,
                 revealedBlockId: cursor.hasPrefix("j:") ? String(cursor.dropFirst(2)) : nil
             )
             return TimelineWindowPage<ConversationRowItem>(
@@ -927,18 +967,20 @@ final class ProviderWorkspaceStore: ObservableObject {
 
         case .antigravity, .dsh, .grokbot:
             let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-            struct Wrap: Encodable {
-                struct Inner: Encodable { let sessionKey: String; let limit: Int; let before: String }
-                let request: Inner
-            }
+            struct Wrap: Encodable { let request: ProviderDetailRequest }
             let page: ProviderSessionDetail = try await store.rpc(
                 cmd,
-                args: Wrap(request: .init(sessionKey: item.sessionKey, limit: 160, before: cursor)),
+                args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160, before: cursor)),
                 localOnly: provider == .grokbot
             )
             let rawPage = TimelineWindowPage<ProviderHistoryEvent>.from(providerDetail: page)
             return TimelineWindowPage<ConversationRowItem>(
-                items: ConversationRowBuilder.buildProviderRows(events: rawPage.items, providerLabel: workspace.label),
+                items: ConversationRowBuilder.buildProviderRows(
+                    events: rawPage.items,
+                    providerLabel: workspace.label,
+                    sessionRunning: selectedItem?.running ?? item.running,
+                    subagentsSupported: subagentsSupportedForCurrentProvider
+                ),
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,
@@ -970,6 +1012,8 @@ final class ProviderWorkspaceStore: ObservableObject {
     static func providerSessionStatusText(status: String, updatedAt: String?, archived: Bool) -> String {
         if status == "running" { return "运行中" }
         if status == "waiting" { return "等待处理" }
+        if status == "reply_needed" { return "待回复" }
+        if status == "failed" { return "异常" }
         if archived { return "已归档" }
         if status == "unknown" { return "状态未知" }
         if let updatedAt, !updatedAt.isEmpty {
@@ -1114,7 +1158,11 @@ final class ProviderWorkspaceStore: ObservableObject {
             ("已归档", .neutral)
         } else if s.status == "running" {
             ("运行中", .info)
-        } else if s.readError != nil {
+        } else if s.status == "waiting" {
+            ("等待处理", .warning)
+        } else if s.status == "reply_needed" {
+            ("待回复", .warning)
+        } else if s.status == "failed" || s.readError != nil {
             ("异常", .danger)
         } else {
             (nil, .neutral)

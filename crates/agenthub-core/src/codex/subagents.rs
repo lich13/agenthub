@@ -18,7 +18,7 @@ const MAX_RECORDS: usize = 20_000;
 mod lifecycle;
 pub(super) use lifecycle::{merge_creation_events, native_activity_block};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentStatus {
     Creating,
@@ -30,7 +30,7 @@ pub enum SubagentStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentEventKind {
     Started,
@@ -39,7 +39,7 @@ pub enum SubagentEventKind {
     Interacted,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentCounts {
     pub creating: usize,
@@ -50,7 +50,7 @@ pub struct SubagentCounts {
     pub unknown: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentCollection {
     pub agents: Vec<SubagentActivity>,
@@ -59,7 +59,7 @@ pub struct SubagentCollection {
     pub warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentActivity {
     #[serde(default, skip_serializing_if = "Option::is_none")]

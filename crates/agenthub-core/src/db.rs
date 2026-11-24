@@ -285,7 +285,7 @@ impl PanelDb {
         Ok(result)
     }
 
-    pub fn get_setting_with_updated_at(&self, key: &str) -> Result<Option<(String, i64)>> {
+    fn get_setting_with_updated_at(&self, key: &str) -> Result<Option<(String, i64)>> {
         let conn = self.conn.lock().expect("db mutex");
         conn.query_row(
             "SELECT value, updated_at FROM settings WHERE key=?1",
@@ -306,22 +306,6 @@ impl PanelDb {
             params![key, value, Self::now()],
         )?;
         Ok(())
-    }
-
-    /// Atomically establish a first-enable baseline shared by hooks and the monitor.
-    pub fn feedback_notification_baseline(&self, enabled: bool) -> Result<Option<i64>> {
-        self.notification_baseline("probe_feedback_baseline", enabled)
-    }
-
-    pub fn notification_baseline(&self, key: &str, enabled: bool) -> Result<Option<i64>> {
-        self.with_transaction(|tx| {
-            Self::notification_baseline_in_transaction(
-                tx,
-                key,
-                enabled,
-                jiff::Timestamp::now().as_millisecond(),
-            )
-        })
     }
 
     pub(crate) fn notification_baseline_in_transaction(
@@ -1005,20 +989,28 @@ mod tests {
                 .query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
                 .unwrap()
         };
+        let baseline = |enabled: bool| {
+            db.with_transaction(|tx| {
+                PanelDb::notification_baseline_in_transaction(
+                    tx,
+                    "fixture",
+                    enabled,
+                    jiff::Timestamp::now().as_millisecond(),
+                )
+            })
+            .unwrap()
+        };
         let before = changes();
-        assert_eq!(db.notification_baseline("fixture", true).unwrap(), Some(1));
+        assert_eq!(baseline(true), Some(1));
         assert_eq!(changes(), before);
-        assert_eq!(db.notification_baseline("fixture", false).unwrap(), None);
+        assert_eq!(baseline(false), None);
         let disabled = changes();
-        assert_eq!(db.notification_baseline("fixture", false).unwrap(), None);
+        assert_eq!(baseline(false), None);
         assert_eq!(changes(), disabled);
-        let restarted = db.notification_baseline("fixture", true).unwrap().unwrap();
+        let restarted = baseline(true).unwrap();
         assert!(restarted > 1);
         let enabled = changes();
-        assert_eq!(
-            db.notification_baseline("fixture", true).unwrap(),
-            Some(restarted)
-        );
+        assert_eq!(baseline(true), Some(restarted));
         assert_eq!(changes(), enabled);
     }
 

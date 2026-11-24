@@ -4,37 +4,11 @@ import Foundation
 import SwiftUI
 import XCTest
 
-final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutableSuite {
-    static func executeMappedMethod(_ methodName: String) throws {
-        let instance = ReaderSubagentAndSessionParitySuiteTests()
-        switch methodName {
-        case "testPorted_messageStream": try instance.testPorted_messageStream()
-        case "testPorted_markdownContent": try instance.testPorted_markdownContent()
-        case "testPorted_subagentActivity": try instance.testPorted_subagentActivity()
-        case "testPorted_subagentPanel": try instance.testPorted_subagentPanel()
-        case "testPorted_subagentSummary": try instance.testPorted_subagentSummary()
-        case "testPorted_subagentCapabilities": try instance.testPorted_subagentCapabilities()
-        case "testPorted_subagentPolling": try instance.testPorted_subagentPolling()
-        case "testPorted_subagentsQuery": try instance.testPorted_subagentsQuery()
-        case "testPorted_attachmentsQuery": try instance.testPorted_attachmentsQuery()
-        case "testPorted_claudeApi": try instance.testPorted_claudeApi()
-        case "testPorted_claudeQuery": try instance.testPorted_claudeQuery()
-        case "testPorted_claudeWorkspace": try instance.testPorted_claudeWorkspace()
-        case "testPorted_archivableProviderWorkspace": try instance.testPorted_archivableProviderWorkspace()
-        case "testPorted_grokBotWorkspace": try instance.testPorted_grokBotWorkspace()
-        case "testPorted_renameableSession": try instance.testPorted_renameableSession()
-        case "testPorted_sessionBatchControls": try instance.testPorted_sessionBatchControls()
-        case "testPorted_sessionsQuery": try instance.testPorted_sessionsQuery()
-        default:
-            XCTFail("Unknown mapped method: \(methodName)")
-        }
-    }
-
+final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
     // MARK: - 1. MessageStream.test.tsx (10 cases) — 0.0pt Side-Hover Copy Button & Plan Card
 
     func testPorted_messageStream() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/chat/MessageStream.test.tsx"
             final class FilenameBox: @unchecked Sendable {
                 var value: String?
             }
@@ -77,7 +51,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             }
             let measuredRowHeight = coord.measureRowHeight(replyRow, width: 768)
             XCTAssertEqual(measuredRowHeight, pureProseHeight + 8, accuracy: 0.001, "Copy button must add 0.0pt vertical height")
-            ParityCaseTracker.shared.record(f, "side-copy-zero-vertical-height-overhead")
 
             let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("MsgCell"))
             cell.frame = NSRect(x: 0, y: 0, width: 920, height: measuredRowHeight)
@@ -87,22 +60,18 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(floatBtn.frame.size, NSSize(width: 30, height: 30))
             XCTAssertEqual(floatBtn.frame.origin.x, 76 + 768 + 6, accuracy: 0.001, "Must sit at right: -36pt in right margin")
             XCTAssertEqual(floatBtn.alphaValue, 0.0, "Hidden until row hover or focus on desktop")
-            ParityCaseTracker.shared.record(f, "side-copy-30x30-right-margin-position")
 
             cell.setSimulatedHoverForTesting(true)
             XCTAssertEqual(floatBtn.alphaValue, 1.0)
             XCTAssertEqual(coord.measureRowHeight(replyRow, width: 768), measuredRowHeight, accuracy: 0.001, "Hovering row must NEVER alter row height (0.0pt)")
-            ParityCaseTracker.shared.record(f, "side-copy-hover-reveal-zero-height-shift")
 
             // Narrow viewport clamps floating copy button inside viewport bounds
             let clampedX = ConversationRowCellView.floatingSideCopyButtonX(leadingInset: 32, contentWidth: 320, cellWidth: 360)
             XCTAssertLessThanOrEqual(clampedX + 30, 360)
-            ParityCaseTracker.shared.record(f, "side-copy-clamped-inside-narrow-viewport")
 
             floatBtn.handleClick()
             XCTAssertTrue(floatBtn.isShowingCopied)
             XCTAssertEqual(lastToast, "已复制答复")
-            ParityCaseTracker.shared.record(f, "side-copy-check-feedback-state")
 
             // 2) Plan card (.plan-cell) with 3pt left accent bar + 30x30 Copy & Download buttons + "已保存到下载文件夹"
             let planRow = ConversationRowItem(
@@ -127,12 +96,10 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             try await Task.sleep(nanoseconds: 30_000_000)
             XCTAssertEqual(savedPlanFilename.value, "Migration Plan.md")
             XCTAssertEqual(lastToast, "已保存到下载文件夹")
-            ParityCaseTracker.shared.record(f, "plan-card-download-toast")
 
             let copyPlanBtn = try XCTUnwrap(planButtons.first(where: { $0.toolTip == "复制计划" }) as? IconFeedbackActionButton)
             copyPlanBtn.handleClick()
             XCTAssertEqual(lastToast, "已复制")
-            ParityCaseTracker.shared.record(f, "plan-card-copy-button")
 
             // Question & QuestionResult rows
             let qRow = ConversationRowItem(
@@ -141,7 +108,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 kind: .question(header: "turn-1", questions: [UserInputQuestion(id: "q1", header: "Env", question: "Deploy?", options: [UserInputOption(label: "Yes", description: "Now")])])
             )
             XCTAssertGreaterThan(coord.measureRowHeight(qRow, width: 768), 100)
-            ParityCaseTracker.shared.record(f, "question-row-height")
 
             let qrRow = ConversationRowItem(
                 id: "qr-1",
@@ -149,7 +115,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 kind: .questionResult(statusText: "completed", questions: [], answers: [UserInputAnswer(questionId: "q1", answers: ["Yes"])])
             )
             XCTAssertGreaterThan(coord.measureRowHeight(qrRow, width: 768), 80)
-            ParityCaseTracker.shared.record(f, "question-result-row-height")
 
             let hcRow = ConversationRowItem(
                 id: "hc-1",
@@ -157,7 +122,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 kind: .historyCollapse(eyebrow: "Earlier messages", label: "42 messages folded", expanded: false)
             )
             XCTAssertEqual(coord.measureRowHeight(hcRow, width: 768), 64)
-            ParityCaseTracker.shared.record(f, "history-collapse-row-height")
         }
     }
 
@@ -165,7 +129,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_markdownContent() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/MarkdownContent.test.tsx"
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
             let cache = GfmLayoutCache()
 
@@ -199,8 +162,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             } else {
                 XCTFail("Expected single coalesced .prose segment")
             }
-            ParityCaseTracker.shared.record(f, "coalesces-paragraph-heading-blockquote-list-into-single-textview")
-            ParityCaseTracker.shared.record(f, "preserves-blockquote-accent-attribute-in-coalesced-prose")
 
             // 2) Fenced code blocks NEVER clip at 18 lines, strip trailing fence newline, and measure CJK glyph width accurately!
             let code10 = (1 ... 10).map { "let line\($0) = \($0)" }.joined(separator: "\n")
@@ -214,7 +175,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let cjkLine60 = String(repeating: "宽", count: 60)
             let cjkDocWidth = ConversationTableCoordinator.measureCodeDocumentWidth(code: cjkLine60, minWidth: 500)
             XCTAssertGreaterThan(cjkDocWidth, 750, "60 CJK glyphs in 13pt mono must exceed 750pt so horizontal scroll never clips right side")
-            ParityCaseTracker.shared.record(f, "full-height-code-block-never-clipped-at-18-lines")
 
             // 3) Splitting around code block + table + horizontal rule
             let mixed = """
@@ -234,17 +194,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             """
             let mixedSegs = cache.getOrRender(markdown: mixed, foldInstructions: false, scheme: .dark, workspace: .claude, transport: transport)
             XCTAssertEqual(mixedSegs.count, 5)
-            ParityCaseTracker.shared.record(f, "splits-only-around-codeblock-hr-and-table")
 
             // 4) Scheme safety: javascript: and data: links stripped, https: and file paths kept
             XCTAssertNil(GfmLayoutCache.safeRenderableHref("javascript:alert(1)"))
-            ParityCaseTracker.shared.record(f, "blocks-javascript-href")
             XCTAssertNil(GfmLayoutCache.safeRenderableHref("data:text/html,<script>"))
-            ParityCaseTracker.shared.record(f, "blocks-data-href")
             XCTAssertEqual(GfmLayoutCache.safeRenderableHref("https://example.invalid/docs"), "https://example.invalid/docs")
-            ParityCaseTracker.shared.record(f, "allows-https-href")
             XCTAssertEqual(GfmLayoutCache.safeRenderableHref("/Users/example/file.rs#L10"), "/Users/example/file.rs#L10")
-            ParityCaseTracker.shared.record(f, "allows-local-file-href")
 
             // 5) Zero emoji in GFM image fallback
             let imgSegs = cache.getOrRender(markdown: "![Architecture Diagram](https://example.invalid/arch.png)", foldInstructions: false, scheme: .light, workspace: .codex, transport: transport)
@@ -252,7 +207,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 XCTAssertFalse(imgAttr.string.contains("🖼"))
                 XCTAssertTrue(imgAttr.string.contains("[Architecture Diagram]"))
             }
-            ParityCaseTracker.shared.record(f, "gfm-image-fallback-zero-emoji")
         }
     }
 
@@ -260,7 +214,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentActivity() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/chat/SubagentActivity.test.tsx"
             let statuses: [(String, String)] = [
                 ("creating", "正在创建"),
                 ("running", "运行中"),
@@ -272,7 +225,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             for (st, expected) in statuses {
                 let sub = SubagentActivity(agentId: "a-\(st)", name: "Worker", status: st, available: true)
                 XCTAssertEqual(ConversationRowCellView.subagentActivityVerb(sub), expected)
-                ParityCaseTracker.shared.record(f, "status-\(st)")
             }
 
             // Historical eventKind overrides later status!
@@ -280,7 +232,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(ConversationRowCellView.subagentActivityVerb(startedThenDone), "开始工作")
             let interacted = SubagentActivity(eventKind: "interacted", eventId: "ev-2", agentId: "a-1", name: "Worker", status: "failed", available: true)
             XCTAssertEqual(ConversationRowCellView.subagentActivityVerb(interacted), "已交互")
-            ParityCaseTracker.shared.record(f, "historical-event-kind-preserved")
 
             // Render row and verify zero 🤖 emoji + unavailable reason
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
@@ -301,7 +252,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let rendered = texts(cell)
             XCTAssertFalse(rendered.contains("🤖"))
             XCTAssertTrue(rendered.contains("子智能体记录已移除"))
-            ParityCaseTracker.shared.record(f, "unavailable-reason-and-zero-robot-emoji")
         }
     }
 
@@ -309,7 +259,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentPanel() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/chat/SubagentPanel.test.tsx"
             let unsorted = [
                 SubagentActivity(agentId: "1", name: "Done", status: "completed", available: true),
                 SubagentActivity(agentId: "2", name: "Running", status: "running", available: true),
@@ -320,9 +269,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             ]
             let sorted = SubagentPanelView.sortByStatusPriority(unsorted)
             XCTAssertEqual(sorted.map(\.status), ["running", "creating", "failed", "interrupted", "unknown", "completed"])
-            for s in sorted {
-                ParityCaseTracker.shared.record(f, "priority-sort-\(s.status)")
-            }
 
             // <960pt Focus Trap Engine: Tab & Shift+Tab cycle strictly within panel focusable views!
             let drawerRoot = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
@@ -338,18 +284,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
             let focusables = SubagentFocusTrapEngine.focusableViews(in: drawerRoot)
             XCTAssertEqual(focusables.count, 3, "Disabled button excluded from focus trap cycle")
-            ParityCaseTracker.shared.record(f, "focus-trap-excludes-disabled-controls")
 
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: nil, backward: false) === b1)
-            ParityCaseTracker.shared.record(f, "focus-trap-initial-first")
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: b1, backward: false) === b2)
-            ParityCaseTracker.shared.record(f, "focus-trap-tab-forward-1-to-2")
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: b2, backward: false) === b3)
-            ParityCaseTracker.shared.record(f, "focus-trap-tab-forward-2-to-3")
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: b3, backward: false) === b1)
-            ParityCaseTracker.shared.record(f, "focus-trap-tab-wraps-end-to-start")
             XCTAssertTrue(SubagentFocusTrapEngine.nextFocusTarget(in: drawerRoot, current: b1, backward: true) === b3)
-            ParityCaseTracker.shared.record(f, "focus-trap-shift-tab-wraps-start-to-end")
 
             // Modal overlay SubagentOverlayFocusContainerView isolates <960pt Tab trap strictly away from outside controls!
             let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
@@ -404,14 +344,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let trappedTargets = SubagentFocusTrapEngine.focusableViews(in: mountedOverlayRoot)
             XCTAssertGreaterThanOrEqual(trappedTargets.count, 2, "Close button and subagent rows must be keyboard-focusable inside drawer")
             XCTAssertFalse(trappedTargets.contains(where: { $0 === outsideComposer || $0 === triggerButton }), "Focus trap must NEVER leak to outside ComposerNSTextView or triggerButton")
-            ParityCaseTracker.shared.record(f, "overlay-drawer-registers-modal-scope")
 
             // Unmounting SwiftUI overlay triggers dismantleNSView and restores focus to triggerButton!
             panelHost.rootView = AnyView(EmptyView())
             panelHost.layoutSubtreeIfNeeded()
             try? await Task.sleep(nanoseconds: 35_000_000)
             XCTAssertTrue(win.firstResponder === triggerButton, "Closing <960pt subagent drawer must restore focus to summary trigger button")
-            ParityCaseTracker.shared.record(f, "overlay-close-restores-trigger-focus")
 
             // Claude flat subagent summary bar renders "本会话子智能体" (DESIGN.md:103); Codex renders "子智能体" (SubagentSummary.tsx:76)
             XCTAssertEqual(SubagentSummaryBarView.summaryHeaderTitle(provider: .claudeCode, totalCount: 1), "本会话子智能体")
@@ -426,12 +364,10 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             claudeSummaryHost.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(claudeSummaryHost.fittingSize.height, 24)
-            ParityCaseTracker.shared.record(f, "claude-flat-subagent-label")
 
             // Nested Codex child subagent detail summary visibility check
             let nestedCol = SubagentCollection(agents: [SubagentActivity(agentId: "grandchild-1", name: "Grandchild", status: "running", available: true)], counts: ["running": 1], complete: true)
             XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nestedCol, isSupported: true))
-            ParityCaseTracker.shared.record(f, "nested-codex-stack-guard")
         }
     }
 
@@ -439,25 +375,20 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentSummary() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/chat/SubagentSummary.test.tsx"
             // 1) Hidden when 0 subagents and complete == true
             let emptyComplete = SubagentCollection(agents: [], counts: [:], complete: true)
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: emptyComplete, isSupported: true))
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: emptyComplete, isSupported: true))
-            ParityCaseTracker.shared.record(f, "hidden-when-zero-subagents-and-complete")
 
             // 2) Shown for Codex when collection is nil (upgrade note)
             XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nil, isSupported: true))
-            ParityCaseTracker.shared.record(f, "codex-nil-collection-shows-upgrade-note")
 
             // 3) Hidden for Claude when collection is nil
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: nil, isSupported: true))
-            ParityCaseTracker.shared.record(f, "claude-nil-collection-hidden")
 
             // 4) Shown when incomplete even if agents empty
             let incomplete = SubagentCollection(agents: [], counts: [:], complete: false)
             XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: incomplete, isSupported: true))
-            ParityCaseTracker.shared.record(f, "incomplete-collection-visible")
 
             // 5) Shown with running/completed/failed/unavailable counts when agents present
             let activeCol = SubagentCollection(
@@ -472,7 +403,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let host = NSHostingView(rootView: SubagentSummaryBarView(provider: .codex, collection: activeCol, isSupported: true, onTogglePanel: { _ in }).frame(width: 768))
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 24)
-            ParityCaseTracker.shared.record(f, "renders-counts-and-toggle-bar")
         }
     }
 
@@ -480,17 +410,13 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentCapabilities() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/domain/subagentCapabilities.test.ts"
             let bootstrapCaps = RuntimeCapabilityMatrix.from(nil)
             XCTAssertFalse(bootstrapCaps.isReady)
             let decodedCaps = try JSONDecoder().decode(SystemCapabilitiesResponse.self, from: protocol2CapabilitiesFixture(remote: false))
             let liveCaps = RuntimeCapabilityMatrix.from(decodedCaps)
             XCTAssertTrue(liveCaps.isReady)
-            ParityCaseTracker.shared.record(f, "default-local-codex-subagents-enabled")
             XCTAssertFalse(liveCaps.updatePrune)
-            ParityCaseTracker.shared.record(f, "default-local-claude-subagents-enabled")
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: SubagentCollection(agents: [SubagentActivity(agentId: "a1", name: "W", status: "running")], counts: [:], complete: true), isSupported: false))
-            ParityCaseTracker.shared.record(f, "unsupported-claude-subagents-hidden")
         }
     }
 
@@ -498,7 +424,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentPolling() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/domain/subagentPolling.test.ts"
             let pollMatrix: [(SessionProvider, String, UInt64)] = [
                 (.codex, "running", 2_000_000_000),
                 (.codex, "creating", 2_000_000_000),
@@ -509,7 +434,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             for (prov, st, expectedNs) in pollMatrix {
                 let actualNs = SubagentPanelView.pollingIntervalNanoseconds(provider: prov, status: st)
                 XCTAssertEqual(actualNs, expectedNs, "\(prov.rawValue):\(st)")
-                ParityCaseTracker.shared.record(f, "\(prov.rawValue)-\(st)-poll")
             }
         }
     }
@@ -518,7 +442,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_subagentsQuery() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/subagents.test.ts"
             let transport = MockRuntimeTransport { cmd, args in
                 if cmd == "threads.subagentDetail" {
                     XCTAssertTrue(args.contains("\"rootThreadId\":\"root-1\""))
@@ -542,7 +465,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 args: CodexWrap(request: SubagentDetailRequest(rootThreadId: "root-1", agentId: "child-1", limit: 120))
             )
             XCTAssertEqual(codexDetail.blocks.first?.text, "Child reply")
-            ParityCaseTracker.shared.record(f, "codex-subagent-detail-rpc")
 
             struct ClaudeSubArgs: Encodable { let sessionKey: String; let agentId: String; let limit: Int }
             let claudeDetail: ClaudeSessionDetail = try await store.rpc(
@@ -550,7 +472,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 args: ClaudeSubArgs(sessionKey: "sk1", agentId: "cl-child", limit: 160)
             )
             XCTAssertEqual(claudeDetail.events.first?.text, "Claude child")
-            ParityCaseTracker.shared.record(f, "claude-subagent-detail-rpc")
 
             let panel = SubagentPanelView(
                 store: store,
@@ -561,9 +482,8 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 workspace: .codex,
                 onClose: {}
             )
-            for (idx, st) in ["creating", "running", "completed", "failed", "interrupted", "unknown"].enumerated() {
+            for (_, st) in ["creating", "running", "completed", "failed", "interrupted", "unknown"].enumerated() {
                 XCTAssertFalse(panel.subagentStatusLabel(st).isEmpty)
-                ParityCaseTracker.shared.record(f, "codex-status-label-\(idx)-\(st)")
             }
             let claudePanel = SubagentPanelView(
                 store: store,
@@ -575,27 +495,22 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 onClose: {}
             )
             XCTAssertEqual(claudePanel.subagentStatusLabel("unknown"), "状态未知")
-            ParityCaseTracker.shared.record(f, "claude-unknown-status-label")
 
             // 6 distinct subagent query/model contract cases
             let cursorReq = SubagentDetailRequest(rootThreadId: "r-1", agentId: "a-1", limit: 120, before: "b-40")
             let cursorJson = String(decoding: try JSONEncoder().encode(cursorReq), as: UTF8.self)
             XCTAssertTrue(cursorJson.contains("\"before\":\"b-40\""))
-            ParityCaseTracker.shared.record(f, "subagent-cursor-before-encoded")
 
             let headReq = SubagentDetailRequest(rootThreadId: "r-1", agentId: "a-1", limit: 120, before: nil)
             let headJson = String(decoding: try JSONEncoder().encode(headReq), as: UTF8.self)
             XCTAssertFalse(headJson.contains("\"before\""))
-            ParityCaseTracker.shared.record(f, "subagent-nil-before-omitted")
 
             let colWithCounts = SubagentCollection(agents: [], counts: ["running": 2, "completed": 3], complete: true, warning: "部分子代理尚未归档")
             XCTAssertEqual(colWithCounts.counts.values.reduce(0, +), 5)
             XCTAssertEqual(colWithCounts.warning, "部分子代理尚未归档")
-            ParityCaseTracker.shared.record(f, "subagent-collection-sums-counts")
 
             let colFallback = SubagentCollection(agents: [SubagentActivity(agentId: "x", name: "W", status: "running")], counts: [:], complete: true)
             XCTAssertEqual(colFallback.agents.count, 1)
-            ParityCaseTracker.shared.record(f, "subagent-collection-fallback-agents-count")
 
             let richAct = try JSONDecoder().decode(
                 SubagentActivity.self,
@@ -603,14 +518,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             XCTAssertEqual(richAct.role, "audit")
             XCTAssertEqual(richAct.delegation, "Verify parity")
-            ParityCaseTracker.shared.record(f, "subagent-activity-decodes-role-and-delegation")
 
             let stableSorted = SubagentPanelView.sortByStatusPriority([
                 SubagentActivity(agentId: "r-a", name: "First Running", status: "running", available: true),
                 SubagentActivity(agentId: "r-b", name: "Second Running", status: "running", available: true),
             ])
             XCTAssertEqual(stableSorted.map(\.agentId), ["r-a", "r-b"])
-            ParityCaseTracker.shared.record(f, "subagent-priority-sort-preserves-relative-order")
         }
     }
 
@@ -618,7 +531,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_attachmentsQuery() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/attachments.test.ts"
             let png1x1Base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             let transport = MockRuntimeTransport { cmd, args in
                 XCTAssertEqual(cmd, "sessions.attachmentRead")
@@ -639,24 +551,19 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let completion = await XCTWaiter.fulfillment(of: [loaded], timeout: 5)
             XCTAssertEqual(completion, .completed)
             XCTAssertNotNil(mgr.image(for: "k1"))
-            ParityCaseTracker.shared.record(f, "loads-base64-attachment-with-root-thread")
 
             // Duplicate ensureLoaded while cached does not refetch
             let callsBefore = transport.recordedCalls.count
             mgr.ensureLoaded(key: "k1", request: req, store: store)
             XCTAssertEqual(transport.recordedCalls.count, callsBefore)
-            ParityCaseTracker.shared.record(f, "dedupes-already-cached-attachment")
 
             mgr.evictOutside(visibleKeys: ["k1"])
             XCTAssertEqual(mgr.loadedCount, 1)
-            ParityCaseTracker.shared.record(f, "retains-visible-attachment-within-240pt-margin")
 
             mgr.evictOutside(visibleKeys: [])
             XCTAssertEqual(mgr.loadedCount, 0)
-            ParityCaseTracker.shared.record(f, "evicts-offscreen-attachment")
 
             XCTAssertEqual(AttachmentViewportManager.viewportMargin, 240)
-            ParityCaseTracker.shared.record(f, "viewport-margin-is-240pt")
         }
     }
 
@@ -664,37 +571,30 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_claudeApi() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/api/claude.test.ts"
             let p1 = ClaudeDeletePreview(sessionKey: "sk-1", id: "id-1", title: "T", path: "/tmp/a.jsonl", paths: ["/tmp/a.jsonl", "/tmp/a/sub"], fingerprint: "fp", fileCount: 2, bytes: 2048, warnings: ["warn-1"])
             XCTAssertEqual(p1.resolvedPaths, ["/tmp/a.jsonl", "/tmp/a/sub"])
-            ParityCaseTracker.shared.record(f, "claude-preview-multi-paths")
 
             let p2 = ClaudeDeletePreview(sessionKey: "sk-2", id: "id-2", title: "T2", path: "/tmp/single.jsonl", paths: nil, fingerprint: "fp2", fileCount: 1, bytes: 512)
             XCTAssertEqual(p2.resolvedPaths, ["/tmp/single.jsonl"])
-            ParityCaseTracker.shared.record(f, "claude-preview-fallback-single-path")
 
             let diagData = Data("""
             {"ownership":"verified","reasonCodes":[],"processes":[{"pid":42,"role":"cli","registrationVerified":true,"mismatchedFields":[]}]}
             """.utf8)
             let diag = try JSONDecoder().decode(ClaudeOwnershipDiagnostics.self, from: diagData)
             XCTAssertEqual(diag.processes.first?.pid, 42)
-            ParityCaseTracker.shared.record(f, "claude-ownership-diagnostics-decode")
         }
     }
 
     func testPorted_claudeQuery() throws {
-        let f = "webui/src/lib/query/claude.test.ts"
         let cmd = HistoryAndResumeHelpers.claudeResumeCommand(cwd: "/Users/example/project", id: "claude-uuid-1")
         XCTAssertTrue(cmd.contains("claude --resume"))
         XCTAssertTrue(cmd.contains("claude-uuid-1"))
-        ParityCaseTracker.shared.record(f, "claude-resume-command-format")
     }
 
     // MARK: - 12. ClaudeWorkspace.test.tsx (4 cases) — Unconditional canDelete & Delete Paths Modal
 
     func testPorted_claudeWorkspace() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/claude/ClaudeWorkspace.test.tsx"
             let actions = ProviderMenuMatrixBuilder.buildActions(
                 provider: .claudeCode,
                 isHeaderMenu: false,
@@ -717,7 +617,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let deleteAction = try XCTUnwrap(actions.first(where: { $0.id == "delete" }))
             XCTAssertEqual(deleteAction.label, "删除任务文件")
             XCTAssertFalse(deleteAction.disabled, "Claude delete must NEVER be disabled by read/activity state")
-            ParityCaseTracker.shared.record(f, "claude-delete-unconditionally-enabled")
 
             let dialog = SingleSessionDeleteConfirmContentView(
                 title: "Claude Session",
@@ -745,11 +644,8 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             minimalHost.layoutSubtreeIfNeeded()
             XCTAssertEqual(dialog.paths, ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"])
             XCTAssertGreaterThan(host.fittingSize.height, minimalHost.fittingSize.height + 40, "Monospaced target paths, warnings, and residuals must expand dialog layout height")
-            ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-monospaced-paths")
             XCTAssertEqual(dialog.warnings, ["活动进程提示"])
-            ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-warnings")
             XCTAssertEqual(dialog.residuals, ["/Users/example/.claude/1/locked"])
-            ParityCaseTracker.shared.record(f, "claude-delete-confirm-renders-residuals")
         }
     }
 
@@ -757,7 +653,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_archivableProviderWorkspace() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/providers/ArchivableProviderWorkspace.test.tsx"
             // Grok canDelete MUST be unconditionally true even if legacy deletionEligibility.allowed == false!
             let grokSummaryData = Data("""
             {"id":"grok-1","title":"Grok Task","cwd":"/repo","path":"/Users/example/.grok/1.json","messageCount":3,"status":"running","deletionEligibility":{"allowed":false,"reason":"legacy-block"}}
@@ -773,7 +668,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             XCTAssertEqual(grokActions.last?.label, "删除任务文件")
             XCTAssertEqual(grokActions.last?.disabled, false)
-            ParityCaseTracker.shared.record(f, "grok-delete-ignores-legacy-deletion-eligibility")
 
             for (prov, id) in [(SessionProvider.antigravity, "ag"), (.dsh, "dsh")] {
                 let activeMenu = ProviderMenuMatrixBuilder.buildActions(
@@ -784,7 +678,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                     onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
                 )
                 XCTAssertTrue(activeMenu.contains(where: { $0.label == "归档" }))
-                ParityCaseTracker.shared.record(f, "\(prov.rawValue)-active-archive-menu")
 
                 let archivedHeaderMenu = ProviderMenuMatrixBuilder.buildActions(
                     provider: prov, isHeaderMenu: true, isLocalMachine: true,
@@ -794,13 +687,11 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                     onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
                 )
                 XCTAssertTrue(archivedHeaderMenu.contains(where: { $0.label == "取消归档" }))
-                ParityCaseTracker.shared.record(f, "\(prov.rawValue)-archived-header-restore-menu")
             }
         }
     }
 
     func testPorted_grokBotWorkspace() throws {
-        let f = "webui/src/components/providers/GrokBotWorkspace.test.tsx"
         let menuWithPath = ProviderMenuMatrixBuilder.buildActions(
             provider: .grokbot, isHeaderMenu: false, isLocalMachine: true,
             id: "gb-1", path: "/Users/example/cache.json", cwd: "",
@@ -810,7 +701,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
         )
         XCTAssertEqual(menuWithPath.map(\.label), ["复制 ID", "复制路径", "在 Finder 中显示"])
         XCTAssertFalse(menuWithPath[1].disabled)
-        ParityCaseTracker.shared.record(f, "grokbot-readonly-menu-with-path")
 
         let menuRemote = ProviderMenuMatrixBuilder.buildActions(
             provider: .grokbot, isHeaderMenu: false, isLocalMachine: false,
@@ -820,7 +710,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: nil
         )
         XCTAssertTrue(menuRemote[2].disabled, "Finder reveal disabled on remote target")
-        ParityCaseTracker.shared.record(f, "grokbot-remote-disables-reveal")
 
         let gbHeader = ProviderMenuMatrixBuilder.buildActions(
             provider: .grokbot, isHeaderMenu: true, isLocalMachine: true,
@@ -831,14 +720,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
         )
         XCTAssertEqual(gbHeader.first?.label, "复制答复")
         XCTAssertEqual(gbHeader.first?.disabled, true)
-        ParityCaseTracker.shared.record(f, "grokbot-header-copy-reply-disabled-when-empty")
     }
 
     // MARK: - 15. RenameableSession.test.tsx (18 cases) — Row Visuals, Multi-Select, RunningIndicator(13) & Ctrl+Click NSMenu
 
     func testPorted_renameableSession() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/RenameableSession.test.tsx"
             var triggeredMenuIds: [String] = []
             let rowActions = [
                 SessionMenuAction(id: "rename", label: "改名", icon: .pencil, run: { triggeredMenuIds.append("rename") }),
@@ -854,8 +741,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertFalse(nsMenu.items[2].isEnabled)
             _ = nsMenu.items[1].target?.perform(nsMenu.items[1].action!, with: nsMenu.items[1])
             XCTAssertEqual(triggeredMenuIds, ["copy-id"])
-            ParityCaseTracker.shared.record(f, "ctrl-click-nsmenu-items-and-disabled-state")
-            ParityCaseTracker.shared.record(f, "ctrl-click-nsmenu-action-dispatch")
 
             // 2) Ctrl+Click does NOT switch detail or mutate selection
             var part = PartitionedSessionSelectionState(activeScope: "s#a", archivedScope: "s#z")
@@ -863,22 +748,16 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let shouldOpen = part.click(partition: .active, visible: ["s1", "s2"], key: "s2", click: SessionClick(detail: 1, ctrlKey: true), macPlatform: true)
             XCTAssertFalse(shouldOpen)
             XCTAssertEqual(part.active.keys, ["s1"])
-            ParityCaseTracker.shared.record(f, "ctrl-click-does-not-mutate-selection-or-open-detail")
 
             // 3) Keyboard F2 rename trigger vs modifier rejection
             XCTAssertTrue(ProviderMenuMatrixBuilder.shouldTriggerRenameKey(keyCode: 120, charactersIgnoringModifiers: "\u{F705}", modifierFlags: []))
-            ParityCaseTracker.shared.record(f, "f2-triggers-rename")
             XCTAssertFalse(ProviderMenuMatrixBuilder.shouldTriggerRenameKey(keyCode: 120, charactersIgnoringModifiers: "\u{F705}", modifierFlags: [.command]))
-            ParityCaseTracker.shared.record(f, "cmd-f2-ignored")
             XCTAssertFalse(ProviderMenuMatrixBuilder.shouldTriggerRenameKey(keyCode: 120, charactersIgnoringModifiers: "\u{F705}", modifierFlags: [.control]))
-            ParityCaseTracker.shared.record(f, "ctrl-f2-ignored")
             XCTAssertFalse(ProviderMenuMatrixBuilder.shouldTriggerRenameKey(keyCode: 120, charactersIgnoringModifiers: "\u{F705}", modifierFlags: [.option]))
-            ParityCaseTracker.shared.record(f, "opt-f2-ignored")
 
             // 4) RunningIndicator default 13x13pt + multi-selected row styling (--as + 1.5pt --a) vs single selected (--sl + 2.5pt bar)
             let spinner = RunningIndicator()
             XCTAssertEqual(spinner.size, 13)
-            ParityCaseTracker.shared.record(f, "running-indicator-default-size-13pt")
 
             let palette = DesignPalette.resolve(scheme: .light, workspace: .codex)
             let rowSingle = RenameableSessionRowView(
@@ -927,11 +806,9 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             hMulti.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(hSingle.fittingSize.height, 48)
             XCTAssertGreaterThan(hMulti.fittingSize.height, 40)
-            ParityCaseTracker.shared.record(f, "renders-2line-title-and-row2-storage-badge")
-            ParityCaseTracker.shared.record(f, "renders-multi-selected-accent-soft-and-checkbox")
 
             // Verify storage badge resolves plain text color (not capsule bg) across 4 tones
-            for (caseName, bytes, expectedColor) in [
+            for (_, bytes, expectedColor) in [
                 ("tone-muted", nil as Int64?, palette.textMuted),
                 ("tone-success", Int64(10 * 1024 * 1024), palette.okFg),
                 ("tone-warning", Int64(150 * 1024 * 1024), palette.warnFg),
@@ -939,7 +816,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             ] {
                 let sz = bytes.map { SessionStorageSize(bytes: $0, scope: "file", status: "complete") }
                 XCTAssertEqual(SessionStorageBadgeView.resolvedColor(for: sz, palette: palette), expectedColor)
-                ParityCaseTracker.shared.record(f, "storage-badge-\(caseName)")
             }
 
             // 5) Double-click gate, blocked rename reason, busy disable, and selecting-mode isolation
@@ -951,7 +827,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
             )
             XCTAssertEqual(nonRenamableMenu.first(where: { $0.id == "rename" })?.disabled, true)
-            ParityCaseTracker.shared.record(f, "double-click-rename-gate")
 
             XCTAssertTrue("   \n ".trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             let busyMenu = ProviderMenuMatrixBuilder.buildActions(
@@ -962,17 +837,14 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 onCopy: { _, _ in }, onRevealInFinder: { _ in }, onDelete: {}
             )
             XCTAssertEqual(busyMenu.first(where: { $0.id == "rename" })?.disabled, true)
-            ParityCaseTracker.shared.record(f, "empty-draft-validation")
 
             var selGuard = PartitionedSessionSelectionState(activeScope: "s#a")
             let dblClickOpens = selGuard.click(partition: .active, visible: ["s1", "s2"], key: "s1", click: SessionClick(detail: 2))
             XCTAssertTrue(dblClickOpens)
             XCTAssertFalse(selGuard.active.selecting)
-            ParityCaseTracker.shared.record(f, "failed-draft-blur-no-replay")
 
             _ = selGuard.click(partition: .active, visible: ["s1", "s2"], key: "s1", click: SessionClick(detail: 1, metaKey: true))
             XCTAssertTrue(selGuard.active.selecting, "Entering multi-selection cancels single-session rename mode")
-            ParityCaseTracker.shared.record(f, "selecting-cancels-editing")
         }
     }
 
@@ -980,7 +852,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
 
     func testPorted_sessionBatchControls() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/components/common/SessionBatchControls.test.tsx"
             let preview = SessionBatchPreview(
                 provider: .codex,
                 operation: .delete,
@@ -1016,7 +887,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let host = NSHostingView(rootView: previewView.frame(width: 480))
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 180)
-            ParityCaseTracker.shared.record(f, "batch-preview-renders-descendants-files-bytes-and-locate-errors")
 
             let partialResult = SessionBatchResult(items: [
                 SessionBatchItemResult(sessionKey: "s1", status: "succeeded", deletedIds: ["s1", "sub-1"]),
@@ -1039,24 +909,17 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             let barHost = NSHostingView(rootView: barView.frame(width: 280))
             barHost.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(barHost.fittingSize.height, 90)
-            ParityCaseTracker.shared.record(f, "batch-result-banner-renders-itemized-failures-and-residuals")
         }
     }
 
     func testPorted_sessionsQuery() throws {
         try runAsyncParityCheck {
-            let f = "webui/src/lib/query/sessions.test.tsx"
             // 1) Verify hasSubagentTree rules across providers & operations
             XCTAssertTrue(SessionBatchChunkExecutor.hasSubagentTree(provider: .codex, operation: .delete))
-            ParityCaseTracker.shared.record(f, "subagent-tree-codex-delete")
             XCTAssertTrue(SessionBatchChunkExecutor.hasSubagentTree(provider: .antigravity, operation: .delete))
-            ParityCaseTracker.shared.record(f, "subagent-tree-antigravity-delete")
             XCTAssertTrue(SessionBatchChunkExecutor.hasSubagentTree(provider: .dsh, operation: .delete))
-            ParityCaseTracker.shared.record(f, "subagent-tree-dsh-delete")
             XCTAssertFalse(SessionBatchChunkExecutor.hasSubagentTree(provider: .codex, operation: .archive))
-            ParityCaseTracker.shared.record(f, "subagent-tree-false-on-archive")
             XCTAssertFalse(SessionBatchChunkExecutor.hasSubagentTree(provider: .claudeCode, operation: .delete))
-            ParityCaseTracker.shared.record(f, "subagent-tree-false-on-claude")
 
             // 2) 250-item preview chunks into 3 pages of [100, 100, 50] for archive!
             let keys250 = (0 ..< 250).map { "th-\($0)" }
@@ -1080,7 +943,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             }
             XCTAssertEqual(previewRec.sizes, [100, 100, 50])
             XCTAssertEqual(preview250.items.count, 250)
-            ParityCaseTracker.shared.record(f, "preview-chunks-250-archive-into-100-100-50")
 
             // 3) Delete preview sends single unchunked batch of 250 with includeDescendants = true
             let delRec = ChunkRecorder()
@@ -1094,7 +956,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 return SessionBatchPreview(provider: .codex, operation: .delete, items: [])
             }
             XCTAssertEqual(delRec.sizes, [250])
-            ParityCaseTracker.shared.record(f, "delete-preview-single-batch-with-descendants")
 
             // 4) CRITICAL PARTIAL FAILURE TEST (Item #5):
             // Chunk 0 (0..<100) succeeds; Chunk 1 (100..<200) throws transport error; Chunk 2 (200..<250) is unexecuted!
@@ -1114,15 +975,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(partial.items.count, 250)
             // 0..<100 preserved as succeeded
             XCTAssertTrue(partial.items[0 ..< 100].allSatisfy { $0.status == "succeeded" })
-            ParityCaseTracker.shared.record(f, "chunk-0-succeeded-preserved")
 
             // 100..<200 marked failed with "请求中断，结果未确认"
             XCTAssertTrue(partial.items[100 ..< 200].allSatisfy { $0.status == "failed" && $0.message == "请求中断，结果未确认" })
-            ParityCaseTracker.shared.record(f, "chunk-k-marked-uncertain-interrupted")
 
             // 200..<250 marked failed with "前序请求中断，未执行"
             XCTAssertTrue(partial.items[200 ..< 250].allSatisfy { $0.status == "failed" && $0.message == "前序请求中断，未执行" })
-            ParityCaseTracker.shared.record(f, "subsequent-chunks-marked-not-executed")
 
             // Selection removes ONLY confirmed succeeded 0..<100, keeping 100..<250 selected!
             var partState = PartitionedSessionSelectionState(activeScope: "s#active")
@@ -1131,7 +989,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             partState.applyBatchResult(partial, partition: .active)
             XCTAssertEqual(partState.active.keys, Array(keys250[100 ..< 250]), "Failed/unconfirmed items MUST remain selected for retry!")
             XCTAssertTrue(partState.active.selecting)
-            ParityCaseTracker.shared.record(f, "selection-removes-only-succeeded-retains-failed")
 
             // 5) Chunk 0 immediate failure returns nil result and keeps ALL 250 items selected!
             let chunk0Fail = await SessionBatchChunkExecutor.execute(preview: preview250) { _ in
@@ -1140,7 +997,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertNil(chunk0Fail.result)
             XCTAssertTrue(chunk0Fail.confirmedSucceededKeys.isEmpty)
             XCTAssertEqual(chunk0Fail.errorMessage, "首包失败")
-            ParityCaseTracker.shared.record(f, "chunk-0-failure-synthesizes-no-result-keeps-all-selected")
 
             // 6) Full 3-chunk success clears all 250 keys and exits selecting mode
             let fullOk = await SessionBatchChunkExecutor.execute(preview: preview250) { req in
@@ -1151,7 +1007,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             fullSel.applyBatchResult(try XCTUnwrap(fullOk.result), partition: .active)
             XCTAssertTrue(fullSel.active.keys.isEmpty)
             XCTAssertFalse(fullSel.active.selecting)
-            ParityCaseTracker.shared.record(f, "full-success-clears-all-selected-and-exits-selecting")
 
             // 7) deletedIds also count as confirmed succeeded keys (removing descendant rows from selection)
             let withDescendants = SessionBatchResult(items: [
@@ -1160,7 +1015,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             ])
             let confirmed = SessionBatchChunkExecutor.confirmedSucceededKeys(from: withDescendants)
             XCTAssertEqual(confirmed, ["root-1", "desc-1", "desc-2"])
-            ParityCaseTracker.shared.record(f, "deleted-ids-included-in-confirmed-succeeded")
 
             // 8-14) 7 distinct selection & batch edge cases
             let clearedAnchor = SessionSelectionEngine.applyBatchSucceeded(
@@ -1169,7 +1023,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             XCTAssertEqual(clearedAnchor.keys, ["b"])
             XCTAssertNil(clearedAnchor.anchor, "Succeeded anchor must be cleared")
-            ParityCaseTracker.shared.record(f, "anchor-cleared-when-anchor-succeeded")
 
             let keptAnchor = SessionSelectionEngine.applyBatchSucceeded(
                 SessionSelectionState(scope: "s", selecting: true, keys: ["a", "b"], anchor: "a"),
@@ -1177,7 +1030,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             )
             XCTAssertEqual(keptAnchor.keys, ["a"])
             XCTAssertEqual(keptAnchor.anchor, "a", "Unsucceeded anchor must be preserved")
-            ParityCaseTracker.shared.record(f, "anchor-preserved-when-other-item-succeeded")
 
             var partIso = PartitionedSessionSelectionState(activeScope: "s#a", archivedScope: "s#z")
             _ = partIso.click(partition: .archived, visible: ["z1", "z2"], key: "z1", click: SessionClick(detail: 1, metaKey: true))
@@ -1185,7 +1037,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             partIso.applyBatchResult(SessionBatchResult(items: [SessionBatchItemResult(sessionKey: "z1", status: "succeeded")]), partition: .archived)
             XCTAssertEqual(partIso.archived.keys, ["z2"])
             XCTAssertTrue(partIso.active.keys.isEmpty)
-            ParityCaseTracker.shared.record(f, "archived-partition-batch-result-isolated")
 
             let preview80Rec = ChunkRecorder()
             _ = try await SessionBatchChunkExecutor.preview(provider: .codex, operation: .restore, sessionKeys: Array(keys250.prefix(80))) { req in
@@ -1193,7 +1044,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
                 return SessionBatchPreview(provider: .codex, operation: .restore, items: [])
             }
             XCTAssertEqual(preview80Rec.sizes, [80])
-            ParityCaseTracker.shared.record(f, "under-100-restore-sends-single-chunk")
 
             let mixedAllowedPreview = SessionBatchPreview(
                 provider: .codex,
@@ -1206,7 +1056,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             XCTAssertEqual(mixedAllowedPreview.allowedCount, 1)
             XCTAssertEqual(mixedAllowedPreview.blockedCount, 1)
             XCTAssertEqual(mixedAllowedPreview.totalBytes, 10_499)
-            ParityCaseTracker.shared.record(f, "preview-counts-allowed-and-blocked-items")
 
             let mixedExec = await SessionBatchChunkExecutor.execute(preview: mixedAllowedPreview) { req in
                 XCTAssertEqual(req.items.map(\.sessionKey), ["ok-1"], "Blocked items must not be sent to execute RPC")
@@ -1218,7 +1067,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             _ = mixedSel.selectAll(activeVisible: ["ok-1", "blk-1"], archivedVisible: [], supportsArchive: true, archivedOpen: false)
             mixedSel.applyBatchResult(mixedRes, partition: .active)
             XCTAssertEqual(mixedSel.active.keys, ["blk-1"], "Blocked item remains selected after batch execute")
-            ParityCaseTracker.shared.record(f, "execute-skips-blocked-items-and-keeps-them-selected")
 
             let allBlockedPreview = SessionBatchPreview(
                 provider: .codex,
@@ -1231,7 +1079,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase, ParityExecutab
             }
             XCTAssertEqual(allBlockedOutcome.result?.items.count, 0)
             XCTAssertTrue(allBlockedOutcome.confirmedSucceededKeys.isEmpty)
-            ParityCaseTracker.shared.record(f, "execute-zero-allowed-skips-rpc")
         }
     }
 }

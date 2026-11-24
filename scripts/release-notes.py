@@ -8,6 +8,24 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.33": {
+        "summary": [
+            "修复 Antigravity 在线与离线运行态识别，补齐多级子智能体阅读、附件与拓扑级联清理，并完成存量架构精简"
+        ],
+        "features": [
+            "Antigravity 新增多级子智能体支持（可缺省能力 antigravity_subagents）：展示内联子代理活动卡、详情顶栏状态汇总与右侧多级抽屉（支持 L0 -> L1 -> L2 下钻、实时状态回写、双向分页与子智能体图片附件读取）。",
+            "全平台线程清理的「Antigravity 已归档与孤立子会话」改用单次批量预览，并纳入整条祖先链已不存在且自身无锁、非活跃的孤立子会话残余。",
+        ],
+        "fixes": [
+            "修复 Antigravity 线程运行状态识别：覆盖 agy CLI 无索引 .pb 持锁会话、SQLite steps.status = 8（GENERATING）／9（WAITING）／7（ERROR）、Connect-RPC WAITING／错误终态及近期异步后台任务收敛，修正旧 RUNNING 转录行状态并补齐 Linux /proc 按需端点探测。",
+            "修复工作区详情轮询周期冻结与侧栏状态不同步问题，补齐「等待处理」「待回复」「异常」徽章；Antigravity 级联删除改为叶节点优先拓扑逆序，并对未水合后代的在线 404 继续清理磁盘与索引残余。",
+            "清理退役 WebUI／Tauri 遗留死分支、重复详情适配层、伪图标字符与静默吞错包装，Probe 配置或运行异常在控制台显式提示。",
+        ],
+        "migration": [
+            "API 协议 2、数据库 schema 3。沿用已有配置、凭据与会话数据，先升级 Linux 服务再升级 Mac App；自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 v2.1.30。",
+            "从 v2.1.27 或更早直接升级且尚未迁移偏好的用户，需要重新选择主题及侧栏折叠状态；早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.32": {
         "summary": [
             "统一纳管 agy CLI（~/.gemini/antigravity-cli）与 Antigravity.app 2.34.0 会话阅读、改名、归档与清理，并升级 url 修复安全公告"

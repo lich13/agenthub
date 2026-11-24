@@ -233,10 +233,6 @@ impl ProbeRuntime {
         }
     }
 
-    pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
-        Self::build_event_for(&self.config, self.paths.kind, input)
-    }
-
     pub fn build_event_for(
         config: &Config,
         kind: crate::platform::PlatformKind,
@@ -1431,7 +1427,9 @@ mod tests {
         let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
         let memory_body = "MEMORY_BODY_MUST_NOT_REACH_SUMMARY_HASH_OR_BARK";
 
-        let event = runtime.build_event(
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-memory"),
                 Some("turn-memory"),
@@ -1753,14 +1751,18 @@ mod tests {
             "完成".repeat(3000)
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-a"),
-            Some("turn-a"),
-            Some("session-a"),
-            Some("/tmp/transcript.jsonl"),
-            Some(&message),
-            "reply-needed",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-a"),
+                Some("turn-a"),
+                Some("session-a"),
+                Some("/tmp/transcript.jsonl"),
+                Some(&message),
+                "reply-needed",
+            ),
+        );
 
         assert_eq!(event.kind, "reply-needed");
         assert_eq!(event.event_type, "reply_needed");
@@ -1842,11 +1844,11 @@ mod tests {
         assert!(!serialized_event.contains("bark_body"));
         assert!(!serialized_event.contains("UNIQUE_FULL_BARK_TAIL"));
 
-        let recoverable = runtime.build_event(ProbeEventInput::hook_stop(
-            Some("thread-a"),
-            Some("turn-b"),
-            "recoverable",
-        ));
+        let recoverable = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-b"), "recoverable"),
+        );
         assert_eq!(recoverable.event_type, "recoverable");
         assert_eq!(recoverable.title, "线程异常停止");
         assert_eq!(
@@ -1870,10 +1872,11 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let completion = runtime.build_event(ProbeEventInput::notify_completion(
-            Some("thread-a"),
-            Some("turn-a"),
-        ));
+        let completion = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::notify_completion(Some("thread-a"), Some("turn-a")),
+        );
 
         assert_eq!(completion.kind, "completion");
         assert_eq!(completion.event_type, "completion");
@@ -1894,7 +1897,9 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let completion = runtime.build_event(
+        let completion = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::notify_completion_with_context(
                 Some("thread-complete"),
                 Some("turn-complete"),
@@ -1908,7 +1913,9 @@ mod tests {
         assert_eq!(completion.bark_title, "线程正常完成：完成线程");
         assert_eq!(completion.bark_body, "最终反馈。");
 
-        let reply = runtime.build_event(
+        let reply = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-reply"),
                 Some("turn-reply"),
@@ -1925,7 +1932,9 @@ mod tests {
         assert!(!reply.bark_body.contains("<proposed_plan>"));
         assert!(!reply.bark_body.contains("</proposed_plan>"));
 
-        let recoverable = runtime.build_event(
+        let recoverable = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-error"),
                 Some("turn-error"),
@@ -1950,30 +1959,42 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let first = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-dedupe"),
-            Some("turn-dedupe"),
-            Some("thread-dedupe"),
-            None,
-            Some("第一版完成反馈"),
-            "hook-stop",
-        ));
-        let second = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-dedupe"),
-            Some("turn-dedupe"),
-            Some("thread-dedupe"),
-            None,
-            Some("第二版完成反馈"),
-            "hook-stop",
-        ));
-        let duplicate = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-dedupe"),
-            Some("turn-dedupe"),
-            Some("thread-dedupe"),
-            None,
-            Some("第一版完成反馈"),
-            "hook-stop",
-        ));
+        let first = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-dedupe"),
+                Some("turn-dedupe"),
+                Some("thread-dedupe"),
+                None,
+                Some("第一版完成反馈"),
+                "hook-stop",
+            ),
+        );
+        let second = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-dedupe"),
+                Some("turn-dedupe"),
+                Some("thread-dedupe"),
+                None,
+                Some("第二版完成反馈"),
+                "hook-stop",
+            ),
+        );
+        let duplicate = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-dedupe"),
+                Some("turn-dedupe"),
+                Some("thread-dedupe"),
+                None,
+                Some("第一版完成反馈"),
+                "hook-stop",
+            ),
+        );
 
         assert_ne!(first.payload["body_sha256"], second.payload["body_sha256"]);
         assert_ne!(first.dedupe_key, second.dedupe_key);
@@ -1994,14 +2015,18 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-real"),
-            Some("turn-real"),
-            Some("thread-real"),
-            Some("/tmp/rollout-real.jsonl"),
-            Some("ok"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-real"),
+                Some("turn-real"),
+                Some("thread-real"),
+                Some("/tmp/rollout-real.jsonl"),
+                Some("ok"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "completion");
         assert_eq!(event.event_type, "completion");
@@ -2028,14 +2053,18 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-plan"),
-            Some("turn-plan"),
-            Some("thread-plan"),
-            Some("/tmp/rollout-plan.jsonl"),
-            Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan"),
+                Some("turn-plan"),
+                Some("thread-plan"),
+                Some("/tmp/rollout-plan.jsonl"),
+                Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "reply-needed");
         assert_eq!(event.event_type, "reply_needed");
@@ -2054,14 +2083,18 @@ mod tests {
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-plan"),
-            Some("turn-plan"),
-            Some("thread-plan"),
-            Some("/tmp/rollout-plan.jsonl"),
-            Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan"),
+                Some("turn-plan"),
+                Some("thread-plan"),
+                Some("/tmp/rollout-plan.jsonl"),
+                Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "reply-needed");
         assert_eq!(event.bark_body, "# 修复计划\n- 等待确认");
@@ -2101,7 +2134,9 @@ mod tests {
 Authorization: Bearer secret-token\n\
 </proposed_plan>";
 
-        let event = runtime.build_event(
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-secret"),
                 Some("turn-secret"),
@@ -2146,14 +2181,18 @@ PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n\
 Authorization: Bearer secret-token\n\
 末尾可见。";
 
-        let event = runtime.build_event(ProbeEventInput::notify_completion_with_context(
-            Some("thread-secret"),
-            Some("turn-secret"),
-            None,
-            None,
-            Some(body),
-            Some("task_complete.last_agent_message"),
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-secret"),
+                Some("turn-secret"),
+                None,
+                None,
+                Some(body),
+                Some("task_complete.last_agent_message"),
+            ),
+        );
 
         assert_eq!(event.bark_body, "部署完成。\n末尾可见。");
         assert_eq!(event.payload["body_summary"], "部署完成。\n末尾可见。");
@@ -2185,7 +2224,9 @@ Call ID：call-question\n\
 URL: https://example.com/secret-token\n\
 Authorization: Bearer secret-token";
 
-        let event = runtime.build_event(
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-question"),
                 Some("turn-question"),
@@ -2222,7 +2263,9 @@ thread_id: thread-complete\n\
 URL: https://example.com/path\n\
 Authorization: Bearer secret-token";
 
-        let event = runtime.build_event(
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::notify_completion_with_context(
                 Some("thread-complete"),
                 Some("turn-complete"),
@@ -2248,14 +2291,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
         let body = "完成。\n\n<oai-mem-citation>\n<rollout_ids>\nprivate-id\n</rollout_ids>\n</oai-mem-citation>\n\n```xml\n<oai-mem-citation>literal</oai-mem-citation>\n```";
-        let event = runtime.build_event(ProbeEventInput::notify_completion_with_context(
-            Some("thread-memory-citation"),
-            Some("turn-memory-citation"),
-            None,
-            None,
-            Some(body),
-            Some("task_complete.last_agent_message"),
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-memory-citation"),
+                Some("turn-memory-citation"),
+                None,
+                None,
+                Some(body),
+                Some("task_complete.last_agent_message"),
+            ),
+        );
         assert_eq!(
             event.bark_body,
             "完成。\n\n```xml\n<oai-mem-citation>literal</oai-mem-citation>\n```"
@@ -2279,7 +2326,9 @@ Plan 摘要:\n\
 - 不应回填\n\
 Authorization: Bearer secret-token";
 
-        let event = runtime.build_event(
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-old-plan"),
                 Some("turn-old-plan"),
@@ -2319,7 +2368,9 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let passive = runtime.build_event(
+        let passive = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-passive"),
                 Some("turn-passive"),
@@ -2337,14 +2388,18 @@ Authorization: Bearer secret-token";
         assert_eq!(passive.payload["scan_source"], "passive-scan");
         assert_eq!(passive.payload["dedupe_ttl_seconds"], 6 * 60 * 60);
 
-        let hook = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-hook"),
-            Some("turn-hook"),
-            Some("thread-hook"),
-            None,
-            Some("等待用户选择"),
-            "reply-needed",
-        ));
+        let hook = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-hook"),
+                Some("turn-hook"),
+                Some("thread-hook"),
+                None,
+                Some("等待用户选择"),
+                "reply-needed",
+            ),
+        );
 
         assert_eq!(hook.ttl_seconds, PROBE_EVENT_TTL_SECONDS);
         assert_eq!(hook.payload["dedupe_ttl_seconds"], PROBE_EVENT_TTL_SECONDS);
@@ -2361,7 +2416,9 @@ Authorization: Bearer secret-token";
         let body_at_t2 = body_at_t1.replace("21:03:40", "21:05:42");
         let changed_plan = body_at_t1.replace("- 等待确认", "- 等待确认\n- 增加验证");
         let build = |body: &str| {
-            runtime.build_event(
+            ProbeRuntime::build_event_for(
+                &runtime.config,
+                runtime.paths.kind,
                 ProbeEventInput::hook_stop_with_context(
                     Some("thread-plan"),
                     Some("turn-plan"),
@@ -2394,14 +2451,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-error"),
-            Some("turn-error"),
-            Some("thread-error"),
-            None,
-            Some("stream disconnected before completion: Transport error"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-error"),
+                Some("turn-error"),
+                Some("thread-error"),
+                None,
+                Some("stream disconnected before completion: Transport error"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "recoverable");
         assert_eq!(event.event_type, "recoverable");
@@ -2423,14 +2484,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-normal"),
-            Some("turn-normal"),
-            Some("thread-normal"),
-            None,
-            Some("一切已经处理完毕。"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-normal"),
+                Some("turn-normal"),
+                Some("thread-normal"),
+                None,
+                Some("一切已经处理完毕。"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "completion");
         assert_eq!(event.event_type, "completion");
@@ -2446,14 +2511,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-product-named"),
-            Some("turn-product-named"),
-            Some("thread-product-named"),
-            None,
-            Some("AgentHub Probe v0.1.68 smoke completion finished normally."),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-product-named"),
+                Some("turn-product-named"),
+                Some("thread-product-named"),
+                None,
+                Some("AgentHub Probe v0.1.68 smoke completion finished normally."),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "completion");
         assert_eq!(event.event_type, "completion");
@@ -2470,14 +2539,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-control"),
-            Some("turn-control"),
-            Some("thread-control"),
-            None,
-            Some(r#"{"suggestions":[{"title":"x","prompt":"y"}]}"#),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-control"),
+                Some("turn-control"),
+                Some("thread-control"),
+                None,
+                Some(r#"{"suggestions":[{"title":"x","prompt":"y"}]}"#),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "hook-stop");
         assert_eq!(event.event_type, "hook_stop");
@@ -2490,7 +2563,7 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+        let event = ProbeRuntime::build_event_for(&runtime.config, runtime.paths.kind, ProbeEventInput::hook_stop_with_context(
             Some("thread-system"),
             Some("turn-system"),
             Some("thread-system"),
@@ -2510,14 +2583,18 @@ Authorization: Bearer secret-token";
             PlatformPaths::linux_server(),
         );
 
-        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-probe-system"),
-            Some("turn-probe-system"),
-            Some("thread-probe-system"),
-            None,
-            Some("AgentHub Probe 检测到「Rate limited」，只记录并推送异常信息，不自动恢复。"),
-            "hook-stop",
-        ));
+        let event = ProbeRuntime::build_event_for(
+            &runtime.config,
+            runtime.paths.kind,
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-probe-system"),
+                Some("turn-probe-system"),
+                Some("thread-probe-system"),
+                None,
+                Some("AgentHub Probe 检测到「Rate limited」，只记录并推送异常信息，不自动恢复。"),
+                "hook-stop",
+            ),
+        );
 
         assert_eq!(event.kind, "hook-stop");
         assert_eq!(event.event_type, "hook_stop");

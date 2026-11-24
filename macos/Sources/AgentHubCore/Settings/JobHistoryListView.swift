@@ -82,11 +82,11 @@ public struct JobHistorySectionView: View {
 
     private func refreshJobs() async {
         do {
-            let envelope: OptionalResultEnvelope<[JobRecord]> = try await store.rpc(
+            let rows: [JobRecord] = try await store.rpc(
                 "jobs.list",
                 args: ["limit": .number(30)]
             )
-            jobs = envelope.data ?? []
+            jobs = rows
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

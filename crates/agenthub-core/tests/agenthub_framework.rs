@@ -260,13 +260,14 @@ fn capabilities_response_has_no_status_collection_or_private_paths() {
 #[test]
 fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() {
     let root = temp_dir("agenthub-probe-event-model");
-    let runtime = ProbeRuntime::new(sandboxed_config(&root), PlatformPaths::linux_server());
+    let config = sandboxed_config(&root);
+    let kind = PlatformPaths::linux_server().kind;
 
-    let hook = runtime.build_event(ProbeEventInput::hook_stop(
-        Some("thread-a"),
-        Some("turn-1"),
-        "hook-stop",
-    ));
+    let hook = ProbeRuntime::build_event_for(
+        &config,
+        kind,
+        ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+    );
     assert_eq!(hook.kind, "hook-stop");
     assert_eq!(hook.thread_id.as_deref(), Some("thread-a"));
     assert_eq!(hook.dedupe_namespace, "probe_event");
@@ -283,17 +284,18 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     assert_eq!(hook.payload["auto_reply"], false);
     assert_eq!(hook.payload["hidden_desktop_control"], false);
 
-    let duplicate_hook = runtime.build_event(ProbeEventInput::hook_stop(
-        Some("thread-a"),
-        Some("turn-1"),
-        "hook-stop",
-    ));
+    let duplicate_hook = ProbeRuntime::build_event_for(
+        &config,
+        kind,
+        ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+    );
     assert_eq!(hook.dedupe_key, duplicate_hook.dedupe_key);
 
-    let completion = runtime.build_event(ProbeEventInput::notify_completion(
-        Some("thread-a"),
-        Some("turn-1"),
-    ));
+    let completion = ProbeRuntime::build_event_for(
+        &config,
+        kind,
+        ProbeEventInput::notify_completion(Some("thread-a"), Some("turn-1")),
+    );
     assert_eq!(completion.kind, "completion");
     assert!(completion
         .dedupe_key

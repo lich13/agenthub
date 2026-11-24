@@ -339,7 +339,7 @@ public struct UnifiedThreadCleanupSection: View {
     public static let scopesMeta: [(scope: String, legacyAlias: String?, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
         ("codex_archived", nil, "Codex", "已归档线程", "Codex 已归档线程", .codex, .codex),
         ("codex_hidden", nil, "Codex", "隐藏线程", "Codex 隐藏线程", .codex, .codex),
-        ("antigravity_archived", nil, "Antigravity", "已归档线程", "Antigravity 已归档线程", .antigravity, .antigravity),
+        ("antigravity_archived", nil, "Antigravity", "已归档与孤立子会话", "Antigravity 已归档与孤立子会话", .antigravity, .antigravity),
         ("dsh_archived", nil, "DeepSeek Harness", "已归档线程", "DeepSeek Harness 已归档线程", .dsh, .dsh),
         ("claude_empty", "claude_inactive", "Claude Code", "空残余会话", "Claude Code 空残余会话", .claude, .claude),
         ("grok_empty", "grok_inactive", "Grok Build", "空残余会话", "Grok Build 空残余会话", .grok, .grok),
@@ -820,7 +820,7 @@ public struct CodexAccountScopeSection: View {
     @State private var result: CodexAccountScopeResult?
     @State private var autoEnabled: Bool = false
     @State private var savingAuto = false
-    @State private var hookInstalled: Bool = false
+    @State private var hookInstalled: Bool?
     @State private var checking: Bool = false
     @State private var clearing: Bool = false
     @State private var armed: Bool = false
@@ -859,7 +859,7 @@ public struct CodexAccountScopeSection: View {
                     Text("回合结束后自动解除")
                         .font(DesignFonts.body(13))
                         .foregroundStyle(palette.textPrimary.color)
-                    if !hookInstalled {
+                    if hookInstalled == false {
                         StatusChip("未安装 Codex Hook", tone: .neutral)
                     }
                     Spacer()
@@ -870,7 +870,7 @@ public struct CodexAccountScopeSection: View {
                         ),
                         label: "回合结束后自动解除"
                     )
-                    .disabled(!hookInstalled || busy || savingAuto)
+                    .disabled(hookInstalled != true || busy || savingAuto)
                 }
 
                 if let result {
@@ -964,6 +964,7 @@ public struct CodexAccountScopeSection: View {
         .task(id: store.machineScope) {
             scopedThreads = nil
             result = nil
+            hookInstalled = nil
             armed = false
             page = 0
             errorMessage = nil
@@ -972,14 +973,26 @@ public struct CodexAccountScopeSection: View {
     }
 
     private func loadHookAndAutoState() async {
-        if let stEnv: OptionalResultEnvelope<ProbeStatus> = try? await store.rpc("probe.status") {
-            hookInstalled = (stEnv.data?.hookStatus == "managed")
+        do {
+            let st: ProbeStatus = try await store.rpc("probe.status")
+            if st.available == false {
+                hookInstalled = nil
+                errorMessage = st.error ?? "Probe 状态不可用"
+            } else {
+                hookInstalled = (st.hookStatus == "managed")
+            }
+        } catch {
+            hookInstalled = nil
+            errorMessage = error.localizedDescription
         }
-        if let setEnv: OptionalResultEnvelope<ProbeSettingsView> = try? await store.rpc("probe.settings.get"),
-           let loaded = setEnv.data
-        {
+        do {
+            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get")
             let d = ProbeSettingsDraft.from(loaded)
             autoEnabled = d.clearAccountScope
+        } catch {
+            if errorMessage == nil {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

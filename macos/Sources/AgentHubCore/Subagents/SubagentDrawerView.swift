@@ -198,6 +198,7 @@ public struct SubagentPanelView: View {
 
     @StateObject private var subagentThreadStore = ThreadMessageStore()
     @StateObject private var subagentClaudeStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
+    @StateObject private var subagentProviderStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
 
     public enum NavigationFrame: Equatable {
         case list(parent: SubagentActivity?, collection: SubagentCollection?)
@@ -301,13 +302,13 @@ public struct SubagentPanelView: View {
             }
 
             if let current = currentAgent {
-                // Child Codex subagent uses its OWN direct subagents collection (DESIGN.md:113, SubagentPanel.tsx:145)
-                if provider == .codex,
+                // Child Codex / Antigravity subagent uses its OWN direct subagents collection (L0 -> L1 -> L2)
+                if provider == .codex || provider == .antigravity,
                    let childCol = currentDetailSubagents,
-                   SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: childCol, isSupported: true)
+                   SubagentSummaryBarView.shouldDisplay(provider: provider, collection: childCol, isSupported: true)
                 {
                     SubagentSummaryBarView(
-                        provider: .codex,
+                        provider: provider,
                         collection: childCol,
                         isSupported: true
                     ) { _ in
@@ -364,7 +365,7 @@ public struct SubagentPanelView: View {
                             sessionScopeKey: "\(store.machineScope):subagent:\(rootSessionKey):\(current.agentId ?? current.id)",
                             sessionProvider: provider,
                             sessionKey: current.agentId ?? rootSessionKey,
-                            rootThreadId: provider == .codex ? rootSessionKey : nil,
+                            rootThreadId: (provider == .codex || provider == .antigravity) ? rootSessionKey : nil,
                             hasTimelineRail: !timelineEntries.isEmpty,
                             isSubagent: true,
                             canLoadOlder: hasMoreOlder && beforeCursor != nil,
@@ -374,7 +375,11 @@ public struct SubagentPanelView: View {
                             TimelineRailView(
                                 entries: timelineEntries,
                                 activeId: activeTimelineId,
-                                availableWidth: LayoutMetrics.subagentDrawerWidth
+                                availableWidth: LayoutMetrics.subagentDrawerWidth,
+                                loadOlder: (hasMoreOlder && beforeCursor != nil) ? {
+                                    Task { await loadOlderSubagentPageIfNeeded() }
+                                } : nil,
+                                loadingOlder: loadingOlder
                             ) { entry in
                                 _ = coord.scrollToPositionKey(entry.id)
                             }
@@ -469,7 +474,7 @@ public struct SubagentPanelView: View {
             if coordinatorRef == nil {
                 let c = ConversationTableCoordinator(store: store)
                 c.onOpenSubagent = { nextSub in
-                    if provider == .codex {
+                    if provider == .codex || provider == .antigravity {
                         pushAgent(nextSub)
                     }
                 }
@@ -487,13 +492,16 @@ public struct SubagentPanelView: View {
                 pushAgent(initialAgent)
             }
         }
-        .task(id: currentAgent?.id) {
-            guard let agent = currentAgent else { return }
+        .task(id: currentAgent?.agentId ?? currentAgent?.id) {
+            guard let initial = currentAgent else { return }
             while !Task.isCancelled {
+                let liveAgent = currentAgent ?? initial
+                guard liveAgent.agentId == initial.agentId else { break }
                 if store.isWindowVisible {
-                    await fetchSubagentDetail(agent)
+                    await fetchSubagentDetail(liveAgent)
                 }
-                let pollNs = Self.pollingIntervalNanoseconds(provider: provider, status: agent.status)
+                let latestStatus = currentAgent?.status ?? liveAgent.status
+                let pollNs = Self.pollingIntervalNanoseconds(provider: provider, status: latestStatus)
                 try? await Task.sleep(nanoseconds: pollNs)
             }
         }
@@ -528,8 +536,12 @@ public struct SubagentPanelView: View {
                   return false
               })
         else { return }
-        if !frameStack.isEmpty {
-            scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
+        if let top = frameStack.last {
+            if case .detail = top {
+                scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
+            } else {
+                scrollAnchorStack.append(nil)
+            }
         }
         pendingRestoreAnchor = nil
         delegationExpanded = false
@@ -544,9 +556,33 @@ public struct SubagentPanelView: View {
         errorText = nil
     }
 
+    public static func propagateUpdatedChildToParentList(
+        popped: NavigationFrame,
+        into stack: inout [NavigationFrame]
+    ) {
+        guard case let .detail(updatedChild) = popped,
+              let childId = updatedChild.agentId,
+              !stack.isEmpty,
+              case .list(let parent, .some(var col)) = stack[stack.count - 1],
+              let idx = col.agents.firstIndex(where: { $0.agentId == childId })
+        else { return }
+        var merged = updatedChild
+        if merged.delegation == nil {
+            merged.delegation = col.agents[idx].delegation
+        }
+        col.agents[idx] = merged
+        var recomputed: [String: Int] = [:]
+        for item in col.agents {
+            recomputed[item.status, default: 0] += 1
+        }
+        col.counts = recomputed
+        stack[stack.count - 1] = .list(parent: parent, collection: col)
+    }
+
     public func popAgent() {
         guard !frameStack.isEmpty else { return }
-        frameStack.removeLast()
+        let popped = frameStack.removeLast()
+        Self.propagateUpdatedChildToParentList(popped: popped, into: &frameStack)
         delegationExpanded = false
         currentDetailSubagents = nil
         rows = []
@@ -556,7 +592,25 @@ public struct SubagentPanelView: View {
         loadingOlder = false
         loading = false
         errorText = nil
-        pendingRestoreAnchor = scrollAnchorStack.isEmpty ? nil : scrollAnchorStack.removeLast()
+        let poppedAnchor = scrollAnchorStack.isEmpty ? nil : scrollAnchorStack.removeLast()
+        if case .detail? = frameStack.last {
+            pendingRestoreAnchor = poppedAnchor
+        } else {
+            pendingRestoreAnchor = nil
+        }
+    }
+
+    private func updateCurrentFrameAgent(_ incoming: SubagentActivity) {
+        guard !frameStack.isEmpty, case let .detail(existing) = frameStack[frameStack.count - 1],
+              existing.agentId == incoming.agentId
+        else { return }
+        var merged = incoming
+        if merged.delegation == nil {
+            merged.delegation = existing.delegation
+        }
+        if merged != existing {
+            frameStack[frameStack.count - 1] = .detail(merged)
+        }
     }
 
     private func fetchSubagentDetail(_ agent: SubagentActivity) async {
@@ -575,6 +629,7 @@ public struct SubagentPanelView: View {
                 guard resp.rootThreadId == rootSessionKey, resp.agent.agentId == agentId else {
                     throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                 }
+                updateCurrentFrameAgent(resp.agent)
                 let slot = subagentThreadStore.applyDetail(resp.detail)
                 let nextSubs = slot.subagents ?? resp.detail.subagents
                 if currentDetailSubagents != nextSubs { currentDetailSubagents = nextSubs }
@@ -603,6 +658,9 @@ public struct SubagentPanelView: View {
                     args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160)
                 )
                 guard currentAgent?.agentId == agentId else { return }
+                if let latestAgent = detail.agent {
+                    updateCurrentFrameAgent(latestAgent)
+                }
                 let slot = subagentClaudeStore.applyHeadPoll(
                     key: scopeKey,
                     headEvents: detail.events,
@@ -622,6 +680,46 @@ public struct SubagentPanelView: View {
                 )
                 if rows != nextRows { rows = nextRows }
                 if !timelineEntries.isEmpty { timelineEntries = [] }
+            } else if provider == .antigravity {
+                struct Wrap: Encodable { let request: ProviderDetailRequest }
+                let detail: ProviderSessionDetail = try await store.rpc(
+                    "antigravity.detail",
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: 160))
+                )
+                guard currentAgent?.agentId == agentId else { return }
+                if let latestAgent = detail.agent {
+                    guard latestAgent.agentId == agentId else {
+                        throw AgentHubFFIError("子智能体关联已变化，请重新打开")
+                    }
+                    updateCurrentFrameAgent(latestAgent)
+                }
+                let slot = subagentProviderStore.applyHeadPoll(
+                    key: scopeKey,
+                    headEvents: detail.events,
+                    history: detail.history,
+                    totalEvents: detail.totalEvents,
+                    beforeCursor: detail.beforeCursor,
+                    hasMore: detail.hasMore,
+                    timeline: detail.timeline,
+                    subagents: detail.subagents,
+                    subagentUpdates: detail.subagentUpdates
+                )
+                if currentDetailSubagents != slot.subagents { currentDetailSubagents = slot.subagents }
+                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                let subRunning = (detail.agent?.status ?? currentAgent?.status) == "running"
+                let nextRows = ConversationRowBuilder.buildProviderRows(
+                    events: slot.events,
+                    providerLabel: "Antigravity",
+                    sessionRunning: subRunning,
+                    subagentsSupported: true
+                )
+                if rows != nextRows { rows = nextRows }
+                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                    provider: .antigravity,
+                    sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                )
+                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
             }
             errorText = nil
             if let restore = pendingRestoreAnchor {
@@ -697,6 +795,40 @@ public struct SubagentPanelView: View {
                     events: slot.events,
                     recordedOnly: true,
                     attachmentsAsNamesOnly: true
+                )
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                rows = nextRows
+            } else if provider == .antigravity {
+                struct Wrap: Encodable { let request: ProviderDetailRequest }
+                let page: ProviderSessionDetail = try await store.rpc(
+                    "antigravity.detail",
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: 160, before: cursor))
+                )
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                if let latestAgent = page.agent, latestAgent.agentId == agentId {
+                    updateCurrentFrameAgent(latestAgent)
+                }
+                let slot = subagentProviderStore.applyOlderPage(
+                    key: scopeKey,
+                    expectedCursor: cursor,
+                    olderEvents: page.events,
+                    history: page.history,
+                    totalEvents: page.totalEvents,
+                    beforeCursor: page.beforeCursor,
+                    hasMore: page.hasMore,
+                    subagentUpdates: page.subagentUpdates
+                )
+                if let subs = page.subagents ?? slot.subagents, currentDetailSubagents != subs {
+                    currentDetailSubagents = subs
+                }
+                hasMoreOlder = slot.hasMore
+                beforeCursor = slot.beforeCursor
+                let subRunning = (page.agent?.status ?? currentAgent?.status) == "running"
+                let nextRows = ConversationRowBuilder.buildProviderRows(
+                    events: slot.events,
+                    providerLabel: "Antigravity",
+                    sessionRunning: subRunning,
+                    subagentsSupported: true
                 )
                 coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
                 rows = nextRows

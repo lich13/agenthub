@@ -61,16 +61,11 @@ public struct NewDesktopThreadButton: View {
         defer { busy = false }
         do {
             if pendingCreatedId == nil {
-                struct ChooseWrap: Encodable {
-                    struct Inner: Encodable { let revision: UInt64; let sessionId: String?; let kind: String }
-                    let request: Inner
-                }
-                let choice: DesktopChoice = try await connection.rpc(
-                    "codex.desktop.choose",
-                    args: ChooseWrap(request: .init(revision: connection.revision, sessionId: nil, kind: "project")),
-                    localOnly: true
-                )
-                guard let chosen = choice.item else { return }
+                guard let chosen = try await CodexDesktopStore.chooseItem(
+                    connection: connection,
+                    sessionId: nil,
+                    kind: "project"
+                ) else { return }
 
                 struct CreateWrap: Encodable {
                     struct Inner: Encodable { let revision: UInt64; let projectHandle: String }

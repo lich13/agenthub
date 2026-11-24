@@ -4,7 +4,9 @@ pub(super) async fn system_capabilities(
     ctx: DispatchContext<'_>,
     _args_json: &str,
 ) -> Result<String, String> {
-    encode(system_service::system_capabilities(ctx.state).map_err(|e| e.to_string()))
+    encode(Ok(AgentHubUseCases::new(ctx.state.platform())
+        .system()
+        .runtime_capabilities()))
 }
 
 pub(super) async fn jobs_list(ctx: DispatchContext<'_>, args_json: &str) -> Result<String, String> {
