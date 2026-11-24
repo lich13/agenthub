@@ -4,7 +4,7 @@
 
 当前源码版本为 **2.1.33**。API 协议 2，数据库 schema 3。Antigravity 补齐在线 Connect-RPC 与离线 SQLite／`agy` CLI `.pb` 实时运行／等待／待回复／异常状态收敛、多级子智能体（`L0 -> L1 -> L2`）阅读与附件读取、叶节点优先拓扑逆序删除及已归档与无锁孤立子会话批量清理，完成存量架构包袱深度清理（移除退役 WebUI／Tauri 残留脚本与 `ParityManifest` 计数脚手架、收敛重复详情适配层、显式化 Probe 错误提示），并升级 `bumpalo` 至 `3.20.4`（修复 `GHSA-j7wg-xg3h-2pr6`）。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
 
-- **v2.1.33** 本机自动化门禁与离屏浅／深色光栅化验证通过；发布、远程 Linux `agenthub-webd` 升级、本机 Mac App 安装及桌面／CLI 运行态与子智能体交互待发布与用户验收。
+- **v2.1.33** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.33`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.32 原地更新并启动；Antigravity 在线／CLI 运行态、多级子智能体抽屉及统一清理待用户验收。[提交 e8ebad5](https://github.com/lich13/agenthub/commit/e8ebad55a2a48d7f87624da78e29b8f28c3e38fc) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.33) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45322327152)
 - **v2.1.32** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.32`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.31 原地更新并启动；本机与远端 `agy` CLI 会话管理及 `Antigravity.app` 2.34.0 在线交互待用户验收。[提交 2f18fc0](https://github.com/lich13/agenthub/commit/2f18fc0dfa228a37761856be0dbc6ed80fdcae7f) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.32) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45268133405)
 
 - **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
