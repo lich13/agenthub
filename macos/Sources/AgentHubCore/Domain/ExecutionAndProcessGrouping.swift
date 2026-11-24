@@ -633,7 +633,8 @@ public enum ExecutionGroupingEngine {
 
     public static func groupProviderEvents(
         _ events: [ProviderHistoryEvent],
-        provider: String
+        provider: String,
+        recordedOnly: Bool = false
     ) -> [ExecutionRenderItem<ProviderHistoryEvent>] {
         let prefix = provider == "Antigravity" ? "antigravity" : (provider == "Grok Bot" ? "grokbot" : "dsh")
         let inputs = events.map { ev -> ActivityInput<ProviderHistoryEvent> in
@@ -660,7 +661,7 @@ public enum ExecutionGroupingEngine {
                 sections: secs
             )
         }
-        return groupActivities(inputs, provider: provider)
+        return groupActivities(inputs, provider: provider, recordedOnly: recordedOnly)
     }
 }
 

@@ -37,9 +37,15 @@ pub fn hidden_and_archived_thread_ids(
     let source_expr = first_existing(&columns, &["source"])
         .unwrap_or("NULL")
         .to_string();
-    let parent_thread_expr = first_existing(&columns, &["parent_thread_id", "parentThreadId"])
-        .unwrap_or("NULL")
-        .to_string();
+    let parent_thread_expr = coalesce_non_empty(
+        &columns,
+        &[
+            "parent_thread_id",
+            "parentThreadId",
+            "attached_thread_parent_id",
+            "attachedThreadParentId",
+        ],
+    );
     let agent_path_expr = first_existing(&columns, &["agent_path", "agentPath"])
         .unwrap_or("NULL")
         .to_string();
@@ -49,26 +55,15 @@ pub fn hidden_and_archived_thread_ids(
     let agent_role_expr = first_existing(&columns, &["agent_role", "agentRole"])
         .unwrap_or("NULL")
         .to_string();
-    let has_user_event_expr = first_existing(&columns, &["has_user_event"])
-        .unwrap_or("NULL")
-        .to_string();
-    let title_expr = first_existing(&columns, &["title", "name"])
-        .unwrap_or("NULL")
-        .to_string();
-    let first_user_message_expr = first_existing(&columns, &["first_user_message"])
-        .unwrap_or("NULL")
-        .to_string();
-    let preview_expr = first_existing(&columns, &["preview"])
-        .unwrap_or("NULL")
-        .to_string();
     let archived_expr = first_existing(&columns, &["archived"])
         .unwrap_or("0")
         .to_string();
     let archived_at_expr = first_existing(&columns, &["archived_at"])
         .unwrap_or("NULL")
         .to_string();
+    let spawned_children = read_spawn_edge_children(&conn);
     let sql = format!(
-        "SELECT id, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, {first_user_message_expr}, {preview_expr}, {archived_expr}, {archived_at_expr} FROM threads"
+        "SELECT id, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {archived_expr}, {archived_at_expr} FROM threads"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
@@ -79,24 +74,17 @@ pub fn hidden_and_archived_thread_ids(
         let agent_path: Option<String> = row.get(4).ok();
         let agent_nickname: Option<String> = row.get(5).ok();
         let agent_role: Option<String> = row.get(6).ok();
-        let has_user_event: Option<i64> = row.get(7).ok();
-        let title: Option<String> = row.get(8).ok();
-        let first_user_message: Option<String> = row.get(9).ok();
-        let preview: Option<String> = row.get(10).ok();
-        let archived_flag: i64 = row.get(11).unwrap_or(0);
-        let archived_at: Option<ValueCell> = row.get(12).ok();
-        let hidden = is_hidden_thread_metadata(ThreadVisibilityMetadata {
-            thread_source: thread_source.as_deref(),
-            source: source.as_deref(),
-            parent_thread_id: parent_thread_id.as_deref(),
-            agent_path: agent_path.as_deref(),
-            agent_nickname: agent_nickname.as_deref(),
-            agent_role: agent_role.as_deref(),
-            has_user_event,
-            title: title.as_deref(),
-            first_user_message: first_user_message.as_deref(),
-            preview: preview.as_deref(),
-        });
+        let archived_flag: i64 = row.get(7).unwrap_or(0);
+        let archived_at: Option<ValueCell> = row.get(8).ok();
+        let hidden = spawned_children.contains(&id)
+            || is_hidden_thread_metadata(ThreadVisibilityMetadata {
+                thread_source: thread_source.as_deref(),
+                source: source.as_deref(),
+                parent_thread_id: parent_thread_id.as_deref(),
+                agent_path: agent_path.as_deref(),
+                agent_nickname: agent_nickname.as_deref(),
+                agent_role: agent_role.as_deref(),
+            });
         let archived =
             archived_flag != 0 || archived_at.as_ref().and_then(format_cell_time).is_some();
         Ok((id, hidden, archived))
@@ -112,6 +100,7 @@ pub fn hidden_and_archived_thread_ids(
             archived_ids.insert(id);
         }
     }
+    hidden_ids.extend(spawned_children);
     Ok((hidden_ids, archived_ids))
 }
 
@@ -186,9 +175,15 @@ pub(super) fn read_thread_rows_matching(
     let source_expr = first_existing(&columns, &["source"])
         .unwrap_or("NULL")
         .to_string();
-    let parent_thread_expr = first_existing(&columns, &["parent_thread_id", "parentThreadId"])
-        .unwrap_or("NULL")
-        .to_string();
+    let parent_thread_expr = coalesce_non_empty(
+        &columns,
+        &[
+            "parent_thread_id",
+            "parentThreadId",
+            "attached_thread_parent_id",
+            "attachedThreadParentId",
+        ],
+    );
     let agent_path_expr = first_existing(&columns, &["agent_path", "agentPath"])
         .unwrap_or("NULL")
         .to_string();
@@ -198,18 +193,13 @@ pub(super) fn read_thread_rows_matching(
     let agent_role_expr = first_existing(&columns, &["agent_role", "agentRole"])
         .unwrap_or("NULL")
         .to_string();
-    let has_user_event_expr = first_existing(&columns, &["has_user_event"])
-        .unwrap_or("NULL")
-        .to_string();
     let first_user_message_expr = first_existing(&columns, &["first_user_message"])
         .unwrap_or("NULL")
         .to_string();
-    let preview_expr = first_existing(&columns, &["preview"])
-        .unwrap_or("NULL")
-        .to_string();
+    let spawned_children = read_spawn_edge_children(&conn);
     let filter = if id.is_some() { " WHERE id = ?1" } else { "" };
     let sql = format!(
-        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {first_user_message_expr}, {preview_expr} FROM threads{filter}"
+        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {first_user_message_expr} FROM threads{filter}"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(id), |row| {
@@ -227,21 +217,17 @@ pub(super) fn read_thread_rows_matching(
         let agent_path: Option<String> = row.get(11).ok();
         let agent_nickname: Option<String> = row.get(12).ok();
         let agent_role: Option<String> = row.get(13).ok();
-        let has_user_event: Option<i64> = row.get(14).ok();
-        let first_user_message: Option<String> = row.get(15).ok();
-        let preview: Option<String> = row.get(16).ok();
-        if is_hidden_thread_metadata(ThreadVisibilityMetadata {
-            thread_source: thread_source.as_deref(),
-            source: source.as_deref(),
-            parent_thread_id: parent_thread_id.as_deref(),
-            agent_path: agent_path.as_deref(),
-            agent_nickname: agent_nickname.as_deref(),
-            agent_role: agent_role.as_deref(),
-            has_user_event,
-            title: title.as_deref(),
-            first_user_message: first_user_message.as_deref(),
-            preview: preview.as_deref(),
-        }) {
+        let first_user_message: Option<String> = row.get(14).ok();
+        if spawned_children.contains(&id)
+            || is_hidden_thread_metadata(ThreadVisibilityMetadata {
+                thread_source: thread_source.as_deref(),
+                source: source.as_deref(),
+                parent_thread_id: parent_thread_id.as_deref(),
+                agent_path: agent_path.as_deref(),
+                agent_nickname: agent_nickname.as_deref(),
+                agent_role: agent_role.as_deref(),
+            })
+        {
             return Ok(None);
         }
         let archived_at = archived_raw.as_ref().and_then(format_cell_time);
@@ -250,6 +236,9 @@ pub(super) fn read_thread_rows_matching(
         } else {
             ThreadStatus::Recent
         };
+        let workspace_root = cwd
+            .as_deref()
+            .and_then(crate::workspace_root::resolve_workspace_root);
         Ok(Some(LocalThreadRow {
             summary: ThreadSummary {
                 activity_updated_at: updated_raw.as_ref().and_then(format_cell_time),
@@ -262,6 +251,7 @@ pub(super) fn read_thread_rows_matching(
                 message_count: 0,
                 latest_message: None,
                 cwd,
+                workspace_root,
                 model,
                 rollout_path: rollout_path
                     .filter(|p| !p.trim().is_empty())
@@ -344,4 +334,48 @@ pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<St
 
 pub(crate) fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'a str> {
     names.iter().copied().find(|name| columns.contains(*name))
+}
+
+pub(crate) fn coalesce_non_empty(columns: &HashSet<String>, names: &[&str]) -> String {
+    let existing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| columns.contains(*name))
+        .collect();
+    match existing.as_slice() {
+        [] => "NULL".to_string(),
+        [single] => (*single).to_string(),
+        many => {
+            let parts = many
+                .iter()
+                .map(|col| format!("NULLIF(TRIM({col}), '')"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("COALESCE({parts})")
+        }
+    }
+}
+
+fn read_spawn_edge_children(conn: &Connection) -> HashSet<String> {
+    let has_table = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='thread_spawn_edges'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !has_table {
+        return HashSet::new();
+    }
+    let Ok(mut stmt) = conn.prepare("SELECT child_thread_id FROM thread_spawn_edges") else {
+        return HashSet::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
+        return HashSet::new();
+    };
+    rows.flatten()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect()
 }

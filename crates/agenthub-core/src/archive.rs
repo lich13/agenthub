@@ -251,22 +251,26 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
         .or_else(|| first_existing(columns, &["source"]))
         .unwrap_or("NULL");
     let source_expr = first_existing(columns, &["source"]).unwrap_or("NULL");
-    let parent_thread_expr =
-        first_existing(columns, &["parent_thread_id", "parentThreadId"]).unwrap_or("NULL");
+    let parent_thread_expr = super::codex::coalesce_non_empty_columns(
+        columns,
+        &[
+            "parent_thread_id",
+            "parentThreadId",
+            "attached_thread_parent_id",
+            "attachedThreadParentId",
+        ],
+    );
     let agent_path_expr = first_existing(columns, &["agent_path", "agentPath"]).unwrap_or("NULL");
     let agent_nickname_expr =
         first_existing(columns, &["agent_nickname", "agentNickname"]).unwrap_or("NULL");
     let agent_role_expr = first_existing(columns, &["agent_role", "agentRole"]).unwrap_or("NULL");
     let has_user_event_expr = first_existing(columns, &["has_user_event"]).unwrap_or("NULL");
     let title_expr = first_existing(columns, &["title", "name"]).unwrap_or("NULL");
-    let first_user_message_expr =
-        first_existing(columns, &["first_user_message"]).unwrap_or("NULL");
-    let preview_expr = first_existing(columns, &["preview"]).unwrap_or("NULL");
     let select_cols = format!(
         "id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END, \
          {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, \
          {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, \
-         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT)"
+         CAST({updated_expr} AS TEXT)"
     );
     VisibilitySelectSql {
         select_cols,
@@ -286,9 +290,7 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
     let agent_role: Option<String> = row.get(7).ok();
     let has_user_event: Option<i64> = row.get(8).ok();
     let title: Option<String> = row.get(9).ok();
-    let first_user_message: Option<String> = row.get(10).ok();
-    let preview: Option<String> = row.get(11).ok();
-    let updated_tag: Option<String> = row.get(12).ok();
+    let updated_tag: Option<String> = row.get(10).ok();
     let hidden_category = hidden_thread_metadata_category(ThreadVisibilityMetadata {
         thread_source: thread_source.as_deref(),
         source: source.as_deref(),
@@ -296,10 +298,6 @@ fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisi
         agent_path: agent_path.as_deref(),
         agent_nickname: agent_nickname.as_deref(),
         agent_role: agent_role.as_deref(),
-        has_user_event,
-        title: title.as_deref(),
-        first_user_message: first_user_message.as_deref(),
-        preview: preview.as_deref(),
     });
     let fingerprint = codex_row_fingerprint(
         &id,

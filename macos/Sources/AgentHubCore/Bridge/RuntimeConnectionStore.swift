@@ -35,8 +35,6 @@ public final class RuntimeConnectionStore: ObservableObject {
     @Published public var themeMode: ThemeMode
     @Published public private(set) var isWindowVisible: Bool = true
     @Published public private(set) var isWindowFocused: Bool = true
-    @Published public private(set) var isInlineModalPresented: Bool = false
-    private var explicitModalKeys: Set<String> = []
 
     public typealias BeforeMachineChangeCleanup = @Sendable @MainActor () async -> Void
 
@@ -103,17 +101,8 @@ public final class RuntimeConnectionStore: ObservableObject {
         transport.setMainWindowState(visible: visible, focused: focused)
     }
 
-    public func setInlineModalPresented(_ key: String, presented: Bool) {
-        if presented {
-            explicitModalKeys.insert(key)
-        } else {
-            explicitModalKeys.remove(key)
-        }
-        isInlineModalPresented = !explicitModalKeys.isEmpty
-    }
-
     public var hasAnyActiveModal: Bool {
-        isInlineModalPresented || ModalPresentationRegistry.shared.hasActiveModal
+        ModalPresentationRegistry.shared.hasActiveModal
     }
 
     public func registerBeforeMachineChange(_ cleanup: @escaping BeforeMachineChangeCleanup) -> UUID {
@@ -202,9 +191,10 @@ public final class RuntimeConnectionStore: ObservableObject {
             else { return false }
             return true
         }()
+        let encoded = try JSONEncoder().encode(argsObject)
         return try await executeRPC(
             command,
-            args: argsObject,
+            encodedArgs: encoded,
             isCancelHiddenScan: isCancelHiddenScan,
             isReadHookStatus: isReadHookStatus,
             localOnly: localOnly,
@@ -228,17 +218,17 @@ public final class RuntimeConnectionStore: ObservableObject {
         localOnly: Bool = false,
         at expectedRevision: UInt64? = nil
     ) async throws -> Res {
+        let encodedArgs = try JSONEncoder().encode(args)
         var isCancelHiddenScan = false
         var isReadHookStatus = false
         if (changing && command == "cleanup.hiddenDryRun") || command == "claude.hooks" {
-            let probeData = try JSONEncoder().encode(args)
-            let probe = try? JSONDecoder().decode(RequestControlProbe.self, from: probeData)
+            let probe = try? JSONDecoder().decode(RequestControlProbe.self, from: encodedArgs)
             isCancelHiddenScan = command == "cleanup.hiddenDryRun" && probe?.request?.mode == "cancel"
             isReadHookStatus = command == "claude.hooks" && probe?.request?.action == "status"
         }
         let data = try await executeRPC(
             command,
-            args: args,
+            encodedArgs: encodedArgs,
             isCancelHiddenScan: isCancelHiddenScan,
             isReadHookStatus: isReadHookStatus,
             localOnly: localOnly,
@@ -247,9 +237,9 @@ public final class RuntimeConnectionStore: ObservableObject {
         return try JSONDecoder().decode(Res.self, from: data)
     }
 
-    private func executeRPC<Req: Encodable>(
+    private func executeRPC(
         _ command: String,
-        args: Req,
+        encodedArgs: Data,
         isCancelHiddenScan: Bool,
         isReadHookStatus: Bool,
         localOnly: Bool,
@@ -272,18 +262,14 @@ public final class RuntimeConnectionStore: ObservableObject {
         if isWrite { writes += 1 }
         defer { if isWrite { writes = max(0, writes - 1) } }
 
+        let argsJSON = String(data: encodedArgs, encoding: .utf8) ?? "{}"
         let data: Data
         if capturedTarget == .remote && !localOnly {
-            let envelope = RemoteRequestEnvelope(
-                request: RemoteInvokeRequest(revision: capturedRevision, command: command, args: args)
-            )
-            let encoded = try JSONEncoder().encode(envelope)
-            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
-            data = try await transport.invokeRawJSON(command: "remote.invoke", argsJSON: jsonStr)
+            let cmdJSON = String(data: try JSONEncoder().encode(command), encoding: .utf8) ?? "\"\""
+            let envelopeJSON = "{\"request\":{\"revision\":\(capturedRevision),\"command\":\(cmdJSON),\"args\":\(argsJSON)}}"
+            data = try await transport.invokeRawJSON(command: "remote.invoke", argsJSON: envelopeJSON)
         } else {
-            let encoded = try JSONEncoder().encode(args)
-            let jsonStr = String(data: encoded, encoding: .utf8) ?? "{}"
-            data = try await transport.invokeRawJSON(command: command, argsJSON: jsonStr)
+            data = try await transport.invokeRawJSON(command: command, argsJSON: argsJSON)
         }
 
         if capturedRevision != revision {
@@ -413,12 +399,6 @@ public final class RuntimeConnectionStore: ObservableObject {
 
 private struct RemoteRequestEnvelope<T: Encodable>: Encodable {
     let request: T
-}
-
-private struct RemoteInvokeRequest<Args: Encodable>: Encodable {
-    let revision: UInt64
-    let command: String
-    let args: Args
 }
 
 private struct RequestControlProbe: Decodable {

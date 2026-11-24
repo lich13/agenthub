@@ -8,7 +8,11 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
     public var threadSubagents: Bool
     public var claudeSubagents: Bool
     public var antigravitySubagents: Bool
-    public var codexStatePaths: Bool
+    public var hiddenCleanupScan: Bool
+    public var codexAccountScope: Bool
+    public var githubCi: Bool
+    public var antigravitySessions: Bool
+    public var dshSessions: Bool
     public var antigravityNotifications: Bool
     public var dshNotifications: Bool
     public var grokbotSessions: Bool
@@ -23,7 +27,11 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         threadSubagents: false,
         claudeSubagents: false,
         antigravitySubagents: false,
-        codexStatePaths: false,
+        hiddenCleanupScan: false,
+        codexAccountScope: false,
+        githubCi: false,
+        antigravitySessions: true,
+        dshSessions: true,
         antigravityNotifications: false,
         dshNotifications: false,
         grokbotSessions: true,
@@ -43,8 +51,12 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
             threadSubagents: c.threadSubagents,
             claudeSubagents: c.claudeSubagents,
             antigravitySubagents: c.antigravitySubagents,
-            codexStatePaths: remote && c.systemd,
-            antigravityNotifications: !remote && c.antigravityNotifications,
+            hiddenCleanupScan: c.hiddenCleanupScan,
+            codexAccountScope: c.codexAccountScope,
+            githubCi: c.githubCi,
+            antigravitySessions: c.antigravitySessions,
+            dshSessions: c.dshSessions,
+            antigravityNotifications: c.antigravityNotifications,
             dshNotifications: !remote && c.dshNotifications,
             grokbotSessions: !remote && c.grokbotSessions,
             grokbotNotifications: !remote && c.grokbotNotifications,
@@ -173,39 +185,6 @@ public enum CleanupFormatting {
 }
 
 // MARK: - Probe & GitHub CI Presentation Helpers
-
-public enum ProbeNotificationPlatform: String, CaseIterable, Sendable, Identifiable {
-    case codex
-    case claudeCode = "claude_code"
-    case grok
-    case grokbot
-    case antigravity
-    case dsh
-
-    public var id: String { rawValue }
-
-    public var brand: AgentBrandId {
-        switch self {
-        case .codex: .codex
-        case .claudeCode: .claude
-        case .grok: .grok
-        case .grokbot: .grokbot
-        case .antigravity: .antigravity
-        case .dsh: .dsh
-        }
-    }
-
-    public var label: String {
-        switch self {
-        case .codex: "Codex"
-        case .claudeCode: "Claude Code"
-        case .grok: "Grok Build"
-        case .grokbot: "Grok Bot"
-        case .antigravity: "Antigravity"
-        case .dsh: "DeepSeek Harness"
-        }
-    }
-}
 
 public enum ProbeFormatting {
     private static let safeBarkCategories: [String: String] = [

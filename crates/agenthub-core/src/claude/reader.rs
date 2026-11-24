@@ -379,7 +379,11 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
                 issues: parsed.issues.clone(),
                 warnings: parsed.warnings.clone(),
                 last_turn_at: parsed.last_turn_at,
+                last_terminal_at: parsed.last_terminal_at,
                 turn_open: parsed.turn_open,
+                has_open_questions: parsed.has_open_questions,
+                saw_sidechain: parsed.saw_sidechain,
+                saw_primary: parsed.saw_primary,
                 ..Default::default()
             }))
         },
@@ -461,7 +465,7 @@ fn text_content_only(content: &Value) -> String {
         .map(|s| bounded(&s))
         .unwrap_or_default()
 }
-fn millis(value: &str) -> Option<i64> {
+pub(super) fn millis(value: &str) -> Option<i64> {
     (value)
         .parse::<jiff::Timestamp>()
         .ok()
@@ -556,6 +560,17 @@ struct Parser {
 }
 impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
+        let is_sidechain_record = record.get("isSidechain").and_then(Value::as_bool) == Some(true)
+            || !field(record, "agentId").is_empty()
+            || field(record, "type") == "fork-context-ref";
+        if is_sidechain_record {
+            self.parsed.saw_sidechain = true;
+        } else if matches!(
+            field(record, "type"),
+            "user" | "assistant" | "system" | "result" | "custom-title" | "ai-title"
+        ) {
+            self.parsed.saw_primary = true;
+        }
         if !self.context.accepts_sidechain()
             && record.get("isSidechain").and_then(Value::as_bool) == Some(true)
         {
@@ -828,15 +843,23 @@ impl Parser {
     fn read_system(&mut self, record: &Value, position: usize, key: String) {
         for key in std::iter::once(key) {
             let subtype = field(record, "subtype");
-            if subtype == "turn_duration" && native_pending_background(record) {
-                // The turn ended while native agents or workflows are still
-                // running and will wake the session again; this terminal turn
-                // is not the thread's end.
-                if let Some(turn) = self.turn.clone() {
-                    self.parsed
-                        .native_events
-                        .retain(|event| !(event.kind == "completion" && event.turn_id == turn));
+            if subtype == "turn_duration" {
+                let keep_open = native_pending_background(record) || !self.questions.is_empty();
+                if keep_open {
+                    // The turn ended while native agents, workflows, or user questions
+                    // are still pending; this terminal turn is not the thread's end.
+                    if let Some(turn) = self.turn.clone() {
+                        self.parsed
+                            .native_events
+                            .retain(|event| !(event.kind == "completion" && event.turn_id == turn));
+                    }
                     self.parsed.turn_open = true;
+                } else {
+                    self.parsed.turn_open = false;
+                    if let Some(ts) = millis(field(record, "timestamp")) {
+                        self.parsed.last_terminal_at =
+                            Some(self.parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
+                    }
                 }
             }
             if subtype == "api_error" {
@@ -850,6 +873,10 @@ impl Parser {
                     }
                 }
                 self.parsed.turn_open = false;
+                if let Some(ts) = millis(field(record, "timestamp")) {
+                    self.parsed.last_terminal_at =
+                        Some(self.parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
+                }
                 self.parsed
                     .native_events
                     .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
@@ -1149,6 +1176,7 @@ impl Parser {
         if parsed.version != "unknown" && !parsed.version.starts_with("2.") {
             issue(&mut parsed, "此 Claude 版本尚未验证，改名已禁用");
         }
+        parsed.has_open_questions = !self.questions.is_empty();
         for q in self.questions.values() {
             parsed.native_events.push(q.clone());
         }
@@ -1220,6 +1248,9 @@ fn finish(
     body: String,
 ) {
     parsed.turn_open = false;
+    if let Some(ts) = millis(field(record, "timestamp")) {
+        parsed.last_terminal_at = Some(parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
+    }
     if body.trim().is_empty() {
         return;
     }

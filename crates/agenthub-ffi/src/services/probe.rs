@@ -3,9 +3,16 @@ use agenthub_core::probe::{ProbeRuntime, ProbeStatus};
 use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
+    desktop_probe_status_with_options(state, false).await
+}
+
+pub async fn desktop_probe_status_with_options(
+    state: &DesktopState,
+    force_refresh: bool,
+) -> Result<ProbeStatus> {
     let config = state.refresh_config()?;
     let mut status = ProbeRuntime::new(config, state.platform().clone())
-        .status()
+        .status_with_options(force_refresh)
         .await?;
     if let Some(raw) = state.db.get_setting("probe_error_monitor_status")? {
         if let Ok(runtime) = serde_json::from_str::<

@@ -476,11 +476,35 @@ pub(super) fn evaluate_trajectory(
     if events.len() > 1024 {
         events.drain(..events.len() - 1024);
     }
+    let raw_title = summary["annotations"]["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            summary["summary"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("");
+    let summary_cwd = summary["workspaces"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|ws| ws["workspaceFolderAbsoluteUri"].as_str())
+        .or_else(|| {
+            summary["trajectoryMetadata"]["workspaceUris"]
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+        })
+        .map(sessions::decode_file_uri)
+        .unwrap_or_default();
+    let resolved_title = native_probe::notification_title(raw_title, id, &summary_cwd);
     let snapshot = NativeStreamSnapshot {
         provider: NativeProvider::Antigravity,
         session_key: id.into(),
         id: id.into(),
-        title: safe_text(&summary["summary"]),
+        title: safe_text(&Value::String(resolved_title)),
         identity,
         record_count: count,
         settled_count,

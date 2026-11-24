@@ -21,68 +21,51 @@ public enum SessionSearchMatchKind {
 
 public struct FloatingSearchPillButton: View {
     @Environment(\.agentHubPalette) private var palette
-    public var isCompactMobile: Bool
     public let action: () -> Void
 
-    public init(isCompactMobile: Bool = false, action: @escaping () -> Void) {
-        self.isCompactMobile = isCompactMobile
+    public init(action: @escaping () -> Void) {
         self.action = action
     }
 
     public var body: some View {
         Button(action: action) {
-            if isCompactMobile {
-                LucideIcon(.search, size: 16)
+            HStack(spacing: 6) {
+                LucideIcon(.search, size: 14)
                     .foregroundStyle(palette.accent.color)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(palette.elevated.color))
-                    .overlay(Circle().strokeBorder(palette.borderStrong.color, lineWidth: 1))
-                    .shadow(
-                        color: palette.shadow2.color.color,
-                        radius: palette.shadow2.radius,
-                        x: palette.shadow2.x,
-                        y: palette.shadow2.y
+                Text("搜索")
+                    .font(DesignFonts.body(12, weight: .medium))
+                    .foregroundStyle(palette.textSecondary.color)
+                Text("⌘F")
+                    .font(DesignFonts.mono(11))
+                    .foregroundStyle(palette.textMuted.color)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(palette.surface.color)
                     )
-                    .contentShape(Circle())
-            } else {
-                HStack(spacing: 6) {
-                    LucideIcon(.search, size: 14)
-                        .foregroundStyle(palette.accent.color)
-                    Text("搜索")
-                        .font(DesignFonts.body(12, weight: .medium))
-                        .foregroundStyle(palette.textSecondary.color)
-                    Text("⌘F")
-                        .font(DesignFonts.mono(11))
-                        .foregroundStyle(palette.textMuted.color)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(palette.surface.color)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
-                        )
-                }
-                .padding(.horizontal, 11)
-                .frame(minHeight: 32)
-                .background(
-                    Capsule()
-                        .fill(palette.elevated.color)
-                )
-                .overlay(
-                    Capsule()
-                        .strokeBorder(palette.borderStrong.color, lineWidth: 1)
-                )
-                .shadow(
-                    color: palette.shadow2.color.color,
-                    radius: palette.shadow2.radius,
-                    x: palette.shadow2.x,
-                    y: palette.shadow2.y
-                )
-                .contentShape(Rectangle())
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+                    )
             }
+            .padding(.horizontal, 11)
+            .frame(minHeight: 32)
+            .background(
+                Capsule()
+                    .fill(palette.elevated.color)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+            )
+            .shadow(
+                color: palette.shadow2.color.color,
+                radius: palette.shadow2.radius,
+                x: palette.shadow2.x,
+                y: palette.shadow2.y
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(PlainHitButtonStyle())
         .accessibilityLabel("搜索会话")

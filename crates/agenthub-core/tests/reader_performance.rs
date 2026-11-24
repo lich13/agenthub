@@ -298,6 +298,7 @@ fn codex_summary(root: &Path) -> ThreadSummary {
         message_count: 0,
         latest_message: None,
         cwd: Some(WORKSPACE.into()),
+        workspace_root: None,
         model: None,
         rollout_path: Some(history_path(root, "codex")),
         active_turn_id: None,

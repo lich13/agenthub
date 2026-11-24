@@ -1,9 +1,9 @@
 use super::*;
 
 #[derive(Debug, Default, Clone)]
-pub(super) struct AnnotationOverlay {
-    pub(super) title: Option<String>,
-    pub(super) archived: Option<bool>,
+pub(crate) struct AnnotationOverlay {
+    pub(crate) title: Option<String>,
+    pub(crate) archived: Option<bool>,
 }
 
 fn unescape_prototext_string(raw: &str) -> String {
@@ -315,38 +315,411 @@ fn parse_wire_fields(bytes: &[u8]) -> Option<Vec<WireField<'_>>> {
 
 /// Reads `.exa.jetski_cortex_pb.ConversationAnnotations` (field 15 of `CascadeTrajectorySummary`):
 /// field 1 = `title` (string), field 4 = `archived` (bool), field 5 = `archival_status_timestamp`.
+#[cfg(test)]
 pub(super) fn read_raw_summary_annotations(raw: &[u8]) -> AnnotationOverlay {
-    let Some(top_fields) = parse_wire_fields(raw) else {
-        return AnnotationOverlay::default();
+    parse_raw_summary(raw).annotations
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedWaitingStep {
+    pub(crate) step_index: u64,
+    pub(crate) kind: &'static str,
+    pub(crate) body: String,
+    pub(crate) proof_hash: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedTrajectoryMeta {
+    pub(crate) parent_conversation_id: Option<String>,
+    pub(crate) root_conversation_id: Option<String>,
+    pub(crate) workspace_uris: Vec<String>,
+    pub(crate) has_subagent_spec: bool,
+    pub(crate) nesting_depth: u64,
+}
+
+impl ParsedTrajectoryMeta {
+    pub(crate) fn is_subagent(&self, self_id: &str) -> bool {
+        self.parent_conversation_id
+            .as_deref()
+            .is_some_and(|p| !p.is_empty() && p != self_id)
+            || self.nesting_depth > 0
+            || self.has_subagent_spec
+            || self
+                .root_conversation_id
+                .as_deref()
+                .is_some_and(|r| !r.is_empty() && r != self_id)
+    }
+
+    pub(crate) fn effective_parent(&self, self_id: &str) -> Option<&str> {
+        self.parent_conversation_id
+            .as_deref()
+            .filter(|p| !p.is_empty() && *p != self_id)
+            .or_else(|| {
+                self.root_conversation_id
+                    .as_deref()
+                    .filter(|r| !r.is_empty() && *r != self_id)
+            })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedRawSummary {
+    pub(crate) trajectory_id: Option<String>,
+    pub(crate) status: u64,
+    pub(crate) created_time_ms: Option<i64>,
+    pub(crate) waiting_steps: Vec<ParsedWaitingStep>,
+    pub(crate) workspaces: Vec<String>,
+    pub(crate) annotations: AnnotationOverlay,
+    pub(crate) last_user_input_step_index: Option<u64>,
+    pub(crate) trajectory_meta: ParsedTrajectoryMeta,
+    pub(crate) has_active_children: bool,
+    pub(crate) not_fully_idle: bool,
+    pub(crate) killed: bool,
+    pub(crate) interrupted: bool,
+    pub(crate) latest_executor_termination_reason: u64,
+    pub(crate) background_task_count: u64,
+    pub(crate) has_running_subagents: bool,
+}
+
+impl ParsedRawSummary {
+    pub(crate) fn is_termination_failure(&self) -> bool {
+        matches!(self.latest_executor_termination_reason, 1 | 3 | 6 | 11)
+    }
+
+    pub(crate) fn is_user_canceled_or_killed(&self) -> bool {
+        self.killed || self.interrupted || self.latest_executor_termination_reason == 2
+    }
+
+    pub(crate) fn active_status(&self) -> Option<&'static str> {
+        if !self.waiting_steps.is_empty() {
+            return Some("waiting");
+        }
+        if matches!(self.status, 2..=4)
+            || self.not_fully_idle
+            || self.has_active_children
+            || self.has_running_subagents
+            || self.background_task_count > 0
+        {
+            return Some("running");
+        }
+        if self.is_termination_failure() {
+            return Some("failed");
+        }
+        None
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedExecutorMeta {
+    pub(crate) termination_reason: u64,
+    pub(crate) last_step_idx: Option<u64>,
+    pub(crate) execution_id: Option<String>,
+    pub(crate) has_execution_error: bool,
+}
+
+fn decode_field_varint(field: &WireField<'_>) -> Option<u64> {
+    if field.wire_type != 0 {
+        return None;
+    }
+    let mut p = 0usize;
+    decode_varint(field.payload, &mut p)
+}
+
+fn collect_nested_utf8_texts(bytes: &[u8], depth: usize, out: &mut Vec<String>) {
+    if depth > 5 {
+        return;
+    }
+    let Some(fields) = parse_wire_fields(bytes) else {
+        return;
     };
-    let mut overlay = AnnotationOverlay::default();
-    for field in top_fields {
-        if field.number != 15 || field.wire_type != 2 {
+    for f in fields {
+        if f.wire_type != 2 {
             continue;
         }
-        let Some(subfields) = parse_wire_fields(field.payload) else {
-            return AnnotationOverlay::default();
+        if let Ok(text) = std::str::from_utf8(f.payload) {
+            let trimmed = text.trim();
+            if trimmed.len() >= 2
+                && !trimmed
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+                && uuid::Uuid::parse_str(trimmed).is_err()
+            {
+                out.push(trimmed.to_owned());
+                continue;
+            }
+        }
+        collect_nested_utf8_texts(f.payload, depth + 1, out);
+    }
+}
+
+pub(crate) fn extract_step_payload_field_strings(blob: &[u8], field_number: u64) -> Vec<String> {
+    let Some(top_fields) = parse_wire_fields(blob) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for field in top_fields {
+        if field.number == field_number && field.wire_type == 2 {
+            if let Ok(text) = std::str::from_utf8(field.payload) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty()
+                    && !trimmed
+                        .chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+                {
+                    out.push(trimmed.to_owned());
+                    continue;
+                }
+            }
+            collect_nested_utf8_texts(field.payload, 0, &mut out);
+        }
+    }
+    out
+}
+
+pub(crate) fn parse_trajectory_metadata_blob(raw: &[u8]) -> ParsedTrajectoryMeta {
+    let Some(fields) = parse_wire_fields(raw) else {
+        return ParsedTrajectoryMeta::default();
+    };
+    let mut meta = ParsedTrajectoryMeta::default();
+    for f in fields {
+        match (f.number, f.wire_type) {
+            (5, 2) => {
+                if let Ok(s) = std::str::from_utf8(f.payload) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        meta.parent_conversation_id = Some(s.to_owned());
+                    }
+                }
+            }
+            (6, 2) => {
+                if let Ok(s) = std::str::from_utf8(f.payload) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        meta.root_conversation_id = Some(s.to_owned());
+                    }
+                }
+            }
+            (7, 2) => {
+                if let Ok(s) = std::str::from_utf8(f.payload) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        meta.workspace_uris.push(s.to_owned());
+                    }
+                }
+            }
+            (8, 2) if !f.payload.is_empty() => {
+                meta.has_subagent_spec = true;
+            }
+            (17, 0) => {
+                if let Some(v) = decode_field_varint(&f) {
+                    meta.nesting_depth = v;
+                }
+            }
+            _ => {}
+        }
+    }
+    meta
+}
+
+fn parse_waiting_step(raw: &[u8]) -> Option<ParsedWaitingStep> {
+    let fields = parse_wire_fields(raw)?;
+    let mut step_bytes: Option<&[u8]> = None;
+    let mut step_index = 0u64;
+    for f in fields {
+        match (f.number, f.wire_type) {
+            (1, 2) => step_bytes = Some(f.payload),
+            (2, 0) => {
+                if let Some(idx) = decode_field_varint(&f) {
+                    step_index = idx;
+                }
+            }
+            _ => {}
+        }
+    }
+    let step_payload = step_bytes?;
+    let step_fields = parse_wire_fields(step_payload)?;
+    let mut ask_payload: Option<&[u8]> = None;
+    let mut has_permissions = false;
+    let mut req_payload: Option<&[u8]> = None;
+    for sf in step_fields {
+        match (sf.number, sf.wire_type) {
+            (154, 2) => ask_payload = Some(sf.payload),
+            (133, 2) if !sf.payload.is_empty() => has_permissions = true,
+            (56, 2) if !sf.payload.is_empty() => req_payload = Some(sf.payload),
+            _ => {}
+        }
+    }
+    let proof_hash = hex::encode(Sha256::digest(step_payload));
+    if let Some(ask) = ask_payload {
+        let mut texts = Vec::new();
+        collect_nested_utf8_texts(ask, 0, &mut texts);
+        let body = if texts.is_empty() {
+            "需要回复，请打开 Antigravity 处理。".into()
+        } else {
+            texts.join("\n")
         };
-        for sub in subfields {
-            match (sub.number, sub.wire_type) {
-                (1, 2) => {
-                    if let Ok(text) = std::str::from_utf8(sub.payload) {
-                        if !text.trim().is_empty() {
-                            overlay.title = Some(text.to_owned());
+        return Some(ParsedWaitingStep {
+            step_index,
+            kind: "reply_needed",
+            body,
+            proof_hash,
+        });
+    }
+    if has_permissions {
+        return Some(ParsedWaitingStep {
+            step_index,
+            kind: "authorization",
+            body: "操作需要授权，请打开 Antigravity 处理。".into(),
+            proof_hash,
+        });
+    }
+    if let Some(req) = req_payload {
+        let mut texts = Vec::new();
+        collect_nested_utf8_texts(req, 0, &mut texts);
+        let looks_like_question = texts.iter().any(|t| t.contains('?') || t.contains('？'));
+        let (kind, body) = if looks_like_question {
+            ("reply_needed", texts.join("\n"))
+        } else {
+            (
+                "authorization",
+                "操作需要授权，请打开 Antigravity 处理。".into(),
+            )
+        };
+        return Some(ParsedWaitingStep {
+            step_index,
+            kind,
+            body,
+            proof_hash,
+        });
+    }
+    None
+}
+
+pub(crate) fn parse_raw_summary(raw: &[u8]) -> ParsedRawSummary {
+    let Some(top_fields) = parse_wire_fields(raw) else {
+        return ParsedRawSummary::default();
+    };
+    let mut parsed = ParsedRawSummary::default();
+    for field in top_fields {
+        match (field.number, field.wire_type) {
+            (4, 2) => {
+                if let Ok(s) = std::str::from_utf8(field.payload) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        parsed.trajectory_id = Some(s.to_owned());
+                    }
+                }
+            }
+            (5, 0) => {
+                if let Some(v) = decode_field_varint(&field) {
+                    parsed.status = v;
+                }
+            }
+            (7, 2) => {
+                if let Some(ts_fields) = parse_wire_fields(field.payload) {
+                    let mut secs: i64 = 0;
+                    let mut nanos: i64 = 0;
+                    for tf in ts_fields {
+                        match tf.number {
+                            1 => {
+                                if let Some(v) = decode_field_varint(&tf) {
+                                    secs = v as i64;
+                                }
+                            }
+                            2 => {
+                                if let Some(v) = decode_field_varint(&tf) {
+                                    nanos = v as i64;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if secs > 86_400 {
+                        parsed.created_time_ms = Some(
+                            secs.saturating_mul(1000)
+                                .saturating_add(nanos.clamp(0, 999_999_999) / 1_000_000),
+                        );
+                    }
+                }
+            }
+            (8, 2) => {
+                if let Some(ws) = parse_waiting_step(field.payload) {
+                    parsed.waiting_steps.push(ws);
+                }
+            }
+            (9, 2) => {
+                if let Some(ws_fields) = parse_wire_fields(field.payload) {
+                    for wf in ws_fields {
+                        if wf.number == 1 && wf.wire_type == 2 {
+                            if let Ok(uri) = std::str::from_utf8(wf.payload) {
+                                let uri = uri.trim();
+                                if !uri.is_empty() {
+                                    parsed.workspaces.push(uri.to_owned());
+                                }
+                            }
                         }
                     }
                 }
-                (4, 0) => {
-                    let mut p = 0usize;
-                    if let Some(v) = decode_varint(sub.payload, &mut p) {
-                        overlay.archived = Some(v != 0);
+            }
+            (15, 2) => {
+                if let Some(subfields) = parse_wire_fields(field.payload) {
+                    for sub in subfields {
+                        match (sub.number, sub.wire_type) {
+                            (1, 2) => {
+                                if let Ok(text) = std::str::from_utf8(sub.payload) {
+                                    if !text.trim().is_empty() {
+                                        parsed.annotations.title = Some(text.to_owned());
+                                    }
+                                }
+                            }
+                            (4, 0) => {
+                                if let Some(v) = decode_field_varint(&sub) {
+                                    parsed.annotations.archived = Some(v != 0);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
-                _ => {}
             }
+            (16, 0) => parsed.last_user_input_step_index = decode_field_varint(&field),
+            (17, 2) => parsed.trajectory_meta = parse_trajectory_metadata_blob(field.payload),
+            (18, 0) => parsed.has_active_children = decode_field_varint(&field).unwrap_or(0) != 0,
+            (21, 0) => parsed.not_fully_idle = decode_field_varint(&field).unwrap_or(0) != 0,
+            (23, 0) => parsed.killed = decode_field_varint(&field).unwrap_or(0) != 0,
+            (25, 0) => parsed.interrupted = decode_field_varint(&field).unwrap_or(0) != 0,
+            (28, 0) => {
+                parsed.latest_executor_termination_reason =
+                    decode_field_varint(&field).unwrap_or(0);
+            }
+            (29, 0) => parsed.background_task_count = decode_field_varint(&field).unwrap_or(0),
+            (30, 0) => parsed.has_running_subagents = decode_field_varint(&field).unwrap_or(0) != 0,
+            _ => {}
         }
     }
-    overlay
+    parsed
+}
+
+pub(crate) fn parse_executor_metadata_blob(raw: &[u8]) -> Option<ParsedExecutorMeta> {
+    let fields = parse_wire_fields(raw)?;
+    let mut meta = ParsedExecutorMeta::default();
+    for f in fields {
+        match (f.number, f.wire_type) {
+            (1, 0) => meta.termination_reason = decode_field_varint(&f).unwrap_or(0),
+            (3, 0) => meta.last_step_idx = decode_field_varint(&f),
+            (9, 2) => {
+                if let Ok(s) = std::str::from_utf8(f.payload) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        meta.execution_id = Some(s.to_owned());
+                    }
+                }
+            }
+            (12, 2) if !f.payload.is_empty() => meta.has_execution_error = true,
+            _ => {}
+        }
+    }
+    Some(meta)
 }
 
 /// Losslessly patches `CascadeTrajectorySummary` field 15 (`ConversationAnnotations`):

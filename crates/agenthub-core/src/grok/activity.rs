@@ -295,7 +295,7 @@ fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u
     let output = Command::new("/bin/ps")
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
-        .args(["-axo", "pid=,lstart=,stat=,comm="])
+        .args(["-axo", "pid=,lstart=,stat=,args="])
         .output()
         .ok()?;
     if !output.status.success() || output.stdout.len() > 8 * 1024 * 1024 {
@@ -324,28 +324,8 @@ fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u
             .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
             .map(|ts| ts.as_second());
         let zombie = fields.next().is_some_and(|state| state.starts_with('Z'));
-        let command = fields.collect::<Vec<_>>().join(" ");
-        #[cfg(target_os = "linux")]
-        let executable = {
-            let _ = command;
-            fs::read_link(format!("/proc/{pid}/exe")).ok()
-        };
-        #[cfg(not(target_os = "linux"))]
-        let executable = Path::new(&command).canonicalize().ok();
-        let native = executable.and_then(|path| {
-            if executables.contains(&path) {
-                Some(true)
-            } else if path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().contains("grok"))
-            {
-                // A running CLI can retain an old/deleted executable after an upgrade.
-                // An unverified Grok binary must not release deletion protection.
-                None
-            } else {
-                Some(false)
-            }
-        });
+        let args: Vec<&str> = fields.collect();
+        let native = classify_grok_process(pid, &args, &executables);
         processes.insert(
             pid,
             Process {
@@ -356,6 +336,86 @@ fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u
         );
     }
     Some(processes)
+}
+
+fn classify_grok_process(pid: u32, args: &[&str], executables: &HashSet<PathBuf>) -> Option<bool> {
+    let kernel_exe = resolve_kernel_exe(pid);
+    if let Some(ref exe) = kernel_exe {
+        if executables.contains(exe) {
+            return Some(true);
+        }
+        if let Ok(canonical) = exe.canonicalize() {
+            if executables.contains(&canonical) {
+                return Some(true);
+            }
+        }
+    }
+    let mut saw_grok_name = kernel_exe
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .is_some_and(|name| name.to_string_lossy().contains("grok"));
+    for (idx, token) in args.iter().copied().take(3).enumerate() {
+        if token.starts_with('-') {
+            continue;
+        }
+        let token_path = Path::new(token);
+        if token_path.is_absolute() {
+            if let Ok(canonical) = token_path.canonicalize() {
+                if executables.contains(&canonical) {
+                    return Some(true);
+                }
+            }
+            if token_path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("grok"))
+            {
+                saw_grok_name = true;
+            }
+        } else if idx == 0 && (token == "grok" || token.starts_with("grok-")) {
+            if !executables.is_empty() {
+                return Some(true);
+            }
+            saw_grok_name = true;
+        }
+    }
+    if saw_grok_name {
+        // A running CLI can retain an old/deleted executable after an upgrade.
+        // An unverified Grok binary must not release deletion protection.
+        None
+    } else if kernel_exe.is_some() || !args.is_empty() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn resolve_kernel_exe(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0_u8; 4096];
+        // SAFETY: `buf` is writable for `buf.len()` bytes and `pid` is validated to fit `i32`.
+        let count = unsafe {
+            libc::proc_pidpath(
+                pid.try_into().ok()?,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        if count <= 0 {
+            return None;
+        }
+        let end = buf.iter().position(|b| *b == 0).unwrap_or(count as usize);
+        std::str::from_utf8(&buf[..end]).ok().map(PathBuf::from)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

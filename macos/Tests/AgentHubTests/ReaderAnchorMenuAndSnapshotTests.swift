@@ -125,7 +125,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
         let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.provider-map.\(UUID().uuidString)")!
         let runtime = RuntimeConnectionStore(transport: transport, defaults: defaults)
-        let wsStore = ProviderWorkspaceStore(store: runtime, workspace: .antigravity, isCompactMobile: false)
+        let wsStore = ProviderWorkspaceStore(store: runtime, workspace: .antigravity)
 
         let summary = ProviderSessionSummary(
             id: "11111111-1111-4111-8111-111111111111",
@@ -383,7 +383,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             }
             let maxRegionalPixelDriftRatio: Double
             let desktopRegions: [Region]
-            let mobileRegions: [Region]
             let floatingComposerRegions: [Region]
             let sessionRowColors: [String: SessionRowColors]
             let providerExpectedSelectedNavColors: [String: [String: NavAccent]]
@@ -399,18 +398,17 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         await store.bootstrap()
         let pngOutDir = ProcessInfo.processInfo.environment["AGENTHUB_SNAPSHOT_PNG_DIR"]
 
-        // 1) Verify 1440x900, 1280x820, and 767x820 across Light and Dark against SnapshotBaselines.json regions
+        // 1) Verify 1440x900 and 1280x820 across Light and Dark against SnapshotBaselines.json regions
         for scheme in [ThemeMode.light, .dark] {
             let schemeKind: ColorSchemeKind = (scheme == .dark) ? .dark : .light
             let appearance: NSAppearance.Name = (scheme == .dark) ? .darkAqua : .aqua
             store.setTheme(scheme)
             store.activeWorkspace = .codex
 
-            for size in [NSSize(width: 1440, height: 900), NSSize(width: 1280, height: 820), NSSize(width: 767, height: 820)] {
+            for size in [NSSize(width: 1440, height: 900), NSSize(width: 1280, height: 820)] {
                 let pixels = try renderOffscreenSnapshot(store: store, size: size, appearance: appearance, pngName: pngOutDir.map { "\($0)/codex-\(scheme.rawValue)-\(Int(size.width))x\(Int(size.height)).png" })
                 let palette = DesignPalette.resolve(scheme: schemeKind, workspace: .codex)
-                let regions = size.width <= 767 ? baseline.mobileRegions : baseline.desktopRegions
-                for reg in regions {
+                for reg in baseline.desktopRegions {
                     let expectedToken: RGBAColor = switch reg.token {
                     case "railBg": palette.railBg
                     case "surface": palette.surface

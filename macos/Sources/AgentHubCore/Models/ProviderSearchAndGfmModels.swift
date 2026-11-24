@@ -8,6 +8,7 @@ public struct ClaudeSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public var sessionKey: String
     public var title: String
     public var cwd: String
+    public var workspaceRoot: String?
     public var path: String
     public var updatedAt: String?
     public var messageCount: Int
@@ -20,6 +21,34 @@ public struct ClaudeSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public var canDelete: Bool
     public var deleteBlockReason: String?
     public var readError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case storageSize, id, sessionKey, title, cwd, workspaceRoot, path
+        case updatedAt, messageCount, lastMessage, status, formatVersion
+        case readWarning, canRename, renameBlockReason, canDelete, deleteBlockReason, readError
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        storageSize = try c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSize)
+        id = try c.decode(String.self, forKey: .id)
+        sessionKey = try c.decode(String.self, forKey: .sessionKey)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceRoot = try c.decodeIfPresent(String.self, forKey: .workspaceRoot)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        messageCount = try c.decodeIfPresent(Int.self, forKey: .messageCount) ?? 0
+        lastMessage = try c.decodeIfPresent(String.self, forKey: .lastMessage)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "recent"
+        formatVersion = try c.decodeIfPresent(String.self, forKey: .formatVersion)
+        readWarning = try c.decodeIfPresent(String.self, forKey: .readWarning)
+        canRename = try c.decodeIfPresent(Bool.self, forKey: .canRename) ?? false
+        renameBlockReason = try c.decodeIfPresent(String.self, forKey: .renameBlockReason)
+        canDelete = try c.decodeIfPresent(Bool.self, forKey: .canDelete) ?? true
+        deleteBlockReason = try c.decodeIfPresent(String.self, forKey: .deleteBlockReason)
+        readError = try c.decodeIfPresent(String.self, forKey: .readError)
+    }
 }
 
 public struct ClaudeHistoryEvent: Codable, Equatable, Sendable, Identifiable {
@@ -74,6 +103,26 @@ public struct ClaudeSessionDetail: Codable, Equatable, Sendable {
     public var totalEvents: Int
     public var hasMore: Bool
     public var beforeCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case agent, subagents, timeline, afterCursor, history
+        case summary, events, totalEvents, hasMore, beforeCursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try c.decodeIfPresent(SubagentActivity.self, forKey: .agent)
+        subagents = try c.decodeIfPresent(SubagentCollection.self, forKey: .subagents)
+        timeline = try c.decodeIfPresent([TimelineEntry].self, forKey: .timeline)
+        afterCursor = try c.decodeIfPresent(String.self, forKey: .afterCursor)
+        history = try c.decodeIfPresent(HistoryMetadata.self, forKey: .history)
+        summary = try c.decode(ClaudeSessionSummary.self, forKey: .summary)
+        let decodedEvents = try c.decodeIfPresent([ClaudeHistoryEvent].self, forKey: .events) ?? []
+        events = decodedEvents
+        totalEvents = try c.decodeIfPresent(Int.self, forKey: .totalEvents) ?? decodedEvents.count
+        hasMore = try c.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        beforeCursor = try c.decodeIfPresent(String.self, forKey: .beforeCursor)
+    }
 }
 
 public struct ClaudeDeletePreview: Codable, Equatable, Sendable {
@@ -149,11 +198,33 @@ public struct GrokSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var title: String
     public var cwd: String
+    public var workspaceRoot: String?
     public var path: String
     public var updatedAt: String?
     public var messageCount: Int
     public var lastMessage: String?
     public var status: String
+
+    enum CodingKeys: String, CodingKey {
+        case deletionEligibility, storageSize, handoffPath
+        case id, title, cwd, workspaceRoot, path, updatedAt, messageCount, lastMessage, status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deletionEligibility = try c.decodeIfPresent(DeletionEligibility.self, forKey: .deletionEligibility)
+        storageSize = try c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSize)
+        handoffPath = try c.decodeIfPresent(String.self, forKey: .handoffPath)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceRoot = try c.decodeIfPresent(String.self, forKey: .workspaceRoot)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        messageCount = try c.decodeIfPresent(Int.self, forKey: .messageCount) ?? 0
+        lastMessage = try c.decodeIfPresent(String.self, forKey: .lastMessage)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "recent"
+    }
 }
 
 public struct GrokHistoryEvent: Codable, Equatable, Sendable {
@@ -197,6 +268,22 @@ public struct GrokSessionDetail: Codable, Equatable, Sendable {
     public var beforeCursor: String?
     public var summary: GrokSessionSummary
     public var events: [GrokHistoryEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case timeline, afterCursor, history, totalEvents, hasMore, beforeCursor, summary, events
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        timeline = try c.decodeIfPresent([TimelineEntry].self, forKey: .timeline)
+        afterCursor = try c.decodeIfPresent(String.self, forKey: .afterCursor)
+        history = try c.decodeIfPresent(HistoryMetadata.self, forKey: .history)
+        totalEvents = try c.decodeIfPresent(Int.self, forKey: .totalEvents)
+        hasMore = try c.decodeIfPresent(Bool.self, forKey: .hasMore)
+        beforeCursor = try c.decodeIfPresent(String.self, forKey: .beforeCursor)
+        summary = try c.decode(GrokSessionSummary.self, forKey: .summary)
+        events = try c.decodeIfPresent([GrokHistoryEvent].self, forKey: .events) ?? []
+    }
 }
 
 public struct GrokDeletePreview: Codable, Equatable, Sendable {
@@ -237,6 +324,7 @@ public struct ProviderSessionSummary: Codable, Equatable, Sendable, Identifiable
     public var sessionKey: String
     public var title: String
     public var cwd: String
+    public var workspaceRoot: String?
     public var path: String
     public var archived: Bool
     public var updatedAt: String?
@@ -252,6 +340,84 @@ public struct ProviderSessionSummary: Codable, Equatable, Sendable, Identifiable
     public var deleteBlockReason: String?
     public var readError: String?
     public var readWarning: String?
+
+    enum CodingKeys: String, CodingKey {
+        case storageSize, id, sessionKey, title, cwd, workspaceRoot, path
+        case archived, updatedAt, messageCount, lastMessage, status, formatVersion
+        case canRename, renameBlockReason, canArchive, archiveBlockReason
+        case canDelete, deleteBlockReason, readError, readWarning
+    }
+
+    public init(
+        storageSize: SessionStorageSize? = nil,
+        id: String,
+        sessionKey: String,
+        title: String,
+        cwd: String = "",
+        workspaceRoot: String? = nil,
+        path: String = "",
+        archived: Bool = false,
+        updatedAt: String? = nil,
+        messageCount: Int = 0,
+        lastMessage: String? = nil,
+        status: String = "idle",
+        formatVersion: String? = nil,
+        canRename: Bool = false,
+        renameBlockReason: String? = nil,
+        canArchive: Bool = false,
+        archiveBlockReason: String? = nil,
+        canDelete: Bool = false,
+        deleteBlockReason: String? = nil,
+        readError: String? = nil,
+        readWarning: String? = nil
+    ) {
+        self.storageSize = storageSize
+        self.id = id
+        self.sessionKey = sessionKey
+        self.title = title
+        self.cwd = cwd
+        self.workspaceRoot = workspaceRoot
+        self.path = path
+        self.archived = archived
+        self.updatedAt = updatedAt
+        self.messageCount = messageCount
+        self.lastMessage = lastMessage
+        self.status = status
+        self.formatVersion = formatVersion
+        self.canRename = canRename
+        self.renameBlockReason = renameBlockReason
+        self.canArchive = canArchive
+        self.archiveBlockReason = archiveBlockReason
+        self.canDelete = canDelete
+        self.deleteBlockReason = deleteBlockReason
+        self.readError = readError
+        self.readWarning = readWarning
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        storageSize = try c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSize)
+        id = try c.decode(String.self, forKey: .id)
+        sessionKey = try c.decode(String.self, forKey: .sessionKey)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceRoot = try c.decodeIfPresent(String.self, forKey: .workspaceRoot)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        messageCount = try c.decodeIfPresent(Int.self, forKey: .messageCount) ?? 0
+        lastMessage = try c.decodeIfPresent(String.self, forKey: .lastMessage)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "idle"
+        formatVersion = try c.decodeIfPresent(String.self, forKey: .formatVersion)
+        canRename = try c.decodeIfPresent(Bool.self, forKey: .canRename) ?? false
+        renameBlockReason = try c.decodeIfPresent(String.self, forKey: .renameBlockReason)
+        canArchive = try c.decodeIfPresent(Bool.self, forKey: .canArchive) ?? false
+        archiveBlockReason = try c.decodeIfPresent(String.self, forKey: .archiveBlockReason)
+        canDelete = try c.decodeIfPresent(Bool.self, forKey: .canDelete) ?? false
+        deleteBlockReason = try c.decodeIfPresent(String.self, forKey: .deleteBlockReason)
+        readError = try c.decodeIfPresent(String.self, forKey: .readError)
+        readWarning = try c.decodeIfPresent(String.self, forKey: .readWarning)
+    }
 }
 
 public struct ProviderDetailRequest: Codable, Equatable, Sendable {
@@ -326,17 +492,62 @@ public struct ProviderSessionDetail: Codable, Equatable, Sendable {
     public var totalEvents: Int
     public var hasMore: Bool
     public var beforeCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case timeline, afterCursor, history, agent, subagents, subagentUpdates
+        case summary, events, totalEvents, hasMore, beforeCursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        timeline = try c.decodeIfPresent([TimelineEntry].self, forKey: .timeline)
+        afterCursor = try c.decodeIfPresent(String.self, forKey: .afterCursor)
+        history = try c.decodeIfPresent(HistoryMetadata.self, forKey: .history)
+        agent = try c.decodeIfPresent(SubagentActivity.self, forKey: .agent)
+        subagents = try c.decodeIfPresent(SubagentCollection.self, forKey: .subagents)
+        subagentUpdates = try c.decodeIfPresent([String: SubagentActivity].self, forKey: .subagentUpdates)
+        summary = try c.decode(ProviderSessionSummary.self, forKey: .summary)
+        let decodedEvents = try c.decodeIfPresent([ProviderHistoryEvent].self, forKey: .events) ?? []
+        events = decodedEvents
+        totalEvents = try c.decodeIfPresent(Int.self, forKey: .totalEvents) ?? decodedEvents.count
+        hasMore = try c.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        beforeCursor = try c.decodeIfPresent(String.self, forKey: .beforeCursor)
+    }
 }
 
 // MARK: - Session Batch, Attachment, Search & Plan Export DTOs
 
-public enum SessionProvider: String, Codable, CaseIterable, Sendable {
+public enum SessionProvider: String, Codable, CaseIterable, Sendable, Identifiable {
     case codex
     case claudeCode = "claude_code"
     case grok
     case grokbot
     case antigravity
     case dsh
+
+    public var id: String { rawValue }
+
+    public var brand: AgentBrandId {
+        switch self {
+        case .codex: .codex
+        case .claudeCode: .claude
+        case .grok: .grok
+        case .grokbot: .grokbot
+        case .antigravity: .antigravity
+        case .dsh: .dsh
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .codex: "Codex"
+        case .claudeCode: "Claude Code"
+        case .grok: "Grok Build"
+        case .grokbot: "Grok Bot"
+        case .antigravity: "Antigravity"
+        case .dsh: "DeepSeek Harness"
+        }
+    }
 
     public static func from(workspace: WorkspaceId) -> SessionProvider? {
         switch workspace {
@@ -346,7 +557,18 @@ public enum SessionProvider: String, Codable, CaseIterable, Sendable {
         case .grokbot: .grokbot
         case .antigravity: .antigravity
         case .dsh: .dsh
-        case .probe, .ops: nil
+        case .workspaces, .probe, .ops: nil
+        }
+    }
+
+    public var workspaceId: WorkspaceId {
+        switch self {
+        case .codex: .codex
+        case .claudeCode: .claude
+        case .grok: .grok
+        case .grokbot: .grokbot
+        case .antigravity: .antigravity
+        case .dsh: .dsh
         }
     }
 }

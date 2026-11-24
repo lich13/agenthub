@@ -5,7 +5,7 @@ use crate::{
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
     security::{is_sensitive_output_line, redact_output},
-    services::probe::aggregate_probe_status,
+    services::probe::aggregate_probe_status_with_options,
 };
 use anyhow::Result;
 use jiff::Timestamp;
@@ -121,13 +121,17 @@ impl ProbeRuntime {
     }
 
     pub async fn status(&self) -> Result<ProbeStatus> {
-        let runtime = Self::new(self.config.clone(), self.paths.clone());
-        crate::read_tasks::spawn_blocking(move || runtime.status_blocking()).await?
+        self.status_with_options(false).await
     }
 
-    fn status_blocking(&self) -> Result<ProbeStatus> {
+    pub async fn status_with_options(&self, force_refresh: bool) -> Result<ProbeStatus> {
+        let runtime = Self::new(self.config.clone(), self.paths.clone());
+        crate::read_tasks::spawn_blocking(move || runtime.status_blocking(force_refresh)).await?
+    }
+
+    fn status_blocking(&self, force_refresh: bool) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
-        let aggregation = aggregate_probe_status(&self.config)?;
+        let aggregation = aggregate_probe_status_with_options(&self.config, force_refresh)?;
         let hook_status = self.hook_status();
         Ok(ProbeStatus {
             provider_notifications: json!([]),

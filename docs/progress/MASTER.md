@@ -2,8 +2,9 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.33**。API 协议 2，数据库 schema 3。Antigravity 补齐在线 Connect-RPC 与离线 SQLite／`agy` CLI `.pb` 实时运行／等待／待回复／异常状态收敛、多级子智能体（`L0 -> L1 -> L2`）阅读与附件读取、叶节点优先拓扑逆序删除及已归档与无锁孤立子会话批量清理，完成存量架构包袱深度清理（移除退役 WebUI／Tauri 残留脚本与 `ParityManifest` 计数脚手架、收敛重复详情适配层、显式化 Probe 错误提示），并升级 `bumpalo` 至 `3.20.4`（修复 `GHSA-j7wg-xg3h-2pr6`）。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
+当前源码版本为 **2.1.34**。API 协议 2，数据库 schema 3。参考 Orca 新增左侧顶栏跨平台「工作区」总览页、5 个代码 Agent 页内「按工作区分组／筛选」及零子进程 `.git` worktree 主仓库归并；打通 `agy` CLI 全功能（根 `presence` 锁树级继承、5 类父链来源防漏与孤儿清理、完整解码 `raw_summary` 及 `.db` steps 状态、流式尾随文本 JSON 解析、多级元数据回填、对象安全改名、15 列纳秒 FTS5 归档）及本机 macOS + 远端 Linux `agenthub-webd` 双端离线 Bark 推送（含 `antigravity_cli_resume_cutoff_ms` 升级防风暴基线）；修复 Codex（主列表排除 `exec`／`thread_spawn_edges`／附着子线程、新版 `session_meta` `cwd` 保留与遗留回合收敛）、Claude Code（`statusUpdatedAt` 因果收敛、中断闭合与 `agent-*`／纯 sidechain 排除）、Grok（macOS 进程核验与非主会话过滤）与 DSH（审批／提问等待态）；深度清理跨层直透包装、退役 `<=767pt` 手机壳层死分支并补齐 Linux 远端五项协议 2 能力声明。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
 
+- **v2.1.34** 本机自动化门禁已全部通过，待原子推送标签、Release CI 构建、远端部署与本机安装及用户实机验收。
 - **v2.1.33** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.33`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.32 原地更新并启动；Antigravity 在线／CLI 运行态、多级子智能体抽屉及统一清理待用户验收。[提交 e8ebad5](https://github.com/lich13/agenthub/commit/e8ebad55a2a48d7f87624da78e29b8f28c3e38fc) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.33) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45322327152)
 - **v2.1.32** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.32`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.31 原地更新并启动；本机与远端 `agy` CLI 会话管理及 `Antigravity.app` 2.34.0 在线交互待用户验收。[提交 2f18fc0](https://github.com/lich13/agenthub/commit/2f18fc0dfa228a37761856be0dbc6ed80fdcae7f) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.32) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45268133405)
 

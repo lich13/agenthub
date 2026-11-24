@@ -1,19 +1,15 @@
 use crate::{audit::AuditActor, state::AppState};
 use agenthub_core::services::jobs::thread_state_action_response as core_thread_state_action_response;
 use agenthub_core::{
-    codex::{self, ThreadDetail, ThreadSummary},
+    codex,
     config::Config,
-    db::JobRecord,
-    platform::PlatformPaths,
     services::{
         commands, jobs as job_service, probe as probe_service, settings as settings_service,
-        threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
         updates as update_service,
-        use_cases::AgentHubUseCases,
     },
 };
 use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::Path;
 
 pub fn apply_probe_settings_save_plan(
@@ -57,60 +53,6 @@ pub fn start_probe_action_plan(
     state
         .jobs
         .start_exclusive_process_job(&spec.kind, &spec.title, process, group)
-}
-
-pub fn list_threads_read_model(
-    state: &AppState,
-    query: ThreadsQuery,
-) -> Result<Vec<ThreadSummary>> {
-    let platform = PlatformPaths::linux_server();
-    let plan = AgentHubUseCases::new(&platform)
-        .threads()
-        .list_read(query)?;
-    let paths = state.codex_paths();
-    thread_service::load_thread_read_model_inputs(&paths, &plan)
-}
-
-pub fn window_thread_detail_read_model(
-    state: &AppState,
-    plan: &thread_service::ThreadDetailPlan,
-) -> Result<Option<ThreadDetail>> {
-    thread_service::read_window_thread_detail(&state.codex_paths(), plan)
-}
-
-pub fn thread_blocks_read_model(
-    state: &AppState,
-    plan: &thread_service::ThreadDetailPlan,
-) -> Result<Option<ThreadBlocksPage>> {
-    thread_service::read_thread_blocks_page(&state.codex_paths(), plan)
-}
-
-pub fn list_jobs_plan(state: &AppState, limit: u32) -> Result<Vec<Value>> {
-    state
-        .db
-        .list_jobs(limit)?
-        .into_iter()
-        .map(job_response_value)
-        .collect()
-}
-
-pub fn job_detail_plan(
-    state: &AppState,
-    job_id: String,
-    include_output: bool,
-) -> Result<Option<Value>> {
-    state
-        .db
-        .job_with_output(&job_id, include_output)?
-        .map(job_response_value)
-        .transpose()
-}
-
-fn job_response_value(job: JobRecord) -> Result<Value> {
-    let response = AgentHubUseCases::new(&PlatformPaths::linux_server())
-        .jobs()
-        .response(job);
-    Ok(serde_json::to_value(response)?)
 }
 
 pub async fn apply_thread_state_action_plan(

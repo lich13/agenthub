@@ -5,11 +5,6 @@
     { "name": "sessionList", "x": 212, "y": 240, "width": 260, "height": 360, "token": "surface" },
     { "name": "mainStage", "x": 540, "y": 240, "width": 620, "height": 360, "token": "background" }
   ],
-  "mobileRegions": [
-    { "name": "mobileTopBar", "x": 120, "y": 780, "width": 520, "height": 32, "token": "railBg" },
-    { "name": "mobileStage", "x": 120, "y": 240, "width": 520, "height": 360, "token": "surface" },
-    { "name": "mobileBottomTabs", "x": 120, "y": 8, "width": 520, "height": 36, "token": "railBg" }
-  ],
   "floatingComposerRegions": [
     { "name": "composerLeftMargin", "x": 12, "y": 30, "width": 84, "height": 90, "token": "background" },
     { "name": "composerRightMargin", "x": 904, "y": 30, "width": 84, "height": 90, "token": "background" }

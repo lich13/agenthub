@@ -144,6 +144,8 @@ pub struct ProviderSessionSummary {
     pub session_key: String,
     pub title: String,
     pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub path: PathBuf,
     pub archived: bool,
     pub updated_at: Option<String>,

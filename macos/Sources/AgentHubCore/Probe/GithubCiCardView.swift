@@ -14,8 +14,38 @@ public struct GithubCiCardView: View {
     @State private var refreshing: Bool = false
     @State private var errorMessage: String?
     @State private var repoQuery: String = ""
-    @State private var notifyCiToggle: Bool = false
-    @State private var filterBotsToggle: Bool = true
+
+    private var notifyCiOn: Bool {
+        draft?.notifyGithubCi ?? false
+    }
+
+    private var filterBotsOn: Bool {
+        draft?.githubCiFilterBots ?? true
+    }
+
+    private var notifyCiBinding: Binding<Bool> {
+        Binding(
+            get: { draft?.notifyGithubCi ?? false },
+            set: { val in
+                if var current = draft, current.notifyGithubCi != val {
+                    current.notifyGithubCi = val
+                    draft = current
+                }
+            }
+        )
+    }
+
+    private var filterBotsBinding: Binding<Bool> {
+        Binding(
+            get: { draft?.githubCiFilterBots ?? true },
+            set: { val in
+                if var current = draft, current.githubCiFilterBots != val {
+                    current.githubCiFilterBots = val
+                    draft = current
+                }
+            }
+        )
+    }
 
     public init(
         store: RuntimeConnectionStore,
@@ -67,7 +97,7 @@ public struct GithubCiCardView: View {
         return GithubCiDomain.visibleRuns(
             runs: snapshot?.runs ?? [],
             repositories: activeTokens,
-            filterBots: draft?.githubCiFilterBots ?? filterBotsToggle
+            filterBots: filterBotsOn
         )
     }
 
@@ -117,47 +147,47 @@ public struct GithubCiCardView: View {
                     HStack(spacing: 10) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill((notifyCiToggle ? palette.accentSoft : palette.surface).color)
+                                .fill((notifyCiOn ? palette.accentSoft : palette.surface).color)
                                 .frame(width: 28, height: 28)
                             LucideIcon(.bell, size: 15)
-                                .foregroundStyle((notifyCiToggle ? palette.accent : palette.textMuted).color)
+                                .foregroundStyle((notifyCiOn ? palette.accent : palette.textMuted).color)
                         }
                         Text("CI 监控通知")
                             .font(DesignFonts.body(13, weight: .semibold))
                             .foregroundStyle(palette.textPrimary.color)
                         Spacer(minLength: 6)
-                        StatusChip(notifyCiToggle ? "已开启" : "已关闭", tone: notifyCiToggle ? .info : .neutral)
-                        CapsuleSwitch(isOn: $notifyCiToggle, label: "CI 监控通知")
+                        StatusChip(notifyCiOn ? "已开启" : "已关闭", tone: notifyCiOn ? .info : .neutral)
+                        CapsuleSwitch(isOn: notifyCiBinding, label: "CI 监控通知")
                             .disabled(draft == nil || saving)
                     }
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder((notifyCiToggle ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
+                            .strokeBorder((notifyCiOn ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
                     )
 
                     HStack(spacing: 10) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill((filterBotsToggle ? palette.accentSoft : palette.surface).color)
+                                .fill((filterBotsOn ? palette.accentSoft : palette.surface).color)
                                 .frame(width: 28, height: 28)
                             LucideIcon(.bot, size: 15)
-                                .foregroundStyle((filterBotsToggle ? palette.accent : palette.textMuted).color)
+                                .foregroundStyle((filterBotsOn ? palette.accent : palette.textMuted).color)
                         }
                         Text("过滤 Bot")
                             .font(DesignFonts.body(13, weight: .semibold))
                             .foregroundStyle(palette.textPrimary.color)
                         Spacer(minLength: 6)
-                        StatusChip(filterBotsToggle ? "已开启" : "已关闭", tone: filterBotsToggle ? .info : .neutral)
-                        CapsuleSwitch(isOn: $filterBotsToggle, label: "过滤 Bot")
+                        StatusChip(filterBotsOn ? "已开启" : "已关闭", tone: filterBotsOn ? .info : .neutral)
+                        CapsuleSwitch(isOn: filterBotsBinding, label: "过滤 Bot")
                             .disabled(draft == nil || saving)
                     }
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder((filterBotsToggle ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
+                            .strokeBorder((filterBotsOn ? palette.accentBorder : palette.borderSubtle).color, lineWidth: 1)
                     )
                 }
 
@@ -360,29 +390,7 @@ public struct GithubCiCardView: View {
                 }
             }
         }
-        .onChange(of: draft?.notifyGithubCi) { val in
-            if let val, notifyCiToggle != val { notifyCiToggle = val }
-        }
-        .onChange(of: draft?.githubCiFilterBots) { val in
-            if let val, filterBotsToggle != val { filterBotsToggle = val }
-        }
-        .onChange(of: notifyCiToggle) { val in
-            if var current = draft, current.notifyGithubCi != val {
-                current.notifyGithubCi = val
-                draft = current
-            }
-        }
-        .onChange(of: filterBotsToggle) { val in
-            if var current = draft, current.githubCiFilterBots != val {
-                current.githubCiFilterBots = val
-                draft = current
-            }
-        }
         .task(id: store.machineScope) {
-            if let d = draft {
-                notifyCiToggle = d.notifyGithubCi
-                filterBotsToggle = d.githubCiFilterBots
-            }
             await fetchStatus(forceRefresh: false)
             while !Task.isCancelled {
                 let intervalNs: UInt64 = (snapshot?.refreshing == true) ? 2_000_000_000 : 15_000_000_000

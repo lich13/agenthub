@@ -326,34 +326,6 @@ public enum ProviderMenuMatrixBuilder {
         guard modifierFlags.intersection(disallowed).isEmpty else { return false }
         return keyCode == 120 || charactersIgnoringModifiers == "\u{F705}"
     }
-
-    @MainActor
-    public static func buildNSMenu(actions: [SessionMenuAction]) -> NSMenu {
-        let menu = NSMenu(title: "线程操作")
-        menu.autoenablesItems = false
-        for act in actions {
-            let item = NSMenuItem(title: act.label, action: #selector(SessionMenuActionBox.invoke(_:)), keyEquivalent: "")
-            let box = SessionMenuActionBox(action: act.run)
-            item.target = box
-            item.representedObject = box
-            item.isEnabled = !act.disabled
-            menu.addItem(item)
-        }
-        return menu
-    }
-}
-
-@MainActor
-private final class SessionMenuActionBox: NSObject {
-    let action: () -> Void
-
-    init(action: @escaping () -> Void) {
-        self.action = action
-    }
-
-    @objc func invoke(_ sender: Any?) {
-        action()
-    }
 }
 
 public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
@@ -990,6 +962,7 @@ private final class SessionRowRightClickCaptureNSView: NSView {
 public struct RenameableSessionRowView: View {
     @Environment(\.agentHubPalette) private var palette
     public let sessionKey: String
+    public var leadingBrandIcon: AgentBrandId? = nil
     public let title: String
     public var idLine: String? = nil
     public let subtitle: String
@@ -1084,14 +1057,28 @@ public struct RenameableSessionRowView: View {
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(title)
-                                .font(DesignFonts.body(13, weight: .medium))
-                                .foregroundStyle(palette.textPrimary.color)
-                                .lineSpacing(2.6)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                if let leadingBrandIcon {
+                                    AgentBrandIcon(leadingBrandIcon, size: 14)
+                                        .foregroundStyle(palette.textSecondary.color)
+                                        .frame(width: 14, height: 14)
+                                        .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 2 }
+                                }
+                                Text(title)
+                                    .font(DesignFonts.body(13, weight: .medium))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                    .lineSpacing(2.6)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                            }
 
                             if isCodexCompactRow {
+                                if !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(DesignFonts.body(11))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                }
                                 HStack(spacing: 6) {
                                     if running {
                                         RunningIndicator(size: 13)
@@ -1114,13 +1101,13 @@ public struct RenameableSessionRowView: View {
                             } else {
                                 if let idLine, !idLine.isEmpty {
                                     Text(idLine)
-                                        .font(DesignFonts.body(12))
+                                        .font(DesignFonts.mono(11))
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
                                 }
                                 if !subtitle.isEmpty {
                                     Text(subtitle)
-                                        .font(DesignFonts.mono(12))
+                                        .font(DesignFonts.body(12))
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
                                 }
@@ -1260,6 +1247,150 @@ public struct RenameableSessionRowView: View {
     }
 }
 
+// MARK: - Frameless Collapsible Project Workspace Group Header
+
+public struct ProjectWorkspaceGroupHeaderView: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let displayName: String
+    public let fullPath: String?
+    public let count: Int
+    public let status: ProjectWorkspaceAggregateStatus
+    public let expanded: Bool
+    public let isFilteredToThisGroup: Bool
+    public let onToggleExpanded: () -> Void
+    public var onFilterOnlyThisGroup: (() -> Void)? = nil
+    public var onSelectAllInGroup: (() -> Void)? = nil
+    public var onCopyPath: ((String) -> Void)? = nil
+
+    @State private var hovered: Bool = false
+
+    public init(
+        displayName: String,
+        fullPath: String?,
+        count: Int,
+        status: ProjectWorkspaceAggregateStatus,
+        expanded: Bool,
+        isFilteredToThisGroup: Bool = false,
+        onToggleExpanded: @escaping () -> Void,
+        onFilterOnlyThisGroup: (() -> Void)? = nil,
+        onSelectAllInGroup: (() -> Void)? = nil,
+        onCopyPath: ((String) -> Void)? = nil
+    ) {
+        self.displayName = displayName
+        self.fullPath = fullPath
+        self.count = count
+        self.status = status
+        self.expanded = expanded
+        self.isFilteredToThisGroup = isFilteredToThisGroup
+        self.onToggleExpanded = onToggleExpanded
+        self.onFilterOnlyThisGroup = onFilterOnlyThisGroup
+        self.onSelectAllInGroup = onSelectAllInGroup
+        self.onCopyPath = onCopyPath
+    }
+
+    public var body: some View {
+        Button(action: onToggleExpanded) {
+            HStack(spacing: 6) {
+                LucideIcon(expanded ? .chevronDown : .chevronRight, size: 13)
+                    .foregroundStyle((expanded ? palette.textSecondary : palette.textMuted).color)
+
+                LucideIcon(.folderGit2, size: 13)
+                    .foregroundStyle((isFilteredToThisGroup ? palette.accent : palette.textMuted).color)
+
+                Text(displayName)
+                    .font(DesignFonts.body(12, weight: .semibold))
+                    .foregroundStyle(palette.textSecondary.color)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                statusIndicator
+
+                Text("\(count)")
+                    .font(DesignFonts.tabularBody(11, weight: .medium))
+                    .foregroundStyle(palette.textMuted.color)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(palette.elevated.color))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(minHeight: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(hovered ? palette.hover.color.opacity(0.65) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainHitButtonStyle())
+        .onHover { hovered = $0 }
+        .help(fullPath ?? displayName)
+        .accessibilityLabel("\(displayName)，\(count) 个会话")
+        .overlay(
+            SessionRowRightClickCaptureRepresentable { screenPoint, view in
+                let actions = buildContextActions()
+                guard !actions.isEmpty else { return }
+                AgentHubTaskMenuPresenter.shared.presentAtScreenTopLeft(
+                    screenPoint,
+                    in: view.window,
+                    returnFocus: view,
+                    actions: actions,
+                    palette: palette
+                )
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch status {
+        case .attention:
+            Circle()
+                .fill(palette.warnFg.color)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel("待处理")
+        case .running:
+            RunningIndicator(size: 11)
+        case .failed:
+            Circle()
+                .fill(palette.errFg.color)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel("异常")
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private func buildContextActions() -> [SessionMenuAction] {
+        var actions: [SessionMenuAction] = []
+        if let onFilterOnlyThisGroup {
+            actions.append(SessionMenuAction(
+                id: "filter-workspace",
+                label: isFilteredToThisGroup ? "显示全部工作区" : "仅看此工作区",
+                icon: isFilteredToThisGroup ? .x : .slidersHorizontal,
+                run: onFilterOnlyThisGroup
+            ))
+        }
+        if let onSelectAllInGroup, expanded, count > 0 {
+            actions.append(SessionMenuAction(
+                id: "select-workspace-all",
+                label: "全选此工作区可见会话",
+                icon: .checkCircle2,
+                run: onSelectAllInGroup
+            ))
+        }
+        if let onCopyPath, let fullPath, !fullPath.isEmpty {
+            actions.append(SessionMenuAction(
+                id: "copy-workspace-path",
+                label: "复制工作区路径",
+                icon: .copy,
+                run: { onCopyPath(fullPath) }
+            ))
+        }
+        return actions
+    }
+}
+
 // MARK: - Bottom .session-batch-controls & Backdrop-Safe ConfirmDialog
 
 public struct SessionBatchBarAndDialogView: View {
@@ -1358,7 +1489,7 @@ public struct SessionBatchBarAndDialogView: View {
                     if !failedItems.isEmpty {
                         ScrollView(.vertical) {
                             VStack(alignment: .leading, spacing: 6) {
-                                ForEach(failedItems, id: \.sessionKey) { item in
+                                ForEach(Array(failedItems.enumerated()), id: \.offset) { _, item in
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("\(item.sessionKey)：\(item.message ?? "操作失败")")
                                             .font(DesignFonts.body(12))
@@ -1473,7 +1604,7 @@ public struct SessionBatchPreviewDialogContentView: View {
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(preview.items, id: \.sessionKey) { item in
+                    ForEach(Array(preview.items.enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title)
                                 .font(DesignFonts.body(13, weight: .semibold))
@@ -1535,98 +1666,6 @@ public struct SessionBatchPreviewDialogContentView: View {
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(allowed == 0 || busy)
                 }
-            }
-        }
-    }
-}
-
-public struct SingleSessionDeleteConfirmContentView: View {
-    @Environment(\.agentHubPalette) private var palette
-    public let title: String
-    public let paths: [String]
-    public let summaryText: String
-    public let busy: Bool
-    public let errorText: String?
-    public let warnings: [String]
-    public let residuals: [String]
-    public let onCancel: () -> Void
-    public let onConfirm: () -> Void
-
-    public init(
-        title: String,
-        paths: [String],
-        summaryText: String,
-        busy: Bool,
-        errorText: String? = nil,
-        warnings: [String] = [],
-        residuals: [String] = [],
-        onCancel: @escaping () -> Void,
-        onConfirm: @escaping () -> Void
-    ) {
-        self.title = title
-        self.paths = paths
-        self.summaryText = summaryText
-        self.busy = busy
-        self.errorText = errorText
-        self.warnings = warnings
-        self.residuals = residuals
-        self.onCancel = onCancel
-        self.onConfirm = onConfirm
-    }
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("删除任务文件")
-                .font(DesignFonts.body(16, weight: .semibold))
-                .foregroundStyle(palette.textPrimary.color)
-
-            Text(title)
-                .font(DesignFonts.body(13, weight: .semibold))
-                .foregroundStyle(palette.textPrimary.color)
-
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(paths, id: \.self) { path in
-                        DeletePathCodeBlockView(path)
-                    }
-                }
-            }
-            .frame(maxHeight: 160)
-
-            Text(summaryText)
-                .font(DesignFonts.body(13))
-                .foregroundStyle(palette.textSecondary.color)
-
-            if let errorText, !errorText.isEmpty {
-                Text(errorText)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.errFg.color)
-            }
-
-            ForEach(warnings, id: \.self) { warning in
-                Text(warning)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.errFg.color)
-            }
-
-            ForEach(residuals, id: \.self) { residual in
-                DeletePathCodeBlockView(residual)
-            }
-
-            HStack(spacing: 8) {
-                Spacer()
-                Button("取消", action: onCancel)
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(busy)
-
-                Button(action: onConfirm) {
-                    HStack(spacing: 6) {
-                        LucideIcon(.trash2, size: 16)
-                        Text(busy ? "正在删除..." : "确认删除任务文件")
-                    }
-                }
-                .buttonStyle(DangerButtonStyle())
-                .disabled(busy)
             }
         }
     }

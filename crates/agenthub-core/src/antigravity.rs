@@ -215,14 +215,21 @@ pub(crate) fn collect_spawned_subagent_ids(value: &Value, out: &mut BTreeSet<Str
             }
         }
         Value::String(raw) => {
-            let trimmed = raw.trim_start();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+            let mut offset = 0usize;
+            while offset < raw.len() {
+                let Some(rel) = raw[offset..].find(['{', '[']) else {
+                    break;
+                };
+                let start = offset + rel;
+                let mut stream =
+                    serde_json::Deserializer::from_str(&raw[start..]).into_iter::<Value>();
+                if let Some(Ok(parsed)) = stream.next() {
+                    let consumed = stream.byte_offset().max(1);
                     collect_spawned_subagent_ids(&parsed, out);
-                }
-            } else if let Some(idx) = trimmed.find('{') {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&trimmed[idx..]) {
-                    collect_spawned_subagent_ids(&parsed, out);
+                    offset = start + consumed;
+                } else {
+                    let step = raw[start..].chars().next().map_or(1, char::len_utf8);
+                    offset = start + step;
                 }
             }
         }

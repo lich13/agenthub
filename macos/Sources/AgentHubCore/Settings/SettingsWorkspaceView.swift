@@ -10,7 +10,7 @@ public struct SettingsWorkspaceView: View {
 
     public var body: some View {
         GeometryReader { geo in
-            let isNarrow = geo.size.width <= LayoutMetrics.mobileBreakpoint
+            let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     // Settings Header & .settings-tabs Underline Tab Bar (styles.css:544-549)
@@ -176,7 +176,7 @@ public struct MaintenanceOpsView: View {
             }
 
             // Codex Account Scope
-            if store.capabilities.isReady {
+            if store.capabilities.isReady && store.capabilities.codexAccountScope {
                 CodexAccountScopeSection(store: store)
             }
 
@@ -622,7 +622,7 @@ public struct UnifiedThreadCleanupSection: View {
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(busy)
 
-                    if store.capabilities.isReady {
+                    if store.capabilities.isReady && store.capabilities.hiddenCleanupScan {
                         if hiddenRunner != nil {
                             Button("取消隐藏扫描") {
                                 cancelHiddenScan()

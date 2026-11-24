@@ -5,10 +5,12 @@ fn map_cortex_status(status: &str) -> &'static str {
         "CORTEX_STEP_STATUS_RUNNING"
         | "CORTEX_STEP_STATUS_WAITING"
         | "CORTEX_STEP_STATUS_PENDING"
-        | "CORTEX_STEP_STATUS_GENERATING" => "running",
+        | "CORTEX_STEP_STATUS_GENERATING"
+        | "CORTEX_STEP_STATUS_QUEUED" => "running",
         "CORTEX_STEP_STATUS_ERROR"
         | "CORTEX_STEP_STATUS_CANCELED"
         | "CORTEX_STEP_STATUS_INTERRUPTED"
+        | "CORTEX_STEP_STATUS_INVALID"
         | "CORTEX_STEP_STATUS_HALTED" => "failed",
         _ => "completed",
     }
@@ -607,12 +609,13 @@ pub(super) fn read_offline_transcript_events(
             let st = row["type"].as_str().unwrap_or("");
             let src = row["source"].as_str().unwrap_or("");
             let sr = row["status"].as_str().unwrap_or("DONE");
-            if !matches!(sr, "RUNNING" | "WAITING" | "PENDING" | "GENERATING")
-                && !matches!(
-                    st,
-                    "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "SYSTEM_MESSAGE" | ""
-                )
-            {
+            if !matches!(
+                sr,
+                "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
+            ) && !matches!(
+                st,
+                "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "SYSTEM_MESSAGE" | ""
+            ) {
                 seen_settled_after = true;
             }
             if st == "USER_INPUT" || src == "USER_EXPLICIT" {
@@ -632,13 +635,19 @@ pub(super) fn read_offline_transcript_events(
             let source = row["source"].as_str().unwrap_or("");
             let timestamp = row["created_at"].as_str().map(str::to_owned);
             let status_raw = row["status"].as_str().unwrap_or("DONE");
-            let status = match status_raw {
-                "RUNNING" | "WAITING" | "PENDING" | "GENERATING" if has_later_settled_row[idx] => {
-                    "completed"
+            let status = if step_type == "ERROR_MESSAGE" {
+                "failed"
+            } else {
+                match status_raw {
+                    "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
+                        if has_later_settled_row[idx] =>
+                    {
+                        "completed"
+                    }
+                    "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED" => "running",
+                    "ERROR" | "FAILED" | "CANCELED" | "INVALID" | "INTERRUPTED" => "failed",
+                    _ => "completed",
                 }
-                "RUNNING" | "WAITING" | "PENDING" | "GENERATING" => "running",
-                "ERROR" | "FAILED" | "CANCELED" => "failed",
-                _ => "completed",
             };
 
             if step_type == "USER_INPUT" || source == "USER_EXPLICIT" {
@@ -715,7 +724,11 @@ pub(super) fn read_offline_transcript_events(
                         ));
                     }
                 }
+                let has_tool_calls = row["tool_calls"]
+                    .as_array()
+                    .is_some_and(|calls| !calls.is_empty());
                 let has_final_reply = !is_intermediate
+                    && !has_tool_calls
                     && row["content"]
                         .as_str()
                         .is_some_and(|s| !s.trim().is_empty());
@@ -792,20 +805,51 @@ pub(super) fn read_offline_transcript_events(
                     }
                 }
                 continue;
-            } else if matches!(
-                step_type,
-                "SYSTEM_MESSAGE" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
-            ) {
+            } else if step_type == "ERROR_MESSAGE" {
+                for (_, _, call_idx) in pending_calls.drain(..) {
+                    if let Some(ev) = events.get_mut(call_idx) {
+                        ev.status.get_or_insert_with(|| "failed".into());
+                    }
+                }
+                let err_text = row["content"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
+                    .unwrap_or("执行出错")
+                    .to_owned();
+                events.push(make_tool_event(
+                    format!("transcript-{step_index}-error"),
+                    timestamp,
+                    "tool_call",
+                    "error_message",
+                    None,
+                    Some(format!("turn-{turn_seq}")),
+                    Some("failed"),
+                    None,
+                    Some(err_text),
+                ));
+            } else if step_type == "SYSTEM_MESSAGE" {
+                if source == "SYSTEM" {
+                    for (_, _, call_idx) in pending_calls.drain(..) {
+                        if let Some(ev) = events.get_mut(call_idx) {
+                            ev.status.get_or_insert_with(|| "completed".into());
+                        }
+                    }
+                }
+                continue;
+            } else if matches!(step_type, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
                 continue;
             } else {
                 let turn_id = Some(format!("turn-{turn_seq}"));
                 let content = row["content"]
                     .as_str()
                     .filter(|s| !s.trim().is_empty())
+                    .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
                     .map(str::to_owned);
                 if let Some((call_id, tool_name, call_idx)) = pending_calls.pop_front() {
-                    if is_subagent_coordination_tool(&tool_name) {
-                        if let Some(call_ev) = events.get_mut(call_idx) {
+                    if let Some(call_ev) = events.get_mut(call_idx) {
+                        call_ev.status.get_or_insert_with(|| status.to_owned());
+                        if is_subagent_coordination_tool(&tool_name) {
                             if content.is_some() {
                                 call_ev.result = content;
                             }
@@ -845,7 +889,7 @@ pub(super) fn read_offline_transcript_events(
         }
     }
 
-    // Secondary offline fallback: extract UTF-8 strings from conversations/<id>.db steps table
+    // Secondary offline fallback: extract step_payload fields 19 (user_input), 20 (planner_response), 24 (error_message)
     let conv_db = paths.conversations_dir().join(format!("{id}.db"));
     if conv_db.is_file() {
         if let Ok(conn) = Connection::open_with_flags(
@@ -864,8 +908,21 @@ pub(super) fn read_offline_transcript_events(
                 }) {
                     let mut events = Vec::new();
                     for (idx, step_type, blob) in rows.flatten() {
-                        let joined = extract_protobuf_utf8_strings(&blob).join("\n");
-                        let joined = joined.trim().to_owned();
+                        let target_field = match step_type {
+                            14 => Some(19),
+                            15 => Some(20),
+                            17 => Some(24),
+                            _ => None,
+                        };
+                        let Some(field_no) = target_field else {
+                            continue;
+                        };
+                        let mut strings =
+                            super::annotations::extract_step_payload_field_strings(&blob, field_no);
+                        if strings.is_empty() {
+                            strings = extract_protobuf_utf8_strings(&blob);
+                        }
+                        let joined = strings.join("\n").trim().to_owned();
                         if joined.is_empty() {
                             continue;
                         }
@@ -895,6 +952,18 @@ pub(super) fn read_offline_transcript_events(
                                 Some(joined),
                                 None,
                                 Some("completed"),
+                            ));
+                        } else if step_type == 17 {
+                            events.push(make_tool_event(
+                                format!("db-{idx}-error"),
+                                None,
+                                "tool_call",
+                                "error_message",
+                                None,
+                                None,
+                                Some("failed"),
+                                None,
+                                Some(joined),
                             ));
                         }
                     }

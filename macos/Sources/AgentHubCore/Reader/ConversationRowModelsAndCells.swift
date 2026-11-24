@@ -357,7 +357,11 @@ public enum ConversationRowBuilder {
         subagentsSupported: Bool = false
     ) -> [ConversationRowItem] {
         let prefix = providerLabel == "Antigravity" ? "antigravity" : (providerLabel == "Grok Bot" ? "grokbot" : "dsh")
-        let grouped = ExecutionGroupingEngine.groupProviderEvents(events, provider: providerLabel)
+        let grouped = ExecutionGroupingEngine.groupProviderEvents(
+            events,
+            provider: providerLabel,
+            recordedOnly: !sessionRunning
+        )
         let folded = ProcessGroupingEngine.foldProcessSequence(prefix: prefix, items: grouped) { entry in
             switch entry {
             case let .group(group):

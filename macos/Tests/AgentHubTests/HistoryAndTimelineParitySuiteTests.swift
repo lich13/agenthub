@@ -646,12 +646,9 @@ final class HistoryAndTimelineParitySuiteTests: XCTestCase {
 
     func testPorted_sessionSearch() throws {
         try runAsyncParityCheck {
-            let desktopBtn = NSHostingView(rootView: FloatingSearchPillButton(isCompactMobile: false, action: {}))
+            let desktopBtn = NSHostingView(rootView: FloatingSearchPillButton(action: {}))
             desktopBtn.layoutSubtreeIfNeeded()
-            let mobileBtn = NSHostingView(rootView: FloatingSearchPillButton(isCompactMobile: true, action: {}))
-            mobileBtn.layoutSubtreeIfNeeded()
-            XCTAssertGreaterThan(desktopBtn.fittingSize.width, mobileBtn.fittingSize.width, "Desktop pill includes ⌘F kbd chip; <=767pt collapses to 36x36 icon")
-            XCTAssertEqual(mobileBtn.fittingSize.width, 36, accuracy: 2)
+            XCTAssertGreaterThan(desktopBtn.fittingSize.width, 64, "Desktop search pill includes ⌘F kbd chip")
 
             let transport = MockRuntimeTransport { cmd, _ in
                 if cmd == "sessions.search" {

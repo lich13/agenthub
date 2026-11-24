@@ -268,7 +268,7 @@ final class CodexDesktopParitySuiteTests: XCTestCase {
                 seenInlineKeys.append(act)
                 return true
             }
-            for (code, expected, caseName) in [
+            for (code, expected, _) in [
                 (UInt16(126), ComposerNSTextView.InlineKeyAction.arrowUp, "inline-key-arrow-up"),
                 (UInt16(125), .arrowDown, "inline-key-arrow-down"),
                 (UInt16(36), .confirmSelection, "inline-key-return-confirm"),
@@ -644,6 +644,78 @@ final class CodexDesktopParitySuiteTests: XCTestCase {
             await desktop.connect(confirmOwner: false)
             await desktop.bindAttachmentsIfNeeded(bounds: bounds, handles: [])
             XCTAssertNil(desktop.attachmentBindingId)
+
+            // 9b) Malformed/incomplete attachment response maps DecodingError to fixed safe Chinese copy while preserving genuine Rust FFI errors
+            transport.setHandler { cmd, _ in
+                if cmd == "codex.desktop.attach" {
+                    return Data("{\"sessionId\":\"sess-mal\",\"threadId\":\"th-1\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8)
+                }
+                if cmd == "codex.desktop.attachments" {
+                    return Data("{}".utf8)
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            attachmentErrors.removeAll()
+            await desktop.connect(confirmOwner: false)
+            await desktop.bindAttachmentsIfNeeded(bounds: bounds, handles: [])
+            XCTAssertNil(desktop.attachmentBindingId)
+            XCTAssertEqual(attachmentErrors.last, "附件通道响应无效")
+            XCTAssertFalse(attachmentErrors.last?.contains("未能读取数据") == true)
+
+            transport.setHandler { cmd, _ in
+                if cmd == "codex.desktop.attachments" {
+                    throw AgentHubFFIError("附件授权已过期，请重新选择")
+                }
+                return Data("{\"ok\":true}".utf8)
+            }
+            await desktop.bindAttachmentsIfNeeded(bounds: bounds, handles: [])
+            XCTAssertEqual(attachmentErrors.last, "附件授权已过期，请重新选择")
+
+            // 9c) Pasteboard ingress & file-chooser errors route through safe attachment copy (never raw DecodingError or stuck actionError)
+            transport.setHandler { cmd, _ in
+                switch cmd {
+                case "codex.desktop.attach":
+                    return Data("{\"sessionId\":\"sess-paste\",\"threadId\":\"th-1\",\"revision\":0,\"connected\":true,\"writable\":true,\"runtime\":\"idle\",\"requests\":[],\"queue\":[]}".utf8)
+                case "codex.desktop.attachments":
+                    return Data("{\"bindingId\":\"b-paste\",\"pasteDisposition\":null}".utf8)
+                case "codex.desktop.paste":
+                    return Data("{}".utf8) // missing bindingId -> DecodingError
+                case "codex.desktop.choose":
+                    return Data("{\"item\":{}}".utf8) // missing handle/name/kind -> DecodingError
+                default:
+                    return Data("{\"ok\":true}".utf8)
+                }
+            }
+            attachmentErrors.removeAll()
+            await desktop.connect(confirmOwner: false)
+            let badDecodePaste = await desktop.handlePasteboardIngress(currentHandles: [])
+            XCTAssertFalse(badDecodePaste)
+            XCTAssertEqual(attachmentErrors.last, "附件通道响应无效")
+            XCTAssertNil(desktop.actionError, "Attachment paste DecodingError must report via onAttachmentError, not actionError")
+
+            do {
+                _ = try await desktop.chooseItem(kind: "file")
+                XCTFail("Expected malformed DesktopChosenItem to fail decoding")
+            } catch {
+                let sanitized = CodexDesktopStore.safeAttachmentErrorMessage(error)
+                XCTAssertEqual(sanitized, "附件通道响应无效")
+                XCTAssertFalse(sanitized.contains("未能读取数据"))
+            }
+
+            transport.setHandler { cmd, _ in
+                switch cmd {
+                case "codex.desktop.attachments":
+                    return Data("{\"bindingId\":\"b-paste\",\"pasteDisposition\":null}".utf8)
+                case "codex.desktop.paste":
+                    throw AgentHubFFIError("图片大小超出上限")
+                default:
+                    return Data("{\"ok\":true}".utf8)
+                }
+            }
+            let oversizedPaste = await desktop.handlePasteboardIngress(currentHandles: [])
+            XCTAssertFalse(oversizedPaste)
+            XCTAssertEqual(attachmentErrors.last, "图片大小超出上限")
+            XCTAssertNil(desktop.actionError, "Attachment paste FFI error must route to onAttachmentError so re-selection clears it")
 
             // 10-12) Real isolated FFIRuntimeBridge integration: attach, attachments, and paste C ABI accept wrapped request JSON!
             let isoDir = FileManager.default.temporaryDirectory.appendingPathComponent("ah-desktop-ffi-\(UUID().uuidString)")

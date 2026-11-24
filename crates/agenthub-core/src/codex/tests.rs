@@ -3503,6 +3503,7 @@ impl ThreadDetailPageFixture {
             message_count: events.len(),
             latest_message: None,
             cwd: Some("/tmp".to_string()),
+            workspace_root: None,
             model: None,
             rollout_path: Some(rollout),
             active_turn_id: None,
@@ -3643,4 +3644,107 @@ fn mark_codex_home(home: &Path) {
 
 fn fallback_codex_home(root: &Path) -> PathBuf {
     root.join("root/.codex")
+}
+
+#[test]
+fn new_session_meta_preserves_cwd_excludes_exec_spawn_edges_attached_parent_and_converges_orphaned_turn(
+) {
+    let root = unique_temp_dir("codex-stage3-visibility-cwd");
+    fs::create_dir_all(&root).unwrap();
+    let rollout_main = root.join("rollout-main.jsonl");
+    fs::write(
+        &rollout_main,
+        [
+            json!({"type":"session_meta","payload":{"id":"main-1","cwd":"/workspace/中文工作区"}})
+                .to_string(),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-orphan"}})
+                .to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let rollout_other = root.join("rollout-other.jsonl");
+    fs::write(
+        &rollout_other,
+        json!({"type":"session_meta","payload":{"id":"exec-1","cwd":"/workspace/中文工作区"}})
+            .to_string(),
+    )
+    .unwrap();
+    let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads(
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            thread_source TEXT NOT NULL,
+            attached_thread_parent_id TEXT,
+            cwd TEXT NOT NULL,
+            title TEXT NOT NULL
+        );
+        CREATE TABLE thread_spawn_edges(
+            parent_thread_id TEXT NOT NULL,
+            child_thread_id TEXT NOT NULL
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES('main-1', ?1, 1, 10, 'vscode', 'user', NULL, '/workspace/fallback', '主线程')",
+        [rollout_main.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES('exec-ordinary', ?1, 1, 9, 'exec', 'user', NULL, '/workspace/中文工作区', '普通非探测 exec 任务')",
+        [rollout_other.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES('guardian-1', ?1, 1, 8, 'vscode', 'guardian_review', NULL, '/workspace/中文工作区', '审查任务')",
+        [rollout_other.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES('attached-child', ?1, 1, 7, 'vscode', 'user', 'main-1', '/workspace/中文工作区', '附着子线程')",
+        [rollout_other.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES('edge-child', ?1, 1, 6, 'vscode', 'user', NULL, '/workspace/中文工作区', '边子线程')",
+        [rollout_other.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO thread_spawn_edges VALUES('main-1', 'edge-child')",
+        [],
+    )
+    .unwrap();
+
+    let paths = CodexPaths::new(&root);
+    let rows = list_threads(&paths, false, Some("中文工作区"), 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "main-1");
+    assert_eq!(rows[0].cwd.as_deref(), Some("/workspace/中文工作区"));
+    assert_eq!(rows[0].status, ThreadStatus::Running);
+
+    let (hidden, _) = hidden_and_archived_thread_ids(&paths).unwrap();
+    for expected_hidden in [
+        "exec-ordinary",
+        "guardian-1",
+        "attached-child",
+        "edge-child",
+    ] {
+        assert!(
+            hidden.contains(expected_hidden),
+            "missing {expected_hidden}"
+        );
+    }
+
+    super::TEST_CODEX_HOST_ALIVE.with(|slot| slot.set(Some(false)));
+    let rows_orphaned = list_threads(&paths, false, None, 10).unwrap();
+    super::TEST_CODEX_HOST_ALIVE.with(|slot| slot.set(None));
+    assert_eq!(rows_orphaned[0].status, ThreadStatus::Recoverable);
+    assert_eq!(rows_orphaned[0].active_turn_id, None);
+
+    let _ = fs::remove_dir_all(root);
 }

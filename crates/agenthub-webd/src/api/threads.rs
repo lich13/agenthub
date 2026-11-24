@@ -73,7 +73,11 @@ pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
 
 pub(crate) async fn list_threads(state: AppState, query: ThreadsQuery) -> ApiResponse {
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        linux_adapter::list_threads_read_model(&state, query)
+        let platform = agenthub_core::platform::PlatformPaths::linux_server();
+        let plan = AgentHubUseCases::new(&platform)
+            .threads()
+            .list_read(query)?;
+        thread_service::load_thread_read_model_inputs(&state.codex_paths(), &plan)
     })
     .await
     .map_err(anyhow::Error::from)??)
@@ -95,7 +99,7 @@ pub(crate) async fn thread_detail(
         })
         .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     match agenthub_core::read_tasks::spawn_blocking(move || {
-        linux_adapter::window_thread_detail_read_model(&state, &plan)
+        thread_service::read_window_thread_detail(&state.codex_paths(), &plan)
     })
     .await
     .map_err(anyhow::Error::from)?
@@ -122,7 +126,7 @@ pub(crate) async fn thread_blocks(
         .blocks(&id, query.limit, query.before.clone())
         .map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))?;
     match agenthub_core::read_tasks::spawn_blocking(move || {
-        linux_adapter::thread_blocks_read_model(&state, &plan)
+        thread_service::read_thread_blocks_page(&state.codex_paths(), &plan)
     })
     .await
     .map_err(anyhow::Error::from)?

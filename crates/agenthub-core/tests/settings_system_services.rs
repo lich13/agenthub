@@ -7,11 +7,12 @@ use agenthub_core::{
     services::{
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
-            normalize_probe_settings_patch, plan_probe_settings_save,
-            probe_settings_view_with_capability, ProbeNotificationsSavePatch, ProbeSecretState,
-            ProbeSettingsSavePatch, ProbeSettingsSaveRequest, PROBE_BARK_DEVICE_KEY_SETTING,
+            normalize_probe_settings_patch, plan_probe_settings_save, ProbeNotificationsSavePatch,
+            ProbeSecretState, ProbeSettingsSavePatch, ProbeSettingsSaveRequest,
+            PROBE_BARK_DEVICE_KEY_SETTING,
         },
         system::{require_capability, system_capabilities_for_surface, Capability},
+        use_cases::AgentHubUseCases,
     },
 };
 
@@ -28,7 +29,7 @@ fn linux_capabilities_expose_api_and_maintenance_features() {
     assert!(capabilities.thread_cleanup);
     assert!(capabilities.thread_archive_actions);
     assert!(capabilities.systemd);
-    assert!(!capabilities.antigravity_notifications);
+    assert!(capabilities.antigravity_notifications);
     assert!(!capabilities.dsh_notifications);
     assert!(capabilities.linux_update_job);
     assert!(capabilities.prune_backups);
@@ -110,8 +111,11 @@ fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
     config.probe.notifications.server_url = "https://bark.example.com".to_string();
 
     let linux = PlatformPaths::linux_server();
-    let plan = probe_settings_view_with_capability(&config, &linux, ProbeSecretState::Configured)
-        .expect("Linux should expose shared Probe settings");
+    let plan = AgentHubUseCases::with_config(&config, &linux)
+        .settings()
+        .expect("Linux should expose shared Probe settings")
+        .probe_settings_view(ProbeSecretState::Configured)
+        .expect("Linux Probe settings view should build");
     let serialized = serde_json::to_string(&plan).unwrap();
 
     assert!(plan.notifications.device_key_configured);
@@ -120,9 +124,10 @@ fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
     assert!(!serialized.contains("device_key\":\""));
 
     let macos = PlatformPaths::macos("/fixture/home");
-    assert!(
-        probe_settings_view_with_capability(&config, &macos, ProbeSecretState::Missing).is_ok()
-    );
+    assert!(AgentHubUseCases::with_config(&config, &macos)
+        .settings()
+        .and_then(|s| s.probe_settings_view(ProbeSecretState::Missing))
+        .is_ok());
 }
 
 #[test]

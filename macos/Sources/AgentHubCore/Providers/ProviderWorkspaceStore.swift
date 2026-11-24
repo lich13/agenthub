@@ -6,7 +6,6 @@ import SwiftUI
 final class ProviderWorkspaceStore: ObservableObject {
     let store: RuntimeConnectionStore
     let workspace: WorkspaceId
-    var isCompactMobile: Bool
     weak var coordinatorRef: ConversationTableCoordinator?
     private var observations = Set<AnyCancellable>()
 
@@ -21,11 +20,34 @@ final class ProviderWorkspaceStore: ObservableObject {
     let motionObserver = AccessibilityMotionObserver()
 
     @Published var query: String = ""
+    @Published var groupingMode: ProjectWorkspaceGroupingMode = .flat {
+        didSet {
+            if oldValue != groupingMode { syncPartitionedSelection() }
+        }
+    }
+    @Published var workspaceFilter: ProjectWorkspaceFilter = .all {
+        didSet {
+            if oldValue != workspaceFilter { syncPartitionedSelection() }
+        }
+    }
+    @Published var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
+        didSet {
+            if oldValue != collapsedWorkspaceKeys { syncPartitionedSelection() }
+        }
+    }
+    @Published var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
+        didSet {
+            if oldValue != collapsedArchivedWorkspaceKeys { syncPartitionedSelection() }
+        }
+    }
     @Published var activeItems: [UnifiedSessionSummaryItem] = []
     @Published var archivedItems: [UnifiedSessionSummaryItem] = []
     @Published var archivedOpen: Bool = false
     @Published var selectedKey: String?
-    @Published var mobileDetailOpen: Bool = false
+    @Published var externalSeedItem: UnifiedSessionSummaryItem?
+    var skipSidebarListFetch: Bool = false
+    var onExternalMutation: (() -> Void)?
+    var onExternalSelectSession: ((String?) -> Void)?
 
     @Published var rows: [ConversationRowItem] = []
     @Published var currentDetailHistory: HistoryMetadata?
@@ -53,12 +75,6 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var batchExecuteError: String?
     @Published var batchPreview: SessionBatchPreview?
     @Published var batchResult: SessionBatchResult?
-    @Published var claudeDeletePreview: ClaudeDeletePreview?
-    @Published var claudeDeleteError: String?
-    @Published var claudeDeleteResiduals: [String] = []
-    @Published var grokDeletePreview: GrokDeletePreview?
-    @Published var grokDeleteError: String?
-    @Published var grokDeleteResiduals: [String] = []
 
     @Published var headerInlineRename: Bool = false
     @Published var claudeOwnershipKey: String?
@@ -68,16 +84,26 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var feedbackMessage: String?
     @Published var errorMessage: String?
 
-    init(store: RuntimeConnectionStore, workspace: WorkspaceId, isCompactMobile: Bool) {
+    init(store: RuntimeConnectionStore, workspace: WorkspaceId) {
         self.store = store
         self.workspace = workspace
-        self.isCompactMobile = isCompactMobile
         self.sourceRevision = store.revision
         for changes in [threadStore.objectWillChange, claudeHistoryStore.objectWillChange,
                         grokHistoryStore.objectWillChange, providerHistoryStore.objectWillChange,
                         timelineWindow.objectWillChange, motionObserver.objectWillChange] {
             changes.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
         }
+        NotificationCenter.default.publisher(for: .agentHubCodexDesktopViewChanged)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.applyLiveCodexDesktopOverlay()
+                }
+            }
+            .store(in: &observations)
+    }
+
+    var supportsWorkspaceGrouping: Bool {
+        provider != .grokbot
     }
 
     var provider: SessionProvider {
@@ -111,16 +137,103 @@ final class ProviderWorkspaceStore: ObservableObject {
         batchOperations(for: activeSelectionPartition)
     }
 
+    var filteredActiveItems: [UnifiedSessionSummaryItem] {
+        guard supportsWorkspaceGrouping, workspaceFilter != .all else { return activeItems }
+        return activeItems.filter {
+            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.cwd, workspaceRoot: $0.workspaceRoot)
+        }
+    }
+
+    var filteredArchivedItems: [UnifiedSessionSummaryItem] {
+        guard supportsWorkspaceGrouping, workspaceFilter != .all else { return archivedItems }
+        return archivedItems.filter {
+            ProjectWorkspaceEngine.matchesFilter(workspaceFilter, cwd: $0.cwd, workspaceRoot: $0.workspaceRoot)
+        }
+    }
+
+    var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
+        ProjectWorkspaceEngine.buildGroups(
+            items: filteredActiveItems,
+            idOf: \.sessionKey,
+            cwdOf: \.cwd,
+            workspaceRootOf: \.workspaceRoot,
+            updatedAtOf: \.updatedAt,
+            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
+        )
+    }
+
+    var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
+        ProjectWorkspaceEngine.buildGroups(
+            items: filteredArchivedItems,
+            idOf: \.sessionKey,
+            cwdOf: \.cwd,
+            workspaceRootOf: \.workspaceRoot,
+            updatedAtOf: \.updatedAt,
+            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
+        )
+    }
+
+    var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
+        ProjectWorkspaceEngine.buildGroups(
+            items: activeItems + (archivedOpen ? archivedItems : []),
+            idOf: \.sessionKey,
+            cwdOf: \.cwd,
+            workspaceRootOf: \.workspaceRoot,
+            updatedAtOf: \.updatedAt,
+            statusOf: ProjectWorkspaceEngine.itemPriorityStatus
+        )
+    }
+
+    var visualOrderedActiveKeys: [String] {
+        if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
+            return ProjectWorkspaceEngine.visualOrderedKeys(
+                groups: activeWorkspaceGroups,
+                collapsedKeys: collapsedWorkspaceKeys,
+                idOf: \.sessionKey
+            )
+        }
+        return filteredActiveItems.map(\.sessionKey)
+    }
+
+    var visualOrderedArchivedKeys: [String] {
+        if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
+            return ProjectWorkspaceEngine.visualOrderedKeys(
+                groups: archivedWorkspaceGroups,
+                collapsedKeys: collapsedArchivedWorkspaceKeys,
+                idOf: \.sessionKey
+            )
+        }
+        return filteredArchivedItems.map(\.sessionKey)
+    }
+
     var allVisibleItems: [UnifiedSessionSummaryItem] {
-        activeItems + (archivedOpen ? archivedItems : [])
+        filteredActiveItems + (archivedOpen ? filteredArchivedItems : [])
+    }
+
+    var isRemoteProviderUnsupported: Bool {
+        guard store.target == .remote, store.capabilities.isReady else { return false }
+        switch provider {
+        case .antigravity: return !store.capabilities.antigravitySessions
+        case .dsh: return !store.capabilities.dshSessions
+        default: return false
+        }
     }
 
     var selectedItem: UnifiedSessionSummaryItem? {
-        if let key = selectedKey, let match = allVisibleItems.first(where: { $0.sessionKey == key }) {
-            return match
+        if let key = selectedKey {
+            if let match = (activeItems + archivedItems).first(where: { $0.sessionKey == key }) {
+                return match
+            }
+            if let searchSelection, searchSelection.sessionKey == key { return searchSelection }
+            if let externalSeedItem, externalSeedItem.sessionKey == key { return externalSeedItem }
         }
-        if let searchSelection, searchSelection.sessionKey == selectedKey { return searchSelection }
-        return isCompactMobile ? nil : activeItems.first
+        if supportsWorkspaceGrouping && workspaceFilter != .all {
+            return filteredActiveItems.first
+        }
+        if !query.isEmpty {
+            return filteredActiveItems.first
+        }
+        return filteredActiveItems.first ?? activeItems.first
     }
 
     var displayedRows: [ConversationRowItem] {
@@ -128,23 +241,35 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func syncPartitionedSelection() {
-        let baseScope = "\(store.revision):\(workspace.rawValue):\(query)"
+        let baseScope = "\(store.revision):\(workspace.rawValue):\(query):\(workspaceFilter.scopeToken)"
         partitionedSelection.sync(
             activeScope: "\(baseScope)#active",
-            activeVisible: activeItems.map(\.sessionKey),
+            activeVisible: visualOrderedActiveKeys,
             archivedScope: "\(baseScope)#archived",
-            archivedVisible: archivedItems.map(\.sessionKey),
+            archivedVisible: visualOrderedArchivedKeys,
             archivedOpen: supportsArchive && archivedOpen
         )
     }
 
     func selectAllVisible() {
         _ = partitionedSelection.selectAll(
-            activeVisible: activeItems.map(\.sessionKey),
-            archivedVisible: archivedItems.map(\.sessionKey),
+            activeVisible: visualOrderedActiveKeys,
+            archivedVisible: visualOrderedArchivedKeys,
             supportsArchive: supportsArchive,
             archivedOpen: archivedOpen
         )
+        batchPreview = nil
+        batchResult = nil
+        batchPrepareError = nil
+        batchExecuteError = nil
+    }
+
+    func selectAllInWorkspaceGroup(keys: [String], partition: SessionSelectionPartition) {
+        guard !keys.isEmpty else { return }
+        var state = partitionedSelection.state(for: partition)
+        state = SessionSelectionEngine.add(state, keys: keys)
+        if state.anchor == nil { state.anchor = keys.first }
+        partitionedSelection.setState(state, for: partition)
         batchPreview = nil
         batchResult = nil
         batchPrepareError = nil
@@ -160,64 +285,35 @@ final class ProviderWorkspaceStore: ObservableObject {
         guard isCurrent() else { return }
         do {
             switch provider {
-            case .codex:
-                struct ListArgs: Encodable {
-                    let archived: Bool
-                    let q: String?
-                    let limit: Int
+            case .codex, .claudeCode, .grok, .antigravity, .dsh:
+                if isRemoteProviderUnsupported {
+                    activeItems = []
+                    archivedItems = []
+                    syncPartitionedSelection()
+                    errorMessage = nil
+                    return
                 }
-                let active: [ThreadSummary] = try await store.rpc(
-                    "threads.list",
-                    args: ListArgs(archived: false, q: query.isEmpty ? nil : query, limit: 120)
+                let active = try await Self.fetchProviderSummaries(
+                    store: store,
+                    provider: provider,
+                    query: query,
+                    archived: false,
+                    limit: 500,
+                    threadStore: threadStore
                 )
                 guard isCurrent() else { return }
-                activeItems = active.map { mapCodexSummary($0, archived: false) }
-                if archivedOpen {
-                    let arch: [ThreadSummary] = try await store.rpc(
-                        "threads.list",
-                        args: ListArgs(archived: true, q: query.isEmpty ? nil : query, limit: 120)
+                activeItems = active
+                if supportsArchive && archivedOpen {
+                    let arch = try await Self.fetchProviderSummaries(
+                        store: store,
+                        provider: provider,
+                        query: query,
+                        archived: true,
+                        limit: 500,
+                        threadStore: threadStore
                     )
                     guard isCurrent() else { return }
-                    archivedItems = arch.map { mapCodexSummary($0, archived: true) }
-                }
-
-            case .claudeCode:
-                struct ClaudeListArgs: Encodable { let q: String?; let limit: Int }
-                let list: [ClaudeSessionSummary] = try await store.rpc(
-                    "claude.list",
-                    args: ClaudeListArgs(q: query.isEmpty ? nil : query, limit: 100)
-                )
-                guard isCurrent() else { return }
-                activeItems = list.map(mapClaudeSummary)
-
-            case .grok:
-                struct GrokListArgs: Encodable { let q: String?; let limit: Int }
-                let list: [GrokSessionSummary] = try await store.rpc(
-                    "grok.list",
-                    args: GrokListArgs(q: query.isEmpty ? nil : query, limit: 100)
-                )
-                guard isCurrent() else { return }
-                activeItems = list.map(mapGrokSummary)
-
-            case .antigravity, .dsh:
-                let prefix = (provider == .antigravity) ? "antigravity" : "dsh"
-                struct ProvListWrap: Encodable {
-                    struct Inner: Encodable { let q: String?; let archived: Bool; let limit: Int }
-                    let request: Inner
-                }
-                let active: [ProviderSessionSummary] = try await store.rpc(
-                    "\(prefix).list",
-                    args: ProvListWrap(request: .init(q: query.isEmpty ? nil : query, archived: false, limit: 100))
-                )
-                guard isCurrent() else { return }
-                activeItems = active.map(mapProviderSummary)
-                if archivedOpen {
-                    let arch: [ProviderSessionSummary] = try await store.rpc(
-                        "\(prefix).list",
-                        args: ProvListWrap(request: .init(q: query.isEmpty ? nil : query, archived: true, limit: 100))
-                    )
-                    guard isCurrent() else { return }
-                    archivedItems = arch.map(mapProviderSummary)
+                    archivedItems = arch
                 }
 
             case .grokbot:
@@ -232,7 +328,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     localOnly: true
                 )
                 guard isCurrent() else { return }
-                activeItems = list.map(mapGrokBotSummary)
+                activeItems = list.map(Self.mapGrokBotSummary)
             }
             syncPartitionedSelection()
             errorMessage = nil
@@ -240,6 +336,92 @@ final class ProviderWorkspaceStore: ObservableObject {
             guard isCurrent() else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    static func isCodingProviderSupported(provider: SessionProvider, store: RuntimeConnectionStore) -> Bool {
+        if provider == .grokbot { return false }
+        if store.target == .remote, store.capabilities.isReady {
+            switch provider {
+            case .antigravity: return store.capabilities.antigravitySessions
+            case .dsh: return store.capabilities.dshSessions
+            default: return true
+            }
+        }
+        return true
+    }
+
+    static func fetchProviderSummaries(
+        store: RuntimeConnectionStore,
+        provider: SessionProvider,
+        query: String,
+        archived: Bool,
+        limit: Int = 500,
+        threadStore: ThreadMessageStore? = nil
+    ) async throws -> [UnifiedSessionSummaryItem] {
+        guard isCodingProviderSupported(provider: provider, store: store) else { return [] }
+        let qArg = query.isEmpty ? nil : query
+        switch provider {
+        case .codex:
+            struct ListArgs: Encodable {
+                let archived: Bool
+                let q: String?
+                let limit: Int
+            }
+            let rows: [ThreadSummary] = try await store.rpc(
+                "threads.list",
+                args: ListArgs(archived: archived, q: qArg, limit: limit)
+            )
+            return rows.map {
+                mapCodexSummaryStatic($0, archived: archived, store: store, threadStore: threadStore)
+            }
+        case .claudeCode:
+            if archived { return [] }
+            struct ClaudeListArgs: Encodable { let q: String?; let limit: Int }
+            let rows: [ClaudeSessionSummary] = try await store.rpc(
+                "claude.list",
+                args: ClaudeListArgs(q: qArg, limit: limit)
+            )
+            return rows.map(mapClaudeSummaryStatic)
+        case .grok:
+            if archived { return [] }
+            struct GrokListArgs: Encodable { let q: String?; let limit: Int }
+            let rows: [GrokSessionSummary] = try await store.rpc(
+                "grok.list",
+                args: GrokListArgs(q: qArg, limit: limit)
+            )
+            return rows.map(mapGrokSummaryStatic)
+        case .antigravity, .dsh:
+            let prefix = (provider == .antigravity) ? "antigravity" : "dsh"
+            struct ProvListWrap: Encodable {
+                struct Inner: Encodable { let q: String?; let archived: Bool; let limit: Int }
+                let request: Inner
+            }
+            let rows: [ProviderSessionSummary] = try await store.rpc(
+                "\(prefix).list",
+                args: ProvListWrap(request: .init(q: qArg, archived: archived, limit: limit))
+            )
+            return rows.map(mapProviderSummaryStatic)
+        case .grokbot:
+            return []
+        }
+    }
+
+    static func sendBulkPreview(
+        store: RuntimeConnectionStore,
+        request: SessionBatchRequest,
+        at revision: UInt64
+    ) async throws -> SessionBatchPreview {
+        struct Wrap: Encodable { let request: SessionBatchRequest }
+        return try await store.rpc("sessions.bulkPreview", args: Wrap(request: request), at: revision)
+    }
+
+    static func sendBulkExecute(
+        store: RuntimeConnectionStore,
+        request: SessionBatchExecuteRequest,
+        at revision: UInt64
+    ) async throws -> SessionBatchResult {
+        struct Wrap: Encodable { let request: SessionBatchExecuteRequest }
+        return try await store.rpc("sessions.bulkExecute", args: Wrap(request: request), at: revision)
     }
 
     func scheduleDebouncedCodexTailRefresh() {
@@ -287,6 +469,15 @@ final class ProviderWorkspaceStore: ObservableObject {
         if searchSelection?.sessionKey == updated.sessionKey, searchSelection != updated {
             searchSelection = updated
         }
+        if let seed = externalSeedItem, seed.sessionKey == updated.sessionKey {
+            var merged = updated
+            if merged.storageSize == nil {
+                merged.storageSize = seed.storageSize
+            }
+            if externalSeedItem != merged {
+                externalSeedItem = merged
+            }
+        }
     }
 
     func fetchSessionDetail(for item: UnifiedSessionSummaryItem) async {
@@ -313,7 +504,8 @@ final class ProviderWorkspaceStore: ObservableObject {
                 syncSidebarItem(mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived"))
                 let slot = threadStore.applyDetail(detail)
                 incomingHistory = detail.history
-                if subagents != slot.subagents { subagents = slot.subagents }
+                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
+                if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildCodexRows(
@@ -354,7 +546,8 @@ final class ProviderWorkspaceStore: ObservableObject {
                     subagents: detail.subagents
                 )
                 incomingHistory = detail.history
-                if subagents != slot.subagents { subagents = slot.subagents }
+                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
+                if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
@@ -600,29 +793,70 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     func performRename(item: UnifiedSessionSummaryItem, newTitle: String) async throws {
         guard store.revision == sourceRevision else { throw CancellationError() }
+        try await Self.performRenameStatic(
+            store: store,
+            provider: provider,
+            sessionKey: item.sessionKey,
+            newTitle: newTitle,
+            threadStore: threadStore
+        )
+        if !skipSidebarListFetch {
+            await fetchSessionList()
+        }
+        onExternalMutation?()
+    }
+
+    static func performRenameStatic(
+        store: RuntimeConnectionStore,
+        provider: SessionProvider,
+        sessionKey: String,
+        newTitle: String,
+        threadStore: ThreadMessageStore? = nil
+    ) async throws {
         switch provider {
         case .codex:
             struct RenameArgs: Encodable { let threadId: String; let name: String }
-            let ack: StartedJobResponse = try await store.rpc("threads.rename", args: RenameArgs(threadId: item.sessionKey, name: newTitle))
+            let ack: StartedJobResponse = try await store.rpc("threads.rename", args: RenameArgs(threadId: sessionKey, name: newTitle))
             store.trackStartedJob(ack.jobId)
-            threadStore.recordOptimisticTitle(threadId: item.sessionKey, title: newTitle)
+            threadStore?.recordOptimisticTitle(threadId: sessionKey, title: newTitle)
         case .claudeCode:
             struct Args: Encodable { let sessionKey: String; let title: String }
-            let _: ClaudeSessionSummary = try await store.rpc("claude.rename", args: Args(sessionKey: item.sessionKey, title: newTitle))
+            let _: ClaudeSessionSummary = try await store.rpc("claude.rename", args: Args(sessionKey: sessionKey, title: newTitle))
         case .grok:
             struct Args: Encodable { let id: String; let title: String }
-            let _: GrokSessionSummary = try await store.rpc("grok.rename", args: Args(id: item.sessionKey, title: newTitle))
+            let _: GrokSessionSummary = try await store.rpc("grok.rename", args: Args(id: sessionKey, title: newTitle))
         case .antigravity, .dsh:
             let cmd = provider == .antigravity ? "antigravity.rename" : "dsh.rename"
             struct Wrap: Encodable {
                 struct Inner: Encodable { let sessionKey: String; let title: String }
                 let request: Inner
             }
-            let _: ProviderSessionSummary = try await store.rpc(cmd, args: Wrap(request: .init(sessionKey: item.sessionKey, title: newTitle)))
+            let _: ProviderSessionSummary = try await store.rpc(cmd, args: Wrap(request: .init(sessionKey: sessionKey, title: newTitle)))
         case .grokbot:
             break
         }
-        await fetchSessionList()
+    }
+
+    static func performToggleArchiveStatic(
+        store: RuntimeConnectionStore,
+        provider: SessionProvider,
+        sessionKey: String,
+        currentlyArchived: Bool
+    ) async throws {
+        if provider == .codex {
+            struct Args: Encodable { let threadId: String }
+            let cmd = currentlyArchived ? "threads.restore" : "threads.archive"
+            let ack: StartedJobResponse = try await store.rpc(cmd, args: Args(threadId: sessionKey))
+            store.trackStartedJob(ack.jobId)
+        } else {
+            let prefix = provider == .antigravity ? "antigravity" : "dsh"
+            let action = currentlyArchived ? "restore" : "archive"
+            struct Wrap: Encodable {
+                struct Inner: Encodable { let sessionKey: String }
+                let request: Inner
+            }
+            let _: ProviderSessionSummary = try await store.rpc("\(prefix).\(action)", args: Wrap(request: .init(sessionKey: sessionKey)))
+        }
     }
 
     func toggleSingleArchive(_ item: UnifiedSessionSummaryItem) async {
@@ -653,8 +887,12 @@ final class ProviderWorkspaceStore: ObservableObject {
             if !item.archived && selectedKey == item.sessionKey && !archivedOpen {
                 selectedKey = nextFallbackKey
                 headerInlineRename = false
+                onExternalSelectSession?(nextFallbackKey)
             }
-            await fetchSessionList()
+            if !skipSidebarListFetch {
+                await fetchSessionList()
+            }
+            onExternalMutation?()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -662,86 +900,8 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     func triggerSingleDelete(_ item: UnifiedSessionSummaryItem) async {
         guard store.revision == sourceRevision else { return }
-        if provider == .claudeCode {
-            claudeDeleteError = nil
-            claudeDeleteResiduals = []
-            struct Args: Encodable { let sessionKey: String }
-            do {
-                claudeDeletePreview = try await store.rpc("claude.deletePreview", args: Args(sessionKey: item.sessionKey))
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        } else if provider == .grok {
-            grokDeleteError = nil
-            grokDeleteResiduals = []
-            struct Args: Encodable { let id: String }
-            do {
-                grokDeletePreview = try await store.rpc("grok.deletePreview", args: Args(id: item.sessionKey))
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        } else {
-            let targetPartition: SessionSelectionPartition = item.archived ? .archived : .active
-            await prepareBatch(operation: .delete, keys: [item.sessionKey], partition: targetPartition)
-        }
-    }
-
-    func confirmClaudeDelete(_ preview: ClaudeDeletePreview) async {
-        guard store.revision == sourceRevision else { return }
-        batchBusy = true
-        claudeDeleteError = nil
-        defer { batchBusy = false }
-        struct Wrap: Encodable {
-            struct Inner: Encodable { let sessionKey: String; let confirmed: Bool; let fingerprint: String }
-            let request: Inner
-        }
-        do {
-            let result: ClaudeDeleteResult = try await store.rpc(
-                "claude.deleteExecute",
-                args: Wrap(request: .init(sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint))
-            )
-            if let residuals = result.residuals, !residuals.isEmpty {
-                claudeDeleteResiduals = residuals
-                claudeDeleteError = "部分任务文件未能清理"
-            } else {
-                claudeDeletePreview = nil
-                claudeDeleteResiduals = []
-                activeItems.removeAll { $0.sessionKey == preview.sessionKey }
-                if selectedKey == preview.sessionKey { selectedKey = nil }
-                await fetchSessionList()
-            }
-        } catch {
-            claudeDeleteError = error.localizedDescription
-        }
-    }
-
-    func confirmGrokDelete(_ preview: GrokDeletePreview) async {
-        guard store.revision == sourceRevision else { return }
-        batchBusy = true
-        grokDeleteError = nil
-        defer { batchBusy = false }
-        struct Wrap: Encodable {
-            struct Inner: Encodable { let id: String; let confirmed: Bool; let fingerprint: String }
-            let request: Inner
-        }
-        do {
-            let result: GrokDeleteResult = try await store.rpc(
-                "grok.deleteExecute",
-                args: Wrap(request: .init(id: preview.id, confirmed: true, fingerprint: preview.fingerprint))
-            )
-            if let residuals = result.residuals, !residuals.isEmpty {
-                grokDeleteResiduals = residuals
-                grokDeleteError = "部分任务文件未能清理"
-            } else {
-                grokDeletePreview = nil
-                grokDeleteResiduals = []
-                activeItems.removeAll { $0.sessionKey == preview.id }
-                if selectedKey == preview.id { selectedKey = nil }
-                await fetchSessionList()
-            }
-        } catch {
-            grokDeleteError = error.localizedDescription
-        }
+        let targetPartition: SessionSelectionPartition = item.archived ? .archived : .active
+        await prepareBatch(operation: .delete, keys: [item.sessionKey], partition: targetPartition)
     }
 
     func fetchClaudeOwnershipDiagnostics(sessionKey: String) async {
@@ -827,10 +987,14 @@ final class ProviderWorkspaceStore: ObservableObject {
             }
             if let sel = selectedKey, okSet.contains(sel) {
                 selectedKey = nil
+                onExternalSelectSession?(nil)
             }
         }
         batchExecuteError = outcome.errorMessage
-        await fetchSessionList()
+        if !skipSidebarListFetch {
+            await fetchSessionList()
+        }
+        onExternalMutation?()
     }
 
     // MARK: - Bounded Timeline Window Jump (j:/w:/n: Cursors) & Search Reveal
@@ -1000,14 +1164,30 @@ final class ProviderWorkspaceStore: ObservableObject {
                 )
             }
             selectedKey = result.sessionKey
-            mobileDetailOpen = true
             if supportsArchive && !activeItems.contains(where: { $0.sessionKey == result.sessionKey }) {
                 archivedOpen = true
             }
+            onExternalSelectSession?(result.sessionKey)
         } else {
             Task { await self.jumpAndRevealPositionKey(result.positionKey) }
         }
     }
+
+    private static let isoFractionalFormatter: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }()
+
+    private static let isoBasicFormatter = ISO8601DateFormatter()
+
+    private static let statusDateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.calendar = Calendar(identifier: .gregorian)
+        df.dateFormat = "yyyy/M/d HH:mm:ss"
+        return df
+    }()
 
     static func providerSessionStatusText(status: String, updatedAt: String?, archived: Bool) -> String {
         if status == "running" { return "运行中" }
@@ -1017,20 +1197,19 @@ final class ProviderWorkspaceStore: ObservableObject {
         if archived { return "已归档" }
         if status == "unknown" { return "状态未知" }
         if let updatedAt, !updatedAt.isEmpty {
-            let iso = ISO8601DateFormatter()
-            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let fallbackIso = ISO8601DateFormatter()
-            if let date = iso.date(from: updatedAt) ?? fallbackIso.date(from: updatedAt) {
-                let df = DateFormatter()
-                df.dateFormat = "yyyy/M/d HH:mm:ss"
-                return df.string(from: date)
+            if let date = isoFractionalFormatter.date(from: updatedAt) ?? isoBasicFormatter.date(from: updatedAt) {
+                return statusDateFormatter.string(from: date)
             }
         }
         return "最近"
     }
 
     func mapClaudeSummary(_ item: ClaudeSessionSummary) -> UnifiedSessionSummaryItem {
-        let stLabel = Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
+        Self.mapClaudeSummaryStatic(item)
+    }
+
+    static func mapClaudeSummaryStatic(_ item: ClaudeSessionSummary) -> UnifiedSessionSummaryItem {
+        let stLabel = providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
         let chip: (String?, StatusChipTone) = if item.status == "running" {
             ("运行中", .info)
         } else if item.status == "waiting" {
@@ -1045,7 +1224,9 @@ final class ProviderWorkspaceStore: ObservableObject {
             nativeId: item.id,
             title: item.title.isEmpty ? item.id : item.title,
             cwd: item.cwd,
+            workspaceRoot: item.workspaceRoot,
             path: item.path,
+            updatedAt: item.updatedAt,
             statusText: stLabel,
             statusChipBadge: chip.0,
             statusChipTone: chip.1,
@@ -1063,13 +1244,19 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func mapGrokSummary(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
+        Self.mapGrokSummaryStatic(item)
+    }
+
+    static func mapGrokSummaryStatic(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
         UnifiedSessionSummaryItem(
             sessionKey: item.id,
             nativeId: item.id,
             title: item.title.isEmpty ? item.id : item.title,
             cwd: item.cwd,
+            workspaceRoot: item.workspaceRoot,
             path: HistoryAndResumeHelpers.grokHandoffPath(item),
-            statusText: Self.providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
+            updatedAt: item.updatedAt,
+            statusText: providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
             statusChipBadge: item.status == "running" ? "运行中" : nil,
             statusChipTone: .info,
             running: item.status == "running",
@@ -1083,6 +1270,10 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func mapGrokBotSummary(_ item: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
+        Self.mapGrokBotSummary(item)
+    }
+
+    static func mapGrokBotSummary(_ item: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
         let st = item.status == "authorization" ? "需要授权"
             : (item.status == "reply_needed" ? "需要回复" : (!item.path.isEmpty ? "近期缓存" : "未缓存"))
         return UnifiedSessionSummaryItem(
@@ -1090,7 +1281,9 @@ final class ProviderWorkspaceStore: ObservableObject {
             nativeId: item.id,
             title: item.title.isEmpty ? item.id : item.title,
             cwd: item.cwd,
+            workspaceRoot: item.workspaceRoot,
             path: item.path,
+            updatedAt: item.updatedAt,
             statusText: st,
             statusChipBadge: "只读",
             statusChipTone: .neutral,
@@ -1105,12 +1298,19 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func mapCodexSummary(_ s: ThreadSummary, archived: Bool) -> UnifiedSessionSummaryItem {
-        let displayTitle = threadStore.effectiveTitle(
-            threadId: s.id,
-            serverTitle: s.title.isEmpty ? s.id : s.title
-        )
-        let running = (s.status == "Running" || s.activeTurnId != nil)
+        Self.mapCodexSummaryStatic(s, archived: archived, store: store, threadStore: threadStore)
+    }
+
+    static func mapCodexSummaryStatic(
+        _ s: ThreadSummary,
+        archived: Bool,
+        store: RuntimeConnectionStore,
+        threadStore: ThreadMessageStore?
+    ) -> UnifiedSessionSummaryItem {
+        let serverTitle = s.title.isEmpty ? s.id : s.title
+        let displayTitle = threadStore?.effectiveTitle(threadId: s.id, serverTitle: serverTitle) ?? serverTitle
         let isArchived = archived || s.status == "Archived"
+        let running = !isArchived && (s.status == "Running")
         let stText: String = switch s.status {
         case "Running": "运行中"
         case "ReplyNeeded": "待回复"
@@ -1133,12 +1333,14 @@ final class ProviderWorkspaceStore: ObservableObject {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let preview = (rawPreview == displayTitle) ? "" : rawPreview
-        return UnifiedSessionSummaryItem(
+        var item = UnifiedSessionSummaryItem(
             sessionKey: s.id,
             nativeId: s.id,
             title: displayTitle,
             cwd: s.cwd ?? "",
+            workspaceRoot: s.workspaceRoot,
             path: s.rolloutPath ?? "",
+            updatedAt: s.updatedAt,
             previewText: preview,
             statusText: stText,
             statusChipBadge: stText,
@@ -1151,9 +1353,63 @@ final class ProviderWorkspaceStore: ObservableObject {
             canDelete: true,
             storageSize: s.storageSize
         )
+        if !isArchived, store.target == .local,
+           let live = CodexDesktopStore.liveView(revision: store.revision, threadId: s.id),
+           live.connected
+        {
+            item = projectCodexDesktopLiveView(live, onto: item)
+        }
+        return item
+    }
+
+    static func projectCodexDesktopLiveView(
+        _ live: DesktopView,
+        onto base: UnifiedSessionSummaryItem
+    ) -> UnifiedSessionSummaryItem {
+        guard !base.archived, live.connected else { return base }
+        var item = base
+        if !live.requests.isEmpty {
+            item.running = false
+            item.statusText = "等待处理"
+            item.statusChipBadge = "等待处理"
+            item.statusChipTone = .warning
+        } else if live.runtime == "active" || live.activeTurnId != nil {
+            item.running = true
+            item.statusText = "运行中"
+            item.statusChipBadge = "运行中"
+            item.statusChipTone = .info
+        } else if item.running {
+            item.running = false
+            item.statusText = "最近"
+            item.statusChipBadge = "最近"
+            item.statusChipTone = .success
+        }
+        return item
+    }
+
+    func applyLiveCodexDesktopOverlay() {
+        guard provider == .codex, store.target == .local, store.revision == sourceRevision else { return }
+        var changed = false
+        for idx in activeItems.indices {
+            let key = activeItems[idx].sessionKey
+            if let live = CodexDesktopStore.liveView(revision: store.revision, threadId: key), live.connected {
+                let updated = Self.projectCodexDesktopLiveView(live, onto: activeItems[idx])
+                if updated != activeItems[idx] {
+                    activeItems[idx] = updated
+                    changed = true
+                }
+            }
+        }
+        if changed {
+            objectWillChange.send()
+        }
     }
 
     func mapProviderSummary(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
+        Self.mapProviderSummaryStatic(s)
+    }
+
+    static func mapProviderSummaryStatic(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
         let chip: (String?, StatusChipTone) = if s.archived {
             ("已归档", .neutral)
         } else if s.status == "running" {
@@ -1172,8 +1428,10 @@ final class ProviderWorkspaceStore: ObservableObject {
             nativeId: s.id,
             title: s.title.isEmpty ? s.id : s.title,
             cwd: s.cwd,
+            workspaceRoot: s.workspaceRoot,
             path: s.path,
-            statusText: Self.providerSessionStatusText(status: s.status, updatedAt: s.updatedAt, archived: s.archived),
+            updatedAt: s.updatedAt,
+            statusText: providerSessionStatusText(status: s.status, updatedAt: s.updatedAt, archived: s.archived),
             statusChipBadge: chip.0,
             statusChipTone: chip.1,
             running: s.status == "running",

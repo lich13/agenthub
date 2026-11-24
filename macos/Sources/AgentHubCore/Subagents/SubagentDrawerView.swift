@@ -8,6 +8,7 @@ public struct SubagentSummaryBarView: View {
     public let provider: SessionProvider
     public let collection: SubagentCollection?
     public let isSupported: Bool
+    public let capabilitiesReady: Bool
     public let onTogglePanel: (NSResponder?) -> Void
 
     @State private var triggerAnchorView: NSView?
@@ -16,24 +17,30 @@ public struct SubagentSummaryBarView: View {
         provider: SessionProvider,
         collection: SubagentCollection?,
         isSupported: Bool = true,
+        capabilitiesReady: Bool = true,
         onTogglePanel: @escaping (NSResponder?) -> Void
     ) {
         self.provider = provider
         self.collection = collection
         self.isSupported = isSupported
+        self.capabilitiesReady = capabilitiesReady
         self.onTogglePanel = onTogglePanel
     }
 
     public static func shouldDisplay(
         provider: SessionProvider,
         collection: SubagentCollection?,
-        isSupported: Bool
+        isSupported: Bool,
+        capabilitiesReady: Bool = true
     ) -> Bool {
+        guard capabilitiesReady else {
+            return false
+        }
         guard isSupported else {
-            return provider == .codex && collection == nil
+            return provider == .codex
         }
         guard let collection else {
-            return provider == .codex
+            return false
         }
         if collection.agents.isEmpty && collection.complete {
             return false
@@ -49,8 +56,13 @@ public struct SubagentSummaryBarView: View {
     @State private var isHovered: Bool = false
 
     public var body: some View {
-        if Self.shouldDisplay(provider: provider, collection: collection, isSupported: isSupported) {
-            if let collection {
+        if Self.shouldDisplay(
+            provider: provider,
+            collection: collection,
+            isSupported: isSupported,
+            capabilitiesReady: capabilitiesReady
+        ) {
+            if isSupported, let collection {
                 let totalCount = collection.agents.count
                 let counts = collection.counts
                 let countFor: (String) -> Int = { key in
@@ -147,7 +159,7 @@ public struct SubagentSummaryBarView: View {
                 .buttonStyle(PlainHitButtonStyle())
                 .onHover { isHovered = $0 }
                 .accessibilityLabel(provider == .claudeCode ? "本会话子智能体" : "查看直属子智能体")
-            } else if provider == .codex {
+            } else if capabilitiesReady && !isSupported && provider == .codex {
                 HStack {
                     Text("更新当前机器服务后可查看子智能体汇总。")
                         .font(DesignFonts.body(12))

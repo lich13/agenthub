@@ -42,6 +42,7 @@ pub(super) struct Assessment {
     reasons: BTreeSet<&'static str>,
     processes: Vec<ClaudeOwnershipProcess>,
     native_status: Option<String>,
+    native_status_updated_at: Option<i64>,
 }
 impl Assessment {
     fn reason(&mut self, code: &'static str) {
@@ -51,6 +52,9 @@ impl Assessment {
     /// `busy` also covers delegated agents and workflows after the main turn.
     pub fn native_status(&self) -> Option<&str> {
         self.native_status.as_deref()
+    }
+    pub fn native_status_updated_at(&self) -> Option<i64> {
+        self.native_status_updated_at
     }
     pub fn block_reason(&self) -> Option<String> {
         if self.ownership == Ownership::Inactive {
@@ -124,6 +128,8 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
                 started_at: started_ms(date).unwrap() + 500,
                 pid_domain: pid_domain().unwrap(),
                 status: status.map(str::to_owned),
+                status_updated_at: None,
+                updated_at: None,
             }],
         })
     });
@@ -135,11 +141,17 @@ struct Registration {
     pid: u32,
     session_id: String,
     cwd: PathBuf,
+    #[serde(default)]
     proc_start: String,
     started_at: i64,
+    #[serde(default)]
     pid_domain: String,
     #[serde(default)]
     status: Option<String>,
+    #[serde(default)]
+    status_updated_at: Option<i64>,
+    #[serde(default)]
+    updated_at: Option<i64>,
 }
 
 fn pid_domain() -> Option<String> {
@@ -274,6 +286,7 @@ impl Snapshot {
             reasons: BTreeSet::new(),
             processes: Vec::new(),
             native_status: None,
+            native_status_updated_at: None,
         };
         let Some(processes) = &self.processes else {
             result.ownership = Ownership::Unknown;
@@ -282,8 +295,16 @@ impl Snapshot {
         };
         let target_id = |id: &str| id == parsed.id || children.contains(id);
         let domain = pid_domain();
+        let domain_matches = |r: &Registration| {
+            if r.pid_domain.is_empty() {
+                domain.is_some()
+            } else {
+                domain.as_deref() == Some(r.pid_domain.as_str())
+            }
+        };
         for registration in &self.registrations {
-            if domain.as_deref() != Some(&registration.pid_domain)
+            if !registration.pid_domain.is_empty()
+                && domain.as_deref() != Some(&registration.pid_domain)
                 && (target_id(&registration.session_id) || session_cwd(parsed, &registration.cwd))
             {
                 result.reason("foreign_domain");
@@ -314,15 +335,22 @@ impl Snapshot {
             let registrations: Vec<_> = self
                 .registrations
                 .iter()
-                .filter(|r| r.pid == p.pid && domain.as_deref() == Some(r.pid_domain.as_str()))
+                .filter(|r| r.pid == p.pid && domain_matches(r))
                 .collect();
+            let proc_start_verified = |r: &Registration| {
+                if r.proc_start.is_empty() {
+                    p.started_ms.is_some_and(|actual| r.started_at >= actual)
+                } else {
+                    started_ms(&r.proc_start).zip(p.started_ms).is_some_and(
+                        |(registered, actual)| registered == actual && r.started_at >= actual,
+                    )
+                }
+            };
             let verified: Vec<_> = registrations
                 .iter()
                 .filter(|r| {
                     p.role == ProcessRole::Session
-                        && started_ms(&r.proc_start).zip(p.started_ms).is_some_and(
-                            |(registered, actual)| registered == actual && r.started_at >= actual,
-                        )
+                        && proc_start_verified(r)
                         && p.cwd.as_ref().is_none_or(|cwd| same_path(cwd, &r.cwd))
                 })
                 .collect();
@@ -350,7 +378,9 @@ impl Snapshot {
             }
             let mut mismatched = BTreeSet::new();
             for r in &registrations {
-                if started_ms(&r.proc_start) != p.started_ms || p.started_ms.is_none() {
+                if (!r.proc_start.is_empty() && started_ms(&r.proc_start) != p.started_ms)
+                    || p.started_ms.is_none()
+                {
                     mismatched.insert("procStart");
                 }
                 if p.started_ms.is_none_or(|start| r.started_at < start) {
@@ -397,6 +427,8 @@ impl Snapshot {
             });
             if owns {
                 result.native_status = verified[0].status.clone();
+                result.native_status_updated_at =
+                    verified[0].status_updated_at.or(verified[0].updated_at);
             }
             if open_file || owns {
                 result.ownership = Ownership::Open;
@@ -1061,6 +1093,8 @@ mod tests {
             started_at: started_ms(date).unwrap() + 500,
             pid_domain: pid_domain().unwrap(),
             status: None,
+            status_updated_at: None,
+            updated_at: None,
         };
         let snapshot = Snapshot {
             processes: Some(vec![process.clone()]),

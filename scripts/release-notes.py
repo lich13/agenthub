@@ -8,6 +8,24 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.34": {
+        "summary": [
+            "新增跨平台「工作区」总览与 Git Worktree 线程归并，打通 agy CLI 全功能及双端 Bark 推送，修复全平台运行态与子代理防漏并完成架构深度精简"
+        ],
+        "features": [
+            "参考 Orca 新增左侧顶栏「工作区」跨平台总览页及 5 个代码 Agent 页内「按工作区分组／筛选」：并发聚合 Codex、Claude Code、Grok Build、Antigravity 与 DeepSeek Harness 会话，轻量解析 .git worktree 归并至主仓库，支持含子目录边界筛选、视觉顺序多选与跨平台批量归档／删除。",
+            "打通 agy CLI（~/.gemini/antigravity-cli）离线 Bark 探针推送，本机 macOS（Stop Hook + 15s 轮询）与远端 Linux agenthub-webd（15s 只读轮询，新增开放 antigravity_notifications）同步覆盖完成、待回复、权限等待与终态失败通知，并内置升级历史防风暴基线。",
+        ],
+        "fixes": [
+            "全面修复 agy CLI 运行态、子代理防漏与离线管理：根会话 presence 锁树级继承、5 类父链来源防漏与孤儿清理、完整解码 raw_summary 及 .db steps 挂起／失败态、流式解析尾随说明 JSON、补齐缺失 cwd／标题与零时间过滤、对象安全改名及 15 列纳秒 FTS5 归档同步。",
+            "修复 Codex、Claude Code、Grok 与 DSH 运行态识别及主列表净化：Codex 主列表排除 exec、thread_spawn_edges 与附着子线程，保留新版 session_meta 的 cwd 并收敛无存活宿主的遗留回合；Claude 按 statusUpdatedAt 因果收敛陈旧 busy、识别用户中断并排除 agent-*／纯 sidechain 文件；修复 Grok macOS 进程识别与子会话过滤及 DSH 审批／提问等待态。",
+            "深度清理跨层直透包装、退役 <=767pt 手机壳层死分支与重复序列化，补齐 Linux 远端 github_ci、codex_account_scope、hidden_cleanup_scan、antigravity_sessions、dsh_sessions 五项协议 2 能力声明。",
+        ],
+        "migration": [
+            "API 协议 2、数据库 schema 3。沿用已有配置、凭据与会话数据，先升级 Linux 服务再升级 Mac App；自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 v2.1.30。",
+            "存量开启 Antigravity 通知的实例首次升级至 v2.1.34 时自动记录 CLI 历史基线，仅推送升级后的新回合事件；早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.33": {
         "summary": [
             "修复 Antigravity 在线与离线运行态识别，补齐多级子智能体阅读、附件与拓扑级联清理，并完成存量架构精简"

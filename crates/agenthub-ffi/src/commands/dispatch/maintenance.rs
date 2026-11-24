@@ -45,9 +45,8 @@ pub(super) async fn probe_status(
     args_json: &str,
 ) -> Result<String, String> {
     let args: ProbeStatusArgs = parse_args(args_json)?;
-    let _ = args.refresh;
     encode(
-        probe_service::desktop_probe_status_with_state(ctx.state)
+        probe_service::desktop_probe_status_with_options(ctx.state, args.refresh.unwrap_or(false))
             .await
             .map_err(|e| e.to_string()),
     )

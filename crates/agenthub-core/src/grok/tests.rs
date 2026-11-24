@@ -1125,3 +1125,38 @@ fn idle_cleanup_releases_summary_metadata_cache() {
     assert_eq!(GROK_SUMMARY_CACHE.cached_weight(&file), 0);
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn non_primary_subsessions_are_excluded_from_list_and_unicode_query_matches() {
+    let (paths, primary_id, primary_dir) = fixture();
+    fs::write(
+        primary_dir.join("summary.json"),
+        serde_json::json!({
+            "info": { "id": primary_id, "cwd": "/workspace/中文仓库" },
+            "generated_title": "修复状态同步",
+            "session_relationship": "primary",
+            "num_messages": 2
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let sub_id = uuid::Uuid::new_v4().to_string();
+    let sub_dir = primary_dir.parent().unwrap().join(&sub_id);
+    fs::create_dir_all(&sub_dir).unwrap();
+    fs::write(
+        sub_dir.join("summary.json"),
+        serde_json::json!({
+            "info": { "id": sub_id, "cwd": "/workspace/中文仓库" },
+            "generated_title": "后台子任务",
+            "session_relationship": "background",
+            "num_messages": 1
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let listed = list_grok_sessions(&paths, 50, Some("中文仓库")).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, primary_id);
+    fs::remove_dir_all(paths.home).unwrap();
+}

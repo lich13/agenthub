@@ -146,6 +146,32 @@ impl PanelDb {
         } else {
             0
         };
+        let antigravity_cli_resume_cutoff_ms = if provider == NativeProvider::Antigravity {
+            let key = "antigravity_cli_resume_cutoff_ms";
+            let existing: Option<String> = tx
+                .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if let Some(value) = existing {
+                value.parse::<i64>()?
+            } else {
+                let cutoff = if baseline || prior.is_none_or(|(_, _, scanned)| scanned == 0) {
+                    activated_ms
+                } else {
+                    prior.map_or(0, |(_, _, scanned)| {
+                        scanned.saturating_add(1).saturating_mul(1000)
+                    })
+                };
+                tx.execute(
+                    "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)",
+                    params![key, cutoff.to_string(), Self::now()],
+                )?;
+                cutoff
+            }
+        } else {
+            0
+        };
         let mut queued = 0;
         if !scan.streams.is_empty() {
             let mut read_cursor = tx.prepare("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2")?;
@@ -170,8 +196,9 @@ impl PanelDb {
                 // Antigravity mutates a waiting step in place. A new request on a
                 // previously baselined step keeps that step's original timestamp.
                 let known_mutable_source = provider == NativeProvider::Antigravity && old.is_some();
+                let tracks_settled = provider.tracks_settled_claims();
                 let cursor = if reset {
-                    if provider.local_only() {
+                    if tracks_settled {
                         stream.settled_count.min(stream.record_count)
                     } else {
                         stream.record_count
@@ -179,7 +206,7 @@ impl PanelDb {
                 } else {
                     old.as_ref().map_or(0, |(_, cursor)| *cursor)
                 };
-                if !reset || provider.local_only() {
+                if !reset || tracks_settled {
                     let now = Self::now();
                     for event in stream.events.iter() {
                         let cursor_exempt =
@@ -192,8 +219,8 @@ impl PanelDb {
                             && ((!cursor_exempt
                                 && !unrecorded_at_cursor
                                 && event.position <= cursor)
-                                || (historical && !provider.local_only())
-                                || (!provider.local_only()
+                                || (historical && !tracks_settled)
+                                || (!tracks_settled
                                     && !provider.event_enabled(config, &event.kind)))
                         {
                             continue;
@@ -203,6 +230,11 @@ impl PanelDb {
                             && event.kind == "completion"
                             && old.is_some()
                             && event.timestamp_ms < grokbot_resume_cutoff_ms;
+                        let upgrade_historical_antigravity_cli = provider
+                            == NativeProvider::Antigravity
+                            && stream.identity.starts_with("cli:")
+                            && old.is_none()
+                            && event.timestamp_ms < antigravity_cli_resume_cutoff_ms;
                         let delivery = NativeDelivery {
                             event_key: if let (
                                 NativeProvider::Claude,
@@ -224,6 +256,7 @@ impl PanelDb {
                         let status = if reset
                             || historical
                             || upgrade_historical_grokbot_completion
+                            || upgrade_historical_antigravity_cli
                             || !provider.event_enabled(config, &event.kind)
                         {
                             "skipped"
@@ -1815,5 +1848,67 @@ mod local_provider_tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn antigravity_cli_upgrade_cutoff_skips_pre_upgrade_cli_history_and_delivers_post_upgrade() {
+        let provider = NativeProvider::Antigravity;
+        let c = config();
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let now_sec = PanelDb::now();
+        let activated_ms = (now_sec - 86_400) * 1000;
+        let pre_upgrade_cli_ms = (now_sec - 3_600) * 1000;
+        let last_v2133_scan_sec = now_sec - 10;
+        let post_upgrade_cli_ms = (now_sec + 5) * 1000;
+
+        // Simulate existing v2.1.33 database where Antigravity was already enabled & scanned before upgrade
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES('antigravity',1,?1,?2,2,0)",
+                params![activated_ms, last_v2133_scan_sec],
+            )
+            .unwrap();
+
+        let make_cli_stream = |id: &str, ts_ms: i64| NativeStreamSnapshot {
+            provider,
+            session_key: id.into(),
+            id: id.into(),
+            title: "CLI Session".into(),
+            identity: format!("cli:source-{id}"),
+            record_count: 2,
+            settled_count: 2,
+            events: vec![NativeTurnEvent {
+                prompt_id: None,
+                position: 2,
+                turn_id: "cli-turn:0".into(),
+                kind: "completion".into(),
+                body: "Done".into(),
+                timestamp_ms: ts_ms,
+            }]
+            .into(),
+        };
+
+        let first_scan = NativeScan {
+            errors: 0,
+            streams: vec![
+                make_cli_stream("old-cli-1", pre_upgrade_cli_ms),
+                make_cli_stream("new-cli-2", post_upgrade_cli_ms),
+            ],
+        };
+        assert_eq!(
+            db.stage_native_notifications(provider, &first_scan, &c)
+                .unwrap(),
+            1,
+            "pre-upgrade CLI session must be skipped while post-upgrade CLI session queues once"
+        );
+        let pending = db.pending_native_deliveries(10, Some(provider)).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].session_key, "new-cli-2");
     }
 }

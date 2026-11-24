@@ -173,7 +173,7 @@ Probe 复用原生轮询、启用基线、消息游标、加密队列与有限�
 
 Antigravity 当前回合遍历完整相关子代理树，沿用循环去重；每个子代理提取待处理任务、子代理 ID 与时间锚点后释放原始 steps，逆序评估时共享最终状态表，保留较晚发现后代的最新时间，不为优化新增深度或数量限制。
 
-`antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、FFI 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
+`antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、FFI 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。五个代码 Provider 列表摘要统一附带可选 `workspaceRoot`（单次只读解析 `<cwd>/.git` worktree 指针文件，零 `git` 子进程，兼容 `ProtectHome=read-only`）供 macOS 跨平台「工作区」总览页与页内工作区分组归并。API 协议保持 **2**，`LinuxServerApi` 完整声明 `github_ci`、`codex_account_scope`、`hidden_cleanup_scan`、`antigravity_sessions`、`antigravity_notifications`（DSH 会话保持 `dsh_sessions: false` 以探测或平滑提示）。
 
 Antigravity 优先通过本机同用户运行中的 language server Connect-RPC（兼容命令行 `--csrf_token` 与 2.34.0+ 的 `~/.gemini/antigravity/daemon/hub_<httpPort>.json` 同 UID／本机回环监听端口核验，Linux 支持 `/proc/<pid>/net/{tcp,tcp6}` + `/proc/<pid>/fd` 无子进程探测）读取桌面会话摘要与轨迹并执行在线改名、归档和删除，拆分运行（`running`）、等待处理（`waiting`）、待回复（`reply_needed`）与错误终态（`failed`）；同时合并 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）尚未加载的根会话与 `ANTIGRAVITY_CLI_HOME`（默认 `~/.gemini/antigravity-cli`）的 `agy` CLI 离线根会话（含未入索引的 `.db`／`.pb` 及持锁活跃根会话，按转录排除未入索引子代理与孤立 `brain/<id>`，结合 `presence` 锁、`steps.status` `1/2/8/9/7` 与转录尾部判定实时状态），仅认领主存储归属会话并排除跨端幽灵摘要与 `implicit/*.pb`。通过可缺省能力 `antigravity_subagents` 在单一归属存储内校验无符号链接、唯一无环父链（`<= 32` 层），于 `HISTORY_CACHE` 外动态富化直属子智能体集合、内联活动卡、`subagentUpdates`、多级详情（`{digest}:` 隔离游标与 `epoch`）及子智能体图片附件。离线写入均先校验目标及后代 `presence/<id>.lock` 未被占用，同步 `.pbtxt`、`conversation_summaries.raw_summary`（`ConversationAnnotations` 字段 `1`/`4`/`5` 保损补丁）、整型 FTS5 `archived`、`cache/conversation_metadata.json` 与四类 proto 缓存文件。永久删除按叶节点优先拓扑逆序清理确认集合（对未水合后代的在线 `404/not_found` 继续清理磁盘与 SQLite 记录）及 CLI 共享文件（`history.jsonl`、`cache/conversation_metadata.json`、`cache/last_conversations.json`），本机与远端 Linux 共用 `antigravity_archived` 批量清理已归档会话与祖先链已移除的无锁孤立子会话。
 
@@ -255,9 +255,9 @@ Probe 关闭时普通 Bark 待发项结束并清除加密正文，重新启用�
 
 Codex 通知先按当前配置与旧去重记录判断通道关闭、事件开关关闭和重复事件，命中即返回原跳过结果；确定入队后才对 rollout 计算内容摘要并写入候选，重试前的来源复核保持。错误监控每轮读取上限为扫描函数已有的 1,000 行。安装／移除 Codex Hook 用 toml_edit 就地编辑 `config.toml`：只改 `features.hooks` 的值并移除 `hooks.json` 对应的过期状态表，其余注释、键顺序与文本逐字节保留；缺少 `[features]` 时追加到文件末尾，响应只在实际复制了备份时返回备份路径。
 
-Antigravity 与 DSH 的通知仅在本机运行，会话阅读及管理是独立能力。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS 桌面声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
+Antigravity 通知在本机 macOS（`~/.gemini/config/hooks.json` 受管 Stop Hook + 15 秒轮询）与远端 Linux `agenthub-webd`（15 秒只读轮询离线 `antigravity-cli`／桌面存储，`LinuxServerApi` 开放 `antigravity_notifications`，Hook 写入仍仅限本机）同步运行；DSH 的通知仍仅在本机运行（`dsh_notifications` 仅由 macOS 桌面声明），协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列；存量开启 Antigravity 通知的实例首次扫描 CLI 存储时持久化一次性 `antigravity_cli_resume_cutoff_ms`，跳过升级前历史会话。
 
-Antigravity 通知扫描从已运行且同用户的原生 language server 读取摘要、轨迹及执行段元数据，使用固定方法，请求限回环并禁止代理和重定向；凭据只保留在本机内存。完成须核验主执行终态及已关联子代理、后台任务收敛；失败须是当前执行的明确错误终态。原生等待、requestedInteraction、提问及审批记录按既有解析器配对并去重；普通工具、中间错误、取消和自动继续不推断失败。服务未运行、身份不明或读取失败在 Probe 来源状态显示异常。
+Antigravity 通知优先从已运行且同用户的原生 language server 读取摘要、轨迹及执行段元数据（限回环并禁止代理和重定向），桌面未启动或会话位于 `~/.gemini/antigravity-cli` 时回退离线 SQLite／转录快照，统一产出完成、`ask_question`／`RequestFeedback`／正文追问需要回复、权限等待及重试结束后的明确错误终态；子代理 `Stop` Hook 识别后静默忽略且 `scan_one` 对串联 Hook 结算延迟做有界重试。服务未运行不阻塞离线 CLI 扫描，身份不明或读取损坏在 Probe 来源状态显示异常。
 
 DSH 复用标准存储边界，读取 v4 JSONL 或逐帧解压追加的 Zstandard，未写完整的尾部等待下次扫描，完整记录按序列核验。turn/start 与 turn/end 决定主回合终态；approval/asked 与 approval/decided 配对授权；ask_user_question 调用、结果及 user-question-reply 身份配对问题。超时返回 pending 的异步问题跨正常回合结束仍保持待回复，实际回答、取消或明确失效解除。子代理、归档和 fork 继承范围不产生主线程通知；不支持的版本、持久化格式及未知必要记录显示读取异常。
 

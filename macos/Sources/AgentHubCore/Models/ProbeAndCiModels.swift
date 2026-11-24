@@ -324,7 +324,7 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         )
     }
 
-    public func isPlatformEnabled(_ platform: ProbeNotificationPlatform) -> Bool {
+    public func isPlatformEnabled(_ platform: SessionProvider) -> Bool {
         switch platform {
         case .codex:
             notifyCodex && (notifyCompletion || notifyReplyNeeded || notifyRecoverable)
@@ -341,7 +341,7 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         }
     }
 
-    public mutating func setPlatformEnabled(_ platform: ProbeNotificationPlatform, enabled: Bool) {
+    public mutating func setPlatformEnabled(_ platform: SessionProvider, enabled: Bool) {
         switch platform {
         case .codex:
             notifyCodex = enabled

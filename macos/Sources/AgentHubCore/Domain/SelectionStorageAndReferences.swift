@@ -15,7 +15,17 @@ public struct FormattedSessionStorage: Codable, Equatable, Sendable {
 }
 
 public enum SessionStorageFormatter {
-    private static let jsMaxSafeInteger: Int64 = 9_007_199_254_740_991
+    private static let maxExactDoubleBytes: Int64 = (1 << 53) - 1
+    private static let thousandsLock = NSLock()
+    private static let thousandsFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
+        formatter.groupingSize = 3
+        return formatter
+    }()
 
     public static func format(_ size: SessionStorageSize?) -> FormattedSessionStorage {
         let scope = (size?.scope == "directory") ? "会话目录" : "会话文件"
@@ -27,7 +37,7 @@ public enum SessionStorageFormatter {
               size.status == "complete" || size.status == "partial",
               let bytes = size.bytes,
               bytes >= 0,
-              bytes <= jsMaxSafeInteger
+              bytes <= maxExactDoubleBytes
         else {
             return unknown
         }
@@ -79,13 +89,9 @@ public enum SessionStorageFormatter {
     }
 
     public static func formatThousands(_ value: Int64) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.numberStyle = .decimal
-        formatter.usesGroupingSeparator = true
-        formatter.groupingSeparator = ","
-        formatter.groupingSize = 3
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+        thousandsLock.lock()
+        defer { thousandsLock.unlock() }
+        return thousandsFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
 

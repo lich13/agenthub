@@ -51,7 +51,7 @@ impl<'a> SettingsUseCases<'a> {
     }
 
     pub fn probe_settings_view(self, bark_device_key: ProbeSecretState) -> Result<SettingsView> {
-        probe_settings_view_with_capability(self.config, self.platform, bark_device_key)
+        Ok(build_settings_view(self.config, bark_device_key))
     }
 
     pub fn save_probe_settings(
@@ -138,14 +138,6 @@ pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -
             bark_device_key,
         ),
     }
-}
-
-pub fn probe_settings_view_with_capability(
-    config: &Config,
-    _platform: &PlatformPaths,
-    bark_device_key: ProbeSecretState,
-) -> Result<SettingsView> {
-    Ok(build_settings_view(config, bark_device_key))
 }
 
 pub fn probe_notifications_settings_view(

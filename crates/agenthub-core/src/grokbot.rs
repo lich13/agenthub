@@ -219,6 +219,7 @@ fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSes
         session_key: session_key(scope, id),
         title: row_title(row),
         cwd: String::new(),
+        workspace_root: None,
         path: if available { path } else { PathBuf::new() },
         archived: false,
         updated_at: row["lastActivityAt"]

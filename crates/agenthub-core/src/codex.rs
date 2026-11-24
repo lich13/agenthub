@@ -56,6 +56,7 @@ use rollout_events::{
     is_request_user_input, message_blocks_from_events, parse_message_event, RolloutScan,
 };
 use session_index::{read_session_index, SessionIndexEntry};
+pub(crate) use thread_rows::coalesce_non_empty as coalesce_non_empty_columns;
 pub use thread_rows::hidden_and_archived_thread_ids;
 use thread_rows::read_thread_rows;
 pub use types::{
@@ -86,19 +87,21 @@ pub fn list_threads(
     rows.retain_mut(|row| enrich_local_thread_row(paths, row, session_index.get(&row.summary.id)));
     let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
 
-    let needle = q
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty());
+    let needle = q.map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty());
     rows.retain(|row| {
         if let Some(needle) = &needle {
-            let title = row.title.to_ascii_lowercase();
-            let id = row.id.to_ascii_lowercase();
+            let title = row.title.to_lowercase();
+            let id = row.id.to_lowercase();
             let latest = row
                 .latest_message
-                .clone()
+                .as_deref()
                 .unwrap_or_default()
-                .to_ascii_lowercase();
-            title.contains(needle) || id.contains(needle) || latest.contains(needle)
+                .to_lowercase();
+            let cwd = row.cwd.as_deref().unwrap_or_default().to_lowercase();
+            title.contains(needle)
+                || id.contains(needle)
+                || latest.contains(needle)
+                || cwd.contains(needle)
         } else {
             true
         }
@@ -274,13 +277,19 @@ fn enrich_thread_from_rollout_with_storage(
         row.activity_updated_at = row.updated_at.clone();
     }
     row.updated_at = scan.last_message_at;
+    let mut active_turn_id = scan.active_turn_id;
     if !matches!(row.status, ThreadStatus::Archived) {
         if scan.recoverable {
             row.status = ThreadStatus::Recoverable;
         } else if scan.reply_needed {
             row.status = ThreadStatus::ReplyNeeded;
         } else if scan.running {
-            row.status = ThreadStatus::Running;
+            if codex_rollout_turn_can_be_live(root, path) {
+                row.status = ThreadStatus::Running;
+            } else {
+                row.status = ThreadStatus::Recoverable;
+                active_turn_id = None;
+            }
         } else if matches!(
             row.status,
             ThreadStatus::Running | ThreadStatus::ReplyNeeded | ThreadStatus::Recoverable
@@ -288,18 +297,138 @@ fn enrich_thread_from_rollout_with_storage(
             row.status = ThreadStatus::Recent;
         }
     }
-    row.cwd = scan.cwd;
-    row.model = scan.model;
+    if scan.cwd.is_some() {
+        row.cwd = scan.cwd;
+    }
+    if scan.model.is_some() {
+        row.model = scan.model;
+    }
+    row.workspace_root = row
+        .cwd
+        .as_deref()
+        .and_then(crate::workspace_root::resolve_workspace_root);
     if !is_usable_thread_title(&row.title) {
         row.title = scan
             .title
             .or(scan.first_user_message_title)
             .unwrap_or_else(|| "未命名线程".to_string());
     }
-    row.active_turn_id = scan.active_turn_id;
+    row.active_turn_id = active_turn_id;
     row.pending_elicitation = scan.pending_elicitation;
     row.last_event_kind = scan.last_event_kind;
     Ok(scan.is_subagent)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CODEX_HOST_ALIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(bool, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+fn codex_rollout_turn_can_be_live(root: Option<&Path>, rollout_path: &Path) -> bool {
+    #[cfg(test)]
+    if let Some(override_alive) = TEST_CODEX_HOST_ALIVE.with(std::cell::Cell::get) {
+        return override_alive;
+    }
+    let Some(root) = root else {
+        return true;
+    };
+    let is_default_home =
+        dirs::home_dir().is_some_and(|home| same_canonical_dir(root, &home.join(".codex")));
+    if !is_default_home {
+        return true;
+    }
+    if !has_live_codex_host_process() {
+        return false;
+    }
+    if let Ok(modified) = fs::metadata(rollout_path).and_then(|m| m.modified()) {
+        if let Ok(elapsed) = modified.elapsed() {
+            if elapsed > std::time::Duration::from_secs(6 * 3600) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn same_canonical_dir(left: &Path, right: &Path) -> bool {
+    left == right
+        || left
+            .canonicalize()
+            .ok()
+            .zip(right.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b)
+}
+
+fn has_live_codex_host_process() -> bool {
+    if let Ok(guard) = CODEX_HOST_PROCESS_CACHE.lock() {
+        if let Some((alive, ts)) = *guard {
+            if ts.elapsed() < std::time::Duration::from_secs(2) {
+                return alive;
+            }
+        }
+    }
+    let alive = probe_live_codex_host_process();
+    if let Ok(mut guard) = CODEX_HOST_PROCESS_CACHE.lock() {
+        *guard = Some((alive, std::time::Instant::now()));
+    }
+    alive
+}
+
+fn probe_live_codex_host_process() -> bool {
+    #[cfg(unix)]
+    {
+        let current_uid = unsafe { libc::geteuid() };
+        let Ok(output) = std::process::Command::new("/bin/ps")
+            .env("LC_ALL", "C")
+            .args(["-axo", "uid=,stat=,comm="])
+            .output()
+        else {
+            return true;
+        };
+        if !output.status.success() {
+            return true;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut fields = line.split_whitespace();
+            let Some(uid) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
+                continue;
+            };
+            if uid != current_uid {
+                continue;
+            }
+            let Some(stat) = fields.next() else {
+                continue;
+            };
+            if stat.starts_with('Z') {
+                continue;
+            }
+            let comm = fields.collect::<Vec<_>>().join(" ");
+            let base = Path::new(comm.trim())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(comm.trim());
+            if matches!(
+                base,
+                "codex"
+                    | "codex-aarch64-apple-darwin"
+                    | "codex-x86_64-apple-darwin"
+                    | "codex-x86_64-unknown-linux-gnu"
+                    | "codex-aarch64-unknown-linux-gnu"
+                    | "Codex"
+                    | "Codex Helper"
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 pub fn thread_detail(paths: &CodexPaths, id: &str) -> Result<Option<ThreadDetail>> {

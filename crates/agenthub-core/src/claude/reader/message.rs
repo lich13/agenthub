@@ -174,6 +174,46 @@ impl Parser {
             if !body.trim().is_empty() {
                 self.parsed.events.push(Arc::new(e));
             }
+        } else if user
+            .text
+            .trim_start()
+            .starts_with("[Request interrupted by user")
+        {
+            self.clear_final_answer();
+            for prompt in self.parsed.prompts.values_mut() {
+                if Some(&prompt.turn_id) == self.turn.as_ref() {
+                    prompt.cancelled = true;
+                }
+            }
+            self.parsed.turn_open = false;
+            if let Some(ts) = millis(field(record, "timestamp")) {
+                self.parsed.last_terminal_at =
+                    Some(self.parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
+            }
+            self.parsed
+                .native_events
+                .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
+            self.turn = None;
+            self.last_stop_reason.clear();
+            self.last_assistant_events.clear();
+            self.last_assistant_text = None;
+            self.questions.clear();
+            for call in &self.pending {
+                if let Some(index) = self.calls.get(call) {
+                    Arc::make_mut(&mut self.parsed.events[*index]).status =
+                        Some("cancelled".into());
+                }
+            }
+            self.pending.clear();
+            let mut e = event(
+                key.to_owned(),
+                record,
+                "user_message",
+                Some(bounded(&user.text)),
+                &self.turn,
+            );
+            e.user_message = Some(user);
+            self.parsed.events.push(Arc::new(e));
         } else {
             // Keep earlier terminal events so an incremental polling cursor
             // can catch up after several turns between scans.

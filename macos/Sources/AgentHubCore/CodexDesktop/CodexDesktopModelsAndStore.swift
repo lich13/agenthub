@@ -443,6 +443,17 @@ public struct DesktopAttachmentEvent: Codable, Equatable, Sendable {
     public var bindingId: String
     public var items: [DesktopChosenItem]
     public var error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case bindingId, items, error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bindingId = try c.decode(String.self, forKey: .bindingId)
+        items = try c.decodeIfPresent([DesktopChosenItem].self, forKey: .items) ?? []
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
 }
 
 public struct DesktopAttachmentResult: Codable, Equatable, Sendable {
@@ -452,16 +463,37 @@ public struct DesktopAttachmentResult: Codable, Equatable, Sendable {
 
 // MARK: - Codex Desktop Session & Attachment Coordinator
 
+public extension Notification.Name {
+    static let agentHubCodexDesktopViewChanged = Notification.Name("AgentHubCodexDesktopViewChanged")
+}
+
 @MainActor
 public final class CodexDesktopStore: ObservableObject {
     public static let maxMessageUTF8Bytes = 256 * 1024
     public static let maxMessageUTF16Units = 131_072
     public static let maxReferencesCount = 32
+    private static var liveViewsStorage: [String: DesktopView] = [:]
+
+    public static func liveView(revision: UInt64, threadId: String) -> DesktopView? {
+        liveViewsStorage["\(revision):\(threadId)"]
+    }
 
     public let connection: RuntimeConnectionStore
     public let threadId: String
 
-    @Published public private(set) var view: DesktopView?
+    @Published public private(set) var view: DesktopView? {
+        didSet {
+            let key = "\(connection.revision):\(threadId)"
+            if let view {
+                Self.liveViewsStorage[key] = view
+            } else {
+                Self.liveViewsStorage.removeValue(forKey: key)
+            }
+            if oldValue != view {
+                NotificationCenter.default.post(name: .agentHubCodexDesktopViewChanged, object: nil)
+            }
+        }
+    }
     @Published public private(set) var busy: Bool = false
     @Published public var actionError: String?
     @Published public private(set) var attachmentBindingId: String?
@@ -522,7 +554,16 @@ public final class CodexDesktopStore: ObservableObject {
             let initialData = try await connection.transport.desktopAttach(
                 requestJSON: reqJSON,
                 onStreamFrame: { [weak self] frameData in
-                    guard let decoded = try? JSONDecoder().decode(DesktopView.self, from: frameData) else { return }
+                    let decoded: DesktopView
+                    do {
+                        decoded = try JSONDecoder().decode(DesktopView.self, from: frameData)
+                    } catch {
+                        Task { @MainActor [weak self] in
+                            guard let self, self.connection.revision == rev, self.attachGeneration == currentAttachGen else { return }
+                            self.actionError = "桌面状态流解析失败，请重新连接"
+                        }
+                        return
+                    }
                     Task { @MainActor [weak self] in
                         guard let self,
                               self.connection.revision == rev,
@@ -546,7 +587,7 @@ public final class CodexDesktopStore: ObservableObject {
             }
         } catch {
             guard attachGeneration == currentAttachGen, connection.revision == rev else { return }
-            actionError = error.localizedDescription
+            actionError = (error is DecodingError) ? "桌面连接响应解析失败，请重新连接" : error.localizedDescription
         }
     }
 
@@ -606,7 +647,7 @@ public final class CodexDesktopStore: ObservableObject {
             view = updated
             onStreamViewUpdated?()
         } catch {
-            actionError = error.localizedDescription
+            actionError = Self.safeCollaborationErrorMessage(error)
             throw error
         }
     }
@@ -623,7 +664,7 @@ public final class CodexDesktopStore: ObservableObject {
                 localOnly: true
             )
         } catch {
-            actionError = error.localizedDescription
+            actionError = Self.safeCollaborationErrorMessage(error)
         }
     }
 
@@ -693,7 +734,7 @@ public final class CodexDesktopStore: ObservableObject {
                     nextCursors[sourceKind] = next
                 }
             } catch {
-                errors[sourceKind] = error.localizedDescription
+                errors[sourceKind] = Self.safeCollaborationErrorMessage(error, fallback: "目录响应无效")
             }
         }
         return ReferenceCatalogBatch(items: mergedItems, nextCursors: nextCursors, errors: errors, sourceKinds: kinds)
@@ -796,6 +837,23 @@ public final class CodexDesktopStore: ObservableObject {
         return String(data: data, encoding: .utf8)
     }
 
+    public static func safeAttachmentErrorMessage(_ error: Error) -> String {
+        if error is DecodingError || error is EncodingError {
+            return "附件通道响应无效"
+        }
+        return error.localizedDescription
+    }
+
+    public static func safeCollaborationErrorMessage(
+        _ error: Error,
+        fallback: String = "桌面协作响应无效"
+    ) -> String {
+        if error is DecodingError || error is EncodingError {
+            return fallback
+        }
+        return error.localizedDescription
+    }
+
     public func bindAttachmentsIfNeeded(bounds: DesktopAttachmentBounds, handles: [String]) async {
         lastAttachmentBounds = bounds
         guard let sessionId = view?.sessionId, view?.writable == true, attachmentBindingId == nil else { return }
@@ -806,27 +864,40 @@ public final class CodexDesktopStore: ObservableObject {
             action: .bind(bounds: bounds, handles: handles)
         ) else { return }
 
-        if let data = try? await connection.transport.desktopAttachments(
-            requestJSON: jsonStr,
-            onEventFrame: { [weak self] frameData in
-                guard let ev = try? JSONDecoder().decode(DesktopAttachmentEvent.self, from: frameData) else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, self.connection.revision == rev, self.view?.sessionId == sessionId else { return }
-                    if let err = ev.error, !err.isEmpty {
-                        self.onAttachmentError?(err)
-                    } else if !ev.items.isEmpty {
-                        self.onItemsAttached?(ev.items)
+        do {
+            let data = try await connection.transport.desktopAttachments(
+                requestJSON: jsonStr,
+                onEventFrame: { [weak self] frameData in
+                    let ev: DesktopAttachmentEvent
+                    do {
+                        ev = try JSONDecoder().decode(DesktopAttachmentEvent.self, from: frameData)
+                    } catch {
+                        Task { @MainActor [weak self] in
+                            guard let self, self.connection.revision == rev, self.view?.sessionId == sessionId else { return }
+                            self.onAttachmentError?("附件事件解析失败")
+                        }
+                        return
                     }
-                }
-            },
-            onEventClosed: nil
-        ),
-            let res = try? JSONDecoder().decode(DesktopAttachmentResult.self, from: data)
-        {
+                    Task { @MainActor [weak self] in
+                        guard let self, self.connection.revision == rev, self.view?.sessionId == sessionId else { return }
+                        if let err = ev.error, !err.isEmpty {
+                            self.onAttachmentError?(err)
+                        } else if !ev.items.isEmpty {
+                            self.onItemsAttached?(ev.items)
+                        }
+                    }
+                },
+                onEventClosed: nil
+            )
+            let res = try JSONDecoder().decode(DesktopAttachmentResult.self, from: data)
             if connection.revision == rev, view?.sessionId == sessionId {
                 attachmentBindingId = res.bindingId
             } else {
                 await unbindAttachments(sessionId: sessionId, bindingId: res.bindingId)
+            }
+        } catch {
+            if connection.revision == rev, view?.sessionId == sessionId {
+                onAttachmentError?(Self.safeAttachmentErrorMessage(error))
             }
         }
     }
@@ -883,7 +954,7 @@ public final class CodexDesktopStore: ObservableObject {
             }
             return false
         } catch {
-            actionError = error.localizedDescription
+            onAttachmentError?(Self.safeAttachmentErrorMessage(error))
             return false
         }
     }

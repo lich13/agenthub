@@ -90,20 +90,40 @@ impl ScanState {
             scan.identity_conflict |= scan.session_id.as_deref().is_some_and(|old| old != id);
             scan.session_id = Some(id.to_owned());
         }
-        if let Some(payload) = value.get("session_meta").and_then(|v| v.get("payload")) {
+        if let Some(payload) = metadata {
             scan.is_subagent |= is_subagent_session_meta(payload);
             scan.cwd = payload
                 .get("cwd")
                 .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .or(scan.cwd);
             scan.model = payload
                 .get("model")
                 .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .or(scan.model);
             if scan.title.is_none() {
                 scan.title = rollout_metadata_title(payload);
+            }
+        }
+        if value["type"] == "turn_context" {
+            if let Some(payload) = value.get("payload") {
+                if let Some(cwd) = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    scan.cwd = Some(cwd.to_string());
+                }
+                if let Some(model) = payload
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    scan.model = Some(model.to_string());
+                }
             }
         }
         let event_type = rollout_event_type(&value);

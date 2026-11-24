@@ -53,6 +53,11 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
     public var threadSubagents = false
     public var claudeSubagents = false
     public var antigravitySubagents = false
+    public var hiddenCleanupScan = false
+    public var codexAccountScope = false
+    public var githubCi = false
+    public var antigravitySessions = false
+    public var dshSessions = false
     public var codexDesktop = false
     public var systemd = false
     public var linuxUpdateJob = false
@@ -66,6 +71,11 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
         case threadSubagents = "thread_subagents"
         case claudeSubagents = "claude_subagents"
         case antigravitySubagents = "antigravity_subagents"
+        case hiddenCleanupScan = "hidden_cleanup_scan"
+        case codexAccountScope = "codex_account_scope"
+        case githubCi = "github_ci"
+        case antigravitySessions = "antigravity_sessions"
+        case dshSessions = "dsh_sessions"
         case codexDesktop = "codex_desktop"
         case systemd
         case linuxUpdateJob = "linux_update_job"
@@ -83,6 +93,11 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
         threadSubagents = try c.decodeIfPresent(Bool.self, forKey: .threadSubagents) ?? false
         claudeSubagents = try c.decodeIfPresent(Bool.self, forKey: .claudeSubagents) ?? false
         antigravitySubagents = try c.decodeIfPresent(Bool.self, forKey: .antigravitySubagents) ?? false
+        hiddenCleanupScan = try c.decodeIfPresent(Bool.self, forKey: .hiddenCleanupScan) ?? false
+        codexAccountScope = try c.decodeIfPresent(Bool.self, forKey: .codexAccountScope) ?? false
+        githubCi = try c.decodeIfPresent(Bool.self, forKey: .githubCi) ?? false
+        antigravitySessions = try c.decodeIfPresent(Bool.self, forKey: .antigravitySessions) ?? false
+        dshSessions = try c.decodeIfPresent(Bool.self, forKey: .dshSessions) ?? false
         codexDesktop = try c.decodeIfPresent(Bool.self, forKey: .codexDesktop) ?? false
         systemd = try c.decodeIfPresent(Bool.self, forKey: .systemd) ?? false
         linuxUpdateJob = try c.decodeIfPresent(Bool.self, forKey: .linuxUpdateJob) ?? false

@@ -30,6 +30,12 @@ pub struct ThreadSummary {
     pub message_count: usize,
     pub latest_message: Option<String>,
     pub cwd: Option<String>,
+    #[serde(
+        default,
+        rename = "workspaceRoot",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace_root: Option<String>,
     pub model: Option<String>,
     pub rollout_path: Option<PathBuf>,
     pub active_turn_id: Option<String>,

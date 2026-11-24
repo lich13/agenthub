@@ -1,62 +1,65 @@
 use super::ApiErrorKind;
 use super::{api_error, ApiError};
-use crate::rpc_payload::{
-    rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
-    rpc_payload as parse_rpc_payload, rpc_query_strings as parse_rpc_query_strings,
-    rpc_required_string as parse_rpc_required_string,
-    rpc_wrapped_payload as parse_rpc_wrapped_payload, RpcPayloadError,
-};
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 pub(super) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_payload(value))
+    T::deserialize(value).map_err(|err| api_error(ApiErrorKind::InvalidRequest, &err.to_string()))
 }
 
 pub(super) fn rpc_wrapped_payload<T: DeserializeOwned>(
     value: &Value,
     keys: &[&str],
 ) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_wrapped_payload(value, keys))
-}
-
-#[cfg(test)]
-pub(super) fn rpc_wrapped_payload_or_empty<T: DeserializeOwned>(
-    value: &Value,
-    keys: &[&str],
-) -> Result<T, ApiError> {
-    api_rpc_payload(crate::rpc_payload::rpc_wrapped_payload_or_empty(
-        value, keys,
-    ))
+    let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
+    rpc_payload(payload)
 }
 
 pub(super) fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
     value: &Value,
     key: &str,
 ) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_nested_payload_or_empty(value, key))
+    match value.get(key) {
+        Some(payload) => rpc_payload(payload),
+        None => rpc_payload(&json!({})),
+    }
 }
 
 pub(super) fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
-    api_rpc_payload(parse_rpc_required_string(value, key))
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| api_error(ApiErrorKind::InvalidRequest, &format!("{key} is required")))
 }
 
 pub(super) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
-    parse_rpc_query_strings(value, keys)
-}
-
-fn api_rpc_payload<T>(result: Result<T, RpcPayloadError>) -> Result<T, ApiError> {
-    result.map_err(|err| api_error(ApiErrorKind::InvalidRequest, err.message()))
+    keys.iter()
+        .filter_map(|key| {
+            value.get(*key).and_then(|value| match value {
+                Value::String(text) if !text.trim().is_empty() => {
+                    Some(((*key).to_string(), text.trim().to_string()))
+                }
+                Value::Number(number) => Some(((*key).to_string(), number.to_string())),
+                Value::Bool(boolean) => Some(((*key).to_string(), boolean.to_string())),
+                _ => None,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{rpc_required_string, rpc_wrapped_payload, rpc_wrapped_payload_or_empty};
+    use super::{
+        rpc_nested_payload_or_empty, rpc_payload, rpc_required_string, rpc_wrapped_payload,
+    };
     use crate::api::ApiError;
     use agenthub_core::services::jobs::ThreadRenameRequest;
     use agenthub_core::services::settings as settings_service;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn must<T>(result: Result<T, ApiError>) -> T {
         match result {
@@ -107,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn rpc_strings_use_the_current_top_level_field() {
+    fn rpc_strings_and_nested_defaults_preserve_parse_errors() {
         assert_eq!(
             must(rpc_required_string(
                 &json!({"threadId":"thread-a"}),
@@ -119,10 +122,10 @@ mod tests {
             rpc_required_string(&json!({"payload":{"threadId":"thread-a"}}), "threadId").is_err()
         );
         assert!(rpc_required_string(&json!({"thread_id":"thread-a"}), "threadId").is_err());
-        let empty: serde_json::Value = must(rpc_wrapped_payload_or_empty(
-            &serde_json::Value::Null,
-            &["request"],
-        ));
-        assert_eq!(empty, json!({}));
+        assert_eq!(
+            must(rpc_nested_payload_or_empty::<Value>(&json!({}), "request")),
+            json!({})
+        );
+        assert!(rpc_payload::<ThreadRenameRequest>(&Value::Null).is_err());
     }
 }

@@ -744,6 +744,10 @@ fn verified_detail(
         message_count: 0,
         latest_message: None,
         cwd: record.cwd.clone(),
+        workspace_root: record
+            .cwd
+            .as_deref()
+            .and_then(crate::workspace_root::resolve_workspace_root),
         model: None,
         rollout_path: Some(path.clone()),
         active_turn_id: None,

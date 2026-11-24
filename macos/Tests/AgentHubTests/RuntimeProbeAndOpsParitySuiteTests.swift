@@ -67,23 +67,26 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
             XCTAssertEqual(routedNoModal, .postedListSelectAll)
             XCTAssertEqual(selectAllNotifications.count, 1)
 
-            // When inline modal is active (`searchModalOpen` / `ModalPresentationRegistry` / `ConfirmDialogOverlay` / `<960pt` subagent) -> BLOCKED!
-            for modalKey in ["searchModal", "batchPreview", "claudeDeletePreview", "grokDeletePreview", "imageLightbox", "discardUnknown", "settingsConfirm", "subagentOverlay"] {
-                store.setInlineModalPresented(modalKey, presented: true)
+            // When active modal is registered in `ModalPresentationRegistry` -> BLOCKED!
+            for _ in 0 ..< 6 {
+                let token = UUID()
+                ModalPresentationRegistry.shared.register(token)
                 let before = selectAllNotifications.count
                 let routed = AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store)
-                XCTAssertEqual(routed, .blockedByModalOrOverlay, "⌘A must be blocked while \(modalKey) is open")
-                XCTAssertEqual(selectAllNotifications.count, before, "Underlying session list must NOT receive selectAll while \(modalKey) is open")
-                store.setInlineModalPresented(modalKey, presented: false)
+                XCTAssertEqual(routed, .blockedByModalOrOverlay, "⌘A must be blocked while modal token is active")
+                XCTAssertEqual(selectAllNotifications.count, before, "Underlying session list must NOT receive selectAll while modal is open")
+                ModalPresentationRegistry.shared.unregister(token)
             }
 
             // WHILE modal is open, underlying ComposerNSTextView or non-modal ReaderSelectableTextView MUST BE BLOCKED from selectAll!
+            let modalToken = UUID()
+            defer { ModalPresentationRegistry.shared.unregister(modalToken) }
             let underlyingComposer = ComposerNSTextView(frame: NSRect(x: 10, y: 50, width: 300, height: 60))
             underlyingComposer.string = "draft behind modal"
             underlyingComposer.setSelectedRange(NSRange(location: 0, length: 0))
             testWin.contentView?.addSubview(underlyingComposer)
             _ = testWin.makeFirstResponder(underlyingComposer)
-            store.setInlineModalPresented("searchModal", presented: true)
+            ModalPresentationRegistry.shared.register(modalToken)
             XCTAssertEqual(AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store), .blockedByModalOrOverlay)
             XCTAssertEqual(underlyingComposer.selectedRange().length, 0, "Underlying ComposerNSTextView must NOT select all while modal is open")
 
@@ -108,16 +111,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
             XCTAssertEqual(routedInput, .editableTextSelectedAll)
             XCTAssertEqual(modalInput.selectedRange(), NSRange(location: 0, length: 17), "Editable input inside modal must select its own text on ⌘A")
             XCTAssertEqual(selectAllNotifications.count, 1, "Underlying session list still not selected")
-            store.setInlineModalPresented("searchModal", presented: false)
-
-            // 3) Mobile <=767pt bottom tab active styling & FlowButtonRow wrapping (Item #12)
-            for ws in [WorkspaceId.codex, .claude, .probe, .ops] {
-                store.activeWorkspace = ws
-                let shellHost = NSHostingView(rootView: AppShellView(store: store))
-                shellHost.frame = NSRect(x: 0, y: 0, width: 767, height: 820)
-                shellHost.layoutSubtreeIfNeeded()
-                XCTAssertEqual(shellHost.frame.width, 767)
-            }
+            ModalPresentationRegistry.shared.unregister(modalToken)
         }
     }
 
@@ -129,8 +123,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
                 title: "Session Stage",
                 statusBadge: "运行中",
                 statusTone: .info,
-                isCompactMobile: true,
-                onBack: {},
+                availableWidth: 500,
                 inlineRenameActive: true,
                 initialRenameText: "Session Stage"
             ) {
@@ -374,7 +367,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
         draft.logMaxMiBText = "5"
         XCTAssertTrue(draft.validationErrors().isEmpty, "Valid 8-parameter advanced settings pass validation")
 
-        for plat in ProbeNotificationPlatform.allCases {
+        for plat in SessionProvider.allCases {
             XCTAssertFalse(plat.id.isEmpty)
         }
     }

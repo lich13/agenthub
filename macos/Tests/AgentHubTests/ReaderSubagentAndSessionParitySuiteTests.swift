@@ -380,11 +380,15 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: emptyComplete, isSupported: true))
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: emptyComplete, isSupported: true))
 
-            // 2) Shown for Codex when collection is nil (upgrade note)
-            XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nil, isSupported: true))
+            // 2) Shown for Codex ONLY when capabilitiesReady && !isSupported && collection == nil (upgrade note);
+            //    NEVER when isSupported == true and collection == nil (loading/error) or before capabilitiesReady!
+            XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nil, isSupported: false, capabilitiesReady: true))
+            XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nil, isSupported: false, capabilitiesReady: false))
+            XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: nil, isSupported: true, capabilitiesReady: true))
 
             // 3) Hidden for Claude when collection is nil
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: nil, isSupported: true))
+            XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: nil, isSupported: false))
 
             // 4) Shown when incomplete even if agents empty
             let incomplete = SubagentCollection(agents: [], counts: [:], complete: false)
@@ -403,6 +407,45 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             let host = NSHostingView(rootView: SubagentSummaryBarView(provider: .codex, collection: activeCol, isSupported: true, onTogglePanel: { _ in }).frame(width: 768))
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 24)
+
+            // 6) Optional/extension field decode resilience across ThreadDetail, MessageBlock & sibling detail DTOs
+            let minimalThreadDetail = try JSONDecoder().decode(
+                ThreadDetail.self,
+                from: Data(#"{"summary":{"id":"th-min","title":"Minimal","status":"Recent","message_count":1},"blocks":[{"id":"b1","role":"user","kind":"userMessage","text":"hi","user_message":{"id":"b1","text":"hi"}}]}"#.utf8)
+            )
+            XCTAssertEqual(minimalThreadDetail.messages, [])
+            XCTAssertEqual(minimalThreadDetail.rawEventCount, 1)
+            XCTAssertEqual(minimalThreadDetail.blocks.first?.questions, [])
+            XCTAssertEqual(minimalThreadDetail.blocks.first?.answers, [])
+            XCTAssertEqual(minimalThreadDetail.blocks.first?.userMessage?.attachments, [])
+
+            let minimalClaudeDetail = try JSONDecoder().decode(
+                ClaudeSessionDetail.self,
+                from: Data(#"{"summary":{"id":"c1","sessionKey":"claude:c1","title":"Claude Min"}}"#.utf8)
+            )
+            XCTAssertEqual(minimalClaudeDetail.events, [])
+            XCTAssertEqual(minimalClaudeDetail.totalEvents, 0)
+            XCTAssertFalse(minimalClaudeDetail.hasMore)
+
+            let minimalGrokDetail = try JSONDecoder().decode(
+                GrokSessionDetail.self,
+                from: Data(#"{"summary":{"id":"g1","title":"Grok Min"}}"#.utf8)
+            )
+            XCTAssertEqual(minimalGrokDetail.events, [])
+
+            let minimalProviderDetail = try JSONDecoder().decode(
+                ProviderSessionDetail.self,
+                from: Data(#"{"summary":{"id":"p1","sessionKey":"p1","title":"Provider Min"}}"#.utf8)
+            )
+            XCTAssertEqual(minimalProviderDetail.events, [])
+            XCTAssertEqual(minimalProviderDetail.totalEvents, 0)
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ThreadDetail.self,
+                    from: Data(#"{"summary":{"id":"th-bad","title":"Bad","status":"Recent","message_count":0},"blocks":"corrupted"}"#.utf8)
+                )
+            )
         }
     }
 
@@ -417,6 +460,99 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             XCTAssertTrue(liveCaps.isReady)
             XCTAssertFalse(liveCaps.updatePrune)
             XCTAssertFalse(SubagentSummaryBarView.shouldDisplay(provider: .claudeCode, collection: SubagentCollection(agents: [SubagentActivity(agentId: "a1", name: "W", status: "running")], counts: [:], complete: true), isSupported: false))
+            XCTAssertTrue(SubagentSummaryBarView.shouldDisplay(provider: .codex, collection: SubagentCollection(agents: [SubagentActivity(agentId: "a1", name: "W", status: "running")], counts: [:], complete: true), isSupported: false, capabilitiesReady: true))
+
+            // Remote machine switching: local (supported) -> handshake (isReady=false) -> legacy webd (thread_subagents=false) -> modern webd (thread_subagents=true, detail loading)
+            let (capsWait, capsYield) = AsyncStream<Void>.makeStream()
+            let (capsProceed, capsRelease) = AsyncStream<Void>.makeStream()
+            let switchSuite = "com.lich13.agenthub.subcap.switch.\(UUID().uuidString)"
+            let switchDefaults = UserDefaults(suiteName: switchSuite)!
+            defer { switchDefaults.removePersistentDomain(forName: switchSuite) }
+            let switchMock = MockRuntimeTransport { command, args in
+                let obj = (try? JSONSerialization.jsonObject(with: Data(args.utf8)) as? [String: Any]) ?? [:]
+                let req = obj["request"] as? [String: Any] ?? [:]
+                let rev = req["revision"] as? Int ?? 0
+                switch command {
+                case "remote.get":
+                    return Data(#"{"target":"local","revision":1,"configured":true}"#.utf8)
+                case "system.capabilities":
+                    return protocol2CapabilitiesFixture(remote: false)
+                case "remote.select":
+                    let id = req["machineId"] as? String ?? "m"
+                    return try JSONSerialization.data(withJSONObject: [
+                        "target": "remote", "configured": true, "revision": rev + 1,
+                        "activeMachineId": id, "sshHost": id,
+                    ])
+                case "remote.invoke":
+                    let innerCmd = req["command"] as? String
+                    if innerCmd == "system.capabilities" {
+                        if rev == 2 {
+                            // Old server without thread_subagents
+                            return Data(#"{"api_version":2,"host_surface":"linux_server_api","capabilities":{"thread_subagents":false}}"#.utf8)
+                        }
+                        capsYield.yield()
+                        var it = capsProceed.makeAsyncIterator()
+                        _ = await it.next()
+                        return protocol2CapabilitiesFixture(remote: true)
+                    }
+                    return Data("{}".utf8)
+                default:
+                    return Data("{}".utf8)
+                }
+            }
+            let switchStore = RuntimeConnectionStore(transport: switchMock, defaults: switchDefaults)
+            await switchStore.bootstrap()
+            XCTAssertTrue(switchStore.capabilities.isReady)
+            XCTAssertTrue(switchStore.capabilities.threadSubagents)
+            XCTAssertFalse(
+                SubagentSummaryBarView.shouldDisplay(
+                    provider: .codex,
+                    collection: nil,
+                    isSupported: switchStore.capabilities.threadSubagents,
+                    capabilitiesReady: switchStore.capabilities.isReady
+                ),
+                "Modern local Codex with nil collection (loading) must NEVER render upgrade note"
+            )
+
+            try await switchStore.selectMachine(target: .remote, machineId: "legacy-webd")
+            XCTAssertTrue(switchStore.capabilities.isReady)
+            XCTAssertFalse(switchStore.capabilities.threadSubagents)
+            XCTAssertTrue(
+                SubagentSummaryBarView.shouldDisplay(
+                    provider: .codex,
+                    collection: nil,
+                    isSupported: switchStore.capabilities.threadSubagents,
+                    capabilitiesReady: switchStore.capabilities.isReady
+                ),
+                "Legacy remote webd with thread_subagents==false MUST render upgrade note"
+            )
+
+            let switchTask = Task { try await switchStore.selectMachine(target: .remote, machineId: "modern-webd") }
+            var waitIt = capsWait.makeAsyncIterator()
+            _ = await waitIt.next()
+            XCTAssertFalse(switchStore.capabilities.isReady, "During SSH handshake capabilities.isReady must be false")
+            XCTAssertFalse(
+                SubagentSummaryBarView.shouldDisplay(
+                    provider: .codex,
+                    collection: nil,
+                    isSupported: switchStore.capabilities.threadSubagents,
+                    capabilitiesReady: switchStore.capabilities.isReady
+                ),
+                "During handshake (isReady==false) SubagentSummaryBarView must NEVER flash upgrade note"
+            )
+            capsRelease.yield()
+            try await switchTask.value
+            XCTAssertTrue(switchStore.capabilities.isReady)
+            XCTAssertTrue(switchStore.capabilities.threadSubagents)
+            XCTAssertFalse(
+                SubagentSummaryBarView.shouldDisplay(
+                    provider: .codex,
+                    collection: nil,
+                    isSupported: switchStore.capabilities.threadSubagents,
+                    capabilitiesReady: switchStore.capabilities.isReady
+                ),
+                "Modern remote webd with nil collection (loading/error) must NEVER render upgrade note"
+            )
         }
     }
 
@@ -618,34 +754,54 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             XCTAssertEqual(deleteAction.label, "删除任务文件")
             XCTAssertFalse(deleteAction.disabled, "Claude delete must NEVER be disabled by read/activity state")
 
-            let dialog = SingleSessionDeleteConfirmContentView(
-                title: "Claude Session",
-                paths: ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"],
-                summaryText: "共 3 个文件 · 4,096 字节",
+            let batchPreview = SessionBatchPreview(
+                provider: .claudeCode,
+                operation: .delete,
+                items: [
+                    SessionBatchItem(
+                        sessionKey: "proj/1.jsonl",
+                        id: "1",
+                        title: "Claude Session",
+                        paths: ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"],
+                        bytes: 4096,
+                        allowed: true,
+                        warnings: ["活动进程提示"]
+                    )
+                ]
+            )
+            let dialog = SessionBatchPreviewDialogContentView(
+                preview: batchPreview,
                 busy: false,
-                warnings: ["活动进程提示"],
-                residuals: ["/Users/example/.claude/1/locked"],
                 onCancel: {},
                 onConfirm: {}
             )
             let host = NSHostingView(rootView: dialog.frame(width: 480))
             host.layoutSubtreeIfNeeded()
-            let minimalDialog = SingleSessionDeleteConfirmContentView(
-                title: "Claude Session",
-                paths: [],
-                summaryText: "共 0 个文件",
+            let minimalPreview = SessionBatchPreview(
+                provider: .claudeCode,
+                operation: .delete,
+                items: [
+                    SessionBatchItem(
+                        sessionKey: "proj/1.jsonl",
+                        id: "1",
+                        title: "Claude Session",
+                        paths: [],
+                        bytes: 0,
+                        allowed: true
+                    )
+                ]
+            )
+            let minimalDialog = SessionBatchPreviewDialogContentView(
+                preview: minimalPreview,
                 busy: false,
-                warnings: [],
-                residuals: [],
                 onCancel: {},
                 onConfirm: {}
             )
             let minimalHost = NSHostingView(rootView: minimalDialog.frame(width: 480))
             minimalHost.layoutSubtreeIfNeeded()
-            XCTAssertEqual(dialog.paths, ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"])
-            XCTAssertGreaterThan(host.fittingSize.height, minimalHost.fittingSize.height + 40, "Monospaced target paths, warnings, and residuals must expand dialog layout height")
-            XCTAssertEqual(dialog.warnings, ["活动进程提示"])
-            XCTAssertEqual(dialog.residuals, ["/Users/example/.claude/1/locked"])
+            XCTAssertEqual(batchPreview.items[0].paths, ["/Users/example/.claude/1.jsonl", "/Users/example/.claude/1/subagents"])
+            XCTAssertGreaterThan(host.fittingSize.height, minimalHost.fittingSize.height + 20, "Monospaced target paths and warnings must expand unified batch delete dialog layout height")
+            XCTAssertEqual(batchPreview.items[0].warnings, ["活动进程提示"])
         }
     }
 
@@ -734,12 +890,12 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 SessionMenuAction(id: "delete", label: "永久删除", icon: .trash2, danger: true, run: { triggeredMenuIds.append("delete") }),
             ]
 
-            // 1) Native NSMenu constructed for Ctrl+Click preserves labels, enabled state, and invokes action!
-            let nsMenu = ProviderMenuMatrixBuilder.buildNSMenu(actions: rowActions)
-            XCTAssertEqual(nsMenu.items.map(\.title), ["改名", "复制 ID", "在 Finder 中显示", "永久删除"])
-            XCTAssertTrue(nsMenu.items[0].isEnabled)
-            XCTAssertFalse(nsMenu.items[2].isEnabled)
-            _ = nsMenu.items[1].target?.perform(nsMenu.items[1].action!, with: nsMenu.items[1])
+            // 1) Action descriptors preserve labels, enabled state, danger styling, and invoke action!
+            XCTAssertEqual(rowActions.map(\.label), ["改名", "复制 ID", "在 Finder 中显示", "永久删除"])
+            XCTAssertFalse(rowActions[0].disabled)
+            XCTAssertTrue(rowActions[2].disabled)
+            XCTAssertTrue(rowActions[3].danger)
+            rowActions[1].run()
             XCTAssertEqual(triggeredMenuIds, ["copy-id"])
 
             // 2) Ctrl+Click does NOT switch detail or mutate selection

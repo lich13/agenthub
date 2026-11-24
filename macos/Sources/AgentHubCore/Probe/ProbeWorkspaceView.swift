@@ -53,7 +53,7 @@ public struct ProbeWorkspaceView: View {
 
     public var body: some View {
         GeometryReader { geo in
-            let isNarrow = geo.size.width <= LayoutMetrics.mobileBreakpoint
+            let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ZStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -90,7 +90,7 @@ public struct ProbeWorkspaceView: View {
                         }
 
                         // 1. Full-width GitHub CI Panel
-                        if store.capabilities.isReady {
+                        if store.capabilities.isReady && store.capabilities.githubCi {
                             GithubCiCardView(
                                 store: store,
                                 draft: $draft,
@@ -257,7 +257,7 @@ public struct ProbeWorkspaceView: View {
                 Text("平台通知一键开关")
                     .font(DesignFonts.body(13, weight: .semibold))
                     .foregroundStyle(palette.textPrimary.color)
-                let visiblePlatforms = ProbeNotificationPlatform.allCases.filter { p in
+                let visiblePlatforms = SessionProvider.allCases.filter { p in
                     switch p {
                     case .antigravity: store.capabilities.antigravityNotifications
                     case .grokbot: store.capabilities.grokbotNotifications

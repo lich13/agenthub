@@ -84,7 +84,7 @@ public struct NewDesktopThreadButton: View {
                 pendingCreatedId = nil
             }
         } catch {
-            let msg = error.localizedDescription
+            let msg = CodexDesktopStore.safeCollaborationErrorMessage(error)
             if msg.contains("结果未确认") {
                 uncertainOutcome = true
             }
@@ -1050,7 +1050,7 @@ public struct DesktopCollaborationFooterView: View {
             draft.references.append(item)
             localError = nil
         } catch {
-            localError = error.localizedDescription
+            localError = CodexDesktopStore.safeAttachmentErrorMessage(error)
         }
     }
 

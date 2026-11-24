@@ -353,6 +353,8 @@ struct FoldedMetadata {
     updated_at_ms: Option<i64>,
     message_count: usize,
     open_turn: bool,
+    waiting_approval: bool,
+    waiting_question: bool,
 }
 
 static DSH_FOLD_CACHE: crate::read_cache::ReadCache<FoldedMetadata> =
@@ -442,6 +444,8 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
         updated_at_ms,
         message_count,
         open_turn: false,
+        waiting_approval: false,
+        waiting_question: false,
     })
 }
 
@@ -475,6 +479,9 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
         updated_at_ms: session.header["createdAt"].as_i64(),
         ..Default::default()
     };
+    let mut timed_question_tool = false;
+    let mut pending_approvals: BTreeSet<String> = BTreeSet::new();
+    let mut pending_questions: BTreeMap<String, bool> = BTreeMap::new();
     let mut line_index = 0usize;
     decode_log_lines(&session.log_path, session.compressed, |line| {
         if line_index == 0 {
@@ -507,18 +514,75 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
                     meta.cwd = Some(c.to_owned());
                 }
             }
+            "request/header" if !is_inherited => {
+                timed_question_tool = data["header"]["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|t| {
+                        t["name"] == "ask_user_question"
+                            && t["parameters"]["properties"].get("timeout").is_some()
+                    });
+            }
             "session/end-seed" => {
                 meta.open_turn = false;
+                pending_approvals.clear();
+                pending_questions.clear();
             }
             "turn/start" if !is_inherited => {
                 meta.open_turn = true;
             }
             "turn/end" if !is_inherited => {
                 meta.open_turn = false;
+                pending_approvals.clear();
+                pending_questions.retain(|_, continued| *continued);
+            }
+            "tool/call" if !is_inherited && data["name"] == "ask_user_question" => {
+                if let Some(id) = data["callId"].as_str().filter(|s| !s.is_empty()) {
+                    pending_questions.insert(id.to_owned(), false);
+                }
+            }
+            "tool/result" if !is_inherited => {
+                if let Some(id) = data["message"]["toolCallId"].as_str() {
+                    let continued = timed_question_tool
+                        && (dsh_pending_result(&data["message"]["content"])
+                            || data["error"]["code"] == "TOOL_OUTCOME_UNKNOWN");
+                    if continued {
+                        if let Some(slot) = pending_questions.get_mut(id) {
+                            *slot = true;
+                        }
+                    } else {
+                        pending_questions.remove(id);
+                    }
+                }
+            }
+            "tool/ptc-dispatch"
+                if !is_inherited
+                    && data["name"] == "ask_user_question"
+                    && data["isError"] != true
+                    && dsh_pending_result(&data["content"]) =>
+            {
+                if let Some(id) = data["subCallId"].as_str().filter(|s| !s.is_empty()) {
+                    pending_questions.insert(id.to_owned(), true);
+                }
+            }
+            "approval/asked" if !is_inherited => {
+                if let Some(id) = data["id"].as_str().filter(|s| !s.is_empty()) {
+                    pending_approvals.insert(id.to_owned());
+                }
+            }
+            "approval/decided" if !is_inherited => {
+                if let Some(id) = data["id"].as_str() {
+                    pending_approvals.remove(id);
+                }
             }
             "user/message" => {
                 let src = data["source"]["kind"].as_str().unwrap_or("user");
                 if src == "user" {
+                    if !is_inherited {
+                        pending_approvals.clear();
+                        pending_questions.clear();
+                    }
                     let txt = extract_content_plain_text(&data["content"]);
                     let trimmed = txt.trim();
                     if !trimmed.is_empty() {
@@ -542,7 +606,18 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
         }
         Ok(())
     })?;
+    meta.waiting_approval = !pending_approvals.is_empty();
+    meta.waiting_question = !pending_questions.is_empty();
     Ok(meta)
+}
+
+fn dsh_pending_result(content: &Value) -> bool {
+    let txt = extract_content_plain_text(content);
+    let trimmed = txt.trim();
+    trimmed.eq_ignore_ascii_case("pending")
+        || serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .is_some_and(|v| v["status"] == "pending" || v["pending"] == true)
 }
 
 fn build_summary(
@@ -587,6 +662,10 @@ fn build_summary(
         });
     let status = if archived {
         "archived"
+    } else if locked && (folded.waiting_approval || folded.waiting_question) {
+        "waiting"
+    } else if !locked && folded.waiting_question {
+        "reply_needed"
     } else if running {
         "running"
     } else {
@@ -600,12 +679,14 @@ fn build_summary(
     } else {
         None
     };
+    let workspace_root = crate::workspace_root::resolve_workspace_root(&cwd);
     ProviderSessionSummary {
         storage_size: None,
         id: session.id.clone(),
         session_key: session.id.clone(),
         title,
         cwd,
+        workspace_root,
         path: session.log_path.clone(),
         archived,
         updated_at,
@@ -2745,6 +2826,67 @@ mod tests {
         assert_eq!(tools[2].call_id.as_deref(), Some("call-c"));
         assert_eq!(tools[2].status.as_deref(), Some("completed"));
 
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_turn_approval_and_question_report_waiting_and_unlocked_question_reports_reply_needed() {
+        use std::os::unix::io::AsRawFd;
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-waiting-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/proj-waiting");
+        let approval_id = "33333333-4444-4555-8666-777777777777";
+        let question_id = "44444444-5555-4666-8777-888888888888";
+        for id in [approval_id, question_id] {
+            fs::create_dir_all(proj.join(id)).unwrap();
+        }
+        write_zstd_frames(
+            &proj.join(approval_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":approval_id,"createdAt":10,"cwd":"/workspace/dsh"}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"approval/asked","seq":1,"time":12,"data":{"id":"ap-1","reason":"需要执行构建"}}),
+            ],
+        );
+        write_zstd_frames(
+            &proj.join(question_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":question_id,"createdAt":20,"cwd":"/workspace/dsh"}),
+                json!({"type":"request/header","seq":0,"time":21,"data":{"header":{"tools":[{"name":"ask_user_question","parameters":{"properties":{"timeout":{}}}}]}}}),
+                json!({"type":"turn/start","seq":1,"time":22,"data":{"turn":1}}),
+                json!({"type":"tool/call","seq":2,"time":23,"data":{"turn":1,"callId":"q-1","name":"ask_user_question","arguments":{"questions":[{"question":"继续？"}]}}}),
+                json!({"type":"tool/result","seq":3,"time":24,"data":{"callId":"q-1","message":{"toolCallId":"q-1","content":[{"type":"text","text":"pending"}]}}}),
+                json!({"type":"turn/end","seq":4,"time":25,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(proj.join(approval_id).join("session.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+
+        let paths = DshPaths { home: home.clone() };
+        let list = list_sessions(
+            &paths,
+            &ProviderListRequest {
+                archived: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let approval_row = list.iter().find(|s| s.id == approval_id).unwrap();
+        assert_eq!(approval_row.status, "waiting");
+        let question_row = list.iter().find(|s| s.id == question_id).unwrap();
+        assert_eq!(question_row.status, "reply_needed");
+
+        drop(lock_file);
         fs::remove_dir_all(home).unwrap();
     }
 }

@@ -23,7 +23,7 @@ func protocol2CapabilitiesFixture(remote: Bool, pruneBackups: Bool? = nil) -> Da
         "systemd": remote,
         "linux_update_job": remote,
         "prune_backups": pruneBackups ?? remote,
-        "antigravity_notifications": !remote,
+        "antigravity_notifications": true,
         "dsh_notifications": !remote,
         "grokbot_sessions": !remote,
         "grokbot_notifications": !remote,

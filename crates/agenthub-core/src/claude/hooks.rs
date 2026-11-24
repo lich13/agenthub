@@ -51,12 +51,7 @@ impl HookProvider {
             Self::Grok => crate::grok::GrokPaths::default_for_user()?
                 .home
                 .join("hooks/agenthub.json"),
-            Self::Antigravity => {
-                let home = crate::antigravity::sessions::AntigravityPaths::default_for_user()?.home;
-                home.parent()
-                    .unwrap_or(home.as_path())
-                    .join("config/hooks.json")
-            }
+            Self::Antigravity => crate::platform::current_home()?.join(".gemini/config/hooks.json"),
         })
     }
 }

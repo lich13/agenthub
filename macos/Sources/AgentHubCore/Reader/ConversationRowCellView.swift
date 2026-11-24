@@ -105,16 +105,16 @@ public final class ConversationRowCellView: NSTableCellView {
     }
 
     private func updateFloatingCopyVisibility() {
-        let narrowMobile = bounds.width > 0 && bounds.width <= LayoutMetrics.mobileBreakpoint
+        let narrowColumn = bounds.width > 0 && bounds.width <= LayoutMetrics.narrowBreakpoint
         let firstRespView = window?.firstResponder as? NSView
         let focusedInside = firstRespView.map { $0 === self || $0.isDescendant(of: self) } ?? false
 
         if let btn = floatingSideCopyButton {
-            let visible = isRowHovered || btn.isShowingCopied || focusedInside || narrowMobile
+            let visible = isRowHovered || btn.isShowingCopied || focusedInside || narrowColumn
             btn.alphaValue = visible ? 1.0 : 0.0
         }
         for qBtn in questionReplyCopyButtons {
-            let visible = isRowHovered || qBtn.isShowingCopied || focusedInside || narrowMobile
+            let visible = isRowHovered || qBtn.isShowingCopied || focusedInside || narrowColumn
             qBtn.alphaValue = visible ? 1.0 : 0.0
         }
     }

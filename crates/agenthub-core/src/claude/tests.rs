@@ -3456,3 +3456,61 @@ fn uncached_key_resolves_by_path_and_parses_only_the_located_transcript() {
     );
     assert_eq!(reader::BODY_RECORDS.with(|count| count.get()), 0);
 }
+
+#[test]
+fn stale_busy_registration_interrupted_prompt_and_agent_sidechain_files_settle_cleanly() {
+    let f = Fixture::new();
+    let project_dir = f.file.parent().unwrap().to_path_buf();
+    fs::write(
+        &f.file,
+        [
+            json!({"type":"user","sessionId":"native-fixture","cwd":"/workspace/claude-fixture","version":"2.1.76","uuid":"u1","promptId":"p1","timestamp":"2026-10-20T08:00:05Z","message":{"role":"user","content":"开始任务"}}).to_string(),
+            json!({"type":"assistant","sessionId":"native-fixture","cwd":"/workspace/claude-fixture","version":"2.1.76","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-20T08:00:10Z","message":{"id":"m1","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"已完成"}]}}).to_string(),
+            json!({"type":"system","subtype":"turn_duration","sessionId":"native-fixture","uuid":"s1","timestamp":"2026-10-20T08:00:12Z","durationMs":7000}).to_string(),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    // Sidechain and agent-* files inside project bucket must not leak into main list,
+    // while empty primary transcript stays readable.
+    fs::write(
+        project_dir.join("agent-leaked.jsonl"),
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":"native-fixture","agentId":"leaked","isSidechain":true,"uuid":"cu1","message":{"role":"user","content":"子代理任务"}})
+        ),
+    )
+    .unwrap();
+    fs::write(
+        project_dir.join("pure-sidechain.jsonl"),
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":"native-fixture","agentId":"side","isSidechain":true,"uuid":"cu2","message":{"role":"user","content":"纯分支记录"}})
+        ),
+    )
+    .unwrap();
+    fs::write(project_dir.join("empty-primary.jsonl"), "").unwrap();
+
+    let listed = list_claude_sessions(&f.paths, 100, None).unwrap();
+    let ids: Vec<&str> = listed.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"native-fixture"));
+    assert!(ids.contains(&"empty-primary"));
+    assert!(!ids.contains(&"agent-leaked"));
+    assert!(!ids.contains(&"pure-sidechain"));
+
+    // User interruption record closes open turn instead of starting a new open turn.
+    let interrupted = project_dir.join("interrupted-session.jsonl");
+    fs::write(
+        &interrupted,
+        [
+            json!({"type":"user","sessionId":"interrupted-session","cwd":"/workspace/claude-fixture","version":"2.1.76","uuid":"iu1","promptId":"ip1","timestamp":"2026-10-20T08:01:00Z","message":{"role":"user","content":"执行长任务"}}).to_string(),
+            json!({"type":"user","sessionId":"interrupted-session","cwd":"/workspace/claude-fixture","version":"2.1.76","uuid":"iu2","parentUuid":"iu1","timestamp":"2026-10-20T08:01:03Z","message":{"role":"user","content":"[Request interrupted by user]"}}).to_string(),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let parsed_interrupted = reader::read(&interrupted).unwrap();
+    assert!(!parsed_interrupted.turn_open);
+}

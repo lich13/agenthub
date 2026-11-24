@@ -543,8 +543,6 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     public let statusBadge: String?
     public let statusTone: StatusChipTone
     public let availableWidth: CGFloat
-    public let isCompactMobile: Bool
-    public let onBack: (() -> Void)?
     public let inlineRenameActive: Bool
     public let initialRenameText: String
     public let onCommitInlineRename: ((String) async throws -> Void)?
@@ -561,8 +559,6 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
         statusBadge: String? = nil,
         statusTone: StatusChipTone = .neutral,
         availableWidth: CGFloat = 1200,
-        isCompactMobile: Bool = false,
-        onBack: (() -> Void)? = nil,
         inlineRenameActive: Bool = false,
         initialRenameText: String = "",
         onCommitInlineRename: ((String) async throws -> Void)? = nil,
@@ -574,8 +570,6 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
         self.statusBadge = statusBadge
         self.statusTone = statusTone
         self.availableWidth = availableWidth
-        self.isCompactMobile = isCompactMobile
-        self.onBack = onBack
         self.inlineRenameActive = inlineRenameActive
         self.initialRenameText = initialRenameText
         self.onCommitInlineRename = onCommitInlineRename
@@ -584,17 +578,9 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     }
 
     public var body: some View {
-        let isNarrowHeader = isCompactMobile || availableWidth <= 520
+        let isNarrowHeader = availableWidth <= 520
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                if isCompactMobile, let onBack {
-                    Button(action: onBack) {
-                        LucideIcon(.chevronLeft, size: 18)
-                    }
-                    .buttonStyle(IconButtonStyle(dimension: 32))
-                    .accessibilityLabel("返回列表")
-                }
-
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(DesignFonts.body(15, weight: .bold))
@@ -618,9 +604,9 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
                     trailing()
                 }
             }
-            .padding(.horizontal, isCompactMobile ? 12 : (isNarrowHeader ? 16 : 24))
+            .padding(.horizontal, isNarrowHeader ? 16 : 24)
             .padding(.vertical, 10)
-            .frame(minHeight: isCompactMobile ? 58 : 54)
+            .frame(minHeight: 54)
             .background(
                 ZStack {
                     BackdropGaussianBlurView(radius: 10)

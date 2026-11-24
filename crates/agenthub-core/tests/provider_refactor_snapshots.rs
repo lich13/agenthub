@@ -59,6 +59,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
         message_count: CODEX_HISTORY.lines().count(),
         latest_message: Some("Confirmed.".into()),
         cwd: Some(WORKSPACE.into()),
+        workspace_root: None,
         model: Some("fixture-model".into()),
         rollout_path: Some(codex_path),
         active_turn_id: None,

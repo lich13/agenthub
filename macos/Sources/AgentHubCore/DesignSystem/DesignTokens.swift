@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 public enum WorkspaceId: String, CaseIterable, Codable, Sendable {
+    case workspaces
     case codex
     case claude
     case grok
@@ -13,6 +14,7 @@ public enum WorkspaceId: String, CaseIterable, Codable, Sendable {
 
     public var label: String {
         switch self {
+        case .workspaces: "工作区"
         case .codex: "Codex"
         case .claude: "Claude Code"
         case .grok: "Grok Build"
@@ -263,9 +265,9 @@ public struct DesignPalette: Equatable, Sendable {
             AccentPalette(accent: RGBAColor(hex: 0x2442C8), accentSoft: RGBAColor(hex: 0xECF0FF), accentBorder: RGBAColor(hex: 0xB3C2FF))
         case (.dark, .dsh):
             AccentPalette(accent: RGBAColor(hex: 0x7D95FF), accentSoft: RGBAColor(hex: 0x1A2342), accentBorder: RGBAColor(hex: 0x35498C))
-        case (.light, .probe), (.light, .ops), (.light, .grokbot):
+        case (.light, .workspaces), (.light, .probe), (.light, .ops), (.light, .grokbot):
             AccentPalette(accent: RGBAColor(hex: 0x0369A1), accentSoft: RGBAColor(hex: 0xE0F2FE), accentBorder: RGBAColor(hex: 0x7DD3FC))
-        case (.dark, .probe), (.dark, .ops), (.dark, .grokbot):
+        case (.dark, .workspaces), (.dark, .probe), (.dark, .ops), (.dark, .grokbot):
             AccentPalette(accent: RGBAColor(hex: 0x38BDF8), accentSoft: RGBAColor(hex: 0x0C2538), accentBorder: RGBAColor(hex: 0x1D4F73))
         }
     }
@@ -285,9 +287,7 @@ public enum LayoutMetrics {
     public static let subagentDrawerWidth: CGFloat = 420
     public static let subagentDockThreshold: CGFloat = 960
 
-    public static let mobileBreakpoint: CGFloat = 767
-    public static let mobileTopBarHeight: CGFloat = 52
-    public static let mobileBottomTabsHeight: CGFloat = 58
+    public static let narrowBreakpoint: CGFloat = 767
     public static let formControlHeight: CGFloat = 36
 
     public static let timelineRailLeft: CGFloat = 8
@@ -296,14 +296,14 @@ public enum LayoutMetrics {
 
     public static let composerMinHeight: CGFloat = 54
     public static let composerMaxHeight: CGFloat = 160
-    public static let fallbackAppVersion: String = "2.1.33"
+    public static let fallbackAppVersion: String = "2.1.34"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,
         hasTimelineRail: Bool,
         isSubagent: Bool = false
     ) -> (leading: CGFloat, trailing: CGFloat, top: CGFloat, bottom: CGFloat) {
-        if availableWidth <= mobileBreakpoint {
+        if availableWidth <= narrowBreakpoint {
             return (leading: 32, trailing: 16, top: 16, bottom: 16)
         }
         if isSubagent {

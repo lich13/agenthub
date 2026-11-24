@@ -122,7 +122,7 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
     private var bridge: FFIRuntimeBridge?
     private var store: RuntimeConnectionStore?
     private var windowManager: AgentHubWindowManager?
-    public var providerContentBuilder: (@MainActor (WorkspaceId, RuntimeConnectionStore, Bool) -> AnyView)?
+    public var providerContentBuilder: (@MainActor (WorkspaceId, RuntimeConnectionStore) -> AnyView)?
 
     public override init() {
         super.init()

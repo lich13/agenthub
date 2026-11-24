@@ -7,28 +7,138 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
+fn open_summaries_rw(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path).context("无法打开 Antigravity 索引数据库写入")?;
+    let _ = conn.busy_timeout(Duration::from_millis(2500));
+    Ok(conn)
+}
+
 fn patch_db_raw_summary(
     conn: &Connection,
     id: &str,
     new_title: Option<&str>,
     new_archived: Option<bool>,
-) {
+) -> Result<()> {
+    let has_raw = super::summaries_table_columns(conn).contains("raw_summary");
+    if !has_raw {
+        return Ok(());
+    }
     let Ok(mut stmt) =
         conn.prepare("SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?1")
     else {
-        return;
+        return Ok(());
     };
     let Ok(Some(blob)) = stmt.query_row(params![id], |row| row.get::<_, Option<Vec<u8>>>(0)) else {
-        return;
+        return Ok(());
     };
     if let Some(patched) =
         patch_raw_summary_annotations(&blob, new_title, new_archived, now_unix_secs())
     {
-        let _ = conn.execute(
+        conn.execute(
             "UPDATE conversation_summaries SET raw_summary = ?1 WHERE conversation_id = ?2",
             params![patched, id],
-        );
+        )
+        .context("更新 Antigravity raw_summary 失败")?;
     }
+    Ok(())
+}
+
+fn upsert_fts_summary_row(
+    conn: &Connection,
+    id: &str,
+    existing: &ProviderSessionSummary,
+    new_title: Option<&str>,
+    new_archived: Option<bool>,
+) -> Result<()> {
+    let cols: BTreeSet<String> = conn
+        .prepare("PRAGMA table_info(conversations_fts)")
+        .ok()
+        .and_then(|mut s| {
+            s.query_map([], |r| r.get::<_, String>(1))
+                .ok()
+                .map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    if !cols.contains("conversation_id") || !cols.contains("chunk_index") {
+        return Ok(());
+    }
+    let effective_title = new_title.unwrap_or(&existing.title);
+    let effective_archived = i64::from(new_archived.unwrap_or(existing.archived));
+    let updated = match (new_title, new_archived) {
+        (Some(_), Some(_)) if cols.contains("title") && cols.contains("archived") => conn.execute(
+            "UPDATE conversations_fts SET title = ?1, archived = ?2 WHERE conversation_id = ?3 AND chunk_index = -1",
+            params![effective_title, effective_archived, id],
+        )?,
+        (Some(_), None) if cols.contains("title") => conn.execute(
+            "UPDATE conversations_fts SET title = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
+            params![effective_title, id],
+        )?,
+        (None, Some(_)) if cols.contains("archived") => conn.execute(
+            "UPDATE conversations_fts SET archived = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
+            params![effective_archived, id],
+        )?,
+        _ => return Ok(()),
+    };
+    if updated > 0 {
+        return Ok(());
+    }
+
+    let now_nanos = existing
+        .updated_at
+        .as_deref()
+        .and_then(super::cli_meta::parse_valid_timestamp_ms)
+        .unwrap_or_else(super::now_epoch_ms)
+        .saturating_mul(1_000_000);
+    let step_count = (existing.message_count as i64).max(1);
+    let project = Path::new(&existing.cwd)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let full_15_cols = [
+        "chunk_first_step",
+        "chunk_last_step",
+        "last_modified_time",
+        "step_count",
+        "last_step_created_at",
+        "archived",
+        "user_step_byte_offsets",
+        "agent_step_byte_offsets",
+        "title",
+        "workspace",
+        "project",
+        "user_body",
+        "agent_body",
+    ]
+    .iter()
+    .all(|c| cols.contains(*c));
+    if full_15_cols {
+        conn.execute(
+            "INSERT INTO conversations_fts (
+                conversation_id, chunk_index, chunk_first_step, chunk_last_step,
+                last_modified_time, step_count, last_step_created_at, archived,
+                user_step_byte_offsets, agent_step_byte_offsets,
+                title, workspace, project, user_body, agent_body
+            ) VALUES (?1, -1, 0, ?2, ?3, ?4, ?3, ?5, '[]', '[]', ?6, ?7, ?8, '', '')",
+            params![
+                id,
+                step_count.saturating_sub(1),
+                now_nanos,
+                step_count,
+                effective_archived,
+                effective_title,
+                existing.cwd,
+                project,
+            ],
+        )
+        .context("写入 Antigravity conversations_fts 索引行失败")?;
+    } else if cols.contains("archived") && cols.contains("title") {
+        conn.execute(
+            "INSERT INTO conversations_fts (conversation_id, chunk_index, archived, title) VALUES (?1, -1, ?2, ?3)",
+            params![id, effective_archived, effective_title],
+        )
+        .context("写入 Antigravity conversations_fts 简版索引行失败")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_target_store_and_endpoint(
@@ -103,17 +213,14 @@ pub fn rename_session(
         write_annotation_overlay(&store, key, Some(&title), None)?;
         let db_path = store.summaries_db();
         if db_path.is_file() {
-            if let Ok(conn) = Connection::open(&db_path) {
-                let _ = conn.execute(
-                    "UPDATE conversation_summaries SET title = ?1 WHERE conversation_id = ?2",
-                    params![title, key],
-                );
-                patch_db_raw_summary(&conn, key, Some(&title), None);
-                let _ = conn.execute(
-                    "UPDATE conversations_fts SET title = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
-                    params![title, key],
-                );
-            }
+            let conn = open_summaries_rw(&db_path)?;
+            conn.execute(
+                "UPDATE conversation_summaries SET title = ?1 WHERE conversation_id = ?2",
+                params![title, key],
+            )
+            .context("更新 Antigravity 会话标题索引失败")?;
+            patch_db_raw_summary(&conn, key, Some(&title), None)?;
+            upsert_fts_summary_row(&conn, key, &existing, Some(&title), None)?;
         }
         let metadata_path = store.home.join("cache/conversation_metadata.json");
         if session_delete::within(&store.home, &metadata_path) {
@@ -124,7 +231,13 @@ pub fn rename_session(
                     .and_then(|map| map.get_mut(key))
                     .and_then(Value::as_object_mut)
                 {
-                    entry.insert("summary".into(), Value::String(title.clone()));
+                    if let Some(summary_obj) =
+                        entry.get_mut("summary").and_then(Value::as_object_mut)
+                    {
+                        summary_obj.insert("Title".into(), Value::String(title.clone()));
+                    } else if entry.get("summary").is_some_and(Value::is_string) {
+                        entry.insert("summary".into(), Value::String(title.clone()));
+                    }
                 }
             })?;
         }
@@ -174,14 +287,9 @@ pub fn set_archived(
         write_annotation_overlay(&store, key, None, Some(archived))?;
         let db_path = store.summaries_db();
         if db_path.is_file() {
-            if let Ok(conn) = Connection::open(&db_path) {
-                patch_db_raw_summary(&conn, key, None, Some(archived));
-                let flag = i64::from(archived);
-                let _ = conn.execute(
-                    "UPDATE conversations_fts SET archived = ?1 WHERE conversation_id = ?2 AND chunk_index = -1",
-                    params![flag, key],
-                );
-            }
+            let conn = open_summaries_rw(&db_path)?;
+            patch_db_raw_summary(&conn, key, None, Some(archived))?;
+            upsert_fts_summary_row(&conn, key, &existing, None, Some(archived))?;
         }
         invalidate_proto_cache(&store);
     }
@@ -310,7 +418,11 @@ pub(crate) fn read_children_map(
 ) -> Result<BTreeMap<String, Vec<String>>> {
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut insert_edge = |parent: String, child: String| {
-        if !parent.is_empty() && parent != child && uuid::Uuid::parse_str(&child).is_ok() {
+        if !parent.is_empty()
+            && parent != child
+            && uuid::Uuid::parse_str(&parent).is_ok()
+            && uuid::Uuid::parse_str(&child).is_ok()
+        {
             let list = children_map.entry(parent).or_default();
             if !list.contains(&child) {
                 list.push(child);
@@ -318,25 +430,45 @@ pub(crate) fn read_children_map(
         }
     };
     let db_path = paths.summaries_db();
+    let mut open_conn: Option<Connection> = None;
     if db_path.is_file() {
         let conn = Connection::open_with_flags(
             &db_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .context("无法打开 Antigravity 索引数据库校验子会话")?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT conversation_id, COALESCE(parent_conversation_id, '') FROM conversation_summaries",
-            )
-            .context("无法读取 Antigravity 索引数据库子会话表")?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .context("无法查询 Antigravity 子会话关系")?;
-        for row in rows {
-            let (cid, pid) = row.context("解码 Antigravity 子会话索引行失败")?;
-            insert_edge(pid, cid);
+        let cols = super::summaries_table_columns(&conn);
+        let raw_expr = if cols.contains("raw_summary") {
+            "raw_summary"
+        } else {
+            "NULL"
+        };
+        {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT conversation_id, COALESCE(parent_conversation_id, ''), {raw_expr} FROM conversation_summaries"
+                ))
+                .context("无法读取 Antigravity 索引数据库子会话表")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<Vec<u8>>>(2).ok().flatten(),
+                    ))
+                })
+                .context("无法查询 Antigravity 子会话关系")?;
+            for row in rows {
+                let (cid, pid, raw_blob) = row.context("解码 Antigravity 子会话索引行失败")?;
+                if !pid.is_empty() {
+                    insert_edge(pid, cid);
+                } else if let Some(blob) = raw_blob {
+                    let parsed = super::annotations::parse_raw_summary(&blob);
+                    if let Some(eff_p) = parsed.trajectory_meta.effective_parent(&cid) {
+                        insert_edge(eff_p.to_owned(), cid);
+                    }
+                }
+            }
         }
         if super::has_conversation_parents_table(&conn) {
             let mut pstmt = conn
@@ -352,6 +484,42 @@ pub(crate) fn read_children_map(
             for row in prows {
                 let (cid, pid) = row.context("解码 Antigravity conversation_parents 行失败")?;
                 insert_edge(pid, cid);
+            }
+        }
+        open_conn = Some(conn);
+    }
+    let aux = super::load_store_auxiliary_index(paths, open_conn.as_ref());
+    for (pid, kids) in aux.sidecar_children {
+        for cid in kids {
+            insert_edge(pid.clone(), cid);
+        }
+    }
+    for (cid, entry) in aux.conv_meta {
+        if let Some(pid) = entry.parent_id.or(entry.root_id) {
+            insert_edge(pid, cid);
+        }
+    }
+    if paths.conversations_dir().is_dir() {
+        if let Ok(entries) = fs::read_dir(paths.conversations_dir()) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("db") {
+                    continue;
+                }
+                let Some(cid) = p.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if uuid::Uuid::parse_str(cid).is_ok() {
+                    if let Some(meta) = super::inspect_conv_db_metadata(paths, cid) {
+                        if !meta.parent_ids.is_empty() {
+                            for pid in meta.parent_ids {
+                                insert_edge(pid, cid.to_owned());
+                            }
+                        } else if let Some(rid) = meta.root_id {
+                            insert_edge(rid, cid.to_owned());
+                        }
+                    }
+                }
             }
         }
     }
@@ -986,6 +1154,7 @@ pub enum UnifiedAntigravityStepOutcome {
 struct VerifiedOrphanSubagent {
     id: String,
     direct_parent: String,
+    root_id: Option<String>,
     title: String,
     bytes: u64,
     fingerprint: String,
@@ -1021,10 +1190,12 @@ fn scan_store_orphan_subagents(
         return Ok(BTreeMap::new());
     }
     let mut parent_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut root_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut titles: BTreeMap<String, String> = BTreeMap::new();
     let mut sqlite_statuses: BTreeMap<String, &'static str> = BTreeMap::new();
 
     let db_path = store.summaries_db();
+    let mut open_conn: Option<Connection> = None;
     if db_path.is_file() {
         let conn = Connection::open_with_flags(
             &db_path,
@@ -1056,47 +1227,145 @@ fn scan_store_orphan_subagents(
         } else {
             "0"
         };
+        let raw_expr = if cols.contains("raw_summary") {
+            "raw_summary"
+        } else {
+            "NULL"
+        };
         let sql = format!(
             "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
              COALESCE(parent_conversation_id, ''), COALESCE(nesting_depth, 0), \
-             {status_expr}, {idle_expr} FROM conversation_summaries"
+             {status_expr}, {idle_expr}, {raw_expr} FROM conversation_summaries"
         );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, super::ValueOrString>(6)
-                    .map(|v| v.0)
-                    .unwrap_or(false),
-            ))
-        })?;
-        for row in rows {
-            let (cid, title, preview, parent, depth, status_str, not_fully_idle) = row?;
-            if uuid::Uuid::parse_str(&cid).is_err() {
-                continue;
+        {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, super::ValueOrString>(6)
+                        .map(|v| v.0)
+                        .unwrap_or(false),
+                    row.get::<_, Option<Vec<u8>>>(7).ok().flatten(),
+                ))
+            })?;
+            for row in rows {
+                let (cid, title, preview, parent, depth, status_str, not_fully_idle, raw_blob) =
+                    row?;
+                if uuid::Uuid::parse_str(&cid).is_err() {
+                    continue;
+                }
+                let parsed_raw = raw_blob
+                    .as_deref()
+                    .map(super::annotations::parse_raw_summary);
+                if let Some(st) = super::offline_summary_row_status(&status_str, not_fully_idle)
+                    .or_else(|| {
+                        parsed_raw
+                            .as_ref()
+                            .and_then(super::annotations::ParsedRawSummary::active_status)
+                    })
+                {
+                    sqlite_statuses.insert(cid.clone(), st);
+                }
+                let display = parsed_raw
+                    .as_ref()
+                    .and_then(|r| r.annotations.title.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        if !title.trim().is_empty() {
+                            title.trim().to_owned()
+                        } else if !preview.trim().is_empty() {
+                            preview.trim().chars().take(80).collect()
+                        } else {
+                            String::new()
+                        }
+                    });
+                if !display.is_empty() {
+                    titles.insert(cid.clone(), display);
+                }
+                if let Some(rid) = parsed_raw
+                    .as_ref()
+                    .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
+                    .filter(|r| !r.is_empty() && *r != cid && uuid::Uuid::parse_str(r).is_ok())
+                {
+                    root_ids.insert(cid.clone(), rid.to_owned());
+                }
+                if !parent.is_empty() && parent != cid {
+                    parent_sets.entry(cid).or_default().insert(parent);
+                } else if let Some(pid) = parsed_raw
+                    .as_ref()
+                    .and_then(|r| r.trajectory_meta.effective_parent(&cid))
+                {
+                    parent_sets
+                        .entry(cid.clone())
+                        .or_default()
+                        .insert(pid.to_owned());
+                } else if depth > 0
+                    || parsed_raw
+                        .as_ref()
+                        .is_some_and(|r| r.trajectory_meta.is_subagent(&cid))
+                {
+                    parent_sets.entry(cid).or_default();
+                }
             }
-            if let Some(st) = super::offline_summary_row_status(&status_str, not_fully_idle) {
-                sqlite_statuses.insert(cid.clone(), st);
+        }
+        open_conn = Some(conn);
+    }
+
+    let aux = super::load_store_auxiliary_index(store, open_conn.as_ref());
+    for (pid, kids) in aux.sidecar_children {
+        for cid in kids {
+            parent_sets.entry(cid).or_default().insert(pid.clone());
+        }
+    }
+    for (cid, s_meta) in aux.sidecar_meta {
+        if let Some(t) = s_meta.title {
+            titles.entry(cid).or_insert(t);
+        }
+    }
+    for (cid, c_meta) in aux.conv_meta {
+        if let Some(rid) = c_meta.root_id.filter(|r| uuid::Uuid::parse_str(r).is_ok()) {
+            root_ids.entry(cid.clone()).or_insert(rid.clone());
+            if c_meta.parent_id.is_none() {
+                parent_sets.entry(cid.clone()).or_default().insert(rid);
             }
-            let display = if !title.trim().is_empty() {
-                title.trim().to_owned()
-            } else if !preview.trim().is_empty() {
-                preview.trim().chars().take(80).collect()
-            } else {
-                String::new()
-            };
-            if !display.is_empty() {
-                titles.insert(cid.clone(), display);
-            }
-            if !parent.is_empty() && parent != cid {
-                parent_sets.entry(cid).or_default().insert(parent);
-            } else if depth > 0 {
-                parent_sets.entry(cid).or_default();
+        }
+        if let Some(pid) = c_meta
+            .parent_id
+            .filter(|p| uuid::Uuid::parse_str(p).is_ok())
+        {
+            parent_sets.entry(cid.clone()).or_default().insert(pid);
+        }
+        if let Some(t) = c_meta.title {
+            titles.entry(cid).or_insert(t);
+        }
+    }
+    if store.conversations_dir().is_dir() {
+        if let Ok(entries) = fs::read_dir(store.conversations_dir()) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("db") {
+                    continue;
+                }
+                let Some(cid) = p.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if uuid::Uuid::parse_str(cid).is_ok() {
+                    if let Some(meta) = super::inspect_conv_db_metadata(store, cid) {
+                        if let Some(rid) = meta.root_id {
+                            root_ids.entry(cid.to_owned()).or_insert(rid);
+                        }
+                        for pid in meta.parent_ids {
+                            parent_sets.entry(cid.to_owned()).or_default().insert(pid);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1175,6 +1444,12 @@ fn scan_store_orphan_subagents(
         if !valid_orphan_chain {
             continue;
         }
+        let recorded_root = root_ids.get(cid).cloned();
+        if let Some(ref rid) = recorded_root {
+            if ancestor_exists_anywhere(paths, store, all_live, rid) {
+                continue;
+            }
+        }
 
         let descendants = descendant_ids(children_map, cid);
         let node_or_desc_busy = std::iter::once(cid)
@@ -1215,6 +1490,7 @@ fn scan_store_orphan_subagents(
             VerifiedOrphanSubagent {
                 id: cid.clone(),
                 direct_parent,
+                root_id: recorded_root,
                 title,
                 bytes,
                 fingerprint,
@@ -1509,7 +1785,12 @@ pub fn execute_unified_cleanup_targets(
             let store_rpc = (!orphan.is_cli_store)
                 .then_some(live_rpc.as_ref())
                 .flatten();
-            if ancestor_exists_anywhere(paths, &store, store_live, &orphan.direct_parent) {
+            if ancestor_exists_anywhere(paths, &store, store_live, &orphan.direct_parent)
+                || orphan
+                    .root_id
+                    .as_deref()
+                    .is_some_and(|rid| ancestor_exists_anywhere(paths, &store, store_live, rid))
+            {
                 results.push((
                     raw_id.clone(),
                     UnifiedAntigravityStepOutcome::Skipped("父会话已恢复或存在，已跳过".into()),

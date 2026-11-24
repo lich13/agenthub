@@ -98,11 +98,11 @@ impl Capability {
     }
     pub fn is_supported_on_surface(self, surface: HostSurface) -> bool {
         match self {
+            Self::AntigravityNotifications => true,
             Self::Systemd | Self::LinuxUpdateJob | Self::PruneBackups => {
                 surface == HostSurface::LinuxServerApi
             }
             Self::CodexDesktop
-            | Self::AntigravityNotifications
             | Self::DshNotifications
             | Self::GrokbotSessions
             | Self::GrokbotNotifications => surface == HostSurface::DesktopEmbedded,

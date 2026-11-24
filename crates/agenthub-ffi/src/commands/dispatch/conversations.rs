@@ -1,4 +1,5 @@
 use super::*;
+use agenthub_core::services::threads::{self as core_thread_service, ThreadsQuery};
 
 pub(super) async fn threads_list(
     ctx: DispatchContext<'_>,
@@ -8,14 +9,14 @@ pub(super) async fn threads_list(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            thread_service::threads_with_state(
-                &state,
-                ThreadListRequest {
+            let plan = AgentHubUseCases::new(state.platform())
+                .threads()
+                .list_read(ThreadsQuery {
                     archived: args.archived,
-                    query: args.q,
+                    q: args.q,
                     limit: args.limit,
-                },
-            )
+                })?;
+            core_thread_service::load_thread_read_model_inputs(&state.codex_paths(), &plan)
         })
         .await,
     )
@@ -30,15 +31,15 @@ pub(super) async fn threads_detail(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            thread_service::thread_detail_with_state(
-                &state,
-                ThreadDetailRequest {
+            let plan = AgentHubUseCases::new(state.platform())
+                .threads()
+                .detail_read(core_thread_service::ThreadDetailRequest {
                     id: args.id,
                     limit: opts.limit,
-                    before: opts.before,
                     full: opts.full,
-                },
-            )
+                    before: opts.before,
+                })?;
+            core_thread_service::read_window_thread_detail(&state.codex_paths(), &plan)
         })
         .await,
     )
@@ -70,14 +71,12 @@ pub(super) async fn threads_blocks(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            thread_service::thread_blocks_with_state(
-                &state,
-                ThreadBlocksRequest {
-                    id: args.id,
-                    limit: opts.limit,
-                    before: opts.before,
-                },
-            )
+            let plan = AgentHubUseCases::new(state.platform()).threads().blocks(
+                &args.id,
+                opts.limit,
+                opts.before,
+            )?;
+            core_thread_service::read_thread_blocks_page(&state.codex_paths(), &plan)
         })
         .await,
     )
@@ -91,12 +90,7 @@ pub(super) async fn threads_archive(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            thread_service::archive_thread_with_state(
-                &state,
-                DesktopThreadIdRequest {
-                    thread_id: args.thread_id,
-                },
-            )
+            thread_service::archive_thread_with_state(&state, &args.thread_id)
         })
         .await,
     )
@@ -110,12 +104,7 @@ pub(super) async fn threads_restore(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            thread_service::restore_thread_with_state(
-                &state,
-                DesktopThreadIdRequest {
-                    thread_id: args.thread_id,
-                },
-            )
+            thread_service::restore_thread_with_state(&state, &args.thread_id)
         })
         .await,
     )
@@ -127,15 +116,9 @@ pub(super) async fn threads_rename(
 ) -> Result<String, String> {
     let args: ThreadRenameArgs = parse_args(args_json)?;
     encode(
-        thread_service::rename_thread_with_state(
-            ctx.state,
-            DesktopRenameThreadRequest {
-                thread_id: args.thread_id,
-                name: args.name,
-            },
-        )
-        .await
-        .map_err(|e| e.to_string()),
+        thread_service::rename_thread_with_state(ctx.state, args.thread_id, args.name)
+            .await
+            .map_err(|e| e.to_string()),
     )
 }
 

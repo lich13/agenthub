@@ -449,6 +449,7 @@ fn public_codex_reader_keeps_context_only_blocks_and_summarizes_clean_user_text(
         message_count: events.len(),
         latest_message: None,
         cwd: Some("/workspace/project".into()),
+        workspace_root: None,
         model: None,
         rollout_path: Some(rollout),
         active_turn_id: None,

@@ -627,33 +627,110 @@ async fn fetch_complete_trajectory(
     anyhow::ensure!(current_len >= total, "Antigravity trajectory is incomplete");
     Ok(response)
 }
+async fn scan_offline_stores(
+    only: Option<&str>,
+    include_primary_offline: bool,
+) -> Result<NativeScan> {
+    let target = only.map(str::to_owned);
+    tokio::task::spawn_blocking(move || -> Result<NativeScan> {
+        let paths = antigravity::sessions::AntigravityPaths::default_for_user()?;
+        let mut combined = NativeScan::default();
+        let mut seen_ids = BTreeSet::new();
+        if let Some(cli) = paths.cli_store() {
+            if cli.home.is_dir() {
+                match antigravity::sessions::scan_offline_store(&cli, target.as_deref()) {
+                    Ok(cli_scan) => {
+                        for s in cli_scan.streams {
+                            seen_ids.insert(s.id.clone());
+                            combined.streams.push(s);
+                        }
+                        combined.errors += cli_scan.errors;
+                    }
+                    Err(_) => combined.errors += 1,
+                }
+            }
+        }
+        if include_primary_offline && paths.home.is_dir() {
+            let primary = antigravity::sessions::AntigravityPaths::offline(paths.home);
+            match antigravity::sessions::scan_offline_store(&primary, target.as_deref()) {
+                Ok(p_scan) => {
+                    for s in p_scan.streams {
+                        if seen_ids.insert(s.id.clone()) {
+                            combined.streams.push(s);
+                        }
+                    }
+                    combined.errors += p_scan.errors;
+                }
+                Err(_) => combined.errors += 1,
+            }
+        }
+        Ok(combined)
+    })
+    .await?
+}
+
+async fn scan_offline_one_with_retry(
+    cascade_id: &str,
+    include_primary_offline: bool,
+) -> Result<NativeScan> {
+    let mut last_scan = NativeScan::default();
+    for attempt in 0..8 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let scan = scan_offline_stores(Some(cascade_id), include_primary_offline).await?;
+        let settled_or_absent = match scan.streams.first() {
+            Some(s) => !s.events.is_empty() || s.settled_count == s.record_count,
+            None => true,
+        };
+        last_scan = scan;
+        if settled_or_absent {
+            break;
+        }
+    }
+    Ok(last_scan)
+}
+
 pub async fn scan() -> Result<NativeScan> {
-    let (endpoint, client, port, summaries) = connect().await?;
-    scan_at(
-        &client,
-        port,
-        &endpoint.token,
-        endpoint.pid,
-        &summaries,
-        None,
-    )
-    .await
+    match connect().await {
+        Ok((endpoint, client, port, summaries)) => {
+            let mut live_scan = scan_at(
+                &client,
+                port,
+                &endpoint.token,
+                endpoint.pid,
+                &summaries,
+                None,
+            )
+            .await?;
+            let cli_scan = scan_offline_stores(None, false).await?;
+            if !cli_scan.streams.is_empty() {
+                let cli_ids: BTreeSet<String> =
+                    cli_scan.streams.iter().map(|s| s.id.clone()).collect();
+                live_scan.streams.retain(|s| !cli_ids.contains(&s.id));
+                live_scan.streams.extend(cli_scan.streams);
+            }
+            live_scan.errors += cli_scan.errors;
+            Ok(live_scan)
+        }
+        Err(_) => scan_offline_stores(None, !cfg!(target_os = "macos")).await,
+    }
 }
 
 pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     if antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
-        return Ok(NativeScan::default());
+        return scan_offline_one_with_retry(cascade_id, false).await;
     }
-    let (endpoint, client, port, mut summaries) = connect().await?;
-    if summaries["trajectorySummaries"].get(cascade_id).is_none()
-        && antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id)
-    {
-        return Ok(NativeScan::default());
+    let Ok((endpoint, client, port, mut summaries)) = connect().await else {
+        return scan_offline_one_with_retry(cascade_id, !cfg!(target_os = "macos")).await;
+    };
+    if summaries["trajectorySummaries"].get(cascade_id).is_none() {
+        return scan_offline_one_with_retry(cascade_id, !cfg!(target_os = "macos")).await;
     }
     let mut last_scan = NativeScan::default();
-    for attempt in 0..4 {
+    for attempt in 0..8 {
         if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
             summaries = query(
                 &client,
                 port,
@@ -911,39 +988,69 @@ async fn load_trajectory_with_context(
 }
 
 pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Result<Value> {
-    let (endpoint, client, port, value) = connect().await?;
-    let summaries = value["trajectorySummaries"]
-        .as_object()
-        .context("missing Antigravity summaries")?;
-    let summary = summaries
-        .get(cascade_id)
-        .with_context(|| format!("missing Antigravity summary for {cascade_id}"))?;
-    let subagents = collect_subagents_by_root(summaries)
-        .get(cascade_id)
-        .cloned()
-        .unwrap_or_default();
-    let now_ms = jiff::Timestamp::now().as_millisecond();
-    let (response, ctx) = load_trajectory_with_context(
-        &client,
-        port,
-        &endpoint.token,
-        endpoint.pid,
-        cascade_id,
-        summary,
-        summaries,
-        &index_children_by_parent(summaries),
-        subagents,
-        now_ms,
-        true,
-    )
-    .await?;
     let db_cursor = db.native_probe_stream_cursor(
         agenthub_core::native_probe::NativeProvider::Antigravity,
         cascade_id,
     )?;
-    antigravity::diagnose_trajectory(cascade_id, summary, &response, &ctx, db_cursor)
+    if !antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
+        if let Ok((endpoint, client, port, value)) = connect().await {
+            if let Some(summaries) = value["trajectorySummaries"].as_object() {
+                if let Some(summary) = summaries.get(cascade_id) {
+                    let subagents = collect_subagents_by_root(summaries)
+                        .get(cascade_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let now_ms = jiff::Timestamp::now().as_millisecond();
+                    let (response, ctx) = load_trajectory_with_context(
+                        &client,
+                        port,
+                        &endpoint.token,
+                        endpoint.pid,
+                        cascade_id,
+                        summary,
+                        summaries,
+                        &index_children_by_parent(summaries),
+                        subagents,
+                        now_ms,
+                        true,
+                    )
+                    .await?;
+                    return antigravity::diagnose_trajectory(
+                        cascade_id, summary, &response, &ctx, db_cursor,
+                    );
+                }
+            }
+        }
+    }
+    let offline = scan_offline_stores(Some(cascade_id), true).await?;
+    let stream = offline
+        .streams
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing Antigravity session {cascade_id}"))?;
+    Ok(json!({
+        "cascadeId": cascade_id,
+        "mode": "offline",
+        "recordCount": stream.record_count,
+        "settledCount": stream.settled_count,
+        "cursor": db_cursor,
+        "eventsCount": stream.events.len(),
+    }))
 }
 pub async fn source_current(delivery: &agenthub_core::db::NativeDelivery) -> Result<bool> {
+    if delivery.event.turn_id.starts_with("cli-")
+        || antigravity::sessions::AntigravityPaths::is_cli_only_session_default(&delivery.thread_id)
+    {
+        let scan = scan_offline_stores(
+            Some(&delivery.thread_id),
+            !cfg!(target_os = "macos")
+                && !antigravity::sessions::AntigravityPaths::is_cli_only_session_default(
+                    &delivery.thread_id,
+                ),
+        )
+        .await?;
+        return super::provider_monitor::native_event_current(&scan, delivery);
+    }
     let (endpoint, client, port, summaries) = connect().await?;
     let scan = scan_at(
         &client,
@@ -971,6 +1078,16 @@ async fn scan_at(
         summaries.len() <= 5000,
         "Antigravity source inventory exceeds limit"
     );
+    let (host_paths, disk_subagents) = tokio::task::spawn_blocking(|| {
+        let paths = antigravity::sessions::AntigravityPaths::default_for_user().ok();
+        let subs = paths
+            .as_ref()
+            .map(antigravity::sessions::AntigravityPaths::collect_all_known_subagents)
+            .unwrap_or_default();
+        (paths, subs)
+    })
+    .await
+    .unwrap_or_default();
     let subagents_by_root = collect_subagents_by_root(summaries);
     let children_by_parent = index_children_by_parent(summaries);
     let now_ms = jiff::Timestamp::now().as_millisecond();
@@ -980,6 +1097,12 @@ async fn scan_at(
             continue;
         }
         if only.is_some_and(|target| target != id) {
+            continue;
+        }
+        if host_paths
+            .as_ref()
+            .is_some_and(|p| p.should_exclude_from_desktop_live_scan(id, &disk_subagents))
+        {
             continue;
         }
         let subagents = subagents_by_root.get(id).cloned().unwrap_or_default();

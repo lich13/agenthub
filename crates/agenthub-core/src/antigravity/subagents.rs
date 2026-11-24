@@ -21,9 +21,10 @@ use crate::{
 };
 
 use super::sessions::{
-    attach_storage_size, decode_file_uri, descendant_ids, evaluate_offline_tree_status,
+    attach_storage_size, decode_file_uri, descendant_ids, evaluate_offline_tree_status_with_lock,
     extract_transcript_spawned_subagents, has_conversation_parents_table,
-    has_primary_session_storage, is_subtrajectory, list_summaries_from_source, live_item_status,
+    has_primary_session_storage, inspect_conv_db_metadata, is_presence_locked_shared,
+    is_subtrajectory, list_summaries_from_source, live_item_status, load_store_auxiliary_index,
     make_summary_with_status, resolve_target_store_and_endpoint, subagent_states_by_root,
     valid_cascade_id, AntigravityPaths, LiveRpc,
 };
@@ -118,6 +119,7 @@ struct SubagentNodeMeta {
     cwd: String,
     updated_at: Option<String>,
     sqlite_status: Option<&'static str>,
+    sidecar_killed: bool,
     live_item: Option<Value>,
 }
 
@@ -125,6 +127,7 @@ struct StoreSubagentGraph {
     nodes: BTreeMap<String, SubagentNodeMeta>,
     children_map: BTreeMap<String, Vec<String>>,
     sqlite_statuses: BTreeMap<String, &'static str>,
+    raw_summaries: BTreeMap<String, super::sessions::annotations::ParsedRawSummary>,
 }
 
 impl StoreSubagentGraph {
@@ -159,94 +162,185 @@ fn build_store_graph(
         nodes: BTreeMap::new(),
         children_map: BTreeMap::new(),
         sqlite_statuses: BTreeMap::new(),
+        raw_summaries: BTreeMap::new(),
     };
     let db_path = store.summaries_db();
-    if ensure_no_symlink_under_store(&store.home, &db_path)?.is_some() && db_path.is_file() {
-        if let Ok(conn) = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) {
-            if has_conversation_parents_table(&conn) {
-                if let Ok(mut stmt) = conn.prepare(
-                    "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-                ) {
-                    if let Ok(rows) =
-                        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                    {
-                        for (cid, pid) in rows.flatten() {
-                            graph.add_edge(pid, cid);
-                        }
+    let open_conn =
+        if ensure_no_symlink_under_store(&store.home, &db_path)?.is_some() && db_path.is_file() {
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .ok()
+        } else {
+            None
+        };
+    let aux = load_store_auxiliary_index(store, open_conn.as_ref());
+    let mut fallback_root_edges: Vec<(String, String)> = Vec::new();
+    for (pid, kids) in &aux.sidecar_children {
+        for cid in kids {
+            graph.add_edge(pid.clone(), cid.clone());
+        }
+    }
+    for (cid, s_meta) in &aux.sidecar_meta {
+        let node = graph.nodes.entry(cid.clone()).or_default();
+        node.sidecar_killed |= s_meta.killed;
+        if node.title.is_none() {
+            node.title = s_meta.title.clone();
+        }
+    }
+    for (cid, c_meta) in &aux.conv_meta {
+        if let Some(pid) = c_meta.parent_id.as_ref() {
+            graph.add_edge(pid.clone(), cid.clone());
+        } else if let Some(rid) = c_meta.root_id.as_ref() {
+            fallback_root_edges.push((rid.clone(), cid.clone()));
+        }
+        let node = graph.nodes.entry(cid.clone()).or_default();
+        if node.title.is_none() {
+            node.title = c_meta.title.clone();
+        }
+        if node.cwd.is_empty() {
+            if let Some(cwd) = &c_meta.cwd {
+                node.cwd = cwd.clone();
+            }
+        }
+    }
+
+    if let Some(conn) = &open_conn {
+        if has_conversation_parents_table(conn) {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
+            ) {
+                if let Ok(rows) =
+                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                {
+                    for (cid, pid) in rows.flatten() {
+                        graph.add_edge(pid, cid);
                     }
                 }
             }
-            let cols: BTreeSet<String> = conn
-                .prepare("PRAGMA table_info(conversation_summaries)")
-                .ok()
-                .and_then(|mut s| {
-                    s.query_map([], |r| r.get::<_, String>(1))
-                        .ok()
-                        .map(|it| it.flatten().collect())
-                })
-                .unwrap_or_default();
-            let status_expr = if cols.contains("status") {
-                "COALESCE(status, '')"
-            } else {
-                "''"
-            };
-            let idle_expr = if cols.contains("not_fully_idle") {
-                "not_fully_idle"
-            } else {
-                "0"
-            };
-            let sql = format!(
-                "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
-                 COALESCE(last_modified_time, ''), COALESCE(workspace_uris, ''), \
-                 COALESCE(parent_conversation_id, ''), {status_expr}, {idle_expr} \
-                 FROM conversation_summaries"
-            );
-            if let Ok(mut stmt) = conn.prepare(&sql) {
-                if let Ok(rows) = stmt.query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                        r.get::<_, String>(5)?,
-                        r.get::<_, String>(6)?,
-                        r.get::<_, super::sessions::ValueOrString>(7)
-                            .map(|v| v.0)
-                            .unwrap_or(false),
-                    ))
-                }) {
-                    for (cid, title, preview, modified, ws_raw, parent, status_str, not_idle) in
-                        rows.flatten()
+        }
+        let cols: BTreeSet<String> = conn
+            .prepare("PRAGMA table_info(conversation_summaries)")
+            .ok()
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(1))
+                    .ok()
+                    .map(|it| it.flatten().collect())
+            })
+            .unwrap_or_default();
+        let status_expr = if cols.contains("status") {
+            "COALESCE(status, '')"
+        } else {
+            "''"
+        };
+        let idle_expr = if cols.contains("not_fully_idle") {
+            "not_fully_idle"
+        } else {
+            "0"
+        };
+        let raw_expr = if cols.contains("raw_summary") {
+            "raw_summary"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
+             COALESCE(last_modified_time, ''), COALESCE(workspace_uris, ''), \
+             COALESCE(parent_conversation_id, ''), {status_expr}, {idle_expr}, {raw_expr} \
+             FROM conversation_summaries"
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, super::sessions::ValueOrString>(7)
+                        .map(|v| v.0)
+                        .unwrap_or(false),
+                    r.get::<_, Option<Vec<u8>>>(8).ok().flatten(),
+                ))
+            }) {
+                for (
+                    cid,
+                    title,
+                    preview,
+                    modified,
+                    ws_raw,
+                    parent,
+                    status_str,
+                    not_idle,
+                    raw_blob,
+                ) in rows.flatten()
+                {
+                    if uuid::Uuid::parse_str(&cid).is_err() {
+                        continue;
+                    }
+                    let parsed_raw = raw_blob
+                        .as_deref()
+                        .map(super::sessions::annotations::parse_raw_summary);
+                    if !parent.is_empty() {
+                        graph.add_edge(parent, cid.clone());
+                    } else if let Some(pid) = parsed_raw
+                        .as_ref()
+                        .and_then(|r| r.trajectory_meta.parent_conversation_id.as_deref())
+                        .filter(|p| !p.is_empty() && *p != cid)
                     {
-                        if uuid::Uuid::parse_str(&cid).is_err() {
-                            continue;
+                        graph.add_edge(pid.to_owned(), cid.clone());
+                    } else if let Some(rid) = parsed_raw
+                        .as_ref()
+                        .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
+                        .filter(|r| !r.is_empty() && *r != cid)
+                    {
+                        fallback_root_edges.push((rid.to_owned(), cid.clone()));
+                    }
+                    let st = super::sessions::offline_summary_row_status(&status_str, not_idle)
+                        .or_else(|| {
+                            parsed_raw.as_ref().and_then(
+                                super::sessions::annotations::ParsedRawSummary::active_status,
+                            )
+                        });
+                    if let Some(s) = st {
+                        graph.sqlite_statuses.insert(cid.clone(), s);
+                    }
+                    let node = graph.nodes.entry(cid.clone()).or_default();
+                    node.sqlite_status = st;
+                    if let Some(raw_title) = parsed_raw
+                        .as_ref()
+                        .and_then(|r| r.annotations.title.as_deref())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        node.title = Some(raw_title.to_owned());
+                    } else if !title.trim().is_empty() {
+                        node.title = Some(title.trim().to_owned());
+                    } else if !preview.trim().is_empty() {
+                        node.title = Some(preview.trim().chars().take(80).collect());
+                    }
+                    if let Ok(uris) = serde_json::from_str::<Vec<String>>(&ws_raw) {
+                        if let Some(first) = uris.into_iter().next() {
+                            node.cwd = decode_file_uri(&first);
                         }
-                        if !parent.is_empty() {
-                            graph.add_edge(parent, cid.clone());
+                    }
+                    if node.cwd.is_empty() {
+                        if let Some(u) = parsed_raw.as_ref().and_then(|r| {
+                            r.workspaces
+                                .first()
+                                .or_else(|| r.trajectory_meta.workspace_uris.first())
+                        }) {
+                            node.cwd = decode_file_uri(u);
                         }
-                        let st = super::sessions::offline_summary_row_status(&status_str, not_idle);
-                        if let Some(s) = st {
-                            graph.sqlite_statuses.insert(cid.clone(), s);
-                        }
-                        let node = graph.nodes.entry(cid).or_default();
-                        node.sqlite_status = st;
-                        if !title.trim().is_empty() {
-                            node.title = Some(title.trim().to_owned());
-                        } else if !preview.trim().is_empty() {
-                            node.title = Some(preview.trim().chars().take(80).collect());
-                        }
-                        if let Ok(uris) = serde_json::from_str::<Vec<String>>(&ws_raw) {
-                            if let Some(first) = uris.into_iter().next() {
-                                node.cwd = decode_file_uri(&first);
-                            }
-                        }
-                        if !modified.trim().is_empty() {
-                            node.updated_at = Some(modified);
-                        }
+                    }
+                    if !modified.trim().is_empty() && !modified.trim().starts_with("0001-") {
+                        node.updated_at = Some(modified);
+                    }
+                    if let Some(pr) = parsed_raw {
+                        graph.raw_summaries.insert(cid, pr);
                     }
                 }
             }
@@ -271,9 +365,7 @@ fn build_store_graph(
                         .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
                         .filter(|s| !s.is_empty() && *s != cid)
                     {
-                        if graph.nodes.get(cid).is_none_or(|n| n.parents.is_empty()) {
-                            graph.add_edge(root.to_owned(), cid.clone());
-                        }
+                        fallback_root_edges.push((root.to_owned(), cid.clone()));
                     }
                 }
                 let node = graph.nodes.entry(cid.clone()).or_default();
@@ -334,6 +426,21 @@ fn build_store_graph(
             continue;
         }
         if inspect_node_storage(store, &curr).ok().flatten().is_some() {
+            if let Some(db_meta) = inspect_conv_db_metadata(store, &curr) {
+                if !db_meta.parent_ids.is_empty() {
+                    for pid in db_meta.parent_ids {
+                        graph.add_edge(pid, curr.clone());
+                    }
+                } else if let Some(rid) = db_meta.root_id {
+                    fallback_root_edges.push((rid, curr.clone()));
+                }
+                if let Some(cwd) = db_meta.cwd {
+                    let node = graph.nodes.entry(curr.clone()).or_default();
+                    if node.cwd.is_empty() {
+                        node.cwd = cwd;
+                    }
+                }
+            }
             for cid in extract_transcript_spawned_subagents(store, &curr) {
                 graph.add_edge(curr.clone(), cid);
             }
@@ -341,6 +448,26 @@ fn build_store_graph(
         if let Some(kids) = graph.children_map.get(&curr).cloned() {
             for kid in kids {
                 queue.push_back((kid, depth + 1));
+            }
+        }
+    }
+
+    for (root_id, child_id) in fallback_root_edges {
+        if graph
+            .nodes
+            .get(&child_id)
+            .is_none_or(|n| n.parents.is_empty())
+        {
+            graph.add_edge(root_id, child_id.clone());
+            if visited.insert(child_id.clone()) {
+                if let Some(db_meta) = inspect_conv_db_metadata(store, &child_id) {
+                    for pid in db_meta.parent_ids {
+                        graph.add_edge(pid, child_id.clone());
+                    }
+                }
+                for grand_cid in extract_transcript_spawned_subagents(store, &child_id) {
+                    graph.add_edge(child_id.clone(), grand_cid);
+                }
             }
         }
     }
@@ -429,6 +556,8 @@ fn extract_invocation_hints(args: &Value) -> InvocationHints {
     let role = first_str_field(
         args,
         &[
+            "TypeName",
+            "typeName",
             "SubagentType",
             "subagentType",
             "Role",
@@ -459,6 +588,7 @@ fn extract_invocation_hints(args: &Value) -> InvocationHints {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn child_activity_in_store(
     store: &AntigravityPaths,
     endpoint: Option<&(LiveRpc, Value)>,
@@ -466,12 +596,18 @@ fn child_activity_in_store(
     sub_states: &BTreeMap<String, (bool, bool)>,
     child_id: &str,
     hints: Option<&InvocationHints>,
+    inherited_lock: bool,
     now_ms: i64,
 ) -> SubagentActivity {
     let node = graph.nodes.get(child_id);
     let unique_parent = node.is_some_and(|n| n.parents.len() == 1);
     let live_item = node.and_then(|n| n.live_item.as_ref());
     let storage_inspect = inspect_node_storage(store, child_id);
+    let sidecar_killed = node.is_some_and(|n| n.sidecar_killed);
+    let raw_killed = graph
+        .raw_summaries
+        .get(child_id)
+        .is_some_and(super::sessions::annotations::ParsedRawSummary::is_user_canceled_or_killed);
 
     let (available, status, unavailable_reason) = match storage_inspect {
         Err(_) => (
@@ -503,11 +639,13 @@ fn child_activity_in_store(
                 let mapped = match st {
                     "running" | "waiting" => SubagentStatus::Running,
                     "failed" => SubagentStatus::Failed,
-                    _ if matches!(
-                        term,
-                        "EXECUTOR_TERMINATION_REASON_USER_CANCELED"
-                            | "EXECUTOR_TERMINATION_REASON_INTERRUPTED"
-                    ) =>
+                    _ if sidecar_killed
+                        || raw_killed
+                        || matches!(
+                            term,
+                            "EXECUTOR_TERMINATION_REASON_USER_CANCELED"
+                                | "EXECUTOR_TERMINATION_REASON_INTERRUPTED"
+                        ) =>
                     {
                         SubagentStatus::Interrupted
                     }
@@ -516,16 +654,19 @@ fn child_activity_in_store(
                 (true, mapped, None)
             } else if has_primary_session_storage(store, child_id) {
                 let descendants = descendant_ids(&graph.children_map, child_id);
-                let st = evaluate_offline_tree_status(
+                let st = evaluate_offline_tree_status_with_lock(
                     store,
                     child_id,
                     &descendants,
                     &graph.sqlite_statuses,
+                    Some(&graph.raw_summaries),
+                    inherited_lock,
                     now_ms,
                 );
                 let mapped = match st {
                     "running" | "waiting" => SubagentStatus::Running,
                     "failed" => SubagentStatus::Failed,
+                    _ if sidecar_killed || raw_killed => SubagentStatus::Interrupted,
                     _ => SubagentStatus::Completed,
                 };
                 let _ = endpoint;
@@ -567,6 +708,35 @@ fn child_activity_in_store(
         unavailable_reason,
         delegation,
     }
+}
+
+fn ancestor_tree_locked(
+    store: &AntigravityPaths,
+    graph: &StoreSubagentGraph,
+    start_id: &str,
+) -> bool {
+    if is_presence_locked_shared(store, start_id) {
+        return true;
+    }
+    let mut curr = start_id;
+    let mut seen = BTreeSet::from([start_id]);
+    for _ in 0..MAX_SUBAGENT_DEPTH {
+        let Some(node) = graph.nodes.get(curr) else {
+            break;
+        };
+        if node.parents.len() != 1 {
+            break;
+        }
+        let parent = node.parents.iter().next().expect("single parent").as_str();
+        if !seen.insert(parent) {
+            break;
+        }
+        if is_presence_locked_shared(store, parent) {
+            return true;
+        }
+        curr = parent;
+    }
+    false
 }
 
 fn enrich_with_graph(
@@ -694,6 +864,7 @@ fn enrich_with_graph(
         complete: true,
         warning: None,
     };
+    let inherited_lock = ancestor_tree_locked(store, graph, focus_id);
     let mut resolved_children: BTreeMap<String, SubagentActivity> = BTreeMap::new();
     for cid in direct_ids {
         let meta_unique = graph.nodes.get(&cid).is_some_and(|n| n.parents.len() == 1);
@@ -708,6 +879,7 @@ fn enrich_with_graph(
             &sub_states,
             &cid,
             hints_by_child.get(&cid),
+            inherited_lock,
             now_ms,
         );
         collection.complete &= agent.available && agent.status != SubagentStatus::Unknown;
@@ -907,6 +1079,8 @@ fn load_verified_subagent(
         .and_then(|(_, payload)| payload["trajectorySummaries"].as_object())
         .map(subagent_states_by_root)
         .unwrap_or_default();
+    let inherited_lock = is_presence_locked_shared(&store, root_session_key)
+        || ancestor_tree_locked(&store, &graph, agent_id);
     let agent_activity = child_activity_in_store(
         &store,
         endpoint.as_ref(),
@@ -914,6 +1088,7 @@ fn load_verified_subagent(
         &sub_states,
         agent_id,
         parent_hints.as_ref(),
+        inherited_lock,
         now_ms,
     );
     ensure!(
@@ -954,6 +1129,7 @@ fn load_verified_subagent(
         } else {
             "sqlite-offline"
         },
+        false,
     );
     attach_storage_size(&store, &mut child_summary);
 
@@ -982,6 +1158,28 @@ fn load_verified_subagent(
     })
 }
 
+fn stamps_compatible_after_read(before: &[FileStamp], after: &[FileStamp]) -> bool {
+    before.iter().all(|b| {
+        after.iter().any(|a| {
+            if a.path != b.path {
+                return false;
+            }
+            #[cfg(unix)]
+            if a.identity != b.identity {
+                return false;
+            }
+            let is_dir = a.path.file_name().is_some_and(|n| {
+                a.path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .is_some_and(|pn| pn == "brain")
+                    && uuid::Uuid::parse_str(&n.to_string_lossy()).is_ok()
+            });
+            is_dir || a.len >= b.len
+        })
+    })
+}
+
 fn verify_after_read(
     load: &VerifiedSubagentLoad,
     root_session_key: &str,
@@ -992,7 +1190,10 @@ fn verify_after_read(
         let Some((_, after_stamps)) = after else {
             bail!("子智能体记录在读取期间已被移除，请重试");
         };
-        ensure!(before_stamps == &after_stamps, "子智能体来源已变化，请重试");
+        ensure!(
+            stamps_compatible_after_read(before_stamps, &after_stamps),
+            "子智能体来源已变化，请重试"
+        );
     }
     let current_graph = build_store_graph(
         &load.store,
@@ -1009,8 +1210,8 @@ pub(crate) fn subagent_detail(
     request: &ProviderDetailRequest,
     agent_id: &str,
 ) -> Result<ProviderSessionDetail> {
-    let loaded = load_verified_subagent(paths, &request.session_key, agent_id)?;
-    let prefix = &loaded.prefix;
+    let mut loaded = load_verified_subagent(paths, &request.session_key, agent_id)?;
+    let prefix = loaded.prefix.clone();
     let native_cursor = request
         .before
         .as_deref()
@@ -1020,7 +1221,7 @@ pub(crate) fn subagent_detail(
                 .filter(|(kind, _)| matches!(*kind, "j" | "n" | "w" | "p"))
                 .map_or(("", cursor), |(kind, id)| (kind, id));
             let position = position
-                .strip_prefix(prefix)
+                .strip_prefix(&prefix)
                 .context("子智能体历史来源已变化，请重新打开")?;
             Ok(if mode.is_empty() {
                 position.into()
@@ -1038,16 +1239,22 @@ pub(crate) fn subagent_detail(
     };
     let mut detail =
         paginate_provider_detail(loaded.child_summary.clone(), &loaded.snapshot, &inner_req)?;
-    let child_graph = build_store_graph(
-        &loaded.store,
-        loaded.endpoint.as_ref(),
-        &[&request.session_key, agent_id],
-        Some((agent_id, &loaded.snapshot.events)),
-    )?;
+    for ev in loaded.snapshot.events.iter() {
+        let tool = ev.role.as_deref().or(ev.text.as_deref()).unwrap_or("");
+        if tool == "invoke_subagent" {
+            let mut spawned = BTreeSet::new();
+            if let Some(res) = &ev.result {
+                super::collect_spawned_subagent_ids(&Value::String(res.clone()), &mut spawned);
+            }
+            for cid in spawned {
+                loaded.graph.add_edge(agent_id.to_owned(), cid);
+            }
+        }
+    }
     enrich_with_graph(
         &loaded.store,
         loaded.endpoint.as_ref(),
-        &child_graph,
+        &loaded.graph,
         agent_id,
         &loaded.snapshot.events,
         &mut detail,

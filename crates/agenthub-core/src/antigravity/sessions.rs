@@ -38,10 +38,18 @@ pub use endpoint::{
 #[cfg(test)]
 pub(crate) use endpoint::{parse_loopback_listener_port, parse_proc_net_tcp_loopback_ports};
 
-mod annotations;
+pub(super) mod annotations;
+#[cfg(test)]
+use annotations::read_raw_summary_annotations;
 use annotations::{
-    invalidate_proto_cache, patch_raw_summary_annotations, read_annotation_overlay,
-    read_raw_summary_annotations, write_annotation_overlay,
+    invalidate_proto_cache, parse_raw_summary, patch_raw_summary_annotations,
+    read_annotation_overlay, write_annotation_overlay, ParsedRawSummary,
+};
+mod cli_meta;
+pub use cli_meta::scan_offline_store;
+pub(crate) use cli_meta::{
+    build_offline_stream_snapshot, inspect_conv_db_metadata, load_store_auxiliary_index,
+    transcript_has_subagent_reminder,
 };
 
 mod history;
@@ -90,13 +98,7 @@ impl AntigravityPaths {
         let home = crate::platform::provider_root("ANTIGRAVITY_HOME", ".gemini/antigravity")?;
         let cli_home = match std::env::var_os("ANTIGRAVITY_CLI_HOME").filter(|v| !v.is_empty()) {
             Some(custom) => Some(PathBuf::from(custom)),
-            None if std::env::var_os("ANTIGRAVITY_HOME")
-                .filter(|v| !v.is_empty())
-                .is_none() =>
-            {
-                Some(crate::platform::current_home()?.join(".gemini/antigravity-cli"))
-            }
-            None => None,
+            None => Some(crate::platform::current_home()?.join(".gemini/antigravity-cli")),
         }
         .filter(|cli| cli != &home);
         Ok(Self {
@@ -164,7 +166,7 @@ impl AntigravityPaths {
         }
     }
 
-    pub(crate) fn cli_store(&self) -> Option<Self> {
+    pub fn cli_store(&self) -> Option<Self> {
         self.cli_home
             .as_ref()
             .filter(|cli| *cli != &self.home)
@@ -173,11 +175,13 @@ impl AntigravityPaths {
 
     pub(crate) fn cli_store_for_id(&self, id: &str) -> Option<Self> {
         let cli = self.cli_store()?;
-        (!has_primary_session_storage(self, id) && has_primary_session_storage(&cli, id))
-            .then_some(cli)
+        has_primary_session_storage(&cli, id).then_some(cli)
     }
 
     pub(crate) fn store_for_id(&self, id: &str, live: Option<&Value>) -> Self {
+        if let Some(cli) = self.cli_store_for_id(id) {
+            return cli;
+        }
         if live
             .and_then(|v| v["trajectorySummaries"].get(id))
             .is_some()
@@ -185,9 +189,7 @@ impl AntigravityPaths {
         {
             return self.primary_store();
         }
-        self.cli_store()
-            .filter(|cli| has_primary_session_storage(cli, id))
-            .unwrap_or_else(|| self.primary_store())
+        self.primary_store()
     }
 
     pub(crate) fn other_store_for(&self, chosen_home: &Path) -> Option<Self> {
@@ -206,6 +208,22 @@ impl AntigravityPaths {
             return false;
         };
         paths.cli_store_for_id(id).is_some()
+    }
+
+    pub fn should_exclude_from_desktop_live_scan(
+        &self,
+        id: &str,
+        extra_excluded: &BTreeSet<String>,
+    ) -> bool {
+        extra_excluded.contains(id) || self.cli_store_for_id(id).is_some()
+    }
+
+    pub fn collect_all_known_subagents(&self) -> BTreeSet<String> {
+        let mut out = collect_store_known_subagents(&self.primary_store());
+        if let Some(cli) = self.cli_store() {
+            out.extend(collect_store_known_subagents(&cli));
+        }
+        out
     }
 
     pub fn available(&self) -> bool {
@@ -444,15 +462,7 @@ pub(crate) fn now_epoch_ms() -> i64 {
 }
 
 fn parse_any_timestamp_ms(raw: &str) -> Option<i64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    trimmed
-        .parse::<jiff::Timestamp>()
-        .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S%.f%:z", trimmed))
-        .ok()
-        .map(|ts| ts.as_millisecond())
+    cli_meta::parse_valid_timestamp_ms(raw)
 }
 
 fn file_mtime_ms(path: &Path) -> Option<i64> {
@@ -461,6 +471,20 @@ fn file_mtime_ms(path: &Path) -> Option<i64> {
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
+}
+
+fn conv_db_modified_within(
+    paths: &AntigravityPaths,
+    id: &str,
+    window_ms: i64,
+    now_ms: i64,
+) -> bool {
+    let db = paths.conversations_dir().join(format!("{id}.db"));
+    let wal = paths.conversations_dir().join(format!("{id}.db-wal"));
+    [wal, db]
+        .into_iter()
+        .filter_map(|p| file_mtime_ms(&p))
+        .any(|ms| now_ms.saturating_sub(ms) <= window_ms && ms <= now_ms + 60_000)
 }
 
 fn read_transcript_tail_rows(paths: &AntigravityPaths, id: &str) -> Option<(PathBuf, Vec<Value>)> {
@@ -594,25 +618,27 @@ fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'
     }
     let mut saw_waiting = false;
     for (pos, &(step_type, status)) in rows.iter().enumerate() {
-        // Cortex step status enum: 1 = PENDING, 2 = RUNNING, 7 = ERROR, 8 = GENERATING, 9 = WAITING
-        if matches!(status, 1 | 2 | 8) {
+        // Cortex step status enum: 1 = PENDING, 2 = RUNNING, 7 = ERROR, 8 = GENERATING, 9 = WAITING, 11 = QUEUED
+        if matches!(status, 1 | 2 | 8 | 11) {
             return Some("running");
         }
         if status == 9 {
             saw_waiting = true;
         }
-        if pos == 0 && status == 7 {
+        if pos == 0 && (status == 7 || step_type == 17) {
             return Some("failed");
         }
-        if step_type == 14 {
+        if step_type == 14 || step_type == 101 {
             break;
         }
     }
     if saw_waiting {
-        Some("waiting")
-    } else {
-        Some("idle")
+        return Some("waiting");
     }
+    if matches!(rows[0], (14 | 101 | 132, 3)) {
+        return Some("between_steps");
+    }
+    Some("idle")
 }
 
 fn transcript_system_message_senders(row: &Value) -> Vec<String> {
@@ -633,11 +659,16 @@ fn transcript_system_message_senders(row: &Value) -> Vec<String> {
         let mut rest = content;
         while let Some(pos) = rest.find("sender=") {
             rest = &rest[pos + "sender=".len()..];
-            if let Some(candidate) = rest.get(..36) {
-                if uuid::Uuid::parse_str(candidate).is_ok() {
-                    senders.push(candidate.to_owned());
-                }
+            let end = rest
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '>' | '"' | '\'' | ',' | ';' | ']' | ')')
+                })
+                .unwrap_or(rest.len());
+            let token = rest[..end].trim();
+            if !token.is_empty() {
+                senders.push(token.to_owned());
             }
+            rest = &rest[end..];
         }
     }
     senders
@@ -654,10 +685,10 @@ fn inspect_transcript_tail_status(
         return None;
     }
     let last_idx = rows.iter().rposition(|row| {
-        !matches!(
-            row["type"].as_str().unwrap_or(""),
-            "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
-        )
+        let st = row["type"].as_str().unwrap_or("");
+        let src = row["source"].as_str().unwrap_or("");
+        !matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
+            && !(st == "SYSTEM_MESSAGE" && src == "SYSTEM_SDK")
     })?;
     let last = &rows[last_idx];
     let last_type = last["type"].as_str().unwrap_or("");
@@ -667,11 +698,11 @@ fn inspect_transcript_tail_status(
         if last_status == "WAITING" {
             return Some("waiting");
         }
-        if matches!(last_status, "RUNNING" | "PENDING" | "GENERATING") {
+        if matches!(last_status, "RUNNING" | "PENDING" | "GENERATING" | "QUEUED") {
             return Some("running");
         }
     }
-    if matches!(last_status, "ERROR" | "FAILED") {
+    if last_type == "ERROR_MESSAGE" || matches!(last_status, "ERROR" | "FAILED") {
         return Some("failed");
     }
 
@@ -684,52 +715,105 @@ fn inspect_transcript_tail_status(
         .unwrap_or(0);
     let turn_rows = &rows[turn_start..=last_idx];
 
-    if lock_held {
-        let mut pending_subagents: BTreeSet<String> = BTreeSet::new();
-        for row in turn_rows {
-            let rtype = row["type"].as_str().unwrap_or("");
-            if rtype == "SYSTEM_MESSAGE" {
+    let mut open_tool_calls = 0usize;
+    let mut open_waiting_tool = false;
+    let mut pending_subagents: BTreeSet<String> = BTreeSet::new();
+    for row in turn_rows {
+        let rtype = row["type"].as_str().unwrap_or("");
+        let rsource = row["source"].as_str().unwrap_or("");
+        let rstatus = row["status"].as_str().unwrap_or("DONE");
+        if matches!(rstatus, "CANCELED" | "INTERRUPTED" | "INVALID")
+            || matches!(rtype, "FINISH" | "ERROR_MESSAGE")
+        {
+            open_tool_calls = 0;
+            open_waiting_tool = false;
+            if rtype != "FINISH" {
+                continue;
+            }
+        }
+        if rtype == "SYSTEM_MESSAGE" {
+            if rsource != "SYSTEM_SDK" {
                 for sender in transcript_system_message_senders(row) {
                     pending_subagents.remove(&sender);
                 }
-                continue;
             }
-            let mut row_spawned = BTreeSet::new();
-            super::collect_spawned_subagent_ids(row, &mut row_spawned);
-            row_spawned.remove(id);
-            for cid in row_spawned {
-                pending_subagents.insert(cid);
-            }
+            continue;
+        }
+        let mut row_spawned = BTreeSet::new();
+        super::collect_spawned_subagent_ids(row, &mut row_spawned);
+        row_spawned.remove(id);
+        for cid in row_spawned {
+            pending_subagents.insert(cid);
+        }
+        if rtype == "PLANNER_RESPONSE" {
             if let Some(calls) = row["tool_calls"].as_array() {
                 for call in calls {
                     let cname = call["name"]
                         .as_str()
                         .or_else(|| call["tool_name"].as_str())
                         .unwrap_or("");
-                    let args = call.get("arguments").or_else(|| call.get("args"));
+                    let args_val = call
+                        .get("arguments")
+                        .or_else(|| call.get("args"))
+                        .map(super::parse_json_or_value)
+                        .unwrap_or(Value::Null);
                     if cname == "manage_subagents" {
-                        let action = args
-                            .and_then(|a| a["Action"].as_str().or_else(|| a["action"].as_str()))
+                        let action = args_val["Action"]
+                            .as_str()
+                            .or_else(|| args_val["action"].as_str())
                             .unwrap_or("");
                         if action == "kill_all" {
                             pending_subagents.clear();
                         } else if action == "kill" {
-                            if let Some(ids) = args.and_then(|a| {
-                                a["ConversationIds"]
-                                    .as_array()
-                                    .or_else(|| a["conversationIds"].as_array())
-                            }) {
+                            if let Some(ids) = args_val["ConversationIds"]
+                                .as_array()
+                                .or_else(|| args_val["conversationIds"].as_array())
+                            {
                                 for cid in ids.iter().filter_map(Value::as_str) {
                                     pending_subagents.remove(cid);
                                 }
                             }
                         }
                     }
+                    let has_inline_result = call
+                        .get("output")
+                        .or_else(|| call.get("result"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty());
+                    if !has_inline_result {
+                        open_tool_calls = open_tool_calls.saturating_add(1);
+                        if matches!(
+                            cname,
+                            "ask_question" | "default_api:ask_question" | "ask_permission"
+                        ) {
+                            open_waiting_tool = true;
+                        }
+                    }
                 }
             }
+        } else if !matches!(
+            rtype,
+            "USER_INPUT" | "FINISH" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | ""
+        ) && rsource != "USER_EXPLICIT"
+        {
+            open_tool_calls = open_tool_calls.saturating_sub(1);
+            if open_tool_calls == 0 {
+                open_waiting_tool = false;
+            }
+        }
+    }
+
+    if lock_held {
+        if open_waiting_tool {
+            return Some("waiting");
         }
         for sub_id in &pending_subagents {
             if is_presence_locked_shared(paths, sub_id) {
+                return Some("running");
+            }
+            let sub_node =
+                evaluate_node_status_offline_with_lock(paths, sub_id, None, None, true, now_ms);
+            if matches!(sub_node, "running" | "waiting") {
                 return Some("running");
             }
             if last_type != "FINISH" {
@@ -743,22 +827,13 @@ fn inspect_transcript_tail_status(
             }
         }
 
-        let planner_unsettled_call = last_type == "PLANNER_RESPONSE"
-            && last["tool_calls"].as_array().is_some_and(|calls| {
-                !calls.is_empty()
-                    && calls.iter().any(|c| {
-                        c.get("output")
-                            .or_else(|| c.get("result"))
-                            .and_then(Value::as_str)
-                            .is_none_or(|s| s.trim().is_empty())
-                    })
-            });
-        let unclosed_tool_step = !matches!(last_type, "PLANNER_RESPONSE" | "FINISH")
-            && !matches!(last_status, "CANCELED" | "INTERRUPTED");
+        let unclosed_tool_step =
+            !matches!(last_type, "PLANNER_RESPONSE" | "FINISH" | "ERROR_MESSAGE")
+                && !matches!(last_status, "CANCELED" | "INTERRUPTED" | "INVALID");
         let inflight_tail = last_type == "USER_INPUT"
             || last_source == "USER_EXPLICIT"
-            || last_type == "SYSTEM_MESSAGE"
-            || planner_unsettled_call
+            || (last_type == "SYSTEM_MESSAGE" && last_source != "SYSTEM_SDK")
+            || open_tool_calls > 0
             || unclosed_tool_step;
         if inflight_tail {
             let fresh = match last["created_at"].as_str().and_then(parse_any_timestamp_ms) {
@@ -775,7 +850,7 @@ fn inspect_transcript_tail_status(
         }
     }
 
-    if last_type == "PLANNER_RESPONSE" {
+    if last_type == "PLANNER_RESPONSE" && open_tool_calls == 0 {
         let fresh_reply = last["created_at"]
             .as_str()
             .and_then(parse_any_timestamp_ms)
@@ -789,9 +864,13 @@ fn inspect_transcript_tail_status(
                 super::step_requests_artifact_feedback(r)
                     || r["tool_calls"].as_array().is_some_and(|calls| {
                         calls.iter().any(|c| {
-                            c["arguments"]["ArtifactMetadata"]["RequestFeedback"].as_bool()
-                                == Some(true)
-                                || c["arguments"]["artifactMetadata"]["requestFeedback"].as_bool()
+                            let args = c
+                                .get("arguments")
+                                .or_else(|| c.get("args"))
+                                .map(super::parse_json_or_value)
+                                .unwrap_or(Value::Null);
+                            args["ArtifactMetadata"]["RequestFeedback"].as_bool() == Some(true)
+                                || args["artifactMetadata"]["requestFeedback"].as_bool()
                                     == Some(true)
                         })
                     })
@@ -800,6 +879,7 @@ fn inspect_transcript_tail_status(
                 return Some("reply_needed");
             }
         }
+        return Some("settled_idle");
     }
 
     if last_type == "FINISH" {
@@ -808,17 +888,26 @@ fn inspect_transcript_tail_status(
     Some("idle")
 }
 
-pub(crate) fn evaluate_node_status_offline(
+pub(crate) fn evaluate_node_status_offline_with_lock(
     paths: &AntigravityPaths,
     id: &str,
     sqlite_status: Option<&str>,
+    raw_summary: Option<&ParsedRawSummary>,
+    inherited_lock: bool,
     now_ms: i64,
 ) -> &'static str {
-    let lock_held = is_presence_locked_shared(paths, id);
     let db_step = inspect_conv_db_steps_status(paths, id);
+    let conv_db_active_fresh = matches!(db_step, Some("running" | "waiting"))
+        && conv_db_modified_within(paths, id, 60_000, now_ms);
+    let lock_held = inherited_lock || is_presence_locked_shared(paths, id) || conv_db_active_fresh;
     let transcript = inspect_transcript_tail_status(paths, id, now_ms, lock_held);
+    let node_settled =
+        matches!(transcript, Some("finished" | "settled_idle")) || db_step == Some("idle");
     if !lock_held {
-        if db_step == Some("failed") || transcript == Some("failed") {
+        if db_step == Some("failed")
+            || transcript == Some("failed")
+            || (!node_settled && raw_summary.is_some_and(ParsedRawSummary::is_termination_failure))
+        {
             return "failed";
         }
         if transcript == Some("reply_needed") {
@@ -829,18 +918,33 @@ pub(crate) fn evaluate_node_status_offline(
     if db_step == Some("running") || transcript == Some("running") {
         return "running";
     }
-    if db_step == Some("waiting") || transcript == Some("waiting") {
+    if db_step == Some("between_steps")
+        && !matches!(transcript, Some("finished" | "settled_idle" | "failed"))
+        && conv_db_modified_within(paths, id, OFFLINE_INFLIGHT_WINDOW_MS, now_ms)
+    {
+        return "running";
+    }
+    if db_step == Some("waiting")
+        || transcript == Some("waiting")
+        || (!node_settled && raw_summary.is_some_and(|r| !r.waiting_steps.is_empty()))
+    {
         return "waiting";
     }
-    if transcript != Some("finished") && db_step != Some("idle") {
-        if sqlite_status == Some("running") {
+    if !node_settled {
+        if sqlite_status == Some("running")
+            || raw_summary.and_then(ParsedRawSummary::active_status) == Some("running")
+        {
             return "running";
         }
         if sqlite_status == Some("waiting") {
             return "waiting";
         }
     }
-    if db_step == Some("failed") || transcript == Some("failed") || sqlite_status == Some("failed")
+    if db_step == Some("failed")
+        || transcript == Some("failed")
+        || (!node_settled
+            && (sqlite_status == Some("failed")
+                || raw_summary.is_some_and(ParsedRawSummary::is_termination_failure)))
     {
         return "failed";
     }
@@ -850,17 +954,31 @@ pub(crate) fn evaluate_node_status_offline(
     "idle"
 }
 
-pub(crate) fn evaluate_offline_tree_status(
+pub(crate) fn evaluate_node_status_offline(
+    paths: &AntigravityPaths,
+    id: &str,
+    sqlite_status: Option<&str>,
+    now_ms: i64,
+) -> &'static str {
+    evaluate_node_status_offline_with_lock(paths, id, sqlite_status, None, false, now_ms)
+}
+
+pub(crate) fn evaluate_offline_tree_status_with_lock(
     paths: &AntigravityPaths,
     root_id: &str,
     descendants: &[String],
     sqlite_statuses: &BTreeMap<String, &'static str>,
+    raw_summaries: Option<&BTreeMap<String, ParsedRawSummary>>,
+    inherited_lock: bool,
     now_ms: i64,
 ) -> &'static str {
-    let root_status = evaluate_node_status_offline(
+    let tree_lock = inherited_lock || is_presence_locked_shared(paths, root_id);
+    let root_status = evaluate_node_status_offline_with_lock(
         paths,
         root_id,
         sqlite_statuses.get(root_id).copied(),
+        raw_summaries.and_then(|m| m.get(root_id)),
+        tree_lock,
         now_ms,
     );
     if root_status == "running" {
@@ -868,8 +986,14 @@ pub(crate) fn evaluate_offline_tree_status(
     }
     let mut any_waiting = root_status == "waiting";
     for child in descendants {
-        let child_status =
-            evaluate_node_status_offline(paths, child, sqlite_statuses.get(child).copied(), now_ms);
+        let child_status = evaluate_node_status_offline_with_lock(
+            paths,
+            child,
+            sqlite_statuses.get(child).copied(),
+            raw_summaries.and_then(|m| m.get(child)),
+            tree_lock,
+            now_ms,
+        );
         if child_status == "running" {
             return "running";
         }
@@ -896,15 +1020,43 @@ pub(crate) fn make_summary_with_status(
     last_message: Option<String>,
     raw_status: &str,
     format_version: &'static str,
+    offline_tree_locked: bool,
 ) -> ProviderSessionSummary {
     let status = if archived { "archived" } else { raw_status };
     let busy = is_session_busy_status(status);
-    let offline_busy = busy && format_version != "cascade-v2";
+    let is_offline = format_version != "cascade-v2";
+    let offline_busy = busy && is_offline;
+    let offline_open_idle = is_offline && offline_tree_locked && !busy;
     let verb = if status == "waiting" {
         "会话正在等待处理，请先在 Antigravity 中处理或停止后再"
     } else {
         "会话正在运行，请先在 Antigravity 中停止后再"
     };
+    let archive_verb = if archived { "恢复" } else { "归档" };
+    let rename_block_reason = if offline_busy {
+        Some(format!("{verb}改名"))
+    } else if offline_open_idle {
+        Some("会话当前已在 Antigravity 中打开，离线模式下无法安全改名".into())
+    } else {
+        None
+    };
+    let archive_block_reason = if offline_busy {
+        Some(format!("{verb}{archive_verb}"))
+    } else if offline_open_idle {
+        Some(format!(
+            "会话当前已在 Antigravity 中打开，离线模式下无法安全{archive_verb}"
+        ))
+    } else {
+        None
+    };
+    let delete_block_reason = if busy {
+        Some(format!("{verb}删除"))
+    } else if offline_open_idle {
+        Some("会话当前已在 Antigravity 中打开，离线模式下无法安全删除".into())
+    } else {
+        None
+    };
+    let workspace_root = crate::workspace_root::resolve_workspace_root(&cwd);
     ProviderSessionSummary {
         storage_size: None,
         session_key: id.clone(),
@@ -912,18 +1064,19 @@ pub(crate) fn make_summary_with_status(
         id,
         title,
         cwd,
+        workspace_root,
         archived,
         updated_at,
         message_count,
         last_message,
         status: status.into(),
         format_version: format_version.into(),
-        can_rename: !offline_busy,
-        rename_block_reason: offline_busy.then(|| format!("{verb}改名")),
-        can_archive: !offline_busy,
-        archive_block_reason: offline_busy.then(|| format!("{verb}归档")),
-        can_delete: !busy,
-        delete_block_reason: busy.then(|| format!("{verb}删除")),
+        can_rename: rename_block_reason.is_none(),
+        rename_block_reason,
+        can_archive: archive_block_reason.is_none(),
+        archive_block_reason,
+        can_delete: delete_block_reason.is_none(),
+        delete_block_reason,
         read_error: None,
         read_warning: None,
     }
@@ -1083,6 +1236,7 @@ fn summary_from_live_json(
         fallback_summary,
         status,
         "cascade-v2",
+        false,
     ))
 }
 
@@ -1176,6 +1330,81 @@ fn summarize_unindexed_transcript(
     (first_title, last_preview, count, last_created_at)
 }
 
+pub(crate) fn collect_store_known_subagents(paths: &AntigravityPaths) -> BTreeSet<String> {
+    let mut known = BTreeSet::new();
+    if !paths.home.is_dir() {
+        return known;
+    }
+    let db_path = paths.summaries_db();
+    let conn = db_path
+        .is_file()
+        .then(|| {
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .ok()
+        })
+        .flatten();
+    let aux = load_store_auxiliary_index(paths, conn.as_ref());
+    for kids in aux.sidecar_children.values() {
+        known.extend(kids.iter().cloned());
+    }
+    for (cid, entry) in &aux.conv_meta {
+        if entry.is_internal || entry.parent_id.is_some() || entry.root_id.is_some() {
+            known.insert(cid.clone());
+        }
+    }
+    if let Some(conn) = &conn {
+        if has_conversation_parents_table(conn) {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
+            ) {
+                if let Ok(rows) =
+                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                {
+                    for (cid, pid) in rows.flatten() {
+                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                            known.insert(cid);
+                        }
+                    }
+                }
+            }
+        }
+        let cols = summaries_table_columns(conn);
+        let raw_expr = if cols.contains("raw_summary") {
+            "raw_summary"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT conversation_id, COALESCE(parent_conversation_id, ''), COALESCE(nesting_depth, 0), {raw_expr} FROM conversation_summaries"
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3).ok().flatten(),
+                ))
+            }) {
+                for (cid, pid, depth, raw) in rows.flatten() {
+                    if !pid.is_empty()
+                        || depth > 0
+                        || raw
+                            .as_deref()
+                            .is_some_and(|b| parse_raw_summary(b).trajectory_meta.is_subagent(&cid))
+                    {
+                        known.insert(cid);
+                    }
+                }
+            }
+        }
+    }
+    known
+}
+
 pub(crate) fn list_offline_summaries(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
@@ -1189,7 +1418,24 @@ pub(crate) fn list_offline_summaries(
     let mut known_subagents: BTreeSet<String> = BTreeSet::new();
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut sqlite_statuses: BTreeMap<String, &'static str> = BTreeMap::new();
+    let mut raw_summaries: BTreeMap<String, ParsedRawSummary> = BTreeMap::new();
+    let mut node_timestamps_ms: BTreeMap<String, i64> = BTreeMap::new();
+    let mut conv_db_metas: BTreeMap<String, cli_meta::ConvDbMetadata> = BTreeMap::new();
     let mut had_any_db_summary = false;
+
+    let add_child_edge =
+        |children: &mut BTreeMap<String, Vec<String>>, parent: &str, child: &str| {
+            if !parent.is_empty()
+                && parent != child
+                && uuid::Uuid::parse_str(parent).is_ok()
+                && uuid::Uuid::parse_str(child).is_ok()
+            {
+                let list = children.entry(parent.to_owned()).or_default();
+                if !list.iter().any(|x| x == child) {
+                    list.push(child.to_owned());
+                }
+            }
+        };
 
     type OfflineRow = (
         String,
@@ -1202,126 +1448,164 @@ pub(crate) fn list_offline_summaries(
         i64,
         String,
         bool,
-        Option<Vec<u8>>,
     );
     let mut root_rows: Vec<OfflineRow> = Vec::new();
-    let mut fts_archived: BTreeMap<String, bool> = BTreeMap::new();
 
     let db_path = paths.summaries_db();
-    if db_path.is_file() {
-        if let Ok(conn) = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) {
+    let open_conn = db_path
+        .is_file()
+        .then(|| {
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .ok()
+        })
+        .flatten();
+    let aux = load_store_auxiliary_index(paths, open_conn.as_ref());
+
+    for (pid, kids) in &aux.sidecar_children {
+        for cid in kids {
+            known_subagents.insert(cid.clone());
+            add_child_edge(&mut children_map, pid, cid);
+        }
+    }
+    for (cid, entry) in &aux.conv_meta {
+        if entry.is_internal {
+            known_subagents.insert(cid.clone());
+        }
+        if let Some(pid) = entry.parent_id.as_deref().or(entry.root_id.as_deref()) {
+            known_subagents.insert(cid.clone());
+            add_child_edge(&mut children_map, pid, cid);
+        }
+    }
+
+    if let Some(conn) = &open_conn {
+        if has_conversation_parents_table(conn) {
             if let Ok(mut stmt) = conn.prepare(
-                "SELECT conversation_id, archived FROM conversations_fts WHERE chunk_index = -1",
+                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
             ) {
                 if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, ValueOrString>(1).ok(),
-                    ))
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 }) {
-                    for (cid, flag) in rows.flatten() {
-                        if let Some(flag) = flag {
-                            fts_archived.insert(cid, flag.0);
+                    for (cid, pid) in rows.flatten() {
+                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                            indexed_ids.insert(cid.clone());
+                            known_subagents.insert(cid.clone());
+                            add_child_edge(&mut children_map, &pid, &cid);
                         }
                     }
                 }
             }
-            if has_conversation_parents_table(&conn) {
-                if let Ok(mut stmt) = conn.prepare(
-                    "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-                ) {
-                    if let Ok(rows) = stmt.query_map([], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    }) {
-                        for (cid, pid) in rows.flatten() {
-                            if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
-                                indexed_ids.insert(cid.clone());
-                                known_subagents.insert(cid.clone());
-                                children_map.entry(pid).or_default().push(cid);
-                            }
-                        }
-                    }
-                }
-            }
+        }
 
-            let cols = summaries_table_columns(&conn);
-            let status_expr = if cols.contains("status") {
-                "COALESCE(status, '')"
-            } else {
-                "''"
-            };
-            let idle_expr = if cols.contains("not_fully_idle") {
-                "not_fully_idle"
-            } else {
-                "0"
-            };
-            let raw_expr = if cols.contains("raw_summary") {
-                "raw_summary"
-            } else {
-                "NULL"
-            };
-            let sql = format!(
-                "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
-                 COALESCE(step_count, 0), COALESCE(last_modified_time, ''), \
-                 COALESCE(workspace_uris, ''), COALESCE(parent_conversation_id, ''), \
-                 COALESCE(nesting_depth, 0), {status_expr}, {idle_expr}, {raw_expr} \
-                 FROM conversation_summaries"
-            );
-            if let Ok(mut stmt) = conn.prepare(&sql) {
-                if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)?,
-                        row.get::<_, String>(8)?,
-                        row.get::<_, ValueOrString>(9).map(|v| v.0).unwrap_or(false),
-                        row.get::<_, Option<Vec<u8>>>(10).ok().flatten(),
-                    ))
-                }) {
-                    for row in rows.flatten() {
-                        let (
-                            ref id,
-                            _,
-                            _,
-                            _,
-                            _,
-                            _,
-                            ref parent,
-                            depth,
-                            ref status_str,
-                            not_fully_idle,
-                            _,
-                        ) = row;
-                        if uuid::Uuid::parse_str(id).is_err() {
-                            continue;
-                        }
-                        indexed_ids.insert(id.clone());
-                        if let Some(st) = offline_summary_row_status(status_str, not_fully_idle) {
-                            sqlite_statuses.insert(id.clone(), st);
-                        }
-                        if !parent.is_empty() || depth > 0 {
-                            known_subagents.insert(id.clone());
-                            if !parent.is_empty() {
-                                children_map
-                                    .entry(parent.clone())
-                                    .or_default()
-                                    .push(id.clone());
-                            }
-                            continue;
-                        }
-                        if has_primary_session_storage(paths, id) {
-                            had_any_db_summary = true;
-                        }
-                        root_rows.push(row);
+        let cols = summaries_table_columns(conn);
+        let status_expr = if cols.contains("status") {
+            "COALESCE(status, '')"
+        } else {
+            "''"
+        };
+        let idle_expr = if cols.contains("not_fully_idle") {
+            "not_fully_idle"
+        } else {
+            "0"
+        };
+        let raw_expr = if cols.contains("raw_summary") {
+            "raw_summary"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
+             COALESCE(step_count, 0), COALESCE(last_modified_time, ''), \
+             COALESCE(workspace_uris, ''), COALESCE(parent_conversation_id, ''), \
+             COALESCE(nesting_depth, 0), {status_expr}, {idle_expr}, {raw_expr} \
+             FROM conversation_summaries"
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, ValueOrString>(9).map(|v| v.0).unwrap_or(false),
+                    row.get::<_, Option<Vec<u8>>>(10).ok().flatten(),
+                ))
+            }) {
+                for (
+                    id,
+                    db_title,
+                    preview,
+                    steps,
+                    modified,
+                    ws_raw,
+                    parent,
+                    depth,
+                    status_str,
+                    not_fully_idle,
+                    raw_blob,
+                ) in rows.flatten()
+                {
+                    if uuid::Uuid::parse_str(&id).is_err() {
+                        continue;
                     }
+                    indexed_ids.insert(id.clone());
+                    let parsed_raw = raw_blob.as_deref().map(parse_raw_summary);
+                    if let Some(ts_ms) = parse_any_timestamp_ms(&modified)
+                        .or_else(|| parsed_raw.as_ref().and_then(|r| r.created_time_ms))
+                        .or_else(|| aux.fts_rows.get(&id).and_then(|f| f.last_modified_ms))
+                    {
+                        node_timestamps_ms.insert(id.clone(), ts_ms);
+                    }
+                    let st =
+                        offline_summary_row_status(&status_str, not_fully_idle).or_else(|| {
+                            parsed_raw
+                                .as_ref()
+                                .and_then(ParsedRawSummary::active_status)
+                        });
+                    if let Some(st) = st {
+                        sqlite_statuses.insert(id.clone(), st);
+                    }
+                    let raw_is_sub = parsed_raw
+                        .as_ref()
+                        .is_some_and(|r| r.trajectory_meta.is_subagent(&id));
+                    let raw_parent = parsed_raw
+                        .as_ref()
+                        .and_then(|r| r.trajectory_meta.effective_parent(&id))
+                        .map(str::to_owned);
+                    if let Some(pr) = parsed_raw {
+                        raw_summaries.insert(id.clone(), pr);
+                    }
+                    if !parent.is_empty() || depth > 0 || raw_is_sub {
+                        known_subagents.insert(id.clone());
+                        if !parent.is_empty() {
+                            add_child_edge(&mut children_map, &parent, &id);
+                        } else if let Some(pid) = raw_parent.as_deref() {
+                            add_child_edge(&mut children_map, pid, &id);
+                        }
+                        continue;
+                    }
+                    if has_primary_session_storage(paths, &id) {
+                        had_any_db_summary = true;
+                    }
+                    root_rows.push((
+                        id,
+                        db_title,
+                        preview,
+                        steps,
+                        modified,
+                        ws_raw,
+                        parent,
+                        depth,
+                        status_str,
+                        not_fully_idle,
+                    ));
                 }
             }
         }
@@ -1396,79 +1680,199 @@ pub(crate) fn list_offline_summaries(
         }
     }
 
+    // Inspect .db metadata for unindexed sessions (and any indexed root whose .db might mark it a subagent)
+    let mut unresolved_unindexed = false;
+    for uid in &unindexed_ids {
+        if let Some(meta) = inspect_conv_db_metadata(paths, uid) {
+            if meta.is_subagent {
+                known_subagents.insert(uid.clone());
+                if !meta.parent_ids.is_empty() {
+                    for pid in &meta.parent_ids {
+                        has_recorded_parent.insert(uid.clone());
+                        add_child_edge(&mut children_map, pid, uid);
+                    }
+                } else if let Some(rid) = meta.root_id.as_deref() {
+                    has_recorded_parent.insert(uid.clone());
+                    add_child_edge(&mut children_map, rid, uid);
+                }
+            }
+            conv_db_metas.insert(uid.clone(), meta);
+        } else {
+            unresolved_unindexed = true;
+        }
+        if !known_subagents.contains(uid) && transcript_has_subagent_reminder(paths, uid) {
+            known_subagents.insert(uid.clone());
+        }
+    }
+
     let has_locked_unparented_subagent = locked_ids
         .iter()
         .any(|id| known_subagents.contains(id) && !has_recorded_parent.contains(id));
-    if !unindexed_ids.is_empty() || has_locked_unparented_subagent {
+    if unresolved_unindexed || has_locked_unparented_subagent {
         for pid in indexed_ids.iter().chain(unindexed_ids.iter()) {
             for cid in extract_transcript_spawned_subagents(paths, pid) {
                 known_subagents.insert(cid.clone());
                 has_recorded_parent.insert(cid.clone());
-                children_map.entry(pid.clone()).or_default().push(cid);
+                add_child_edge(&mut children_map, pid, &cid);
             }
         }
     } else {
-        for pid in locked_ids.intersection(&indexed_ids) {
+        let mut scan_pids: BTreeSet<&str> = locked_ids
+            .intersection(&indexed_ids)
+            .map(String::as_str)
+            .collect();
+        if let Some(target) = filter_id {
+            scan_pids.insert(target);
+        }
+        for pid in scan_pids {
             for cid in extract_transcript_spawned_subagents(paths, pid) {
                 known_subagents.insert(cid.clone());
                 has_recorded_parent.insert(cid.clone());
-                children_map.entry(pid.clone()).or_default().push(cid);
+                add_child_edge(&mut children_map, pid, &cid);
             }
         }
     }
 
-    for (id, db_title, preview, steps, modified, ws_raw, _, _, _, _, raw_summary) in root_rows {
+    type HistoryPromptFallbackMap = BTreeMap<String, (Option<String>, Option<String>)>;
+    let mut history_loaded: Option<HistoryPromptFallbackMap> = None;
+    let mut get_history_fallback = |cid: &str| -> (Option<String>, Option<String>) {
+        let map =
+            history_loaded.get_or_insert_with(|| cli_meta::load_history_jsonl_fallbacks(paths));
+        map.get(cid).cloned().unwrap_or((None, None))
+    };
+
+    for (id, db_title, preview, steps, modified, ws_raw, _, _, _, _) in root_rows {
         if known_subagents.contains(&id) || !has_primary_session_storage(paths, &id) {
             continue;
         }
         if filter_id.is_some_and(|target| target != id) {
             continue;
         }
+        let raw_parsed = raw_summaries.get(&id);
+        let fts_row = aux.fts_rows.get(&id);
+        let conv_meta_entry = aux.conv_meta.get(&id);
         let overlay = read_annotation_overlay(paths, &id);
-        let raw_overlay = raw_summary
-            .as_deref()
-            .map(read_raw_summary_annotations)
-            .unwrap_or_default();
         let archived = overlay
             .archived
-            .or(raw_overlay.archived)
-            .or_else(|| fts_archived.get(&id).copied())
+            .or_else(|| raw_parsed.and_then(|r| r.annotations.archived))
+            .or_else(|| fts_row.and_then(|f| f.archived))
             .unwrap_or(false);
+
+        let mut cwd = serde_json::from_str::<Vec<String>>(&ws_raw)
+            .ok()
+            .and_then(|uris| uris.into_iter().next())
+            .map(|uri| decode_file_uri(&uri))
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                raw_parsed
+                    .and_then(|r| {
+                        r.workspaces
+                            .first()
+                            .or_else(|| r.trajectory_meta.workspace_uris.first())
+                    })
+                    .map(|u| decode_file_uri(u))
+                    .filter(|s| !s.is_empty())
+            })
+            .or_else(|| fts_row.and_then(|f| f.workspace.clone()))
+            .or_else(|| aux.last_conv_cwd.get(&id).cloned())
+            .or_else(|| conv_meta_entry.and_then(|m| m.cwd.clone()))
+            .unwrap_or_default();
+        let mut db_meta_entry = conv_db_metas.get(&id).cloned();
+        if cwd.is_empty() || steps <= 0 {
+            if db_meta_entry.is_none() {
+                if let Some(m) = inspect_conv_db_metadata(paths, &id) {
+                    if m.is_subagent {
+                        continue;
+                    }
+                    db_meta_entry = Some(m);
+                }
+            }
+            if cwd.is_empty() {
+                cwd = db_meta_entry
+                    .as_ref()
+                    .and_then(|m| m.cwd.clone())
+                    .or_else(|| cli_meta::read_conv_meta_file(paths, &id).1)
+                    .or_else(|| get_history_fallback(&id).0)
+                    .unwrap_or_default();
+            }
+        }
+
         let title = overlay
             .title
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| raw_overlay.title.filter(|s| !s.trim().is_empty()))
+            .or_else(|| {
+                raw_parsed
+                    .and_then(|r| r.annotations.title.clone())
+                    .filter(|s| !s.trim().is_empty())
+            })
             .or_else(|| {
                 let t = db_title.trim();
                 (!t.is_empty()).then(|| t.to_owned())
             })
+            .or_else(|| fts_row.and_then(|f| f.title.clone()))
+            .or_else(|| conv_meta_entry.and_then(|m| m.title.clone()))
             .or_else(|| {
                 let p = preview.trim();
                 (!p.is_empty()).then(|| p.chars().take(80).collect())
             })
+            .or_else(|| cli_meta::read_conv_meta_file(paths, &id).0)
+            .or_else(|| get_history_fallback(&id).1)
             .unwrap_or_else(|| "未命名会话".into());
-        let cwd = serde_json::from_str::<Vec<String>>(&ws_raw)
-            .ok()
-            .and_then(|uris| uris.into_iter().next())
-            .map(|uri| decode_file_uri(&uri))
-            .unwrap_or_default();
+
+        let descendants = descendant_ids(&children_map, &id);
         let raw_status = if archived {
             "archived"
         } else {
-            let descendants = descendant_ids(&children_map, &id);
-            evaluate_offline_tree_status(paths, &id, &descendants, &sqlite_statuses, now_ms)
+            evaluate_offline_tree_status_with_lock(
+                paths,
+                &id,
+                &descendants,
+                &sqlite_statuses,
+                Some(&raw_summaries),
+                false,
+                now_ms,
+            )
         };
+
+        let updated_at = index_timestamp(&modified).or_else(|| {
+            let mut best_ms = node_timestamps_ms.get(&id).copied().or_else(|| {
+                file_mtime_ms(&paths.canonical_path(&id)).and_then(cli_meta::valid_epoch_ms)
+            });
+            for desc in &descendants {
+                if let Some(dms) = node_timestamps_ms.get(desc).copied() {
+                    best_ms = Some(best_ms.map_or(dms, |prev| prev.max(dms)));
+                }
+            }
+            best_ms.and_then(cli_meta::format_ms_utc)
+        });
+        let effective_steps = if steps > 0 {
+            steps as usize
+        } else {
+            fts_row
+                .and_then(|f| f.step_count)
+                .or_else(|| {
+                    db_meta_entry
+                        .as_ref()
+                        .map(|m| m.step_count)
+                        .filter(|&c| c > 0)
+                })
+                .unwrap_or(0)
+        };
+
+        let tree_locked =
+            locked_ids.contains(&id) || descendants.iter().any(|d| locked_ids.contains(d));
         let summary = make_summary_with_status(
             paths,
             id.clone(),
             title,
             cwd,
             archived,
-            index_timestamp(&modified),
-            steps.max(0) as usize,
+            updated_at,
+            effective_steps,
             (!preview.trim().is_empty()).then_some(preview),
             raw_status,
             "sqlite-offline",
+            tree_locked,
         );
         by_id.insert(id, summary);
     }
@@ -1481,6 +1885,9 @@ pub(crate) fn list_offline_summaries(
             continue;
         }
         let overlay = read_annotation_overlay(paths, &id);
+        let conv_meta_entry = aux.conv_meta.get(&id);
+        let db_meta_entry = conv_db_metas.get(&id);
+        let (meta_file_title, meta_file_cwd) = cli_meta::read_conv_meta_file(paths, &id);
         let archived = overlay.archived.unwrap_or(false);
         let (first_title, last_preview, step_count, transcript_ts) =
             summarize_unindexed_transcript(paths, &id);
@@ -1494,19 +1901,31 @@ pub(crate) fn list_offline_summaries(
             "brain-offline"
         };
         let updated_at = transcript_ts.or_else(|| {
-            let canonical = paths.canonical_path(&id);
-            fs::metadata(&canonical)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| jiff::Timestamp::try_from(t).ok())
-                .map(|ts| crate::timestamps::format_utc(ts, true))
+            file_mtime_ms(&paths.canonical_path(&id)).and_then(cli_meta::format_ms_utc)
         });
+        let descendants = descendant_ids(&children_map, &id);
         let raw_status = if archived {
             "archived"
         } else {
-            let descendants = descendant_ids(&children_map, &id);
-            evaluate_offline_tree_status(paths, &id, &descendants, &sqlite_statuses, now_ms)
+            evaluate_offline_tree_status_with_lock(
+                paths,
+                &id,
+                &descendants,
+                &sqlite_statuses,
+                Some(&raw_summaries),
+                false,
+                now_ms,
+            )
         };
+        let mut cwd = db_meta_entry
+            .and_then(|m| m.cwd.clone())
+            .or(meta_file_cwd)
+            .or_else(|| aux.last_conv_cwd.get(&id).cloned())
+            .or_else(|| conv_meta_entry.and_then(|m| m.cwd.clone()))
+            .unwrap_or_default();
+        if cwd.is_empty() {
+            cwd = get_history_fallback(&id).0.unwrap_or_default();
+        }
         let default_title = if format_version == "brain-offline" {
             id.clone()
         } else {
@@ -1515,19 +1934,30 @@ pub(crate) fn list_offline_summaries(
         let title = overlay
             .title
             .filter(|s| !s.trim().is_empty())
+            .or_else(|| conv_meta_entry.and_then(|m| m.title.clone()))
+            .or(meta_file_title)
             .or(first_title)
+            .or_else(|| get_history_fallback(&id).1)
             .unwrap_or(default_title);
+        let effective_steps = if step_count > 0 {
+            step_count
+        } else {
+            db_meta_entry.map_or(0, |m| m.step_count)
+        };
+        let tree_locked =
+            locked_ids.contains(&id) || descendants.iter().any(|d| locked_ids.contains(d));
         let summary = make_summary_with_status(
             paths,
             id.clone(),
             title,
-            String::new(),
+            cwd,
             archived,
             updated_at,
-            step_count,
+            effective_steps,
             last_preview,
             raw_status,
             format_version,
+            tree_locked,
         );
         by_id.insert(id, summary);
     }
@@ -1539,16 +1969,20 @@ pub(crate) fn list_offline_summaries(
 /// RFC 3339. One form keeps merged lists ordered and displayable.
 fn index_timestamp(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.is_empty() {
+    if raw.is_empty() || raw.starts_with("0001-") || raw.starts_with("0000-") {
         return None;
     }
-    Some(
-        (raw)
-            .parse::<jiff::Timestamp>()
-            .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S%.f%:z", raw))
-            .map(|ts| crate::timestamps::format_utc(ts, true))
-            .unwrap_or_else(|_| raw.to_owned()),
-    )
+    let parsed = raw
+        .parse::<jiff::Timestamp>()
+        .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S%.f%:z", raw))
+        .ok();
+    match parsed {
+        Some(ts) if ts.as_millisecond() > 86_400_000 => {
+            Some(crate::timestamps::format_utc(ts, true))
+        }
+        Some(_) => None,
+        None => cli_meta::parse_valid_timestamp_ms(raw).and_then(cli_meta::format_ms_utc),
+    }
 }
 
 pub(crate) struct ValueOrString(pub(crate) bool);
@@ -1593,6 +2027,16 @@ pub(crate) fn list_summaries_from_source(
     payload: Option<&Value>,
 ) -> Result<Vec<ProviderSessionSummary>> {
     let primary = paths.primary_store();
+    let cli = paths.cli_store();
+    let cli_subagents = cli
+        .as_ref()
+        .map(collect_store_known_subagents)
+        .unwrap_or_default();
+    let primary_subagents = if payload.is_some() {
+        collect_store_known_subagents(&primary)
+    } else {
+        BTreeSet::new()
+    };
     let now_ms = now_epoch_ms();
     let mut items = if let Some(payload) = payload {
         let map = payload["trajectorySummaries"].as_object();
@@ -1600,7 +2044,12 @@ pub(crate) fn list_summaries_from_source(
         let mut items = map
             .into_iter()
             .flatten()
-            .filter(|(id, _)| filter_id.is_none_or(|target| target == id.as_str()))
+            .filter(|(id, _)| {
+                filter_id.is_none_or(|target| target == id.as_str())
+                    && paths.cli_store_for_id(id).is_none()
+                    && !cli_subagents.contains(id.as_str())
+                    && !primary_subagents.contains(id.as_str())
+            })
             .filter_map(|(id, item)| {
                 let (exec_subs, wait_subs) = sub_states.get(id).copied().unwrap_or((false, false));
                 summary_from_live_json(&primary, id, item, exec_subs, wait_subs, now_ms)
@@ -1620,20 +2069,27 @@ pub(crate) fn list_summaries_from_source(
                 // the service and must not reappear from the index.
                 .filter(|item| {
                     !loaded.contains(item.id.as_str())
+                        && paths.cli_store_for_id(&item.id).is_none()
+                        && !cli_subagents.contains(&item.id)
                         && has_primary_session_storage(&primary, &item.id)
                 }),
         );
         items
     } else {
         list_offline_summaries(&primary, filter_id)?
+            .into_iter()
+            .filter(|item| {
+                paths.cli_store_for_id(&item.id).is_none() && !cli_subagents.contains(&item.id)
+            })
+            .collect()
     };
-    if let Some(cli) = paths.cli_store() {
+    if let Some(cli) = cli {
         let seen: BTreeSet<String> = items.iter().map(|i| i.id.clone()).collect();
         items.extend(
             list_offline_summaries(&cli, filter_id)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|item| !seen.contains(&item.id)),
+                .filter(|item| !seen.contains(&item.id) && !primary_subagents.contains(&item.id)),
         );
     }
     items.sort_by(|a, b| {
@@ -1699,12 +2155,28 @@ pub(crate) fn probe_live_stream_snapshot(
     now_ms: i64,
 ) -> Option<crate::native_probe::NativeStreamSnapshot> {
     valid_cascade_id(id).ok()?;
-    if paths.cli_store_for_id(id).is_some() {
-        return None;
+    if let Some(cli) = paths.cli_store_for_id(id) {
+        let summary = list_offline_summaries(&cli, Some(id))
+            .ok()?
+            .into_iter()
+            .next()?;
+        return build_offline_stream_snapshot(&cli, &summary);
     }
     let primary = paths.primary_store();
-    let (rpc, all_live) = connect_endpoint(&primary).ok()??;
-    let summary = all_live["trajectorySummaries"].get(id)?;
+    let Some((rpc, all_live)) = connect_endpoint(&primary).ok().flatten() else {
+        let summary = list_offline_summaries(&primary, Some(id))
+            .ok()?
+            .into_iter()
+            .next()?;
+        return build_offline_stream_snapshot(&primary, &summary);
+    };
+    let Some(summary) = all_live["trajectorySummaries"].get(id) else {
+        let offline = list_offline_summaries(&primary, Some(id))
+            .ok()?
+            .into_iter()
+            .next()?;
+        return build_offline_stream_snapshot(&primary, &offline);
+    };
     let mut resp = connect_rpc_post(
         rpc.port,
         &rpc.token,
@@ -2770,12 +3242,22 @@ mod tests {
         };
 
         // 1. Offline list/detail reports "idle" even when presence/<id>.lock is held,
-        //    while offline delete is blocked by the non-blocking shared lock probe.
+        //    while disabling offline mutations and reporting explicit open-in-Antigravity block reasons.
         let offline_paths = AntigravityPaths::offline(root.clone());
         let offline_list = list_sessions(&offline_paths, &ProviderListRequest::default()).unwrap();
         assert_eq!(offline_list.len(), 1);
         assert_eq!(offline_list[0].status, "idle");
-        assert!(offline_list[0].delete_block_reason.is_none());
+        #[cfg(unix)]
+        {
+            assert!(!offline_list[0].can_rename && offline_list[0].rename_block_reason.is_some());
+            assert!(!offline_list[0].can_archive && offline_list[0].archive_block_reason.is_some());
+            assert!(!offline_list[0].can_delete);
+            assert!(offline_list[0]
+                .delete_block_reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("已在 Antigravity 中打开"));
+        }
 
         #[cfg(unix)]
         {
@@ -3746,7 +4228,14 @@ mod tests {
             idle_open_item.status, "idle",
             "idle open CLI session must stay idle rather than running"
         );
-        assert!(idle_open_item.delete_block_reason.is_none());
+        assert!(!idle_open_item.can_rename && idle_open_item.rename_block_reason.is_some());
+        assert!(!idle_open_item.can_archive && idle_open_item.archive_block_reason.is_some());
+        assert!(!idle_open_item.can_delete);
+        assert!(idle_open_item
+            .delete_block_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("已在 Antigravity 中打开"));
         let rename_err = rename_session(&paths, &idle_open_id, "不可改名")
             .unwrap_err()
             .to_string();
@@ -3833,6 +4322,364 @@ mod tests {
             let _ = libc::flock(sub_lock.as_raw_fd(), libc::LOCK_UN);
             let _ = libc::flock(idle_lock.as_raw_fd(), libc::LOCK_UN);
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_root_lock_inheritance_trailing_prose_json_15col_fts_object_rename_and_offline_probe_events(
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let root = env::temp_dir().join(format!("agenthub-ag-cli-full-{}", uuid::Uuid::new_v4()));
+        for dir in ["conversations", "annotations", "presence", "cache"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let child_id = uuid::Uuid::new_v4().to_string();
+        let internal_id = uuid::Uuid::new_v4().to_string();
+        let err_id = uuid::Uuid::new_v4().to_string();
+        let ask_id = uuid::Uuid::new_v4().to_string();
+
+        // 1. Streaming JSON extraction when invoke_subagent result has trailing prose
+        let mut parsed_ids = BTreeSet::new();
+        crate::antigravity::collect_spawned_subagent_ids(
+            &json!(format!(
+                "Created subagent:\n{{\"conversationId\":\"{child_id}\"}}\nSubagent returned 3 findings."
+            )),
+            &mut parsed_ids,
+        );
+        assert!(parsed_ids.contains(&child_id));
+
+        for cid in [&root_id, &child_id, &internal_id, &err_id, &ask_id] {
+            fs::write(
+                root.join("conversations").join(format!("{cid}.db")),
+                b"placeholder",
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("brain").join(cid).join(".system_generated/logs"))
+                .unwrap();
+        }
+        // Sidecar subagent registration: brain/<root>/.system_generated/subagents/<child>.json
+        let sub_sidecar = root
+            .join("brain")
+            .join(&root_id)
+            .join(".system_generated/subagents");
+        fs::create_dir_all(&sub_sidecar).unwrap();
+        fs::write(
+            sub_sidecar.join(format!("{child_id}.json")),
+            serde_json::to_vec(
+                &json!({"title": "Worker Child", "state": "SUBAGENT_STATE_RUNNING"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let now_iso = crate::timestamps::format_utc(jiff::Timestamp::now(), true);
+        // Root transcript settled at PLANNER_RESPONSE, while child transcript has active GENERATING step (with lock ONLY on root!)
+        fs::write(
+            root.join("brain")
+                .join(&root_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":now_iso,"content":"启动多代理检查"}),
+                json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"content":"已派发子代理"}),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("brain")
+                .join(&child_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n",
+                json!({"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"GENERATING","created_at":now_iso,"content":"分析中"}),
+            ),
+        )
+        .unwrap();
+        // Error session ending in ERROR_MESSAGE (status: "DONE") + SYSTEM_SDK hook context after it
+        fs::write(
+            root.join("brain")
+                .join(&err_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":now_iso,"content":"运行任务"}),
+                json!({"step_index":1,"source":"MODEL","type":"ERROR_MESSAGE","status":"DONE","created_at":now_iso,"error":"Quota exceeded"}),
+                json!({"step_index":2,"source":"SYSTEM_SDK","type":"SYSTEM_MESSAGE","status":"DONE","created_at":now_iso,"content":"hook"}),
+            ),
+        )
+        .unwrap();
+        // Mid-turn ask_question session
+        fs::write(
+            root.join("brain")
+                .join(&ask_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":now_iso,"content":"部署配置"}),
+                json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"tool_calls":[{"id":"q1","name":"ask_question","args":{"questions":[{"question":"是否覆盖线上环境？"}]}}]}),
+            ),
+        )
+        .unwrap();
+
+        // conversation_metadata.json with Go SummaryStruct object & internal session
+        let meta_path = root.join("cache/conversation_metadata.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_vec(&json!({
+                "conversations": {
+                    (&root_id): {
+                        "summary": {
+                            "Title": "CLI 根任务",
+                            "WorkspaceURIs": ["file:///workspace/orca-demo"],
+                            "Internal": false
+                        }
+                    },
+                    (&internal_id): {
+                        "is_internal": true,
+                        "summary": { "Title": "Internal Memory", "Internal": true }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT, preview TEXT, step_count INTEGER,
+                last_modified_time TEXT, workspace_uris TEXT,
+                status TEXT, parent_conversation_id TEXT,
+                nesting_depth INTEGER, not_fully_idle NUMERIC
+            );
+            CREATE TABLE conversations_fts (
+                conversation_id TEXT, chunk_index INTEGER,
+                chunk_first_step INTEGER, chunk_last_step INTEGER,
+                last_modified_time INTEGER, step_count INTEGER,
+                last_step_created_at INTEGER, archived INTEGER,
+                user_step_byte_offsets TEXT, agent_step_byte_offsets TEXT,
+                title TEXT, workspace TEXT, project TEXT,
+                user_body TEXT, agent_body TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversation_summaries VALUES \
+             (?1, '', '', 0, '0001-01-01 00:00:00+00:00', '', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0), \
+             (?2, 'Internal', '', 1, ?5, '', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0), \
+             (?3, 'Error Run', '', 2, ?5, '[\"file:///workspace/orca-demo\"]', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0), \
+             (?4, 'Ask Run', '', 2, ?5, '[\"file:///workspace/orca-demo\"]', 'CASCADE_RUN_STATUS_IDLE', '', 0, 0)",
+            params![root_id, internal_id, err_id, ask_id, now_iso],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Hold lock ONLY on root_id and ask_id
+        let hold = |cid: &str| {
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(root.join("presence").join(format!("{cid}.lock")))
+                .unwrap();
+            assert_eq!(
+                unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            f
+        };
+        let root_lock = hold(&root_id);
+        let ask_lock = hold(&ask_id);
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let list = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        // child_id and internal_id must both be excluded from main list!
+        assert!(!list.iter().any(|s| s.id == child_id));
+        assert!(!list.iter().any(|s| s.id == internal_id));
+
+        let root_sum = list.iter().find(|s| s.id == root_id).unwrap();
+        assert_eq!(
+            root_sum.status, "running",
+            "child must inherit root_id presence lock"
+        );
+        assert_eq!(root_sum.title, "CLI 根任务");
+        assert_eq!(root_sum.cwd, "/workspace/orca-demo");
+        assert!(
+            !root_sum
+                .updated_at
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("0001-"),
+            "0001-01-01 zero time must be rejected"
+        );
+
+        let err_sum = list.iter().find(|s| s.id == err_id).unwrap();
+        assert_eq!(err_sum.status, "failed");
+
+        let ask_sum = list.iter().find(|s| s.id == ask_id).unwrap();
+        assert_eq!(ask_sum.status, "waiting");
+
+        // Offline NativeStreamSnapshot: running root holds settled_count < record_count with 0 events;
+        // waiting ask_id emits reply_needed; failed err_id emits failure; child subagent is suppressed!
+        let scan_all = scan_offline_store(&paths, None).unwrap();
+        let snap_root = scan_all.streams.iter().find(|s| s.id == root_id).unwrap();
+        assert!(snap_root.settled_count < snap_root.record_count);
+        assert!(snap_root.events.is_empty());
+        assert!(scan_offline_store(&paths, Some(&child_id))
+            .unwrap()
+            .streams
+            .is_empty());
+
+        let snap_ask = scan_all.streams.iter().find(|s| s.id == ask_id).unwrap();
+        assert_eq!(snap_ask.events.len(), 1);
+        assert_eq!(snap_ask.events[0].kind, "reply_needed");
+        assert!(snap_ask.events[0].body.contains("是否覆盖线上环境"));
+
+        let snap_err = scan_all.streams.iter().find(|s| s.id == err_id).unwrap();
+        assert_eq!(snap_err.events.len(), 1);
+        assert_eq!(snap_err.events[0].kind, "failure");
+        assert!(snap_err.events[0].body.contains("Quota exceeded"));
+
+        // Finish child + unlock root -> root emits completion, rename preserves Go SummaryStruct Object, archive upserts 15-col FTS!
+        fs::write(
+            root.join("brain")
+                .join(&child_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n",
+                json!({"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"content":"分析完成"}),
+            ),
+        )
+        .unwrap();
+        unsafe {
+            let _ = libc::flock(root_lock.as_raw_fd(), libc::LOCK_UN);
+            let _ = libc::flock(ask_lock.as_raw_fd(), libc::LOCK_UN);
+        }
+        drop(root_lock);
+        drop(ask_lock);
+
+        let snap_done = scan_offline_store(&paths, Some(&root_id)).unwrap();
+        assert_eq!(snap_done.streams[0].identity, snap_root.identity);
+        assert_eq!(snap_done.streams[0].events.len(), 1);
+        assert_eq!(snap_done.streams[0].events[0].kind, "completion");
+
+        // Crashed/killed mid-tool session (PLANNER_RESPONSE with unsettled tool_calls & no lock)
+        // must NEVER emit a false "completion" Bark event, and L2 subagent with both root_conversation_id
+        // and direct parent L1 must keep unique parent L1!
+        let mid_crash_id = uuid::Uuid::new_v4().to_string();
+        let l2_id = uuid::Uuid::new_v4().to_string();
+        for cid in [&mid_crash_id, &l2_id] {
+            fs::write(
+                root.join("conversations").join(format!("{cid}.db")),
+                b"placeholder",
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("brain").join(cid).join(".system_generated/logs"))
+                .unwrap();
+        }
+        fs::write(
+            root.join("brain")
+                .join(&mid_crash_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":now_iso,"content":"跑全量检查"}),
+                json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"content":"先执行测试命令","tool_calls":[{"id":"c1","name":"run_command","args":{"CommandLine":"cargo test"}}]}),
+            ),
+        )
+        .unwrap();
+        let snap_mid_crash = scan_offline_store(&paths, Some(&mid_crash_id)).unwrap();
+        assert_eq!(snap_mid_crash.streams.len(), 1);
+        assert!(
+            snap_mid_crash.streams[0].events.is_empty(),
+            "mid-tool crashed session must not emit false completion"
+        );
+
+        let child_sidecar = root
+            .join("brain")
+            .join(&child_id)
+            .join(".system_generated/subagents");
+        fs::create_dir_all(&child_sidecar).unwrap();
+        fs::write(
+            child_sidecar.join(format!("{l2_id}.json")),
+            serde_json::to_vec(&json!({"title": "Nested L2", "state": "SUBAGENT_STATE_DONE"}))
+                .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("brain")
+                .join(&l2_id)
+                .join(".system_generated/logs/transcript_full.jsonl"),
+            format!(
+                "{}\n",
+                json!({"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":now_iso,"content":"L2 子代理完成"}),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &meta_path,
+            serde_json::to_vec(&json!({
+                "conversations": {
+                    (&root_id): {
+                        "summary": {
+                            "Title": "CLI 根任务",
+                            "WorkspaceURIs": ["file:///workspace/orca-demo"],
+                            "Internal": false
+                        }
+                    },
+                    (&l2_id): {
+                        "root_conversation_id": (&root_id),
+                        "summary": { "Title": "Nested L2", "RootConversationID": (&root_id) }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let l2_detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: root_id.clone(),
+                agent_id: Some(l2_id.clone()),
+                limit: Some(20),
+                before: None,
+            },
+        )
+        .expect("L2 subagent with root_conversation_id + direct L1 parent must resolve uniquely");
+        assert_eq!(l2_detail.events.len(), 1);
+
+        let renamed = rename_session(&paths, &root_id, "CLI 新标题").unwrap();
+        assert_eq!(renamed.title, "CLI 新标题");
+        let meta_after: Value = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        assert!(meta_after["conversations"][&root_id]["summary"].is_object());
+        assert_eq!(
+            meta_after["conversations"][&root_id]["summary"]["Title"].as_str(),
+            Some("CLI 新标题")
+        );
+        assert_eq!(
+            meta_after["conversations"][&root_id]["summary"]["WorkspaceURIs"][0].as_str(),
+            Some("file:///workspace/orca-demo")
+        );
+
+        let archived = set_archived(&paths, &root_id, true).unwrap();
+        assert!(archived.archived);
+        let check_conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        let (fts_arch, fts_sc, fts_lm): (i64, i64, i64) = check_conn
+            .query_row(
+                "SELECT archived, step_count, last_modified_time FROM conversations_fts WHERE conversation_id = ?1 AND chunk_index = -1",
+                params![root_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(fts_arch, 1);
+        assert!(fts_sc >= 1);
+        assert!(fts_lm > 1_000_000_000_000_000_000);
+        drop(check_conn);
+
         fs::remove_dir_all(root).unwrap();
     }
 }

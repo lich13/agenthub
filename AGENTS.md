@@ -59,7 +59,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 单条、批量、归档清理和隐藏清理共用直接删除实现。Codex 覆盖普通／归档明文与压缩 rollout、writer 锁、shell snapshots、visualizations、原生状态和分页历史数据库、名称索引。父子关系去重遍历，循环不阻断；不反向扩大到引用方。执行仅处理确认时提交的 ID 集合，不加入后来出现的后代。
 - Claude 定位键取项目相对路径及文件名身份；覆盖主 JSONL、同名目录、file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 按各工作区的 ID 目录定位，摘要缺失或损坏不影响删除。
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
-- Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理与本机通知。Antigravity 同时纳管桌面端（`ANTIGRAVITY_HOME`／`~/.gemini/antigravity`，兼容 `--csrf_token` 与 `daemon/hub_*.json` 在线探测）与 `agy` CLI（`ANTIGRAVITY_CLI_HOME`／`~/.gemini/antigravity-cli`，离线模式），按主存储文件校验归属、排除跨端幽灵摘要与 `implicit/*.pb`，并支持同源无环父链核验的多级子智能体阅读与附件读取（`antigravity_subagents`）；离线改名／归档校验 `presence` 锁并同步 `raw_summary`、整型 FTS5 `archived`、proto 缓存及 `conversation_metadata.json`，永久删除按叶节点优先拓扑逆序覆盖 `conversation_parents`、未水合后代 `404` 磁盘残余与 CLI 共享文件，本机与远端 Linux 同步开放 `antigravity_archived` 已归档与无锁孤立子会话统一清理及 `settings.json` 只读保护。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
+- Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理；左侧顶栏「工作区」跨平台总览页及 5 个代码 Agent 页内分组按 `.git` worktree 主仓库与规范化工作目录混排或筛选会话。Antigravity 同时纳管桌面端（`ANTIGRAVITY_HOME`／`~/.gemini/antigravity`，兼容 `--csrf_token` 与 `daemon/hub_*.json` 在线探测）与 `agy` CLI（`ANTIGRAVITY_CLI_HOME`／`~/.gemini/antigravity-cli`，离线根锁树级继承、5 源父链防漏及本机／远端 Linux 双端 Bark 通知），按主存储文件校验归属、排除跨端幽灵摘要与 `implicit/*.pb`，并支持同源无环父链核验的多级子智能体阅读与附件读取（`antigravity_subagents`）；离线改名／归档校验 `presence` 锁并同步 `raw_summary`、15 列整型纳秒 FTS5 `archived`、proto 缓存及对象安全的 `conversation_metadata.json`，永久删除按叶节点优先拓扑逆序覆盖 `conversation_parents`、未水合后代 `404` 磁盘残余与 CLI 共享文件，本机与远端 Linux 同步开放 `antigravity_archived` 已归档与无锁孤立子会话统一清理及 `settings.json` 只读保护。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
 - Pi 活动契约、读取、管理、界面和监测全部退役，未知命令统一拒绝，不维护退役命令墓碑表。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
@@ -117,7 +117,7 @@ Probe 不显示说明小字、副标题、平台事件或 Hook 机制解释，�
 
 ## Bark 投递边界
 
-- Antigravity 和 DSH 仅在本机运行通知，通过可选能力展示总开关和四类开关，默认关闭；协议保持 2。沿用 Probe 轮询、数据库和加密队列，首次启用／重新启用建立基线。Antigravity 只读原生服务，明确执行终态和 WAITING + requestedInteraction 才产生对应事件；DSH 只读标准 v4 日志及多帧 Zstandard，按主回合、问题和审批身份配对。子代理和 fork 继承记录不成为主线程事件；读取或身份不明显示异常，不推断终态。首发与重试均复核，恢复执行淘汰旧失败，问题和审批解除后终结重试；异步问题超时仍可回答时继续待回复。
+- Antigravity 通知在本机 macOS（受管 `~/.gemini/config/hooks.json` Stop Hook + 15 秒轮询）与远端 Linux `agenthub-webd`（15 秒只读轮询，Hook 写入仍仅限本机）同步开放 `antigravity_notifications`；DSH 仅在本机运行通知，两者均通过可选能力展示总开关和四类开关，默认关闭，协议保持 2。沿用 Probe 轮询、数据库和加密队列，首次启用／重新启用及升级首次扫描 CLI 存储时建立基线（`antigravity_cli_resume_cutoff_ms`）。Antigravity 只读原生在线服务与离线 `.db`／转录快照，明确执行终态、正文／工具提问（`ask_question`／`RequestFeedback`）与权限等待才产生对应事件；DSH 只读标准 v4 日志及多帧 Zstandard，按主回合、问题和审批身份配对。子代理和 fork 继承记录不成为主线程事件；读取或身份不明显示异常，不推断终态。首发与重试均复核，恢复执行淘汰旧失败，问题和审批解除后终结重试；异步问题超时仍可回答时继续待回复。
 
 - 每分段最多 3 次，重试等待 15/60 秒并加入 ±20% 抖动；首次投递起 10 分钟内有效。尊重 Retry-After，不提前发送或无限保留。
 - 网络失败、结果未知和明确临时拒绝可重试；凭据、证书验证、重定向、非法请求及已知永久 APNs 拒绝不能重试。日志仅含安全分类、状态码、耗时、次数和匿名身份，不含原始异常、地址、Key 或正文。

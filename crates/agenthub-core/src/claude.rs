@@ -51,6 +51,8 @@ pub struct ClaudeSessionSummary {
     pub session_key: String,
     pub title: String,
     pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub path: PathBuf,
     pub updated_at: Option<String>,
     pub message_count: usize,
@@ -200,7 +202,11 @@ struct Parsed {
     issues: Vec<String>,
     warnings: Vec<String>,
     last_turn_at: Option<i64>,
+    last_terminal_at: Option<i64>,
     turn_open: bool,
+    has_open_questions: bool,
+    saw_sidechain: bool,
+    saw_primary: bool,
     native_events: Vec<crate::native_probe::NativeTurnEvent>,
     prompts: HashMap<String, ClaudePrompt>,
     current_turn: Option<String>,
@@ -453,10 +459,23 @@ fn summary_with_root(
         // The verified owner publishes the live state: main loop or delegated
         // agents/workflows active, a prompt waiting for the user, or idle.
         match native {
-            "busy" => "running",
+            "busy" => {
+                if is_native_busy_causally_stale(parsed, &assessment) {
+                    if parsed.has_open_questions {
+                        "waiting"
+                    } else {
+                        "recent"
+                    }
+                } else {
+                    "running"
+                }
+            }
             "waiting" => "waiting",
+            _ if parsed.has_open_questions => "waiting",
             _ => "recent",
         }
+    } else if parsed.has_open_questions {
+        "waiting"
     } else if !parsed.turn_open {
         "recent"
     } else if owner == activity::Ownership::Open {
@@ -488,6 +507,7 @@ fn summary_with_root(
         session_key: key_for(canonical_projects, path, &parsed.id),
         title: parsed.title.clone(),
         cwd: parsed.cwd.clone(),
+        workspace_root: crate::workspace_root::resolve_workspace_root(&parsed.cwd),
         path: path.to_owned(),
         updated_at: parsed.updated_at.clone(),
         message_count: parsed.message_count,
@@ -528,7 +548,13 @@ pub(crate) fn list_claude_sessions_without_storage(
     let canonical_projects = paths.projects.canonicalize()?;
     let mut result = Vec::new();
     for path in files {
+        if is_agent_filename(&path) {
+            continue;
+        }
         let parsed = read_or_warning(&path, true);
+        if parsed.saw_sidechain && !parsed.saw_primary {
+            continue;
+        }
         let s = summary_with_root(&canonical_projects, &path, &parsed, &snapshot)?;
         if [&s.title, &s.id, &s.cwd]
             .iter()
@@ -545,7 +571,7 @@ pub(crate) fn list_claude_sessions_without_storage(
                 .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
         ),)
     });
-    result.truncate(limit.clamp(1, 200));
+    result.truncate(limit.clamp(1, 500));
     Ok(result)
 }
 
@@ -735,6 +761,14 @@ pub(crate) fn notification_snapshots(
     }
     let canonical_root = paths.projects.canonicalize()?;
     for path in files {
+        if is_agent_filename(&path) {
+            continue;
+        }
+        if let Ok(summary_parsed) = reader::summary(&path) {
+            if summary_parsed.saw_sidechain && !summary_parsed.saw_primary {
+                continue;
+            }
+        }
         match reader::probe_snapshot(&path, &canonical_root) {
             Ok(snapshot) => scan.streams.push(snapshot),
             Err(_) => scan.errors += 1,
@@ -910,10 +944,11 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
         before == reader::stamp(path)?,
         "Claude notification source changed during read"
     );
-    let native_busy = activity::Snapshot::capture_readonly(paths)
-        .assess(&parsed, path)
+    let assessment = activity::Snapshot::capture_readonly(paths).assess(&parsed, path);
+    let native_busy = assessment
         .native_status()
-        .is_some_and(|status| status == "busy");
+        .is_some_and(|status| status == "busy")
+        && !is_native_busy_causally_stale(&parsed, &assessment);
     Ok(ClaudeNotificationContext {
         stream,
         prompts: parsed.prompts.clone(),
@@ -926,6 +961,26 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
             .to_string_lossy()
             .into(),
     })
+}
+
+fn is_agent_filename(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("agent-"))
+}
+
+fn is_native_busy_causally_stale(parsed: &Parsed, assessment: &activity::Assessment) -> bool {
+    if parsed.turn_open {
+        return false;
+    }
+    let settled_ms = parsed
+        .last_terminal_at
+        .or_else(|| parsed.updated_at.as_deref().and_then(reader::millis))
+        .or(parsed.last_turn_at);
+    assessment
+        .native_status_updated_at()
+        .zip(settled_ms)
+        .is_some_and(|(status_ms, terminal_ms)| terminal_ms > status_ms)
 }
 fn prompt_for_turn(parsed: &Parsed, turn: &str) -> Option<String> {
     parsed

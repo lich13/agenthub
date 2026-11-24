@@ -16,6 +16,7 @@
   ],
   "capabilitiesByHostSurface": {
     "linux_server_api": [
+      "antigravity_notifications",
       "systemd",
       "linux_update_job",
       "prune_backups"

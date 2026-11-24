@@ -45,6 +45,8 @@ pub struct GrokSessionSummary {
     pub id: String,
     pub title: String,
     pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub path: PathBuf,
     pub updated_at: Option<String>,
     pub message_count: usize,
@@ -153,17 +155,20 @@ fn list_grok_sessions_from_dirs(
     let needle = query
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_ascii_lowercase);
+        .map(str::to_lowercase);
     let mut result = Vec::new();
     for dirs in by_id.values() {
         for dir in dirs {
             if let Ok(Some(summary)) =
                 read_summary(dir).or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary(dir))))
             {
+                if is_non_primary_grok_events_dir(dir) {
+                    continue;
+                }
                 if needle.as_ref().is_some_and(|needle| {
-                    !summary.title.to_ascii_lowercase().contains(needle)
-                        && !summary.id.to_ascii_lowercase().contains(needle)
-                        && !summary.cwd.to_ascii_lowercase().contains(needle)
+                    !summary.title.to_lowercase().contains(needle)
+                        && !summary.id.to_lowercase().contains(needle)
+                        && !summary.cwd.to_lowercase().contains(needle)
                 }) {
                     continue;
                 }
@@ -179,7 +184,7 @@ fn list_grok_sessions_from_dirs(
                 .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
         ),)
     });
-    result.truncate(limit.clamp(1, 200));
+    result.truncate(limit.clamp(1, 500));
     let active = activity::Snapshot::capture_readonly(paths);
     for summary in &mut result {
         active.update_summary(summary);
@@ -1140,6 +1145,15 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
         info.get("id").and_then(Value::as_str) == Some(&id),
         "Grok session identity mismatch"
     );
+    let relationship = value
+        .get("session_relationship")
+        .or_else(|| info.get("session_relationship"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if relationship.is_some_and(|rel| rel != "primary") {
+        return Ok(None);
+    }
     let cwd = info
         .get("cwd")
         .and_then(Value::as_str)
@@ -1160,6 +1174,7 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
         .get("num_messages")
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize;
+    let workspace_root = crate::workspace_root::resolve_workspace_root(&cwd);
     Ok(Some(GrokSessionSummary {
         deletion_eligibility: None,
         storage_size: None,
@@ -1167,6 +1182,7 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
         id,
         title,
         cwd,
+        workspace_root,
         path: path.to_path_buf(),
         updated_at: None,
         message_count,
@@ -1260,6 +1276,7 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
         id: id.clone(),
         title: id,
         cwd: String::new(),
+        workspace_root: None,
         handoff_path: Some(grok_handoff_path(path)),
         path: path.into(),
         updated_at: None,
@@ -1272,6 +1289,50 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
         }),
         storage_size: None,
     }
+}
+
+fn is_non_primary_grok_events_dir(dir: &Path) -> bool {
+    let events_path = dir.join("events.jsonl");
+    let Ok(meta) = fs::symlink_metadata(&events_path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return false;
+    }
+    use std::io::{BufRead, BufReader, Read};
+    let Ok(file) = fs::File::open(&events_path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file.take(128 * 1024));
+    let mut line = String::new();
+    let mut saw_non_primary = false;
+    for _ in 0..32 {
+        line.clear();
+        let Ok(read) = reader.read_line(&mut line) else {
+            break;
+        };
+        if read == 0 {
+            break;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("turn_started") {
+            continue;
+        }
+        if let Some(rel) = value
+            .get("session_relationship")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if rel == "primary" {
+                return false;
+            }
+            saw_non_primary = true;
+        }
+    }
+    saw_non_primary
 }
 
 fn session_workspaces(paths: &GrokPaths) -> Result<Vec<PathBuf>> {

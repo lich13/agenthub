@@ -10,6 +10,8 @@ extension RuntimeTransport where Self == MockRuntimeTransport {
                 Data(#"{"target":"local","revision":1,"configured":false,"machines":[]}"#.utf8)
             case "system.capabilities":
                 protocol2CapabilitiesFixture(remote: false)
+            case "codex.desktop.attachments":
+                Data(#"{"bindingId":"bind-visual-1"}"#.utf8)
             default:
                 Data("[]".utf8)
             }

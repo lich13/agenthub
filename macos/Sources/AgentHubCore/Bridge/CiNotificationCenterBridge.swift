@@ -19,6 +19,7 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
     }
 
     private var installed = false
+    public private(set) var lastDecodeError: String?
 
     public func installIfAvailable() {
         guard !installed else { return }
@@ -45,8 +46,15 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
     }
 
     public func deliverAuthorized(eventsJSON: Data) {
-        guard let items = try? JSONDecoder().decode([CiNotificationItem].self, from: eventsJSON),
-              !items.isEmpty,
+        let items: [CiNotificationItem]
+        do {
+            items = try JSONDecoder().decode([CiNotificationItem].self, from: eventsJSON)
+            lastDecodeError = nil
+        } catch {
+            lastDecodeError = "CI 通知事件解码失败"
+            return
+        }
+        guard !items.isEmpty,
               Bundle.main.bundleIdentifier != nil,
               Bundle.main.bundlePath.hasSuffix(".app")
         else { return }

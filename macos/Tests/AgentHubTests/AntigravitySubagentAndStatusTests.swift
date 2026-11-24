@@ -45,7 +45,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
                   "subagentUpdates": {
                     "older-spawn": {"eventKind":"started","eventId":"older-spawn","agentId":"\(subId)","name":"架构摸底子代理","role":"research","status":"\(state.childStatus)","available":true}
                   },
-                  "history": {"epoch":"\(rootId)","revision":"rev-\(state.childStatus)","changed_ids":[],"reset":false},
+                  "history": {"epoch":"\(rootId)","revision":"rev-\(state.childStatus)","changedIds":[],"reset":false},
                   "events": [
                     {"id":"ev-tail","kind":"assistant_message","role":"assistant","text":"已汇总子代理结论。","status":"completed"}
                   ],
@@ -61,7 +61,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         await store.bootstrap()
         XCTAssertTrue(store.capabilities.antigravitySubagents)
 
-        let ws = ProviderWorkspaceStore(store: store, workspace: .antigravity, isCompactMobile: false)
+        let ws = ProviderWorkspaceStore(store: store, workspace: .antigravity)
         await ws.fetchSessionList()
         XCTAssertEqual(ws.activeItems.count, 4)
         XCTAssertEqual(ws.activeItems[0].statusChipBadge, "运行中")
@@ -138,7 +138,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         let transport = MockRuntimeTransport { cmd, _ in
             switch cmd {
             case "system.capabilities":
-                return Data(#"{"apiProtocol":2,"hostSurface":"linux_server_api","capabilities":{"thread_subagents":false,"claude_subagents":false}}"#.utf8)
+                return Data(#"{"api_version":2,"host_surface":"linux_server_api","capabilities":{"thread_subagents":false,"claude_subagents":false}}"#.utf8)
             case "antigravity.list":
                 return Data("""
                 [{"id":"\(rootId)","sessionKey":"\(rootId)","title":"Remote AG","cwd":"/srv","path":"/srv/root.db","archived":false,"status":"idle","messageCount":1,"canRename":true,"canArchive":true,"canDelete":true}]
@@ -159,9 +159,11 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         }
         let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
         await store.bootstrap()
+        XCTAssertTrue(store.capabilities.isReady)
+        XCTAssertNil(store.capabilitiesError)
         XCTAssertFalse(store.capabilities.antigravitySubagents)
 
-        let ws = ProviderWorkspaceStore(store: store, workspace: .antigravity, isCompactMobile: false)
+        let ws = ProviderWorkspaceStore(store: store, workspace: .antigravity)
         await ws.fetchSessionList()
         ws.selectedKey = rootId
         await ws.fetchSessionDetail(for: ws.activeItems[0])
@@ -227,7 +229,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
                         "counts": {"creating":0,"running":0,"completed":1,"failed":0,"interrupted":0,"unknown":0},
                         "complete": true
                       },
-                      "history": {"epoch":"a1b2c3d4e5f60001:\(l1Id)","revision":"r1","changed_ids":[],"reset":false},
+                      "history": {"epoch":"a1b2c3d4e5f60001:\(l1Id)","revision":"r1","changedIds":[],"reset":false},
                       "events": [
                         {"id":"a1b2c3d4e5f60001:ev1","kind":"user_message","role":"user","text":"核查 Connect-RPC 与 SQLite 状态","status":"completed"},
                         {"id":"a1b2c3d4e5f60001:ev2","kind":"tool_call","role":"invoke_subagent","text":"invoke_subagent","status":"completed","subagent":{"eventKind":"started","eventId":"a1b2c3d4e5f60001:ev2","agentId":"\(l2Id)","name":"叶节点校验 L2","role":"self","status":"completed","available":true,"delegation":"核验拓扑逆序删除"}},

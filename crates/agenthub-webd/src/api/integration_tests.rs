@@ -116,6 +116,7 @@ fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
         message_count: 0,
         latest_message: None,
         cwd: None,
+        workspace_root: None,
         model: None,
         rollout_path: None,
         active_turn_id: None,

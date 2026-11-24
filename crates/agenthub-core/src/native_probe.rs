@@ -42,6 +42,9 @@ impl NativeProvider {
         }
     }
     pub fn local_only(self) -> bool {
+        matches!(self, Self::Dsh | Self::GrokBot)
+    }
+    pub(crate) fn tracks_settled_claims(self) -> bool {
         matches!(self, Self::Antigravity | Self::Dsh | Self::GrokBot)
     }
     pub fn enabled(self, config: &Config) -> bool {

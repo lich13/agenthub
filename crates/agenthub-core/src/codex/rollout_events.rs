@@ -1301,10 +1301,6 @@ pub(crate) struct ThreadVisibilityMetadata<'a> {
     pub(crate) agent_path: Option<&'a str>,
     pub(crate) agent_nickname: Option<&'a str>,
     pub(crate) agent_role: Option<&'a str>,
-    pub(crate) has_user_event: Option<i64>,
-    pub(crate) title: Option<&'a str>,
-    pub(crate) first_user_message: Option<&'a str>,
-    pub(crate) preview: Option<&'a str>,
 }
 
 pub(crate) fn is_hidden_thread_metadata(metadata: ThreadVisibilityMetadata<'_>) -> bool {
@@ -1341,48 +1337,11 @@ pub(crate) fn is_internal_thread_metadata(metadata: ThreadVisibilityMetadata<'_>
         .map(str::trim)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if source != "exec" || metadata.has_user_event.unwrap_or(0) != 0 {
-        return false;
-    }
-    if !thread_source.is_empty() && thread_source != "user" {
-        return false;
-    }
-    [
-        metadata.title,
-        metadata.first_user_message,
-        metadata.preview,
-    ]
-    .into_iter()
-    .flatten()
-    .any(is_internal_thread_prompt_text)
-}
-
-fn is_internal_thread_prompt_text(text: &str) -> bool {
-    let text = text.trim().to_ascii_lowercase();
-    if text.is_empty() {
-        return false;
-    }
-    let readonly_probe = text.contains("只读验证")
-        || text.contains("只读核查")
-        || text.contains("不要修改文件")
-        || text.contains("不改文件")
-        || text.contains("read-only")
-        || text.contains("readonly");
-    let agent_probe = text.contains("spawn_agent")
-        || text.contains("子代理")
-        || text.contains("subagent")
-        || text.contains("model_reasoning_effort=xhigh");
-    if readonly_probe && agent_probe {
-        return true;
-    }
-
-    let strong_subagent_instruction = text.contains("你是子代理")
-        || text.contains("你是并行子代理")
-        || text.contains("you are a subagent");
-    let fixed_agent_config = text.contains("gpt-5.5")
-        || text.contains("xhigh")
-        || text.contains("model_reasoning_effort=xhigh");
-    strong_subagent_instruction && fixed_agent_config
+    matches!(source.as_str(), "exec" | "internal")
+        || matches!(
+            thread_source.as_str(),
+            "exec" | "internal" | "guardian_review" | "memory_consolidation"
+        )
 }
 
 pub(crate) fn source_text_contains_subagent(value: &str) -> bool {

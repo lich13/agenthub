@@ -159,6 +159,7 @@ impl CodexFixture {
             message_count: events.len(),
             latest_message: None,
             cwd: Some("/synthetic/workspace".to_owned()),
+            workspace_root: None,
             model: None,
             rollout_path: Some(rollout),
             active_turn_id: None,

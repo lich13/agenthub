@@ -475,7 +475,7 @@ impl SearchUseCases {
                 if output.len() >= MAX_RESULTS {
                     break;
                 }
-                let corpus = json_corpus(event)?;
+                let corpus = provider_event_corpus(event);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     push_result(
                         output,
@@ -515,6 +515,65 @@ fn validate_request(request: &SessionSearchRequest) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn provider_event_corpus(event: &crate::provider_sessions::ProviderHistoryEvent) -> String {
+    if matches!(event.kind.as_str(), "compaction" | "branch_summary") {
+        let text = event
+            .detail
+            .as_deref()
+            .or(event.text.as_deref())
+            .unwrap_or_default();
+        return strip_memory_metadata(text);
+    }
+    let mut strings = Vec::new();
+    if let Some(user) = &event.user_message {
+        strings.push(crate::user_message::searchable_text(&user.text));
+        for block in &user.context_blocks {
+            if block.kind == crate::user_message::UserContextKind::Instructions {
+                strings.push(block.text.clone());
+            }
+        }
+        for attachment in &user.attachments {
+            strings.push(attachment.name.clone());
+        }
+    } else if event.role.as_deref() == Some("user")
+        || matches!(event.kind.as_str(), "user_message" | "user_message_chunk")
+    {
+        strings.push(crate::user_message::searchable_text(
+            event.text.as_deref().unwrap_or(""),
+        ));
+    } else {
+        if matches!(event.kind.as_str(), "tool_call" | "tool_result") {
+            if let Some(tool_name) = event.role.as_deref().filter(|s| !s.trim().is_empty()) {
+                strings.push(tool_name.to_owned());
+            }
+        }
+        for s in [
+            event.text.as_deref(),
+            event.detail.as_deref(),
+            event.result.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !s.trim().is_empty() {
+                strings.push(s.to_owned());
+            }
+        }
+        if let Some(sub) = &event.subagent {
+            if !sub.name.trim().is_empty() {
+                strings.push(sub.name.clone());
+            }
+            if let Some(role) = sub.role.as_deref().filter(|s| !s.trim().is_empty()) {
+                strings.push(role.to_owned());
+            }
+            if let Some(del) = sub.delegation.as_deref().filter(|s| !s.trim().is_empty()) {
+                strings.push(del.to_owned());
+            }
+        }
+    }
+    strip_memory_metadata(&strings.join("\n"))
 }
 
 fn json_corpus<T: Serialize>(value: &T) -> Result<String> {

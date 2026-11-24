@@ -360,6 +360,7 @@ fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetai
             message_count: 1,
             latest_message: None,
             cwd: None,
+            workspace_root: None,
             model: None,
             rollout_path: None,
             active_turn_id: None,

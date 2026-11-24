@@ -64,7 +64,7 @@ pub(crate) async fn get_probe_events(state: AppState, query: ProbeEventsQuery) -
         .db
         .list_probe_events(limit)?
         .into_iter()
-        .map(redact_probe_event)
+        .map(redact_probe_event_for_output)
         .collect::<Vec<_>>();
     ok(json!({
         "events": events,
@@ -94,7 +94,7 @@ fn probe_runtime(state: &AppState) -> anyhow::Result<ProbeRuntime> {
 
 async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Value {
     if force_refresh {
-        let value = probe_status_fresh_value(state.clone()).await;
+        let value = probe_status_fresh_value(state.clone(), true).await;
         store_probe_status_snapshot(&state, value.clone());
         return probe_service::probe_status_snapshot_view(
             value,
@@ -121,7 +121,7 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
         );
     }
 
-    let value = probe_status_fresh_value(state.clone()).await;
+    let value = probe_status_fresh_value(state.clone(), false).await;
     store_probe_status_snapshot(&state, value.clone());
     probe_service::probe_status_snapshot_view(
         value,
@@ -131,8 +131,14 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
     )
 }
 
-async fn probe_status_fresh_value(state: AppState) -> Value {
-    match async { probe_runtime(&state)?.status().await }.await {
+async fn probe_status_fresh_value(state: AppState, force_refresh: bool) -> Value {
+    match async {
+        probe_runtime(&state)?
+            .status_with_options(force_refresh)
+            .await
+    }
+    .await
+    {
         Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
         Err(err) => json!({
             "label": "Probe",
@@ -216,7 +222,7 @@ pub(crate) fn spawn_probe_status_refresh(state: AppState) {
         cache.refreshing = true;
     }
     tokio::spawn(async move {
-        let value = probe_status_fresh_value(state.clone()).await;
+        let value = probe_status_fresh_value(state.clone(), false).await;
         store_probe_status_snapshot(&state, value);
     });
 }
@@ -245,8 +251,4 @@ pub(crate) async fn load_probe_threads(
     limit: usize,
 ) -> anyhow::Result<Vec<agenthub_core::codex::ThreadSummary>> {
     probe_service::probe_threads_for_status_with_paths(&state.codex_paths(), status, limit)
-}
-
-fn redact_probe_event(event: agenthub_core::db::ProbeEvent) -> agenthub_core::db::ProbeEvent {
-    redact_probe_event_for_output(event)
 }

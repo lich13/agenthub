@@ -283,6 +283,7 @@ fn aggregate_active_sessions(
     running_threads: &[ThreadSummary],
     reply_needed_threads: &[ThreadSummary],
     recoverable_threads: &[ThreadSummary],
+    force_refresh: bool,
 ) -> Result<Vec<probe_core::ProbeLiveSession>> {
     let mut sessions = Vec::new();
     let per_bucket_limit = limit.clamp(1, 50);
@@ -310,11 +311,13 @@ fn aggregate_active_sessions(
         config.codex.home.clone(),
         per_bucket_limit,
     );
-    if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-        if let Some((ref cached_key, ref cached_items, ts)) = *guard {
-            if *cached_key == cache_key && ts.elapsed() < std::time::Duration::from_secs(3) {
-                sessions.extend(cached_items.iter().cloned());
-                return Ok(sessions);
+    if !force_refresh {
+        if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+            if let Some((ref cached_key, ref cached_items, ts)) = *guard {
+                if *cached_key == cache_key && ts.elapsed() < std::time::Duration::from_secs(3) {
+                    sessions.extend(cached_items.iter().cloned());
+                    return Ok(sessions);
+                }
             }
         }
     }
@@ -338,6 +341,10 @@ fn aggregate_active_sessions(
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
+                } else if item.status == "waiting"
+                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                {
+                    Some("reply_needed")
                 } else if item.read_error.is_some() {
                     Some("recoverable")
                 } else if is_updated_within_fresh_window(&item.updated_at, now_ms) {
@@ -410,23 +417,23 @@ fn aggregate_active_sessions(
             crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
         {
             for item in items {
+                let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
                 let bucket = match item.status.as_str() {
                     "running" => Some("running"),
-                    "waiting" | "reply_needed" => Some("reply_needed"),
-                    "failed" => Some("recoverable"),
-                    _ if item.read_error.is_some() => Some("recoverable"),
-                    _ if is_updated_within_fresh_window(&item.updated_at, now_ms) => {
-                        crate::antigravity::sessions::probe_live_stream_snapshot(
-                            &ag_paths, &item.id, now_ms,
-                        )
-                        .and_then(|s| {
-                            if s.settled_count < s.record_count {
-                                Some("running")
-                            } else {
-                                native_stream_live_bucket(&s, now_ms)
-                            }
-                        })
-                    }
+                    "waiting" => Some("reply_needed"),
+                    "reply_needed" if fresh => Some("reply_needed"),
+                    "failed" if fresh => Some("recoverable"),
+                    _ if item.read_error.is_some() && fresh => Some("recoverable"),
+                    _ if fresh => crate::antigravity::sessions::probe_live_stream_snapshot(
+                        &ag_paths, &item.id, now_ms,
+                    )
+                    .and_then(|s| {
+                        if s.settled_count < s.record_count {
+                            Some("running")
+                        } else {
+                            native_stream_live_bucket(&s, now_ms)
+                        }
+                    }),
                     _ => None,
                 };
                 if let Some(bucket) = bucket {
@@ -455,7 +462,7 @@ fn aggregate_active_sessions(
         if dsh_paths.home.join("sessions").is_dir() {
             if let Ok((items, scan)) =
                 crate::dsh::sessions::probe_sessions(&dsh_paths, &list_req, |item| {
-                    item.status != "running"
+                    !matches!(item.status.as_str(), "running" | "waiting")
                         && item.read_error.is_none()
                         && is_updated_within_fresh_window(&item.updated_at, now_ms)
                 })
@@ -464,6 +471,11 @@ fn aggregate_active_sessions(
                 for item in items {
                     let bucket = if item.status == "running" {
                         Some("running")
+                    } else if item.status == "waiting"
+                        || (item.status == "reply_needed"
+                            && is_updated_within_fresh_window(&item.updated_at, now_ms))
+                    {
+                        Some("reply_needed")
                     } else if let Some(&b) = stream_buckets.get(&item.id) {
                         Some(b)
                     } else if item.read_error.is_some() {
@@ -531,6 +543,13 @@ fn probe_codex_buckets(
 }
 
 pub fn aggregate_probe_status(config: &Config) -> Result<ProbeStatusAggregation> {
+    aggregate_probe_status_with_options(config, false)
+}
+
+pub fn aggregate_probe_status_with_options(
+    config: &Config,
+    force_refresh: bool,
+) -> Result<ProbeStatusAggregation> {
     let limit = config.probe.recent_limit.clamp(1, 200);
     let (running_threads, reply_needed_threads, recoverable_threads) =
         probe_codex_buckets(config, limit);
@@ -540,6 +559,7 @@ pub fn aggregate_probe_status(config: &Config) -> Result<ProbeStatusAggregation>
         &running_threads,
         &reply_needed_threads,
         &recoverable_threads,
+        force_refresh,
     )?;
     Ok(ProbeStatusAggregation {
         recent_event_count: recent_probe_event_count(&config.paths.db_path, limit as u32)
@@ -1270,6 +1290,7 @@ mod tests {
             message_count: 1,
             latest_message: Some("failed".to_string()),
             cwd: None,
+            workspace_root: None,
             model: None,
             rollout_path: None,
             active_turn_id: None,
@@ -1475,12 +1496,23 @@ mod tests {
         cfg_b.codex.home = root_b.join(".codex");
         cfg_b.paths.db_path = root_b.join("panel.sqlite");
 
-        let sessions_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[]).unwrap();
+        let sessions_a =
+            super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
         assert!(sessions_a.iter().any(|s| s.id == grok_id_a));
 
         // Querying with cfg_b must NOT hit cfg_a's cached sessions
-        let sessions_b = super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[]).unwrap();
+        let sessions_b =
+            super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[], false).unwrap();
         assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
+
+        // Re-seed cfg_a cache, delete session on disk, and verify force_refresh=true bypasses 3s TTL
+        let _ = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
+        std::fs::remove_dir_all(&grok_dir_a).unwrap();
+        let cached_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
+        assert!(cached_a.iter().any(|s| s.id == grok_id_a));
+        let refreshed_a =
+            super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
+        assert!(!refreshed_a.iter().any(|s| s.id == grok_id_a));
 
         super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
         assert!(super::LIVE_PROVIDER_SESSIONS_CACHE

@@ -40,6 +40,7 @@ pub mod native_probe;
 pub mod provider_sessions;
 
 pub mod user_message;
+pub mod workspace_root;
 
 pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     codex::evict_idle_detail_cache(max_idle);
@@ -52,6 +53,7 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     provider_sessions::HISTORY_CACHE.evict_idle(max_idle);
     services::probe::evict_idle_live_provider_sessions_cache(max_idle);
     antigravity::sessions::evict_idle_endpoint_cache(max_idle);
+    workspace_root::evict_idle_cache(max_idle);
 }
 
 #[cfg(all(test, unix))]

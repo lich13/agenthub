@@ -40,7 +40,29 @@ final class VisualSceneCaptureTests: XCTestCase {
         try await pumpMainRunLoop(ms: 450)
         scrollConversationTable(in: host, fraction: 0.0)
         try await pumpMainRunLoop(ms: 200)
-        try captureWindow(window, host: host, to: "\(outDir)/swift-01-codex-light-top.png")
+        XCTAssertGreaterThanOrEqual(conversationTableRowCount(in: host), 6, "Codex scene 1 must decode threads.detail and mount conversation rows")
+        let scene1Strings = collectAllRenderedStrings(in: host)
+        XCTAssertTrue(scene1Strings.contains("搜索标题、ID 或工作目录"), "Codex search bar must use unified workspace placeholder")
+        XCTAssertFalse(scene1Strings.contains(where: { $0.contains("未能读取数据") }), "Codex scene 1 must have zero DecodingError text")
+        XCTAssertTrue(scene1Strings.contains(where: { $0.contains("12 条历史对话已折叠") || $0.contains("请核对线程详情") }), "Codex conversation stage must mount decoded message text views")
+        let rep1 = try captureWindow(window, host: host, to: "\(outDir)/swift-01-codex-light-top.png")
+        if let rep1 {
+            XCTAssertGreaterThan(
+                countDarkInkPixels(in: rep1, logicalSize: size, topLeftRect: NSRect(x: 514, y: 29, width: 190, height: 18)),
+                40,
+                "Codex stage header must render /workspace/AgentHub subtitle glyphs"
+            )
+            XCTAssertGreaterThan(
+                countErrorRedPixels(in: rep1, logicalSize: size, topLeftRect: NSRect(x: 510, y: 56, width: 340, height: 38)),
+                10,
+                "Codex subagent summary bar must render populated '1 失败' count (not muted upgrade notice)"
+            )
+            XCTAssertEqual(
+                countErrorRedPixels(in: rep1, logicalSize: size, topLeftRect: NSRect(x: 206, y: 88, width: 220, height: 22)),
+                0,
+                "Sidebar strip below Codex search bar must have zero errFg red error pixels"
+            )
+        }
 
         // Scene 2: Light Codex Mid (QuestionResultCell + Question-Reply + AGENTS.md fold)
         scrollConversationTable(in: host, fraction: 0.45)
@@ -87,7 +109,17 @@ final class VisualSceneCaptureTests: XCTestCase {
         try await pumpMainRunLoop(ms: 450)
         scrollConversationTable(in: host, fraction: 1.0)
         try await pumpMainRunLoop(ms: 200)
-        try captureWindow(window, host: host, to: "\(outDir)/swift-05-codex-writable-composer.png")
+        let scene5Strings = collectAllRenderedStrings(in: host)
+        XCTAssertFalse(scene5Strings.contains(where: { $0.contains("未能读取数据") }), "Writable Codex composer scene 5 must have zero DecodingError text")
+        XCTAssertFalse(scene5Strings.contains(where: { $0.contains("附件通道响应无效") }), "Writable Codex composer scene 5 must bind attachments cleanly")
+        let rep5 = try captureWindow(window, host: host, to: "\(outDir)/swift-05-codex-writable-composer.png")
+        if let rep5 {
+            XCTAssertEqual(
+                countErrorRedPixels(in: rep5, logicalSize: size, topLeftRect: NSRect(x: 640, y: 905, width: 320, height: 37)),
+                0,
+                "Writable Codex composer footer bottom strip must have zero errFg red error pixels"
+            )
+        }
         writableBox.writable = false
 
         // Scene 6: Light Claude Workspace (Expanded ClaudeProcessGroup)
@@ -158,6 +190,113 @@ final class VisualSceneCaptureTests: XCTestCase {
     }
 
     @MainActor
+    private func conversationTableRowCount(in root: NSView) -> Int {
+        if let tv = root as? NSTableView {
+            return tv.numberOfRows
+        }
+        for sub in root.subviews {
+            let count = conversationTableRowCount(in: sub)
+            if count > 0 { return count }
+        }
+        return 0
+    }
+
+    @MainActor
+    private func collectVisibleStrings(in root: NSView) -> [String] {
+        guard !root.isHidden, root.alphaValue > 0.01 else { return [] }
+        var out: [String] = []
+        if let tf = root as? NSTextField {
+            if !tf.stringValue.isEmpty { out.append(tf.stringValue) }
+            if let ph = tf.placeholderString, !ph.isEmpty { out.append(ph) }
+        }
+        if let tv = root as? NSTextView, !tv.string.isEmpty {
+            out.append(tv.string)
+        }
+        for sub in root.subviews {
+            out.append(contentsOf: collectVisibleStrings(in: sub))
+        }
+        return out
+    }
+
+    @MainActor
+    private func collectAccessibilityStrings(from element: AnyObject, visited: inout Set<ObjectIdentifier>) -> [String] {
+        let oid = ObjectIdentifier(element)
+        guard visited.insert(oid).inserted else { return [] }
+        var out: [String] = []
+        if let ax = element as? NSAccessibilityProtocol {
+            if let lbl = ax.accessibilityLabel(), !lbl.isEmpty { out.append(lbl) }
+            if let title = ax.accessibilityTitle(), !title.isEmpty { out.append(title) }
+            if let val = ax.accessibilityValue() as? String, !val.isEmpty { out.append(val) }
+            if let ph = ax.accessibilityPlaceholderValue(), !ph.isEmpty { out.append(ph) }
+            for child in (ax.accessibilityChildren() ?? []) {
+                out.append(contentsOf: collectAccessibilityStrings(from: child as AnyObject, visited: &visited))
+            }
+        }
+        if let view = element as? NSView {
+            for sub in view.subviews {
+                out.append(contentsOf: collectAccessibilityStrings(from: sub, visited: &visited))
+            }
+        }
+        return out
+    }
+
+    @MainActor
+    private func collectAllRenderedStrings(in root: NSView) -> [String] {
+        var visited = Set<ObjectIdentifier>()
+        return collectVisibleStrings(in: root) + collectAccessibilityStrings(from: root, visited: &visited)
+    }
+
+    private func countDarkInkPixels(
+        in rep: NSBitmapImageRep,
+        logicalSize: NSSize,
+        topLeftRect: NSRect
+    ) -> Int {
+        let scaleX = CGFloat(rep.pixelsWide) / max(1, logicalSize.width)
+        let scaleY = CGFloat(rep.pixelsHigh) / max(1, logicalSize.height)
+        let minX = max(0, Int(floor(topLeftRect.minX * scaleX)))
+        let maxX = min(rep.pixelsWide, Int(ceil(topLeftRect.maxX * scaleX)))
+        let minY = max(0, Int(floor(topLeftRect.minY * scaleY)))
+        let maxY = min(rep.pixelsHigh, Int(ceil(topLeftRect.maxY * scaleY)))
+        guard minX < maxX, minY < maxY else { return 0 }
+        var inkCount = 0
+        for py in minY ..< maxY {
+            for px in minX ..< maxX {
+                guard let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB) else { continue }
+                if c.redComponent < 0.78 || c.greenComponent < 0.80 || c.blueComponent < 0.84 {
+                    inkCount += 1
+                }
+            }
+        }
+        return inkCount
+    }
+
+    private func countErrorRedPixels(
+        in rep: NSBitmapImageRep,
+        logicalSize: NSSize,
+        topLeftRect: NSRect
+    ) -> Int {
+        let scaleX = CGFloat(rep.pixelsWide) / max(1, logicalSize.width)
+        let scaleY = CGFloat(rep.pixelsHigh) / max(1, logicalSize.height)
+        let minX = max(0, Int(floor(topLeftRect.minX * scaleX)))
+        let maxX = min(rep.pixelsWide, Int(ceil(topLeftRect.maxX * scaleX)))
+        let minY = max(0, Int(floor(topLeftRect.minY * scaleY)))
+        let maxY = min(rep.pixelsHigh, Int(ceil(topLeftRect.maxY * scaleY)))
+        guard minX < maxX, minY < maxY else { return 0 }
+        var redCount = 0
+        for py in minY ..< maxY {
+            for px in minX ..< maxX {
+                guard let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB) else { continue }
+                // Light-mode palette.errFg is crimson #9F1239 (R=0.62, G=0.07, B=0.22 -> R-G > 0.16 && B > G),
+                // cleanly separating errFg from neutral grays (R <= G <= B) and amber warnFg #7C2D12 (G > B).
+                if (c.redComponent - c.greenComponent) > 0.16 && c.blueComponent > c.greenComponent {
+                    redCount += 1
+                }
+            }
+        }
+        return redCount
+    }
+
+    @MainActor
     private func reloadAllTables(in root: NSView) {
         if let tv = root as? NSTableView {
             tv.reloadData()
@@ -187,21 +326,23 @@ final class VisualSceneCaptureTests: XCTestCase {
     }
 
     @MainActor
-    private func captureWindow(_ window: NSWindow, host: NSView, to path: String) throws {
+    @discardableResult
+    private func captureWindow(_ window: NSWindow, host: NSView, to path: String) throws -> NSBitmapImageRep? {
         host.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             XCTFail("Failed to allocate bitmapImageRep")
-            return
+            return nil
         }
         host.cacheDisplay(in: host.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else {
             XCTFail("Failed to encode PNG")
-            return
+            return nil
         }
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
+        return rep
     }
 
     private static func mockResponse(cmd: String, args: String, writable: Bool) -> Data {
@@ -224,6 +365,7 @@ final class VisualSceneCaptureTests: XCTestCase {
             return Data(#"""
             {
               "summary":{"id":"th-visual-1","title":"Plan Mode 与线程详情视觉对齐核查","status":"ReplyNeeded","message_count":14,"latest_message":"已完成全部视觉层级核查，请确认。","rollout_path":"/workspace/.codex/sessions/rollout-1.jsonl","cwd":"/workspace/AgentHub","updated_at":"2026-11-19T12:00:00Z"},
+              "messages":[],
               "raw_event_count":9,
               "total_blocks":9,
               "has_more_blocks":false,
@@ -234,19 +376,20 @@ final class VisualSceneCaptureTests: XCTestCase {
                 "agents":[
                   {"agentId":"sub-1","name":"视觉对齐审查子智能体","status":"completed","available":true},
                   {"agentId":"sub-2","name":"排版度量核验器","status":"running","available":true},
-                  {"agentId":"sub-3","name":"快照比对器","status":"failed","available":true}
+                  {"agentId":"sub-3","name":"快照比对器","status":"failed","available":true},
+                  {"agentId":"sub-4","name":"契约与线报文审查器","status":"completed","available":true}
                 ]
               },
               "blocks":[
-                {"id":"chat-history-collapsed","role":"tool","kind":"chat_history_collapsed","status":"completed","text":"12 条历史对话已折叠","summary":"12 条历史对话已折叠","tool_name":"chat_history","truncated":false,"questions":[]},
-                {"id":"u-prompt-1","role":"user","kind":"userMessage","text":"<environment_context>\n  <cwd>/workspace/AgentHub</cwd>\n  <shell>zsh</shell>\n</environment_context>\n请核对线程详情的全部视觉层级：过程与工具折叠行、代码块、行内代码、表格、引用、计划卡片与问答。","user_message":{"id":"u-prompt-1","text":"请核对线程详情的全部视觉层级：过程与工具折叠行、代码块、行内代码、表格、引用、计划卡片与问答。","contextBlocks":[{"kind":"environment_context","text":"<environment_context>\n  <cwd>/workspace/AgentHub</cwd>\n  <shell>zsh</shell>\n</environment_context>"}],"attachments":[{"id":"att-1","name":"DESIGN.md","kind":"file","path":"/workspace/AgentHub/DESIGN.md"}]},"questions":[]},
-                {"id":"call-1","role":"tool","kind":"function_call_output","tool_name":"read_file","call_id":"c1","turn_id":"turn-1","status":"completed","input":"{\"path\":\"/workspace/AgentHub/DESIGN.md\"}","text":"Read 180 lines from DESIGN.md","questions":[]},
-                {"id":"call-2","role":"tool","kind":"function_call_output","tool_name":"exec_command","call_id":"c2","turn_id":"turn-1","status":"completed","input":"{\"cmd\":\"rg -n 'execution-group|markdown-content' webui/src/styles.css\"}","text":"451:.markdown-content {\n479:.execution-group > summary {","questions":[]},
-                {"id":"sub-row-1","role":"tool","kind":"subagent","status":"completed","questions":[],"subagent":{"agentId":"sub-1","name":"视觉对齐审查子智能体","status":"completed","eventKind":"completed","available":true}},
-                {"id":"plan-1","role":"assistant","kind":"plan","display_kind":"plan","turn_id":"turn-1","item_id":"plan-1","status":"completed","plan_status":"completed","resolved":true,"text":"<proposed_plan>1. 对齐 `.execution-group` 无边框行与左侧 `-20px` 图标\n2. 修复行内 `code` 圆角底色、代码块与表格列宽\n3. 实机双视图 PNG 逐帧核验</proposed_plan>","questions":[]},
+                {"id":"chat-history-collapsed","role":"tool","kind":"chat_history_collapsed","status":"completed","text":"12 条历史对话已折叠","summary":"12 条历史对话已折叠","tool_name":"chat_history","truncated":false,"questions":[],"answers":[]},
+                {"id":"u-prompt-1","role":"user","kind":"userMessage","text":"<environment_context>\n  <cwd>/workspace/AgentHub</cwd>\n  <shell>zsh</shell>\n</environment_context>\n请核对线程详情的全部视觉层级：过程与工具折叠行、代码块、行内代码、表格、引用、计划卡片与问答。","user_message":{"id":"u-prompt-1","text":"请核对线程详情的全部视觉层级：过程与工具折叠行、代码块、行内代码、表格、引用、计划卡片与问答。","contextBlocks":[{"kind":"environment","text":"<environment_context>\n  <cwd>/workspace/AgentHub</cwd>\n  <shell>zsh</shell>\n</environment_context>"}],"attachments":[{"id":"att-1","name":"DESIGN.md","kind":"file","path":"/workspace/AgentHub/DESIGN.md"}]},"questions":[],"answers":[]},
+                {"id":"call-1","role":"tool","kind":"function_call_output","tool_name":"read_file","call_id":"c1","turn_id":"turn-1","status":"completed","input":"{\"path\":\"/workspace/AgentHub/DESIGN.md\"}","text":"Read 180 lines from DESIGN.md","questions":[],"answers":[]},
+                {"id":"call-2","role":"tool","kind":"function_call_output","tool_name":"exec_command","call_id":"c2","turn_id":"turn-1","status":"completed","input":"{\"cmd\":\"rg -n 'execution-group|markdown-content' webui/src/styles.css\"}","text":"451:.markdown-content {\n479:.execution-group > summary {","questions":[],"answers":[]},
+                {"id":"sub-row-1","role":"tool","kind":"subagent","status":"completed","questions":[],"answers":[],"subagent":{"agentId":"sub-1","name":"视觉对齐审查子智能体","status":"completed","eventKind":"completed","available":true}},
+                {"id":"plan-1","role":"assistant","kind":"plan","display_kind":"plan","turn_id":"turn-1","item_id":"plan-1","status":"completed","plan_status":"completed","resolved":true,"text":"<proposed_plan>1. 对齐 `.execution-group` 无边框行与左侧 `-20px` 图标\n2. 修复行内 `code` 圆角底色、代码块与表格列宽\n3. 实机双视图 PNG 逐帧核验</proposed_plan>","questions":[],"answers":[]},
                 {"id":"q-res-1","role":"assistant","kind":"request_user_input_result","display_kind":"question_result","turn_id":"turn-1","status":"completed","resolved":true,"questions":[{"id":"mode","question":"选择验收对比基线","options":[{"label":"真实 WebUI 渲染截图","description":"使用 WKWebView 同源渲染逐像素比对"},{"label":"仅跑单元测试","description":"无法发现排版与样式偏差"}]}],"answers":[{"question_id":"mode","answers":["真实 WebUI 渲染截图"]}]},
-                {"id":"u-reply-1","role":"user","kind":"userMessage","text":"<send_user_message_question_reply>[{\"questionItemId\":\"q-mode\",\"question\":\"请确认是否同时检查浅色与深色模式下的全部折叠展开态？\",\"answer\":\"确认，浅色、深色、折叠态与展开态全部并排比对。\"}]</send_user_message_question_reply>","questions":[]},
-                {"id":"a-rich-1","role":"assistant","kind":"agentMessage","text":"# AGENTS.md instructions for /workspace/AgentHub\n\n<INSTRUCTIONS>\nFollow DESIGN.md and styles.css with zero visual drift.\n</INSTRUCTIONS>\n\n## 线程详情视觉核查结论\n\n已完成对 `Conversation.tsx`、[DESIGN.md](/workspace/AgentHub/DESIGN.md) 与 [在线规范](https://example.invalid/spec) 的逐项比对，重点修复 **折叠行边框冗余** 与 `inline code` 背景高度：\n\n- 工具与思考折叠行默认透明无外框，左侧 `-20px` 悬挂强调色图标；\n- 展开态左侧绘制 `2px solid var(--bs)` 纵向引导线；\n- 助教回复右侧悬浮 `30×30px` 复制按钮，零行高占用。\n\n> 最高品质原则：所有配色、字级、行高、间距与折叠交互，必须与现有桌面版 100% 一致。\n\n```rust\npub fn assert_zero_visual_drift(diff_ratio: f64) -> bool {\n    diff_ratio <= 0.005\n}\n```\n\n| 检查模块 | 字号 / 行高 | 状态 |\n| :--- | :---: | :--- |\n| 助教正文 | `15px / 1.72` | 已对齐 |\n| 代码块 | `13px / 1.60` | 无截断 |","questions":[]}
+                {"id":"u-reply-1","role":"user","kind":"userMessage","text":"<send_user_message_question_reply>[{\"questionItemId\":\"q-mode\",\"question\":\"请确认是否同时检查浅色与深色模式下的全部折叠展开态？\",\"answer\":\"确认，浅色、深色、折叠态与展开态全部并排比对。\"}]</send_user_message_question_reply>","questions":[],"answers":[]},
+                {"id":"a-rich-1","role":"assistant","kind":"agentMessage","text":"# AGENTS.md instructions for /workspace/AgentHub\n\n<INSTRUCTIONS>\nFollow DESIGN.md and styles.css with zero visual drift.\n</INSTRUCTIONS>\n\n## 线程详情视觉核查结论\n\n已完成对 `Conversation.tsx`、[DESIGN.md](/workspace/AgentHub/DESIGN.md) 与 [在线规范](https://example.invalid/spec) 的逐项比对，重点修复 **折叠行边框冗余** 与 `inline code` 背景高度：\n\n- 工具与思考折叠行默认透明无外框，左侧 `-20px` 悬挂强调色图标；\n- 展开态左侧绘制 `2px solid var(--bs)` 纵向引导线；\n- 助教回复右侧悬浮 `30×30px` 复制按钮，零行高占用。\n\n> 最高品质原则：所有配色、字级、行高、间距与折叠交互，必须与现有桌面版 100% 一致。\n\n```rust\npub fn assert_zero_visual_drift(diff_ratio: f64) -> bool {\n    diff_ratio <= 0.005\n}\n```\n\n| 检查模块 | 字号 / 行高 | 状态 |\n| :--- | :---: | :--- |\n| 助教正文 | `15px / 1.72` | 已对齐 |\n| 代码块 | `13px / 1.60` | 无截断 |","questions":[],"answers":[]}
               ]
             }
             """#.utf8)
@@ -292,6 +435,8 @@ final class VisualSceneCaptureTests: XCTestCase {
                 """#.utf8)
             }
             return Data(#"{"sessionId":"sess-ro","threadId":"th-visual-1","revision":0,"connected":false,"writable":false,"runtime":"idle","requests":[],"queue":[]}"#.utf8)
+        case "codex.desktop.attachments":
+            return Data(#"{"bindingId":"bind-visual-1","pasteDisposition":null}"#.utf8)
         case "probe.status":
             return Data(#"{"label":"Probe","enabled":true,"available":true,"platform":"macos","service_kind":"launchd","service_name":"com.lich13.agenthub.probe","flavor":"builtin","hook_status":"managed","bark_status":"configured","recent_event_count":2,"running_count":1,"reply_needed_count":1,"recoverable_count":0,"running_threads":[],"reply_needed_threads":[],"recoverable_threads":[],"lifecycle_status":"ok","doctor_status":"ok","runtime_version":"2.1.27","config_path":"~/Library/Application Support/AgentHub/config.toml","codex_home":"~/.codex","configured_codex_home":"~/.codex","resolved_codex_home":"~/.codex","codex_home_source":"default","logs_db_source":"resolved_codex_home","host_label":"local","snapshot_age_seconds":1,"is_refreshing":false,"snapshot_status":"fresh"}"#.utf8)
         case "probe.settings.get":

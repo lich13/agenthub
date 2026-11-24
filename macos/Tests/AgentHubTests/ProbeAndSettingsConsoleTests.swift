@@ -139,27 +139,18 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         store.toggleNavCollapsed()
         XCTAssertTrue(store.navCollapsed)
         let collapsedPixels = try renderShellPixels(store: store, size: NSSize(width: 1440, height: 900))
-        // Collapsed SideNav is 48.0pt: x = 45 is SideNav, x = 52..342 is 296pt SessionList, x = 348 is Stage (48+296=344)!
-        assertPixelNear(collapsedPixels, width: 1440, x: 24, y: 450, expected: (248, 249, 251), label: "Collapsed 48pt SideNav")
-        assertPixelNear(collapsedPixels, width: 1440, x: 52, y: 450, expected: (243, 245, 248), label: "Right of 48pt collapsed divider")
-        assertPixelNear(collapsedPixels, width: 1440, x: 342, y: 450, expected: (243, 245, 248), label: "Inside 48+296=344pt sidebar")
-        assertPixelNear(collapsedPixels, width: 1440, x: 348, y: 450, expected: (255, 255, 255), label: "Right of 344pt sidebar divider")
+        // Collapsed SideNav is 48.0pt (bottom-origin y = 200 is 700pt from top, below all 10 nav items): x = 24..45 is railBg, x = 52..342 is 296pt SessionList, x = 348 is Stage (48+296=344)!
+        assertPixelNear(collapsedPixels, width: 1440, x: 24, y: 200, expected: (248, 249, 251), label: "Collapsed 48pt SideNav")
+        assertPixelNear(collapsedPixels, width: 1440, x: 45, y: 200, expected: (248, 249, 251), label: "Left of 48pt collapsed divider")
+        assertPixelNear(collapsedPixels, width: 1440, x: 52, y: 200, expected: (243, 245, 248), label: "Right of 48pt collapsed divider")
+        assertPixelNear(collapsedPixels, width: 1440, x: 342, y: 200, expected: (243, 245, 248), label: "Inside 48+296=344pt sidebar")
+        assertPixelNear(collapsedPixels, width: 1440, x: 348, y: 200, expected: (255, 255, 255), label: "Right of 344pt sidebar divider")
         store.toggleNavCollapsed()
 
-        // 2. Verify Mobile <= 767pt layout: exact 52.0pt top bar (y=768..819) + 58.0pt bottom tabs (y=0..57) pixel boundaries!
-        XCTAssertEqual(LayoutMetrics.mobileTopBarHeight, 52.0, accuracy: 0.0)
-        XCTAssertEqual(LayoutMetrics.mobileBottomTabsHeight, 58.0, accuracy: 0.0)
         XCTAssertEqual(LayoutMetrics.subagentDrawerWidth, 420.0, accuracy: 0.0)
         XCTAssertEqual(LayoutMetrics.formControlHeight, 36.0, accuracy: 0.0)
 
-        let mobilePixels = try renderShellPixels(store: store, size: NSSize(width: 767, height: 820))
-        // CGContext bitmap row y=0 is bottom of window (58pt bottom tabs: y=0..57), y=819 is top of window (52pt top bar: y=768..819)
-        assertPixelNear(mobilePixels, width: 767, x: 380, y: 772, expected: (248, 249, 251), label: "Inside 52pt MobileTopBar (y=772)")
-        assertPixelNear(mobilePixels, width: 767, x: 380, y: 760, expected: (243, 245, 248), label: "Below 52pt MobileTopBar in SessionList (y=760)")
-        assertPixelNear(mobilePixels, width: 767, x: 380, y: 54, expected: (248, 249, 251), label: "Inside 58pt MobileBottomTabs (y=54)")
-        assertPixelNear(mobilePixels, width: 767, x: 380, y: 66, expected: (243, 245, 248), label: "Above 58pt MobileBottomTabs in SessionList (y=66)")
-
-        // 3. Verify 420.0pt SubagentPanelView docked width & 36.0pt button control row height + full-rect edge hit-testing
+        // 2. Verify 420.0pt SubagentPanelView docked width & 36.0pt button control row height + full-rect edge hit-testing
         let drawerHost = NSHostingView(
             rootView: SubagentPanelView(
                 store: store,
