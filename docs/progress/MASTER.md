@@ -4,6 +4,8 @@
 
 当前源码版本为 **2.1.37**。API 协议 2，数据库 schema 3。全链路根治超大 Claude 会话无法向上滚动与 Codex 表格首行截断问题，并完成 `$de-gpt` 代码瘦身与前后端资源优化：`JsonlCache` 改为确定性历史 `epoch`（消除超容量／空闲淘汰后重读误清空前端分页），`claude/reader.rs` 跳过 `progress` 等遥测记录的去重与记录上限权重并压缩 `file-history-snapshot`／`attachment` 冗余体积（保留物理行游标零回退），AppKit 阅读器引入 `ReaderOuterScrollView` 弹性顶边上滚与欠屏 `limit = 500` 自动回填、展开态首行底边 `maxY` 锚点锁定及 `TimelineWindowController` 原生事件游标；表格改用 `FlippedDocumentView` 顶原点布局、`.legacy` 横向滚动条高度补偿、中文避头尾与字素簇词元列宽保护及固定等宽逐行行内 `code` 圆角胶囊，同步剥离 `<external_codex_apps_selected_page_part_*>` 伴侣页快照包装；收口未变化轮询短路、RPC 强类型校验、无拷贝 Markdown 桥接、Antigravity 单遍扫描与指纹缓存、Codex 只读查询与 `workspace_root` 复用及 SQLite 幂等索引与旧作业保留策略。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
 
+- **v2.1.37** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.37`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.36 原地更新并启动；超大 Claude 会话向上滚动与时间线跳转、Codex 表格首行显示与伴侣页快照净化待用户验收。[提交 2ed804c](https://github.com/lich13/agenthub/commit/2ed804c56adeea46287f9225a8d8feb32f289baf) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.37) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45540691647)
+
 - **v2.1.36** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.36`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.35 原地更新并启动；长会话思考块与工具循环中间过渡说明默认折叠、跨会话与反向翻页折叠态保持，以及合并后的工作区与菜单交互待用户验收。[提交 3e0812d](https://github.com/lich13/agenthub/commit/3e0812d6e8a084f8ceb514e45a695f097b654e53) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.36) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45489940549)
 
 - **v2.1.35** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.35`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.34 原地更新并启动；Antigravity 用户气泡零系统提示词占位、未索引与斜杠指令会话标题、子智能体角色名与委派内容提纯待用户验收。[提交 acb398d](https://github.com/lich13/agenthub/commit/acb398d7a194ce665539e0dc252976c4bc24d288) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.35) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45446575906)
@@ -33,7 +35,13 @@
 | Codex 200 线程多 worktree 列表 ×20 | 359.81 → 154.69 | 359.38 → 154.62 | 免重复 `canonicalize` 与 `workspace_root`，下降 57.0% |
 | Swift 160 事件无变更轮询 ×50 | 170.28 → 18.80 | 170.34 → 19.24 | `LastRenderedPollSignature` 短路行重建，下降 89.0% |
 
-未测量线上 Linux 常驻 RSS、物理磁盘 I/O 或真实用户会话体积变化，不将开发构建合成基准外推为线上固定比例。
+未测量线上 Linux 常驻 RSS、物理磁盘 I/O 或真实用户会话体积变化，不将开发构建合成基准外推为线上固定比例。下表比较 v2.1.36 与 v2.1.37 对应标签 CI 生成并正式发布的同类资产（不能声称安装包体积缩减，也不代表用户磁盘历史空间回收）：
+
+| 发布资产 | v2.1.36 字节 | v2.1.37 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG | 18,749,090 | 18,928,496 | +179,406（+0.957%） |
+| macOS updater | 17,329,738 | 17,485,385 | +155,647（+0.898%） |
+| Linux x86_64 webd | 7,940,938 | 8,002,995 | +62,057（+0.781%） |
 
 ## v2.1.29 实现与验证
 
