@@ -4,7 +4,7 @@
 
 当前源码版本为 **2.1.38**。API 协议 2，数据库 schema 3。完成全仓 `$de-gpt` 存量包袱深度减法、彻底退役本机 Codex 桌面连接对话全链路（`codex.desktop.*` 9 个动作、`codex_desktop` 能力、底部悬浮输入协作区、侧栏新建空线程与「在 Codex 中打开」、发送队列加密账本模块、Keychain 读取、剪贴板／拖放图片转码与 `StreamSink` 流订阅，净删 **46 个整文件**），并完成前后端算法、渲染与服务端资源占用全栈优化：合并单平台与跨平台工作区侧栏分组列表、归档抽屉切换与批量操作栏模板，统一四套详情轮询快照管道并收紧内部导出；修正 Codex `SCAN_CACHE` 虚高计重消除 2,000 线程抖动重扫，检索改为零 `serde_json::Value` 强类型可见语料构建与 ASCII 快速预筛，归档坏行校验流式化，异步路径补齐有界 `spawn_blocking`、收敛常驻 Tokio 工作线程并让短时 CLI／Hook 改用单线程运行时，复用 Antigravity HTTP 客户端并抑制 `lsof` 反向域名解析，补齐会话索引空闲淘汰与 Linux `malloc_trim(0)`，收敛 SQLite 页缓存与 WAL 日志上限（保留默认 `synchronous=FULL`）、补建 `idx_native_probe_claude_session` 局部索引并开启 Release Thin LTO；修复 `UnifiedProviderWorkspaceView` 非惰性 `@StateObject` 重建与外部回调同步缺陷，预计算会话毫秒时间戳与纯 ASCII 规范路径零分配快路径，AppKit 阅读器改为增量行高与单行披露局部刷新并在切会话／释放时取消高亮任务，GFM 表格改为单层自绘 `TableGridDocumentView`（消除每格包装视图／图层与重复排版测量），修复减少动态效果切换下 `RunningIndicator` 停摆与顶栏毛玻璃边缘溢出。新数据库不再创建 `codex_desktop_submissions` 表，存量升级机器保留既有遗留表、`<db>.desktop-attachments/` 与钥匙串项（不执行 `DROP TABLE`），二进制回退目标保持为 **v2.1.30**。
 
-- **v2.1.38** 本地代码清理、同负载前后基准对比、浅／深色离屏渲染核验与本地全量门禁已完成；远端推送、打标签发布 CI、Linux 服务部署与本机 App 安装待统一发布执行，真实界面与跨端交互待用户验收。
+- **v2.1.38** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.38`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.37 原地更新并启动；Codex 纯只读会话布局（移除新建线程、悬浮输入协作区与「在 Codex 中打开」）、单层自绘表格、跨平台工作区交互及 Bark／macOS 系统通知实收待用户验收。[提交 cbc0319](https://github.com/lich13/agenthub/commit/cbc0319b0e01cc6b3e59128cd3752b68d402838e) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.38) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45627291894)
 
 - **v2.1.37** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.37`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.36 原地更新并启动；超大 Claude 会话向上滚动与时间线跳转、Codex 表格首行显示与伴侣页快照净化待用户验收。[提交 2ed804c](https://github.com/lich13/agenthub/commit/2ed804c56adeea46287f9225a8d8feb32f289baf) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.37) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45540691647)
 
@@ -37,14 +37,15 @@
 | Swift 400 行长对话单过程组 `toggleDisclosurePreservingAnchor` ×20 | 1,909.13 → 39.25 | 1,871.71 → 39.22 | 精确局部行高失效与局部重绘（保持 `0.0pt` 锚点锁定），下降 **97.9%**（**48.6×**） |
 | Swift 50×6 GFM 表格（含行内 `code` 胶囊）单元格构建布局 ×20 | 3,392.16 → 2,691.22 | 3,430.32 → 2,737.45 | 单层 `TableGridDocumentView`（`307 → 1` 图层）＋免重复测量，下降 **20.7%** |
 
-本机 `scripts/package-macos-swift-arm64.sh` 同源 Release 打包产物字节对比（未外推为线上 Linux 常驻 RSS 或物理磁盘历史占用回收）：
+下表比较 v2.1.37 与 v2.1.38 对应标签 CI 生成并正式发布的同类资产（及本机 stripped 主二进制体积；未测量线上常驻 RSS 或用户历史会话磁盘回收）：
 
-| 本机 Release 产物（macOS ARM64） | v2.1.37 字节 | v2.1.38 字节 | 变化 |
+| 发布资产／二进制 | v2.1.37 字节 | v2.1.38 字节 | 变化 |
 | --- | ---: | ---: | ---: |
-| `Contents/Resources/agenthub-webd`（stripped） | 15,827,392 | 13,268,576 | -2,558,816（**-16.17%**） |
-| `Contents/MacOS/agenthub`（Release WMO stripped） | 21,714,080 | 17,214,096 | -4,499,984（**-20.72%**） |
-| `dist/agenthub-darwin-arm64.tar.gz`（updater） | 17,119,727 | 14,986,492 | -2,133,235（**-12.46%**） |
-| `dist/AgentHub-<ver>-darwin-arm64.dmg` | 18,513,202 | 16,069,049 | -2,444,153（**-13.20%**） |
+| macOS ARM64 DMG（Release CI） | 18,928,496 | 16,423,927 | -2,504,569（**-13.232%**） |
+| macOS updater（Release CI） | 17,485,385 | 15,316,022 | -2,169,363（**-12.407%**） |
+| Linux x86_64 webd（Release CI） | 8,002,995 | 7,274,827 | -728,168（**-9.099%**） |
+| 本机 `Contents/Resources/agenthub-webd`（stripped） | 15,827,392 | 13,268,576 | -2,558,816（**-16.17%**） |
+| 本机 `Contents/MacOS/agenthub`（Release WMO stripped） | 21,714,080 | 17,214,096 | -4,499,984（**-20.72%**） |
 
 ## v2.1.37 实现与验证
 
