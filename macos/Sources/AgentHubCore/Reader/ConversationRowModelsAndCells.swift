@@ -170,7 +170,7 @@ public enum ConversationRowBuilder {
                             questions: block.questions
                         )
                     ))
-                } else if block.role == "user" {
+                } else if block.role == "user", ConversationViewModel.shouldRenderConversationMessage(block) {
                     rows.append(ConversationRowItem(
                         id: key,
                         timelineId: block.id,
@@ -706,25 +706,57 @@ public final class ReaderSelectableTextView: NSTextView {
         return pboard.setString(cleaned, forType: .string)
     }
 
-    private static func rightRoundedRectPath(_ rect: NSRect, rightRadius r: CGFloat) -> NSBezierPath {
-        let radius = min(r, min(rect.width * 0.5, rect.height * 0.5))
+    private static func horizontalRoundedRectPath(
+        _ rect: NSRect,
+        leftRadius lRaw: CGFloat,
+        rightRadius rRaw: CGFloat
+    ) -> NSBezierPath {
+        let maxR = min(rect.width * 0.5, rect.height * 0.5)
+        let lR = max(0, min(lRaw, maxR))
+        let rR = max(0, min(rRaw, maxR))
+        if abs(lR - rR) < 0.01 {
+            return lR > 0.01
+                ? NSBezierPath(roundedRect: rect, xRadius: lR, yRadius: lR)
+                : NSBezierPath(rect: rect)
+        }
         let path = NSBezierPath()
-        path.move(to: NSPoint(x: rect.minX, y: rect.minY))
-        path.line(to: NSPoint(x: rect.maxX - radius, y: rect.minY))
-        path.appendArc(
-            withCenter: NSPoint(x: rect.maxX - radius, y: rect.minY + radius),
-            radius: radius,
-            startAngle: 270,
-            endAngle: 360
-        )
-        path.line(to: NSPoint(x: rect.maxX, y: rect.maxY - radius))
-        path.appendArc(
-            withCenter: NSPoint(x: rect.maxX - radius, y: rect.maxY - radius),
-            radius: radius,
-            startAngle: 0,
-            endAngle: 90
-        )
-        path.line(to: NSPoint(x: rect.minX, y: rect.maxY))
+        path.move(to: NSPoint(x: rect.minX + lR, y: rect.minY))
+        path.line(to: NSPoint(x: rect.maxX - rR, y: rect.minY))
+        if rR > 0.01 {
+            path.appendArc(
+                withCenter: NSPoint(x: rect.maxX - rR, y: rect.minY + rR),
+                radius: rR,
+                startAngle: 270,
+                endAngle: 360
+            )
+        }
+        path.line(to: NSPoint(x: rect.maxX, y: rect.maxY - rR))
+        if rR > 0.01 {
+            path.appendArc(
+                withCenter: NSPoint(x: rect.maxX - rR, y: rect.maxY - rR),
+                radius: rR,
+                startAngle: 0,
+                endAngle: 90
+            )
+        }
+        path.line(to: NSPoint(x: rect.minX + lR, y: rect.maxY))
+        if lR > 0.01 {
+            path.appendArc(
+                withCenter: NSPoint(x: rect.minX + lR, y: rect.maxY - lR),
+                radius: lR,
+                startAngle: 90,
+                endAngle: 180
+            )
+        }
+        path.line(to: NSPoint(x: rect.minX, y: rect.minY + lR))
+        if lR > 0.01 {
+            path.appendArc(
+                withCenter: NSPoint(x: rect.minX + lR, y: rect.minY + lR),
+                radius: lR,
+                startAngle: 180,
+                endAngle: 270
+            )
+        }
         path.close()
         return path
     }
@@ -752,7 +784,7 @@ public final class ReaderSelectableTextView: NSTextView {
                 )
                 if let fill = quoteBackgroundColor {
                     fill.setFill()
-                    Self.rightRoundedRectPath(bgRect, rightRadius: 10).fill()
+                    Self.horizontalRoundedRectPath(bgRect, leftRadius: 0, rightRadius: 10).fill()
                 }
                 if let accent = quoteAccentColor {
                     accent.setFill()
@@ -760,26 +792,126 @@ public final class ReaderSelectableTextView: NSTextView {
                 }
             }
 
-            // 2) Inline `code` pills (6pt rounded --h background, 20pt vertical height so adjacent lines never collide)
+            // 2) Inline `code` pills (6pt end-cap / 2.5pt soft-wrap seam --h background, per-line-fragment)
             let unselected = NSRange(location: NSNotFound, length: 0)
+            let nsText = storage.string as NSString
+            let viewBounds = bounds
             storage.enumerateAttribute(.agentHubInlineCode, in: fullRange, options: []) { value, charRange, _ in
                 guard let pillColor = value as? NSColor, charRange.length > 0 else { return }
                 let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+                guard glyphRange.length > 0 else { return }
+
+                // Resolve canonical monospace metrics once per inline-code attribute span so NSTextStorage
+                // font fallback (Menlo on U+202F, SF Mono on ASCII, PingFang on CJK) never causes pill height
+                // or vertical center jumps across wrapped line fragments of the same `code` span.
+                let spanStartIdx = min(nsText.length - 1, charRange.location)
+                let rawSpanFont = storage.attribute(.font, at: spanStartIdx, effectiveRange: nil) as? NSFont
+                let font = DesignFonts.nsMonoFont(size: rawSpanFont?.pointSize ?? 12, weight: .regular)
+                let para = storage.attribute(.paragraphStyle, at: spanStartIdx, effectiveRange: nil) as? NSParagraphStyle
+                let desiredPillH = max(16, ceil(font.ascender - font.descender) + 5)
+
+                var spanHasNonBlankCodeChar = false
+                for chIdx in charRange.location ..< min(nsText.length, NSMaxRange(charRange)) {
+                    let cu = nsText.character(at: chIdx)
+                    if cu != 0x20 && cu != 0x09 && cu != 0x0A && cu != 0x0D && cu != 0x202F && cu != 0x00A0 {
+                        spanHasNonBlankCodeChar = true
+                        break
+                    }
+                }
+
                 pillColor.setFill()
-                manager.enumerateEnclosingRects(
-                    forGlyphRange: glyphRange,
-                    withinSelectedGlyphRange: unselected,
-                    in: container
-                ) { sliceRect, _ in
-                    guard sliceRect.width > 1, sliceRect.height > 1 else { return }
-                    let pillH = min(sliceRect.height - 3, 21)
-                    let pillRect = NSRect(
-                        x: origin.x + sliceRect.minX,
-                        y: origin.y + sliceRect.midY - pillH * 0.5,
-                        width: sliceRect.width,
-                        height: pillH
-                    )
-                    NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6).fill()
+                manager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, lineContainer, lineGlyphRange, _ in
+                    guard lineContainer === container else { return }
+                    var subGlyphRange = NSIntersectionRange(glyphRange, lineGlyphRange)
+                    guard subGlyphRange.length > 0 else { return }
+
+                    let wrappedFromPrev = subGlyphRange.location > glyphRange.location
+                    let wrapsToNext = NSMaxRange(subGlyphRange) < NSMaxRange(glyphRange)
+
+                    if spanHasNonBlankCodeChar {
+                        while wrappedFromPrev, subGlyphRange.length > 0 {
+                            let chIdx = manager.characterIndexForGlyph(at: subGlyphRange.location)
+                            guard chIdx < nsText.length else { break }
+                            let cu = nsText.character(at: chIdx)
+                            if cu == 0x20 || cu == 0x09 {
+                                subGlyphRange.location += 1
+                                subGlyphRange.length -= 1
+                            } else {
+                                break
+                            }
+                        }
+                        while subGlyphRange.length > 0 {
+                            let lastGlyph = NSMaxRange(subGlyphRange) - 1
+                            let chIdx = manager.characterIndexForGlyph(at: lastGlyph)
+                            guard chIdx < nsText.length else { break }
+                            let cu = nsText.character(at: chIdx)
+                            if (wrapsToNext && (cu == 0x20 || cu == 0x09)) || cu == 0x0A || cu == 0x0D {
+                                subGlyphRange.length -= 1
+                            } else {
+                                break
+                            }
+                        }
+                        guard subGlyphRange.length > 0 else { return }
+
+                        if wrappedFromPrev || wrapsToNext {
+                            var hasVisibleGlyph = false
+                            for g in subGlyphRange.location ..< NSMaxRange(subGlyphRange) {
+                                let chIdx = manager.characterIndexForGlyph(at: g)
+                                if chIdx < nsText.length {
+                                    let cu = nsText.character(at: chIdx)
+                                    if cu != 0x20 && cu != 0x09 && cu != 0x0A && cu != 0x0D && cu != 0x202F && cu != 0x00A0 {
+                                        hasVisibleGlyph = true
+                                        break
+                                    }
+                                }
+                            }
+                            guard hasVisibleGlyph else { return }
+                        }
+                    } else if wrappedFromPrev {
+                        return
+                    }
+
+                    let nominalLineH: CGFloat = if let para, para.maximumLineHeight > 0 {
+                        min(lineRect.height, para.maximumLineHeight)
+                    } else if let para, para.minimumLineHeight > 0 {
+                        min(lineRect.height, max(para.minimumLineHeight, ceil(font.ascender - font.descender + font.leading)))
+                    } else {
+                        min(lineRect.height, ceil(font.ascender - font.descender + font.leading + 6))
+                    }
+                    let pillH = max(12, min(nominalLineH - 2.2, desiredPillH))
+                    let baselineY = lineRect.minY + manager.location(forGlyphAt: subGlyphRange.location).y
+                    let glyphMidY = baselineY - (font.ascender + font.descender) * 0.5
+                    var pillMinY = origin.y + glyphMidY - pillH * 0.5
+                    if viewBounds.height >= pillH {
+                        pillMinY = max(0, min(viewBounds.maxY - pillH, pillMinY))
+                    }
+
+                    let leftPad: CGFloat = wrappedFromPrev ? 2.5 : 0
+                    let rightPad: CGFloat = wrapsToNext ? 2.5 : 0
+                    let leftRadius: CGFloat = wrappedFromPrev ? 2.5 : 6
+                    let rightRadius: CGFloat = wrapsToNext ? 2.5 : 6
+
+                    manager.enumerateEnclosingRects(
+                        forGlyphRange: subGlyphRange,
+                        withinSelectedGlyphRange: unselected,
+                        in: container
+                    ) { sliceRect, _ in
+                        guard sliceRect.width > 1, sliceRect.height > 1 else { return }
+                        let minX = max(0, origin.x + sliceRect.minX - leftPad)
+                        let maxX = min(viewBounds.maxX, origin.x + sliceRect.maxX + rightPad)
+                        guard maxX - minX > 1 else { return }
+                        let pillRect = NSRect(
+                            x: minX,
+                            y: pillMinY,
+                            width: maxX - minX,
+                            height: pillH
+                        )
+                        Self.horizontalRoundedRectPath(
+                            pillRect,
+                            leftRadius: leftRadius,
+                            rightRadius: rightRadius
+                        ).fill()
+                    }
                 }
             }
         }

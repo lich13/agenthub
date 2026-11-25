@@ -343,6 +343,7 @@ enum TargetStepOutcome {
 
 fn record_target_result(
     scope: &mut UnifiedCleanupScopeResult,
+    deleted_ids: Option<&mut Vec<String>>,
     id: &str,
     result: Result<TargetStepOutcome>,
 ) {
@@ -351,6 +352,9 @@ fn record_target_result(
         TargetStepOutcome::Deleted(bytes) => {
             scope.deleted_count += 1;
             scope.deleted_bytes = scope.deleted_bytes.saturating_add(bytes);
+            if let Some(out) = deleted_ids {
+                out.push(id.to_owned());
+            }
         }
         TargetStepOutcome::Skipped(message) => {
             scope.skipped_count += 1;
@@ -383,7 +387,7 @@ fn verified_scope_targets(
                 Ok(Some(message)) => Ok(TargetStepOutcome::Skipped(message.into())),
                 Err(error) => Err(error),
             };
-            record_target_result(scope, &target.id, outcome);
+            record_target_result(scope, None, &target.id, outcome);
             None
         })
         .collect()
@@ -396,9 +400,11 @@ fn execute_codex_scope(
     scope: &mut UnifiedCleanupScopeResult,
 ) -> Result<()> {
     let db_path = codex.state_db();
-    let conn =
-        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| anyhow::anyhow!("open {}: {e}", db_path.display()))?;
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| anyhow::anyhow!("open {}: {e}", db_path.display()))?;
     let thread_cols = archive::table_columns(&conn, "threads")?;
     let edge_cols = archive::table_columns(&conn, "thread_spawn_edges")?;
     let has_spawn_edges =
@@ -435,6 +441,7 @@ fn execute_codex_scope(
     {
         record_target_result(
             scope,
+            None,
             &target.id,
             result.map(|out| {
                 if out.error.is_none() && out.residuals.is_empty() {
@@ -452,6 +459,7 @@ fn execute_antigravity_archived_scope(
     antigravity: &crate::antigravity::sessions::AntigravityPaths,
     scope_targets: Vec<UnifiedCleanupTargetSelection>,
     scope_res: &mut UnifiedCleanupScopeResult,
+    deleted_ids: &mut Vec<String>,
 ) -> Result<()> {
     use crate::antigravity::sessions::UnifiedAntigravityStepOutcome;
     let pairs: Vec<(String, Option<String>)> = scope_targets
@@ -468,7 +476,7 @@ fn execute_antigravity_archived_scope(
                 TargetStepOutcome::Failed(msg, residuals)
             }
         };
-        record_target_result(scope_res, &id, Ok(mapped));
+        record_target_result(scope_res, Some(deleted_ids), &id, Ok(mapped));
     }
     Ok(())
 }
@@ -477,6 +485,7 @@ fn execute_dsh_archived_scope(
     paths: &crate::dsh::DshPaths,
     targets: Vec<UnifiedCleanupTargetSelection>,
     scope: &mut UnifiedCleanupScopeResult,
+    deleted_ids: &mut Vec<String>,
 ) -> Result<()> {
     let targets = verified_scope_targets(targets, scope, |_, _| Ok(None));
     if targets.is_empty() {
@@ -499,6 +508,7 @@ fn execute_dsh_archived_scope(
     for item in result.items {
         record_target_result(
             scope,
+            Some(deleted_ids),
             &item.id,
             Ok(match item.status.as_str() {
                 "deleted" => TargetStepOutcome::Deleted(0),
@@ -532,6 +542,7 @@ fn execute_claude_empty_scope(
     paths: &crate::claude::ClaudePaths,
     targets: Vec<UnifiedCleanupTargetSelection>,
     scope: &mut UnifiedCleanupScopeResult,
+    deleted_ids: &mut Vec<String>,
 ) -> Result<()> {
     let allowed = crate::claude::find_empty_inactive_sessions(paths)?
         .into_iter()
@@ -570,6 +581,7 @@ fn execute_claude_empty_scope(
     {
         record_target_result(
             scope,
+            Some(deleted_ids),
             &target.id,
             result.map(|r| {
                 if r.deleted && r.residuals.is_empty() {
@@ -587,6 +599,7 @@ fn execute_grok_empty_scope(
     paths: &crate::grok::GrokPaths,
     targets: Vec<UnifiedCleanupTargetSelection>,
     scope: &mut UnifiedCleanupScopeResult,
+    deleted_ids: &mut Vec<String>,
 ) -> Result<()> {
     let allowed = crate::grok::find_empty_inactive_sessions(paths)?
         .into_iter()
@@ -612,6 +625,7 @@ fn execute_grok_empty_scope(
     {
         record_target_result(
             scope,
+            Some(deleted_ids),
             &target.id,
             result.map(|r| {
                 if r.deleted && r.residuals.is_empty() {
@@ -625,11 +639,21 @@ fn execute_grok_empty_scope(
     Ok(())
 }
 
+pub type DeletedProbeStreams = Vec<(crate::native_probe::NativeProvider, Vec<String>)>;
+
 pub fn execute_unified_with_capability(
-    _platform: &PlatformPaths,
+    platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,
 ) -> Result<UnifiedCleanupResult> {
+    execute_unified_with_deleted_streams(platform, paths, request).map(|(res, _)| res)
+}
+
+pub fn execute_unified_with_deleted_streams(
+    _platform: &PlatformPaths,
+    paths: &UnifiedCleanupPaths,
+    request: UnifiedCleanupExecuteRequest,
+) -> Result<(UnifiedCleanupResult, DeletedProbeStreams)> {
     anyhow::ensure!(request.confirmed, UNIFIED_CLEANUP_CONFIRMATION_MESSAGE);
     anyhow::ensure!(
         !request.targets.is_empty(),
@@ -690,6 +714,7 @@ pub fn execute_unified_with_capability(
     anyhow::ensure!(!ordered_scopes.is_empty(), "请至少选择一个待清理平台范围");
 
     let mut total = UnifiedCleanupResult::default();
+    let mut deleted_streams = Vec::new();
     for scope in ordered_scopes {
         let (provider, label) = scope_meta(scope)?;
         let mut scope_res = UnifiedCleanupScopeResult {
@@ -698,6 +723,7 @@ pub fn execute_unified_with_capability(
             label: label.to_owned(),
             ..Default::default()
         };
+        let mut scope_deleted_ids = Vec::new();
         let scope_targets = targets_by_scope.remove(scope).unwrap_or_default();
         if !scope_targets.is_empty() {
             let target_count = scope_targets.len();
@@ -712,16 +738,26 @@ pub fn execute_unified_with_capability(
                     &paths.antigravity,
                     scope_targets,
                     &mut scope_res,
+                    &mut scope_deleted_ids,
                 ),
-                SCOPE_DSH_ARCHIVED => {
-                    execute_dsh_archived_scope(&paths.dsh, scope_targets, &mut scope_res)
-                }
-                SCOPE_CLAUDE_EMPTY => {
-                    execute_claude_empty_scope(&paths.claude, scope_targets, &mut scope_res)
-                }
-                SCOPE_GROK_EMPTY => {
-                    execute_grok_empty_scope(&paths.grok, scope_targets, &mut scope_res)
-                }
+                SCOPE_DSH_ARCHIVED => execute_dsh_archived_scope(
+                    &paths.dsh,
+                    scope_targets,
+                    &mut scope_res,
+                    &mut scope_deleted_ids,
+                ),
+                SCOPE_CLAUDE_EMPTY => execute_claude_empty_scope(
+                    &paths.claude,
+                    scope_targets,
+                    &mut scope_res,
+                    &mut scope_deleted_ids,
+                ),
+                SCOPE_GROK_EMPTY => execute_grok_empty_scope(
+                    &paths.grok,
+                    scope_targets,
+                    &mut scope_res,
+                    &mut scope_deleted_ids,
+                ),
                 _ => unreachable!("validated cleanup scope"),
             };
             if let Err(error) = result {
@@ -732,13 +768,43 @@ pub fn execute_unified_with_capability(
                 scope_res.issues.push(error.to_string());
             }
         }
+        if !scope_deleted_ids.is_empty() {
+            match scope {
+                SCOPE_ANTIGRAVITY_ARCHIVED => {
+                    let mut normalized = Vec::with_capacity(scope_deleted_ids.len() * 2);
+                    for id in scope_deleted_ids {
+                        if let Some(raw) = id.strip_prefix("ag:") {
+                            normalized.push(raw.to_owned());
+                        }
+                        normalized.push(id);
+                    }
+                    deleted_streams
+                        .push((crate::native_probe::NativeProvider::Antigravity, normalized));
+                }
+                SCOPE_DSH_ARCHIVED => {
+                    deleted_streams
+                        .push((crate::native_probe::NativeProvider::Dsh, scope_deleted_ids));
+                }
+                SCOPE_CLAUDE_EMPTY => {
+                    deleted_streams.push((
+                        crate::native_probe::NativeProvider::Claude,
+                        scope_deleted_ids,
+                    ));
+                }
+                SCOPE_GROK_EMPTY => {
+                    deleted_streams
+                        .push((crate::native_probe::NativeProvider::Grok, scope_deleted_ids));
+                }
+                _ => {}
+            }
+        }
         total.deleted_count += scope_res.deleted_count;
         total.skipped_count += scope_res.skipped_count;
         total.failed_count += scope_res.failed_count;
         total.deleted_bytes = total.deleted_bytes.saturating_add(scope_res.deleted_bytes);
         total.scopes.push(scope_res);
     }
-    Ok(total)
+    Ok((total, deleted_streams))
 }
 
 #[cfg(test)]
@@ -1149,7 +1215,7 @@ fn grok_cleanup_reports_unknown_ownership_as_failure() {
         fingerprint: Some(candidates[0].1.clone()),
     };
     let mut result = UnifiedCleanupScopeResult::default();
-    execute_grok_empty_scope(&paths, vec![target], &mut result).unwrap();
+    execute_grok_empty_scope(&paths, vec![target], &mut result, &mut Vec::new()).unwrap();
     assert_eq!(
         (
             result.failed_count,

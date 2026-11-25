@@ -224,23 +224,8 @@ public struct UnifiedProviderWorkspaceView: View {
             if model.searchSelection?.sessionKey != model.selectedKey { model.searchSelection = nil }
             if model.pendingSearch?.sessionKey != model.selectedKey { model.pendingSearch = nil }
             previewImageItem = nil
-            model.errorMessage = nil
-            model.feedbackMessage = nil
-            model.currentDetailHistory = nil
-            model.headerInlineRename = false
-            model.loadingOlder = false
-            model.hasMoreOlder = false
-            model.beforeCursor = nil
-            model.showAllHistory = false
-            model.detailLoadedForKey = nil
-            model.latestReplyText = nil
-            model.rows = []
-            model.timelineEntries = []
-            model.subagents = nil
-            model.revealedPositionKey = nil
-            model.loadOlderError = nil
             readWarningExpanded = false
-            model.timelineWindow.returnToLatest()
+            model.resetDetailStateForSelectionChange()
         }
         // 5s Session List Polling Clock (paused when window hidden or sidebar hidden)
         .task(id: "\(store.revision):\(store.capabilities.isReady):\(workspace.rawValue):\(model.query):\(model.archivedOpen):\(hideSidebar)") {
@@ -866,7 +851,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                             isSubagent: false,
                                             canLoadOlder: model.timelineWindow.isActive ? model.timelineWindow.hasMoreOlder : (model.hasMoreOlder && model.beforeCursor != nil),
                                             isLoadingOlder: model.loadingOlder || model.timelineWindow.busy,
-                                            isLoadOlderBlockedByError: model.loadOlderError != nil
+                                            isLoadOlderBlockedByError: model.loadOlderError != nil || (model.timelineWindow.isActive && model.timelineWindow.error != nil)
                                         )
                                     }
 
@@ -890,6 +875,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                             loadOlder: (model.timelineWindow.isActive ? model.timelineWindow.hasMoreOlder : model.hasMoreOlder) ? {
                                                 Task {
                                                     model.loadOlderError = nil
+                                                    model.timelineWindow.clearError()
                                                     await model.loadOlderPageIfNeeded()
                                                 }
                                             } : nil,
@@ -916,7 +902,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                     active: model.timelineWindow.isActive,
                                     busy: model.timelineWindow.busy,
                                     error: model.timelineWindow.error,
-                                    hasNewer: model.timelineWindow.hasNewer(latestTailId: model.rows.last?.timelineId),
+                                    hasNewer: model.timelineWindow.hasNewer(latestTailId: model.latestNativeTailId ?? model.rows.last?.timelineId),
                                     onLoadNewer: {
                                         Task { await model.loadNewerTimelineWindowPage() }
                                     },
@@ -1044,7 +1030,9 @@ public struct UnifiedProviderWorkspaceView: View {
         guard coordinatorRef == nil else { return }
         let c = ConversationTableCoordinator(store: store)
         c.onLoadOlderRequested = {
-            guard model.loadOlderError == nil else { return }
+            guard model.loadOlderError == nil,
+                  !model.timelineWindow.isActive || model.timelineWindow.error == nil
+            else { return }
             Task { await model.loadOlderPageIfNeeded() }
         }
         c.onShowAllHistory = {

@@ -10628,16 +10628,20 @@
     "macos/Sources/AgentHubCore/Bridge/FFIRuntimeBridge.swift": {
       "types": {
         "AgentHubFFIError": "structAgentHubFFIError:LocalizedError,Equatable,Sendable{publicletmessage:Stringpublicinit(_message:String){self.message=message}publicvarerrorDescription:String?{message}}",
-        "NativeMarkdown": "enumNativeMarkdown{staticfuncparse(_markdown:String)->Data{Array(markdown.utf8).withUnsafeBufferPointer{bytesinletptr=bytes.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}guardletjson=agenthub_ffi_parse_gfm_markdown(ptr,bytes.count)else{returnData(#\"{\"blocks\":[]}\"#.utf8)}defer{agenthub_ffi_string_free(json)}returnData(String(cString:json).utf8)}}}",
+        "NativeMarkdown": "enumNativeMarkdown{staticfuncparse(_markdown:String)->Data{funcinvoke(_ptr:UnsafePointer<CChar>?,_count:Int)->Data{guardletjson=agenthub_ffi_parse_gfm_markdown(ptr,count)else{returnData(#\"{\"blocks\":[]}\"#.utf8)}defer{agenthub_ffi_string_free(json)}returnData(bytes:json,count:strlen(json))}ifletresult=markdown.utf8.withContiguousStorageIfAvailable({bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}){returnresult}varcopy=markdownreturncopy.withUTF8{bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}}}",
         "FileOpenerService": "enumFileOpenerService{publicstaticfuncvalidateRevealPath(_raw:String)throws->URL{lettrimmed=raw.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmpty,trimmed.hasPrefix(\"/\"),!trimmed.unicodeScalars.contains(where:{CharacterSet.controlCharacters.contains($0)})else{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}returnURL(fileURLWithPath:trimmed)}publicstaticfuncrevealPaths(_paths:[String])asyncthrows{leturls=trypaths.map(validateRevealPath)guard!urls.isEmptyelse{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}awaitMainActor.run{NSWorkspace.shared.activateFileViewerSelecting(urls)}}}"
       },
-      "calls": []
+      "calls": [
+        "invoke(ptr,buf.count)",
+        "invoke(ptr,buf.count)"
+      ]
     },
     "macos/Sources/AgentHubCore/Bridge/RuntimeConnectionStore.swift": {
       "types": {
         "PreferenceKey": "enumPreferenceKey{staticlettheme=\"agenthub.theme\"staticletnavCollapsed=\"agenthub.nav-collapsed\"}",
         "RemoteRequestEnvelope": "structRemoteRequestEnvelope<T:Encodable>:Encodable{letrequest:T}",
-        "RequestControlProbe": "structRequestControlProbe:Decodable{structInner:Decodable{letmode:String?letaction:String?}letrequest:Inner?}"
+        "RemoteInvokeRequest": "structRemoteInvokeRequest<Args:Encodable>:Encodable{letrevision:UInt64letcommand:Stringletargs:Args}",
+        "RemoteInvokeEnvelope": "structRemoteInvokeEnvelope<Args:Encodable>:Encodable{letrequest:RemoteInvokeRequest<Args>}"
       },
       "calls": [
         "invokeLocal(\"remote.get\")",

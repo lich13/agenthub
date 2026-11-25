@@ -44,7 +44,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 workspace: .codex,
                 transport: transport
             ).reduce(CGFloat(0)) { acc, seg in
-                if case let .prose(attr, _) = seg {
+                if case let .prose(attr) = seg {
                     return acc + ReaderSelectableTextView.measureHeight(attributed: attr, width: 768) + 8
                 }
                 return acc
@@ -148,7 +148,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             """
             let segs = cache.getOrRender(markdown: richProse, foldInstructions: false, scheme: .light, workspace: .codex, transport: transport)
             XCTAssertEqual(segs.count, 1, "Contiguous paragraph + heading + blockquote + list must coalesce into ONE continuous .prose segment for cross-paragraph drag selection!")
-            if case let .prose(attr, _) = segs[0] {
+            if case let .prose(attr) = segs[0] {
                 XCTAssertTrue(attr.string.contains("Intro paragraph one."))
                 XCTAssertTrue(attr.string.contains("Section Heading"))
                 XCTAssertTrue(attr.string.contains("Quoted insight line one"))
@@ -203,7 +203,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
 
             // 5) Zero emoji in GFM image fallback
             let imgSegs = cache.getOrRender(markdown: "![Architecture Diagram](https://example.invalid/arch.png)", foldInstructions: false, scheme: .light, workspace: .codex, transport: transport)
-            if case let .prose(imgAttr, _)? = imgSegs.first {
+            if case let .prose(imgAttr)? = imgSegs.first {
                 XCTAssertFalse(imgAttr.string.contains("🖼"))
                 XCTAssertTrue(imgAttr.string.contains("[Architecture Diagram]"))
             }

@@ -33,9 +33,12 @@ pub(crate) async fn unified_cleanup_execute(
     let paths = state.unified_cleanup_paths()?;
     ok(
         agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-            let result = AgentHubUseCases::new(state.platform())
+            let (result, deleted_streams) = AgentHubUseCases::new(state.platform())
                 .cleanup()
-                .unified_execute(&paths, request)?;
+                .unified_execute_with_deleted_streams(&paths, request)?;
+            let _ = state
+                .db
+                .prune_cursors_after_unified_cleanup(&deleted_streams);
             state.db.record_audit(
                 Some(&auth.admin_id),
                 "unified_cleanup.execute",

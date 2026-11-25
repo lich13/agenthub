@@ -488,7 +488,70 @@ fn conv_db_modified_within(
         .any(|ms| now_ms.saturating_sub(ms) <= window_ms && ms <= now_ms + 60_000)
 }
 
-fn read_transcript_tail_rows(paths: &AntigravityPaths, id: &str) -> Option<(PathBuf, Vec<Value>)> {
+type ConvDbStepsCacheEntry = (
+    (
+        cli_meta::AntigravityFileStamp,
+        Option<cli_meta::AntigravityFileStamp>,
+    ),
+    Option<&'static str>,
+    std::time::Instant,
+);
+type TranscriptTailCacheEntry = (
+    cli_meta::AntigravityFileStamp,
+    std::sync::Arc<Vec<Value>>,
+    std::time::Instant,
+);
+type TranscriptSpawnedCacheEntry = (
+    cli_meta::AntigravityFileStamp,
+    Vec<String>,
+    std::time::Instant,
+);
+type TranscriptSummaryValue = (Option<String>, Option<String>, usize, Option<String>);
+type TranscriptSummaryCacheEntry = (
+    cli_meta::AntigravityFileStamp,
+    TranscriptSummaryValue,
+    std::time::Instant,
+);
+
+static CONV_DB_STEPS_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, ConvDbStepsCacheEntry>>,
+> = std::sync::Mutex::new(None);
+static TRANSCRIPT_TAIL_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, TranscriptTailCacheEntry>>,
+> = std::sync::Mutex::new(None);
+static TRANSCRIPT_SPAWNED_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, TranscriptSpawnedCacheEntry>>,
+> = std::sync::Mutex::new(None);
+static TRANSCRIPT_SUMMARY_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, TranscriptSummaryCacheEntry>>,
+> = std::sync::Mutex::new(None);
+
+fn evict_idle_map<K: Eq + std::hash::Hash, V>(
+    mutex: &std::sync::Mutex<Option<std::collections::HashMap<K, V>>>,
+    max_idle: std::time::Duration,
+    ts_of: impl Fn(&V) -> std::time::Instant,
+) {
+    if let Ok(mut guard) = mutex.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.retain(|_, v| ts_of(v).elapsed() < max_idle);
+            if map.is_empty() {
+                *guard = None;
+            }
+        }
+    }
+}
+
+pub(crate) fn evict_idle_file_caches(max_idle: std::time::Duration) {
+    evict_idle_map(&CONV_DB_STEPS_CACHE, max_idle, |(_, _, ts)| *ts);
+    evict_idle_map(&TRANSCRIPT_TAIL_CACHE, max_idle, |(_, _, ts)| *ts);
+    evict_idle_map(&TRANSCRIPT_SPAWNED_CACHE, max_idle, |(_, _, ts)| *ts);
+    evict_idle_map(&TRANSCRIPT_SUMMARY_CACHE, max_idle, |(_, _, ts)| *ts);
+}
+
+fn read_transcript_tail_rows(
+    paths: &AntigravityPaths,
+    id: &str,
+) -> Option<(PathBuf, std::sync::Arc<Vec<Value>>)> {
     use std::io::{Seek, SeekFrom};
     let logs = paths.brain_dir().join(id).join(".system_generated/logs");
     let full = logs.join("transcript_full.jsonl");
@@ -500,6 +563,17 @@ fn read_transcript_tail_rows(paths: &AntigravityPaths, id: &str) -> Option<(Path
     } else {
         return None;
     };
+    let stamp = cli_meta::AntigravityFileStamp::of(&chosen)?;
+    if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
+        if let Some((cached_stamp, ref rows, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&chosen))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return Some((chosen, rows.clone()));
+            }
+        }
+    }
     let mut file = fs::File::open(&chosen).ok()?;
     let len = file.metadata().ok()?.len();
     let tail_cap: u64 = 256 * 1024;
@@ -516,7 +590,24 @@ fn read_transcript_tail_rows(paths: &AntigravityPaths, id: &str) -> Option<(Path
         rows.push(row);
         std::ops::ControlFlow::Continue(())
     });
-    Some((chosen, rows))
+    let arc_rows = std::sync::Arc::new(rows);
+    if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= 64 && !map.contains_key(&chosen) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (_, _, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(
+            chosen.clone(),
+            (stamp, arc_rows.clone(), std::time::Instant::now()),
+        );
+    }
+    Some((chosen, arc_rows))
 }
 
 pub(crate) fn extract_transcript_spawned_subagents(
@@ -533,6 +624,19 @@ pub(crate) fn extract_transcript_spawned_subagents(
     } else {
         return Vec::new();
     };
+    let Some(stamp) = cli_meta::AntigravityFileStamp::of(&chosen) else {
+        return Vec::new();
+    };
+    if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
+        if let Some((cached_stamp, ref ids, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&chosen))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return ids.clone();
+            }
+        }
+    }
     let Ok(file) = fs::File::open(&chosen) else {
         return Vec::new();
     };
@@ -551,19 +655,62 @@ pub(crate) fn extract_transcript_spawned_subagents(
         std::ops::ControlFlow::Continue(())
     });
     spawned.remove(id);
-    spawned.into_iter().collect()
+    let result: Vec<String> = spawned.into_iter().collect();
+    if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= 512 && !map.contains_key(&chosen) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (_, _, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(chosen, (stamp, result.clone(), std::time::Instant::now()));
+    }
+    result
 }
 
 fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'static str> {
     let db_path = paths.conversations_dir().join(format!("{id}.db"));
-    let mut f = fs::File::open(&db_path).ok()?;
+    let stamp = cli_meta::AntigravityFileStamp::sqlite_pair(&db_path)?;
+    if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
+        if let Some((cached_stamp, cached_status, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&db_path))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return *cached_status;
+            }
+        }
+    }
+    let status = inspect_conv_db_steps_status_uncached(&db_path);
+    if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= 512 && !map.contains_key(&db_path) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (_, _, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(db_path, (stamp, status, std::time::Instant::now()));
+    }
+    status
+}
+
+fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Option<&'static str> {
+    let mut f = fs::File::open(db_path).ok()?;
     let mut header = [0u8; 16];
     if f.read_exact(&mut header).is_err() || &header != b"SQLite format 3\0" {
         return None;
     }
     drop(f);
     let conn = Connection::open_with_flags(
-        &db_path,
+        db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
@@ -956,6 +1103,12 @@ pub(crate) fn evaluate_offline_tree_status_with_lock(
     }
     let mut any_waiting = root_status == "waiting";
     for child in descendants {
+        if !tree_lock
+            && !is_presence_locked_shared(paths, child)
+            && !conv_db_modified_within(paths, child, 60_000, now_ms)
+        {
+            continue;
+        }
         let child_status = evaluate_node_status_offline_with_lock(
             paths,
             child,
@@ -1243,6 +1396,19 @@ fn summarize_unindexed_transcript(
     let Some(path) = chosen else {
         return (None, None, 0, None);
     };
+    let Some(stamp) = cli_meta::AntigravityFileStamp::of(&path) else {
+        return (None, None, 0, None);
+    };
+    if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
+        if let Some((cached_stamp, ref val, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&path))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return val.clone();
+            }
+        }
+    }
     let Ok(file) = fs::File::open(&path) else {
         return (None, None, 0, None);
     };
@@ -1279,7 +1445,21 @@ fn summarize_unindexed_transcript(
         }
         std::ops::ControlFlow::Continue(())
     });
-    (first_title, last_preview, count, last_created_at)
+    let result = (first_title, last_preview, count, last_created_at);
+    if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= 512 && !map.contains_key(&path) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (_, _, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(path, (stamp, result.clone(), std::time::Instant::now()));
+    }
+    result
 }
 
 pub(crate) fn collect_store_known_subagents(paths: &AntigravityPaths) -> BTreeSet<String> {
@@ -1361,11 +1541,26 @@ pub(crate) fn list_offline_summaries(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    list_offline_summaries_with_subagents(paths, filter_id, None).map(|(items, _, _)| items)
+}
+
+type OfflineStorePass = (
+    Vec<ProviderSessionSummary>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+);
+
+fn list_offline_summaries_with_subagents(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+    archived_filter: Option<bool>,
+) -> Result<OfflineStorePass> {
     if !paths.home.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), BTreeSet::new(), BTreeSet::new()));
     }
     let now_ms = now_epoch_ms();
     let mut by_id: BTreeMap<String, ProviderSessionSummary> = BTreeMap::new();
+    let mut seen_root_ids: BTreeSet<String> = BTreeSet::new();
     let mut indexed_ids: BTreeSet<String> = BTreeSet::new();
     let mut known_subagents: BTreeSet<String> = BTreeSet::new();
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -1709,6 +1904,20 @@ pub(crate) fn list_offline_summaries(
             .or_else(|| raw_parsed.and_then(|r| r.annotations.archived))
             .or_else(|| fts_row.and_then(|f| f.archived))
             .unwrap_or(false);
+        let mut db_meta_entry = conv_db_metas.get(&id).cloned();
+        if (ws_raw.is_empty() || steps <= 0) && db_meta_entry.is_none() {
+            if let Some(m) = inspect_conv_db_metadata(paths, &id) {
+                if m.is_subagent {
+                    known_subagents.insert(id);
+                    continue;
+                }
+                db_meta_entry = Some(m);
+            }
+        }
+        seen_root_ids.insert(id.clone());
+        if archived_filter.is_some_and(|want| want != archived) {
+            continue;
+        }
 
         let mut cwd = serde_json::from_str::<Vec<String>>(&ws_raw)
             .ok()
@@ -1729,11 +1938,11 @@ pub(crate) fn list_offline_summaries(
             .or_else(|| aux.last_conv_cwd.get(&id).cloned())
             .or_else(|| conv_meta_entry.and_then(|m| m.cwd.clone()))
             .unwrap_or_default();
-        let mut db_meta_entry = conv_db_metas.get(&id).cloned();
         if cwd.is_empty() || steps <= 0 {
             if db_meta_entry.is_none() {
                 if let Some(m) = inspect_conv_db_metadata(paths, &id) {
                     if m.is_subagent {
+                        known_subagents.insert(id);
                         continue;
                     }
                     db_meta_entry = Some(m);
@@ -1838,10 +2047,14 @@ pub(crate) fn list_offline_summaries(
             continue;
         }
         let overlay = read_annotation_overlay(paths, &id);
+        let archived = overlay.archived.unwrap_or(false);
+        seen_root_ids.insert(id.clone());
+        if archived_filter.is_some_and(|want| want != archived) {
+            continue;
+        }
         let conv_meta_entry = aux.conv_meta.get(&id);
         let db_meta_entry = conv_db_metas.get(&id);
         let (meta_file_title, meta_file_cwd) = cli_meta::read_conv_meta_file(paths, &id);
-        let archived = overlay.archived.unwrap_or(false);
         let (first_title, last_preview, step_count, transcript_ts) =
             summarize_unindexed_transcript(paths, &id);
         let conv_db = paths.conversations_dir().join(format!("{id}.db"));
@@ -1915,7 +2128,11 @@ pub(crate) fn list_offline_summaries(
         by_id.insert(id, summary);
     }
 
-    Ok(by_id.into_values().collect())
+    Ok((
+        by_id.into_values().collect(),
+        known_subagents,
+        seen_root_ids,
+    ))
 }
 
 /// The index stores `2026-01-02 03:04:05.678+00:00`; the live service reports
@@ -1952,24 +2169,30 @@ impl rusqlite::types::FromSql for ValueOrString {
     }
 }
 
-fn list_all_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessionSummary>> {
-    list_summaries_filtered(paths, None)
-}
-
 fn list_summaries_filtered(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    list_summaries_filtered_with_archive(paths, filter_id, None)
+}
+
+fn list_summaries_filtered_with_archive(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+    archived_filter: Option<bool>,
+) -> Result<Vec<ProviderSessionSummary>> {
     if let Some(id) = filter_id {
         if let Some(cli) = paths.cli_store_for_id(id) {
-            return list_offline_summaries(&cli, Some(id));
+            return list_offline_summaries_with_subagents(&cli, Some(id), archived_filter)
+                .map(|(items, _, _)| items);
         }
     }
     let primary = paths.primary_store();
     let endpoint = connect_endpoint(&primary)?;
-    list_summaries_from_source(
+    list_summaries_from_source_filtered(
         paths,
         filter_id,
+        archived_filter,
         endpoint.as_ref().map(|(_, payload)| payload),
     )
 }
@@ -1979,19 +2202,40 @@ pub(crate) fn list_summaries_from_source(
     filter_id: Option<&str>,
     payload: Option<&Value>,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    list_summaries_from_source_filtered(paths, filter_id, None, payload)
+}
+
+fn list_summaries_from_source_filtered(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+    archived_filter: Option<bool>,
+    payload: Option<&Value>,
+) -> Result<Vec<ProviderSessionSummary>> {
     let primary = paths.primary_store();
     let cli = paths.cli_store();
-    let cli_subagents = cli
-        .as_ref()
-        .map(collect_store_known_subagents)
-        .unwrap_or_default();
-    let primary_subagents = if payload.is_some() {
-        collect_store_known_subagents(&primary)
-    } else {
-        BTreeSet::new()
+    let (cli_offline_items, cli_subagents) = match cli.as_ref() {
+        Some(cli_store) => {
+            let (items, subs, _) =
+                list_offline_summaries_with_subagents(cli_store, filter_id, archived_filter)
+                    .unwrap_or_default();
+            (items, subs)
+        }
+        None => (Vec::new(), BTreeSet::new()),
     };
     let now_ms = now_epoch_ms();
-    let mut items = if let Some(payload) = payload {
+    let mut seen_primary_roots: BTreeSet<String> = BTreeSet::new();
+    let (mut items, primary_subagents) = if let Some(payload) = payload {
+        let (primary_offline, primary_subs, primary_roots) =
+            list_offline_summaries_with_subagents(&primary, filter_id, archived_filter)
+                .unwrap_or_default();
+        for id in primary_roots {
+            if paths.cli_store_for_id(&id).is_none()
+                && !cli_subagents.contains(&id)
+                && has_primary_session_storage(&primary, &id)
+            {
+                seen_primary_roots.insert(id);
+            }
+        }
         let map = payload["trajectorySummaries"].as_object();
         let sub_states = map.map(subagent_states_by_root).unwrap_or_default();
         let mut items = map
@@ -2001,11 +2245,18 @@ pub(crate) fn list_summaries_from_source(
                 filter_id.is_none_or(|target| target == id.as_str())
                     && paths.cli_store_for_id(id).is_none()
                     && !cli_subagents.contains(id.as_str())
-                    && !primary_subagents.contains(id.as_str())
+                    && !primary_subs.contains(id.as_str())
             })
             .filter_map(|(id, item)| {
                 let (exec_subs, wait_subs) = sub_states.get(id).copied().unwrap_or((false, false));
-                summary_from_live_json(&primary, id, item, exec_subs, wait_subs, now_ms)
+                let summary =
+                    summary_from_live_json(&primary, id, item, exec_subs, wait_subs, now_ms)?;
+                seen_primary_roots.insert(summary.id.clone());
+                if archived_filter.is_some_and(|want| want != summary.archived) {
+                    None
+                } else {
+                    Some(summary)
+                }
             })
             .collect::<Vec<_>>();
         // The live service reports only conversations it has loaded this run.
@@ -2015,8 +2266,7 @@ pub(crate) fn list_summaries_from_source(
             .map(|map| map.keys().map(String::as_str).collect::<BTreeSet<_>>())
             .unwrap_or_default();
         items.extend(
-            list_offline_summaries(&primary, filter_id)
-                .unwrap_or_default()
+            primary_offline
                 .into_iter()
                 // An index row whose native store is gone was deleted through
                 // the service and must not reappear from the index.
@@ -2027,23 +2277,30 @@ pub(crate) fn list_summaries_from_source(
                         && has_primary_session_storage(&primary, &item.id)
                 }),
         );
-        items
+        (items, primary_subs)
     } else {
-        list_offline_summaries(&primary, filter_id)?
+        let (primary_offline, primary_subs, primary_roots) =
+            list_offline_summaries_with_subagents(&primary, filter_id, archived_filter)?;
+        for id in primary_roots {
+            if paths.cli_store_for_id(&id).is_none() && !cli_subagents.contains(&id) {
+                seen_primary_roots.insert(id);
+            }
+        }
+        let filtered = primary_offline
             .into_iter()
             .filter(|item| {
                 paths.cli_store_for_id(&item.id).is_none() && !cli_subagents.contains(&item.id)
             })
-            .collect()
+            .collect();
+        (filtered, primary_subs)
     };
-    if let Some(cli) = cli {
-        let seen: BTreeSet<String> = items.iter().map(|i| i.id.clone()).collect();
-        items.extend(
-            list_offline_summaries(&cli, filter_id)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|item| !seen.contains(&item.id) && !primary_subagents.contains(&item.id)),
-        );
+    if cli.is_some() {
+        for existing in &items {
+            seen_primary_roots.insert(existing.id.clone());
+        }
+        items.extend(cli_offline_items.into_iter().filter(|item| {
+            !seen_primary_roots.contains(&item.id) && !primary_subagents.contains(&item.id)
+        }));
     }
     items.sort_by(|a, b| {
         b.updated_at
@@ -2072,7 +2329,7 @@ pub(crate) fn list_sessions_without_storage(
     request: &ProviderListRequest,
 ) -> Result<Vec<ProviderSessionSummary>> {
     let limit = request.limit.unwrap_or(200).clamp(1, 1000);
-    let all = list_all_summaries(paths)?;
+    let all = list_summaries_filtered_with_archive(paths, None, request.archived)?;
     Ok(all
         .into_iter()
         .filter(|item| match request.archived {

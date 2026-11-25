@@ -429,7 +429,7 @@ pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<St
     Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
 }
 
-fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'a str> {
+pub(crate) fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'a str> {
     names.iter().copied().find(|name| columns.contains(*name))
 }
 

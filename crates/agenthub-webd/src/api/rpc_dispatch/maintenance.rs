@@ -24,16 +24,12 @@ pub(super) async fn handle_probe_settings_save(state: AppState, args: Value) -> 
 }
 
 pub(super) async fn handle_probe_events(state: AppState, args: Value) -> ApiResponse {
-    get_probe_events(
-        state,
-        ProbeEventsQuery {
-            limit: args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
-        },
-    )
-    .await
+    let query = if args.is_null() {
+        ProbeEventsQuery::default()
+    } else {
+        rpc_payload(&args)?
+    };
+    get_probe_events(state, query).await
 }
 
 pub(super) async fn handle_probe_bark_test(state: AppState, _args: Value) -> ApiResponse {

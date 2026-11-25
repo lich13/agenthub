@@ -29,7 +29,9 @@ pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState
         seed.paths.db_path = isolated_root.join("agenthub.sqlite");
         seed.paths.log_dir = log_dir.clone();
         seed.codex.workspace = isolated_root.join("workspace");
-        let serialized = toml::to_string(&seed).context("serialize isolated config.toml")?;
+        let serialized = seed
+            .to_toml_string()
+            .context("serialize isolated config.toml")?;
         write_atomic_0600(&config_file, serialized.as_bytes())?;
     }
 

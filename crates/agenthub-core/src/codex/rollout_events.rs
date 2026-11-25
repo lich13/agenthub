@@ -421,9 +421,11 @@ pub(super) fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
     if is_internal_display_kind(payload_type)
         || if role == "user" {
             is_hidden_user_action_text(&text)
-                || crate::user_message::presentation_text(&text)
-                    .trim()
-                    .is_empty()
+                || crate::services::search::strip_memory_metadata(
+                    &crate::user_message::presentation_text(&text),
+                )
+                .trim()
+                .is_empty()
         } else {
             is_internal_context_message_text(&text)
         }
@@ -524,7 +526,9 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
     }) {
         return None;
     }
-    if text.as_deref().unwrap_or("").trim().is_empty()
+    if crate::services::search::strip_memory_metadata(text.as_deref().unwrap_or(""))
+        .trim()
+        .is_empty()
         && user_message.as_ref().is_none_or(|message| {
             message.attachments.is_empty() && message.context_blocks.is_empty()
         })
@@ -1256,7 +1260,10 @@ pub(crate) fn is_usable_thread_title(text: &str) -> bool {
         || lower.starts_with("loading")
         || lower.contains("<proposed_plan>")
         || looks_like_assistant_preview_title(trimmed)
-        || is_internal_context_message_text(trimmed))
+        || is_internal_context_message_text(trimmed)
+        || crate::services::search::strip_memory_metadata(trimmed)
+            .trim()
+            .is_empty())
 }
 
 fn looks_like_assistant_preview_title(text: &str) -> bool {

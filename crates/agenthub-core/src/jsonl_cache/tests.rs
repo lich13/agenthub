@@ -716,7 +716,8 @@ fn entry_limit_evicts_least_recently_read_file() {
     );
     assert_eq!(count.load(Ordering::SeqCst), 65);
     let rebuilt = read(&cache, &paths[1], &count).unwrap();
-    assert_ne!(rebuilt.epoch, views[1].epoch);
+    assert!(rebuilt.changed);
+    assert_eq!(rebuilt.epoch, views[1].epoch);
     assert_eq!(rebuilt.ids, vec![1]);
     assert_eq!(count.load(Ordering::SeqCst), 66);
 }
@@ -746,10 +747,9 @@ fn raised_entry_limit_reuses_more_sources_than_the_default() {
     // The raised value is still a limit: one more source evicts the oldest.
     let newest = fixture.file("history-newest.jsonl", b"{\"id\":2}\n");
     read(&cache, &newest, &count).unwrap();
-    assert_ne!(
-        read(&cache, &paths[0], &count).unwrap().epoch,
-        views[0].epoch
-    );
+    let rebuilt = read(&cache, &paths[0], &count).unwrap();
+    assert!(rebuilt.changed);
+    assert_eq!(rebuilt.epoch, views[0].epoch);
     assert_eq!(count.load(Ordering::SeqCst), SOURCES + 2);
 }
 
@@ -767,7 +767,8 @@ fn byte_budget_evicts_cached_state_before_entry_limit() {
     assert_eq!(retained.epoch, second.epoch);
     assert_eq!(count.load(Ordering::SeqCst), 2);
     let rebuilt = read_weighted(&cache, &first_path, &count, false, 4 * 1024).unwrap();
-    assert_ne!(rebuilt.epoch, first.epoch);
+    assert!(rebuilt.changed);
+    assert_eq!(rebuilt.epoch, first.epoch);
     assert_eq!(rebuilt.ids, vec![1]);
     assert_eq!(count.load(Ordering::SeqCst), 3);
 }
@@ -834,8 +835,9 @@ fn byte_budget_preserves_in_use_snapshot_and_evicts_it_after_release() {
     assert_eq!(count.load(Ordering::SeqCst), 2);
     read_weighted(&cache, &other_path, &count, false, weight).unwrap();
     let rebuilt = read_weighted(&cache, &active_path, &count, false, weight).unwrap();
+    assert!(rebuilt.changed);
     assert_eq!(rebuilt.ids, initial.ids);
-    assert_ne!(rebuilt.epoch, initial.epoch);
+    assert_eq!(rebuilt.epoch, initial.epoch);
     assert_eq!(count.load(Ordering::SeqCst), 4);
 }
 
@@ -849,8 +851,9 @@ fn oversize_snapshot_is_returned_but_not_retained() {
     let rebuilt = read_weighted(&cache, &path, &count, false, 8 * 1024).unwrap();
 
     assert_eq!(first.ids, vec![1]);
+    assert!(rebuilt.changed);
     assert_eq!(rebuilt.ids, first.ids);
-    assert_ne!(rebuilt.epoch, first.epoch);
+    assert_eq!(rebuilt.epoch, first.epoch);
     assert_eq!(count.load(Ordering::SeqCst), 2);
 }
 
@@ -868,8 +871,64 @@ fn idle_eviction_releases_stale_snapshots_and_retains_recent_entries() {
 
     cache.evict_idle(std::time::Duration::ZERO);
     let rebuilt = read_weighted(&cache, &path, &count, false, 64).unwrap();
-    assert_ne!(rebuilt.epoch, first.epoch);
+    assert!(rebuilt.changed);
+    assert_eq!(rebuilt.epoch, first.epoch);
     assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn evicted_source_preserves_epoch_across_append_and_rotates_on_in_place_truncation() {
+    let fixture = Fixture::new();
+    let path = fixture.file("history.jsonl", b"{\"id\":1}\n{\"id\":2}");
+    let cache = JsonlCache::new(128 * 1024);
+    let count = AtomicUsize::new(0);
+
+    // Oversize read #1 (evicted after release) with non-newline tail
+    let first = read_weighted(&cache, &path, &count, true, 256 * 1024).unwrap();
+    assert_eq!(first.ids, vec![1, 2]);
+    assert!(cache.entries.lock().unwrap().is_empty());
+
+    // Append newline + third record while evicted: epoch must stay identical!
+    append(&path, b"\n{\"id\":3}\n");
+    let after_append = read_weighted(&cache, &path, &count, true, 64).unwrap();
+    assert_eq!(after_append.ids, vec![1, 2, 3]);
+    assert_eq!(after_append.epoch, first.epoch);
+    assert_ne!(after_append.revision, first.revision);
+
+    // In-place truncation keeping line 1 while cached must rotate epoch via rewrite_gen!
+    rewrite(&path, b"{\"id\":1}\n");
+    let after_truncate = read_weighted(&cache, &path, &count, true, 64).unwrap();
+    assert_eq!(after_truncate.ids, vec![1]);
+    assert_ne!(after_truncate.epoch, first.epoch);
+
+    // Overflowing the 256-entry lineage ring while `path` stays cached must still preserve its rewrite_gen on append!
+    for idx in 0..260usize {
+        let other = fixture.file(&format!("spill-{idx}.jsonl"), b"{\"id\":9}\n");
+        read_weighted(&cache, &other, &count, true, 16).unwrap();
+        if idx % 16 == 15 {
+            // Unchanged cache hit keeps `path` MRU in `entries` without refreshing `lineage`
+            let hit = read_weighted(&cache, &path, &count, true, 16).unwrap();
+            assert!(!hit.changed);
+        }
+    }
+    append(&path, b"{\"id\":4}\n");
+    let after_ring_wrap = read_weighted(&cache, &path, &count, true, 16).unwrap();
+    assert_eq!(after_ring_wrap.ids, vec![1, 4]);
+    assert_eq!(after_ring_wrap.epoch, after_truncate.epoch);
+    cache.evict_idle(std::time::Duration::ZERO);
+    let cold_after_wrap = read_weighted(&cache, &path, &count, true, 16).unwrap();
+    assert_eq!(cold_after_wrap.epoch, after_truncate.epoch);
+
+    // 0-byte empty file -> append first line -> evict -> cold re-read must keep a stable epoch once populated!
+    let empty_first = fixture.file("empty-created.jsonl", b"");
+    let zero_view = read_weighted(&cache, &empty_first, &count, true, 64).unwrap();
+    assert!(zero_view.ids.is_empty());
+    append(&empty_first, b"{\"id\":10}\n");
+    let populated_cached = read_weighted(&cache, &empty_first, &count, true, 64).unwrap();
+    assert_eq!(populated_cached.ids, vec![10]);
+    cache.evict_idle(std::time::Duration::ZERO);
+    let populated_cold = read_weighted(&cache, &empty_first, &count, true, 64).unwrap();
+    assert_eq!(populated_cold.epoch, populated_cached.epoch);
 }
 
 fn record(journal: &mut HistoryJournal, epoch: &str, offset: u64, ids: Vec<String>) -> String {
@@ -1067,15 +1126,13 @@ fn compressed_snapshots_share_budget_and_release_oversize_and_idle_state() {
     let original = read_weighted(&cache, &plain, &count, false, 4096).unwrap();
     compressed_read(&cache, &compressed, &count, false, 4096).unwrap();
     assert_eq!(cache.entries.lock().unwrap().len(), 1);
-    assert_ne!(
-        read_weighted(&cache, &plain, &count, false, 4096)
-            .unwrap()
-            .epoch,
-        original.epoch
-    );
+    let plain_rebuilt = read_weighted(&cache, &plain, &count, false, 4096).unwrap();
+    assert!(plain_rebuilt.changed);
+    assert_eq!(plain_rebuilt.epoch, original.epoch);
     let oversize = compressed_read(&cache, &compressed, &count, false, 6000).unwrap();
     let rebuilt = compressed_read(&cache, &compressed, &count, false, 6000).unwrap();
-    assert_ne!(oversize.epoch, rebuilt.epoch);
+    assert!(rebuilt.changed);
+    assert_eq!(oversize.epoch, rebuilt.epoch);
     assert_eq!(oversize.ids, vec![2]);
     assert!(cache.entries.lock().unwrap().is_empty());
     compressed_read(&cache, &compressed, &count, false, 4096).unwrap();

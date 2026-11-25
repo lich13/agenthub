@@ -202,10 +202,14 @@ pub(super) async fn cleanup_unified_execute(
                 state.codex_paths(),
             )
             .map_err(|error| error.to_string())?;
-            AgentHubUseCases::new(state.platform())
+            let (result, deleted_streams) = AgentHubUseCases::new(state.platform())
                 .cleanup()
-                .unified_execute(&paths, args.request)
-                .map_err(|e| e.to_string())
+                .unified_execute_with_deleted_streams(&paths, args.request)
+                .map_err(|e| e.to_string())?;
+            let _ = state
+                .db
+                .prune_cursors_after_unified_cleanup(&deleted_streams);
+            Ok(result)
         })
         .await
         .map_err(|_| "全平台清理任务未完成".to_string())?,

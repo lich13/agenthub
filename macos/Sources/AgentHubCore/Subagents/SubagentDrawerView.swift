@@ -381,7 +381,8 @@ public struct SubagentPanelView: View {
                             hasTimelineRail: !timelineEntries.isEmpty,
                             isSubagent: true,
                             canLoadOlder: hasMoreOlder && beforeCursor != nil,
-                            isLoadingOlder: loadingOlder
+                            isLoadingOlder: loadingOlder,
+                            isLoadOlderBlockedByError: errorText != nil
                         )
                         if !timelineEntries.isEmpty {
                             TimelineRailView(
@@ -389,6 +390,7 @@ public struct SubagentPanelView: View {
                                 activeId: activeTimelineId,
                                 availableWidth: LayoutMetrics.subagentDrawerWidth,
                                 loadOlder: (hasMoreOlder && beforeCursor != nil) ? {
+                                    errorText = nil
                                     Task { await loadOlderSubagentPageIfNeeded() }
                                 } : nil,
                                 loadingOlder: loadingOlder
@@ -481,7 +483,11 @@ public struct SubagentPanelView: View {
                 .frame(width: 0, height: 0)
             }
         }
-        .onExitCommand { onClose() }
+        .onExitCommand {
+            if !AppInputCompositionGuard.responderHasMarkedText() {
+                onClose()
+            }
+        }
         .onAppear {
             if coordinatorRef == nil {
                 let c = ConversationTableCoordinator(store: store)
@@ -766,21 +772,41 @@ public struct SubagentPanelView: View {
     }
 
     private func loadOlderSubagentPageIfNeeded() async {
-        guard hasMoreOlder, !loadingOlder, let cursor = beforeCursor,
-              let agent = currentAgent, let agentId = agent.agentId, !agentId.isEmpty
-        else { return }
+        guard hasMoreOlder, !loadingOlder, errorText == nil else { return }
+        coordinatorRef?.markUpwardNavigationIntent()
+        for step in 0 ..< 5 {
+            guard hasMoreOlder, !loadingOlder, errorText == nil,
+                  let agent = currentAgent, let agentId = agent.agentId, !agentId.isEmpty
+            else { break }
+            let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
+            let prevCount = rows.count
+            let limitOverride: Int? = (step > 0 || prevCount <= 2) ? 500 : nil
+            let loaded = await loadSingleOlderSubagentPage(agentId: agentId, limitOverride: limitOverride)
+            if !loaded { break }
+            guard let coord = coordinatorRef else { break }
+            let newHeight = coord.renderedContentHeight
+            let needsMore = coord.isViewportUnderfilled
+                || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
+                || (rows.count <= prevCount && rows.count <= 2)
+            if !needsMore { break }
+        }
+    }
+
+    private func loadSingleOlderSubagentPage(agentId: String, limitOverride: Int?) async -> Bool {
+        guard hasMoreOlder, !loadingOlder, let cursor = beforeCursor else { return false }
         loadingOlder = true
         defer { if currentAgent?.agentId == agentId { loadingOlder = false } }
         let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
 
         do {
             if provider == .codex {
+                let reqLimit = limitOverride ?? 120
                 struct ReqWrap: Encodable { let request: SubagentDetailRequest }
                 let resp: SubagentDetailResponse = try await store.rpc(
                     "threads.subagentDetail",
-                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: 120, before: cursor))
+                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
                 let page = ThreadBlockPage(
                     threadId: resp.detail.summary.id,
                     blocks: resp.detail.blocks,
@@ -790,10 +816,13 @@ public struct SubagentPanelView: View {
                     history: resp.detail.history
                 )
                 let slot = subagentThreadStore.applyBlockPage(page, expectedCursor: cursor)
-                hasMoreOlder = slot.hasMoreBlocks && slot.beforeCursor != cursor
+                let advanced = !resp.detail.blocks.isEmpty && slot.beforeCursor != cursor
+                hasMoreOlder = advanced ? slot.hasMoreBlocks : false
                 beforeCursor = hasMoreOlder ? slot.beforeCursor : nil
                 applyOlderPageRows(buildCodexSubagentRows(blocks: slot.blocks, agentName: resp.agent.name))
+                return advanced || !resp.detail.blocks.isEmpty
             } else if provider == .claudeCode {
+                let reqLimit = limitOverride ?? 160
                 struct ClaudeSubReq: Encodable {
                     let sessionKey: String
                     let agentId: String
@@ -802,9 +831,9 @@ public struct SubagentPanelView: View {
                 }
                 let page: ClaudeSessionDetail = try await store.rpc(
                     "claude.detail",
-                    args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160, before: cursor)
+                    args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor)
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
                 let slot = subagentClaudeStore.applyOlderPage(
                     key: scopeKey,
                     expectedCursor: cursor,
@@ -817,13 +846,15 @@ public struct SubagentPanelView: View {
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
                 applyOlderPageRows(buildClaudeSubagentRows(events: slot.events))
+                return !page.events.isEmpty && slot.beforeCursor != cursor
             } else if provider == .antigravity {
+                let reqLimit = limitOverride ?? 160
                 struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     "antigravity.detail",
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: 160, before: cursor))
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
                 if let latestAgent = page.agent, latestAgent.agentId == agentId {
                     updateCurrentFrameAgent(latestAgent)
                 }
@@ -843,10 +874,13 @@ public struct SubagentPanelView: View {
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
                 applyOlderPageRows(buildAntigravitySubagentRows(events: slot.events, latestAgent: page.agent))
+                return !page.events.isEmpty && slot.beforeCursor != cursor
             }
+            return false
         } catch {
-            guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return }
+            guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
             errorText = error.localizedDescription
+            return false
         }
     }
 
@@ -1092,6 +1126,9 @@ private struct SubagentModalFocusTrapView: NSViewRepresentable {
 
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 if event.keyCode == 53 && flags.isEmpty {
+                    guard !AppInputCompositionGuard.responderHasMarkedText(win.firstResponder) else {
+                        return event
+                    }
                     self.onEscape()
                     return nil
                 }

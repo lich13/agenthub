@@ -68,35 +68,62 @@ impl Stamp {
 
 // Reject links in every component below the configured root, including the leaf.
 // Canonicalizing a path alone would silently count a link's external target.
-fn metadata(root: &Path, path: &Path) -> Option<(PathBuf, Metadata)> {
-    if fs::symlink_metadata(root).ok()?.file_type().is_symlink() {
-        return None;
-    }
-    let canonical_root = root.canonicalize().ok()?;
+fn metadata_with_canonical_root(
+    root: &Path,
+    canonical_root: Option<&Path>,
+    path: &Path,
+) -> Option<(PathBuf, Metadata)> {
+    let owned_canonical: PathBuf;
+    let canonical = match canonical_root {
+        Some(prevalidated) => prevalidated,
+        None => {
+            if fs::symlink_metadata(root).ok()?.file_type().is_symlink() {
+                return None;
+            }
+            owned_canonical = root.canonicalize().ok()?;
+            &owned_canonical
+        }
+    };
     let relative = path
         .strip_prefix(root)
-        .or_else(|_| path.strip_prefix(&canonical_root))
+        .or_else(|_| path.strip_prefix(canonical))
         .ok()?;
-    let mut resolved = canonical_root;
+    let mut resolved = canonical.to_path_buf();
+    let mut last_meta: Option<Metadata> = None;
     for component in relative.components() {
         let Component::Normal(name) = component else {
             return None;
         };
         resolved.push(name);
-        if fs::symlink_metadata(&resolved)
-            .ok()?
-            .file_type()
-            .is_symlink()
-        {
+        let meta = fs::symlink_metadata(&resolved).ok()?;
+        if meta.file_type().is_symlink() {
             return None;
         }
+        last_meta = Some(meta);
     }
-    let meta = fs::symlink_metadata(&resolved).ok()?;
+    let meta = match last_meta {
+        Some(meta) => meta,
+        None => fs::symlink_metadata(&resolved).ok()?,
+    };
     Some((resolved, meta))
 }
 
+fn metadata(root: &Path, path: &Path) -> Option<(PathBuf, Metadata)> {
+    metadata_with_canonical_root(root, None, path)
+}
+
 pub fn file_size(root: &Path, file: &Path) -> SessionStorageSize {
-    match metadata(root, file).filter(|(_, meta)| meta.is_file()) {
+    file_size_with_canonical_root(root, None, file)
+}
+
+pub(crate) fn file_size_with_canonical_root(
+    root: &Path,
+    canonical_root: Option<&Path>,
+    file: &Path,
+) -> SessionStorageSize {
+    match metadata_with_canonical_root(root, canonical_root, file)
+        .filter(|(_, meta)| meta.is_file())
+    {
         Some((_, meta)) => SessionStorageSize {
             bytes: Some(meta.len()),
             scope: StorageScope::File,

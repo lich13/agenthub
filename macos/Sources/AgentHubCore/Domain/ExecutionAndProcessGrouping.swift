@@ -91,6 +91,14 @@ public enum ConversationViewModel {
             {
                 return false
             }
+            let attachments = block.userMessage?.attachments ?? []
+            if attachments.isEmpty {
+                let rawBody = block.userMessage?.text ?? block.text ?? ""
+                let proj = UserContextEngine.projectUserMessage(rawBody, contextBlocks: block.userMessage?.contextBlocks)
+                if proj.contextBlocks.isEmpty && UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks).isEmpty {
+                    return false
+                }
+            }
         } else if internalPrefixes.contains(where: { trimmedStart.hasPrefix($0) }) {
             return false
         }
@@ -400,27 +408,66 @@ public enum ExecutionGroupingEngine {
         return "命令"
     }
 
-    private static func activityPreview(_ sources: [String?]) -> String? {
-        for source in sources {
-            guard let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            var text = source
-            if source.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{"),
-               let data = source.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            {
-                for key in ["cmd", "command", "title", "path", "file_path", "query", "code"] {
-                    if let val = json[key] as? String, !val.isEmpty {
-                        text = val
-                        break
-                    }
+    private static let previewCacheLock = NSLock()
+    nonisolated(unsafe) private static var previewCache: [String: String] = [:]
+    nonisolated(unsafe) private static var previewCacheOrder: [String] = []
+    private static let maxPreviewCacheEntries = 512
+
+    private static func singleSourcePreview(_ source: String) -> String? {
+        let trimmedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSource.isEmpty else { return nil }
+        let cacheable = trimmedSource.utf8.count <= 16_384
+        if cacheable {
+            previewCacheLock.lock()
+            if let hit = previewCache[trimmedSource] {
+                previewCacheLock.unlock()
+                return hit.isEmpty ? nil : hit
+            }
+            previewCacheLock.unlock()
+        }
+
+        var text = source
+        if trimmedSource.hasPrefix("{"),
+           trimmedSource.utf8.count <= 65_536,
+           let data = trimmedSource.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            for key in ["cmd", "command", "title", "path", "file_path", "query", "code"] {
+                if let val = json[key] as? String, !val.isEmpty {
+                    text = val
+                    break
                 }
             }
-            let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
-                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleaned.isEmpty {
-                let ns = cleaned as NSString
-                return ns.length > 180 ? "\(ns.substring(to: 180))…" : cleaned
+        }
+        let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let result: String? = if !cleaned.isEmpty {
+            (cleaned as NSString).length > 180 ? "\((cleaned as NSString).substring(to: 180))…" : cleaned
+        } else {
+            nil
+        }
+
+        if cacheable {
+            previewCacheLock.lock()
+            if previewCache[trimmedSource] == nil {
+                if previewCacheOrder.count >= maxPreviewCacheEntries, let oldest = previewCacheOrder.first {
+                    previewCacheOrder.removeFirst()
+                    previewCache.removeValue(forKey: oldest)
+                }
+                previewCacheOrder.append(trimmedSource)
+            }
+            previewCache[trimmedSource] = result ?? ""
+            previewCacheLock.unlock()
+        }
+        return result
+    }
+
+    private static func activityPreview(_ sources: [String?]) -> String? {
+        for source in sources {
+            guard let source else { continue }
+            if let preview = singleSourcePreview(source) {
+                return preview
             }
         }
         return nil

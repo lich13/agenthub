@@ -798,13 +798,38 @@ pub(crate) fn strip_memory_metadata(input: &str) -> String {
 fn page_metadata_length(input: &str) -> Option<usize> {
     const OPEN: &str = "<external_codex_apps_open_page>";
     const CLOSE: &str = "</external_codex_apps_open_page>";
-    let body = input.strip_prefix(OPEN)?;
-    let end = body.find(CLOSE)?;
-    let value: Value = serde_json::from_str(&body[..end]).ok()?;
+    if let Some(body) = input.strip_prefix(OPEN) {
+        let end = body.find(CLOSE)?;
+        let value: Value = serde_json::from_str(&body[..end]).ok()?;
+        let object = value.as_object()?;
+        let page_id = object.get("page_id")?;
+        return (object.len() == 1 && (page_id.is_null() || page_id.is_string()))
+            .then_some(OPEN.len() + end + CLOSE.len());
+    }
+    selected_page_snapshot_length(input)
+}
+
+fn selected_page_snapshot_length(input: &str) -> Option<usize> {
+    const TAG_PREFIX: &str = "<external_codex_apps_selected_page_part_";
+    let rest = input.strip_prefix(TAG_PREFIX)?;
+    let gt = rest.find('>')?;
+    let tag_spec = &rest[..gt];
+    let (part_str, total_str) = tag_spec.split_once("_of_")?;
+    let part: u32 = part_str.parse().ok().filter(|&n| n >= 1)?;
+    let total: u32 = total_str.parse().ok().filter(|&n| n >= part)?;
+
+    let open_len = TAG_PREFIX.len() + gt + 1;
+    let close_tag = format!("</external_codex_apps_selected_page_part_{part_str}_of_{total_str}>");
+    let body_all = &input[open_len..];
+    let close_pos = body_all.find(&close_tag)?;
+    let inner = &body_all[..close_pos];
+    let expected_header = format!("Companion Page snapshot part {part} of {total}:");
+    let json_slice = inner.strip_prefix(&expected_header)?.trim();
+    let value: Value = serde_json::from_str(json_slice).ok()?;
     let object = value.as_object()?;
     let page_id = object.get("page_id")?;
-    (object.len() == 1 && (page_id.is_null() || page_id.is_string()))
-        .then_some(OPEN.len() + end + CLOSE.len())
+    (object.contains_key("document_view") && (page_id.is_null() || page_id.is_string()))
+        .then_some(open_len + close_pos + close_tag.len())
 }
 
 fn match_metadata_tag(input: &str) -> Option<(bool, &'static str, usize)> {
@@ -1362,6 +1387,48 @@ mod tests {
         assert!(corpus.contains("LEGACY_VISIBLE_BODY_TOKEN"));
         assert!(!corpus.contains("LEGACY_MEMORY_SECRET_TOKEN"));
         assert!(!corpus.contains("fixture-page-secret-token"));
+    }
+
+    #[test]
+    fn selected_page_snapshot_wrapper_is_stripped_outside_literals_and_never_creates_timeline_marker(
+    ) {
+        let snapshot = concat!(
+            "<external_codex_apps_selected_page_part_1_of_1>Companion Page snapshot part 1 of 1:\n",
+            "{\"page_id\":null,\"document_view\":null}\n",
+            "</external_codex_apps_selected_page_part_1_of_1>"
+        );
+        // 1) Snapshot-only message produces empty visible markdown, empty search corpus, and zero timeline markers
+        assert_eq!(super::strip_memory_metadata(snapshot).trim(), "");
+        let only_value = json!({
+            "role": "user",
+            "text": snapshot,
+            "userMessage": {
+                "id": "msg-snap-only",
+                "text": snapshot,
+                "contextBlocks": [],
+                "attachments": []
+            }
+        });
+        assert!(json_corpus(&only_value).unwrap().trim().is_empty());
+        let tl = crate::history_navigation::timeline(std::iter::once((
+            "msg-snap-only",
+            None,
+            Some(snapshot),
+        )));
+        assert!(tl.is_empty());
+
+        // 2) Mixed message strips snapshot JSON while keeping real user request
+        let mixed = format!("{snapshot}\n盘点命令型工具");
+        assert_eq!(
+            super::strip_memory_metadata(&mixed).trim(),
+            "盘点命令型工具"
+        );
+
+        // 3) Fenced code and mismatched part numbers are preserved verbatim
+        let fenced = format!("```xml\n{snapshot}\n```");
+        assert_eq!(super::strip_memory_metadata(&fenced), fenced);
+        let mismatched = "<external_codex_apps_selected_page_part_1_of_2>Companion Page snapshot part 1 of 2:\n{\"page_id\":null}\n</external_codex_apps_selected_page_part_2_of_2>";
+        assert_eq!(super::strip_memory_metadata(mismatched), mismatched);
     }
 
     #[test]

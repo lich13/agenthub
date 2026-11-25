@@ -163,13 +163,16 @@ public final class RuntimeConnectionStore: ObservableObject {
 
     // MARK: - Typed RPC & Machine Switching
 
+    private static let jsonEncoder = JSONEncoder()
+    private static let jsonDecoder = JSONDecoder()
+
     public func invokeLocal<Res: Decodable>(_ command: String, argsJSON: String = "{}") async throws -> Res {
         let data = try await transport.invokeRawJSON(command: command, argsJSON: argsJSON)
-        return try JSONDecoder().decode(Res.self, from: data)
+        return try Self.jsonDecoder.decode(Res.self, from: data)
     }
 
     public func invokeLocal<Req: Encodable, Res: Decodable>(_ command: String, args: Req) async throws -> Res {
-        let encoded = try JSONEncoder().encode(args)
+        let encoded = try Self.jsonEncoder.encode(args)
         let argsJSON = String(data: encoded, encoding: .utf8) ?? "{}"
         return try await invokeLocal(command, argsJSON: argsJSON)
     }
@@ -191,10 +194,9 @@ public final class RuntimeConnectionStore: ObservableObject {
             else { return false }
             return true
         }()
-        let encoded = try JSONEncoder().encode(argsObject)
         return try await executeRPC(
             command,
-            encodedArgs: encoded,
+            args: argsObject,
             isCancelHiddenScan: isCancelHiddenScan,
             isReadHookStatus: isReadHookStatus,
             localOnly: localOnly,
@@ -209,7 +211,18 @@ public final class RuntimeConnectionStore: ObservableObject {
         at expectedRevision: UInt64? = nil
     ) async throws -> Res {
         let data = try await rpcRaw(command, argsObject: args, localOnly: localOnly, at: expectedRevision)
-        return try JSONDecoder().decode(Res.self, from: data)
+        return try Self.jsonDecoder.decode(Res.self, from: data)
+    }
+
+    private static func inspectRequestStringField(_ args: Any, field: String) -> String? {
+        for child in Mirror(reflecting: args).children where child.label == "request" {
+            for inner in Mirror(reflecting: child.value).children where inner.label == field {
+                if let str = inner.value as? String {
+                    return str
+                }
+            }
+        }
+        return nil
     }
 
     public func rpc<Req: Encodable, Res: Decodable>(
@@ -218,28 +231,25 @@ public final class RuntimeConnectionStore: ObservableObject {
         localOnly: Bool = false,
         at expectedRevision: UInt64? = nil
     ) async throws -> Res {
-        let encodedArgs = try JSONEncoder().encode(args)
-        var isCancelHiddenScan = false
-        var isReadHookStatus = false
-        if (changing && command == "cleanup.hiddenDryRun") || command == "claude.hooks" {
-            let probe = try? JSONDecoder().decode(RequestControlProbe.self, from: encodedArgs)
-            isCancelHiddenScan = command == "cleanup.hiddenDryRun" && probe?.request?.mode == "cancel"
-            isReadHookStatus = command == "claude.hooks" && probe?.request?.action == "status"
-        }
+        let isCancelHiddenScan = changing
+            && command == "cleanup.hiddenDryRun"
+            && Self.inspectRequestStringField(args, field: "mode") == "cancel"
+        let isReadHookStatus = command == "claude.hooks"
+            && Self.inspectRequestStringField(args, field: "action") == "status"
         let data = try await executeRPC(
             command,
-            encodedArgs: encodedArgs,
+            args: args,
             isCancelHiddenScan: isCancelHiddenScan,
             isReadHookStatus: isReadHookStatus,
             localOnly: localOnly,
             at: expectedRevision
         )
-        return try JSONDecoder().decode(Res.self, from: data)
+        return try Self.jsonDecoder.decode(Res.self, from: data)
     }
 
-    private func executeRPC(
+    private func executeRPC<Args: Encodable>(
         _ command: String,
-        encodedArgs: Data,
+        args: Args,
         isCancelHiddenScan: Bool,
         isReadHookStatus: Bool,
         localOnly: Bool,
@@ -262,13 +272,21 @@ public final class RuntimeConnectionStore: ObservableObject {
         if isWrite { writes += 1 }
         defer { if isWrite { writes = max(0, writes - 1) } }
 
-        let argsJSON = String(data: encodedArgs, encoding: .utf8) ?? "{}"
         let data: Data
         if capturedTarget == .remote && !localOnly {
-            let cmdJSON = String(data: try JSONEncoder().encode(command), encoding: .utf8) ?? "\"\""
-            let envelopeJSON = "{\"request\":{\"revision\":\(capturedRevision),\"command\":\(cmdJSON),\"args\":\(argsJSON)}}"
+            let envelope = RemoteInvokeEnvelope(
+                request: RemoteInvokeRequest(
+                    revision: capturedRevision,
+                    command: command,
+                    args: args
+                )
+            )
+            let encodedEnvelope = try Self.jsonEncoder.encode(envelope)
+            let envelopeJSON = String(data: encodedEnvelope, encoding: .utf8) ?? "{}"
             data = try await transport.invokeRawJSON(command: "remote.invoke", argsJSON: envelopeJSON)
         } else {
+            let encodedArgs = try Self.jsonEncoder.encode(args)
+            let argsJSON = String(data: encodedArgs, encoding: .utf8) ?? "{}"
             data = try await transport.invokeRawJSON(command: command, argsJSON: argsJSON)
         }
 
@@ -401,10 +419,12 @@ private struct RemoteRequestEnvelope<T: Encodable>: Encodable {
     let request: T
 }
 
-private struct RequestControlProbe: Decodable {
-    struct Inner: Decodable {
-        let mode: String?
-        let action: String?
-    }
-    let request: Inner?
+private struct RemoteInvokeRequest<Args: Encodable>: Encodable {
+    let revision: UInt64
+    let command: String
+    let args: Args
+}
+
+private struct RemoteInvokeEnvelope<Args: Encodable>: Encodable {
+    let request: RemoteInvokeRequest<Args>
 }

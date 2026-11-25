@@ -9,7 +9,7 @@ extension NSAttributedString.Key {
 // MARK: - Rendered GFM Segment & Bounded 256-entry / 2 MiB Cache
 
 public enum GfmRenderedSegment {
-    case prose(attributed: NSAttributedString, isQuote: Bool)
+    case prose(attributed: NSAttributedString)
     case codeBlock(language: String?, code: String)
     case table(alignments: [GfmAlignment], headers: [NSAttributedString], rows: [[NSAttributedString]])
     case thematicBreak
@@ -21,14 +21,24 @@ public final class GfmLayoutCache {
     public static let maxEntries = 256
     public static let maxBytes = 2 * 1024 * 1024
     public static let shared = GfmLayoutCache()
+    private static let gfmDecoder = JSONDecoder()
+
+    private struct CacheKey: Hashable {
+        let scheme: ColorSchemeKind
+        let workspace: WorkspaceId
+        let foldInstructions: Bool
+        let utf8Count: Int
+        let cleaned: String
+    }
 
     private struct Entry {
         let segments: [GfmRenderedSegment]
         let estimatedBytes: Int
+        var lastSeq: UInt64
     }
 
-    private var entries: [String: Entry] = [:]
-    private var order: [String] = []
+    private var entries: [CacheKey: Entry] = [:]
+    private var accessSeq: UInt64 = 0
     public private(set) var totalBytes: Int = 0
 
     public init() {}
@@ -41,12 +51,17 @@ public final class GfmLayoutCache {
         transport: any RuntimeTransport
     ) -> [GfmRenderedSegment] {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
-        let key = "\(scheme.rawValue):\(workspace.rawValue):\(foldInstructions ? 1 : 0):\(cleaned)"
-        if let hit = entries[key] {
-            if let idx = order.firstIndex(of: key) {
-                order.remove(at: idx)
-                order.append(key)
-            }
+        let key = CacheKey(
+            scheme: scheme,
+            workspace: workspace,
+            foldInstructions: foldInstructions,
+            utf8Count: cleaned.utf8.count,
+            cleaned: cleaned
+        )
+        if var hit = entries[key] {
+            accessSeq &+= 1
+            hit.lastSeq = accessSeq
+            entries[key] = hit
             return hit.segments
         }
 
@@ -60,14 +75,13 @@ public final class GfmLayoutCache {
         let estBytes = max(64, cleaned.utf8.count * 3 + rendered.count * 96)
         if estBytes <= Self.maxBytes {
             while entries.count >= Self.maxEntries || totalBytes + estBytes > Self.maxBytes {
-                guard let oldest = order.first else { break }
-                order.removeFirst()
-                if let removed = entries.removeValue(forKey: oldest) {
+                guard let oldestKey = entries.min(by: { $0.value.lastSeq < $1.value.lastSeq })?.key else { break }
+                if let removed = entries.removeValue(forKey: oldestKey) {
                     totalBytes = max(0, totalBytes - removed.estimatedBytes)
                 }
             }
-            entries[key] = Entry(segments: rendered, estimatedBytes: estBytes)
-            order.append(key)
+            accessSeq &+= 1
+            entries[key] = Entry(segments: rendered, estimatedBytes: estBytes, lastSeq: accessSeq)
             totalBytes += estBytes
         }
         return rendered
@@ -75,7 +89,7 @@ public final class GfmLayoutCache {
 
     public func clear() {
         entries.removeAll()
-        order.removeAll()
+        accessSeq = 0
         totalBytes = 0
     }
 
@@ -107,7 +121,7 @@ public final class GfmLayoutCache {
                 continue
             }
             let astData = transport.parseGfmMarkdown(slice.text)
-            let doc = (try? JSONDecoder().decode(GfmDocument.self, from: astData)) ?? GfmDocument(blocks: [])
+            let doc = (try? gfmDecoder.decode(GfmDocument.self, from: astData)) ?? GfmDocument(blocks: [])
             output.append(contentsOf: renderBlocks(doc.blocks, palette: palette))
         }
         return output
@@ -126,7 +140,7 @@ public final class GfmLayoutCache {
                 proseBuffer.deleteCharacters(in: NSRange(location: proseBuffer.length - 1, length: 1))
             }
             if proseBuffer.length > 0 {
-                output.append(.prose(attributed: NSAttributedString(attributedString: proseBuffer), isQuote: false))
+                output.append(.prose(attributed: NSAttributedString(attributedString: proseBuffer)))
             }
             proseBuffer = NSMutableAttributedString()
         }

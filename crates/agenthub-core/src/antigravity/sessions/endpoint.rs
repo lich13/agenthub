@@ -599,6 +599,8 @@ pub fn evict_idle_endpoint_cache(max_idle: Duration) {
             *guard = None;
         }
     }
+    super::cli_meta::evict_idle_meta_cache(max_idle);
+    super::evict_idle_file_caches(max_idle);
 }
 
 #[derive(Debug)]

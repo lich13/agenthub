@@ -64,6 +64,22 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var pendingSearch: SessionSearchResult?
     @Published var searchSelection: UnifiedSessionSummaryItem?
     @Published var latestReplyText: String?
+    private(set) var latestNativeTailId: String?
+    private(set) var detailSelectionGeneration: UInt64 = 0
+    private var lastRenderedPollSig: LastRenderedPollSignature?
+
+    private struct LastRenderedPollSignature: Equatable {
+        let scopeKey: String
+        let epoch: String
+        let revision: String
+        let running: Bool
+        let title: String
+        let showAllHistory: Bool
+        let revealedPositionKey: String?
+        let subagentsSupported: Bool
+        let subagents: SubagentCollection?
+        let subagentUpdates: [String: SubagentActivity]?
+    }
     @Published var renameRequestSeqByKey: [String: Int] = [:]
     @Published var codexTailRefreshTask: Task<Void, Never>?
     @Published var codexCreateError: String?
@@ -404,8 +420,34 @@ final class ProviderWorkspaceStore: ObservableObject {
         }
     }
 
-    func isCurrentDetail(_ item: UnifiedSessionSummaryItem) -> Bool {
-        !Task.isCancelled && store.revision == sourceRevision && selectedItem?.sessionKey == item.sessionKey
+    func resetDetailStateForSelectionChange() {
+        detailSelectionGeneration &+= 1
+        errorMessage = nil
+        feedbackMessage = nil
+        currentDetailHistory = nil
+        headerInlineRename = false
+        detailLoading = false
+        loadingOlder = false
+        hasMoreOlder = false
+        beforeCursor = nil
+        showAllHistory = false
+        detailLoadedForKey = nil
+        latestReplyText = nil
+        latestNativeTailId = nil
+        lastRenderedPollSig = nil
+        rows = []
+        timelineEntries = []
+        subagents = nil
+        revealedPositionKey = nil
+        loadOlderError = nil
+        timelineWindow.returnToLatest()
+    }
+
+    func isCurrentDetail(_ item: UnifiedSessionSummaryItem, generation: UInt64? = nil) -> Bool {
+        !Task.isCancelled
+            && store.revision == sourceRevision
+            && selectedItem?.sessionKey == item.sessionKey
+            && (generation == nil || detailSelectionGeneration == generation)
     }
 
     var subagentsSupportedForCurrentProvider: Bool {
@@ -452,12 +494,16 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func fetchSessionDetail(for item: UnifiedSessionSummaryItem) async {
-        guard isCurrentDetail(item) else { return }
+        let generation = detailSelectionGeneration
+        guard isCurrentDetail(item, generation: generation) else { return }
         let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
-        if detailLoadedForKey != item.sessionKey {
+        let isFirstLoadForKey = (detailLoadedForKey != item.sessionKey)
+        if isFirstLoadForKey {
             detailLoading = true
+            latestNativeTailId = nil
+            lastRenderedPollSig = nil
         }
-        defer { if isCurrentDetail(item) { detailLoading = false } }
+        defer { if isCurrentDetail(item, generation: generation) { detailLoading = false } }
         do {
             var incomingHistory: HistoryMetadata?
             switch provider {
@@ -471,10 +517,31 @@ final class ProviderWorkspaceStore: ObservableObject {
                     "threads.detail",
                     args: DetailArgs(id: item.sessionKey, options: .init(limit: 120))
                 ) else { return }
-                guard isCurrentDetail(item) else { return }
-                syncSidebarItem(mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived"))
-                let slot = threadStore.applyDetail(detail)
+                guard isCurrentDetail(item, generation: generation) else { return }
+                let mappedCodex = mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived")
+                syncSidebarItem(mappedCodex)
                 incomingHistory = detail.history
+                let effectiveTitle = threadStore.effectiveTitle(threadId: detail.summary.id, serverTitle: detail.summary.title)
+                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
+                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+                    return LastRenderedPollSignature(
+                        scopeKey: historyScope,
+                        epoch: h.epoch,
+                        revision: h.revision,
+                        running: mappedCodex.running,
+                        title: effectiveTitle,
+                        showAllHistory: showAllHistory || threadStore.slot(for: item.sessionKey).showAllHistory,
+                        revealedPositionKey: revealedPositionKey,
+                        subagentsSupported: subagentsSupportedForCurrentProvider,
+                        subagents: detail.subagents,
+                        subagentUpdates: detail.subagentUpdates
+                    )
+                }
+                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                    break
+                }
+                let slot = threadStore.applyDetail(detail)
+                latestNativeTailId = slot.blocks.last?.id
                 let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
                 if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
@@ -482,7 +549,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                 let nextRows = ConversationRowBuilder.buildCodexRows(
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
-                    planFallbackTitle: item.title,
+                    planFallbackTitle: effectiveTitle,
                     subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: revealedPositionKey
                 )
@@ -497,6 +564,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     return nil
                 }.first
                 if latestReplyText != nextReply { latestReplyText = nextReply }
+                lastRenderedPollSig = candidateSig
 
             case .claudeCode:
                 struct Req: Encodable { let sessionKey: String; let limit: Int }
@@ -504,8 +572,28 @@ final class ProviderWorkspaceStore: ObservableObject {
                     "claude.detail",
                     args: Req(sessionKey: item.sessionKey, limit: 160)
                 )
-                guard isCurrentDetail(item) else { return }
-                syncSidebarItem(mapClaudeSummary(detail.summary))
+                guard isCurrentDetail(item, generation: generation) else { return }
+                let mappedClaude = mapClaudeSummary(detail.summary)
+                syncSidebarItem(mappedClaude)
+                incomingHistory = detail.history
+                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
+                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+                    return LastRenderedPollSignature(
+                        scopeKey: historyScope,
+                        epoch: h.epoch,
+                        revision: h.revision,
+                        running: mappedClaude.running,
+                        title: mappedClaude.title,
+                        showAllHistory: false,
+                        revealedPositionKey: nil,
+                        subagentsSupported: subagentsSupportedForCurrentProvider,
+                        subagents: detail.subagents,
+                        subagentUpdates: nil
+                    )
+                }
+                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                    break
+                }
                 let slot = claudeHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -516,7 +604,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     timeline: detail.timeline,
                     subagents: detail.subagents
                 )
-                incomingHistory = detail.history
+                latestNativeTailId = slot.events.last?.id
                 let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
                 if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
@@ -530,6 +618,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                 if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
                 let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
                 if latestReplyText != nextReply { latestReplyText = nextReply }
+                lastRenderedPollSig = candidateSig
 
             case .grok:
                 struct Req: Encodable { let id: String; let limit: Int }
@@ -537,9 +626,28 @@ final class ProviderWorkspaceStore: ObservableObject {
                     "grok.detail",
                     args: Req(id: item.sessionKey, limit: 160)
                 )
-                guard isCurrentDetail(item) else { return }
+                guard isCurrentDetail(item, generation: generation) else { return }
                 let mappedGrok = mapGrokSummary(detail.summary)
                 syncSidebarItem(mappedGrok)
+                incomingHistory = detail.history
+                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
+                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+                    return LastRenderedPollSignature(
+                        scopeKey: historyScope,
+                        epoch: h.epoch,
+                        revision: h.revision,
+                        running: mappedGrok.running,
+                        title: mappedGrok.title,
+                        showAllHistory: false,
+                        revealedPositionKey: nil,
+                        subagentsSupported: false,
+                        subagents: nil,
+                        subagentUpdates: nil
+                    )
+                }
+                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                    break
+                }
                 let slot = grokHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -549,7 +657,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     hasMore: detail.hasMore ?? false,
                     timeline: detail.timeline
                 )
-                incomingHistory = detail.history
+                latestNativeTailId = slot.events.last.flatMap { $0.id ?? $0.userMessage?.id }
                 if subagents != nil { subagents = nil }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
                 if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
@@ -568,6 +676,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                 if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
                 let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
                 if latestReplyText != nextReply { latestReplyText = nextReply }
+                lastRenderedPollSig = candidateSig
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
@@ -577,9 +686,28 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160)),
                     localOnly: provider == .grokbot
                 )
-                guard isCurrentDetail(item) else { return }
+                guard isCurrentDetail(item, generation: generation) else { return }
                 let mappedSummary = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
                 syncSidebarItem(mappedSummary)
+                incomingHistory = detail.history
+                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
+                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+                    return LastRenderedPollSignature(
+                        scopeKey: historyScope,
+                        epoch: h.epoch,
+                        revision: h.revision,
+                        running: mappedSummary.running,
+                        title: mappedSummary.title,
+                        showAllHistory: false,
+                        revealedPositionKey: nil,
+                        subagentsSupported: subagentsSupportedForCurrentProvider,
+                        subagents: detail.subagents,
+                        subagentUpdates: detail.subagentUpdates
+                    )
+                }
+                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                    break
+                }
                 let slot = providerHistoryStore.applyHeadPoll(
                     key: historyScope,
                     headEvents: detail.events,
@@ -591,7 +719,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     subagents: detail.subagents,
                     subagentUpdates: detail.subagentUpdates
                 )
-                incomingHistory = detail.history
+                latestNativeTailId = slot.events.last?.id
                 let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
                 if subagents != nextSubs { subagents = nextSubs }
                 if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
@@ -610,49 +738,109 @@ final class ProviderWorkspaceStore: ObservableObject {
                 if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
                 let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
                 if latestReplyText != nextReply { latestReplyText = nextReply }
+                lastRenderedPollSig = candidateSig
             }
 
             currentDetailHistory = incomingHistory
             detailLoadedForKey = item.sessionKey
 
-            if timelineWindow.isActive {
+            // Bounded initial backfill when an entire tail page collapses into <= 2 rows (e.g. massive active tool turn)
+            if isFirstLoadForKey,
+               !timelineWindow.isActive,
+               hasMoreOlder,
+               loadOlderError == nil,
+               rows.count <= 2
+            {
+                for _ in 0 ..< 4 {
+                    guard isCurrentDetail(item, generation: generation), hasMoreOlder, loadOlderError == nil, rows.count <= 3 else { break }
+                    let advanced = await loadSingleOlderPage(for: item, generation: generation, limitOverride: 500, preferBottom: true)
+                    if !advanced { break }
+                }
+            }
+
+            if timelineWindow.isActive, isCurrentDetail(item, generation: generation) {
                 await timelineWindow.reconcilePollHistory(incoming: incomingHistory) { cursor in
                     try await readTimelineWindowPage(for: item, cursor: cursor)
                 }
             }
 
-            if let pending = pendingSearch, pending.sessionKey == item.sessionKey, isCurrentDetail(item) {
+            if let pending = pendingSearch, pending.sessionKey == item.sessionKey, isCurrentDetail(item, generation: generation) {
                 pendingSearch = nil
                 await jumpAndRevealPositionKey(pending.positionKey)
             }
         } catch {
-            guard isCurrentDetail(item) else { return }
+            guard isCurrentDetail(item, generation: generation) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     @discardableResult
     func loadOlderPageIfNeeded() async -> Bool {
-        guard let item = selectedItem else { return false }
+        let generation = detailSelectionGeneration
+        guard let item = selectedItem, isCurrentDetail(item, generation: generation) else { return false }
+        coordinatorRef?.markUpwardNavigationIntent()
         if timelineWindow.isActive {
-            guard timelineWindow.hasMoreOlder, !timelineWindow.busy else { return false }
-            await timelineWindow.loadOlder { cursor in
-                try await readTimelineWindowPage(for: item, cursor: cursor)
+            var anyLoaded = false
+            for step in 0 ..< 5 {
+                guard isCurrentDetail(item, generation: generation), timelineWindow.hasMoreOlder, !timelineWindow.busy, timelineWindow.error == nil else { break }
+                let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
+                let prevRowCount = coordinatorRef?.rows.count ?? 0
+                let pageLimit: Int? = step > 0 ? 500 : nil
+                await timelineWindow.loadOlder { cursor in
+                    try await readTimelineWindowPage(for: item, cursor: cursor, limitOverride: pageLimit)
+                }
+                guard isCurrentDetail(item, generation: generation) else { break }
+                if let winRows = timelineWindow.items {
+                    coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
+                }
+                guard timelineWindow.error == nil else { break }
+                anyLoaded = true
+                guard let coord = coordinatorRef else { break }
+                let newHeight = coord.renderedContentHeight
+                let newCount = coord.rows.count
+                let needsMore = coord.isViewportUnderfilled
+                    || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
+                    || (newCount <= prevRowCount && newCount <= 2)
+                if !needsMore { break }
             }
-            if let winRows = timelineWindow.items {
-                coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
-            }
-            return timelineWindow.error == nil
+            return anyLoaded
         }
 
-        guard hasMoreOlder, !loadingOlder, loadOlderError == nil, let cursor = beforeCursor else { return false }
+        guard hasMoreOlder, !loadingOlder, loadOlderError == nil else { return false }
+        var anyLoaded = false
+        for step in 0 ..< 5 {
+            guard isCurrentDetail(item, generation: generation), hasMoreOlder, !loadingOlder, loadOlderError == nil else { break }
+            let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
+            let prevRowCount = rows.count
+            let limitOverride: Int? = (step > 0 || prevRowCount <= 2) ? 500 : nil
+            let loaded = await loadSingleOlderPage(for: item, generation: generation, limitOverride: limitOverride, preferBottom: false)
+            if !loaded { break }
+            anyLoaded = true
+            guard let coord = coordinatorRef else { break }
+            let newHeight = coord.renderedContentHeight
+            let needsMore = coord.isViewportUnderfilled
+                || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
+                || (rows.count <= prevRowCount && rows.count <= 2)
+            if !needsMore { break }
+        }
+        return anyLoaded
+    }
+
+    private func loadSingleOlderPage(
+        for item: UnifiedSessionSummaryItem,
+        generation: UInt64,
+        limitOverride: Int?,
+        preferBottom: Bool
+    ) async -> Bool {
+        guard isCurrentDetail(item, generation: generation), hasMoreOlder, !loadingOlder, loadOlderError == nil, let cursor = beforeCursor else { return false }
         loadingOlder = true
-        defer { if isCurrentDetail(item) { loadingOlder = false } }
+        defer { if isCurrentDetail(item, generation: generation) { loadingOlder = false } }
         let historyScope = "\(store.machineScope):\(provider.rawValue):\(item.sessionKey)"
 
         do {
             switch provider {
             case .codex:
+                let reqLimit = limitOverride ?? 120
                 struct BlocksArgs: Encodable {
                     struct Opts: Encodable { let limit: Int; let before: String }
                     let id: String
@@ -660,9 +848,9 @@ final class ProviderWorkspaceStore: ObservableObject {
                 }
                 let page: ThreadBlockPage = try await store.rpc(
                     "threads.blocks",
-                    args: BlocksArgs(id: item.sessionKey, options: .init(limit: 120, before: cursor))
+                    args: BlocksArgs(id: item.sessionKey, options: .init(limit: reqLimit, before: cursor))
                 )
-                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
+                guard isCurrentDetail(item, generation: generation), beforeCursor == cursor else { return false }
                 let slot = threadStore.applyBlockPage(page, expectedCursor: cursor)
                 let advanced = (!page.blocks.isEmpty && slot.beforeCursor != cursor)
                 hasMoreOlder = advanced ? slot.hasMoreBlocks : false
@@ -674,17 +862,18 @@ final class ProviderWorkspaceStore: ObservableObject {
                     subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: revealedPositionKey
                 )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: preferBottom)
                 rows = nextRows
                 return advanced || !page.blocks.isEmpty
 
             case .claudeCode:
+                let reqLimit = limitOverride ?? 160
                 struct Req: Encodable { let sessionKey: String; let limit: Int; let before: String }
                 let page: ClaudeSessionDetail = try await store.rpc(
                     "claude.detail",
-                    args: Req(sessionKey: item.sessionKey, limit: 160, before: cursor)
+                    args: Req(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)
                 )
-                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
+                guard isCurrentDetail(item, generation: generation), beforeCursor == cursor else { return false }
                 let slot = claudeHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -697,17 +886,18 @@ final class ProviderWorkspaceStore: ObservableObject {
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
                 let nextRows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: preferBottom)
                 rows = nextRows
-                return !page.events.isEmpty
+                return !page.events.isEmpty && slot.beforeCursor != cursor
 
             case .grok:
+                let reqLimit = limitOverride ?? 160
                 struct Req: Encodable { let id: String; let limit: Int; let before: String }
                 let page: GrokSessionDetail = try await store.rpc(
                     "grok.detail",
-                    args: Req(id: item.sessionKey, limit: 160, before: cursor)
+                    args: Req(id: item.sessionKey, limit: reqLimit, before: cursor)
                 )
-                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
+                guard isCurrentDetail(item, generation: generation), beforeCursor == cursor else { return false }
                 let slot = grokHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -720,19 +910,20 @@ final class ProviderWorkspaceStore: ObservableObject {
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
                 let nextRows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: preferBottom)
                 rows = nextRows
-                return !page.events.isEmpty
+                return !page.events.isEmpty && slot.beforeCursor != cursor
 
             case .antigravity, .dsh, .grokbot:
+                let reqLimit = limitOverride ?? 160
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
                 struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     cmd,
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160, before: cursor)),
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
                     localOnly: provider == .grokbot
                 )
-                guard isCurrentDetail(item), beforeCursor == cursor else { return false }
+                guard isCurrentDetail(item, generation: generation), beforeCursor == cursor else { return false }
                 let slot = providerHistoryStore.applyOlderPage(
                     key: historyScope,
                     expectedCursor: cursor,
@@ -751,12 +942,12 @@ final class ProviderWorkspaceStore: ObservableObject {
                     sessionRunning: selectedItem?.running ?? item.running,
                     subagentsSupported: subagentsSupportedForCurrentProvider
                 )
-                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+                coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: preferBottom)
                 rows = nextRows
-                return !page.events.isEmpty
+                return !page.events.isEmpty && slot.beforeCursor != cursor
             }
         } catch {
-            guard isCurrentDetail(item) else { return false }
+            guard isCurrentDetail(item, generation: generation) else { return false }
             loadOlderError = error.localizedDescription
             return false
         }
@@ -1012,7 +1203,7 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     func loadNewerTimelineWindowPage() async {
         guard let item = selectedItem, timelineWindow.isActive else { return }
-        await timelineWindow.loadNewer(latestTailId: rows.last?.timelineId) { cursor in
+        await timelineWindow.loadNewer(latestTailId: latestNativeTailId ?? rows.last?.timelineId) { cursor in
             try await readTimelineWindowPage(for: item, cursor: cursor)
         }
         if let winRows = timelineWindow.items {
@@ -1027,10 +1218,12 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     func readTimelineWindowPage(
         for item: UnifiedSessionSummaryItem,
-        cursor: String
+        cursor: String,
+        limitOverride: Int? = nil
     ) async throws -> TimelineWindowPage<ConversationRowItem> {
         switch provider {
         case .codex:
+            let reqLimit = limitOverride ?? 120
             struct DetailArgs: Encodable {
                 struct Opts: Encodable { let limit: Int; let before: String }
                 let id: String
@@ -1038,7 +1231,7 @@ final class ProviderWorkspaceStore: ObservableObject {
             }
             guard let page: ThreadDetail = try await store.rpc(
                 "threads.detail",
-                args: DetailArgs(id: item.sessionKey, options: .init(limit: 120, before: cursor))
+                args: DetailArgs(id: item.sessionKey, options: .init(limit: reqLimit, before: cursor))
             ) else {
                 throw NSError(
                     domain: "AgentHub.TimelineWindow",
@@ -1059,14 +1252,18 @@ final class ProviderWorkspaceStore: ObservableObject {
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,
-                history: rawPage.history
+                history: rawPage.history,
+                firstNativeId: rawPage.firstNativeId,
+                lastNativeId: rawPage.lastNativeId,
+                nativeIds: rawPage.nativeIds
             )
 
         case .claudeCode:
+            let reqLimit = limitOverride ?? 160
             struct Req: Encodable { let sessionKey: String; let limit: Int; let before: String }
             let page: ClaudeSessionDetail = try await store.rpc(
                 "claude.detail",
-                args: Req(sessionKey: item.sessionKey, limit: 160, before: cursor)
+                args: Req(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)
             )
             let rawPage = TimelineWindowPage<ClaudeHistoryEvent>.from(claudeDetail: page)
             return TimelineWindowPage<ConversationRowItem>(
@@ -1074,14 +1271,18 @@ final class ProviderWorkspaceStore: ObservableObject {
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,
-                history: rawPage.history
+                history: rawPage.history,
+                firstNativeId: rawPage.firstNativeId,
+                lastNativeId: rawPage.lastNativeId,
+                nativeIds: rawPage.nativeIds
             )
 
         case .grok:
+            let reqLimit = limitOverride ?? 160
             struct Req: Encodable { let id: String; let limit: Int; let before: String }
             let page: GrokSessionDetail = try await store.rpc(
                 "grok.detail",
-                args: Req(id: item.sessionKey, limit: 160, before: cursor)
+                args: Req(id: item.sessionKey, limit: reqLimit, before: cursor)
             )
             let rawPage = TimelineWindowPage<GrokHistoryEvent>.from(grokDetail: page)
             return TimelineWindowPage<ConversationRowItem>(
@@ -1089,15 +1290,19 @@ final class ProviderWorkspaceStore: ObservableObject {
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,
-                history: rawPage.history
+                history: rawPage.history,
+                firstNativeId: rawPage.firstNativeId,
+                lastNativeId: rawPage.lastNativeId,
+                nativeIds: rawPage.nativeIds
             )
 
         case .antigravity, .dsh, .grokbot:
+            let reqLimit = limitOverride ?? 160
             let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
             struct Wrap: Encodable { let request: ProviderDetailRequest }
             let page: ProviderSessionDetail = try await store.rpc(
                 cmd,
-                args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160, before: cursor)),
+                args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
                 localOnly: provider == .grokbot
             )
             let rawPage = TimelineWindowPage<ProviderHistoryEvent>.from(providerDetail: page)
@@ -1111,7 +1316,10 @@ final class ProviderWorkspaceStore: ObservableObject {
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,
-                history: rawPage.history
+                history: rawPage.history,
+                firstNativeId: rawPage.firstNativeId,
+                lastNativeId: rawPage.lastNativeId,
+                nativeIds: rawPage.nativeIds
             )
         }
     }
@@ -1136,22 +1344,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         }
     }
 
-    private static let isoFractionalFormatter: ISO8601DateFormatter = {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return iso
-    }()
-
-    private static let isoBasicFormatter = ISO8601DateFormatter()
-
-    private static let statusDateFormatter: DateFormatter = {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.calendar = Calendar(identifier: .gregorian)
-        df.dateFormat = "yyyy/M/d HH:mm:ss"
-        return df
-    }()
-
     static func providerSessionStatusText(status: String, updatedAt: String?, archived: Bool) -> String {
         if status == "running" { return "运行中" }
         if status == "waiting" { return "等待处理" }
@@ -1159,10 +1351,8 @@ final class ProviderWorkspaceStore: ObservableObject {
         if status == "failed" { return "异常" }
         if archived { return "已归档" }
         if status == "unknown" { return "状态未知" }
-        if let updatedAt, !updatedAt.isEmpty {
-            if let date = isoFractionalFormatter.date(from: updatedAt) ?? isoBasicFormatter.date(from: updatedAt) {
-                return statusDateFormatter.string(from: date)
-            }
+        if let date = SharedTimestampFormatters.parseISO8601(updatedAt) {
+            return SharedTimestampFormatters.formatSessionStatusTimestamp(date)
         }
         return "最近"
     }

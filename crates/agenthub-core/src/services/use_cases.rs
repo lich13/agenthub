@@ -280,6 +280,14 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::execute_unified_with_capability(self.platform, paths, request)
     }
 
+    pub fn unified_execute_with_deleted_streams(
+        self,
+        paths: &cleanup::UnifiedCleanupPaths,
+        request: cleanup::UnifiedCleanupExecuteRequest,
+    ) -> Result<(cleanup::UnifiedCleanupResult, cleanup::DeletedProbeStreams)> {
+        cleanup::execute_unified_with_deleted_streams(self.platform, paths, request)
+    }
+
     pub async fn scan_hidden(
         self,
         paths: crate::codex::CodexPaths,

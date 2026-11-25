@@ -3533,3 +3533,95 @@ fn stale_busy_registration_interrupted_prompt_and_agent_sidechain_files_settle_c
     let parsed_interrupted = reader::read(&interrupted).unwrap();
     assert!(!parsed_interrupted.turn_open);
 }
+
+#[test]
+fn massive_progress_telemetry_and_file_snapshots_preserve_cursor_and_compact_detail() {
+    use std::io::{BufWriter, Write};
+    let f = Fixture::new();
+    {
+        let mut out = BufWriter::new(fs::File::create(&f.file).unwrap());
+        writeln!(out, "{}", f.row("u1", None, "user", json!("初始请求"))).unwrap();
+        for idx in 0..205_000usize {
+            writeln!(
+                out,
+                "{{\"type\":\"progress\",\"uuid\":\"prog-{idx}\",\"sessionId\":\"native-fixture\"}}"
+            )
+            .unwrap();
+        }
+        writeln!(
+            out,
+            "{}",
+            json!({
+                "type": "file-history-snapshot",
+                "uuid": "snap-1",
+                "sessionId": "native-fixture",
+                "snapshot": {
+                    "messageId": "u1",
+                    "trackedFileBackups": {
+                        "src/main.rs": {"backupFileName": "main.bak", "raw": "x".repeat(32_768)},
+                        "src/lib.rs": {"backupFileName": "lib.bak", "raw": "y".repeat(32_768)}
+                    }
+                }
+            })
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "{}",
+            json!({
+                "type": "attachment",
+                "uuid": "att-1",
+                "sessionId": "native-fixture",
+                "attachment": {
+                    "type": "instructions",
+                    "files": [{"content": "遵循既有规范"}]
+                }
+            })
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "{}",
+            f.row("a1", Some("u1"), "assistant", json!("处理完毕"))
+        )
+        .unwrap();
+        // Semantically identical duplicate UUID with reordered keys & whitespace must NOT disable rename or notifications.
+        writeln!(
+            out,
+            "{{ \"sessionId\" : \"native-fixture\" , \"uuid\" : \"att-1\" , \"type\" : \"attachment\" , \"attachment\" : {{ \"files\" : [ {{ \"content\" : \"遵循既有规范\" }} ] , \"type\" : \"instructions\" }} }}"
+        )
+        .unwrap();
+        out.flush().unwrap();
+    }
+
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            agent_id: None,
+            session_key: f.key(),
+            limit: Some(160),
+            before: None,
+        },
+    )
+    .unwrap();
+    assert!(detail.summary.read_error.is_none());
+    assert!(detail.summary.can_rename);
+    let snap_ev = detail
+        .events
+        .iter()
+        .find(|e| e.kind == "file-history-snapshot")
+        .expect("snapshot event");
+    let snap_detail = snap_ev.detail.as_deref().unwrap_or("");
+    assert!(snap_detail.contains("src/main.rs") && snap_detail.len() < 512);
+
+    let att_ev = detail
+        .events
+        .iter()
+        .find(|e| e.kind == "attachment")
+        .expect("attachment event");
+    assert_eq!(att_ev.detail.as_deref(), Some("遵循既有规范"));
+
+    // Physical record_count still counts every JSON line so native_probe_streams cursors never regress.
+    let ctx = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(ctx.stream.record_count, 205_005);
+}

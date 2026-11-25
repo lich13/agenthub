@@ -3,7 +3,7 @@ use crate::state::AppState;
 use agenthub_core::{claude::ClaudeDeleteRequest, services::use_cases::AgentHubUseCases};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct ClaudeListQuery {
     pub q: Option<String>,
     pub limit: Option<usize>,
@@ -66,11 +66,21 @@ pub(crate) async fn claude_delete_execute(
     request: ClaudeDeleteRequest,
 ) -> ApiResponse {
     let platform = state.platform().clone();
-    ok(agenthub_core::read_tasks::spawn_blocking(move || {
-        AgentHubUseCases::new(&platform)
-            .claude()?
-            .delete_execute(request)
-    })
-    .await
-    .map_err(anyhow::Error::from)??)
+    let db = state.db.clone();
+    ok(
+        agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let result = AgentHubUseCases::new(&platform)
+                .claude()?
+                .delete_execute(request)?;
+            if result.deleted && result.residuals.is_empty() {
+                let _ = db.delete_native_probe_stream_cursors(
+                    agenthub_core::native_probe::NativeProvider::Claude,
+                    std::slice::from_ref(&result.session_key),
+                );
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
 }

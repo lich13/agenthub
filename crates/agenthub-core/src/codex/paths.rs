@@ -17,16 +17,27 @@ impl CodexPaths {
     }
 
     pub(crate) fn contains_path(&self, path: &Path) -> bool {
-        if is_macos_network_volume_path(&self.home) || is_macos_network_volume_path(path) {
+        if is_macos_network_volume_path(&self.home) {
             return false;
         }
         let Ok(home) = fs::canonicalize(&self.home) else {
             return false;
         };
+        self.contains_path_with_canonical_home(&home, path)
+    }
+
+    pub(crate) fn contains_path_with_canonical_home(
+        &self,
+        canonical_home: &Path,
+        path: &Path,
+    ) -> bool {
+        if is_macos_network_volume_path(path) {
+            return false;
+        }
         let Ok(candidate) = fs::canonicalize(path) else {
             return false;
         };
-        candidate.starts_with(home)
+        candidate.starts_with(canonical_home)
     }
 
     pub fn state_db(&self) -> PathBuf {

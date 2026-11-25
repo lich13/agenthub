@@ -143,8 +143,8 @@ extension ProjectWorkspaceEngine {
     }
 }
 
-public enum ProjectWorkspaceEngine {
-    private static let isoFractionalLock = NSLock()
+public enum SharedTimestampFormatters {
+    private static let lock = NSLock()
     nonisolated(unsafe) private static let isoFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -155,6 +155,55 @@ public enum ProjectWorkspaceEngine {
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
+    private static let timeOfDayFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.calendar = Calendar(identifier: .gregorian)
+        df.dateFormat = "HH:mm:ss"
+        return df
+    }()
+    private static let monthDayTimeFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.calendar = Calendar(identifier: .gregorian)
+        df.dateFormat = "MM-dd HH:mm"
+        return df
+    }()
+    private static let sessionStatusFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.calendar = Calendar(identifier: .gregorian)
+        df.dateFormat = "yyyy/M/d HH:mm:ss"
+        return df
+    }()
+
+    public static func parseISO8601(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return isoFractional.date(from: raw) ?? isoBasic.date(from: raw)
+    }
+
+    public static func formatTimeOfDay(_ date: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return timeOfDayFormatter.string(from: date)
+    }
+
+    public static func formatMonthDayTime(_ date: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return monthDayTimeFormatter.string(from: date)
+    }
+
+    public static func formatSessionStatusTimestamp(_ date: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessionStatusFormatter.string(from: date)
+    }
+}
+
+public enum ProjectWorkspaceEngine {
 
     /// Canonicalizes a path string using Unicode NFC, single `/` separators, and no trailing `/`
     /// (except root `/`), while preserving case sensitivity for Linux SSH targets.
@@ -267,11 +316,7 @@ public enum ProjectWorkspaceEngine {
     }
 
     public static func parseTimestampMs(_ iso: String?) -> Int64 {
-        guard let iso, !iso.isEmpty else { return Int64.min }
-        isoFractionalLock.lock()
-        let date = isoFractional.date(from: iso) ?? isoBasic.date(from: iso)
-        isoFractionalLock.unlock()
-        guard let date else { return Int64.min }
+        guard let date = SharedTimestampFormatters.parseISO8601(iso) else { return Int64.min }
         return Int64((date.timeIntervalSince1970 * 1000.0).rounded())
     }
 

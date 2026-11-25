@@ -322,6 +322,63 @@ pub(crate) fn load_store_auxiliary_index(
     idx
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AntigravityFileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl AntigravityFileStamp {
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        let meta = fs::symlink_metadata(path).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+        };
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
+    pub(crate) fn sqlite_pair(db_path: &Path) -> Option<(Self, Option<Self>)> {
+        let main = Self::of(db_path)?;
+        let mut wal_os = db_path.as_os_str().to_os_string();
+        wal_os.push("-wal");
+        let wal = Self::of(&PathBuf::from(wal_os));
+        Some((main, wal))
+    }
+}
+
+type ConvDbMetaCacheEntry = (
+    (AntigravityFileStamp, Option<AntigravityFileStamp>),
+    Option<ConvDbMetadata>,
+    std::time::Instant,
+);
+
+static CONV_DB_META_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, ConvDbMetaCacheEntry>>,
+> = std::sync::Mutex::new(None);
+
+pub(crate) fn evict_idle_meta_cache(max_idle: std::time::Duration) {
+    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.retain(|_, (_, _, ts)| ts.elapsed() < max_idle);
+            if map.is_empty() {
+                *guard = None;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ConvDbMetadata {
     pub(crate) parent_ids: Vec<String>,
@@ -338,14 +395,46 @@ pub(crate) fn inspect_conv_db_metadata(
     id: &str,
 ) -> Option<ConvDbMetadata> {
     let db_path = paths.conversations_dir().join(format!("{id}.db"));
-    let mut f = fs::File::open(&db_path).ok()?;
+    let stamp = AntigravityFileStamp::sqlite_pair(&db_path)?;
+    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
+        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&db_path))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return cached_val.clone();
+            }
+        }
+    }
+    let computed = inspect_conv_db_metadata_uncached(&db_path, id);
+    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= 512 && !map.contains_key(&db_path) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (_, _, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(
+            db_path,
+            (stamp, computed.clone(), std::time::Instant::now()),
+        );
+    }
+    computed
+}
+
+fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbMetadata> {
+    let mut f = fs::File::open(db_path).ok()?;
     let mut header = [0u8; 16];
     if f.read_exact(&mut header).is_err() || &header != b"SQLite format 3\0" {
         return None;
     }
     drop(f);
     let conn = Connection::open_with_flags(
-        &db_path,
+        db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;

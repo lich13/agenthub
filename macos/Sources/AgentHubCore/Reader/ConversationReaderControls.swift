@@ -324,4 +324,36 @@ final class PassthroughInnerScrollView: NSScrollView {
     }
 }
 
+@MainActor
+public final class ReaderOuterScrollView: NSScrollView {
+    public weak var coordinator: ConversationTableCoordinator?
+
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        verticalScrollElasticity = .allowed
+        horizontalScrollElasticity = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override public func scrollWheel(with event: NSEvent) {
+        coordinator?.handleOuterScrollWheel(
+            deltaY: event.scrollingDeltaY,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase
+        )
+        super.scrollWheel(with: event)
+    }
+
+    override public func keyDown(with event: NSEvent) {
+        if event.keyCode == 126 || event.keyCode == 116 || event.keyCode == 115 {
+            coordinator?.handleOuterUpwardKeyNavigation()
+        }
+        super.keyDown(with: event)
+    }
+}
+
 // MARK: - SwiftUI Representable Wrapping NSScrollView + Headerless View-Based NSTableView

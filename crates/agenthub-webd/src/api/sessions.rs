@@ -55,6 +55,8 @@ pub(crate) async fn bulk_execute(
         None,
         detail,
     )?;
+    let provider = request.provider;
+    let operation = request.operation;
     let runtime = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         AgentHubUseCases::new(runtime.platform())
@@ -63,6 +65,9 @@ pub(crate) async fn bulk_execute(
     })
     .await
     .map_err(anyhow::Error::from)??;
+    let _ = state
+        .db
+        .prune_cursors_after_batch_execute(provider, operation, &result);
     state.db.record_audit(Some(&auth.admin_id), "sessions.bulkExecute.completed", Some("sessions"), None,         serde_json::json!({"succeeded": result.items.iter().filter(|item| item.status == "succeeded").count(), "blocked": result.items.iter().filter(|item| item.status == "blocked").count(), "failed": result.items.iter().filter(|item| item.status == "failed").count()}))?;
     ok(result)
 }

@@ -210,9 +210,15 @@ pub(super) async fn sessions_bulk_execute(
     let state = ctx.state.clone();
     encode(
         tokio::task::spawn_blocking(move || {
-            AgentHubUseCases::new(state.platform())
+            let provider = args.request.provider;
+            let operation = args.request.operation;
+            let result = AgentHubUseCases::new(state.platform())
                 .sessions(state.codex_paths())?
-                .bulk_execute(args.request)
+                .bulk_execute(args.request)?;
+            let _ = state
+                .db
+                .prune_cursors_after_batch_execute(provider, operation, &result);
+            Ok::<_, anyhow::Error>(result)
         })
         .await
         .map_err(|e| e.to_string())?

@@ -72,7 +72,8 @@ public struct ConversationReaderTableView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSScrollView {
         syncCoordinatorProperties()
-        let scroll = NSScrollView()
+        let scroll = ReaderOuterScrollView(frame: .zero)
+        scroll.coordinator = coordinator
         scroll.wantsLayer = true
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -119,6 +120,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
+        (nsView as? ReaderOuterScrollView)?.coordinator = coordinator
         let sessionChanged = (coordinator.sessionScopeKey != sessionScopeKey)
         let themeOrWorkspaceChanged = (coordinator.scheme != scheme || coordinator.workspace != workspace)
         syncCoordinatorProperties()

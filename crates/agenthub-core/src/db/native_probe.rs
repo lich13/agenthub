@@ -542,6 +542,108 @@ impl PanelDb {
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         Ok(())
     }
+
+    pub fn delete_native_probe_stream_cursors(
+        &self,
+        provider: NativeProvider,
+        session_keys: &[String],
+    ) -> Result<usize> {
+        let non_empty: Vec<&str> = session_keys
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().expect("db mutex");
+        let payload = serde_json::to_string(&non_empty)?;
+        let deleted = if provider == NativeProvider::Dsh {
+            conn.execute(
+                "DELETE FROM native_probe_streams
+                 WHERE provider = ?1
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(?2) AS j
+                       WHERE native_probe_streams.session_key = j.value
+                          OR (
+                              LENGTH(native_probe_streams.session_key) > LENGTH(j.value) + 1
+                              AND SUBSTR(native_probe_streams.session_key, -LENGTH(j.value) - 1) = '/' || j.value
+                              AND INSTR(
+                                  SUBSTR(
+                                      native_probe_streams.session_key,
+                                      1,
+                                      LENGTH(native_probe_streams.session_key) - LENGTH(j.value) - 1
+                                  ),
+                                  '/'
+                              ) = 0
+                          )
+                   )",
+                params![provider.as_str(), payload],
+            )?
+        } else {
+            conn.execute(
+                "DELETE FROM native_probe_streams
+                 WHERE provider = ?1
+                   AND session_key IN (SELECT value FROM json_each(?2))",
+                params![provider.as_str(), payload],
+            )?
+        };
+        Ok(deleted)
+    }
+
+    pub fn prune_cursors_after_batch_execute(
+        &self,
+        provider: crate::services::sessions::SessionProvider,
+        operation: crate::services::sessions::SessionOperation,
+        result: &crate::services::sessions::SessionBatchResult,
+    ) -> Result<usize> {
+        use crate::services::sessions::{SessionOperation, SessionProvider};
+        if operation != SessionOperation::Delete {
+            return Ok(0);
+        }
+        let native_provider = match provider {
+            SessionProvider::Claude => NativeProvider::Claude,
+            SessionProvider::Grok => NativeProvider::Grok,
+            SessionProvider::Grokbot => NativeProvider::GrokBot,
+            SessionProvider::Antigravity => NativeProvider::Antigravity,
+            SessionProvider::Dsh => NativeProvider::Dsh,
+            SessionProvider::Codex => return Ok(0),
+        };
+        let mut keys = Vec::new();
+        for item in &result.items {
+            if item.status == "succeeded" {
+                if native_provider == NativeProvider::Antigravity {
+                    if let Some(raw) = item.session_key.strip_prefix("ag:") {
+                        keys.push(raw.to_owned());
+                    }
+                }
+                keys.push(item.session_key.clone());
+                for id in &item.deleted_ids {
+                    if native_provider == NativeProvider::Antigravity {
+                        if let Some(raw) = id.strip_prefix("ag:") {
+                            keys.push(raw.to_owned());
+                        }
+                    }
+                    keys.push(id.clone());
+                }
+            }
+        }
+        self.delete_native_probe_stream_cursors(native_provider, &keys)
+    }
+
+    pub fn prune_cursors_after_unified_cleanup(
+        &self,
+        deleted_by_provider: &[(NativeProvider, Vec<String>)],
+    ) -> Result<usize> {
+        let mut total = 0usize;
+        for (native_provider, deleted_ids) in deleted_by_provider {
+            if deleted_ids.is_empty() {
+                continue;
+            }
+            total += self.delete_native_probe_stream_cursors(*native_provider, deleted_ids)?;
+        }
+        Ok(total)
+    }
 }
 
 #[cfg(test)]

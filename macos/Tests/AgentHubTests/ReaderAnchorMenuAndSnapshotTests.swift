@@ -321,7 +321,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         guard let prosePiece = rendered.first(where: {
             if case .prose = $0 { return true }
             return false
-        }), case let .prose(paraAttr, _) = prosePiece else {
+        }), case let .prose(paraAttr) = prosePiece else {
             return XCTFail("Expected .prose segment")
         }
         XCTAssertFalse(paraAttr.string.contains("oai-mem-citation"))

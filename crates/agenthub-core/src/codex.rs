@@ -83,7 +83,24 @@ pub fn list_threads(
     let mut rows = read_thread_rows(paths)?;
     rows.retain(|row| matches!(row.summary.status, ThreadStatus::Archived) == archived);
     let session_index = read_session_index(paths).unwrap_or_default();
-    rows.retain_mut(|row| enrich_local_thread_row(paths, row, session_index.get(&row.summary.id)));
+    let canonical_home = (!is_macos_network_volume_path(&paths.home))
+        .then(|| fs::canonicalize(&paths.home).ok())
+        .flatten();
+    let storage_canonical_home = canonical_home.as_deref().filter(|_| {
+        fs::symlink_metadata(&paths.home)
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(false)
+    });
+    rows.retain_mut(|row| {
+        enrich_local_thread_row_with_home(
+            paths,
+            canonical_home.as_deref(),
+            storage_canonical_home,
+            row,
+            session_index.get(&row.summary.id),
+            true,
+        )
+    });
     let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
 
     let needle = q.map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty());
@@ -141,25 +158,52 @@ fn enrich_local_thread_row(
     row: &mut thread_rows::LocalThreadRow,
     index_entry: Option<&SessionIndexEntry>,
 ) -> bool {
+    let canonical_home = (!is_macos_network_volume_path(&paths.home))
+        .then(|| fs::canonicalize(&paths.home).ok())
+        .flatten();
+    let storage_canonical_home = canonical_home.as_deref().filter(|_| {
+        fs::symlink_metadata(&paths.home)
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(false)
+    });
+    enrich_local_thread_row_with_home(
+        paths,
+        canonical_home.as_deref(),
+        storage_canonical_home,
+        row,
+        index_entry,
+        true,
+    )
+}
+
+fn enrich_local_thread_row_with_home(
+    paths: &CodexPaths,
+    canonical_home: Option<&Path>,
+    storage_canonical_home: Option<&Path>,
+    row: &mut thread_rows::LocalThreadRow,
+    index_entry: Option<&SessionIndexEntry>,
+    cwd_already_resolved: bool,
+) -> bool {
     // Native updated_at also changes on metadata writes; only messages order the list.
     row.summary.updated_at = None;
     if row.summary.rollout_path.is_none() {
         row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
     }
     let is_archived = matches!(row.summary.status, ThreadStatus::Archived);
-    if row
-        .summary
-        .rollout_path
-        .as_deref()
-        .is_some_and(|path| missing_rollout_inside_codex_home(paths, path, is_archived))
-    {
-        return false;
+    if let Some(raw_path) = row.summary.rollout_path.take() {
+        match resolve_existing_rollout_path_with_home(paths, canonical_home, &raw_path, is_archived)
+        {
+            Some(resolved) => row.summary.rollout_path = Some(resolved),
+            None if !raw_path.as_os_str().is_empty()
+                && !is_macos_network_volume_path(&paths.home)
+                && !is_macos_network_volume_path(&raw_path)
+                && path_has_ancestor_inside_canonical_home(canonical_home, &raw_path) =>
+            {
+                return false;
+            }
+            None => {}
+        }
     }
-    row.summary.rollout_path = row
-        .summary
-        .rollout_path
-        .take()
-        .and_then(|path| resolve_existing_rollout_path(paths, &path, is_archived));
     if should_repair_thread_title_from_local_metadata(
         row.db_title.as_deref(),
         row.first_user_message.as_deref(),
@@ -174,7 +218,13 @@ fn enrich_local_thread_row(
             })
             .unwrap_or_else(|| "未命名线程".to_string());
     }
-    !enrich_thread_from_rollout_with_storage(&mut row.summary, Some(&paths.home)).unwrap_or(false)
+    !enrich_thread_from_rollout_inner(
+        &mut row.summary,
+        Some(&paths.home),
+        storage_canonical_home,
+        cwd_already_resolved,
+    )
+    .unwrap_or(false)
 }
 
 fn resolve_existing_rollout_path(
@@ -182,43 +232,59 @@ fn resolve_existing_rollout_path(
     path: &Path,
     archived: bool,
 ) -> Option<PathBuf> {
+    let canonical_home = (!is_macos_network_volume_path(&paths.home))
+        .then(|| fs::canonicalize(&paths.home).ok())
+        .flatten();
+    resolve_existing_rollout_path_with_home(paths, canonical_home.as_deref(), path, archived)
+}
+
+fn resolve_existing_rollout_path_with_home(
+    paths: &CodexPaths,
+    canonical_home: Option<&Path>,
+    path: &Path,
+    archived: bool,
+) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;
     }
-    for candidate in [
-        rollout_file::plain_path(path),
-        path.to_path_buf(),
-        rollout_file::compressed_path(path),
-    ] {
-        if paths.contains_path(&candidate) {
-            return Some(candidate);
-        }
+    let home = canonical_home?;
+    let plain = rollout_file::plain_path(path);
+    if paths.contains_path_with_canonical_home(home, &plain) {
+        return Some(plain);
     }
-    if archived && path_has_ancestor_inside_codex_home(paths, path) {
+    if path != plain && paths.contains_path_with_canonical_home(home, path) {
+        return Some(path.to_path_buf());
+    }
+    let compressed = rollout_file::compressed_path(path);
+    if compressed != path && paths.contains_path_with_canonical_home(home, &compressed) {
+        return Some(compressed);
+    }
+    if archived && path_has_ancestor_inside_canonical_home(Some(home), path) {
         if let Some(name) = path.file_name() {
             let relocated = paths.home.join("archived_sessions").join(name);
-            for candidate in [
-                rollout_file::plain_path(&relocated),
-                relocated.clone(),
-                rollout_file::compressed_path(&relocated),
-            ] {
-                if paths.contains_path(&candidate) {
-                    return Some(candidate);
-                }
+            let rel_plain = rollout_file::plain_path(&relocated);
+            if paths.contains_path_with_canonical_home(home, &rel_plain) {
+                return Some(rel_plain);
+            }
+            if relocated != rel_plain && paths.contains_path_with_canonical_home(home, &relocated) {
+                return Some(relocated);
+            }
+            let rel_compressed = rollout_file::compressed_path(&relocated);
+            if rel_compressed != relocated
+                && paths.contains_path_with_canonical_home(home, &rel_compressed)
+            {
+                return Some(rel_compressed);
             }
         }
     }
     None
 }
 
-fn path_has_ancestor_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
-    if path.as_os_str().is_empty()
-        || is_macos_network_volume_path(&paths.home)
-        || is_macos_network_volume_path(path)
-    {
+fn path_has_ancestor_inside_canonical_home(canonical_home: Option<&Path>, path: &Path) -> bool {
+    if path.as_os_str().is_empty() || is_macos_network_volume_path(path) {
         return false;
     }
-    let Ok(home) = fs::canonicalize(&paths.home) else {
+    let Some(home) = canonical_home else {
         return false;
     };
     let mut ancestor = path.parent();
@@ -237,24 +303,15 @@ fn path_has_ancestor_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool 
     false
 }
 
-fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path, archived: bool) -> bool {
-    if path.as_os_str().is_empty()
-        || resolve_existing_rollout_path(paths, path, archived).is_some()
-        || is_macos_network_volume_path(&paths.home)
-        || is_macos_network_volume_path(path)
-    {
-        return false;
-    }
-    path_has_ancestor_inside_codex_home(paths, path)
-}
-
 pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
-    enrich_thread_from_rollout_with_storage(row, None)
+    enrich_thread_from_rollout_inner(row, None, None, false)
 }
 
-fn enrich_thread_from_rollout_with_storage(
+fn enrich_thread_from_rollout_inner(
     row: &mut ThreadSummary,
     root: Option<&Path>,
+    canonical_root: Option<&Path>,
+    cwd_already_resolved: bool,
 ) -> Result<bool> {
     let Some(path) = &row.rollout_path else {
         return Ok(false);
@@ -264,7 +321,7 @@ fn enrich_thread_from_rollout_with_storage(
         use crate::session_storage::{self, SessionStorageSize, StorageScope};
         row.storage_size = Some(
             if !scan.identity_conflict && scan.session_id.as_deref() == Some(&row.id) {
-                session_storage::file_size(root, path)
+                session_storage::file_size_with_canonical_root(root, canonical_root, path)
             } else {
                 SessionStorageSize::unavailable(StorageScope::File)
             },
@@ -296,16 +353,22 @@ fn enrich_thread_from_rollout_with_storage(
             row.status = ThreadStatus::Recent;
         }
     }
-    if scan.cwd.is_some() {
-        row.cwd = scan.cwd;
+    let mut cwd_changed = false;
+    if let Some(scan_cwd) = scan.cwd {
+        if row.cwd.as_deref() != Some(scan_cwd.as_str()) {
+            row.cwd = Some(scan_cwd);
+            cwd_changed = true;
+        }
     }
     if scan.model.is_some() {
         row.model = scan.model;
     }
-    row.workspace_root = row
-        .cwd
-        .as_deref()
-        .and_then(crate::workspace_root::resolve_workspace_root);
+    if cwd_changed || (!cwd_already_resolved && row.workspace_root.is_none()) {
+        row.workspace_root = row
+            .cwd
+            .as_deref()
+            .and_then(crate::workspace_root::resolve_workspace_root);
+    }
     if !is_usable_thread_title(&row.title) {
         row.title = scan
             .title

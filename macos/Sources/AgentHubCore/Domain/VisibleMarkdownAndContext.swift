@@ -91,6 +91,9 @@ private enum MarkdownPatterns {
         options: [.caseInsensitive, .anchorsMatchLines]
     )
     static let pageMetadata = try! NSRegularExpression(pattern: "<external_codex_apps_open_page>([\\s\\S]*?)<\\/external_codex_apps_open_page>")
+    static let selectedPageSnapshotMetadata = try! NSRegularExpression(
+        pattern: "<external_codex_apps_selected_page_part_(\\d+)_of_(\\d+)>Companion Page snapshot part (\\d+) of (\\d+):([\\s\\S]*?)<\\/external_codex_apps_selected_page_part_(\\d+)_of_(\\d+)>"
+    )
     static let instructionFile = try! NSRegularExpression(
         pattern: "(?:^|[\\s/\\\\`\"'(=:])agents\\.md(?=$|[\\s`\"'),:;\\]}>])",
         options: [.caseInsensitive]
@@ -286,23 +289,59 @@ public enum VisibleMarkdownEngine {
     }
 
     private static func pageMetadataRanges(_ text: String, protectedRanges: [UTF16Range]? = nil) -> [UTF16Range] {
-        guard text.contains("external_codex_apps_open_page") else { return [] }
+        guard text.contains("external_codex_apps_") else { return [] }
         let ns = text as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
         let literal = protectedRanges ?? literalMarkdownRanges(text, includeInline: true, includeQuotes: true)
         var ranges: [UTF16Range] = []
-        let regex = MarkdownPatterns.pageMetadata
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            let start = match.range.location
-            let end = start + match.range.length
-            if literal.contains(where: { $0.start < end && start < $0.end }) { continue }
-            let inner = ns.substring(with: match.range(at: 1))
-            guard let data = inner.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  obj.count == 1,
-                  let val = obj["page_id"],
-                  (val is NSNull || val is String)
-            else { continue }
-            ranges.append(UTF16Range(start: start, end: end))
+
+        if text.contains("external_codex_apps_open_page") {
+            let regex = MarkdownPatterns.pageMetadata
+            for match in regex.matches(in: text, range: fullRange) {
+                let start = match.range.location
+                let end = start + match.range.length
+                if literal.contains(where: { $0.start < end && start < $0.end }) { continue }
+                let inner = ns.substring(with: match.range(at: 1))
+                guard let data = inner.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      obj.count == 1,
+                      let val = obj["page_id"],
+                      (val is NSNull || val is String)
+                else { continue }
+                ranges.append(UTF16Range(start: start, end: end))
+            }
+        }
+
+        if text.contains("external_codex_apps_selected_page_part_") {
+            let snapRegex = MarkdownPatterns.selectedPageSnapshotMetadata
+            for match in snapRegex.matches(in: text, range: fullRange) {
+                let start = match.range.location
+                let end = start + match.range.length
+                if literal.contains(where: { $0.start < end && start < $0.end }) { continue }
+                let openPart = ns.substring(with: match.range(at: 1))
+                let openTotal = ns.substring(with: match.range(at: 2))
+                let headPart = ns.substring(with: match.range(at: 3))
+                let headTotal = ns.substring(with: match.range(at: 4))
+                let closePart = ns.substring(with: match.range(at: 6))
+                let closeTotal = ns.substring(with: match.range(at: 7))
+                guard openPart == headPart,
+                      openPart == closePart,
+                      openTotal == headTotal,
+                      openTotal == closeTotal,
+                      let partNum = Int(openPart),
+                      let totalNum = Int(openTotal),
+                      partNum >= 1,
+                      totalNum >= partNum
+                else { continue }
+                let jsonStr = ns.substring(with: match.range(at: 5)).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let data = jsonStr.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      obj["document_view"] != nil,
+                      let pageVal = obj["page_id"],
+                      (pageVal is NSNull || pageVal is String)
+                else { continue }
+                ranges.append(UTF16Range(start: start, end: end))
+            }
         }
         return ranges
     }

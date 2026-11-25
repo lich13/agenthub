@@ -65,7 +65,22 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
         );
         assert!(db.job("fixture-job").unwrap().is_some());
         let conn = db.conn.lock().unwrap();
-        assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('idx_native_probe_unfinished','idx_probe_events_notification_key','idx_probe_error_incidents_event')",[],|r|r.get::<_,usize>(0)).unwrap(),3);
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name IN (
+                    'idx_native_probe_unfinished',
+                    'idx_probe_events_notification_key',
+                    'idx_probe_error_incidents_event',
+                    'idx_audit_log_created_at',
+                    'idx_jobs_started_at',
+                    'idx_native_probe_deliveries_updated_at'
+                )",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            6
+        );
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
@@ -248,5 +263,47 @@ fn encrypted_upgrade_rolls_back_all_panel_rows_and_preserves_delivery_progress()
     assert_eq!(
         db.get_setting("fixture").unwrap().unwrap(),
         encrypted_setting
+    );
+}
+
+#[test]
+fn existing_schema_three_store_missing_performance_indexes_backfills_idempotently() {
+    let fixture = Fixture::new();
+    let key = SecretBox::random_key_material();
+    let db =
+        PanelDb::open_with_secret_box(&fixture.path, SecretBox::from_key_material(&key).unwrap())
+            .unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_audit_log_created_at;
+             DROP INDEX idx_jobs_started_at;
+             DROP INDEX idx_native_probe_deliveries_updated_at;",
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let reopened =
+        PanelDb::open_with_secret_box(&fixture.path, SecretBox::from_key_material(&key).unwrap())
+            .unwrap();
+    let conn = reopened.conn.lock().unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN (
+                'idx_audit_log_created_at',
+                'idx_jobs_started_at',
+                'idx_native_probe_deliveries_updated_at'
+            )",
+            [],
+            |r| r.get::<_, usize>(0),
+        )
+        .unwrap(),
+        3
     );
 }

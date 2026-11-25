@@ -25,7 +25,7 @@ pub use notification_channels::{
     NOTIFICATION_LIFETIME_MS,
 };
 
-const NOTIFICATION_INDEXES: &str = "
+const SCHEMA_THREE_INDEXES: &str = "
 CREATE INDEX IF NOT EXISTS idx_native_probe_unfinished
  ON native_probe_deliveries(status,created_at,event_key)
  WHERE status='pending' OR status='delivering';
@@ -34,7 +34,46 @@ CREATE INDEX IF NOT EXISTS idx_probe_events_notification_key
  WHERE json_valid(payload_json);
 CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_event
  ON probe_error_incidents(event_id) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at
+ ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_started_at
+ ON jobs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at
+ ON native_probe_deliveries(status, updated_at);
 ";
+
+const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
+    (
+        "idx_native_probe_unfinished",
+        "native_probe_deliveries",
+        "CREATE INDEX IF NOT EXISTS idx_native_probe_unfinished ON native_probe_deliveries(status,created_at,event_key) WHERE status='pending' OR status='delivering';",
+    ),
+    (
+        "idx_probe_events_notification_key",
+        "probe_events",
+        "CREATE INDEX IF NOT EXISTS idx_probe_events_notification_key ON probe_events(json_extract(payload_json,'$.notification_event_key')) WHERE json_valid(payload_json);",
+    ),
+    (
+        "idx_probe_error_incidents_event",
+        "probe_error_incidents",
+        "CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_event ON probe_error_incidents(event_id) WHERE event_id IS NOT NULL;",
+    ),
+    (
+        "idx_audit_log_created_at",
+        "audit_log",
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);",
+    ),
+    (
+        "idx_jobs_started_at",
+        "jobs",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at DESC);",
+    ),
+    (
+        "idx_native_probe_deliveries_updated_at",
+        "native_probe_deliveries",
+        "CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at ON native_probe_deliveries(status, updated_at);",
+    ),
+];
 
 #[derive(Clone)]
 pub struct PanelDb {
@@ -123,13 +162,39 @@ impl PanelDb {
         Timestamp::now().as_second()
     }
 
+    fn missing_schema_three_index_ddls(conn: &Connection) -> Result<Vec<&'static str>> {
+        let mut stmt =
+            conn.prepare("SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index')")?;
+        let mut tables = std::collections::HashSet::new();
+        let mut indexes = std::collections::HashSet::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (kind, name) = row?;
+            if kind == "table" {
+                tables.insert(name);
+            } else if kind == "index" {
+                indexes.insert(name);
+            }
+        }
+        Ok(SCHEMA_THREE_INDEX_SPECS
+            .iter()
+            .filter(|&&(idx_name, tbl_name, _)| {
+                tables.contains(tbl_name) && !indexes.contains(idx_name)
+            })
+            .map(|&(_, _, ddl)| ddl)
+            .collect())
+    }
+
     fn migrate(&self) -> Result<()> {
         const SCHEMA_VERSION: i64 = 3;
         {
             let conn = self.conn.lock().expect("db mutex");
             conn.execute_batch("PRAGMA foreign_keys=ON;")?;
             let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version >= SCHEMA_VERSION {
+            if version >= SCHEMA_VERSION && Self::missing_schema_three_index_ddls(&conn)?.is_empty()
+            {
                 return Ok(());
             }
         }
@@ -137,6 +202,14 @@ impl PanelDb {
         let mut conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version >= SCHEMA_VERSION {
+            let missing = Self::missing_schema_three_index_ddls(&conn)?;
+            if !missing.is_empty() {
+                let tx = conn.transaction()?;
+                for ddl in missing {
+                    tx.execute_batch(ddl)?;
+                }
+                tx.commit()?;
+            }
             return Ok(());
         }
         let populated: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')", [], |row| row.get(0))?;
@@ -257,7 +330,7 @@ impl PanelDb {
         )?;
         tx.execute_batch(desktop_submissions::SCHEMA)?;
         tx.execute_batch(notification_channels::SCHEMA)?;
-        tx.execute_batch(NOTIFICATION_INDEXES)?;
+        tx.execute_batch(SCHEMA_THREE_INDEXES)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(())
@@ -794,6 +867,19 @@ impl PanelDb {
                 SELECT rowid FROM probe_error_incidents
                 WHERE bark_status != 'pending' AND updated_at < ?1
                 ORDER BY updated_at ASC
+                LIMIT ?2
+            )",
+            params![marker_cutoff, limit],
+        )?;
+        conn.execute(
+            "DELETE FROM jobs WHERE rowid IN (
+                SELECT rowid FROM jobs
+                WHERE status IN ('succeeded', 'failed', 'cancelled')
+                  AND COALESCE(finished_at, started_at) < ?1
+                  AND rowid NOT IN (
+                      SELECT rowid FROM jobs ORDER BY started_at DESC, rowid DESC LIMIT 200
+                  )
+                ORDER BY started_at ASC
                 LIMIT ?2
             )",
             params![marker_cutoff, limit],
@@ -1342,5 +1428,144 @@ mod tests {
         );
         drop(db);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn maintain_probe_events_prunes_old_terminal_jobs_beyond_200_and_only_explicit_delete_prunes_stream_cursors(
+    ) {
+        use crate::native_probe::NativeProvider;
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let now = PanelDb::now();
+        let old_ts = now - 15 * 86_400;
+
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            // Insert 205 old terminal jobs + 1 old running job
+            for idx in 0..205_i64 {
+                conn.execute(
+                    "INSERT INTO jobs(id, kind, status, title, started_at, finished_at, output)
+                     VALUES(?1, 'probe', 'succeeded', 'job', ?2, ?2, ?3)",
+                    rusqlite::params![
+                        format!("job-{idx:03}"),
+                        old_ts + idx,
+                        format!("full-output-{idx:03}")
+                    ],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO jobs(id, kind, status, title, started_at, output)
+                 VALUES('job-running-old', 'probe', 'running', 'running', ?1, 'live-output')",
+                rusqlite::params![old_ts - 100],
+            )
+            .unwrap();
+
+            // Insert old native_probe_streams cursors for two sessions
+            for sk in ["proj/keep-alive", "proj/explicit-delete"] {
+                conn.execute(
+                    "INSERT INTO native_probe_streams(provider, session_key, identity, cursor, updated_at)
+                     VALUES('claude_code', ?1, 'id-1', 42, ?2)",
+                    rusqlite::params![sk, old_ts - 86_400 * 90],
+                )
+                .unwrap();
+            }
+        }
+
+        // Maintenance prunes only the 5 oldest terminal jobs beyond the latest 200 (200 + 1 running = 201 left),
+        // preserves full job output on retained jobs, and NEVER deletes native_probe_streams cursors by age!
+        db.maintain_notification_history_if_due(7).unwrap();
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            let remaining_jobs: i64 = conn
+                .query_row("SELECT count(*) FROM jobs", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(remaining_jobs, 201);
+            let retained_out: String = conn
+                .query_row("SELECT output FROM jobs WHERE id='job-204'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(retained_out, "full-output-204");
+            let running_still_present: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM jobs WHERE id='job-running-old'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(running_still_present, 1);
+
+            let cursors_after_maint: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM native_probe_streams WHERE provider='claude_code'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                cursors_after_maint, 2,
+                "periodic maintenance must NEVER delete native_probe_streams cursors by age"
+            );
+        }
+
+        let pruned = db
+            .delete_native_probe_stream_cursors(
+                NativeProvider::Claude,
+                &["proj/explicit-delete".to_string()],
+            )
+            .unwrap();
+        assert_eq!(pruned, 1);
+        let surviving: Vec<String> = db
+            .conn
+            .lock()
+            .expect("db mutex")
+            .prepare("SELECT session_key FROM native_probe_streams")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(surviving, vec!["proj/keep-alive".to_string()]);
+
+        // DSH stores `{project}/{id}` in native_probe_streams while delete/cleanup supplies bare `{id}`.
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            for sk in [
+                "proj-a/11111111-1111-4111-8111-111111111111",
+                "proj-b/22222222-2222-4222-8222-222222222222",
+            ] {
+                conn.execute(
+                    "INSERT INTO native_probe_streams(provider, session_key, identity, cursor, updated_at)
+                     VALUES('dsh', ?1, 'id-dsh', 19, ?2)",
+                    rusqlite::params![sk, old_ts],
+                )
+                .unwrap();
+            }
+        }
+        let dsh_pruned = db
+            .delete_native_probe_stream_cursors(
+                NativeProvider::Dsh,
+                &["11111111-1111-4111-8111-111111111111".to_string()],
+            )
+            .unwrap();
+        assert_eq!(dsh_pruned, 1);
+        let dsh_surviving: Vec<String> = db
+            .conn
+            .lock()
+            .expect("db mutex")
+            .prepare("SELECT session_key FROM native_probe_streams WHERE provider='dsh'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            dsh_surviving,
+            vec!["proj-b/22222222-2222-4222-8222-222222222222".to_string()]
+        );
     }
 }

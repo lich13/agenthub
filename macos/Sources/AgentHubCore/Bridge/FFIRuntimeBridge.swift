@@ -549,13 +549,23 @@ public final class FFIRuntimeBridge: RuntimeTransport, @unchecked Sendable {
 
 enum NativeMarkdown {
     static func parse(_ markdown: String) -> Data {
-        Array(markdown.utf8).withUnsafeBufferPointer { bytes in
-            let ptr = bytes.baseAddress.map { UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self) }
-            guard let json = agenthub_ffi_parse_gfm_markdown(ptr, bytes.count) else {
+        func invoke(_ ptr: UnsafePointer<CChar>?, _ count: Int) -> Data {
+            guard let json = agenthub_ffi_parse_gfm_markdown(ptr, count) else {
                 return Data(#"{"blocks":[]}"#.utf8)
             }
             defer { agenthub_ffi_string_free(json) }
-            return Data(String(cString: json).utf8)
+            return Data(bytes: json, count: strlen(json))
+        }
+        if let result = markdown.utf8.withContiguousStorageIfAvailable({ buf in
+            let ptr = buf.baseAddress.map { UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self) }
+            return invoke(ptr, buf.count)
+        }) {
+            return result
+        }
+        var copy = markdown
+        return copy.withUTF8 { buf in
+            let ptr = buf.baseAddress.map { UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self) }
+            return invoke(ptr, buf.count)
         }
     }
 }

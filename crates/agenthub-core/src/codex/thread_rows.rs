@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
-use rusqlite::Connection;
-use std::{collections::HashSet, path::PathBuf};
+use rusqlite::{Connection, OpenFlags};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use super::{
     rollout_events::{
@@ -16,7 +19,11 @@ pub fn hidden_and_archived_thread_ids(
     if !db.exists() {
         return Ok((HashSet::new(), HashSet::new()));
     }
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
+    let conn = Connection::open_with_flags(
+        &db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open {}", db.display()))?;
     let has_threads = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='threads'",
@@ -135,7 +142,11 @@ pub(super) fn read_thread_rows_matching(
     if !db.exists() {
         return Ok(Vec::new());
     }
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
+    let conn = Connection::open_with_flags(
+        &db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open {}", db.display()))?;
     let has_threads = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='threads'",
@@ -201,6 +212,7 @@ pub(super) fn read_thread_rows_matching(
     let sql = format!(
         "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {first_user_message_expr} FROM threads{filter}"
     );
+    let mut workspace_root_memo: HashMap<String, Option<String>> = HashMap::new();
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(id), |row| {
         let id: String = row.get(0)?;
@@ -236,17 +248,23 @@ pub(super) fn read_thread_rows_matching(
         } else {
             ThreadStatus::Recent
         };
-        let workspace_root = cwd
-            .as_deref()
-            .and_then(crate::workspace_root::resolve_workspace_root);
+        let workspace_root = cwd.as_deref().and_then(|c| {
+            if let Some(cached) = workspace_root_memo.get(c) {
+                return cached.clone();
+            }
+            let resolved = crate::workspace_root::resolve_workspace_root(c);
+            workspace_root_memo.insert(c.to_owned(), resolved.clone());
+            resolved
+        });
+        let formatted_updated = updated_raw.as_ref().and_then(format_cell_time);
         Ok(Some(LocalThreadRow {
             summary: ThreadSummary {
-                activity_updated_at: updated_raw.as_ref().and_then(format_cell_time),
+                activity_updated_at: formatted_updated.clone(),
                 storage_size: None,
                 id,
                 title: choose_initial_thread_title(title.as_deref(), None),
                 status,
-                updated_at: updated_raw.as_ref().and_then(format_cell_time),
+                updated_at: formatted_updated,
                 archived_at,
                 message_count: 0,
                 latest_message: None,
@@ -326,15 +344,7 @@ fn format_timestamp(value: i64) -> Option<String> {
     })
 }
 
-pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
-}
-
-pub(crate) fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'a str> {
-    names.iter().copied().find(|name| columns.contains(*name))
-}
+pub(crate) use crate::archive::{first_existing, table_columns};
 
 pub(crate) fn coalesce_non_empty(columns: &HashSet<String>, names: &[&str]) -> String {
     let existing: Vec<&str> = names

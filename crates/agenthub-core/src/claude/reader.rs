@@ -79,6 +79,7 @@ struct ReaderState {
     main: Vec<String>,
     positions: HashMap<String, usize>,
     records: usize,
+    retained_records: usize,
     rebuild: bool,
     journal: crate::jsonl_cache::HistoryJournal,
     weight: u64,
@@ -94,7 +95,6 @@ impl ReaderState {
         if line.iter().all(u8::is_ascii_whitespace) {
             return Ok(());
         }
-        ensure!(self.records < 200_000, "Claude 会话记录超出读取上限");
         let value = match serde_json::from_slice::<Value>(line) {
             Ok(value) if value.is_object() => value,
             _ => {
@@ -104,6 +104,14 @@ impl ReaderState {
                 return Ok(());
             }
         };
+        let kind = field(&value, "type");
+        let discarded = is_discarded_telemetry_kind(kind);
+        if !discarded {
+            ensure!(
+                self.retained_records < 200_000,
+                "Claude 会话记录超出读取上限"
+            );
+        }
         context.validate(&value)?;
         if self.records == 0 {
             self.parser.context = context.clone();
@@ -111,7 +119,7 @@ impl ReaderState {
         let uuid = field(&value, "uuid");
         if (context.accepts_sidechain()
             || value.get("isSidechain").and_then(Value::as_bool) != Some(true))
-            && matches!(field(&value, "type"), "user" | "assistant")
+            && matches!(kind, "user" | "assistant")
             && !uuid.is_empty()
             && !self.positions.contains_key(uuid)
         {
@@ -129,6 +137,9 @@ impl ReaderState {
             self.parser.push(&value, self.records, None);
         }
         self.records += 1;
+        if !discarded {
+            self.retained_records += 1;
+        }
         Ok(())
     }
     fn rebuild(&mut self, path: &Path, offset: u64) -> Result<()> {
@@ -335,7 +346,7 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                                 .map_or(0, crate::user_message::UserMessage::weight)
                     })
                     .sum::<u64>()
-                    + state.records as u64 * 256
+                    + state.retained_records as u64 * 256
                     + parsed
                         .agent_names
                         .iter()
@@ -540,6 +551,84 @@ fn alias_conflict(record: &Value, keys: &[&str]) -> bool {
     false
 }
 
+fn is_discarded_telemetry_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "progress"
+            | "last-prompt"
+            | "agent-name"
+            | "tag"
+            | "pr-link"
+            | "saved_hook_context"
+            | "mode"
+            | "permission-mode"
+            | "api-request-shape"
+            | "api-request-blob"
+            | "api-request"
+            | "agent-setting"
+            | "continued-in"
+            | "tools-used"
+    )
+}
+
+fn compact_file_history_detail(record: &Value) -> String {
+    let container = record
+        .get("snapshot")
+        .or_else(|| record.get("delta"))
+        .unwrap_or(record);
+    let mut paths: Vec<&str> = Vec::new();
+    if let Some(backups) = container
+        .get("trackedFileBackups")
+        .and_then(Value::as_object)
+    {
+        paths.extend(backups.keys().map(String::as_str));
+    } else if let Some(files) = container.get("files") {
+        if let Some(arr) = files.as_array() {
+            for item in arr {
+                if let Some(s) = item
+                    .as_str()
+                    .or_else(|| item.get("path").and_then(Value::as_str))
+                {
+                    if !s.is_empty() {
+                        paths.push(s);
+                    }
+                }
+            }
+        } else if let Some(obj) = files.as_object() {
+            paths.extend(obj.keys().map(String::as_str));
+        }
+    }
+    let msg_id = field(container, "messageId");
+    let msg_id = if msg_id.is_empty() {
+        field(record, "messageId")
+    } else {
+        msg_id
+    };
+    if !paths.is_empty() {
+        let total = paths.len();
+        let preview: Vec<&str> = paths.into_iter().take(24).collect();
+        let mut out = if msg_id.is_empty() {
+            format!(
+                "文件历史快照（共 {total} 个文件）：\n{}",
+                preview.join("\n")
+            )
+        } else {
+            format!(
+                "文件历史快照（messageId: {msg_id}，共 {total} 个文件）：\n{}",
+                preview.join("\n")
+            )
+        };
+        if total > 24 {
+            out.push_str(&format!("\n… 其余 {} 个文件已省略", total - 24));
+        }
+        return out;
+    }
+    if !msg_id.is_empty() {
+        return format!("文件历史快照（messageId: {msg_id}）");
+    }
+    "文件历史快照".into()
+}
+
 #[derive(Default)]
 struct Parser {
     context: ReadContext,
@@ -552,12 +641,33 @@ struct Parser {
     pending: HashSet<String>,
     questions: HashMap<String, crate::native_probe::NativeTurnEvent>,
     permission_calls: HashMap<String, String>,
-    seen: HashMap<String, String>,
+    seen: HashMap<String, [u8; 32]>,
     last_assistant_text: Option<String>,
     last_stop_reason: String,
     last_assistant_events: Vec<usize>,
     last_assistant_message_id: Option<String>,
 }
+struct Sha256JsonWriter<'a>(&'a mut sha2::Sha256);
+
+impl std::io::Write for Sha256JsonWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use sha2::Digest;
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn canonical_record_digest(record: &Value) -> [u8; 32] {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    let _ = serde_json::to_writer(Sha256JsonWriter(&mut hasher), record);
+    hasher.finalize().into()
+}
+
 impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
         let is_sidechain_record = record.get("isSidechain").and_then(Value::as_bool) == Some(true)
@@ -616,14 +726,17 @@ impl Parser {
         if !version.is_empty() {
             self.parsed.version = version.into();
         }
+        if is_discarded_telemetry_kind(kind) {
+            return;
+        }
         let key = if uuid.is_empty() {
             format!("record-{}", position + 1)
         } else {
             uuid.into()
         };
         if !uuid.is_empty() {
-            let hash = digest(record.to_string());
-            if let Some(prior) = self.seen.insert(uuid.into(), hash.clone()) {
+            let hash = canonical_record_digest(record);
+            if let Some(prior) = self.seen.insert(uuid.into(), hash) {
                 if prior != hash {
                     issue(&mut self.parsed, "记录 ID 冲突，改名已禁用");
                 }
@@ -1099,7 +1212,6 @@ impl Parser {
                 ),
                 &self.turn,
             );
-            e.detail = Some(printable(record));
             if kind == "attachment" {
                 let attachment = &record["attachment"];
                 e.role = Some("native_context".into());
@@ -1130,6 +1242,12 @@ impl Parser {
                 } else {
                     printable(attachment)
                 };
+                let bounded_body = bounded(&body);
+                e.detail = Some(if bounded_body.trim().is_empty() {
+                    printable(attachment)
+                } else {
+                    bounded_body.clone()
+                });
                 let mut user =
                     crate::user_message::parse_user_message(&e.id, &Value::String(String::new()));
                 user.context_blocks
@@ -1139,9 +1257,13 @@ impl Parser {
                         } else {
                             crate::user_message::UserContextKind::Runtime
                         },
-                        text: bounded(&body),
+                        text: bounded_body,
                     });
                 e.user_message = Some(user);
+            } else if matches!(kind, "file-history-snapshot" | "file-history-delta") {
+                e.detail = Some(compact_file_history_detail(record));
+            } else {
+                e.detail = Some(printable(record));
             }
             self.parsed.events.push(Arc::new(e));
         }

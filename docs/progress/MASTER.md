@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.36**。API 协议 2，数据库 schema 3。全链路根治「默认应折叠的思考块异常展开」的八类实证根因：含思考段的过程组不再因工具非零退出而整组自动撑开（闭合态高亮失败计数，纯 `AGENTS.md` 失败同样保持闭合），多步或含工具过程组内的思考与过渡说明包裹紧凑 `32pt` 二层披露行（单段纯思考组保持点开直读），独立 `.thinking` 行运行中保持默认闭合，补齐 `ActivityDisclosureStore` 单调递增 `seq` 与全别名写回（反向翻页改首键与合并组零回弹）、`CellConfigSignature` 及行高／单元格缓存的 `sessionScopeKey` 跨会话隔离、Antigravity 离线 `.db` 同轮逆序预扫 `step_type == 15` 降级中间回复、Claude 无 `turnId` 顶层 `foldProcessSequence` 聚合、收紧 `matchesTimelinePosition` 杜绝短位置键误展开，以及五大代码平台工具循环中间过渡说明统一归入当轮过程组默认折叠（每轮最终／未决回复独立展示）。同步完成全仓 `$de-gpt` 四阶段深度瘦身：移除零引用 `syn`/`quote` 依赖、重复 `drift_guard.rs`、死函数／死组件 `GlassHeaderSurface`、`ApiErrorKind` 与 `< 2.0.1` 历史发版死分支；拆除 FFI 假请求套娃与 `rpc_query_strings` 字符串绕路，合并双份工作区侧栏控件、子智能体抽屉映射、确认遮罩与菜单锚点捕获视图（修正右对齐 `NSMenu.popUp` 坐标）；移除启动期私自创建 `~/agenthub-workspace` 副作用并补齐交互链路显式错误反馈。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
+当前源码版本为 **2.1.37**。API 协议 2，数据库 schema 3。全链路根治超大 Claude 会话无法向上滚动与 Codex 表格首行截断问题，并完成 `$de-gpt` 代码瘦身与前后端资源优化：`JsonlCache` 改为确定性历史 `epoch`（消除超容量／空闲淘汰后重读误清空前端分页），`claude/reader.rs` 跳过 `progress` 等遥测记录的去重与记录上限权重并压缩 `file-history-snapshot`／`attachment` 冗余体积（保留物理行游标零回退），AppKit 阅读器引入 `ReaderOuterScrollView` 弹性顶边上滚与欠屏 `limit = 500` 自动回填、展开态首行底边 `maxY` 锚点锁定及 `TimelineWindowController` 原生事件游标；表格改用 `FlippedDocumentView` 顶原点布局、`.legacy` 横向滚动条高度补偿、中文避头尾与字素簇词元列宽保护及固定等宽逐行行内 `code` 圆角胶囊，同步剥离 `<external_codex_apps_selected_page_part_*>` 伴侣页快照包装；收口未变化轮询短路、RPC 强类型校验、无拷贝 Markdown 桥接、Antigravity 单遍扫描与指纹缓存、Codex 只读查询与 `workspace_root` 复用及 SQLite 幂等索引与旧作业保留策略。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
 
 - **v2.1.36** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.36`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.35 原地更新并启动；长会话思考块与工具循环中间过渡说明默认折叠、跨会话与反向翻页折叠态保持，以及合并后的工作区与菜单交互待用户验收。[提交 3e0812d](https://github.com/lich13/agenthub/commit/3e0812d6e8a084f8ceb514e45a695f097b654e53) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.36) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45489940549)
 
@@ -14,6 +14,26 @@
 
 - **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
 - **v2.1.30** 已发布八项资产，具备两种密文格式的读取能力，继续写旧格式。Linux 服务在该版部署后状态为 `active`，健康检查 `ok`。Mac App 已由 2.1.29 原地更新并启动。[提交 3fb2cdf](https://github.com/lich13/agenthub/commit/3fb2cdf361a5f62198bfd168bcd13132c4c57aec) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.30) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44777552143)
+
+## v2.1.37 实现与验证
+
+1. **超大 Claude 会话向上滚动与 JSONL 确定性历史纪元**：`JsonlCache` 将随机 UUID `epoch` 改为基于 `(dev, ino, scope, compressed, start_offset, rewrite_gen, first_record_digest)` 与 256 项 `Lineage` 环的确定性派生，使超容量／LRU／空闲淘汰与尾部追加保持同一 `epoch`（前端分页历史不被误判 `reset` 清空），同时在 `rename`、原地截断、同长覆写与非换行尾改写时立即轮换 `epoch`；`claude/reader.rs` 保留物理 JSON 行号 `self.records`（确保既有 SQLite `native_probe_streams.cursor` 零回退），引入 `retained_records` 计入 `200,000` 上限与缓存权重，跳过 14 类丢弃遥测记录（`progress` 等）的 `seen` 写入并将去重键收敛为零堆分配流式规范 JSON `[u8; 32]` 摘要，去掉 `attachment` 双重 `detail` 拷贝并将 `file-history-snapshot`／`file-history-delta` 压缩为紧凑路径列表。AppKit 阅读器新增 `ReaderOuterScrollView`（`verticalScrollElasticity = .allowed`），修正 `NSTableView` 视口填充下 `renderedContentHeight`（取末行 `rect(ofRow:).maxY`），使单条折叠过程组（`34pt < 视口`）向上滚轮／方向键直接触发历史续拉、顶部橡皮筋回弹不误清 `upwardScrollIntent`、展开态首行前置翻页锁定可见底边 `maxY`，并在折叠尾页自动升级 `limit = 500` 有界回填至可见对话及为 `TimelineWindowController` 的 `w:`／`n:` 游标传递原始事件 ID。
+2. **Codex 表格首行截断、行内代码换行胶囊、Markdown 段高与 `<external_codex_apps_selected_page_part_*>` 清理**：`makeTableView` 改用顶原点 `FlippedDocumentView`（`isFlipped = true`）由 `y = 0` 自上而下排布表头与数据行，并为需要横向滚动的表格与代码块在 `NSScroller.preferredScrollerStyle == .legacy` 下补足滚动条高度（`horizontalScrollerExtraHeight`）及监听滚动条样式切换；`measureTableLayout` 按扩展字素簇与中文避头尾标点禁则保护不可拆分的 ASCII／代码词元列宽下限（上限 `168pt`）并在其上按 `maxWidth` 比例收缩超宽文本列，仅当列下限之和超出视口时启用横向滚动；`ReaderSelectableTextView` 行内 `code` 圆角背景改为固定等宽字体度量逐行片段（`enumerateLineFragments`）对齐字形基线绘制（折行断口收窄圆角防切字），杜绝跨行折行时合并成单块错位胶囊或因字体回退跳变高度；统一 `.assistant`、`.plan`、多段代码块及 `makeMonospaceDetailBox`（`max(106, width)`）测量与 Auto Layout 高度，移除 `GfmRenderedSegment.prose` 死参数 `isQuote` 并将 `GfmLayoutCache` 命中更新改为单调序号 `O(1)`；前后端与跨语言黄金向量同步剥离 `<external_codex_apps_selected_page_part_i_of_n>Companion Page snapshot part i of n:...` 包装（保留代码块与引用字面量），快照专属消息不再产生空气泡或时间线锚点；`ConversationRowCellView.swift` 按职责拆分为核心、`MarkdownViews` 与 `ProcessViews` 三文件。
+3. **`$de-gpt` 代码审计瘦身与前端／RPC 执行效率**：`ProviderWorkspaceStore` 对未变化轮询按 `LastRenderedPollSignature` 短路行重建；`RuntimeConnectionStore` 移除 `RequestControlProbe` 二次编解码与手工 JSON 拼接，统一静态编解码器与强类型 `RemoteInvokeEnvelope`；`FFIRuntimeBridge` 原地借用 UTF-8 缓冲解析 Markdown；收口全端重复 `ISO8601DateFormatter`／`DateFormatter` 为线程安全 `SharedTimestampFormatters`，为工具预览 JSON 解析补充 512 项有界记忆化，补齐 `ConfirmDialogOverlay` 与 `SubagentDrawerView` 的输入法 `hasMarkedText()` `Escape` 误关守卫；`agenthub-webd` 统一 `grok.list`、`grok.detail`、`claude.list`、`probe.events` 的 `rpc_payload` 强类型反序列化（拒绝非法 `limit`），收口重复 `table_columns`/`first_existing`，由 `Config::to_toml_string` 收口配置序列化并移除 `agenthub-ffi` 直接 `toml` 依赖。
+4. **服务端与本机 CPU／内存／SQLite 占用优化**：Antigravity 合并 `collect_store_known_subagents` 与 `list_offline_summaries` 为每库单次扫描、按 `archived` 过滤提前跳过无关会话树状态评估、跳过无锁且超过 60s 未改动的历史子代理 `.db` 检查，并为 `.db`（含 `-wal`）与转录文件建立有界文件指纹缓存（接入既有空闲淘汰）；Codex 只读查询统一启用 `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX`，列表单次复用 `canonicalize(home)` 与同路径 `cwd` 的 `workspace_root` 解析；Claude `Snapshot::capture_readonly` 增加单飞互斥消除并发 `ps`/`/proc` 风暴；SQLite 保持 schema 3，在迁移锁内幂等补齐 `idx_audit_log_created_at`、`idx_jobs_started_at`、`idx_native_probe_deliveries_updated_at` 三个索引，例行维护保留最近 200 条作业（不截断保留项 `output`）并清理超期终态旧作业，`native_probe_streams` 游标仅在会话经确认显式删除／统一清理成功时移除，绝不按时间清理仍存在会话的游标。API 协议保持 2，未新增第三方依赖、数据库表、后台任务、状态文件或 CI 门禁。
+
+本机 macOS 开发测试构建（`test` / `swift test` 未优化 profile），同一合成负载在改动前（基线工作树）后（最终源码）顺序各测一次，夹具创建不计入耗时／CPU，临时基准代码已移除。Claude 负载为 `209.7 MiB` JSONL（1,800 轮对话、45,000 条 `progress`、1,800 条 `file-history-snapshot` 及 `attachment`，冷读 ×3 独立子进程、热轮询 ×3、追加 2 行后轮询 ×3）；Antigravity 为桌面与 CLI 双库离线活跃列表热读 ×20；Codex 为 8 个 `.git` worktree 下 200 条线程列表热读 ×20；Swift 为 160 条事件运行中会话无变更轮询 ×50：
+
+| 合成负载 | 耗时 ms：前 → 后 | CPU ms：前 → 后 | 关键状态变化 |
+| --- | ---: | ---: | --- |
+| Claude 209.7 MiB 冷读 ×3 | 43,624.03 → 16,491.28 | 43,417.04 → 16,357.63 | 单次解析耗时与 CPU 下降约 62.3% |
+| Claude 209.7 MiB 热轮询 ×3 | 45,316.58 → 0.40 | 44,264.38 → 0.40 | `epoch_preserved`: `false` → `true`（驻留 `160 MiB` 预算内免重扫） |
+| Claude 209.7 MiB 尾部追加轮询 ×3 | 44,832.78 → 13.51 | 44,578.18 → 13.47 | 命中增量偏移追加，不再整文件重扫 |
+| Antigravity 双库活跃列表 ×20 | 849.86 → 467.15 | 848.66 → 466.88 | 单遍扫描＋指纹复用，耗时下降 45.0% |
+| Codex 200 线程多 worktree 列表 ×20 | 359.81 → 154.69 | 359.38 → 154.62 | 免重复 `canonicalize` 与 `workspace_root`，下降 57.0% |
+| Swift 160 事件无变更轮询 ×50 | 170.28 → 18.80 | 170.34 → 19.24 | `LastRenderedPollSignature` 短路行重建，下降 89.0% |
+
+未测量线上 Linux 常驻 RSS、物理磁盘 I/O 或真实用户会话体积变化，不将开发构建合成基准外推为线上固定比例。
 
 ## v2.1.29 实现与验证
 

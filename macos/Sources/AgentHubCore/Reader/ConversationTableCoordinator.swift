@@ -44,12 +44,19 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     private var userAnchorRowIndices: [Int] = []
     private var hasAnyUserImageAttachments: Bool = false
 
+    public static var scrollerStyleOverrideForTesting: NSScroller.Style?
+
+    public static var effectiveScrollerStyle: NSScroller.Style {
+        scrollerStyleOverrideForTesting ?? NSScroller.preferredScrollerStyle
+    }
+
     private var cachedRowHeights: [CGFloat?] = []
     private var heightCacheWidthKey: Int = 0
     private var heightCacheDisclosureRev: UInt64 = 0
     private var heightCacheScheme: ColorSchemeKind = .light
     private var heightCacheWorkspace: WorkspaceId = .codex
     private var heightCacheScopeKey: String = ""
+    private var heightCacheScrollerStyle: NSScroller.Style = ConversationTableCoordinator.effectiveScrollerStyle
 
     private static let maxCachedCells = 128
     private var cellCacheByRowId: [String: ConversationRowCellView] = [:]
@@ -59,17 +66,26 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     public struct ScrollAnchorSnapshot: Equatable, Sendable {
         public let timelineId: String
         public let deltaY: CGFloat
+        public var deltaMaxY: CGFloat
+        public var savedRowHeight: CGFloat
+        public var wasFirstRow: Bool
         public var savedScrollTop: CGFloat
         public var savedContentHeight: CGFloat
 
         public init(
             timelineId: String,
             deltaY: CGFloat,
+            deltaMaxY: CGFloat = 0,
+            savedRowHeight: CGFloat = 0,
+            wasFirstRow: Bool = false,
             savedScrollTop: CGFloat = 0,
             savedContentHeight: CGFloat = 0
         ) {
             self.timelineId = timelineId
             self.deltaY = deltaY
+            self.deltaMaxY = deltaMaxY
+            self.savedRowHeight = savedRowHeight
+            self.wasFirstRow = wasFirstRow
             self.savedScrollTop = savedScrollTop
             self.savedContentHeight = savedContentHeight
         }
@@ -85,6 +101,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         attachmentViewport.onImageUpdated = { [weak self] _ in
             self?.tableView?.reloadData()
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(ConversationTableCoordinator.preferredScrollerStyleDidChange(_:)),
+            name: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil
+        )
     }
 
     public var palette: DesignPalette {
@@ -115,8 +137,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 return ScrollAnchorSnapshot(
                     timelineId: rows[idx].timelineId,
                     deltaY: rect.minY - viewportTop,
+                    deltaMaxY: rect.maxY - viewportTop,
+                    savedRowHeight: rect.height,
+                    wasFirstRow: idx == 0,
                     savedScrollTop: viewportTop,
-                    savedContentHeight: tableView.frame.height
+                    savedContentHeight: renderedContentHeight
                 )
             }
         }
@@ -124,12 +149,14 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     }
 
     private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) {
+        let currentScrollerStyle = Self.effectiveScrollerStyle
         let canCarry = (currentWidthKey > 0
             && currentWidthKey == heightCacheWidthKey
             && disclosureStore.revision == heightCacheDisclosureRev
             && scheme == heightCacheScheme
             && workspace == heightCacheWorkspace
             && sessionScopeKey == heightCacheScopeKey
+            && currentScrollerStyle == heightCacheScrollerStyle
             && cachedRowHeights.count == rows.count)
 
         var previousById: [String: (item: ConversationRowItem, height: CGFloat)] = [:]
@@ -164,6 +191,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         heightCacheScheme = scheme
         heightCacheWorkspace = workspace
         heightCacheScopeKey = sessionScopeKey
+        heightCacheScrollerStyle = currentScrollerStyle
         userAnchorRowIndices = nextUserIndices
         hasAnyUserImageAttachments = anyImages
     }
@@ -228,11 +256,20 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             } else if let anchor {
                 if let newIdx = self.findAnchorRowIndex(for: anchor.timelineId, in: nextRows) {
                     let newRect = tableView.rect(ofRow: newIdx)
-                    let restoredY = max(minY, newRect.minY - anchor.deltaY)
+                    let restoredY: CGFloat
+                    if !preferAutoFollowBottom
+                        && anchor.wasFirstRow
+                        && anchor.savedRowHeight > 0
+                        && newRect.height > anchor.savedRowHeight + 0.5
+                    {
+                        restoredY = max(minY, newRect.maxY - anchor.deltaMaxY)
+                    } else {
+                        restoredY = max(minY, newRect.minY - anchor.deltaY)
+                    }
                     clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
                     self.scrollView?.reflectScrolledClipView(clipView)
-                } else if anchor.savedContentHeight > 0 && abs(tableView.frame.height - anchor.savedContentHeight) > 0.5 {
-                    let restoredY = max(minY, anchor.savedScrollTop + (tableView.frame.height - anchor.savedContentHeight))
+                } else if anchor.savedContentHeight > 0 && abs(self.renderedContentHeight - anchor.savedContentHeight) > 0.5 {
+                    let restoredY = max(minY, anchor.savedScrollTop + (self.renderedContentHeight - anchor.savedContentHeight))
                     clipView.setBoundsOrigin(NSPoint(x: 0, y: restoredY))
                     self.scrollView?.reflectScrolledClipView(clipView)
                 }
@@ -444,6 +481,9 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         let minY = -(scrollView?.contentInsets.top ?? 0)
         let maxScroll = max(minY, tableView.frame.height - clipView.bounds.height)
         let targetY = max(minY, min(maxScroll, rect.minY - 16))
+        if targetY < maxScroll - 1.0 {
+            upwardScrollIntent = true
+        }
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0
@@ -506,24 +546,109 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
-    @objc public func clipViewBoundsDidChange(_ notification: Notification) {
-        guard !isRestoringScroll, let clipView = scrollView?.contentView else { return }
-        let originY = clipView.bounds.origin.y
-        let movedUp = (lastClipOriginY == .greatestFiniteMagnitude) || (originY < lastClipOriginY - 0.5)
-        if movedUp {
+    public var renderedContentHeight: CGFloat {
+        guard let tableView, !rows.isEmpty else { return 0 }
+        return tableView.rect(ofRow: rows.count - 1).maxY
+    }
+
+    public var isViewportUnderfilled: Bool {
+        guard let scrollView, scrollView.bounds.height > 1 else { return false }
+        let visibleBudget = scrollView.contentView.bounds.height - scrollView.contentInsets.top - scrollView.contentInsets.bottom
+        return visibleBudget > 64 && renderedContentHeight + 1 < visibleBudget
+    }
+
+    public var isNearTopForContinuation: Bool {
+        guard let scrollView, scrollView.bounds.height > 1 else { return false }
+        return scrollView.contentView.bounds.origin.y <= 200
+    }
+
+    private func requestLoadOlderIfEligible() {
+        guard canLoadOlder, !isLoadingOlder, !isLoadOlderBlockedByError else { return }
+        onLoadOlderRequested?()
+    }
+
+    public func handleOuterScrollWheel(
+        deltaY: CGFloat,
+        phase _: NSEvent.Phase = [],
+        momentumPhase: NSEvent.Phase = []
+    ) {
+        if deltaY > 0.1 {
             upwardScrollIntent = true
-        } else if originY > lastClipOriginY + 0.5 {
-            upwardScrollIntent = false
+            let originY = scrollView?.contentView.bounds.origin.y ?? 0
+            if originY <= 200 {
+                requestLoadOlderIfEligible()
+            }
+        } else if deltaY < -0.5, momentumPhase.isEmpty {
+            let minY = -(scrollView?.contentInsets.top ?? 0)
+            let originY = scrollView?.contentView.bounds.origin.y ?? 0
+            if originY > minY + 1.0 {
+                upwardScrollIntent = false
+            }
+        }
+    }
+
+    public func handleOuterUpwardKeyNavigation() {
+        upwardScrollIntent = true
+        let originY = scrollView?.contentView.bounds.origin.y ?? 0
+        if originY <= 200 {
+            requestLoadOlderIfEligible()
+        }
+    }
+
+    public func markUpwardNavigationIntent() {
+        upwardScrollIntent = true
+    }
+
+    @objc public func preferredScrollerStyleDidChange(_ notification: Notification) {
+        guard !isRestoringScroll, let tableView else { return }
+        cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
+        heightCacheScrollerStyle = Self.effectiveScrollerStyle
+        cellCacheByRowId.removeAll()
+        cellCacheOrder.removeAll()
+        let anchor = captureScrollAnchor()
+        isRestoringScroll = true
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            ctx.allowsImplicitAnimation = false
+            tableView.reloadData()
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< rows.count))
+            tableView.tile()
+            tableView.layoutSubtreeIfNeeded()
+            if let anchor,
+               let clipView = scrollView?.contentView,
+               let idx = findAnchorRowIndex(for: anchor.timelineId, in: rows)
+            {
+                let minY = -(scrollView?.contentInsets.top ?? 0)
+                let rect = tableView.rect(ofRow: idx)
+                clipView.setBoundsOrigin(NSPoint(x: 0, y: max(minY, rect.minY - anchor.deltaY)))
+                scrollView?.reflectScrolledClipView(clipView)
+                lastClipOriginY = clipView.bounds.origin.y
+            }
+        }
+        isRestoringScroll = false
+    }
+
+    @objc public func clipViewBoundsDidChange(_ notification: Notification) {
+        guard !isRestoringScroll, let scrollView else { return }
+        let clipView = scrollView.contentView
+        let originY = clipView.bounds.origin.y
+        let minY = -scrollView.contentInsets.top
+        if originY <= minY + 1.0 {
+            if lastClipOriginY == .greatestFiniteMagnitude || originY < lastClipOriginY - 0.5 {
+                upwardScrollIntent = true
+            }
+        } else {
+            let movedUp = (lastClipOriginY == .greatestFiniteMagnitude) || (originY < lastClipOriginY - 0.5)
+            if movedUp {
+                upwardScrollIntent = true
+            } else if originY > lastClipOriginY + 0.5 {
+                upwardScrollIntent = false
+            }
         }
         lastClipOriginY = originY
 
-        if upwardScrollIntent
-            && originY <= 200
-            && canLoadOlder
-            && !isLoadingOlder
-            && !isLoadOlderBlockedByError
-        {
-            onLoadOlderRequested?()
+        if upwardScrollIntent && originY <= 200 {
+            requestLoadOlderIfEligible()
         }
         refreshViewportAttachmentsAndTimeline()
     }
@@ -596,11 +721,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         let widthKey = Int((colWidth * 2).rounded())
         let discRev = disclosureStore.revision
 
+        let currentScrollerStyle = Self.effectiveScrollerStyle
         if widthKey != heightCacheWidthKey
             || discRev != heightCacheDisclosureRev
             || scheme != heightCacheScheme
             || workspace != heightCacheWorkspace
             || sessionScopeKey != heightCacheScopeKey
+            || currentScrollerStyle != heightCacheScrollerStyle
             || cachedRowHeights.count != rows.count
         {
             cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
@@ -609,6 +736,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             heightCacheScheme = scheme
             heightCacheWorkspace = workspace
             heightCacheScopeKey = sessionScopeKey
+            heightCacheScrollerStyle = currentScrollerStyle
         }
 
         if let cached = cachedRowHeights[row] {
@@ -749,7 +877,16 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
         case let .assistant(markdown, foldInstructions):
             // Side-hover copy button is floating in the right margin and NEVER adds vertical height (0.0pt impact)!
-            return measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: foldInstructions, width: width) + 8
+            return max(
+                28,
+                measureMarkdownSegmentsHeight(
+                    ownerId: row.id,
+                    markdown: markdown,
+                    foldInstructions: foldInstructions,
+                    width: width,
+                    interItemSpacing: 8
+                ) + 16
+            )
 
         case let .executionGroup(group):
             let isOpen = disclosureStore.isOpen(
@@ -839,7 +976,17 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return 34 + 14 + measureThoughtMarkdownHeight(ownerId: row.id, markdown: text, width: max(120, width - 22))
 
         case let .plan(markdown, _, _):
-            return 72 + measureMarkdownSegmentsHeight(ownerId: row.id, markdown: markdown, foldInstructions: false, width: max(120, width - 35))
+            let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
+            let innerWidth = max(120, width - 35)
+            let segsH = measureMarkdownSegmentsHeight(
+                ownerId: row.id,
+                markdown: cleaned,
+                foldInstructions: false,
+                width: innerWidth,
+                interItemSpacing: 10,
+                allowInstructionsFold: false
+            )
+            return segsH > 0 ? (72 + segsH) : 62
 
         case let .question(_, questions):
             return Self.measureQuestionsHeight(questions: questions, answers: nil, width: width)
@@ -1035,21 +1182,261 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return max(minWidth, ceil(attr.size().width) + 24)
     }
 
+    public static func horizontalScrollerExtraHeight(needsHorizontalScroll: Bool) -> CGFloat {
+        guard needsHorizontalScroll, effectiveScrollerStyle == .legacy else {
+            return 0
+        }
+        return ceil(NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy))
+    }
+
+    private enum TableCharBreakRole {
+        case whitespace
+        case cjkIdeograph
+        case cjkOpening
+        case cjkClosing
+        case nonBreakable
+    }
+
+    private static func classifyTableScalar(_ scalar: Unicode.Scalar) -> TableCharBreakRole {
+        if scalar.value == 0x00A0 || scalar.value == 0x202F || scalar.value == 0x2060 || scalar.value == 0xFEFF {
+            return .nonBreakable
+        }
+        if scalar.properties.isWhitespace {
+            return .whitespace
+        }
+        switch scalar.value {
+        // UAX #14 OP (Kinsoku 避尾点): prohibited at line end, glues forward to following token
+        case 0x3008, 0x300A, 0x300C, 0x300E, 0x3010, 0x3014, 0x3016, 0x3018, 0x301A, 0x301D,
+             0xFE35, 0xFE37, 0xFE39, 0xFE3B, 0xFE3D, 0xFE3F, 0xFE41, 0xFE43, 0xFE47,
+             0xFE59, 0xFE5B, 0xFE5D,
+             0xFF08, 0xFF3B, 0xFF5B, 0xFF5F, 0xFF62:
+            return .cjkOpening
+
+        // UAX #14 CL/CP/EX/IS/NS (Kinsoku 避头点): prohibited at line start, glues backward to preceding token
+        case 0x3001, 0x3002, 0x3005, 0x3009, 0x300B, 0x300D, 0x300F, 0x3011, 0x3015, 0x3017,
+             0x3019, 0x301B, 0x301E, 0x301F, 0x309B, 0x309C, 0x309D, 0x309E, 0x30FB, 0x30FD, 0x30FE,
+             0xFE30, 0xFE36, 0xFE38, 0xFE3A, 0xFE3C, 0xFE3E, 0xFE40, 0xFE42, 0xFE44, 0xFE48,
+             0xFE50 ... 0xFE57, 0xFE5A, 0xFE5C, 0xFE5E,
+             0xFF01, 0xFF09, 0xFF0C, 0xFF0E, 0xFF1A, 0xFF1B, 0xFF1F, 0xFF3D, 0xFF5D, 0xFF60,
+             0xFF61, 0xFF63, 0xFF64, 0xFF65, 0xFF70, 0xFF9E, 0xFF9F:
+            return .cjkClosing
+
+        case 0x2E80 ... 0x9FFF,
+             0xAC00 ... 0xD7AF,
+             0xF900 ... 0xFAFF,
+             0xFE30 ... 0xFE6F,
+             0xFF00 ... 0xFFEF,
+             0x20000 ... 0x2FA1F,
+             0x30000 ... 0x323AF:
+            return .cjkIdeograph
+
+        default:
+            return .nonBreakable
+        }
+    }
+
+    private static func startsWithGlueScalar(_ ch: Character) -> Bool {
+        guard let scalar = ch.unicodeScalars.first else { return false }
+        return scalar.value == 0x202F || scalar.value == 0x00A0 || scalar.value == 0x2060 || scalar.value == 0xFEFF
+    }
+
+    private static func maxUnbreakableTokenColumnWidth(
+        in attributed: NSAttributedString,
+        cap: CGFloat = 168
+    ) -> CGFloat {
+        let str = attributed.string
+        guard !str.isEmpty else { return 0 }
+        var maxW: CGFloat = 0
+        var tokenStart: String.Index?
+        var tokenCharCount = 0
+
+        func flushToken(upTo endIdx: String.Index) {
+            guard let startIdx = tokenStart else { return }
+            tokenStart = nil
+            tokenCharCount = 0
+            guard startIdx < endIdx else { return }
+            let slice = str[startIdx ..< endIdx]
+            guard slice.unicodeScalars.contains(where: { $0.value != 0x202F && $0.value != 0x00A0 }) else {
+                return
+            }
+            let nsRange = NSRange(startIdx ..< endIdx, in: str)
+            guard nsRange.length > 0 else { return }
+            let subAttr = attributed.attributedSubstring(from: nsRange)
+            let w = ceil(subAttr.size().width) + 28
+            if w > maxW {
+                maxW = min(cap, w)
+            }
+        }
+
+        var idx = str.startIndex
+        while idx < str.endIndex {
+            let ch = str[idx]
+            let nextIdx = str.index(after: idx)
+            let role = ch.unicodeScalars.first.map(classifyTableScalar) ?? .nonBreakable
+
+            switch role {
+            case .whitespace:
+                flushToken(upTo: idx)
+                if maxW >= cap { return cap }
+
+            case .cjkIdeograph:
+                let nextGluesToThis = nextIdx < str.endIndex && (
+                    startsWithGlueScalar(str[nextIdx])
+                    || (str[nextIdx].unicodeScalars.first.map(classifyTableScalar) == .cjkClosing)
+                )
+                if tokenStart != nil {
+                    let prevIdx = str.index(before: idx)
+                    let prevRole = str[prevIdx].unicodeScalars.first.map(classifyTableScalar) ?? .nonBreakable
+                    if prevRole != .cjkOpening && !startsWithGlueScalar(str[prevIdx]) {
+                        flushToken(upTo: idx)
+                        if maxW >= cap { return cap }
+                    }
+                }
+                if tokenStart != nil || nextGluesToThis {
+                    if tokenStart == nil {
+                        tokenStart = idx
+                        tokenCharCount = 0
+                    }
+                    tokenCharCount += 1
+                    if !nextGluesToThis || tokenCharCount >= 64 {
+                        flushToken(upTo: nextIdx)
+                        if maxW >= cap { return cap }
+                    }
+                }
+
+            case .cjkOpening:
+                if tokenStart != nil {
+                    let prevIdx = str.index(before: idx)
+                    let prevRole = str[prevIdx].unicodeScalars.first.map(classifyTableScalar) ?? .nonBreakable
+                    if prevRole != .cjkOpening && !startsWithGlueScalar(str[prevIdx]) {
+                        flushToken(upTo: idx)
+                        if maxW >= cap { return cap }
+                    }
+                }
+                if tokenStart == nil {
+                    tokenStart = idx
+                    tokenCharCount = 0
+                }
+                tokenCharCount += 1
+                if tokenCharCount >= 64 {
+                    flushToken(upTo: nextIdx)
+                    if maxW >= cap { return cap }
+                }
+
+            case .cjkClosing:
+                if tokenStart == nil {
+                    tokenStart = idx
+                    tokenCharCount = 0
+                }
+                tokenCharCount += 1
+                let nextContinuesCloseOrGlue = nextIdx < str.endIndex && (
+                    startsWithGlueScalar(str[nextIdx])
+                    || (str[nextIdx].unicodeScalars.first.map(classifyTableScalar) == .cjkClosing)
+                )
+                if !nextContinuesCloseOrGlue || tokenCharCount >= 64 {
+                    flushToken(upTo: nextIdx)
+                    if maxW >= cap { return cap }
+                }
+
+            case .nonBreakable:
+                if tokenStart == nil {
+                    tokenStart = idx
+                    tokenCharCount = 0
+                }
+                tokenCharCount += 1
+                if tokenCharCount >= 64 {
+                    flushToken(upTo: nextIdx)
+                    if maxW >= cap { return cap }
+                    var skipIdx = nextIdx
+                    while skipIdx < str.endIndex {
+                        let sr = str[skipIdx].unicodeScalars.first.map(classifyTableScalar) ?? .nonBreakable
+                        if sr != .nonBreakable && sr != .cjkClosing { break }
+                        skipIdx = str.index(after: skipIdx)
+                    }
+                    idx = skipIdx
+                    continue
+                }
+            }
+            idx = nextIdx
+        }
+        flushToken(upTo: str.endIndex)
+        return maxW
+    }
+
     public static func measureTableLayout(
         headers: [NSAttributedString],
         rows: [[NSAttributedString]],
         maxWidth: CGFloat
     ) -> (colWidths: [CGFloat], rowHeights: [CGFloat], totalWidth: CGFloat, totalHeight: CGFloat) {
-        let colCount = max(1, headers.count)
+        let colCount = max(1, max(headers.count, rows.map(\.count).max() ?? 0))
         let allRows = [headers] + rows
-        var colWidths = Array(repeating: CGFloat(64), count: colCount)
-        for cols in allRows {
+        let usableMaxW = max(160, floor(maxWidth))
+
+        var naturalWidths = Array(repeating: CGFloat(64), count: colCount)
+        var headerNaturalWidths = Array(repeating: CGFloat(64), count: colCount)
+        var tokenFloorWidths = Array(repeating: CGFloat(0), count: colCount)
+        for (rIdx, cols) in allRows.enumerated() {
             for cIdx in 0 ..< min(colCount, cols.count) {
-                let natural = ceil(cols[cIdx].size().width) + 28
-                colWidths[cIdx] = max(colWidths[cIdx], min(360, natural))
+                let cellAttr = cols[cIdx]
+                let natural = ceil(cellAttr.size().width) + 28
+                if rIdx == 0 {
+                    headerNaturalWidths[cIdx] = max(64, natural)
+                }
+                naturalWidths[cIdx] = max(naturalWidths[cIdx], min(360, natural))
+                if tokenFloorWidths[cIdx] < 168 {
+                    let tokenW = maxUnbreakableTokenColumnWidth(in: cellAttr, cap: 168)
+                    if tokenW > tokenFloorWidths[cIdx] {
+                        tokenFloorWidths[cIdx] = tokenW
+                    }
+                }
             }
         }
+
+        let colFloors: [CGFloat] = (0 ..< colCount).map { cIdx in
+            let headerFloor = max(84, min(132, headerNaturalWidths[cIdx]))
+            return min(naturalWidths[cIdx], max(headerFloor, tokenFloorWidths[cIdx]))
+        }
+        let naturalTotal = naturalWidths.reduce(0, +)
+        let floorTotal = colFloors.reduce(0, +)
+
+        var colWidths: [CGFloat]
+        if naturalTotal <= usableMaxW {
+            colWidths = naturalWidths
+        } else if floorTotal <= usableMaxW {
+            let targetShrink = naturalTotal - usableMaxW
+            let shrinkable = zip(naturalWidths, colFloors).map { max(0, $0 - $1) }
+            let totalShrinkable = shrinkable.reduce(0, +)
+            if totalShrinkable > 0.5 {
+                var allocated: CGFloat = 0
+                colWidths = (0 ..< colCount).map { cIdx in
+                    let cut = floor(targetShrink * (shrinkable[cIdx] / totalShrinkable))
+                    let w = max(colFloors[cIdx], naturalWidths[cIdx] - cut)
+                    allocated += w
+                    return w
+                }
+                var excess = ceil(allocated - usableMaxW)
+                if excess > 0 {
+                    for cIdx in (0 ..< colCount).sorted(by: { (colWidths[$0] - colFloors[$0]) > (colWidths[$1] - colFloors[$1]) }) {
+                        guard excess > 0 else { break }
+                        let avail = floor(colWidths[cIdx] - colFloors[cIdx])
+                        if avail > 0 {
+                            let delta = min(excess, avail)
+                            colWidths[cIdx] -= delta
+                            excess -= delta
+                        }
+                    }
+                }
+            } else {
+                colWidths = colFloors
+            }
+        } else {
+            colWidths = (0 ..< colCount).map { cIdx in
+                max(colFloors[cIdx], min(260, naturalWidths[cIdx]))
+            }
+        }
+
         var rowHeights: [CGFloat] = []
+        rowHeights.reserveCapacity(allRows.count)
         for cols in allRows {
             var maxCellH: CGFloat = 19
             for cIdx in 0 ..< min(colCount, cols.count) {
@@ -1104,11 +1491,20 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 .paragraphStyle: pStyle,
             ]
         )
-        let measured = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: max(80, width - 26)))
+        let boxWidth = max(106, width)
+        let innerW = boxWidth - 26
+        let measured = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: innerW))
         return min(240, max(48, measured + 22))
     }
 
-    private func measureMarkdownSegmentsHeight(ownerId: String, markdown: String, foldInstructions: Bool, width: CGFloat) -> CGFloat {
+    private func measureMarkdownSegmentsHeight(
+        ownerId: String,
+        markdown: String,
+        foldInstructions: Bool,
+        width: CGFloat,
+        interItemSpacing: CGFloat = 8,
+        allowInstructionsFold: Bool = true
+    ) -> CGFloat {
         let segs = GfmLayoutCache.shared.getOrRender(
             markdown: markdown,
             foldInstructions: foldInstructions,
@@ -1117,30 +1513,48 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             transport: store.transport
         )
         var total: CGFloat = 0
+        var renderedCount = 0
         for seg in segs {
+            let itemHeight: CGFloat
             switch seg {
-            case let .prose(attr, isQuote):
-                let w = isQuote ? max(100, width - 32) : width
-                total += ReaderSelectableTextView.measureHeight(attributed: attr, width: w) + (isQuote ? 24 : 8)
+            case let .prose(attr):
+                itemHeight = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width))
             case let .codeBlock(_, code):
                 // Full vertical height of fenced code blocks — NEVER clip at 18 lines!
-                total += Self.measureCodeBlockHeight(code: code) + 54
+                let innerCodeW = max(32, width - 32)
+                let docWidth = Self.measureCodeDocumentWidth(code: code, minWidth: innerCodeW)
+                let scrollerExtra = Self.horizontalScrollerExtraHeight(needsHorizontalScroll: docWidth > innerCodeW + 0.5)
+                itemHeight = Self.measureCodeBlockHeight(code: code) + scrollerExtra + 54
             case let .table(_, headers, rows):
                 let layout = Self.measureTableLayout(headers: headers, rows: rows, maxWidth: width)
-                total += layout.totalHeight + 16
+                let visibleW = min(width, layout.totalWidth)
+                let scrollerExtra = Self.horizontalScrollerExtraHeight(needsHorizontalScroll: layout.totalWidth > visibleW + 0.5)
+                itemHeight = layout.totalHeight + scrollerExtra
             case .thematicBreak:
-                total += 21
+                itemHeight = 1
             case let .instructionsFold(id, text, _, _):
+                guard allowInstructionsFold else { continue }
                 let scopedKey = "\(ownerId):\(id)"
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: scopedKey, initiallyOpen: false)
                 if open {
-                    total += 46 + measureMarkdownSegmentsHeight(ownerId: scopedKey, markdown: text, foldInstructions: false, width: max(120, width - 24))
+                    itemHeight = 54 + measureMarkdownSegmentsHeight(
+                        ownerId: scopedKey,
+                        markdown: text,
+                        foldInstructions: false,
+                        width: max(120, width - 24),
+                        interItemSpacing: 8
+                    )
                 } else {
-                    total += 42
+                    itemHeight = 38
                 }
             }
+            if renderedCount > 0 {
+                total += interItemSpacing
+            }
+            total += itemHeight
+            renderedCount += 1
         }
-        return max(28, total)
+        return total
     }
 }
 

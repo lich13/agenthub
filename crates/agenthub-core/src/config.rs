@@ -429,6 +429,10 @@ impl Config {
 }
 
 impl Config {
+    pub fn to_toml_string(&self) -> Result<String> {
+        toml::to_string(self).context("serialize config to TOML")
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if !path.exists() {

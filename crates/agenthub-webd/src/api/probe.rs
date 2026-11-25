@@ -46,7 +46,7 @@ pub(crate) async fn patch_probe_settings(
     ok(probe_settings_value_for_config(&state, &response_config)?)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct ProbeEventsQuery {
     pub(crate) limit: Option<u32>,
 }

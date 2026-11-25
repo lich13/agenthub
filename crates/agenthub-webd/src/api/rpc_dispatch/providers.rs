@@ -1,39 +1,18 @@
 use super::*;
 
 pub(super) async fn handle_grok_list(state: AppState, args: Value) -> ApiResponse {
-    grok_list(
-        state,
-        GrokListQuery {
-            q: args
-                .get("q")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            limit: args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize),
-        },
-    )
-    .await
+    let query = if args.is_null() {
+        GrokListQuery::default()
+    } else {
+        rpc_payload(&args)?
+    };
+    grok_list(state, query).await
 }
 
 pub(super) async fn handle_grok_detail(state: AppState, args: Value) -> ApiResponse {
     let id = rpc_required_string(&args, "id")?;
-    grok_detail(
-        state,
-        id,
-        crate::api::grok::GrokDetailQuery {
-            limit: args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|n| n as usize),
-            before: args
-                .get("before")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-        },
-    )
-    .await
+    let query: crate::api::grok::GrokDetailQuery = rpc_payload(&args)?;
+    grok_detail(state, id, query).await
 }
 
 pub(super) async fn handle_grok_rename(state: AppState, args: Value) -> ApiResponse {
@@ -49,20 +28,12 @@ pub(super) async fn handle_grok_delete_execute(state: AppState, args: Value) -> 
 }
 
 pub(super) async fn handle_claude_list(state: AppState, args: Value) -> ApiResponse {
-    claude_list(
-        state,
-        ClaudeListQuery {
-            q: args
-                .get("q")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            limit: args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize),
-        },
-    )
-    .await
+    let query = if args.is_null() {
+        ClaudeListQuery::default()
+    } else {
+        rpc_payload(&args)?
+    };
+    claude_list(state, query).await
 }
 
 pub(super) async fn handle_claude_detail(state: AppState, args: Value) -> ApiResponse {

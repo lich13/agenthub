@@ -173,7 +173,7 @@ mod tests {
         let mut platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
         platform.kind = kind;
         std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
-        std::fs::write(&platform.config_file, toml::to_string(&config).unwrap()).unwrap();
+        std::fs::write(&platform.config_file, config.to_toml_string().unwrap()).unwrap();
         let db = PanelDb::open_with_secret_box(
             &config.paths.db_path,
             SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
@@ -190,7 +190,7 @@ mod tests {
         config.probe.enabled = !config.probe.enabled;
         agenthub_core::config::write_config_atomic(
             &platform.config_file,
-            &toml::to_string(&config).unwrap(),
+            &config.to_toml_string().unwrap(),
         )
         .unwrap();
         let status = crate::services::probe::desktop_probe_status_with_state(&state)
@@ -214,7 +214,7 @@ mod tests {
         config.probe.hooks.manage_stop_hook = !initial.probe.hooks.manage_stop_hook;
         agenthub_core::config::write_config_atomic(
             &platform.config_file,
-            &toml::to_string(&config).unwrap(),
+            &config.to_toml_string().unwrap(),
         )
         .unwrap();
         let refreshed = probe_settings_with_state(&state).unwrap();

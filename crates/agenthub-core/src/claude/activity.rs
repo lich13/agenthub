@@ -187,6 +187,7 @@ type ReadonlySnapshotCacheEntry = ((PathBuf, PathBuf), Snapshot, std::time::Inst
 
 static READONLY_SNAPSHOT_CACHE: std::sync::Mutex<Option<ReadonlySnapshotCacheEntry>> =
     std::sync::Mutex::new(None);
+static CAPTURE_SINGLEFLIGHT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn invalidate_readonly_snapshot_cache() {
@@ -208,7 +209,21 @@ pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
 
 impl Snapshot {
     pub(super) fn capture_readonly(paths: &ClaudePaths) -> Self {
+        #[cfg(test)]
+        if let Some(snapshot) = TEST_SNAPSHOT.with(|slot| slot.borrow().clone()) {
+            return snapshot;
+        }
         let key = (paths.config.clone(), paths.projects.clone());
+        if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
+            if let Some((ref cached_key, ref snap, ts)) = *guard {
+                if *cached_key == key && ts.elapsed() < std::time::Duration::from_secs(2) {
+                    return snap.clone();
+                }
+            }
+        }
+        let _flight = CAPTURE_SINGLEFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
             if let Some((ref cached_key, ref snap, ts)) = *guard {
                 if *cached_key == key && ts.elapsed() < std::time::Duration::from_secs(2) {

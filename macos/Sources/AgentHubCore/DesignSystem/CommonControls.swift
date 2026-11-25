@@ -751,10 +751,17 @@ public struct ConfirmDialogOverlay<Content: View>: View {
         }
         .accessibilityElement(children: .contain)
         .onExitCommand {
-            if !busy {
+            if !busy, !AppInputCompositionGuard.responderHasMarkedText() {
                 onCancel()
             }
         }
+    }
+}
+
+@MainActor
+public enum AppInputCompositionGuard {
+    public static func responderHasMarkedText(_ responder: NSResponder? = NSApp.keyWindow?.firstResponder) -> Bool {
+        (responder as? NSTextInputClient)?.hasMarkedText() == true
     }
 }
 

@@ -30,7 +30,7 @@ fn desktop_state(temp: &tempfile::TempDir) -> DesktopState {
     .unwrap();
     let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
     std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
-    std::fs::write(&platform.config_file, toml::to_string(&config).unwrap()).unwrap();
+    std::fs::write(&platform.config_file, config.to_toml_string().unwrap()).unwrap();
     DesktopState::new(config, db, platform)
 }
 

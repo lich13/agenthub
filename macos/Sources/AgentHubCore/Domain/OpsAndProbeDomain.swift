@@ -249,9 +249,7 @@ public enum ProbeFormatting {
         if status == "waiting_retry" {
             if let nextMs = int("next_retry_ms"), nextMs > 0 {
                 let date = Date(timeIntervalSince1970: Double(nextMs) / 1000.0)
-                let df = DateFormatter()
-                df.dateFormat = "HH:mm:ss"
-                return ("等待重试 · \(df.string(from: date))", .warning)
+                return ("等待重试 · \(SharedTimestampFormatters.formatTimeOfDay(date))", .warning)
             }
             return ("等待重试", .warning)
         }
@@ -359,16 +357,10 @@ public enum GithubCiDomain {
     public static func formatRunUpdatedAt(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "—" }
-        let isoFrac = ISO8601DateFormatter()
-        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoPlain = ISO8601DateFormatter()
-        isoPlain.formatOptions = [.withInternetDateTime]
-        guard let date = isoFrac.date(from: trimmed) ?? isoPlain.date(from: trimmed) else {
+        guard let date = SharedTimestampFormatters.parseISO8601(trimmed) else {
             return trimmed
         }
-        let df = DateFormatter()
-        df.dateFormat = "MM-dd HH:mm"
-        return df.string(from: date)
+        return SharedTimestampFormatters.formatMonthDayTime(date)
     }
 
     public static func buildCatalog(

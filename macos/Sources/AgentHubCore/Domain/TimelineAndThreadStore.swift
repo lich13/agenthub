@@ -640,19 +640,28 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
     public var after: String?
     public var hasMore: Bool
     public var history: HistoryMetadata?
+    public var firstNativeId: String?
+    public var lastNativeId: String?
+    public var nativeIds: Set<String>?
 
     public init(
         items: [Item],
         before: String? = nil,
         after: String? = nil,
         hasMore: Bool = false,
-        history: HistoryMetadata? = nil
+        history: HistoryMetadata? = nil,
+        firstNativeId: String? = nil,
+        lastNativeId: String? = nil,
+        nativeIds: Set<String>? = nil
     ) {
         self.items = items
         self.before = before
         self.after = after
         self.hasMore = hasMore
         self.history = history
+        self.firstNativeId = firstNativeId
+        self.lastNativeId = lastNativeId
+        self.nativeIds = nativeIds
     }
 
     public static func from(threadDetail page: ThreadDetail) -> TimelineWindowPage<MessageBlock> {
@@ -667,7 +676,10 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
             before: stableBefore,
             after: page.afterCursor,
             hasMore: page.hasMoreBlocks ?? false,
-            history: page.history
+            history: page.history,
+            firstNativeId: blocks.first?.id,
+            lastNativeId: blocks.last?.id,
+            nativeIds: Set(blocks.map(\.id))
         )
     }
 
@@ -677,17 +689,24 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
             before: page.beforeCursor,
             after: page.afterCursor,
             hasMore: page.hasMore,
-            history: page.history
+            history: page.history,
+            firstNativeId: page.events.first?.id,
+            lastNativeId: page.events.last?.id,
+            nativeIds: Set(page.events.map(\.id))
         )
     }
 
     public static func from(grokDetail page: GrokSessionDetail) -> TimelineWindowPage<GrokHistoryEvent> {
-        TimelineWindowPage<GrokHistoryEvent>(
+        let ids = page.events.compactMap { $0.id ?? $0.userMessage?.id }.filter { !$0.isEmpty }
+        return TimelineWindowPage<GrokHistoryEvent>(
             items: page.events,
             before: page.beforeCursor,
             after: page.afterCursor,
             hasMore: page.hasMore ?? false,
-            history: page.history
+            history: page.history,
+            firstNativeId: ids.first,
+            lastNativeId: ids.last,
+            nativeIds: Set(ids)
         )
     }
 
@@ -697,7 +716,10 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
             before: page.beforeCursor,
             after: page.afterCursor,
             hasMore: page.hasMore,
-            history: page.history
+            history: page.history,
+            firstNativeId: page.events.first?.id,
+            lastNativeId: page.events.last?.id,
+            nativeIds: Set(page.events.map(\.id))
         )
     }
 }
@@ -736,10 +758,12 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         if let after = lastPage.after, !after.isEmpty {
             return true
         }
-        if let lastItem = lastPage.items.last,
+        let lastId = lastPage.lastNativeId ?? lastPage.items.last.map(idOf)
+        if let lastId,
+           !lastId.isEmpty,
            let latestTailId,
            !latestTailId.isEmpty,
-           idOf(lastItem) != latestTailId
+           lastId != latestTailId
         {
             return true
         }
@@ -827,15 +851,19 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         pendingTargetId = nil
     }
 
+    public func clearError() {
+        error = nil
+    }
+
     public func loadNewer(
         latestTailId: String?,
         read: @Sendable (String) async throws -> TimelineWindowPage<Item>
     ) async {
         guard isActive, !busy, let lastPage = pages.last else { return }
-        let lastId = lastPage.items.last.map(idOf)
+        let lastId = lastPage.lastNativeId ?? lastPage.items.last.map(idOf)
         let cursor: String? = if let after = lastPage.after, !after.isEmpty {
             after
-        } else if let lastId, let latestTailId, lastId != latestTailId {
+        } else if let lastId, !lastId.isEmpty, let latestTailId, lastId != latestTailId {
             "n:\(lastId)"
         } else {
             nil
@@ -902,10 +930,11 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         if incoming.revision == windowHistory?.revision { return }
 
         let prevRev = windowHistory?.revision
+        let epochChanged = (windowHistory != nil && !incoming.epoch.isEmpty && windowHistory?.epoch != incoming.epoch)
         let prevIdx = incoming.changes?.firstIndex(where: { $0.revision == prevRev }) ?? -1
         let journalReset = prevIdx >= 0
             && (incoming.changes?[(prevIdx + 1)...].contains(where: { $0.reset == true }) ?? false)
-        if incoming.reset == true || journalReset {
+        if incoming.reset == true || journalReset || epochChanged {
             returnToLatest()
             error = "历史已更新，请重新定位"
             return
@@ -932,9 +961,18 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
             var nextPages: [TimelineWindowPage<Item>] = []
             for page in pages {
                 guard token == sequence, isActive else { return }
-                let affected = (changedIds == nil) || page.items.contains(where: { changedIds!.contains(idOf($0)) })
-                if affected, let first = page.items.first {
-                    let refreshed = try await read("w:\(idOf(first))")
+                let affected: Bool = if let changedIds {
+                    if let nativeIds = page.nativeIds {
+                        !nativeIds.isDisjoint(with: changedIds)
+                    } else {
+                        page.items.contains(where: { changedIds.contains(idOf($0)) })
+                    }
+                } else {
+                    true
+                }
+                let anchorId = page.firstNativeId ?? page.items.first.map(idOf)
+                if affected, let anchorId, !anchorId.isEmpty {
+                    let refreshed = try await read("w:\(anchorId)")
                     nextPages.append(refreshed)
                 } else {
                     nextPages.append(page)

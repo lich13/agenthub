@@ -187,4 +187,21 @@ mod tests {
             HANDLED_COMMANDS.iter().copied().collect()
         );
     }
+
+    #[tokio::test]
+    async fn invalid_limit_types_are_rejected_instead_of_silently_coerced_to_default() {
+        let st = state();
+        for (cmd, bad_args) in [
+            ("grok.list", json!({"limit": "not-a-number"})),
+            (
+                "grok.detail",
+                json!({"id": "11111111-1111-4111-8111-111111111111", "limit": "bad"}),
+            ),
+            ("claude.list", json!({"limit": -5})),
+            ("probe.events", json!({"limit": "bad"})),
+        ] {
+            let res = rpc_dispatch(st.clone(), cmd.into(), bad_args).await;
+            assert!(res.is_err(), "{cmd} must reject malformed limit payload");
+        }
+    }
 }

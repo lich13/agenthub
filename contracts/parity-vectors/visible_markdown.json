@@ -35,6 +35,16 @@
       "name": "quoted_external_page_example_preserved",
       "input": "> <external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>",
       "expected": "> <external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>"
+    },
+    {
+      "name": "external_codex_apps_selected_page_snapshot_removed",
+      "input": "<external_codex_apps_selected_page_part_1_of_1>Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}</external_codex_apps_selected_page_part_1_of_1>\n\nBefore <external_codex_apps_selected_page_part_1_of_2>Companion Page snapshot part 1 of 2:\n{\"page_id\":\"page-1\",\"document_view\":{\"title\":\"Doc\"}}</external_codex_apps_selected_page_part_1_of_2> After",
+      "expected": "Before  After"
+    },
+    {
+      "name": "quoted_or_mismatched_selected_page_snapshot_preserved",
+      "input": "> <external_codex_apps_selected_page_part_1_of_1>Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}</external_codex_apps_selected_page_part_1_of_1>\n\n<external_codex_apps_selected_page_part_1_of_2>Companion Page snapshot part 2 of 2:\n{\"page_id\":null,\"document_view\":null}</external_codex_apps_selected_page_part_1_of_2>",
+      "expected": "> <external_codex_apps_selected_page_part_1_of_1>Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}</external_codex_apps_selected_page_part_1_of_1>\n\n<external_codex_apps_selected_page_part_1_of_2>Companion Page snapshot part 2 of 2:\n{\"page_id\":null,\"document_view\":null}</external_codex_apps_selected_page_part_1_of_2>"
     }
   ],
   "instructionActivityCases": [

@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.36"
+version = "2.1.37"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-ffi"
-version = "2.1.36"
+version = "2.1.37"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -95,14 +95,13 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
- "toml",
  "url",
  "zeroize",
 ]
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.36"
+version = "2.1.37"
 dependencies = [
  "agenthub-core",
  "anyhow",

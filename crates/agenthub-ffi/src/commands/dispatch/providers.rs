@@ -89,9 +89,16 @@ pub(super) async fn grok_delete_execute(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
+            let result = AgentHubUseCases::new(state.platform())
                 .grok()?
-                .delete_execute(args.request)
+                .delete_execute(args.request)?;
+            if result.deleted && result.residuals.is_empty() {
+                let _ = state.db.delete_native_probe_stream_cursors(
+                    agenthub_core::native_probe::NativeProvider::Grok,
+                    std::slice::from_ref(&result.id),
+                );
+            }
+            Ok(result)
         })
         .await,
     )
@@ -190,9 +197,16 @@ pub(super) async fn claude_delete_execute(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
+            let result = AgentHubUseCases::new(state.platform())
                 .claude()?
-                .delete_execute(args.request)
+                .delete_execute(args.request)?;
+            if result.deleted && result.residuals.is_empty() {
+                let _ = state.db.delete_native_probe_stream_cursors(
+                    agenthub_core::native_probe::NativeProvider::Claude,
+                    std::slice::from_ref(&result.session_key),
+                );
+            }
+            Ok(result)
         })
         .await,
     )

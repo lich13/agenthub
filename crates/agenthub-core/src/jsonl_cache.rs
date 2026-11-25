@@ -113,6 +113,7 @@ struct Snapshot<S> {
     offset: u64,
     lines: usize,
     epoch: String,
+    rewrite_gen: u64,
     anchor: [u8; 32],
     partial: bool,
     terminated: bool,
@@ -125,6 +126,57 @@ fn monotonic_ms() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
+fn strip_line_ending(mut line: &[u8]) -> &[u8] {
+    if line.ends_with(b"\n") {
+        line = &line[..line.len() - 1];
+    }
+    if line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    line
+}
+
+fn derive_epoch(
+    stamp: &Stamp,
+    scope: &str,
+    compressed: bool,
+    start_offset: u64,
+    rewrite_gen: u64,
+    first_record_digest: Option<[u8; 32]>,
+    compressed_stream: Option<(u64, [u8; 32])>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"agenthub-jsonl-epoch-v1\0");
+    hasher.update(stamp.identity.0.to_le_bytes());
+    hasher.update(stamp.identity.1.to_le_bytes());
+    hasher.update((scope.len() as u64).to_le_bytes());
+    hasher.update(scope.as_bytes());
+    hasher.update([u8::from(compressed)]);
+    hasher.update(start_offset.to_le_bytes());
+    hasher.update(rewrite_gen.to_le_bytes());
+    if let Some((size, stream_anchor)) = compressed_stream {
+        hasher.update([2u8]);
+        hasher.update(size.to_le_bytes());
+        hasher.update(stream_anchor);
+    } else if let Some(first_digest) = first_record_digest {
+        hasher.update([1u8]);
+        hasher.update(first_digest);
+    } else {
+        hasher.update([0u8]);
+    }
+    let full = hasher.finalize();
+    hex::encode(&full[..16])
+}
+
+struct Lineage {
+    identity: (u64, u64),
+    scope: String,
+    last_offset: u64,
+    last_anchor: [u8; 32],
+    terminated: bool,
+    rewrite_gen: u64,
+}
+
 struct Entry<S> {
     path: PathBuf,
     scope: String,
@@ -135,6 +187,7 @@ struct Entry<S> {
 
 pub(crate) struct JsonlCache<S> {
     entries: Mutex<VecDeque<Arc<Entry<S>>>>,
+    lineage: Mutex<VecDeque<Lineage>>,
     max_bytes: u64,
     max_entries: usize,
     max_line_bytes: Option<u64>,
@@ -144,6 +197,7 @@ impl<S: Default> JsonlCache<S> {
     pub const fn new(max_bytes: u64) -> Self {
         Self {
             entries: Mutex::new(VecDeque::new()),
+            lineage: Mutex::new(VecDeque::new()),
             max_bytes,
             max_entries: crate::resource_limits::SOURCE_CACHE_ENTRIES,
             max_line_bytes: None,
@@ -296,6 +350,25 @@ impl<S: Default> JsonlCache<S> {
                             }
                         })
                 });
+                let file_id = (before.identity.0, before.identity.1);
+                let prior_lineage = self.lineage.lock().ok().and_then(|guard| {
+                    guard
+                        .iter()
+                        .find(|item| item.identity == file_id && item.scope == scope)
+                        .map(|item| {
+                            (
+                                item.last_offset,
+                                item.last_anchor,
+                                item.terminated,
+                                item.rewrite_gen,
+                            )
+                        })
+                });
+                let prev_cached_gen = cached
+                    .as_ref()
+                    .filter(|value| before.same_file(&value.stamp))
+                    .map(|value| value.rewrite_gen);
+                let had_cached = cached.is_some();
                 let mut snapshot = if append {
                     cached.take().expect("append snapshot")
                 } else {
@@ -304,13 +377,47 @@ impl<S: Default> JsonlCache<S> {
                         stamp: before.clone(),
                         offset,
                         lines: 0,
-                        epoch: uuid::Uuid::new_v4().to_string(),
+                        epoch: String::new(),
+                        rewrite_gen: 0,
                         anchor: [0; 32],
                         partial: false,
                         terminated: true,
                         state: S::default(),
                     }
                 };
+                let rewrite_gen = if append {
+                    snapshot.rewrite_gen
+                } else if let Some(prev_gen) = prev_cached_gen {
+                    prev_gen + 1
+                } else if let Some((prev_offset, prev_anchor, prev_terminated, prev_gen)) =
+                    prior_lineage
+                {
+                    let valid_cold_continuation = !compressed
+                        && !had_cached
+                        && before.size >= prev_offset
+                        && anchor(&mut file, prev_offset).ok() == Some(prev_anchor)
+                        && (prev_terminated || before.size == prev_offset || {
+                            let mut bytes = [0; 2];
+                            let count = (before.size - prev_offset).min(2) as usize;
+                            file.seek(SeekFrom::Start(prev_offset))
+                                .and_then(|_| file.read_exact(&mut bytes[..count]))
+                                .is_ok()
+                                && (bytes[0] == b'\n' || (count == 2 && bytes == *b"\r\n"))
+                        });
+                    let unchanged_compressed = compressed
+                        && !had_cached
+                        && before.size == prev_offset
+                        && anchor(&mut file, before.size).ok() == Some(prev_anchor);
+                    if valid_cold_continuation || unchanged_compressed {
+                        prev_gen
+                    } else {
+                        prev_gen + 1
+                    }
+                } else {
+                    0
+                };
+                snapshot.rewrite_gen = rewrite_gen;
+                let was_empty = snapshot.lines == 0 && snapshot.offset == 0;
                 snapshot.offset += separator;
                 if separator > 0 {
                     snapshot.terminated = true;
@@ -339,6 +446,8 @@ impl<S: Default> JsonlCache<S> {
                     snapshot.offset += read_line(&mut input, &mut line)? as u64;
                     line.clear();
                 }
+                let effective_start_offset = snapshot.offset;
+                let mut first_record_digest: Option<[u8; 32]> = None;
                 snapshot.partial = false;
                 loop {
                     line.clear();
@@ -353,14 +462,40 @@ impl<S: Default> JsonlCache<S> {
                         snapshot.partial = true;
                         break;
                     }
+                    if (!append || was_empty) && !compressed && first_record_digest.is_none() {
+                        first_record_digest = Some(Sha256::digest(strip_line_ending(&line)).into());
+                    }
                     snapshot.lines += 1;
                     consume(&mut snapshot.state, &line, snapshot.lines, snapshot.offset)?;
                     snapshot.offset += length as u64;
                     snapshot.terminated = line.ends_with(b"\n");
                 }
                 drop(input);
-                if !compressed {
+                if compressed {
+                    let stream_anchor = anchor(&mut file, before.size)?;
+                    snapshot.anchor = stream_anchor;
+                    snapshot.epoch = derive_epoch(
+                        &before,
+                        scope,
+                        true,
+                        effective_start_offset,
+                        rewrite_gen,
+                        None,
+                        Some((before.size, stream_anchor)),
+                    );
+                } else {
                     snapshot.anchor = anchor(&mut file, snapshot.offset)?;
+                    if !append || (was_empty && first_record_digest.is_some()) {
+                        snapshot.epoch = derive_epoch(
+                            &before,
+                            scope,
+                            false,
+                            effective_start_offset,
+                            rewrite_gen,
+                            first_record_digest,
+                            None,
+                        );
+                    }
                 }
                 let after = Stamp::read(path)?;
                 ensure!(
@@ -368,6 +503,30 @@ impl<S: Default> JsonlCache<S> {
                         || (!compressed && after.same_file(&before) && after.size > before.size),
                     "会话文件已变化，请重试"
                 );
+                if let Ok(mut guard) = self.lineage.lock() {
+                    let recorded_offset = if compressed {
+                        before.size
+                    } else {
+                        snapshot.offset
+                    };
+                    if let Some(pos) = guard
+                        .iter()
+                        .position(|item| item.identity == file_id && item.scope == scope)
+                    {
+                        guard.remove(pos);
+                    }
+                    while guard.len() >= 256 {
+                        guard.pop_front();
+                    }
+                    guard.push_back(Lineage {
+                        identity: file_id,
+                        scope: scope.into(),
+                        last_offset: recorded_offset,
+                        last_anchor: snapshot.anchor,
+                        terminated: snapshot.terminated,
+                        rewrite_gen,
+                    });
+                }
                 snapshot.stamp = before;
                 *cached = Some(snapshot);
             }
