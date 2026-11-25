@@ -697,7 +697,7 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
     Ok(scan)
 }
 pub fn evict_idle(ttl: std::time::Duration) {
-    SLICES.evict_idle(ttl)
+    let _ = SLICES.evict_idle(ttl);
 }
 #[cfg(test)]
 mod tests;

@@ -177,29 +177,47 @@ pub async fn run_with_threads(
         Some(slice) => slice,
         None => {
             let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-            let mut loaded = codex::notification_thread_headers(&paths)?;
-            loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            owned_threads = loaded;
+            owned_threads = agenthub_core::read_tasks::spawn_blocking(move || {
+                let mut loaded = codex::notification_thread_headers(&paths)?;
+                loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                Ok::<_, anyhow::Error>(loaded)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("question header scan join failed: {err}"))??;
             &owned_threads
         }
     };
     let now_ms = jiff::Timestamp::now().as_millisecond();
     const PASSIVE_ASYNC_QUESTION_MAX_AGE_MS: i64 = 6 * 86_400_000;
+    let candidates: Vec<(usize, std::path::PathBuf)> = threads
+        .iter()
+        .take(config.probe.recent_limit.clamp(1, 200))
+        .enumerate()
+        .filter(|(_, thread)| {
+            task_notification_suppression_reason(config, Some(&thread.id)).is_none()
+        })
+        .filter_map(|(idx, thread)| thread.rollout_path.as_ref().map(|path| (idx, path.clone())))
+        .collect();
+    let scanned_calls = if candidates.is_empty() {
+        Vec::new()
+    } else {
+        agenthub_core::read_tasks::spawn_blocking(move || {
+            candidates
+                .into_iter()
+                .filter_map(|(idx, path)| {
+                    let pending =
+                        codex::rollout_pending_async_questions_since(&path, since).ok()?;
+                    (!pending.is_empty()).then_some((idx, pending))
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("async question scan join failed: {err}"))?
+    };
     let mut active_markers = Vec::new();
-    for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {
-        if task_notification_suppression_reason(config, Some(&thread.id)).is_some() {
-            continue;
-        }
-        let Some(path) = thread.rollout_path.as_deref() else {
-            continue;
-        };
-        let Ok(calls) = codex::rollout_async_questions(path) else {
-            continue;
-        };
-        for call in calls
-            .iter()
-            .filter(|c| c.created_at_ms.is_some_and(|created| created > since))
-        {
+    for (idx, calls) in scanned_calls {
+        let thread = &threads[idx];
+        for call in &calls {
             let Some(event) = event_for(config, thread, call) else {
                 continue;
             };

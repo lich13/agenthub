@@ -81,8 +81,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         let subagentUpdates: [String: SubagentActivity]?
     }
     @Published var renameRequestSeqByKey: [String: Int] = [:]
-    @Published var codexTailRefreshTask: Task<Void, Never>?
-    @Published var codexCreateError: String?
 
     @Published var partitionedSelection = PartitionedSessionSelectionState(activeScope: "init")
     @Published var batchTargetPartition: SessionSelectionPartition = .active
@@ -109,13 +107,6 @@ final class ProviderWorkspaceStore: ObservableObject {
                         timelineWindow.objectWillChange, motionObserver.objectWillChange] {
             changes.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
         }
-        NotificationCenter.default.publisher(for: .agentHubCodexDesktopViewChanged)
-            .sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.applyLiveCodexDesktopOverlay()
-                }
-            }
-            .store(in: &observations)
     }
 
     var supportsWorkspaceGrouping: Bool {
@@ -411,15 +402,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         return try await store.rpc("sessions.bulkExecute", args: Wrap(request: request), at: revision)
     }
 
-    func scheduleDebouncedCodexTailRefresh() {
-        codexTailRefreshTask?.cancel()
-        codexTailRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard let self, !Task.isCancelled, provider == .codex, let item = selectedItem else { return }
-            await fetchSessionDetail(for: item)
-        }
-    }
-
     func resetDetailStateForSelectionChange() {
         detailSelectionGeneration &+= 1
         errorMessage = nil
@@ -522,30 +504,21 @@ final class ProviderWorkspaceStore: ObservableObject {
                 syncSidebarItem(mappedCodex)
                 incomingHistory = detail.history
                 let effectiveTitle = threadStore.effectiveTitle(threadId: detail.summary.id, serverTitle: detail.summary.title)
-                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
-                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
-                    return LastRenderedPollSignature(
-                        scopeKey: historyScope,
-                        epoch: h.epoch,
-                        revision: h.revision,
-                        running: mappedCodex.running,
-                        title: effectiveTitle,
-                        showAllHistory: showAllHistory || threadStore.slot(for: item.sessionKey).showAllHistory,
-                        revealedPositionKey: revealedPositionKey,
-                        subagentsSupported: subagentsSupportedForCurrentProvider,
-                        subagents: detail.subagents,
-                        subagentUpdates: detail.subagentUpdates
-                    )
-                }
-                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                let candidateSig = makePollSignature(
+                    scopeKey: historyScope,
+                    history: detail.history,
+                    running: mappedCodex.running,
+                    title: effectiveTitle,
+                    showAllHistory: showAllHistory || threadStore.slot(for: item.sessionKey).showAllHistory,
+                    revealedPositionKey: revealedPositionKey,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
+                    subagents: detail.subagents,
+                    subagentUpdates: detail.subagentUpdates
+                )
+                if shouldSkipUnchangedDetailPoll(isFirstLoadForKey: isFirstLoadForKey, candidateSig: candidateSig) {
                     break
                 }
                 let slot = threadStore.applyDetail(detail)
-                latestNativeTailId = slot.blocks.last?.id
-                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
-                if subagents != nextSubs { subagents = nextSubs }
-                if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildCodexRows(
                     blocks: slot.blocks,
                     showAllHistory: showAllHistory || slot.showAllHistory,
@@ -553,18 +526,19 @@ final class ProviderWorkspaceStore: ObservableObject {
                     subagentsSupported: subagentsSupportedForCurrentProvider,
                     revealedBlockId: revealedPositionKey
                 )
-                if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .codex,
                     sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
-                let nextReply = nextRows.reversed().compactMap { r -> String? in
-                    if case let .assistant(md, _) = r.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }
-                    return nil
-                }.first
-                if latestReplyText != nextReply { latestReplyText = nextReply }
-                lastRenderedPollSig = candidateSig
+                applyRenderedDetailSnapshot(
+                    tailId: slot.blocks.last?.id,
+                    nextSubagents: subagentsSupportedForCurrentProvider ? slot.subagents : nil,
+                    hasMore: slot.hasMoreBlocks,
+                    before: slot.beforeCursor,
+                    nextRows: nextRows,
+                    nextTimeline: nextTimeline,
+                    signature: candidateSig
+                )
 
             case .claudeCode:
                 struct Req: Encodable { let sessionKey: String; let limit: Int }
@@ -576,22 +550,15 @@ final class ProviderWorkspaceStore: ObservableObject {
                 let mappedClaude = mapClaudeSummary(detail.summary)
                 syncSidebarItem(mappedClaude)
                 incomingHistory = detail.history
-                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
-                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
-                    return LastRenderedPollSignature(
-                        scopeKey: historyScope,
-                        epoch: h.epoch,
-                        revision: h.revision,
-                        running: mappedClaude.running,
-                        title: mappedClaude.title,
-                        showAllHistory: false,
-                        revealedPositionKey: nil,
-                        subagentsSupported: subagentsSupportedForCurrentProvider,
-                        subagents: detail.subagents,
-                        subagentUpdates: nil
-                    )
-                }
-                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                let candidateSig = makePollSignature(
+                    scopeKey: historyScope,
+                    history: detail.history,
+                    running: mappedClaude.running,
+                    title: mappedClaude.title,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
+                    subagents: detail.subagents
+                )
+                if shouldSkipUnchangedDetailPoll(isFirstLoadForKey: isFirstLoadForKey, candidateSig: candidateSig) {
                     break
                 }
                 let slot = claudeHistoryStore.applyHeadPoll(
@@ -604,21 +571,20 @@ final class ProviderWorkspaceStore: ObservableObject {
                     timeline: detail.timeline,
                     subagents: detail.subagents
                 )
-                latestNativeTailId = slot.events.last?.id
-                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
-                if subagents != nextSubs { subagents = nextSubs }
-                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildClaudeRows(events: slot.events)
-                if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .claudeCode,
                     sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
-                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
-                if latestReplyText != nextReply { latestReplyText = nextReply }
-                lastRenderedPollSig = candidateSig
+                applyRenderedDetailSnapshot(
+                    tailId: slot.events.last?.id,
+                    nextSubagents: subagentsSupportedForCurrentProvider ? slot.subagents : nil,
+                    hasMore: slot.hasMore,
+                    before: slot.beforeCursor,
+                    nextRows: nextRows,
+                    nextTimeline: nextTimeline,
+                    signature: candidateSig
+                )
 
             case .grok:
                 struct Req: Encodable { let id: String; let limit: Int }
@@ -630,22 +596,14 @@ final class ProviderWorkspaceStore: ObservableObject {
                 let mappedGrok = mapGrokSummary(detail.summary)
                 syncSidebarItem(mappedGrok)
                 incomingHistory = detail.history
-                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
-                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
-                    return LastRenderedPollSignature(
-                        scopeKey: historyScope,
-                        epoch: h.epoch,
-                        revision: h.revision,
-                        running: mappedGrok.running,
-                        title: mappedGrok.title,
-                        showAllHistory: false,
-                        revealedPositionKey: nil,
-                        subagentsSupported: false,
-                        subagents: nil,
-                        subagentUpdates: nil
-                    )
-                }
-                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                let candidateSig = makePollSignature(
+                    scopeKey: historyScope,
+                    history: detail.history,
+                    running: mappedGrok.running,
+                    title: mappedGrok.title,
+                    subagentsSupported: false
+                )
+                if shouldSkipUnchangedDetailPoll(isFirstLoadForKey: isFirstLoadForKey, candidateSig: candidateSig) {
                     break
                 }
                 let slot = grokHistoryStore.applyHeadPoll(
@@ -657,26 +615,26 @@ final class ProviderWorkspaceStore: ObservableObject {
                     hasMore: detail.hasMore ?? false,
                     timeline: detail.timeline
                 )
-                latestNativeTailId = slot.events.last.flatMap { $0.id ?? $0.userMessage?.id }
-                if subagents != nil { subagents = nil }
-                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildGrokRows(
                     events: slot.events,
                     fallbackTitle: mappedGrok.title,
                     sessionRunning: mappedGrok.running
                 )
-                if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: .grok,
                     sources: slot.events.enumerated().map { idx, ev in
                         TimelineSourceItem(id: ev.id ?? ev.userMessage?.id ?? "grok-\(idx)", role: nil, kind: ev.kind, text: ev.text, userMessage: ev.userMessage)
                     }
                 )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
-                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
-                if latestReplyText != nextReply { latestReplyText = nextReply }
-                lastRenderedPollSig = candidateSig
+                applyRenderedDetailSnapshot(
+                    tailId: slot.events.last.flatMap { $0.id ?? $0.userMessage?.id },
+                    nextSubagents: nil,
+                    hasMore: slot.hasMore,
+                    before: slot.beforeCursor,
+                    nextRows: nextRows,
+                    nextTimeline: nextTimeline,
+                    signature: candidateSig
+                )
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
@@ -690,22 +648,16 @@ final class ProviderWorkspaceStore: ObservableObject {
                 let mappedSummary = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
                 syncSidebarItem(mappedSummary)
                 incomingHistory = detail.history
-                let candidateSig: LastRenderedPollSignature? = detail.history.flatMap { h in
-                    guard !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
-                    return LastRenderedPollSignature(
-                        scopeKey: historyScope,
-                        epoch: h.epoch,
-                        revision: h.revision,
-                        running: mappedSummary.running,
-                        title: mappedSummary.title,
-                        showAllHistory: false,
-                        revealedPositionKey: nil,
-                        subagentsSupported: subagentsSupportedForCurrentProvider,
-                        subagents: detail.subagents,
-                        subagentUpdates: detail.subagentUpdates
-                    )
-                }
-                if !isFirstLoadForKey, !rows.isEmpty, let candidateSig, candidateSig == lastRenderedPollSig {
+                let candidateSig = makePollSignature(
+                    scopeKey: historyScope,
+                    history: detail.history,
+                    running: mappedSummary.running,
+                    title: mappedSummary.title,
+                    subagentsSupported: subagentsSupportedForCurrentProvider,
+                    subagents: detail.subagents,
+                    subagentUpdates: detail.subagentUpdates
+                )
+                if shouldSkipUnchangedDetailPoll(isFirstLoadForKey: isFirstLoadForKey, candidateSig: candidateSig) {
                     break
                 }
                 let slot = providerHistoryStore.applyHeadPoll(
@@ -719,26 +671,25 @@ final class ProviderWorkspaceStore: ObservableObject {
                     subagents: detail.subagents,
                     subagentUpdates: detail.subagentUpdates
                 )
-                latestNativeTailId = slot.events.last?.id
-                let nextSubs = subagentsSupportedForCurrentProvider ? slot.subagents : nil
-                if subagents != nextSubs { subagents = nextSubs }
-                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
                 let nextRows = ConversationRowBuilder.buildProviderRows(
                     events: slot.events,
                     providerLabel: workspace.label,
                     sessionRunning: mappedSummary.running,
                     subagentsSupported: subagentsSupportedForCurrentProvider
                 )
-                if rows != nextRows { rows = nextRows }
                 let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
                     provider: provider,
                     sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
                 )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
-                let nextReply = nextRows.reversed().compactMap { if case let .assistant(md, _) = $0.kind { return VisibleMarkdownEngine.visibleMarkdown(md) }; return nil }.first
-                if latestReplyText != nextReply { latestReplyText = nextReply }
-                lastRenderedPollSig = candidateSig
+                applyRenderedDetailSnapshot(
+                    tailId: slot.events.last?.id,
+                    nextSubagents: subagentsSupportedForCurrentProvider ? slot.subagents : nil,
+                    hasMore: slot.hasMore,
+                    before: slot.beforeCursor,
+                    nextRows: nextRows,
+                    nextTimeline: nextTimeline,
+                    signature: candidateSig
+                )
             }
 
             currentDetailHistory = incomingHistory
@@ -772,6 +723,65 @@ final class ProviderWorkspaceStore: ObservableObject {
             guard isCurrentDetail(item, generation: generation) else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func makePollSignature(
+        scopeKey: String,
+        history: HistoryMetadata?,
+        running: Bool,
+        title: String,
+        showAllHistory: Bool = false,
+        revealedPositionKey: String? = nil,
+        subagentsSupported: Bool,
+        subagents: SubagentCollection? = nil,
+        subagentUpdates: [String: SubagentActivity]? = nil
+    ) -> LastRenderedPollSignature? {
+        guard let h = history, !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+        return LastRenderedPollSignature(
+            scopeKey: scopeKey,
+            epoch: h.epoch,
+            revision: h.revision,
+            running: running,
+            title: title,
+            showAllHistory: showAllHistory,
+            revealedPositionKey: revealedPositionKey,
+            subagentsSupported: subagentsSupported,
+            subagents: subagents,
+            subagentUpdates: subagentUpdates
+        )
+    }
+
+    private func shouldSkipUnchangedDetailPoll(
+        isFirstLoadForKey: Bool,
+        candidateSig: LastRenderedPollSignature?
+    ) -> Bool {
+        !isFirstLoadForKey && !rows.isEmpty && candidateSig != nil && candidateSig == lastRenderedPollSig
+    }
+
+    private func applyRenderedDetailSnapshot(
+        tailId: String?,
+        nextSubagents: SubagentCollection?,
+        hasMore: Bool,
+        before: String?,
+        nextRows: [ConversationRowItem],
+        nextTimeline: [TimelineEntry],
+        signature: LastRenderedPollSignature?
+    ) {
+        latestNativeTailId = tailId
+        if subagents != nextSubagents { subagents = nextSubagents }
+        if hasMoreOlder != hasMore { hasMoreOlder = hasMore }
+        if beforeCursor != before { beforeCursor = before }
+        if rows != nextRows { rows = nextRows }
+        if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+        var nextReply: String?
+        for row in nextRows.reversed() {
+            if case let .assistant(md, _) = row.kind {
+                nextReply = VisibleMarkdownEngine.visibleMarkdown(md)
+                break
+            }
+        }
+        if latestReplyText != nextReply { latestReplyText = nextReply }
+        lastRenderedPollSig = signature
     }
 
     @discardableResult
@@ -1486,7 +1496,7 @@ final class ProviderWorkspaceStore: ObservableObject {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let preview = (rawPreview == displayTitle) ? "" : rawPreview
-        var item = UnifiedSessionSummaryItem(
+        return UnifiedSessionSummaryItem(
             sessionKey: s.id,
             nativeId: s.id,
             title: displayTitle,
@@ -1506,56 +1516,6 @@ final class ProviderWorkspaceStore: ObservableObject {
             canDelete: true,
             storageSize: s.storageSize
         )
-        if !isArchived, store.target == .local,
-           let live = CodexDesktopStore.liveView(revision: store.revision, threadId: s.id),
-           live.connected
-        {
-            item = projectCodexDesktopLiveView(live, onto: item)
-        }
-        return item
-    }
-
-    static func projectCodexDesktopLiveView(
-        _ live: DesktopView,
-        onto base: UnifiedSessionSummaryItem
-    ) -> UnifiedSessionSummaryItem {
-        guard !base.archived, live.connected else { return base }
-        var item = base
-        if !live.requests.isEmpty {
-            item.running = false
-            item.statusText = "等待处理"
-            item.statusChipBadge = "等待处理"
-            item.statusChipTone = .warning
-        } else if live.runtime == "active" || live.activeTurnId != nil {
-            item.running = true
-            item.statusText = "运行中"
-            item.statusChipBadge = "运行中"
-            item.statusChipTone = .info
-        } else if item.running {
-            item.running = false
-            item.statusText = "最近"
-            item.statusChipBadge = "最近"
-            item.statusChipTone = .success
-        }
-        return item
-    }
-
-    func applyLiveCodexDesktopOverlay() {
-        guard provider == .codex, store.target == .local, store.revision == sourceRevision else { return }
-        var changed = false
-        for idx in activeItems.indices {
-            let key = activeItems[idx].sessionKey
-            if let live = CodexDesktopStore.liveView(revision: store.revision, threadId: key), live.connected {
-                let updated = Self.projectCodexDesktopLiveView(live, onto: activeItems[idx])
-                if updated != activeItems[idx] {
-                    activeItems[idx] = updated
-                    changed = true
-                }
-            }
-        }
-        if changed {
-            objectWillChange.send()
-        }
     }
 
     func mapProviderSummary(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {

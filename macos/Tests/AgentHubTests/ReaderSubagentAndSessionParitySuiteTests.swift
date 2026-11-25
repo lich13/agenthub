@@ -312,11 +312,11 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             }
 
             let triggerButton = FocusTargetView(frame: NSRect(x: 0, y: 0, width: 100, height: 28))
-            let outsideComposer = ComposerNSTextView(frame: NSRect(x: 10, y: 40, width: 300, height: 60))
+            let outsideFocusable = FocusTargetView(frame: NSRect(x: 10, y: 40, width: 300, height: 60))
             let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
             let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
             container.addSubview(triggerButton)
-            container.addSubview(outsideComposer)
+            container.addSubview(outsideFocusable)
             let panelHost = NSHostingView<AnyView>(
                 rootView: AnyView(
                     SubagentOverlayFocusContainerView(palette: DesignPalette.resolve(scheme: .light, workspace: .codex)) {
@@ -343,7 +343,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             let mountedOverlayRoot = try XCTUnwrap(findOverlayRoot(panelHost), "SubagentOverlayRootNSView must exist inside NSHostingView")
             let trappedTargets = SubagentFocusTrapEngine.focusableViews(in: mountedOverlayRoot)
             XCTAssertGreaterThanOrEqual(trappedTargets.count, 2, "Close button and subagent rows must be keyboard-focusable inside drawer")
-            XCTAssertFalse(trappedTargets.contains(where: { $0 === outsideComposer || $0 === triggerButton }), "Focus trap must NEVER leak to outside ComposerNSTextView or triggerButton")
+            XCTAssertFalse(trappedTargets.contains(where: { $0 === outsideFocusable || $0 === triggerButton }), "Focus trap must NEVER leak to outside responder views or triggerButton")
 
             // Unmounting SwiftUI overlay triggers dismantleNSView and restores focus to triggerButton!
             panelHost.rootView = AnyView(EmptyView())
@@ -1054,13 +1054,10 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 busy: false,
                 notice: nil,
                 executeError: "网络中断",
-                preview: nil,
                 result: partialResult,
                 onSelectAll: {},
                 onClear: {},
-                onPrepareOperation: { _ in },
-                onConfirmExecute: {},
-                onDismissPreview: {}
+                onPrepareOperation: { _ in }
             )
             let barHost = NSHostingView(rootView: barView.frame(width: 280))
             barHost.layoutSubtreeIfNeeded()

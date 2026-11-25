@@ -673,11 +673,14 @@ public final class ReaderSelectableTextView: NSTextView {
     override public func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         if newSize.width > 1, let container = textContainer {
-            container.containerSize = NSSize(
-                width: max(1, newSize.width - textContainerInset.width * 2),
-                height: CGFloat.greatestFiniteMagnitude
-            )
-            layoutManager?.ensureLayout(for: container)
+            let targetW = max(1, newSize.width - textContainerInset.width * 2)
+            if abs(container.containerSize.width - targetW) > 0.01 {
+                container.containerSize = NSSize(
+                    width: targetW,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+                layoutManager?.ensureLayout(for: container)
+            }
         }
     }
 
@@ -933,14 +936,26 @@ public final class ReaderSelectableTextView: NSTextView {
         super.clicked(onLink: link, at: charIndex)
     }
 
-    public static func measureHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
-        guard attributed.length > 0, width > 1 else { return 0 }
-        let storage = NSTextStorage(attributedString: attributed)
-        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+    private static let scratchMeasureStack: (storage: NSTextStorage, container: NSTextContainer, manager: NSLayoutManager) = {
+        let storage = NSTextStorage()
+        let container = NSTextContainer(size: NSSize(width: 200, height: CGFloat.greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         let manager = NSLayoutManager()
         manager.addTextContainer(container)
         storage.addLayoutManager(manager)
+        return (storage, container, manager)
+    }()
+
+    public static func measureHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
+        guard attributed.length > 0, width > 1 else { return 0 }
+        let (storage, container, manager) = scratchMeasureStack
+        defer {
+            if storage.length > 4096 {
+                storage.setAttributedString(NSAttributedString())
+            }
+        }
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        storage.setAttributedString(attributed)
         manager.ensureLayout(for: container)
         return ceil(manager.usedRect(for: container).height)
     }

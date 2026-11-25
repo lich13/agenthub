@@ -5,7 +5,6 @@
     "desktop_embedded_tauri"
   ],
   "capabilities": [
-    "codex_desktop",
     "antigravity_notifications",
     "dsh_notifications",
     "grokbot_sessions",
@@ -22,7 +21,6 @@
       "prune_backups"
     ],
     "desktop_embedded_tauri": [
-      "codex_desktop",
       "antigravity_notifications",
       "dsh_notifications",
       "grokbot_sessions",
@@ -39,7 +37,7 @@
       "异常",
       "归档"
     ],
-    "interaction": "read-only history; verified local Codex desktop collaboration; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
+    "interaction": "read-only history; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
     "navigation": [
       "Codex",
       "Claude Code",
@@ -652,105 +650,6 @@
       "responseDto": "ClaudeMutationResponse"
     },
     {
-      "id": "codex.desktop.attach",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.attach",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_attach",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopThreadRequest",
-      "responseDto": "DesktopView",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.action",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.action",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_action",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopActionRequest",
-      "responseDto": "DesktopView",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.detach",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.detach",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_detach",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopSessionRequest",
-      "responseDto": "DesktopAck",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.open",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.open",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_open",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopThreadRequest",
-      "responseDto": "DesktopAck",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.catalog",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.catalog",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_catalog",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopCatalogRequest",
-      "responseDto": "DesktopCatalog",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.choose",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.choose",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_choose",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopChooseRequest",
-      "responseDto": "DesktopChoice",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.create",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.create",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_create",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopCreateRequest",
-      "responseDto": "DesktopCreatedThread",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
-      "id": "codex.desktop.attachments",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.attachments",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_attachments",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopAttachmentRequest",
-      "responseDto": "DesktopAttachmentResult",
-      "hostOnlyReason": "Verified native OS clipboard/drop ingress in the local macOS main window; no client paths and no Linux or remote registration"
-    },
-    {
-      "id": "codex.desktop.diagnostics",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktop.codex.diagnostics",
-      "ffiHandler": "dispatch::collaboration::codex_desktop_diagnostics",
-      "dtoOwner": "codex_desktop",
-      "requestDto": "DesktopDiagnosticsRequest",
-      "responseDto": "DesktopDiagnostics",
-      "hostOnlyReason": "Verified local macOS desktop owner and AgentHub queue; never registered with Linux RPC or remote.invoke"
-    },
-    {
       "id": "claude.hooks",
       "kind": "rpc",
       "scope": "host_only",
@@ -1106,108 +1005,6 @@
     },
     "SubagentCollection": {
       "core": "SubagentCollection"
-    },
-    "DesktopThreadRequest": {
-      "core": "DesktopThreadRequest"
-    },
-    "DesktopSessionRequest": {
-      "core": "DesktopSessionRequest"
-    },
-    "DesktopActionRequest": {
-      "core": "DesktopActionRequest"
-    },
-    "DesktopAction": {
-      "core": "DesktopAction"
-    },
-    "DesktopMode": {
-      "core": "DesktopMode"
-    },
-    "DesktopAnswer": {
-      "core": "DesktopAnswer"
-    },
-    "DesktopView": {
-      "core": "DesktopView"
-    },
-    "DesktopQueuedMessage": {
-      "core": "DesktopQueuedMessage"
-    },
-    "DesktopPendingRequest": {
-      "core": "DesktopPendingRequest"
-    },
-    "DesktopQuestion": {
-      "core": "DesktopQuestion"
-    },
-    "DesktopQuestionOption": {
-      "core": "DesktopQuestionOption"
-    },
-    "DesktopCatalogRequest": {
-      "core": "DesktopCatalogRequest"
-    },
-    "DesktopCatalog": {
-      "core": "DesktopCatalog"
-    },
-    "DesktopCatalogItem": {
-      "core": "DesktopCatalogItem"
-    },
-    "DesktopChooseRequest": {
-      "core": "DesktopChooseRequest"
-    },
-    "DesktopChosenItem": {
-      "core": "DesktopChosenItem"
-    },
-    "DesktopChoice": {
-      "core": "DesktopChoice"
-    },
-    "DesktopCreateRequest": {
-      "core": "DesktopCreateRequest"
-    },
-    "DesktopCreatedThread": {
-      "core": "DesktopCreatedThread"
-    },
-    "DesktopAck": {
-      "core": "DesktopAck"
-    },
-    "DesktopReferenceSpan": {
-      "core": "DesktopReferenceSpan"
-    },
-    "DesktopReview": {
-      "core": "DesktopReview"
-    },
-    "DesktopFileReview": {
-      "core": "DesktopFileReview"
-    },
-    "DesktopPermissionsReview": {
-      "core": "DesktopPermissionsReview"
-    },
-    "DesktopAttachmentRequest": {
-      "core": "DesktopAttachmentRequest"
-    },
-    "DesktopAttachmentAction": {
-      "core": "DesktopAttachmentAction"
-    },
-    "DesktopAttachmentBounds": {
-      "core": "DesktopAttachmentBounds"
-    },
-    "DesktopAttachmentEvent": {
-      "core": "DesktopAttachmentEvent"
-    },
-    "DesktopAttachmentResult": {
-      "core": "DesktopAttachmentResult"
-    },
-    "DesktopPasteDisposition": {
-      "core": "DesktopPasteDisposition"
-    },
-    "DesktopDiagnosticsRequest": {
-      "core": "DesktopDiagnosticsRequest"
-    },
-    "DesktopDiagnostic": {
-      "core": "DesktopDiagnostic"
-    },
-    "DesktopDiagnostics": {
-      "core": "DesktopDiagnostics"
-    },
-    "DesktopGoal": {
-      "core": "DesktopGoal"
     },
     "ClaudeHooksRequest": {
       "core": "ClaudeHooksRequest"

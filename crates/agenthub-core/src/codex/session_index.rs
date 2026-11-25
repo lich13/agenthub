@@ -27,12 +27,18 @@ impl SessionIndexEntry {
     }
 }
 
+static SESSION_INDEX_CACHE: crate::jsonl_cache::JsonlCache<
+    Arc<HashMap<String, SessionIndexEntry>>,
+> = crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_INDEX_CACHE_BYTES);
+
+pub(crate) fn evict_idle_index_cache(max_idle: std::time::Duration) {
+    SESSION_INDEX_CACHE.evict_idle(max_idle);
+}
+
 pub(crate) fn read_session_index(
     paths: &CodexPaths,
 ) -> Result<Arc<HashMap<String, SessionIndexEntry>>> {
-    static CACHE: crate::jsonl_cache::JsonlCache<Arc<HashMap<String, SessionIndexEntry>>> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_INDEX_CACHE_BYTES);
-    CACHE.read(
+    SESSION_INDEX_CACHE.read(
         &paths.session_index(),
         |_| Ok(0),
         true,

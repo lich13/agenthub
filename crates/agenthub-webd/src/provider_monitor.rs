@@ -10,11 +10,14 @@ use agenthub_core::{
 use anyhow::Result;
 use std::time::Duration;
 
-pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
+pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
     let config = &load_config()?;
     let idle_ttl = agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
-    agenthub_core::evict_idle_detail_caches(idle_ttl);
     super::antigravity::evict_idle_cache(idle_ttl).await;
+    let _ = agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::evict_idle_detail_caches(idle_ttl);
+    })
+    .await;
     db.recover_interrupted_native_deliveries()?;
 
     for provider in [
@@ -52,7 +55,7 @@ pub async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
     deliver_pending(load_config, db, None).await
 }
 
-pub async fn run_provider_hook(
+pub(crate) async fn run_provider_hook(
     config_path: &std::path::Path,
     provider: NativeProvider,
 ) -> Result<()> {
@@ -72,7 +75,7 @@ pub async fn run_provider_hook(
     deliver_pending(&load_config, &db, Some(provider)).await
 }
 
-pub async fn run_antigravity_hook(
+pub(crate) async fn run_antigravity_hook(
     config_path: &std::path::Path,
     conversation_id: Option<&str>,
 ) -> Result<()> {
@@ -157,7 +160,7 @@ pub(super) async fn scan(provider: NativeProvider) -> Result<NativeScan> {
     if provider == NativeProvider::Antigravity {
         super::antigravity::scan().await
     } else {
-        tokio::task::spawn_blocking(move || native_probe::scan(provider)).await?
+        agenthub_core::read_tasks::spawn_blocking(move || native_probe::scan(provider)).await?
     }
 }
 

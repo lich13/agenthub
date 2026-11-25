@@ -103,6 +103,23 @@ pub struct UserInputQuestion {
     pub options: Vec<UserInputOption>,
 }
 
+impl UserInputQuestion {
+    pub(crate) fn heap_bytes(&self) -> u64 {
+        self.id.capacity() as u64
+            + self.header.as_ref().map_or(0, String::capacity) as u64
+            + self.question.capacity() as u64
+            + (self.options.capacity() * std::mem::size_of::<UserInputOption>()) as u64
+            + self
+                .options
+                .iter()
+                .map(|opt| {
+                    opt.label.capacity() as u64
+                        + opt.description.as_ref().map_or(0, String::capacity) as u64
+                })
+                .sum::<u64>()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserInputOption {
     pub label: String,

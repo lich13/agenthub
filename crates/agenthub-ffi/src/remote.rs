@@ -82,23 +82,6 @@ impl RemoteConnections {
         }
     }
 
-    pub(crate) fn require_local(&self, revision: u64) -> Result<(), String> {
-        let s = self.state.lock().expect("connection");
-        if s.changing || s.prefs.revision != revision || s.prefs.target != MachineTarget::Local {
-            return Err("连接已变化，操作已取消".into());
-        }
-        Ok(())
-    }
-
-    pub(crate) fn begin_local_write(&self, revision: u64) -> Result<LocalWriteGuard, String> {
-        let mut s = self.state.lock().expect("connection");
-        if s.changing || s.prefs.revision != revision || s.prefs.target != MachineTarget::Local {
-            return Err("连接已变化，操作已取消".into());
-        }
-        s.writes += 1;
-        Ok(LocalWriteGuard(self.state.clone()))
-    }
-
     fn begin_change(&self, revision: u64) -> Result<ChangeGuard, String> {
         let mut s = self.state.lock().expect("connection");
         if s.prefs.revision != revision {
@@ -333,8 +316,8 @@ impl Drop for ChangeGuard {
     }
 }
 
-pub(crate) struct LocalWriteGuard(Arc<Mutex<ConnectionState>>);
-impl Drop for LocalWriteGuard {
+struct WriteGuard(Arc<Mutex<ConnectionState>>);
+impl Drop for WriteGuard {
     fn drop(&mut self) {
         self.0.lock().expect("connection").writes -= 1;
     }
@@ -483,7 +466,7 @@ pub async fn remoteInvoke(
         }
         if matches!(access, RemoteAccess::Write) {
             s.writes += 1;
-            Some(LocalWriteGuard(state.state.clone()))
+            Some(WriteGuard(state.state.clone()))
         } else {
             None
         }

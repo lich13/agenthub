@@ -81,10 +81,18 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let mut runtime = if matches!(cli.command, Command::RpcStdio | Command::Health) {
-        tokio::runtime::Builder::new_current_thread()
+    let mut runtime = if matches!(
+        cli.command,
+        Command::Serve
+            | Command::Probe {
+                command: ProbeCommand::MonitorErrors
+            }
+    ) {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.worker_threads(2);
+        builder
     } else {
-        tokio::runtime::Builder::new_multi_thread()
+        tokio::runtime::Builder::new_current_thread()
     };
     runtime.enable_all().build()?.block_on(run(cli))
 }
@@ -1279,12 +1287,17 @@ async fn run_probe_error_monitor_once(
     let shared_codex_threads =
         if async_question_monitor::is_enabled(config) || question_monitor::is_enabled(config) {
             let paths = resolve_codex_paths(&config.codex.home).codex_paths();
-            agenthub_core::codex::notification_thread_headers(&paths)
-                .ok()
-                .map(|mut rows| {
-                    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    rows
-                })
+            agenthub_core::read_tasks::spawn_blocking(move || {
+                agenthub_core::codex::notification_thread_headers(&paths)
+                    .ok()
+                    .map(|mut rows| {
+                        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                        rows
+                    })
+            })
+            .await
+            .ok()
+            .flatten()
         } else {
             None
         };
@@ -1334,11 +1347,18 @@ async fn run_probe_error_monitor_once(
 
     let resolved = resolve_codex_paths(&config.codex.home);
     let previous = load_probe_error_cursor(db)?;
-    let scan = match scan_codex_turn_errors(
-        &resolved.logs_db,
-        previous.as_ref(),
-        PROBE_ERROR_MONITOR_BATCH_LIMIT,
-    ) {
+    let logs_db = resolved.logs_db.clone();
+    let previous_for_scan = previous.clone();
+    let scan_result = agenthub_core::read_tasks::spawn_blocking(move || {
+        scan_codex_turn_errors(
+            &logs_db,
+            previous_for_scan.as_ref(),
+            PROBE_ERROR_MONITOR_BATCH_LIMIT,
+        )
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("scan task join failed: {err}"))?;
+    let scan = match scan_result {
         Ok(scan) => scan,
         Err(err) => {
             let safe_error = safe_probe_monitor_error(&err.to_string());
@@ -1547,10 +1567,12 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let mut recorded = 0usize;
     let mut active_markers = Vec::new();
     let codex_paths = state.codex_paths();
-    let buckets = probe_service::probe_passive_scan_threads_with_paths(
-        &codex_paths,
-        config.probe.recent_limit,
-    )?;
+    let recent_limit = config.probe.recent_limit;
+    let buckets = agenthub_core::read_tasks::spawn_blocking(move || {
+        probe_service::probe_passive_scan_threads_with_paths(&codex_paths, recent_limit)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("passive thread scan join failed: {err}"))??;
     for (status, threads) in buckets {
         for thread in threads {
             if task_notification_suppression_reason(&config, Some(&thread.id)).is_some() {

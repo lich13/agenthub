@@ -67,7 +67,7 @@ async fn rpc_completes_once_for_success_error_abort_and_unwind() {
 }
 
 #[test]
-fn bridge_cleanup_and_blocking_workers_share_two_seconds() {
+fn runtime_shutdown_timeout_bounds_hung_blocking_workers() {
     let (release, held) = std::sync::mpsc::channel::<()>();
     let (done, result) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -75,11 +75,11 @@ fn bridge_cleanup_and_blocking_workers_share_two_seconds() {
         runtime.spawn_blocking(move || {
             let _ = held.recv();
         });
-        stop_runtime(runtime, std::future::pending());
+        runtime.shutdown_timeout(Duration::from_secs(2));
         done.send(()).ok();
     });
     let stopped = result.recv_timeout(Duration::from_millis(3500));
     drop(release);
     worker.join().unwrap();
-    stopped.expect("runtime must use the time remaining after bridge cleanup");
+    stopped.expect("runtime shutdown_timeout must bound blocking workers within 2s");
 }

@@ -371,9 +371,14 @@ static CONV_DB_META_CACHE: std::sync::Mutex<
 pub(crate) fn evict_idle_meta_cache(max_idle: std::time::Duration) {
     if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
         if let Some(map) = guard.as_mut() {
+            let before = map.len();
             map.retain(|_, (_, _, ts)| ts.elapsed() < max_idle);
+            let evicted = map.len() < before;
             if map.is_empty() {
                 *guard = None;
+            }
+            if evicted {
+                crate::note_cache_eviction();
             }
         }
     }
@@ -438,16 +443,19 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbM
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
+    let _ = conn.execute_batch("PRAGMA cache_size = -512; PRAGMA temp_store = MEMORY;");
     let mut out = ConvDbMetadata::default();
 
-    let has_table = |name: &str| -> bool {
-        conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
-            params![name],
-            |_| Ok(()),
-        )
-        .is_ok()
-    };
+    let tables: std::collections::HashSet<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .ok()
+        .and_then(|mut s| {
+            s.query_map([], |r| r.get::<_, String>(0))
+                .ok()
+                .map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    let has_table = |name: &str| -> bool { tables.contains(name) };
 
     if has_table("trajectory_metadata_blob") {
         let blob: Option<Vec<u8>> = conn

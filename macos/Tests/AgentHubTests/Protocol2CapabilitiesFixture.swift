@@ -19,7 +19,6 @@ func protocol2CapabilitiesFixture(remote: Bool, pruneBackups: Bool? = nil) -> Da
         "antigravity_sessions": true,
         "dsh_sessions": true,
         "thread_archive_actions": true,
-        "codex_desktop": !remote,
         "systemd": remote,
         "linux_update_job": remote,
         "prune_backups": pruneBackups ?? remote,

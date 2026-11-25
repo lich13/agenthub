@@ -10,9 +10,8 @@ final class VisualSceneCaptureTests: XCTestCase {
             return
         }
 
-        let writableBox = WritableModeBox()
         let transport = MockRuntimeTransport { cmd, args in
-            Self.mockResponse(cmd: cmd, args: args, writable: writableBox.writable)
+            Self.mockResponse(cmd: cmd, args: args)
         }
         let suiteName = "com.lich13.agenthub.visual.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -98,29 +97,15 @@ final class VisualSceneCaptureTests: XCTestCase {
         try await pumpMainRunLoop(ms: 250)
         try captureWindow(window, host: host, to: "\(outDir)/swift-04-codex-dark-bottom.png")
 
-        // Scene 5: Light Codex Writable Composer (Goal + Outbox + Request + Toolbar)
-        writableBox.writable = true
+        // Scene 5: Light Codex Bottom (Read-only stage without collaboration footer)
         store.setTheme(.light)
         window.appearance = NSAppearance(named: .aqua)
-        DesktopOpenIntentRegistry.request(threadId: "th-visual-1")
-        store.activeWorkspace = .claude
-        try await pumpMainRunLoop(ms: 150)
-        store.activeWorkspace = .codex
-        try await pumpMainRunLoop(ms: 450)
+        try await pumpMainRunLoop(ms: 250)
         scrollConversationTable(in: host, fraction: 1.0)
         try await pumpMainRunLoop(ms: 200)
         let scene5Strings = collectAllRenderedStrings(in: host)
-        XCTAssertFalse(scene5Strings.contains(where: { $0.contains("未能读取数据") }), "Writable Codex composer scene 5 must have zero DecodingError text")
-        XCTAssertFalse(scene5Strings.contains(where: { $0.contains("附件通道响应无效") }), "Writable Codex composer scene 5 must bind attachments cleanly")
-        let rep5 = try captureWindow(window, host: host, to: "\(outDir)/swift-05-codex-writable-composer.png")
-        if let rep5 {
-            XCTAssertEqual(
-                countErrorRedPixels(in: rep5, logicalSize: size, topLeftRect: NSRect(x: 640, y: 905, width: 320, height: 37)),
-                0,
-                "Writable Codex composer footer bottom strip must have zero errFg red error pixels"
-            )
-        }
-        writableBox.writable = false
+        XCTAssertFalse(scene5Strings.contains(where: { $0.contains("未能读取数据") }), "Codex bottom scene 5 must have zero DecodingError text")
+        try captureWindow(window, host: host, to: "\(outDir)/swift-05-codex-light-bottom.png")
 
         // Scene 6: Light Claude Workspace (Expanded ClaudeProcessGroup)
         ActivityDisclosureStore.shared.setOpen(
@@ -177,10 +162,6 @@ final class VisualSceneCaptureTests: XCTestCase {
             try captureWindow(panel, host: menuView, to: "\(outDir)/swift-09-codex-context-menu.png")
         }
         AgentHubTaskMenuPresenter.shared.dismiss()
-    }
-
-    private final class WritableModeBox: @unchecked Sendable {
-        var writable = false
     }
 
     @MainActor
@@ -345,7 +326,7 @@ final class VisualSceneCaptureTests: XCTestCase {
         return rep
     }
 
-    private static func mockResponse(cmd: String, args: String, writable: Bool) -> Data {
+    private static func mockResponse(cmd: String, args: String) -> Data {
         let mib = 1024 * 1024
         switch cmd {
         case "remote.get":
@@ -414,29 +395,6 @@ final class VisualSceneCaptureTests: XCTestCase {
               "subagents":{"complete":true,"counts":{"creating":0,"running":0,"completed":1,"failed":0,"interrupted":0,"unknown":0},"agents":[{"agentId":"csub-1","name":"Explore subagent","status":"completed","available":true}]}
             }
             """#.utf8)
-        case "codex.desktop.attach", "codex.desktop.connect":
-            if writable {
-                return Data(#"""
-                {
-                  "sessionId":"sess-rw",
-                  "threadId":"th-visual-1",
-                  "revision":2,
-                  "connected":true,
-                  "writable":true,
-                  "runtime":"waiting",
-                  "activeTurnId":"turn-live-1",
-                  "model":"gpt-5",
-                  "reasoningEffort":"high",
-                  "mode":"plan",
-                  "goal":{"status":"active","objective":"保持桌面原生 Swift 6 与 WebUI 零视觉漂移并完成逐帧截图核验。","truncated":false},
-                  "queue":[{"id":"q-msg-1","kind":"queue","status":"queued","preview":"补充检查深色模式代码块与表格边框"}],
-                  "requests":[{"key":"req-cmd-1","kind":"command","title":"需要确认执行命令","body":"","canAccept":true,"supportedDecisions":["acceptForSession"],"review":{"command":"swift test --package-path macos","cwd":"/workspace/AgentHub","reason":"运行原生排版与快照门禁","changes":[]},"questions":[]}]
-                }
-                """#.utf8)
-            }
-            return Data(#"{"sessionId":"sess-ro","threadId":"th-visual-1","revision":0,"connected":false,"writable":false,"runtime":"idle","requests":[],"queue":[]}"#.utf8)
-        case "codex.desktop.attachments":
-            return Data(#"{"bindingId":"bind-visual-1","pasteDisposition":null}"#.utf8)
         case "probe.status":
             return Data(#"{"label":"Probe","enabled":true,"available":true,"platform":"macos","service_kind":"launchd","service_name":"com.lich13.agenthub.probe","flavor":"builtin","hook_status":"managed","bark_status":"configured","recent_event_count":2,"running_count":1,"reply_needed_count":1,"recoverable_count":0,"running_threads":[],"reply_needed_threads":[],"recoverable_threads":[],"lifecycle_status":"ok","doctor_status":"ok","runtime_version":"2.1.27","config_path":"~/Library/Application Support/AgentHub/config.toml","codex_home":"~/.codex","configured_codex_home":"~/.codex","resolved_codex_home":"~/.codex","codex_home_source":"default","logs_db_source":"resolved_codex_home","host_label":"local","snapshot_age_seconds":1,"is_refreshing":false,"snapshot_status":"fresh"}"#.utf8)
         case "probe.settings.get":

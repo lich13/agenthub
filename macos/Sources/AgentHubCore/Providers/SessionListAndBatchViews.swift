@@ -1386,13 +1386,10 @@ public struct SessionBatchBarAndDialogView: View {
     public let notice: String?
     public var prepareError: String? = nil
     public var executeError: String? = nil
-    public let preview: SessionBatchPreview?
     public let result: SessionBatchResult?
     public let onSelectAll: () -> Void
     public let onClear: () -> Void
     public let onPrepareOperation: (SessionOperation) -> Void
-    public let onConfirmExecute: () -> Void
-    public let onDismissPreview: () -> Void
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1675,6 +1672,134 @@ public struct WorkspaceArchivedToggleRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainHitButtonStyle())
+    }
+}
+
+public struct WorkspaceEmptyMatchPlaceholder: View {
+    @Environment(\.agentHubPalette) private var palette
+
+    public init() {}
+
+    public var body: some View {
+        Text("无匹配会话")
+            .font(DesignFonts.body(12))
+            .foregroundStyle(palette.textMuted.color)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 10)
+    }
+}
+
+public struct WorkspaceGroupedSessionRows<Item: Identifiable & Equatable & Sendable, RowContent: View>: View {
+    public let groups: [ProjectWorkspaceGroup<Item>]
+    @Binding public var collapsedKeys: Set<ProjectWorkspaceKey>
+    @Binding public var workspaceFilter: ProjectWorkspaceFilter
+    public let isArchived: Bool
+    public let onSelectAllInGroup: ((ProjectWorkspaceGroup<Item>) -> Void)?
+    public let onCopyPath: (String) -> Void
+    @ViewBuilder public let rowContent: (Item, ProjectWorkspaceGroup<Item>) -> RowContent
+
+    public init(
+        groups: [ProjectWorkspaceGroup<Item>],
+        collapsedKeys: Binding<Set<ProjectWorkspaceKey>>,
+        workspaceFilter: Binding<ProjectWorkspaceFilter>,
+        isArchived: Bool = false,
+        onSelectAllInGroup: ((ProjectWorkspaceGroup<Item>) -> Void)?,
+        onCopyPath: @escaping (String) -> Void,
+        @ViewBuilder rowContent: @escaping (Item, ProjectWorkspaceGroup<Item>) -> RowContent
+    ) {
+        self.groups = groups
+        self._collapsedKeys = collapsedKeys
+        self._workspaceFilter = workspaceFilter
+        self.isArchived = isArchived
+        self.onSelectAllInGroup = onSelectAllInGroup
+        self.onCopyPath = onCopyPath
+        self.rowContent = rowContent
+    }
+
+    public var body: some View {
+        ForEach(groups) { group in
+            let expanded = !collapsedKeys.contains(group.key)
+            ProjectWorkspaceGroupHeaderView(
+                displayName: group.displayName,
+                fullPath: group.fullPath,
+                count: group.items.count,
+                status: isArchived ? .idle : group.aggregateStatus,
+                expanded: expanded,
+                isFilteredToThisGroup: workspaceFilter.selectedKey == group.key,
+                onToggleExpanded: {
+                    if expanded {
+                        collapsedKeys.insert(group.key)
+                    } else {
+                        collapsedKeys.remove(group.key)
+                    }
+                },
+                onFilterOnlyThisGroup: {
+                    if workspaceFilter.selectedKey == group.key {
+                        workspaceFilter = .all
+                    } else {
+                        workspaceFilter = .workspace(group.key, includeSubdirectories: false)
+                    }
+                },
+                onSelectAllInGroup: onSelectAllInGroup.map { handler in
+                    { handler(group) }
+                },
+                onCopyPath: onCopyPath
+            )
+            if expanded {
+                ForEach(group.items) { item in
+                    rowContent(item, group)
+                }
+            }
+        }
+    }
+}
+
+public struct WorkspaceArchivedExpandedSection<Content: View>: View {
+    @Environment(\.agentHubPalette) private var palette
+    @Binding public var isOpen: Bool
+    public let archivedCount: Int
+    @ViewBuilder public let content: () -> Content
+
+    public init(
+        isOpen: Binding<Bool>,
+        archivedCount: Int,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self._isOpen = isOpen
+        self.archivedCount = archivedCount
+        self.content = content
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            WorkspaceArchivedToggleRow(isOpen: $isOpen, archivedCount: archivedCount)
+            content()
+        }
+        .padding(.top, 8)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+        }
+    }
+}
+
+public struct WorkspaceArchivedClosedFooter: View {
+    @Environment(\.agentHubPalette) private var palette
+    @Binding public var isOpen: Bool
+    public let archivedCount: Int
+
+    public init(isOpen: Binding<Bool>, archivedCount: Int) {
+        self._isOpen = isOpen
+        self.archivedCount = archivedCount
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            WorkspaceArchivedToggleRow(isOpen: $isOpen, archivedCount: archivedCount)
+        }
+        .padding(.top, 8)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+        }
     }
 }
 

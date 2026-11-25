@@ -533,9 +533,14 @@ fn evict_idle_map<K: Eq + std::hash::Hash, V>(
 ) {
     if let Ok(mut guard) = mutex.lock() {
         if let Some(map) = guard.as_mut() {
+            let before = map.len();
             map.retain(|_, v| ts_of(v).elapsed() < max_idle);
+            let evicted = map.len() < before;
             if map.is_empty() {
                 *guard = None;
+            }
+            if evicted {
+                crate::note_cache_eviction();
             }
         }
     }

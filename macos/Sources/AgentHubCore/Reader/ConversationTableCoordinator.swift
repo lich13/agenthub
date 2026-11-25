@@ -35,7 +35,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     public var isLoadOlderBlockedByError: Bool = false
     public var canLoadOlder: Bool = true
     public var isLoadingOlder: Bool = false
-    private var highlightClearTask: Task<Void, Never>?
+    nonisolated(unsafe) private var highlightClearTask: Task<Void, Never>?
     private var isRestoringScroll = false
     private var lastLaidOutWidth: CGFloat = 0
     private var lastClipOriginY: CGFloat = .greatestFiniteMagnitude
@@ -109,6 +109,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         )
     }
 
+    deinit {
+        highlightClearTask?.cancel()
+        NotificationCenter.default.removeObserver(self)
+    }
+
     public var palette: DesignPalette {
         DesignPalette.resolve(scheme: scheme, workspace: workspace)
     }
@@ -148,16 +153,23 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return nil
     }
 
-    private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) {
-        let currentScrollerStyle = Self.effectiveScrollerStyle
-        let canCarry = (currentWidthKey > 0
-            && currentWidthKey == heightCacheWidthKey
-            && disclosureStore.revision == heightCacheDisclosureRev
+    private func isHeightCacheValid(forWidthKey widthKey: Int, disclosureRevision: UInt64) -> Bool {
+        widthKey > 0
+            && widthKey == heightCacheWidthKey
+            && disclosureRevision == heightCacheDisclosureRev
             && scheme == heightCacheScheme
             && workspace == heightCacheWorkspace
             && sessionScopeKey == heightCacheScopeKey
-            && currentScrollerStyle == heightCacheScrollerStyle
-            && cachedRowHeights.count == rows.count)
+            && Self.effectiveScrollerStyle == heightCacheScrollerStyle
+            && cachedRowHeights.count == rows.count
+    }
+
+    private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) -> IndexSet {
+        let currentScrollerStyle = Self.effectiveScrollerStyle
+        let canCarry = isHeightCacheValid(
+            forWidthKey: currentWidthKey,
+            disclosureRevision: disclosureStore.revision
+        )
 
         var previousById: [String: (item: ConversationRowItem, height: CGFloat)] = [:]
         if canCarry {
@@ -185,6 +197,19 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             }
         }
 
+        let changedHeightIndexes: IndexSet
+        if !canCarry || nextRows.count != rows.count {
+            changedHeightIndexes = IndexSet(integersIn: 0 ..< nextRows.count)
+        } else {
+            var changed = IndexSet()
+            for idx in 0 ..< nextRows.count {
+                if nextHeights[idx] == nil || nextHeights[idx] != cachedRowHeights[idx] {
+                    changed.insert(idx)
+                }
+            }
+            changedHeightIndexes = changed
+        }
+
         cachedRowHeights = nextHeights
         heightCacheWidthKey = currentWidthKey
         heightCacheDisclosureRev = disclosureStore.revision
@@ -194,6 +219,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         heightCacheScrollerStyle = currentScrollerStyle
         userAnchorRowIndices = nextUserIndices
         hasAnyUserImageAttachments = anyImages
+        return changedHeightIndexes
     }
 
     public func isNearBottom(threshold: CGFloat = 96) -> Bool {
@@ -220,7 +246,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     ) {
         let totalW = max(320, scrollView?.bounds.width ?? tableView?.bounds.width ?? 0)
         let widthKey = totalW > 0 ? Int((contentColumnWidth(for: totalW) * 2).rounded()) : 0
-        rebuildRowIndexesAndCarryHeightCache(nextRows: nextRows, currentWidthKey: widthKey)
+        let changedHeightIndexes = rebuildRowIndexesAndCarryHeightCache(nextRows: nextRows, currentWidthKey: widthKey)
 
         guard let tableView, let clipView = scrollView?.contentView else {
             rows = nextRows
@@ -228,6 +254,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
         let wasEmpty = rows.isEmpty
         if forceScrollToBottom || sessionScopeKey != cellCacheScopeKey {
+            if sessionScopeKey != cellCacheScopeKey {
+                highlightClearTask?.cancel()
+                highlightClearTask = nil
+                highlightedTimelineId = nil
+            }
             if forceScrollToBottom {
                 upwardScrollIntent = false
             }
@@ -244,7 +275,9 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             context.allowsImplicitAnimation = false
             self.rows = nextRows
             tableView.reloadData()
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< nextRows.count))
+            if !changedHeightIndexes.isEmpty {
+                tableView.noteHeightOfRows(withIndexesChanged: changedHeightIndexes)
+            }
             tableView.tile()
             tableView.layoutSubtreeIfNeeded()
 
@@ -300,12 +333,135 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
+    private static func executionGroupReferencesDisclosure(_ group: ExecutionGroup, targetKeys: Set<String>) -> Bool {
+        if targetKeys.contains(group.id) { return true }
+        for alias in group.stateAliases where targetKeys.contains(alias) {
+            return true
+        }
+        for cmd in group.commands {
+            if targetKeys.contains(cmd.id) { return true }
+            for sid in cmd.sourceIds where targetKeys.contains(sid) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func claudeEntriesReferenceDisclosure(_ entries: [ClaudeEventRenderItem], targetKeys: Set<String>) -> Bool {
+        for entry in entries {
+            switch entry {
+            case let .group(group):
+                if executionGroupReferencesDisclosure(group, targetKeys: targetKeys) { return true }
+            case let .metadata(meta):
+                if targetKeys.contains(meta.id) { return true }
+                for sid in meta.sourceIds where targetKeys.contains("claude-metadata:\(sid)") {
+                    return true
+                }
+                let subItems = meta.entries.map { e -> ClaudeEventRenderItem in
+                    switch e {
+                    case let .item(it, k, sids): .item(item: it, key: k, sourceIds: sids)
+                    case let .group(g): .group(g)
+                    }
+                }
+                if claudeEntriesReferenceDisclosure(subItems, targetKeys: targetKeys) { return true }
+            case let .item(_, key, sids):
+                if targetKeys.contains(key) || targetKeys.contains("\(key):thinking") { return true }
+                for sid in sids {
+                    if targetKeys.contains(sid) || targetKeys.contains("\(sid):thinking") {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private static func rowMayReferenceDisclosure(_ row: ConversationRowItem, targetKeys: Set<String>) -> Bool {
+        guard !targetKeys.isEmpty else { return false }
+        switch row.kind {
+        case let .user(msg, _, _):
+            let p1 = "\(msg?.id ?? row.timelineId):"
+            let p2 = "\(row.timelineId):"
+            return targetKeys.contains { $0.hasPrefix(p1) || $0.hasPrefix(p2) }
+        case let .assistant(_, foldInstructions):
+            guard foldInstructions else { return false }
+            let prefix = "\(row.id):"
+            return targetKeys.contains { $0.hasPrefix(prefix) }
+        case let .executionGroup(group):
+            return executionGroupReferencesDisclosure(group, targetKeys: targetKeys)
+        case let .processGroup(proc):
+            if targetKeys.contains(proc.stateKey) { return true }
+            for alias in proc.stateAliases where targetKeys.contains(alias) {
+                return true
+            }
+            for step in proc.steps {
+                switch step {
+                case let .thinking(id, sids, _, _, _):
+                    if targetKeys.contains("\(id):thinking") { return true }
+                    for sid in sids where targetKeys.contains("\(sid):thinking") {
+                        return true
+                    }
+                case let .execution(group, _):
+                    if executionGroupReferencesDisclosure(group, targetKeys: targetKeys) { return true }
+                case let .detail(id, sids, _, _, _, _, _):
+                    if targetKeys.contains(id) { return true }
+                    for sid in sids where targetKeys.contains(sid) {
+                        return true
+                    }
+                }
+            }
+            return false
+        case let .claudeProcessGroup(proc, _):
+            if targetKeys.contains(proc.stateKey) { return true }
+            for sid in proc.sourceIds where targetKeys.contains("claude-process:\(proc.turnId):\(sid)") {
+                return true
+            }
+            return claudeEntriesReferenceDisclosure(proc.entries, targetKeys: targetKeys)
+        case let .claudeMetadataGroup(meta, _):
+            if targetKeys.contains(meta.id) { return true }
+            for sid in meta.sourceIds where targetKeys.contains("claude-metadata:\(sid)") {
+                return true
+            }
+            let subItems = meta.entries.map { e -> ClaudeEventRenderItem in
+                switch e {
+                case let .item(it, k, sids): .item(item: it, key: k, sourceIds: sids)
+                case let .group(g): .group(g)
+                }
+            }
+            return claudeEntriesReferenceDisclosure(subItems, targetKeys: targetKeys)
+        case .thinking:
+            if targetKeys.contains(row.id) { return true }
+            for alias in row.timelineAliases where targetKeys.contains(alias) {
+                return true
+            }
+            return false
+        case .plan, .question, .questionResult, .subagent, .historyCollapse, .systemNotice:
+            return false
+        }
+    }
+
     public func toggleDisclosurePreservingAnchor(
         stateKey: String,
         aliases: [String] = [],
         currentlyOpen: Bool
     ) {
         let anchor = captureScrollAnchor()
+        let targetKeys = Set(([stateKey] + aliases).filter { !$0.isEmpty })
+        var affected = IndexSet()
+        for (idx, row) in rows.enumerated() where Self.rowMayReferenceDisclosure(row, targetKeys: targetKeys) {
+            affected.insert(idx)
+        }
+        if affected.isEmpty && !rows.isEmpty {
+            affected = IndexSet(integersIn: 0 ..< rows.count)
+        }
+
+        let totalW = max(320, scrollView?.bounds.width ?? tableView?.bounds.width ?? 0)
+        let widthKey = totalW > 0 ? Int((contentColumnWidth(for: totalW) * 2).rounded()) : 0
+        let canPartiallyInvalidate = isHeightCacheValid(
+            forWidthKey: widthKey,
+            disclosureRevision: disclosureStore.revision
+        )
+
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
@@ -316,11 +472,28 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 aliases: aliases,
                 isOpen: !currentlyOpen
             )
-            self.cachedRowHeights = Array<CGFloat?>(repeating: nil, count: self.rows.count)
-            self.heightCacheDisclosureRev = self.disclosureStore.revision
+            let reloadIndexes: IndexSet
+            if canPartiallyInvalidate {
+                for idx in affected {
+                    self.cachedRowHeights[idx] = nil
+                }
+                self.heightCacheDisclosureRev = self.disclosureStore.revision
+                reloadIndexes = affected
+            } else {
+                self.cachedRowHeights = Array<CGFloat?>(repeating: nil, count: self.rows.count)
+                self.heightCacheWidthKey = widthKey
+                self.heightCacheDisclosureRev = self.disclosureStore.revision
+                self.heightCacheScheme = self.scheme
+                self.heightCacheWorkspace = self.workspace
+                self.heightCacheScopeKey = self.sessionScopeKey
+                self.heightCacheScrollerStyle = Self.effectiveScrollerStyle
+                reloadIndexes = IndexSet(integersIn: 0 ..< self.rows.count)
+            }
             if let tableView = self.tableView {
-                tableView.reloadData()
-                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< self.rows.count))
+                if !reloadIndexes.isEmpty {
+                    tableView.reloadData(forRowIndexes: reloadIndexes, columnIndexes: IndexSet(integer: 0))
+                    tableView.noteHeightOfRows(withIndexesChanged: reloadIndexes)
+                }
                 tableView.tile()
                 tableView.layoutSubtreeIfNeeded()
                 let minY = -(self.scrollView?.contentInsets.top ?? 0)
@@ -370,6 +543,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             return false
         }
         // Auto-open disclosure if jumping to a folded group, thinking row, or instruction/context fold (DESIGN.md:43, 140)
+        let totalW = max(320, scrollView?.bounds.width ?? tableView.bounds.width)
+        let widthKey = Int((contentColumnWidth(for: totalW) * 2).rounded())
+        let canPartiallyInvalidate = isHeightCacheValid(
+            forWidthKey: widthKey,
+            disclosureRevision: disclosureStore.revision
+        )
         let targetRow = rows[rowIdx]
         var didMutateDisclosure = false
         switch targetRow.kind {
@@ -469,10 +648,23 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             break
         }
         if didMutateDisclosure {
-            cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
-            heightCacheDisclosureRev = disclosureStore.revision
-            tableView.reloadData()
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: rowIdx))
+            let reloadIndexes: IndexSet
+            if canPartiallyInvalidate {
+                cachedRowHeights[rowIdx] = nil
+                heightCacheDisclosureRev = disclosureStore.revision
+                reloadIndexes = IndexSet(integer: rowIdx)
+            } else {
+                cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
+                heightCacheWidthKey = widthKey
+                heightCacheDisclosureRev = disclosureStore.revision
+                heightCacheScheme = scheme
+                heightCacheWorkspace = workspace
+                heightCacheScopeKey = sessionScopeKey
+                heightCacheScrollerStyle = Self.effectiveScrollerStyle
+                reloadIndexes = IndexSet(integersIn: 0 ..< rows.count)
+            }
+            tableView.reloadData(forRowIndexes: reloadIndexes, columnIndexes: IndexSet(integer: 0))
+            tableView.noteHeightOfRows(withIndexesChanged: reloadIndexes)
             tableView.tile()
             tableView.layoutSubtreeIfNeeded()
         }

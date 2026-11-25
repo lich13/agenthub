@@ -16,7 +16,6 @@ const requiredFiles = [
   ["user_context.json", doc => Array.isArray(doc.cases) && doc.cases.length > 0],
   ["session_storage.json", doc => Array.isArray(doc.cases) && doc.cases.length > 0],
   ["session_selection.json", doc => Array.isArray(doc.visible) && Array.isArray(doc.steps) && doc.steps.length > 0],
-  ["desktop_references.json", doc => Array.isArray(doc.cases) && doc.cases.length > 0],
 ];
 
 for (const [name, validate] of requiredFiles) {

@@ -239,6 +239,7 @@ pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Durat
             .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
         {
             *guard = None;
+            crate::note_cache_eviction();
         }
     }
 }

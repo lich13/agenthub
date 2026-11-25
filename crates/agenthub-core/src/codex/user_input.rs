@@ -147,6 +147,20 @@ impl AsyncQuestionCall {
             questions,
         })
     }
+
+    pub(crate) fn heap_bytes(&self) -> u64 {
+        self.session_id.as_ref().map_or(0, String::capacity) as u64
+            + self.turn_id.capacity() as u64
+            + self.call_id.capacity() as u64
+            + self.content_hash.capacity() as u64
+            + (self.questions.capacity() * std::mem::size_of::<UserInputQuestion>()) as u64
+            + self
+                .questions
+                .iter()
+                .map(UserInputQuestion::heap_bytes)
+                .sum::<u64>()
+            + (self.answered.capacity() * (std::mem::size_of::<usize>() + 1)) as u64
+    }
 }
 
 #[derive(Default, Clone)]
@@ -275,6 +289,16 @@ impl AsyncQuestionTracker {
     pub fn pending(&self) -> impl Iterator<Item = &AsyncQuestionCall> {
         self.calls.iter().filter(|call| call.pending().is_some())
     }
+
+    pub(crate) fn heap_bytes(&self) -> u64 {
+        self.session_id.as_ref().map_or(0, String::capacity) as u64
+            + (self.calls.capacity() * std::mem::size_of::<AsyncQuestionCall>()) as u64
+            + self
+                .calls
+                .iter()
+                .map(AsyncQuestionCall::heap_bytes)
+                .sum::<u64>()
+    }
 }
 
 /// Only the complete native user envelope is executable metadata. Examples stay text.
@@ -319,6 +343,28 @@ pub(crate) fn evict_idle_question_cache(max_idle: std::time::Duration) {
 }
 
 pub fn rollout_async_questions(path: &Path) -> Result<Vec<AsyncQuestionCall>> {
+    read_question_state(path, |state| state.tracker.calls.clone())
+}
+
+pub fn rollout_pending_async_questions_since(
+    path: &Path,
+    since_ms: i64,
+) -> Result<Vec<AsyncQuestionCall>> {
+    read_question_state(path, |state| {
+        state
+            .tracker
+            .calls
+            .iter()
+            .filter(|call| {
+                call.created_at_ms.is_some_and(|created| created > since_ms)
+                    && call.pending().is_some()
+            })
+            .cloned()
+            .collect()
+    })
+}
+
+fn read_question_state<R>(path: &Path, project: impl FnOnce(&QuestionState) -> R) -> Result<R> {
     QUESTION_CACHE.read(
         path,
         |_| Ok(0),
@@ -336,15 +382,12 @@ pub fn rollout_async_questions(path: &Path) -> Result<Vec<AsyncQuestionCall>> {
                 !info.partial,
                 "question transcript has an incomplete record"
             );
-            Ok(state.tracker.calls.clone())
+            Ok(project(state))
         },
         |state| {
-            state
-                .tracker
-                .calls
-                .iter()
-                .map(|c| 512 + serde_json::to_vec(&c.questions).map_or(0, |v| v.len() as u64))
-                .sum()
+            std::mem::size_of::<QuestionState>() as u64
+                + state.turn.as_ref().map_or(0, String::capacity) as u64
+                + state.tracker.heap_bytes()
         },
     )
 }

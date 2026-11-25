@@ -512,6 +512,7 @@ public struct BackdropGaussianBlurView: NSViewRepresentable {
     public func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
+        view.layer?.masksToBounds = true
         view.layerUsesCoreImageFilters = true
         if let blur = CIFilter(name: "CIGaussianBlur") {
             blur.setValue(radius, forKey: kCIInputRadiusKey)

@@ -19,20 +19,20 @@ impl Drop for TestSandboxDir {
 }
 
 #[derive(Clone)]
-pub struct AppState {
+pub(crate) struct AppState {
     config: Arc<RwLock<Config>>,
     config_cache: Arc<ConfigCache>,
     platform: PlatformPaths,
-    pub db: PanelDb,
-    pub jobs: JobRunner,
-    pub app_server_client: CodexAppServerClient,
-    pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
+    pub(crate) db: PanelDb,
+    pub(crate) jobs: JobRunner,
+    pub(crate) app_server_client: CodexAppServerClient,
+    pub(crate) probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
     #[cfg(test)]
     test_sandbox: Option<Arc<TestSandboxDir>>,
 }
 
 impl AppState {
-    pub fn new(config: Config, db: PanelDb) -> Self {
+    pub(crate) fn new(config: Config, db: PanelDb) -> Self {
         let jobs = JobRunner::new(db.clone());
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -53,44 +53,44 @@ impl AppState {
         self
     }
 
-    pub fn platform(&self) -> &PlatformPaths {
+    pub(crate) fn platform(&self) -> &PlatformPaths {
         &self.platform
     }
 
-    pub fn config(&self) -> Config {
+    pub(crate) fn config(&self) -> Config {
         self.config.read().expect("config rwlock").clone()
     }
 
-    pub fn with_config_path(mut self, path: std::path::PathBuf) -> Self {
+    pub(crate) fn with_config_path(mut self, path: std::path::PathBuf) -> Self {
         self.platform.config_file = path;
         self
     }
 
-    pub fn config_path(&self) -> &std::path::Path {
+    pub(crate) fn config_path(&self) -> &std::path::Path {
         &self.platform.config_file
     }
 
-    pub fn refresh_config(&self) -> anyhow::Result<Config> {
+    pub(crate) fn refresh_config(&self) -> anyhow::Result<Config> {
         let mut current = self.config.write().expect("config rwlock");
         let loaded = self.config_cache.load(self.config_path())?;
         *current = loaded.clone();
         Ok(loaded)
     }
 
-    pub fn replace_config(&self, config: Config) {
+    pub(crate) fn replace_config(&self, config: Config) {
         *self.config.write().expect("config rwlock") = config;
     }
 
-    pub fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
+    pub(crate) fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
         let config = self.config();
         resolve_codex_paths(&config.codex.home)
     }
 
-    pub fn codex_paths(&self) -> CodexPaths {
+    pub(crate) fn codex_paths(&self) -> CodexPaths {
         self.resolved_codex_paths().codex_paths()
     }
 
-    pub fn unified_cleanup_paths(
+    pub(crate) fn unified_cleanup_paths(
         &self,
     ) -> anyhow::Result<agenthub_core::services::cleanup::UnifiedCleanupPaths> {
         let codex = self.codex_paths();
@@ -120,13 +120,13 @@ impl AppState {
 }
 
 #[derive(Debug, Default)]
-pub struct ProbeStatusCache {
-    pub snapshot: Option<CachedProbeStatus>,
-    pub refreshing: bool,
+pub(crate) struct ProbeStatusCache {
+    pub(crate) snapshot: Option<CachedProbeStatus>,
+    pub(crate) refreshing: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct CachedProbeStatus {
-    pub value: Value,
-    pub refreshed_at_unix: i64,
+pub(crate) struct CachedProbeStatus {
+    pub(crate) value: Value,
+    pub(crate) refreshed_at_unix: i64,
 }

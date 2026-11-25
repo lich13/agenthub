@@ -597,6 +597,7 @@ pub fn evict_idle_endpoint_cache(max_idle: Duration) {
             .is_some_and(|(_, ts)| ts.elapsed() >= max_idle)
         {
             *guard = None;
+            crate::note_cache_eviction();
         }
     }
     super::cli_meta::evict_idle_meta_cache(max_idle);

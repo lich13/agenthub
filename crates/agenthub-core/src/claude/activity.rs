@@ -203,6 +203,7 @@ pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
             .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
         {
             *guard = None;
+            crate::note_cache_eviction();
         }
     }
 }

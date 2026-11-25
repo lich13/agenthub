@@ -8,24 +8,80 @@ public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
     public var nativeId: String
     public var title: String
     public var cwd: String
-    public var workspaceRoot: String? = nil
+    public var workspaceRoot: String?
     public var path: String
-    public var updatedAt: String? = nil
-    public var previewText: String = ""
+    public var updatedAt: String? {
+        didSet {
+            if oldValue != updatedAt {
+                updatedAtMs = ProjectWorkspaceEngine.parseTimestampMs(updatedAt)
+            }
+        }
+    }
+    public private(set) var updatedAtMs: Int64
+    public var previewText: String
     public var statusText: String
-    public var statusChipBadge: String? = nil
-    public var statusChipTone: StatusChipTone = .neutral
+    public var statusChipBadge: String?
+    public var statusChipTone: StatusChipTone
     public var running: Bool
     public var archived: Bool
     public var canRename: Bool
-    public var renameBlockReason: String? = nil
+    public var renameBlockReason: String?
     public var canArchive: Bool
-    public var archiveBlockReason: String? = nil
+    public var archiveBlockReason: String?
     public var canDelete: Bool
-    public var deleteBlockReason: String? = nil
-    public var storageSize: SessionStorageSize? = nil
-    public var readError: String? = nil
-    public var readWarning: String? = nil
+    public var deleteBlockReason: String?
+    public var storageSize: SessionStorageSize?
+    public var readError: String?
+    public var readWarning: String?
+
+    public init(
+        sessionKey: String,
+        nativeId: String,
+        title: String,
+        cwd: String,
+        workspaceRoot: String? = nil,
+        path: String,
+        updatedAt: String? = nil,
+        previewText: String = "",
+        statusText: String,
+        statusChipBadge: String? = nil,
+        statusChipTone: StatusChipTone = .neutral,
+        running: Bool,
+        archived: Bool,
+        canRename: Bool,
+        renameBlockReason: String? = nil,
+        canArchive: Bool,
+        archiveBlockReason: String? = nil,
+        canDelete: Bool,
+        deleteBlockReason: String? = nil,
+        storageSize: SessionStorageSize? = nil,
+        readError: String? = nil,
+        readWarning: String? = nil
+    ) {
+        self.sessionKey = sessionKey
+        self.nativeId = nativeId
+        self.title = title
+        self.cwd = cwd
+        self.workspaceRoot = workspaceRoot
+        self.path = path
+        self.updatedAt = updatedAt
+        self.updatedAtMs = ProjectWorkspaceEngine.parseTimestampMs(updatedAt)
+        self.previewText = previewText
+        self.statusText = statusText
+        self.statusChipBadge = statusChipBadge
+        self.statusChipTone = statusChipTone
+        self.running = running
+        self.archived = archived
+        self.canRename = canRename
+        self.renameBlockReason = renameBlockReason
+        self.canArchive = canArchive
+        self.archiveBlockReason = archiveBlockReason
+        self.canDelete = canDelete
+        self.deleteBlockReason = deleteBlockReason
+        self.storageSize = storageSize
+        self.readError = readError
+        self.readWarning = readWarning
+    }
 
     public var id: String { sessionKey }
 }
@@ -41,8 +97,6 @@ public struct UnifiedProviderWorkspaceView: View {
     public var externalSeedItem: UnifiedSessionSummaryItem?
     public var onExternalMutation: (() -> Void)?
     public var onExternalSelectSession: ((String?) -> Void)?
-    public var codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)?
-    public var codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)?
 
     @StateObject private var model: ProviderWorkspaceStore
     @StateObject private var timelineTracker = TimelineActiveTracker()
@@ -61,19 +115,19 @@ public struct UnifiedProviderWorkspaceView: View {
         hideSidebar: Bool = false,
         externalSeedItem: UnifiedSessionSummaryItem? = nil,
         onExternalMutation: (() -> Void)? = nil,
-        onExternalSelectSession: ((String?) -> Void)? = nil,
-        codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)? = nil,
-        codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)? = nil
+        onExternalSelectSession: ((String?) -> Void)? = nil
     ) {
-        let initialStore = ProviderWorkspaceStore(store: store, workspace: workspace)
-        initialStore.skipSidebarListFetch = hideSidebar
-        if let externalSeedItem {
-            initialStore.externalSeedItem = externalSeedItem
-            initialStore.selectedKey = externalSeedItem.sessionKey
-        }
-        initialStore.onExternalMutation = onExternalMutation
-        initialStore.onExternalSelectSession = onExternalSelectSession
-        _model = StateObject(wrappedValue: initialStore)
+        _model = StateObject(wrappedValue: {
+            let initialStore = ProviderWorkspaceStore(store: store, workspace: workspace)
+            initialStore.skipSidebarListFetch = hideSidebar
+            if let externalSeedItem {
+                initialStore.externalSeedItem = externalSeedItem
+                initialStore.selectedKey = externalSeedItem.sessionKey
+            }
+            initialStore.onExternalMutation = onExternalMutation
+            initialStore.onExternalSelectSession = onExternalSelectSession
+            return initialStore
+        }())
         self.store = store
         self.workspace = workspace
         self.scheme = scheme
@@ -81,26 +135,66 @@ public struct UnifiedProviderWorkspaceView: View {
         self.externalSeedItem = externalSeedItem
         self.onExternalMutation = onExternalMutation
         self.onExternalSelectSession = onExternalSelectSession
-        self.codexNewThreadSlot = codexNewThreadSlot
-        self.codexCollaborationFooterSlot = codexCollaborationFooterSlot
     }
 
     init(
         model: ProviderWorkspaceStore,
         scheme: ColorSchemeKind,
-        hideSidebar: Bool = false
+        hideSidebar: Bool = false,
+        externalSeedItem: UnifiedSessionSummaryItem? = nil,
+        onExternalMutation: (() -> Void)? = nil,
+        onExternalSelectSession: ((String?) -> Void)? = nil
     ) {
-        model.skipSidebarListFetch = hideSidebar
-        _model = StateObject(wrappedValue: model)
+        _model = StateObject(wrappedValue: {
+            model.skipSidebarListFetch = hideSidebar
+            if let externalSeedItem {
+                model.externalSeedItem = externalSeedItem
+                model.selectedKey = externalSeedItem.sessionKey
+            }
+            if let onExternalMutation {
+                model.onExternalMutation = onExternalMutation
+            }
+            if let onExternalSelectSession {
+                model.onExternalSelectSession = onExternalSelectSession
+            }
+            return model
+        }())
         self.store = model.store
         self.workspace = model.workspace
         self.scheme = scheme
         self.hideSidebar = hideSidebar
-        self.externalSeedItem = nil
-        self.onExternalMutation = nil
-        self.onExternalSelectSession = nil
-        self.codexNewThreadSlot = nil
-        self.codexCollaborationFooterSlot = nil
+        self.externalSeedItem = externalSeedItem ?? model.externalSeedItem
+        self.onExternalMutation = onExternalMutation ?? model.onExternalMutation
+        self.onExternalSelectSession = onExternalSelectSession ?? model.onExternalSelectSession
+    }
+
+    private func syncExternalBindings() {
+        model.skipSidebarListFetch = hideSidebar
+        model.onExternalMutation = onExternalMutation
+        model.onExternalSelectSession = onExternalSelectSession
+    }
+
+    private struct ExternalBindingsSyncView: NSViewRepresentable {
+        let model: ProviderWorkspaceStore
+        let hideSidebar: Bool
+        let onExternalMutation: (() -> Void)?
+        let onExternalSelectSession: ((String?) -> Void)?
+
+        func makeNSView(context: Context) -> NSView {
+            sync()
+            return NSView(frame: .zero)
+        }
+
+        func updateNSView(_ nsView: NSView, context: Context) {
+            sync()
+        }
+
+        @MainActor
+        private func sync() {
+            model.skipSidebarListFetch = hideSidebar
+            model.onExternalMutation = onExternalMutation
+            model.onExternalSelectSession = onExternalSelectSession
+        }
     }
 
     public var body: some View {
@@ -184,7 +278,31 @@ public struct UnifiedProviderWorkspaceView: View {
             }
             .frame(width: 0, height: 0)
         )
-        .onAppear { ensureCoordinator() }
+        .background(
+            ExternalBindingsSyncView(
+                model: model,
+                hideSidebar: hideSidebar,
+                onExternalMutation: onExternalMutation,
+                onExternalSelectSession: onExternalSelectSession
+            )
+            .frame(width: 0, height: 0)
+        )
+        .onAppear {
+            syncExternalBindings()
+            if let externalSeedItem {
+                model.externalSeedItem = externalSeedItem
+                if model.selectedKey == nil {
+                    model.selectedKey = externalSeedItem.sessionKey
+                }
+            }
+            ensureCoordinator()
+        }
+        // Note: 1-parameter .onChange fires async and may capture pre-update `self`;
+        // use `nextHideSidebar`/`nextSeed` parameters here while ExternalBindingsSyncView
+        // updates `onExternalMutation`/`onExternalSelectSession` from fresh `body` values.
+        .onChange(of: hideSidebar) { nextHideSidebar in
+            model.skipSidebarListFetch = nextHideSidebar
+        }
         .onChange(of: externalSeedItem) { nextSeed in
             guard let nextSeed else { return }
             model.externalSeedItem = nextSeed
@@ -216,9 +334,7 @@ public struct UnifiedProviderWorkspaceView: View {
                 model.batchExecuteError = nil
             }
         }
-        .onDisappear { model.codexTailRefreshTask?.cancel() }
         .onChange(of: model.selectedItem?.sessionKey) { _ in
-            model.codexTailRefreshTask?.cancel()
             subagentDrawerOpen = false
             selectedSubagent = nil
             if model.searchSelection?.sessionKey != model.selectedKey { model.searchSelection = nil }
@@ -229,6 +345,7 @@ public struct UnifiedProviderWorkspaceView: View {
         }
         // 5s Session List Polling Clock (paused when window hidden or sidebar hidden)
         .task(id: "\(store.revision):\(store.capabilities.isReady):\(workspace.rawValue):\(model.query):\(model.archivedOpen):\(hideSidebar)") {
+            syncExternalBindings()
             guard !hideSidebar else { return }
             model.syncPartitionedSelection()
             while !Task.isCancelled {
@@ -339,19 +456,6 @@ public struct UnifiedProviderWorkspaceView: View {
                         )
                     }
 
-                    if workspace == .codex, store.target == .local, store.capabilities.codexDesktop,
-                       let slot = codexNewThreadSlot
-                    {
-                        slot({ newId in
-                            model.query = ""
-                            model.workspaceFilter = .all
-                            model.selectedKey = newId
-                            Task { await model.fetchSessionList() }
-                        }, { createErr in
-                            model.codexCreateError = createErr
-                        })
-                    }
-
                     Button {
                         Task { await model.fetchSessionList() }
                     } label: {
@@ -362,17 +466,6 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             }
             .padding(.horizontal, 4)
-
-            if let createErr = model.codexCreateError, !createErr.isEmpty {
-                Text(createErr)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.errFg.color)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg.color))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
-            }
 
             WorkspaceSidebarSearchField(placeholder: searchPlaceholderText, query: $model.query)
 
@@ -393,53 +486,23 @@ public struct UnifiedProviderWorkspaceView: View {
                         && model.errorMessage == nil
                         && (!model.query.isEmpty || model.workspaceFilter != .all)
                     {
-                        Text("无匹配会话")
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.textMuted.color)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 10)
+                        WorkspaceEmptyMatchPlaceholder()
                     } else if model.supportsWorkspaceGrouping && model.groupingMode == .byWorkspace {
-                        ForEach(model.activeWorkspaceGroups) { group in
-                            let expanded = !model.collapsedWorkspaceKeys.contains(group.key)
-                            ProjectWorkspaceGroupHeaderView(
-                                displayName: group.displayName,
-                                fullPath: group.fullPath,
-                                count: group.items.count,
-                                status: group.aggregateStatus,
-                                expanded: expanded,
-                                isFilteredToThisGroup: model.workspaceFilter.selectedKey == group.key,
-                                onToggleExpanded: {
-                                    if expanded {
-                                        model.collapsedWorkspaceKeys.insert(group.key)
-                                    } else {
-                                        model.collapsedWorkspaceKeys.remove(group.key)
-                                    }
-                                },
-                                onFilterOnlyThisGroup: {
-                                    if model.workspaceFilter.selectedKey == group.key {
-                                        model.workspaceFilter = .all
-                                    } else {
-                                        model.workspaceFilter = .workspace(group.key, includeSubdirectories: false)
-                                    }
-                                },
-                                onSelectAllInGroup: model.provider == .grokbot ? nil : {
-                                    model.selectAllInWorkspaceGroup(keys: group.items.map(\.sessionKey), partition: .active)
-                                },
-                                onCopyPath: { path in
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(path, forType: .string)
-                                    model.feedbackMessage = "已复制工作区路径"
-                                }
+                        WorkspaceGroupedSessionRows(
+                            groups: model.activeWorkspaceGroups,
+                            collapsedKeys: $model.collapsedWorkspaceKeys,
+                            workspaceFilter: $model.workspaceFilter,
+                            isArchived: false,
+                            onSelectAllInGroup: model.provider == .grokbot ? nil : { group in
+                                model.selectAllInWorkspaceGroup(keys: group.items.map(\.sessionKey), partition: .active)
+                            },
+                            onCopyPath: copyWorkspacePath
+                        ) { item, group in
+                            sessionRowView(
+                                item,
+                                partition: .active,
+                                groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
                             )
-                            if expanded {
-                                ForEach(group.items) { item in
-                                    sessionRowView(
-                                        item,
-                                        partition: .active,
-                                        groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
-                                    )
-                                }
-                            }
                         }
                     } else {
                         ForEach(model.filteredActiveItems) { item in
@@ -448,50 +511,26 @@ public struct UnifiedProviderWorkspaceView: View {
                     }
 
                     if model.supportsArchive && model.archivedOpen {
-                        VStack(alignment: .leading, spacing: 4) {
-                            WorkspaceArchivedToggleRow(isOpen: $model.archivedOpen, archivedCount: model.filteredArchivedItems.count)
+                        WorkspaceArchivedExpandedSection(
+                            isOpen: $model.archivedOpen,
+                            archivedCount: model.filteredArchivedItems.count
+                        ) {
                             if model.supportsWorkspaceGrouping && model.groupingMode == .byWorkspace {
-                                ForEach(model.archivedWorkspaceGroups) { group in
-                                    let expanded = !model.collapsedArchivedWorkspaceKeys.contains(group.key)
-                                    ProjectWorkspaceGroupHeaderView(
-                                        displayName: group.displayName,
-                                        fullPath: group.fullPath,
-                                        count: group.items.count,
-                                        status: .idle,
-                                        expanded: expanded,
-                                        isFilteredToThisGroup: model.workspaceFilter.selectedKey == group.key,
-                                        onToggleExpanded: {
-                                            if expanded {
-                                                model.collapsedArchivedWorkspaceKeys.insert(group.key)
-                                            } else {
-                                                model.collapsedArchivedWorkspaceKeys.remove(group.key)
-                                            }
-                                        },
-                                        onFilterOnlyThisGroup: {
-                                            if model.workspaceFilter.selectedKey == group.key {
-                                                model.workspaceFilter = .all
-                                            } else {
-                                                model.workspaceFilter = .workspace(group.key, includeSubdirectories: false)
-                                            }
-                                        },
-                                        onSelectAllInGroup: {
-                                            model.selectAllInWorkspaceGroup(keys: group.items.map(\.sessionKey), partition: .archived)
-                                        },
-                                        onCopyPath: { path in
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(path, forType: .string)
-                                            model.feedbackMessage = "已复制工作区路径"
-                                        }
+                                WorkspaceGroupedSessionRows(
+                                    groups: model.archivedWorkspaceGroups,
+                                    collapsedKeys: $model.collapsedArchivedWorkspaceKeys,
+                                    workspaceFilter: $model.workspaceFilter,
+                                    isArchived: true,
+                                    onSelectAllInGroup: { group in
+                                        model.selectAllInWorkspaceGroup(keys: group.items.map(\.sessionKey), partition: .archived)
+                                    },
+                                    onCopyPath: copyWorkspacePath
+                                ) { item, group in
+                                    sessionRowView(
+                                        item,
+                                        partition: .archived,
+                                        groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
                                     )
-                                    if expanded {
-                                        ForEach(group.items) { item in
-                                            sessionRowView(
-                                                item,
-                                                partition: .archived,
-                                                groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
-                                            )
-                                        }
-                                    }
                                 }
                             } else {
                                 ForEach(model.filteredArchivedItems) { item in
@@ -499,23 +538,16 @@ public struct UnifiedProviderWorkspaceView: View {
                                 }
                             }
                         }
-                        .padding(.top, 8)
-                        .overlay(alignment: .top) {
-                            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
-                        }
                     }
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
 
             if model.supportsArchive && !model.archivedOpen {
-                VStack(alignment: .leading, spacing: 0) {
-                    WorkspaceArchivedToggleRow(isOpen: $model.archivedOpen, archivedCount: model.filteredArchivedItems.count)
-                }
-                .padding(.top, 8)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
-                }
+                WorkspaceArchivedClosedFooter(
+                    isOpen: $model.archivedOpen,
+                    archivedCount: model.filteredArchivedItems.count
+                )
             }
 
             if model.provider != .grokbot {
@@ -526,7 +558,6 @@ public struct UnifiedProviderWorkspaceView: View {
                     notice: activeSel.notice,
                     prepareError: model.batchPrepareError,
                     executeError: model.batchExecuteError,
-                    preview: model.batchPreview,
                     result: model.batchResult,
                     onSelectAll: model.selectAllVisible,
                     onClear: {
@@ -538,15 +569,19 @@ public struct UnifiedProviderWorkspaceView: View {
                     },
                     onPrepareOperation: { op in
                         Task { await model.prepareBatch(operation: op, keys: activeSel.keys, partition: activePart) }
-                    },
-                    onConfirmExecute: { Task { await model.executePreparedBatch() } },
-                    onDismissPreview: { model.batchPreview = nil }
+                    }
                 )
             }
         }
         .padding(.top, 14)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
+    }
+
+    private func copyWorkspacePath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+        model.feedbackMessage = "已复制工作区路径"
     }
 
     private func sessionRowView(
@@ -919,22 +954,6 @@ public struct UnifiedProviderWorkspaceView: View {
                             .padding(.bottom, 16)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        if workspace == .codex,
-                           !item.archived,
-                           store.target == .local,
-                           store.capabilities.codexDesktop,
-                           let footerSlot = codexCollaborationFooterSlot
-                        {
-                            footerSlot(
-                                item.sessionKey,
-                                item.cwd.isEmpty ? nil : item.cwd,
-                                mainColumnWidth,
-                                availableHeight
-                            ) {
-                                model.scheduleDebouncedCodexTailRefresh()
-                            }
-                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 

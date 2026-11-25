@@ -2,7 +2,9 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.37**。API 协议 2，数据库 schema 3。全链路根治超大 Claude 会话无法向上滚动与 Codex 表格首行截断问题，并完成 `$de-gpt` 代码瘦身与前后端资源优化：`JsonlCache` 改为确定性历史 `epoch`（消除超容量／空闲淘汰后重读误清空前端分页），`claude/reader.rs` 跳过 `progress` 等遥测记录的去重与记录上限权重并压缩 `file-history-snapshot`／`attachment` 冗余体积（保留物理行游标零回退），AppKit 阅读器引入 `ReaderOuterScrollView` 弹性顶边上滚与欠屏 `limit = 500` 自动回填、展开态首行底边 `maxY` 锚点锁定及 `TimelineWindowController` 原生事件游标；表格改用 `FlippedDocumentView` 顶原点布局、`.legacy` 横向滚动条高度补偿、中文避头尾与字素簇词元列宽保护及固定等宽逐行行内 `code` 圆角胶囊，同步剥离 `<external_codex_apps_selected_page_part_*>` 伴侣页快照包装；收口未变化轮询短路、RPC 强类型校验、无拷贝 Markdown 桥接、Antigravity 单遍扫描与指纹缓存、Codex 只读查询与 `workspace_root` 复用及 SQLite 幂等索引与旧作业保留策略。自 v2.1.31 写入绑定记录身份密文后，二进制回退目标保持为 **v2.1.30**，保留原有密钥和数据。
+当前源码版本为 **2.1.38**。API 协议 2，数据库 schema 3。完成全仓 `$de-gpt` 存量包袱深度减法、彻底退役本机 Codex 桌面连接对话全链路（`codex.desktop.*` 9 个动作、`codex_desktop` 能力、底部悬浮输入协作区、侧栏新建空线程与「在 Codex 中打开」、发送队列加密账本模块、Keychain 读取、剪贴板／拖放图片转码与 `StreamSink` 流订阅，净删 **46 个整文件**），并完成前后端算法、渲染与服务端资源占用全栈优化：合并单平台与跨平台工作区侧栏分组列表、归档抽屉切换与批量操作栏模板，统一四套详情轮询快照管道并收紧内部导出；修正 Codex `SCAN_CACHE` 虚高计重消除 2,000 线程抖动重扫，检索改为零 `serde_json::Value` 强类型可见语料构建与 ASCII 快速预筛，归档坏行校验流式化，异步路径补齐有界 `spawn_blocking`、收敛常驻 Tokio 工作线程并让短时 CLI／Hook 改用单线程运行时，复用 Antigravity HTTP 客户端并抑制 `lsof` 反向域名解析，补齐会话索引空闲淘汰与 Linux `malloc_trim(0)`，收敛 SQLite 页缓存与 WAL 日志上限（保留默认 `synchronous=FULL`）、补建 `idx_native_probe_claude_session` 局部索引并开启 Release Thin LTO；修复 `UnifiedProviderWorkspaceView` 非惰性 `@StateObject` 重建与外部回调同步缺陷，预计算会话毫秒时间戳与纯 ASCII 规范路径零分配快路径，AppKit 阅读器改为增量行高与单行披露局部刷新并在切会话／释放时取消高亮任务，GFM 表格改为单层自绘 `TableGridDocumentView`（消除每格包装视图／图层与重复排版测量），修复减少动态效果切换下 `RunningIndicator` 停摆与顶栏毛玻璃边缘溢出。新数据库不再创建 `codex_desktop_submissions` 表，存量升级机器保留既有遗留表、`<db>.desktop-attachments/` 与钥匙串项（不执行 `DROP TABLE`），二进制回退目标保持为 **v2.1.30**。
+
+- **v2.1.38** 本地代码清理、同负载前后基准对比、浅／深色离屏渲染核验与本地全量门禁已完成；远端推送、打标签发布 CI、Linux 服务部署与本机 App 安装待统一发布执行，真实界面与跨端交互待用户验收。
 
 - **v2.1.37** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.37`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.36 原地更新并启动；超大 Claude 会话向上滚动与时间线跳转、Codex 表格首行显示与伴侣页快照净化待用户验收。[提交 2ed804c](https://github.com/lich13/agenthub/commit/2ed804c56adeea46287f9225a8d8feb32f289baf) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.37) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45540691647)
 
@@ -16,6 +18,33 @@
 
 - **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
 - **v2.1.30** 已发布八项资产，具备两种密文格式的读取能力，继续写旧格式。Linux 服务在该版部署后状态为 `active`，健康检查 `ok`。Mac App 已由 2.1.29 原地更新并启动。[提交 3fb2cdf](https://github.com/lich13/agenthub/commit/3fb2cdf361a5f62198bfd168bcd13132c4c57aec) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.30) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44777552143)
+
+## v2.1.38 实现与验证
+
+1. **彻底移除本机 Codex 桌面连接对话全链路**：净删 **46 个整文件**（`crates/agenthub-core/src/codex/desktop*`、`services/{codex_desktop,credentials}.rs`、`db/desktop_submissions*`、`crates/agenthub-ffi/src/codex_desktop*`、`commands/dispatch/collaboration.rs`、`macos/Sources/AgentHubCore/CodexDesktop/*` 及专属测试与向量夹具），下线 `codex.desktop.*` 全部 9 个动作（未知命令由正向白名单直接拒绝，桌面命令分发由 `73` 项收敛为 `64` 项）与 `codex_desktop` 能力位，移除 `agenthub_ffi.h` 4 个桌面流／粘贴／拖放 C ABI 导出、`agenthub-ffi` 的 `keyring`／`url` 依赖及 `macos/Package.swift` 的 `ImageIO`／`CoreServices` 链接框架；清理侧栏 `+` 新建空线程按钮、底部悬浮协作输入卡与右键菜单「在 Codex 中打开」入口，阅读列底部恢复全屏舒展。新 SQLite 数据库不再建立 `codex_desktop_submissions` 表，存量升级库不执行 `DROP TABLE` 并保留既有钥匙串项以无损兼容 **v2.1.30** 回退（`v2.1.38+` 全新库回退时旧版发送队列缺表不可用，会话阅读与通知正常）；100% 保留 Codex 会话只读阅读、子智能体、搜索、附件、Plan 导出、改名、归档／恢复、直接删除、统一／隐藏清理、账号隔离解除与 Probe 通知监测。
+2. **`$de-gpt` 去重、孤立辅助清理与可见性收口**：提取 `WorkspaceGroupedSessionRows`、`WorkspaceArchivedExpandedSection`、`WorkspaceArchivedClosedFooter` 与 `WorkspaceEmptyMatchPlaceholder`，消除 `UnifiedProviderWorkspaceView` 与 `UnifiedWorkspaceHubView` 平行复制的工作区分组列表与归档抽屉模板，移除 `SessionBatchBarAndDialogView` 3 个未读死属性、`RuntimeConnectionStore.isWindowFocused` 未读发布属性（仅窗口可见性实际变化才通知根 Store）及协作浮层遗留的 `WindowFullContentModal`；清理无生产调用的 `security::hash_token`、`CleanupUseCases::unified_execute` 与 `isolation.rs` 退役常量；在 `ProviderWorkspaceStore` 收口 `makePollSignature`、`shouldSkipUnchangedDetailPoll` 与 `applyRenderedDetailSnapshot` 统一四类详情刷新管道，并将最新助手回复提取由全量逆序 `.compactMap` 改为命中首条即停；收紧 `agenthub-core`（`system`、`workspace_root`、`cleanup`）与 `agenthub-webd` 内部模块可见性。
+3. **服务端与 FFI 的 CPU、内存、磁盘 I/O 与二进制体积优化**：`agenthub-webd` 仅对常驻 `Serve` 与 `Probe MonitorErrors` 启用 `worker_threads(2)` 多线程运行时，其余短时 CLI／Hook 子命令统一改用 `new_current_thread()`，并将 `probe_passive_scan_threads_with_paths`、`notification_thread_headers`、`scan_codex_turn_errors`、`async_question_monitor`（在阻塞任务内按线程即时过滤基线后仍待处理的提问）、`question_monitor`、`provider_monitor`（含空闲淘汰与原生扫描）及 `ci_notifications` 本地读取全部经有界 `read_tasks::spawn_blocking` 卸载；`agenthub-ffi` 常驻运行时收敛为 `worker_threads(2)`；`antigravity.rs` 改为 `OnceLock<reqwest::Client>` 复用连接池并为 `lsof` 补齐 `-nP` 抑制反向 DNS／端口名解析；修正 Codex `SCAN_CACHE` 单条虚高 `8192B` 基重为真实结构＋嵌套字符串／`AsyncQuestionTracker` 堆容量计重（使 2,000 活跃线程完整常驻 `8 MiB` 预算内免抖动重扫），消除 `rollout_pending_feedback` 逐行 `HashMap::clone` 与全文小写分配并将 `rollout_has_confirmed_inactive_state` 改为 `BufReader` 逐行原始 JSON 流式校验；将 `session_index` 缓存接入 5 分钟空闲淘汰，并在实际发生缓存淘汰时于 Linux glibc 下触发 `malloc_trim(0)` 归还空闲页（空轮询零锁竞争）；`sessions.search` 移除热路径 `serde_json::to_value` 递归建树与非可见内部标识字段，改为 `MessageBlock`／`ClaudeHistoryEvent`／`GrokHistoryEvent` 强类型可见语料构建、`strip_memory_metadata` 标记字节零分配快路径与 ASCII 大小写不敏感无分配预筛；`PanelDb` 配置 `cache_size=-2048`、`temp_store=MEMORY`、`journal_size_limit=4194304`（保留默认 `synchronous=FULL`）并幂等新增 `idx_native_probe_claude_session` 局部索引（存量索引增至 7 项），`cli_meta.rs` 限制 `cache_size=-512` 并单次读取 `sqlite_master` 表集合；工作区 `[profile.release]` 启用 `lto = "thin"` 与 `codegen-units = 1`。
+4. **macOS 前端渲染、算法复杂度与潜在缺陷修复**：修复 `UnifiedProviderWorkspaceView.init` 在 `@StateObject(wrappedValue:)` 外急切构造 `ProviderWorkspaceStore` 的非惰性分配缺陷并在生命周期钩子同步外部回调与侧栏开关；`UnifiedSessionSummaryItem` 预计算 `updatedAtMs` 配合 `normalizePath` 纯 ASCII 规范路径零分配快路径消除排序与工作区分组热路径的 `ISO8601DateFormatter` 锁竞争；`VisibleMarkdownEngine.visibleMarkdown` 增加连续 UTF-8 缓冲标记快速返回，`ExecutionGroupingEngine` 移除循环内动态正则编译并在追加命令前移出分组所有权，彻底消除引用计数=2 引发的 `O(K²)` 写时复制重扫；`ConversationTableCoordinator` 改为仅对高度实际变化的行调用 `noteHeightOfRows`，`toggleDisclosurePreservingAnchor` 与 `scrollToPositionKey` 校验共享 `ActivityDisclosureStore` 修订号基线后按 `rowMayReferenceDisclosure` 精确局部刷新受影响行（外部修订越界时自动全量重算防陈旧行高残留）并在切会话与 `deinit` 时取消 `highlightClearTask`；GFM 表格改用单层自绘 `TableGridDocumentView` 配合 `ReaderSelectableTextView` 复用测量栈（超长文本测后自动清空释放）与单次排版高度读取；修复 `RunningIndicator` 在辅助功能「减少动态效果」切换或复用时的动画复位问题，并为 `BackdropGaussianBlurView` 开启 `masksToBounds = true`。
+
+本机 macOS 开发测试构建（`test` / `swift test` 未优化 profile），同一合成负载在改动前（`v2.1.37` 基线 `3ea6891`）与改动后（`v2.1.38` 最终源码）顺序各测一次，夹具创建不计入耗时／CPU，临时基准代码已移除：
+
+| 合成负载 | 耗时 ms：前 → 后 | CPU ms：前 → 后 | 关键状态变化 |
+| --- | ---: | ---: | --- |
+| Codex 2,000 线程活动扫描热读 ×5（10,000 次 `enrich_thread_from_rollout`） | 3,426.93 → 135.47 | 3,423.39 → 135.41 | 真实计重驻留 `8 MiB` `SCAN_CACHE` 免抖动重扫，下降 **96.0%**（**25.3×**） |
+| `sessions.search` Codex 跨会话 200×60 事件热搜 ×5 | 4,531.90 → 3,032.37 | 4,516.92 → 3,030.58 | 强类型语料＋`strip_memory_metadata`／ASCII 快路径，下降 **33.1%** |
+| `sessions.search` Claude 跨会话 200×40 事件热搜 ×5 | 2,571.13 → 1,701.36 | 2,544.13 → 1,700.51 | 消除 `serde_json::to_value` 建树与无效小写分配，下降 **33.8%** |
+| Swift 跨平台 1,000 会话 `sortMergedItems` + `buildGroups` ×50 | 6,222.48 → 241.40 | 6,202.92 → 241.27 | 预计算 `updatedAtMs`＋ASCII 规范路径快路径，下降 **96.1%**（**25.8×**） |
+| Swift 400 行长对话单过程组 `toggleDisclosurePreservingAnchor` ×20 | 1,909.13 → 39.25 | 1,871.71 → 39.22 | 精确局部行高失效与局部重绘（保持 `0.0pt` 锚点锁定），下降 **97.9%**（**48.6×**） |
+| Swift 50×6 GFM 表格（含行内 `code` 胶囊）单元格构建布局 ×20 | 3,392.16 → 2,691.22 | 3,430.32 → 2,737.45 | 单层 `TableGridDocumentView`（`307 → 1` 图层）＋免重复测量，下降 **20.7%** |
+
+本机 `scripts/package-macos-swift-arm64.sh` 同源 Release 打包产物字节对比（未外推为线上 Linux 常驻 RSS 或物理磁盘历史占用回收）：
+
+| 本机 Release 产物（macOS ARM64） | v2.1.37 字节 | v2.1.38 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| `Contents/Resources/agenthub-webd`（stripped） | 15,827,392 | 13,268,576 | -2,558,816（**-16.17%**） |
+| `Contents/MacOS/agenthub`（Release WMO stripped） | 21,714,080 | 17,214,096 | -4,499,984（**-20.72%**） |
+| `dist/agenthub-darwin-arm64.tar.gz`（updater） | 17,119,727 | 14,986,492 | -2,133,235（**-12.46%**） |
+| `dist/AgentHub-<ver>-darwin-arm64.dmg` | 18,513,202 | 16,069,049 | -2,444,153（**-13.20%**） |
 
 ## v2.1.37 实现与验证
 

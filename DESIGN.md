@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier canonical surface hierarchy (`--bg-rail`, `--bg-surface`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
+AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier canonical surface hierarchy (`--bg-rail`, `--bg-surface`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Conversation history surfaces and subagent details are read-only, with no floating collaboration footer or duplicate status cards.
 
 ## Layout and interaction
 
@@ -18,22 +18,6 @@ AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined read
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup, Codex account-scope clearing and job history under `更新与维护`; the retired system status panel and polling do not exist.
 - Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without disabling safe management; only fatal parse or identity errors suppress notification scanning.
 - The reading column has a 20px timeline rail outside the document flow. Its complete user-message index is independent of loaded or folded body pages. Only a bounded range of marks mounts; scrolling and Home/End/arrow keys reach every entry. A single hover/focus preview sizes to its text, capped at 288px, without a duplicate tooltip. Selecting an unloaded entry reads one bounded window; older/newer paging and 返回最新 preserve the reading context. Assistant replies, plans and activities retain search anchors without rail marks. `⌘F` on macOS opens machine-scoped 当前线程/当前 Provider search; the trimmed query is sent once it has been stable for 200ms.
-
-## 本机 Codex 协作区
-
-本机 Codex 列表提供新建线程，先用原生目录选择器选工作目录；空线程由 Codex 创建并打开。正文下方仅保留一个紧凑协作区，连接失败在原处说明并可在 Codex 中打开；不显示调试身份或附件内部路径；不显示 build 常驻提示；协议不兼容时仅说明该操作不可用并提供原生入口，owner/失步错误提示打开同一线程或重连。远程、归档、子线程和其他 Provider 不显示发送入口。
-
-打开和新建两个明确入口在桌面打开后自动连接，普通浏览保持阅读。重连、重新同步与 owner 待确认在连接行分别说明；owner 改变只恢复阅读，使用现有“连接”按钮确认。只读时暂停及结果待核对项仍可见，队列操作禁用。复制诊断在连接失败时仍可用，正文、路径及原生错误原文不进入剪贴板。
-
-输入区使用紧凑圆角容器、左侧“＋”添加菜单、右侧模型摘要与圆形发送按钮；模型/思考强度/模式在摘要内展开，保留键盘可达与 Escape 关闭。诊断使用带标签的图标按钮，复制后就地反馈。原生 Goal 显示一行目标/状态，可展开目标全文，修改仅跳转原生桌面。
-
-输入区支持文件/图片及原生技能、应用、已启用插件引用，输入 `$` / `@` 时按当前输入位置展示过滤目录，上下键移动、Enter/Tab 选取、Escape 关闭，组合输入不触发选择。引用同时显示可读占位文字和可移除名称标签，编辑占位文字撤销绑定，移除标签同步删除占位文字。每页最多 100 项；超时和部分目录失败可重试且保留其他来源的结果。模型、思考强度和默认/Plan 模式采用原生可用目录。⌘/Ctrl+Enter 发送，输入法组合过程中不触发；运行时区分排队、补充和停止。等待队列可取消，暂停后由用户继续；结果不明保留记录，只有明确核对后才能移除，不自动重发。
-
-协作状态用一行显示，待处理请求优先、队列数同行，运行复用 RunningIndicator。文件可拖入输入区，也可从 Finder、完整路径文本和截图粘贴。附件标签只显示名称；整段路径无法识别为有效文件集合时保留原文、换行及编辑历史。普通文本沿用原生粘贴；发送、隐藏或换线程后不接收旧附件结果，界面只持有名称和 handle。
-
-提交等待显示“正在提交到 Codex…”。模型、模式、技能、应用、插件各自显示加载、空状态和可重试错误，失败不清空其他结果。设置错误就地显示，选择值以原生视图为准；成功或重连后清除过期错误，结果不明仍由队列保留。附件错误应区分授权过期、不可读、数量、大小、格式、文件变化与存储容量，使用固定安全文案。失败保留草稿；重新选择或移除附件清除对应操作提示，原生错误与队列结果不明状态保留。
-
-审批内容按需展开且高度受限；命令等宽显示，文件 diff 按文件折叠且展开才挂载，原生文件路径仅供只读审阅，未知字段折叠显示；命令、文件变化和权限展示完整可核对内容后才允许确认。仅后端声明支持时，命令/文件审批显示“允许本次会话”，权限仍限本回合。问答不预选答案，密码型回答不自动补全；不支持的请求提供在 Codex 中处理的入口。连接和请求失败保留草稿，迟到响应不得切换线程或恢复旧审批。既有阅读、历史分页、工具折叠、搜索定位与滚动锚点规则继续适用。
 
 ## User messages and attachments
 

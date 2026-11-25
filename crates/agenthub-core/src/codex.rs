@@ -7,8 +7,6 @@ use std::{
 pub mod account_scope;
 mod app_server_client;
 mod assistant_question;
-#[cfg(unix)]
-pub mod desktop;
 mod identity;
 mod mutations;
 mod name_client;
@@ -64,12 +62,13 @@ pub use types::{
 };
 pub use user_input::{
     is_async_question_tool, is_question_tool, normalize_user_input_questions,
-    rollout_async_questions, AsyncQuestionCall,
+    rollout_async_questions, rollout_pending_async_questions_since, AsyncQuestionCall,
 };
 
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     rollout_events::evict_idle_detail_cache(max_idle);
     rollout_events::evict_idle_scan_cache(max_idle);
+    session_index::evict_idle_index_cache(max_idle);
     user_input::evict_idle_question_cache(max_idle);
     subagents::evict_idle(max_idle);
 }

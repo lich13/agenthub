@@ -233,10 +233,18 @@ impl<T: Clone> ReadCache<T> {
             .sum()
     }
 
-    pub(crate) fn evict_idle(&self, max_idle: std::time::Duration) {
+    pub(crate) fn evict_idle(&self, max_idle: std::time::Duration) -> usize {
         if let Ok(mut entries) = self.entries.lock() {
+            let before = entries.len();
             let now = std::time::Instant::now();
             entries.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
+            let evicted = before - entries.len();
+            if evicted > 0 {
+                crate::note_cache_eviction();
+            }
+            evicted
+        } else {
+            0
         }
     }
 }

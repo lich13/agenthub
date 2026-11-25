@@ -155,43 +155,92 @@ pub async fn run_with_threads(
         Some(slice) => slice,
         None => {
             let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-            let mut loaded = codex::notification_thread_headers(&paths)?;
-            loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            owned_threads = loaded;
+            owned_threads = agenthub_core::read_tasks::spawn_blocking(move || {
+                let mut loaded = codex::notification_thread_headers(&paths)?;
+                loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                Ok::<_, anyhow::Error>(loaded)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("feedback header scan join failed: {err}"))??;
             &owned_threads
         }
     };
-    for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {
-        let Some(path) = thread.rollout_path.as_ref() else {
-            continue;
-        };
-        let Ok(meta) = std::fs::metadata(path) else {
-            continue;
-        };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
-        let fingerprint = (meta.len(), modified.as_nanos());
-        next.insert(thread.id.clone(), fingerprint);
-        if previous.get(&thread.id) == Some(&fingerprint) {
-            if let Some(key) = prev_active_keys.get(&thread.id) {
-                let _ = db.touch_setting_if_older_than(key, 86_400);
-                next_active_keys.insert(thread.id.clone(), key.clone());
+    enum FeedbackScanAction {
+        Unchanged,
+        Skipped,
+        Pending(Option<codex::AssistantFeedback>),
+    }
+    struct FeedbackScanCandidate {
+        idx: usize,
+        path: std::path::PathBuf,
+        prev_fp: Option<(u64, u128)>,
+        suppressed: bool,
+    }
+    let candidates: Vec<FeedbackScanCandidate> = threads
+        .iter()
+        .take(config.probe.recent_limit.clamp(1, 200))
+        .enumerate()
+        .filter_map(|(idx, thread)| {
+            let path = thread.rollout_path.as_ref()?.clone();
+            let prev_fp = previous.get(&thread.id).copied();
+            let suppressed =
+                task_notification_suppression_reason(config, Some(&thread.id)).is_some();
+            Some(FeedbackScanCandidate {
+                idx,
+                path,
+                prev_fp,
+                suppressed,
+            })
+        })
+        .collect();
+    let scanned = if candidates.is_empty() {
+        Vec::new()
+    } else {
+        agenthub_core::read_tasks::spawn_blocking(move || {
+            let mut out = Vec::with_capacity(candidates.len());
+            for cand in candidates {
+                let Ok(meta) = std::fs::metadata(&cand.path) else {
+                    continue;
+                };
+                let Ok(modified) = meta.modified() else {
+                    continue;
+                };
+                let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+                let fingerprint = (meta.len(), modified.as_nanos());
+                let action = if cand.prev_fp == Some(fingerprint) {
+                    FeedbackScanAction::Unchanged
+                } else if modified.as_millis() < since as u128 || cand.suppressed {
+                    FeedbackScanAction::Skipped
+                } else {
+                    FeedbackScanAction::Pending(
+                        codex::rollout_pending_feedback(&cand.path).ok().flatten(),
+                    )
+                };
+                out.push((cand.idx, cand.path, fingerprint, action));
             }
-            continue;
-        }
-        if modified.as_millis() < since as u128 {
-            continue;
-        }
-        if task_notification_suppression_reason(config, Some(&thread.id)).is_some() {
-            continue;
-        }
-        let Ok(Some(feedback)) = codex::rollout_pending_feedback(path) else {
-            // A half-written terminal line must be examined again on the next change.
-            continue;
+            out
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("feedback rollout scan join failed: {err}"))?
+    };
+    for (idx, path, fingerprint, action) in scanned {
+        let thread = &threads[idx];
+        next.insert(thread.id.clone(), fingerprint);
+        let feedback = match action {
+            FeedbackScanAction::Unchanged => {
+                if let Some(key) = prev_active_keys.get(&thread.id) {
+                    let _ = db.touch_setting_if_older_than(key, 86_400);
+                    next_active_keys.insert(thread.id.clone(), key.clone());
+                }
+                continue;
+            }
+            FeedbackScanAction::Skipped | FeedbackScanAction::Pending(None) => {
+                // A half-written terminal line must be examined again on the next change.
+                continue;
+            }
+            FeedbackScanAction::Pending(Some(feedback)) => feedback,
         };
-        let event = event_for(config, &thread.id, &thread.title, path, &feedback);
+        let event = event_for(config, &thread.id, &thread.title, &path, &feedback);
         if let Some(key) = delivery_key(&event) {
             next_active_keys.insert(thread.id.clone(), key.clone());
             if db.get_setting(&key)?.is_some() {

@@ -658,6 +658,175 @@ final class WorkspaceGroupingAndHubTests: XCTestCase {
         XCTAssertEqual(batchItems[2].message, "前序请求中断，未执行")
     }
 
+    @MainActor
+    func testUnifiedProviderWorkspaceViewSyncsExternalBindingsAcrossAppearAndUpdates() async throws {
+        let transport = MockRuntimeTransport { cmd, _ in
+            if cmd == "remote.get" {
+                return Data(#"{"target":"local","revision":1,"sshHost":null,"configured":false,"activeMachineId":null,"activeMachineName":null,"machines":[]}"#.utf8)
+            }
+            if cmd == "system.capabilities" {
+                return Data(#"{"protocol":2,"host":"desktop_embedded_tauri","capabilities":{"codex_sessions":true}}"#.utf8)
+            }
+            return Data("[]".utf8)
+        }
+        let suite = "com.lich13.agenthub.ws-bindings.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        await store.bootstrap()
+
+        @MainActor
+        final class WrapperModel: ObservableObject {
+            @Published var hideSidebar: Bool = false
+            @Published var generation: Int = 1
+            var recordedMutations: [Int] = []
+            var recordedSelections: [(Int, String?)] = []
+        }
+
+        struct HostWrapper: View {
+            @ObservedObject var store: RuntimeConnectionStore
+            @ObservedObject var wrapper: WrapperModel
+            let retainedModel: ProviderWorkspaceStore
+            let seedA: UnifiedSessionSummaryItem
+            let seedB: UnifiedSessionSummaryItem
+
+            var body: some View {
+                let gen = wrapper.generation
+                UnifiedProviderWorkspaceView(
+                    model: retainedModel,
+                    scheme: .dark,
+                    hideSidebar: wrapper.hideSidebar,
+                    externalSeedItem: gen < 3 ? seedA : seedB,
+                    onExternalMutation: {
+                        wrapper.recordedMutations.append(gen)
+                    },
+                    onExternalSelectSession: { key in
+                        wrapper.recordedSelections.append((gen, key))
+                    }
+                )
+            }
+        }
+
+        let seedA = UnifiedSessionSummaryItem(
+            sessionKey: "th-a",
+            nativeId: "th-a",
+            title: "Seed A",
+            cwd: "/workspace/a",
+            workspaceRoot: "/workspace/a",
+            path: "/tmp/a.jsonl",
+            updatedAt: "2026-01-01T00:00:00Z",
+            statusText: "空闲",
+            statusChipTone: .neutral,
+            running: false,
+            archived: false,
+            canRename: true,
+            canArchive: true,
+            canDelete: true
+        )
+        let seedB = UnifiedSessionSummaryItem(
+            sessionKey: "th-b",
+            nativeId: "th-b",
+            title: "Seed B",
+            cwd: "/workspace/b",
+            workspaceRoot: "/workspace/b",
+            path: "/tmp/b.jsonl",
+            updatedAt: "2026-01-01T00:01:00Z",
+            statusText: "空闲",
+            statusChipTone: .neutral,
+            running: false,
+            archived: false,
+            canRename: true,
+            canArchive: true,
+            canDelete: true
+        )
+
+        let wrapper = WrapperModel()
+        let retainedModel = ProviderWorkspaceStore(store: store, workspace: .codex)
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let hosting = NSHostingView(
+            rootView: HostWrapper(
+                store: store,
+                wrapper: wrapper,
+                retainedModel: retainedModel,
+                seedA: seedA,
+                seedB: seedB
+            )
+        )
+        // Flip skipSidebarListFetch opposite to hideSidebar=false before .onAppear fires
+        retainedModel.skipSidebarListFetch = true
+        win.contentView = hosting
+        win.orderBack(nil)
+        defer { win.orderOut(nil) }
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // 1) .onAppear synced skipSidebarListFetch=false, initial seedA, and generation=1 closures
+        let initialSkip = retainedModel.skipSidebarListFetch
+        XCTAssertEqual(initialSkip, false)
+        XCTAssertEqual(retainedModel.externalSeedItem?.sessionKey, "th-a")
+        XCTAssertEqual(retainedModel.selectedKey, "th-a")
+        retainedModel.onExternalMutation?()
+        retainedModel.onExternalSelectSession?("k1")
+        let mut1 = wrapper.recordedMutations
+        let sel1 = wrapper.recordedSelections
+        XCTAssertEqual(mut1, [1])
+        XCTAssertEqual(sel1.count, 1)
+        XCTAssertEqual(sel1[0].0, 1)
+        XCTAssertEqual(sel1[0].1, "k1")
+
+        // 2) .onChange(of: hideSidebar) syncs skipSidebarListFetch=true and fresh generation=2 closures onto retained @StateObject
+        wrapper.generation = 2
+        wrapper.hideSidebar = true
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let updatedSkip = retainedModel.skipSidebarListFetch
+        XCTAssertEqual(updatedSkip, true)
+        retainedModel.onExternalMutation?()
+        retainedModel.onExternalSelectSession?("k2")
+        let mut2 = wrapper.recordedMutations
+        let sel2 = wrapper.recordedSelections
+        XCTAssertEqual(mut2, [1, 2])
+        XCTAssertEqual(sel2.count, 2)
+        XCTAssertEqual(sel2[1].0, 2)
+        XCTAssertEqual(sel2[1].1, "k2")
+
+        // 3) .onChange(of: externalSeedItem) also refreshes closures to generation=3 even when hideSidebar stays true
+        wrapper.generation = 3
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let finalKey = retainedModel.selectedKey
+        XCTAssertEqual(finalKey, "th-b")
+        retainedModel.onExternalMutation?()
+        retainedModel.onExternalSelectSession?("k3")
+        let mut3 = wrapper.recordedMutations
+        let sel3 = wrapper.recordedSelections
+        XCTAssertEqual(mut3, [1, 2, 3])
+        XCTAssertEqual(sel3.count, 3)
+        XCTAssertEqual(sel3[2].0, 3)
+        XCTAssertEqual(sel3[2].1, "k3")
+
+        // 4) Pure parent re-render (neither hideSidebar nor externalSeedItem changed) still updates closures to generation=4
+        wrapper.generation = 4
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        retainedModel.onExternalMutation?()
+        retainedModel.onExternalSelectSession?("k4")
+        let mut4 = wrapper.recordedMutations
+        let sel4 = wrapper.recordedSelections
+        XCTAssertEqual(mut4, [1, 2, 3, 4])
+        XCTAssertEqual(sel4.count, 4)
+        XCTAssertEqual(sel4[3].0, 4)
+        XCTAssertEqual(sel4[3].1, "k4")
+    }
+
     private func assertRegionHasForegroundPixels(
         rep: NSBitmapImageRep,
         rect: NSRect,

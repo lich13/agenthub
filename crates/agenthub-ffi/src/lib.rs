@@ -1,5 +1,4 @@
 pub mod ci_notifications;
-pub mod codex_desktop;
 pub mod commands;
 pub mod gfm_markdown;
 pub mod host;
@@ -10,16 +9,13 @@ pub mod remote;
 pub mod resources;
 pub mod services;
 
-pub use codex_desktop::clipboard::{
-    AgentHubRawFileUrl, AgentHubRawImageKind, AgentHubRawPasteboard,
-};
-pub use host::{AgentHubHostCallbacks, AgentHubRpcCallback, AgentHubStreamCallback};
+pub use host::{AgentHubHostCallbacks, AgentHubRpcCallback};
 pub use overview::DesktopState;
 pub use services::probe::desktop_probe_status_with_state;
 pub use services::updates::desktop_update_status_with_state;
 
 use commands::dispatch::{dispatch, DispatchContext};
-use host::{HostBridge, RpcSink, StreamSink};
+use host::{HostBridge, RpcSink};
 use std::{
     ffi::{c_char, CStr, CString},
     path::{Path, PathBuf},
@@ -27,14 +23,6 @@ use std::{
     time::Duration,
 };
 use tokio::task::AbortHandle;
-
-#[repr(C)]
-pub struct AgentHubPasteboardLimits {
-    pub files: usize,
-    pub image_bytes: usize,
-    pub text_utf16_units: usize,
-    pub path_utf16_units: usize,
-}
 
 #[repr(C)]
 pub struct AgentHubCommandAccess {
@@ -64,22 +52,10 @@ pub unsafe extern "C" fn agenthub_ffi_command_access(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn agenthub_ffi_pasteboard_limits() -> AgentHubPasteboardLimits {
-    use codex_desktop::clipboard::*;
-    AgentHubPasteboardLimits {
-        files: MAX_FILES,
-        image_bytes: CAPTURE_BYTES,
-        text_utf16_units: TEXT_BYTES,
-        path_utf16_units: MAX_PATH_UNITS,
-    }
-}
-
 pub struct AgentHubRuntime {
     tokio_runtime: tokio::runtime::Runtime,
     state: DesktopState,
     remote: remote::RemoteConnections,
-    bridge: Arc<codex_desktop::CodexDesktopBridge>,
     host: Arc<HostBridge>,
     ci_task: AbortHandle,
 }
@@ -91,6 +67,7 @@ impl AgentHubRuntime {
         callbacks: AgentHubHostCallbacks,
     ) -> Result<Self, String> {
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
             .map_err(|err| format!("failed to initialize async runtime: {err}"))?;
@@ -118,10 +95,6 @@ impl AgentHubRuntime {
         }
 
         let remote = remote::RemoteConnections::load(&state.config().paths.data_dir)?;
-        let bridge = Arc::new(codex_desktop::CodexDesktopBridge::new(
-            agenthub_core::services::credentials::CredentialAccess::default(),
-            isolated,
-        ));
         let host = HostBridge::new(callbacks);
         let ci_task = {
             let _enter = tokio_runtime.enter();
@@ -132,31 +105,17 @@ impl AgentHubRuntime {
             tokio_runtime,
             state,
             remote,
-            bridge,
             host,
             ci_task,
         })
     }
 
     pub fn shutdown_gracefully(self) {
-        // Step 1 & 2: Reject new calls, wake pending oneshots, and cancel active NSOpenPanel.
         self.host.begin_shutdown();
-        // Step 3: Abort CI observer task.
         self.ci_task.abort();
-        // Step 4: Close owned SSH transport.
         self.remote.disconnect();
-        stop_runtime(self.tokio_runtime, self.bridge.shutdown());
+        self.tokio_runtime.shutdown_timeout(Duration::from_secs(2));
     }
-}
-
-fn stop_runtime(runtime: tokio::runtime::Runtime, cleanup: impl std::future::Future<Output = ()>) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    runtime.block_on(async {
-        if tokio::time::timeout_at(deadline, cleanup).await.is_err() {
-            eprintln!("Desktop bridge shutdown timed out");
-        }
-    });
-    runtime.shutdown_timeout(deadline.saturating_duration_since(tokio::time::Instant::now()));
 }
 
 unsafe fn opt_cstr(ptr: *const c_char) -> Result<Option<String>, String> {
@@ -254,68 +213,6 @@ pub unsafe extern "C" fn agenthub_ffi_string_free(ptr: *mut c_char) {
 }
 
 /// # Safety
-/// `runtime` must be null or a live `AgentHubRuntime` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_set_main_window_state(
-    runtime: *const AgentHubRuntime,
-    visible: bool,
-    focused: bool,
-) {
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        return;
-    };
-    rt.host.set_window_state(visible, focused);
-}
-
-/// # Safety
-/// `runtime` must be null or live; `path_or_null` must be null or a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_complete_choose_local_path(
-    runtime: *const AgentHubRuntime,
-    op_id: u64,
-    path_or_null: *const c_char,
-) {
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        return;
-    };
-    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
-    let path = unsafe { opt_cstr(path_or_null) }.ok().flatten();
-    rt.host.complete_choose_local_path(op_id, path);
-}
-
-/// # Safety
-/// `runtime` must be null or live.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_complete_pasteboard_change_count(
-    runtime: *const AgentHubRuntime,
-    op_id: u64,
-    count: i64,
-) {
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        return;
-    };
-    rt.host.complete_pasteboard_change_count(op_id, count);
-}
-
-/// # Safety
-/// `runtime` must be null or live.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_complete_write_pasteboard(
-    runtime: *const AgentHubRuntime,
-    op_id: u64,
-    ok: bool,
-) {
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        return;
-    };
-    rt.host.complete_write_pasteboard(op_id, ok);
-}
-
-/// # Safety
 /// When `len > 0`, `utf8_ptr` must point to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn agenthub_ffi_parse_gfm_markdown(
@@ -373,263 +270,17 @@ pub unsafe extern "C" fn agenthub_ffi_invoke(
     };
     let state = rt.state.clone();
     let remote = rt.remote.clone();
-    let bridge = rt.bridge.clone();
     let host = rt.host.clone();
     let isolated = rt.state.isolated;
     tokio_rt.spawn(async move {
         let ctx = DispatchContext {
             state: &state,
             remote: &remote,
-            bridge: &bridge,
             host: &host,
             isolated,
         };
         let result = dispatch(ctx, &command, &args).await;
         sink.respond(result);
-    });
-}
-
-/// # Safety
-/// `runtime` must be null or live; `request_json_utf8` must be null or valid null-terminated UTF-8.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_desktop_attach(
-    runtime: *const AgentHubRuntime,
-    request_json_utf8: *const c_char,
-    request_id: u64,
-    initial_cb: AgentHubRpcCallback,
-    initial_ctx: *mut std::ffi::c_void,
-    stream_cb: AgentHubStreamCallback,
-    stream_ctx: *mut std::ffi::c_void,
-) {
-    let initial_sink = RpcSink::new(request_id, initial_cb, initial_ctx);
-    let stream_sink = StreamSink::new(stream_cb, stream_ctx);
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        stream_sink.close();
-        initial_sink.respond(Err("runtime is null".into()));
-        return;
-    };
-    let tokio_rt = &rt.tokio_runtime;
-    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
-    let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
-        Ok(Some(s)) => s,
-        _ => {
-            stream_sink.close();
-            initial_sink.respond(Err("invalid attach request".into()));
-            return;
-        }
-    };
-    let state = rt.state.clone();
-    let remote = rt.remote.clone();
-    let bridge = rt.bridge.clone();
-    tokio_rt.spawn(async move {
-        let parsed: Result<
-            commands::dispatch::WrappedRequest<
-                agenthub_core::services::codex_desktop::DesktopThreadRequest,
-            >,
-            serde_json::Error,
-        > = serde_json::from_str(&raw_req);
-        let req = match parsed {
-            Ok(wrapped) => wrapped.request,
-            Err(err) => {
-                stream_sink.close();
-                initial_sink.respond(Err(format!("invalid attach request: {err}")));
-                return;
-            }
-        };
-        match codex_desktop::attach(&state, &remote, &bridge, req, stream_sink.clone()).await {
-            Ok(view) => {
-                initial_sink.respond(serde_json::to_string(&view).map_err(|e| e.to_string()));
-            }
-            Err(err) => {
-                stream_sink.close();
-                initial_sink.respond(Err(err));
-            }
-        }
-    });
-}
-
-/// # Safety
-/// `runtime` must be null or live; `request_json_utf8` must be null or valid null-terminated UTF-8.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_desktop_attachments(
-    runtime: *const AgentHubRuntime,
-    request_json_utf8: *const c_char,
-    request_id: u64,
-    result_cb: AgentHubRpcCallback,
-    result_ctx: *mut std::ffi::c_void,
-    event_cb: AgentHubStreamCallback,
-    event_ctx: *mut std::ffi::c_void,
-) {
-    let result_sink = RpcSink::new(request_id, result_cb, result_ctx);
-    let event_stream = event_cb.map(|_| StreamSink::new(event_cb, event_ctx));
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        if let Some(s) = &event_stream {
-            s.close();
-        }
-        result_sink.respond(Err("runtime is null".into()));
-        return;
-    };
-    let tokio_rt = &rt.tokio_runtime;
-    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
-    let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
-        Ok(Some(s)) => s,
-        _ => {
-            if let Some(s) = &event_stream {
-                s.close();
-            }
-            result_sink.respond(Err("invalid attachments request".into()));
-            return;
-        }
-    };
-    let state = rt.state.clone();
-    let remote = rt.remote.clone();
-    let bridge = rt.bridge.clone();
-    let host = rt.host.clone();
-    tokio_rt.spawn(async move {
-        let parsed: Result<
-            commands::dispatch::WrappedRequest<
-                agenthub_core::services::codex_desktop::DesktopAttachmentRequest,
-            >,
-            serde_json::Error,
-        > = serde_json::from_str(&raw_req);
-        let req = match parsed {
-            Ok(wrapped) => wrapped.request,
-            Err(err) => {
-                if let Some(s) = &event_stream {
-                    s.close();
-                }
-                result_sink.respond(Err(format!("invalid attachments request: {err}")));
-                return;
-            }
-        };
-        let is_bind = matches!(
-            &req.action,
-            agenthub_core::services::codex_desktop::DesktopAttachmentAction::Bind { .. }
-        );
-        if !is_bind {
-            if let Some(s) = &event_stream {
-                s.close();
-            }
-        }
-        match codex_desktop::attachments::handle(
-            &host,
-            &state,
-            &remote,
-            &bridge,
-            req,
-            if is_bind { event_stream.clone() } else { None },
-        )
-        .await
-        {
-            Ok(res) => {
-                result_sink.respond(serde_json::to_string(&res).map_err(|e| e.to_string()));
-            }
-            Err(err) => {
-                if let Some(s) = &event_stream {
-                    s.close();
-                }
-                result_sink.respond(Err(err));
-            }
-        }
-    });
-}
-
-/// # Safety
-/// `runtime` must be null or live; `raw_pasteboard` and non-empty buffers must remain valid during this call.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_desktop_paste(
-    runtime: *const AgentHubRuntime,
-    request_json_utf8: *const c_char,
-    raw_pasteboard: *const AgentHubRawPasteboard,
-    request_id: u64,
-    result_cb: AgentHubRpcCallback,
-    result_ctx: *mut std::ffi::c_void,
-) {
-    let result_sink = RpcSink::new(request_id, result_cb, result_ctx);
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        result_sink.respond(Err("runtime is null".into()));
-        return;
-    };
-    let tokio_rt = &rt.tokio_runtime;
-    // SAFETY: The caller lends the initialized pasteboard descriptor through this C entry.
-    let Some(raw_pb) = (unsafe { raw_pasteboard.as_ref() }) else {
-        result_sink.respond(Err("无法读取剪贴板附件".into()));
-        return;
-    };
-    let snapshot =
-        // SAFETY: All nested pointer/length pairs are backed by the host snapshot until the copy returns.
-        match unsafe { codex_desktop::clipboard::RawPasteboardSnapshot::from_raw(raw_pb) } {
-            Ok(snap) => snap,
-            Err(err) => {
-                result_sink.respond(Err(err.to_owned()));
-                return;
-            }
-        };
-    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
-    let raw_req = match unsafe { opt_cstr(request_json_utf8) } {
-        Ok(Some(s)) => s,
-        _ => {
-            result_sink.respond(Err("invalid paste request".into()));
-            return;
-        }
-    };
-    let state = rt.state.clone();
-    let remote = rt.remote.clone();
-    let bridge = rt.bridge.clone();
-    let host = rt.host.clone();
-    tokio_rt.spawn(async move {
-        let req: agenthub_core::services::codex_desktop::DesktopAttachmentRequest =
-            match serde_json::from_str::<
-                commands::dispatch::WrappedRequest<
-                    agenthub_core::services::codex_desktop::DesktopAttachmentRequest,
-                >,
-            >(&raw_req)
-            {
-                Ok(wrapped) => wrapped.request,
-                Err(err) => {
-                    result_sink.respond(Err(format!("invalid paste request: {err}")));
-                    return;
-                }
-            };
-        let res =
-            codex_desktop::attachments::paste(&host, &state, &remote, &bridge, req, snapshot).await;
-        result_sink.respond(res.and_then(|v| serde_json::to_string(&v).map_err(|e| e.to_string())));
-    });
-}
-
-/// # Safety
-/// `runtime` must be null or live; `paths_json_utf8` must be null or valid null-terminated UTF-8.
-#[no_mangle]
-pub unsafe extern "C" fn agenthub_ffi_desktop_drop_files(
-    runtime: *const AgentHubRuntime,
-    paths_json_utf8: *const c_char,
-    logical_x: f64,
-    logical_y: f64,
-) {
-    // SAFETY: The host borrows this handle until this synchronous entry returns; shutdown waits for borrowers.
-    let Some(rt) = (unsafe { runtime.as_ref() }) else {
-        return;
-    };
-    let tokio_rt = &rt.tokio_runtime;
-    // SAFETY: The ABI supplies a null pointer or a NUL-terminated string valid through this call.
-    let Some(raw) = (unsafe { opt_cstr(paths_json_utf8) }).ok().flatten() else {
-        return;
-    };
-    let Ok(paths) = serde_json::from_str::<Vec<PathBuf>>(&raw) else {
-        return;
-    };
-    let host = rt.host.clone();
-    let state = rt.state.clone();
-    let remote = rt.remote.clone();
-    let bridge = rt.bridge.clone();
-    tokio_rt.spawn(async move {
-        codex_desktop::attachments::drop_files(
-            host, state, remote, bridge, paths, logical_x, logical_y,
-        )
-        .await;
     });
 }
 

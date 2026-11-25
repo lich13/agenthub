@@ -2,8 +2,81 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class FlippedDocumentView: NSView {
+class FlippedDocumentView: NSView {
     override var isFlipped: Bool { true }
+}
+
+@MainActor
+final class TableGridDocumentView: FlippedDocumentView {
+    let colWidths: [CGFloat]
+    let rowHeights: [CGFloat]
+    let headerBackground: NSColor
+    let bodyBackground: NSColor
+    let borderColor: NSColor
+
+    init(
+        frame: NSRect,
+        colWidths: [CGFloat],
+        rowHeights: [CGFloat],
+        headerBackground: NSColor,
+        bodyBackground: NSColor,
+        borderColor: NSColor
+    ) {
+        self.colWidths = colWidths
+        self.rowHeights = rowHeights
+        self.headerBackground = headerBackground
+        self.bodyBackground = bodyBackground
+        self.borderColor = borderColor
+        super.init(frame: frame)
+    }
+
+    override var isOpaque: Bool { true }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let b = bounds
+        guard b.width > 1, b.height > 1 else { return }
+
+        bodyBackground.setFill()
+        b.intersection(dirtyRect).fill()
+
+        if let firstRowH = rowHeights.first, firstRowH > 0 {
+            let headerRect = NSRect(x: 0, y: 0, width: b.width, height: min(b.height, firstRowH))
+            let clipped = headerRect.intersection(dirtyRect)
+            if !clipped.isNull && !clipped.isEmpty {
+                headerBackground.setFill()
+                clipped.fill()
+            }
+        }
+
+        borderColor.setFill()
+        var x: CGFloat = 0
+        for idx in 0 ..< max(0, colWidths.count - 1) {
+            x += colWidths[idx]
+            let vLine = NSRect(x: x - 0.5, y: 0, width: 1.0, height: b.height).intersection(dirtyRect)
+            if !vLine.isNull && !vLine.isEmpty {
+                vLine.fill()
+            }
+        }
+
+        var y: CGFloat = 0
+        for idx in 0 ..< max(0, rowHeights.count - 1) {
+            y += rowHeights[idx]
+            let hLine = NSRect(x: 0, y: y - 0.5, width: b.width, height: 1.0).intersection(dirtyRect)
+            if !hLine.isNull && !hLine.isEmpty {
+                hLine.fill()
+            }
+        }
+
+        borderColor.setStroke()
+        let outerPath = NSBezierPath(rect: b.insetBy(dx: 0.5, dy: 0.5))
+        outerPath.lineWidth = 1.0
+        outerPath.stroke()
+    }
 }
 
 extension ConversationRowCellView {
@@ -340,7 +413,14 @@ extension ConversationRowCellView {
 
         let colCount = layout.colWidths.count
         let allRows = [headers] + rows
-        let docView = FlippedDocumentView(frame: NSRect(x: 0, y: 0, width: layout.totalWidth, height: layout.totalHeight))
+        let docView = TableGridDocumentView(
+            frame: NSRect(x: 0, y: 0, width: layout.totalWidth, height: layout.totalHeight),
+            colWidths: layout.colWidths,
+            rowHeights: layout.rowHeights,
+            headerBackground: palette.surface.nsColor,
+            bodyBackground: palette.background.nsColor,
+            borderColor: palette.borderStrong.nsColor
+        )
         var currentTopY: CGFloat = 0
 
         for (rIdx, cols) in allRows.enumerated() {
@@ -348,35 +428,30 @@ extension ConversationRowCellView {
             var currentX: CGFloat = 0
             for cIdx in 0 ..< colCount {
                 let colW = layout.colWidths[cIdx]
-                let cellRect = NSRect(x: currentX, y: currentTopY, width: colW, height: rowH)
-                let cellBox = FlippedDocumentView(frame: cellRect)
-                cellBox.wantsLayer = true
-                cellBox.layer?.backgroundColor = (rIdx == 0 ? palette.surface : palette.background).nsColor.cgColor
-                cellBox.layer?.borderWidth = 0.5
-                cellBox.layer?.borderColor = palette.borderStrong.nsColor.cgColor
-
                 let cellAttr = cIdx < cols.count ? cols[cIdx] : NSAttributedString(string: "")
                 let innerW = max(36, colW - 24)
-                let textH = max(18, ReaderSelectableTextView.measureHeight(attributed: cellAttr, width: innerW))
                 let tv = ReaderSelectableTextView(
-                    frame: NSRect(x: 12, y: max(4, floor((rowH - textH) * 0.5)), width: innerW, height: textH)
+                    frame: NSRect(x: currentX + 12, y: currentTopY + 4, width: innerW, height: max(18, rowH - 8))
                 )
                 tv.quoteBackgroundColor = palette.surface.nsColor
                 tv.quoteAccentColor = palette.accent.nsColor
                 tv.applyAttributedText(cellAttr, width: innerW)
+                let textH = max(18, tv.measuredUsedHeight())
+                tv.frame = NSRect(
+                    x: currentX + 12,
+                    y: currentTopY + max(4, floor((rowH - textH) * 0.5)),
+                    width: innerW,
+                    height: textH
+                )
                 tv.onLinkActivated = { [weak self, weak coordinator] href in
                     guard let self, let coordinator else { return false }
                     return self.handleActivatedHref(href, coordinator: coordinator)
                 }
-                cellBox.addSubview(tv)
-                docView.addSubview(cellBox)
+                docView.addSubview(tv)
                 currentX += colW
             }
             currentTopY += rowH
         }
-        docView.wantsLayer = true
-        docView.layer?.borderWidth = 1
-        docView.layer?.borderColor = palette.borderStrong.nsColor.cgColor
         scroll.documentView = docView
         NSLayoutConstraint.activate([
             scroll.widthAnchor.constraint(equalToConstant: visibleW),

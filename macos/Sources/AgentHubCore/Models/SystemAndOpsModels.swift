@@ -58,7 +58,6 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
     public var githubCi = false
     public var antigravitySessions = false
     public var dshSessions = false
-    public var codexDesktop = false
     public var systemd = false
     public var linuxUpdateJob = false
     public var pruneBackups = false
@@ -76,7 +75,6 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
         case githubCi = "github_ci"
         case antigravitySessions = "antigravity_sessions"
         case dshSessions = "dsh_sessions"
-        case codexDesktop = "codex_desktop"
         case systemd
         case linuxUpdateJob = "linux_update_job"
         case pruneBackups = "prune_backups"
@@ -98,7 +96,6 @@ public struct SystemCapabilitiesCore: Codable, Equatable, Sendable {
         githubCi = try c.decodeIfPresent(Bool.self, forKey: .githubCi) ?? false
         antigravitySessions = try c.decodeIfPresent(Bool.self, forKey: .antigravitySessions) ?? false
         dshSessions = try c.decodeIfPresent(Bool.self, forKey: .dshSessions) ?? false
-        codexDesktop = try c.decodeIfPresent(Bool.self, forKey: .codexDesktop) ?? false
         systemd = try c.decodeIfPresent(Bool.self, forKey: .systemd) ?? false
         linuxUpdateJob = try c.decodeIfPresent(Bool.self, forKey: .linuxUpdateJob) ?? false
         pruneBackups = try c.decodeIfPresent(Bool.self, forKey: .pruneBackups) ?? false

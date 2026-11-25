@@ -4,9 +4,6 @@ use anyhow::{anyhow, Context, Result};
 use std::{fs, io::Write, path::Path};
 use zeroize::{Zeroize, Zeroizing};
 
-pub const KEY_SERVICE_PRODUCTION: &str = "com.lich13.agenthub.codex-desktop";
-pub const KEY_SERVICE_PREVIEW: &str = "com.lich13.agenthub.codex-desktop.preview";
-
 pub fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> {
     match isolated_root {
         Some(root) => build_isolated_desktop_state(root),

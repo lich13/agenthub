@@ -40,8 +40,6 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("Security"),
                 .linkedFramework("UserNotifications"),
-                .linkedFramework("ImageIO"),
-                .linkedFramework("CoreServices"),
                 .linkedFramework("QuartzCore"),
             ]
         ),

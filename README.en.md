@@ -2,9 +2,9 @@
 
 [中文](README.md) | **English**
 
-AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a native macOS Swift 6 (`SwiftUI` + `AppKit`) workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels. Unarchived local Codex main threads can also connect directly to the native Codex desktop app for live collaboration.
+AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a native macOS Swift 6 (`SwiftUI` + `AppKit`) workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels.
 
-v2.1.37 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first. Databases older than schema 3 must pass through v2.0.10. The API protocol remains 2 and the database schema remains 3. After writing record-bound ciphertext, use v2.1.30 for binary rollback and keep the original keys.
+v2.1.38 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first. Databases older than schema 3 must pass through v2.0.10. The API protocol remains 2 and the database schema remains 3. After writing record-bound ciphertext, use v2.1.30 for binary rollback and keep the original keys.
 
 v2.1.28 replaces the macOS desktop host with a 100% native Swift 6 (`SwiftUI` + `AppKit`) UI backed by the Rust `agenthub-ffi` static archive, retiring Tauri, `WKWebView`, the Node/pnpm frontend toolchain, and `objc2` Rust glue. The conversation reader uses a native `AppKit` table and explicit TextKit 1 text stack with carried-over row height caching, vertical scroll pass-through across code blocks and wide tables, `200pt` top reverse-pagination pixel anchor locking, and custom-drawn context menus while preserving existing data directories, Keychain items, and Minisign-verified updates.
 
@@ -12,8 +12,7 @@ v2.1.28 replaces the macOS desktop host with a 100% native Swift 6 (`SwiftUI` + 
 
 | Pillar | Architecture & Distinctive Capabilities |
 | --- | --- |
-| **Six-Provider Unified Session Hub** | Native session browsing across Codex, Claude Code, Grok Build, Grok Bot (read-only local `.blob`/`.kblob` recent cache), Antigravity (unified desktop app & `agy` CLI stores), and DeepSeek Harness; `⌘F` in-thread and cross-provider search (capped at 200 matches), one-click Thread ID & optimal handoff file path copy, macOS `Reveal in Finder` (`⌘⇧R`), and Codex/Grok Plan Markdown export. |
-| **Native Codex Desktop Collaboration** | Open unarchived local Codex main threads directly in the native Codex desktop app or create new workspace threads; supports `⌘+Enter` send, mid-turn queue/steer/stop, encrypted local send queue, drag-and-drop/clipboard attachments & screenshots, `$` skills and `@` apps/plugins lookup, model/reasoning-effort/Plan mode switching, and live command/diff approvals. |
+| **Six-Provider Unified Session Hub** | Native session browsing across Codex, Claude Code, Grok Build, Grok Bot (read-only local `.blob`/`.kblob` recent cache), Antigravity (unified desktop app & `agy` CLI stores), and DeepSeek Harness; cross-provider Workspace hub grouping, `⌘F` in-thread and cross-provider search (capped at 200 matches), one-click Thread ID & optimal handoff file path copy, macOS `Reveal in Finder` (`⌘⇧R`), and Codex/Grok Plan Markdown export. |
 | **Frameless Streaming & Bounded-Memory Reading** | Preserves exact chronological ordering of prose and tool calls while collapsing consecutive reasoning/command steps into lightweight `<details>` disclosures; seamless reverse pagination at `200px` from the top with strict pixel scroll-anchor locking; shared 32 MiB / 64-entry history cache, 300s idle eviction, and K/M/G session size badges (`< 100 MiB` green, `100–300 MiB` amber, `>= 300 MiB` red). |
 | **Console-First Probe & 5-Platform Real-Time Hooks** | Top-level master switch, encrypted Bark queue delivery, one-click per-provider notification toggles, and a unified 5-platform Hooks/Host matrix (one-click install/repair/remove for Codex, Claude Code, Grok Build, and Antigravity hooks, plus zero-intrusion DSH native `session.lock` + `.zstd` streaming), sharing atomic SQLite idempotent deduplication across `<1s` hook callbacks and 15s polling. |
 | **GitHub CI Dual-Channel Monitor & Bot Filtering** | Automatically discovers public, private, and fork repositories for the active `gh` account on the selected machine; supports **persisted repository filtering** and **default-enabled Bot workflow run filtering** (`dependabot[bot]`, `renovate[bot]`, `github-actions[bot]`, and bot branches), delivering completion, failure, and timeout alerts to Bark and macOS notifications. |
@@ -35,18 +34,6 @@ Codex and Antigravity sessions support top-bar subagent status summaries, inline
 - **Named Remote Linux Host Management**: "Settings → Remote Connections" manages multiple named SSH hosts, reusing local OpenSSH config (`Include`, keys, `ssh-agent`, jump hosts) and supporting one-click "Install & Connect" for the matching `agenthub-webd` version. Switching machines isolates caches, pagination, and late responses without interrupting accepted background tasks.
 
 All model inference and tool execution remain inside each agent's native runtime; AgentHub never bundles model runtimes or mutates unrecognized native session files.
-
-## Native Codex Desktop Collaboration
-
-Opening an unarchived local Codex main thread and clicking "Open in Codex" in the bottom floating collaboration bar launches the native Codex desktop app on that thread and establishes a local IPC connection; you can also create a new workspace thread via "New Thread". Historical browsing remains strictly read-only until collaboration is requested. Compatibility is determined by live handshake protocol and thread ownership rather than hardcoded build numbers, falling back cleanly to read-only mode if the protocol or owner changes.
-
-The collaboration composer supports:
-
-- **Send, Queue, Steer & Stop**: Press `⌘+Enter` to send; while a turn is running, queue messages for the next turn, steer the active turn, or stop the current turn and pause the local queue. Pending items are persisted with encryption in SQLite and require explicit confirmation after disconnect or restart; items with uncertain delivery status are never resent automatically.
-- **Attachments & Clipboard Integration**: Native file picker, drag-and-drop upload, Finder file copy-paste, newline-separated absolute/`~/`/`file://` paths, and direct screenshot paste (PNG/TIFF/JPEG).
-- **Skills, Apps, Plugins & Model Switching**: Type `$` to search skills, `@` to search apps and enabled plugins; click the model summary to switch native models, reasoning effort, and Default/Plan modes while synchronizing native Goal progress and command/file diff approvals.
-
-See [Architecture](docs/ARCHITECTURE.md#本机-codex-桌面协作) for detailed protocol boundaries.
 
 ## Reading, Pagination & Storage Accounting
 
@@ -99,7 +86,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.37**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.38**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (macOS in-app updater archive and Minisign signature);

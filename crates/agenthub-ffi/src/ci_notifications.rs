@@ -182,7 +182,7 @@ pub(crate) fn start(
             } else {
                 let state_clone = state.clone();
                 Some(
-                    tokio::task::spawn_blocking(move || {
+                    agenthub_core::read_tasks::spawn_blocking(move || {
                         agenthub_core::services::use_cases::AgentHubUseCases::with_config(
                             &config,
                             state_clone.platform(),

@@ -34,7 +34,6 @@ public final class RuntimeConnectionStore: ObservableObject {
     @Published public var navCollapsed: Bool
     @Published public var themeMode: ThemeMode
     @Published public private(set) var isWindowVisible: Bool = true
-    @Published public private(set) var isWindowFocused: Bool = true
 
     public typealias BeforeMachineChangeCleanup = @Sendable @MainActor () async -> Void
 
@@ -95,10 +94,9 @@ public final class RuntimeConnectionStore: ObservableObject {
         }
     }
 
-    public func updateWindowState(visible: Bool, focused: Bool) {
+    public func updateWindowState(visible: Bool) {
+        guard isWindowVisible != visible else { return }
         isWindowVisible = visible
-        isWindowFocused = focused
-        transport.setMainWindowState(visible: visible, focused: focused)
     }
 
     public var hasAnyActiveModal: Bool {

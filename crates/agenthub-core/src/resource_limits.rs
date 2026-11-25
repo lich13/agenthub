@@ -35,20 +35,9 @@ pub(crate) const STORAGE_SCAN_DEPTH: usize = 16;
 pub(crate) const STORAGE_SCAN_TIME: Duration = Duration::from_millis(250);
 pub(crate) const READ_WORKERS_MIN: usize = 2;
 pub(crate) const READ_WORKERS_MAX: usize = 4;
-pub(crate) const CREDENTIAL_WORKERS: usize = 1;
 // Shared native bridge constraints. A base64-encoded 20 MiB image fits below
 // the 32 MiB response cap; neither bound limits all concurrent response memory.
 pub const REMOTE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 // Local loopback (127.0.0.1) Connect-RPC limit for long Antigravity trajectories
 // whose embedded executorMetadatas + multi-thousand-step payloads exceed 32 MiB.
 pub const ANTIGRAVITY_LOCAL_RPC_BYTES: usize = 256 * 1024 * 1024;
-pub const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
-// Native desktop IPC uses one length-prefixed frame at a time. Consumers own
-// returned snapshots; this bound is not a cap on retained UI state or RSS.
-pub(crate) const CODEX_DESKTOP_FRAME_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const CODEX_DESKTOP_CONNECT_WAIT: Duration = Duration::from_secs(10);
-pub(crate) const CODEX_DESKTOP_START_WAIT: Duration = Duration::from_secs(90);
-pub(crate) const CODEX_DESKTOP_STEER_WAIT: Duration = Duration::from_secs(30);
-pub(crate) const CODEX_DESKTOP_HELPER_WAIT: Duration = Duration::from_secs(20);
-pub(crate) const CODEX_DESKTOP_APPS_WAIT: Duration = Duration::from_secs(60);
-pub(crate) const CODEX_DESKTOP_HELPER_PERMIT_WAIT: Duration = Duration::from_secs(60);

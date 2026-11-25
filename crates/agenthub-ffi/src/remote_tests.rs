@@ -175,10 +175,11 @@ async fn business_errors_keep_the_channel_and_do_not_retry() {
 }
 
 #[test]
-fn saved_ssh_preferences_and_local_write_guard() {
+fn saved_ssh_preferences_and_write_guard_blocks_machine_change() {
     let root = tempfile::tempdir().unwrap();
     let connection = RemoteConnections::load(root.path()).unwrap();
-    let guard = connection.begin_local_write(0).unwrap();
+    connection.state.lock().unwrap().writes += 1;
+    let guard = WriteGuard(connection.state.clone());
     assert!(connection.begin_change(0).is_err());
     drop(guard);
     let mut prefs = Preferences::default();
@@ -191,5 +192,6 @@ fn saved_ssh_preferences_and_local_write_guard() {
     connection.commit(prefs, None).unwrap();
     let restored = RemoteConnections::load(root.path()).unwrap();
     assert_eq!(restored.view().machines[0].ssh_host, "fixture-host");
-    assert!(restored.require_local(0).is_err());
+    assert!(!restored.is_current(0));
+    assert!(restored.is_current(1));
 }

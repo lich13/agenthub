@@ -586,11 +586,12 @@ impl<S: Default> JsonlCache<S> {
             .sum()
     }
 
-    pub fn evict_idle(&self, max_idle: std::time::Duration) {
+    pub fn evict_idle(&self, max_idle: std::time::Duration) -> usize {
         use std::sync::atomic::Ordering;
         let Ok(mut entries) = self.entries.lock() else {
-            return;
+            return 0;
         };
+        let before = entries.len();
         let now_ms = monotonic_ms();
         let max_idle_ms = max_idle.as_millis() as u64;
         entries.retain(|entry| {
@@ -598,6 +599,11 @@ impl<S: Default> JsonlCache<S> {
                 || now_ms.saturating_sub(entry.last_accessed_ms.load(Ordering::Relaxed))
                     < max_idle_ms
         });
+        let evicted = before - entries.len();
+        if evicted > 0 {
+            crate::note_cache_eviction();
+        }
+        evicted
     }
 }
 

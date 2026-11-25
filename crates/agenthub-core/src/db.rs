@@ -15,7 +15,6 @@ use std::{
 };
 use uuid::Uuid;
 
-pub mod desktop_submissions;
 mod encrypted_records;
 mod native_probe;
 mod notification_channels;
@@ -40,6 +39,9 @@ CREATE INDEX IF NOT EXISTS idx_jobs_started_at
  ON jobs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at
  ON native_probe_deliveries(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_native_probe_claude_session
+ ON native_probe_deliveries(json_extract(event_json,'$.session_key'))
+ WHERE provider='claude_code' AND json_valid(event_json);
 ";
 
 const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
@@ -72,6 +74,11 @@ const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
         "idx_native_probe_deliveries_updated_at",
         "native_probe_deliveries",
         "CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at ON native_probe_deliveries(status, updated_at);",
+    ),
+    (
+        "idx_native_probe_claude_session",
+        "native_probe_deliveries",
+        "CREATE INDEX IF NOT EXISTS idx_native_probe_claude_session ON native_probe_deliveries(json_extract(event_json,'$.session_key')) WHERE provider='claude_code' AND json_valid(event_json);",
     ),
 ];
 
@@ -151,6 +158,12 @@ impl PanelDb {
             crypto,
         };
         db.migrate()?;
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            conn.execute_batch(
+                "PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=4194304;",
+            )?;
+        }
         Ok(db)
     }
 
@@ -328,7 +341,6 @@ impl PanelDb {
 
             "#,
         )?;
-        tx.execute_batch(desktop_submissions::SCHEMA)?;
         tx.execute_batch(notification_channels::SCHEMA)?;
         tx.execute_batch(SCHEMA_THREE_INDEXES)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;

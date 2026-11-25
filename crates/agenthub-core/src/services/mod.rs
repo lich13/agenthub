@@ -1,8 +1,6 @@
 pub mod cleanup;
-pub mod codex_desktop;
 pub mod commands;
 pub mod contract_dtos;
-pub mod credentials;
 pub mod jobs;
 pub mod plans;
 pub mod probe;

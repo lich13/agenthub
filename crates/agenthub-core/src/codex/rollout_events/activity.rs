@@ -242,7 +242,7 @@ impl ScanState {
                 });
             }
         }
-        update_pending_tool_calls(
+        let _ = update_pending_tool_calls(
             &value,
             &mut pending_tool_turns,
             scan.active_turn_id.as_deref(),
@@ -324,9 +324,17 @@ pub(crate) fn evict_idle_scan_cache(max_idle: std::time::Duration) {
     SCAN_CACHE.evict_idle(max_idle);
 }
 
-pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutScan> {
+pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
+    scan_rollout_with_cache(&SCAN_CACHE, path, max_messages)
+}
+
+fn scan_rollout_with_cache(
+    cache: &crate::jsonl_cache::JsonlCache<ScanState>,
+    path: &Path,
+    _max_messages: usize,
+) -> Result<RolloutScan> {
     crate::codex::rollout_file::read_cached(
-        &SCAN_CACHE,
+        cache,
         path,
         true,
         |state, line, _, _| {
@@ -337,9 +345,55 @@ pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutS
         },
         |state, _| Ok(state.summary()),
         |state| {
-            8192 + state.scan.latest_message.as_ref().map_or(0, String::len) as u64
-                + state.async_questions.calls.len() as u64 * 4096
-                + state.pending_tool_turns.len() as u64 * 256
+            let opt_cap = |s: &Option<String>| s.as_ref().map_or(0, String::capacity) as u64;
+            let pending_action_bytes = match &state.pending_action {
+                None => 0,
+                Some(PendingAction::Plan { turn_id, item_id }) => {
+                    opt_cap(turn_id) + opt_cap(item_id)
+                }
+                Some(PendingAction::Elicitation {
+                    turn_id,
+                    item_id,
+                    call_id,
+                    elicitation,
+                }) => {
+                    opt_cap(turn_id)
+                        + opt_cap(item_id)
+                        + opt_cap(call_id)
+                        + opt_cap(&elicitation.turn_id)
+                        + opt_cap(&elicitation.item_id)
+                        + (elicitation.questions.capacity()
+                            * std::mem::size_of::<crate::codex::UserInputQuestion>())
+                            as u64
+                        + elicitation
+                            .questions
+                            .iter()
+                            .map(crate::codex::UserInputQuestion::heap_bytes)
+                            .sum::<u64>()
+                }
+            };
+            let plan_marker_bytes = state
+                .current_plan_marker
+                .as_ref()
+                .map_or(0, |(t, i)| opt_cap(t) + opt_cap(i));
+            std::mem::size_of::<ScanState>() as u64
+                + 128
+                + opt_cap(&state.scan.session_id)
+                + opt_cap(&state.scan.latest_message)
+                + opt_cap(&state.scan.last_message_at)
+                + opt_cap(&state.scan.cwd)
+                + opt_cap(&state.scan.model)
+                + opt_cap(&state.scan.title)
+                + opt_cap(&state.scan.first_user_message_title)
+                + opt_cap(&state.scan.active_turn_id)
+                + opt_cap(&state.scan.last_event_kind)
+                + opt_cap(&state.last_task_status)
+                + opt_cap(&state.turn_context)
+                + pending_action_bytes
+                + plan_marker_bytes
+                + state.async_questions.heap_bytes()
+                + state.pending_tool_turns.capacity() as u64 * 96
+                + state.active_tasks.capacity() as u64 * 32
         },
     )
 }
@@ -615,11 +669,12 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
     let mut final_reply: Option<String> = None;
     let mut completed = None;
     let mut pending = HashMap::new();
-    for line in String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-    {
-        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+    for raw_line in bytes.split(|&b| b == b'\n') {
+        let raw_line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        if raw_line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(mut value) = serde_json::from_slice::<Value>(raw_line) else {
             return Ok(None);
         };
         let previous_turn = current_turn.clone();
@@ -645,17 +700,21 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
                 completed = None;
             }
         }
-        let before = pending.clone();
-        update_pending_tool_calls(&value, &mut pending, current_turn.as_deref());
+        let pending_changed =
+            update_pending_tool_calls(&value, &mut pending, current_turn.as_deref());
         let interactive_request = kind.contains("request_user_input")
             || kind.contains("elicitation")
-            || value
-                .get("payload")
-                .map(|payload| payload.to_string().to_ascii_lowercase())
-                .is_some_and(|payload| {
-                    payload.contains("request_user_input") || payload.contains("elicitation")
-                });
-        if before != pending
+            || contains_ascii_case_insensitive(raw_line, b"request_user_input")
+            || contains_ascii_case_insensitive(raw_line, b"elicitation")
+            || (contains_ascii_case_insensitive(raw_line, b"\\u")
+                && value
+                    .get("payload")
+                    .map(|payload| payload.to_string())
+                    .is_some_and(|payload| {
+                        contains_ascii_case_insensitive(payload.as_bytes(), b"request_user_input")
+                            || contains_ascii_case_insensitive(payload.as_bytes(), b"elicitation")
+                    }));
+        if pending_changed
             || interactive_request
             || matches!(
                 kind,
@@ -840,18 +899,46 @@ pub(super) fn request_user_input_resolution_matches(
     payload.get("type").and_then(Value::as_str) == Some("function_call_output")
 }
 
+fn contains_ascii_case_insensitive(haystack: &[u8], needle_lower: &[u8]) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle_lower.len() {
+        return false;
+    }
+    let first = needle_lower[0];
+    let first_upper = first.to_ascii_uppercase();
+    let max_start = haystack.len() - needle_lower.len();
+    for i in 0..=max_start {
+        let b = haystack[i];
+        if (b == first || b == first_upper)
+            && haystack[i + 1..i + needle_lower.len()].eq_ignore_ascii_case(&needle_lower[1..])
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Archive/restore retain explicit native terminal evidence.
 pub(crate) fn rollout_has_confirmed_inactive_state(path: &Path) -> Result<bool> {
     let scan = scan_rollout(path, 1)?;
     if scan.running || scan.active_turn_id.is_some() || scan.reply_needed {
         return Ok(false);
     }
-    let mut text = String::new();
-    crate::codex::rollout_file::open_reader(path)?.read_to_string(&mut text)?;
+    let mut reader = std::io::BufReader::new(crate::codex::rollout_file::open_reader(path)?);
+    let mut line = String::new();
     let mut terminal = false;
     let mut turn_context = None;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let mut value: Value = serde_json::from_str(line).context("线程记录损坏或尚未写入完整")?;
+    loop {
+        line.clear();
+        if std::io::BufRead::read_line(&mut reader, &mut line)? == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut value: Value = serde_json::from_str(&line).context("线程记录损坏或尚未写入完整")?;
         normalize_canonical_turn(&mut value, &mut turn_context);
         let kind = rollout_event_type(&value);
         if is_turn_terminal_event(kind) || kind == "task_complete" {
@@ -929,6 +1016,169 @@ mod streaming_tests {
         for path in [&plain, &compressed] {
             assert_eq!(SCAN_CACHE.cached_weight(path), 0);
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn confirmed_inactive_state_rejects_non_json_unicode_whitespace_prefix() {
+        let root =
+            std::env::temp_dir().join(format!("agenthub-inactive-nbsp-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let valid = root.join("valid.jsonl");
+        let nbsp_corrupt = root.join("nbsp-corrupt.jsonl");
+        let bom_corrupt = root.join("bom-corrupt.jsonl");
+
+        fs::write(
+            &valid,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"t1\"}}\n",
+                "   \t\r\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"status\":\"completed\"}}\n"
+            ),
+        )
+        .unwrap();
+        assert!(rollout_has_confirmed_inactive_state(&valid).unwrap());
+
+        let running_only = root.join("running.jsonl");
+        fs::write(
+            &running_only,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"t1\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}\n"
+            ),
+        )
+        .unwrap();
+        assert!(!rollout_has_confirmed_inactive_state(&running_only).unwrap());
+
+        // Without an open task_started (or after a completed prior turn), scan_rollout reports
+        // running=false; serde_json::from_str(&line) must still reject leading U+00A0 / U+FEFF
+        // on a corrupt task_complete line rather than stripping non-JSON Unicode whitespace.
+        fs::write(
+            &nbsp_corrupt,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"t1\"}}\n",
+                "\u{00a0}{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"status\":\"completed\"}}\n"
+            ),
+        )
+        .unwrap();
+        let err = rollout_has_confirmed_inactive_state(&nbsp_corrupt).unwrap_err();
+        assert!(
+            err.to_string().contains("线程记录损坏或尚未写入完整"),
+            "unexpected error: {err:#}"
+        );
+
+        fs::write(
+            &bom_corrupt,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"t1\"}}\n",
+                "\u{feff}{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"status\":\"completed\"}}\n"
+            ),
+        )
+        .unwrap();
+        assert!(rollout_has_confirmed_inactive_state(&bom_corrupt).is_err());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_cache_counts_nested_async_question_heap_and_evicts_over_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "agenthub-scan-question-budget-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&root).unwrap();
+
+        let make_question_rollout = |path: &Path, seed: &str, payload_kb: usize| {
+            let large_body = "问".repeat((payload_kb * 1024) / 3);
+            let large_desc = "选".repeat((payload_kb * 512) / 3);
+            let turn_id = format!("turn-{seed}-{}", "t".repeat(128));
+            let call_id = format!("call-{seed}-{}", "c".repeat(128));
+            let answer_envelope = format!(
+                "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
+                serde_json::json!([{
+                    "questionItemId": serde_json::json!(["request_user_input_async", call_id, 0]).to_string(),
+                    "question": "first",
+                    "answer": "选A"
+                }])
+            );
+            let rows = [
+                serde_json::json!({"type":"session_meta","payload":{"id":format!("sess-{seed}")}}),
+                serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn_id}}),
+                serde_json::json!({
+                    "type":"response_item",
+                    "turn_id":turn_id,
+                    "payload":{
+                        "type":"function_call",
+                        "name":"request_user_input_async",
+                        "call_id":call_id,
+                        "arguments":serde_json::json!({
+                            "questions":[
+                                {
+                                    "id":format!("qid-{seed}-1"),
+                                    "header":format!("Header-{seed}"),
+                                    "question":large_body,
+                                    "options":[
+                                        {"label":"选A","description":large_desc},
+                                        {"label":"选B","description":"备用选项"}
+                                    ]
+                                },
+                                {
+                                    "id":format!("qid-{seed}-2"),
+                                    "header":"第二题",
+                                    "question":"仍待回复的问题？",
+                                    "options":[{"label":"继续"}]
+                                }
+                            ]
+                        }).to_string()
+                    }
+                }),
+                serde_json::json!({
+                    "type":"response_item",
+                    "turn_id":turn_id,
+                    "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":answer_envelope}]}
+                }),
+            ];
+            let content = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+            fs::write(path, content).unwrap();
+        };
+
+        // Budget = 32 KiB: each rollout has only 1 async question call (~18 KiB of nested strings),
+        // which under the old fixed 256B/call estimate would look like ~1 KiB and never evict.
+        let cache =
+            crate::jsonl_cache::JsonlCache::<ScanState>::new(32 * 1024).with_entry_limit(64);
+        let first = root.join("first.jsonl");
+        let second = root.join("second.jsonl");
+        let oversize = root.join("oversize.jsonl");
+        make_question_rollout(&first, "a", 12);
+        make_question_rollout(&second, "b", 12);
+        make_question_rollout(&oversize, "huge", 40);
+
+        let first_scan = scan_rollout_with_cache(&cache, &first, 80).unwrap();
+        assert!(first_scan.reply_needed);
+        let first_weight = cache.cached_weight(&first);
+        assert!(
+            first_weight > 16 * 1024,
+            "nested AsyncQuestionTracker heap must be counted in SCAN_CACHE weight, got {first_weight}"
+        );
+
+        let second_scan = scan_rollout_with_cache(&cache, &second, 80).unwrap();
+        assert!(second_scan.reply_needed);
+        assert_eq!(
+            cache.cached_weight(&first),
+            0,
+            "older rollout must be LRU-evicted once nested question strings exceed budget"
+        );
+        assert!(cache.cached_weight(&second) > 16 * 1024);
+
+        let huge_scan = scan_rollout_with_cache(&cache, &oversize, 80).unwrap();
+        assert!(huge_scan.reply_needed);
+        assert_eq!(
+            cache.cached_weight(&oversize),
+            0,
+            "single oversize question rollout must still read accurately without staying cached"
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -17,7 +17,6 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
     public var dshNotifications: Bool
     public var grokbotSessions: Bool
     public var grokbotNotifications: Bool
-    public var codexDesktop: Bool
     public var updatePrune: Bool
     public var updateServiceLabels: Bool
 
@@ -36,7 +35,6 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         dshNotifications: false,
         grokbotSessions: true,
         grokbotNotifications: false,
-        codexDesktop: false,
         updatePrune: false,
         updateServiceLabels: false
     )
@@ -60,7 +58,6 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
             dshNotifications: !remote && c.dshNotifications,
             grokbotSessions: !remote && c.grokbotSessions,
             grokbotNotifications: !remote && c.grokbotNotifications,
-            codexDesktop: !remote && c.codexDesktop,
             updatePrune: remote && c.pruneBackups,
             updateServiceLabels: remote && c.linuxUpdateJob
         )

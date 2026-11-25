@@ -107,47 +107,6 @@ final class GoldenVectorsAndDomainParityTests: XCTestCase {
         }
     }
 
-    // MARK: - 6. Shared Golden Vector #5: desktop_references.json
-
-    func testSharedGoldenVectorsDesktopReferences() throws {
-        struct VectorFile: Decodable {
-            struct InsertSpec: Decodable {
-                let item: DesktopChosenItem
-                let start: Int
-                let end: Int
-            }
-            struct CaseItem: Decodable {
-                let name: String
-                let initialText: String
-                let insert: InsertSpec
-                let expectedText: String
-                let expectedCaretUtf16: Int
-                let expectedUtf16Spans: [DesktopReferenceSpan]
-                let expectedUtf8Spans: [DesktopReferenceSpan]
-            }
-            let cases: [CaseItem]
-        }
-        let url = repoRoot.appendingPathComponent("contracts/parity-vectors/desktop_references.json")
-        let vectors = try JSONDecoder().decode(VectorFile.self, from: Data(contentsOf: url))
-        for c in vectors.cases {
-            let initial = DesktopReferencesEngine.edit(ReferenceDraft(), text: c.initialText)
-            let inserted = try DesktopReferencesEngine.insert(
-                initial,
-                item: c.insert.item,
-                start: c.insert.start,
-                end: c.insert.end
-            )
-            XCTAssertEqual(inserted.draft.text, c.expectedText, "\(c.name) text")
-            XCTAssertEqual(inserted.caret, c.expectedCaretUtf16, "\(c.name) caret")
-            XCTAssertEqual(inserted.draft.spans, c.expectedUtf16Spans, "\(c.name) utf16 spans")
-            XCTAssertEqual(
-                DesktopReferencesEngine.toUTF8ReferenceSpans(inserted.draft),
-                c.expectedUtf8Spans,
-                "\(c.name) utf8 spans"
-            )
-        }
-    }
-
     // MARK: - 7. Domain Compaction, 2000-Key FIFO Disclosure, 120s Optimistic Title & Plan Export
 
     @MainActor

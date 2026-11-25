@@ -35,6 +35,7 @@ struct Cached {
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
     if let Ok(mut cache) = CACHE.lock() {
+        let before = cache.entries.len();
         let now = std::time::Instant::now();
         let mut removed = 0;
         cache.entries.retain(|entry| {
@@ -45,6 +46,9 @@ pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
             keep
         });
         cache.bytes -= removed;
+        if cache.entries.len() < before {
+            crate::note_cache_eviction();
+        }
     }
 }
 #[derive(Default)]

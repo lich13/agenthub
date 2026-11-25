@@ -50,25 +50,38 @@ static CACHE: tokio::sync::Mutex<VecDeque<SnapshotCacheEntry>> =
 static META_CACHE: tokio::sync::Mutex<VecDeque<MetaCacheEntry>> =
     tokio::sync::Mutex::const_new(VecDeque::new());
 
-pub async fn evict_idle_cache(max_idle: Duration) {
+pub(crate) async fn evict_idle_cache(max_idle: Duration) {
     let now = std::time::Instant::now();
+    let mut evicted = false;
     {
         let mut cache = CACHE.lock().await;
+        let before = cache.len();
         cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+        evicted |= cache.len() < before;
     }
     {
         let mut meta_cache = META_CACHE.lock().await;
+        let before = meta_cache.len();
         meta_cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+        evicted |= meta_cache.len() < before;
+    }
+    if evicted {
+        agenthub_core::note_cache_eviction();
     }
 }
 type Endpoint = antigravity::sessions::DiscoveredAntigravityEndpoint;
 
 fn client() -> Result<reqwest::Client> {
-    Ok(agenthub_core::http_client_builder()
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(cached) = CLIENT.get() {
+        return Ok(cached.clone());
+    }
+    let built = agenthub_core::http_client_builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(5))
-        .build()?)
+        .build()?;
+    Ok(CLIENT.get_or_init(|| built).clone())
 }
 async fn query(
     client: &reqwest::Client,
@@ -195,7 +208,7 @@ fn has_open_file_handle(path: &std::path::Path) -> bool {
         "lsof"
     };
     std::process::Command::new(bin)
-        .args(["-Fp", "--"])
+        .args(["-nP", "-Fp", "--"])
         .arg(path)
         .output()
         .is_ok_and(|out| out.status.success() && out.stdout.contains(&b'p'))
@@ -691,7 +704,7 @@ async fn scan_offline_one_with_retry(
     Ok(last_scan)
 }
 
-pub async fn scan() -> Result<NativeScan> {
+pub(crate) async fn scan() -> Result<NativeScan> {
     match connect().await {
         Ok((endpoint, client, port, summaries)) => {
             let mut live_scan = scan_at(
@@ -717,7 +730,7 @@ pub async fn scan() -> Result<NativeScan> {
     }
 }
 
-pub async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
+pub(crate) async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     if antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
         return scan_offline_one_with_retry(cascade_id, false).await;
     }
@@ -987,7 +1000,7 @@ async fn load_trajectory_with_context(
     Ok((response, ctx))
 }
 
-pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Result<Value> {
+pub(crate) async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Result<Value> {
     let db_cursor = db.native_probe_stream_cursor(
         agenthub_core::native_probe::NativeProvider::Antigravity,
         cascade_id,
@@ -1037,7 +1050,7 @@ pub async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) -> Resu
         "eventsCount": stream.events.len(),
     }))
 }
-pub async fn source_current(delivery: &agenthub_core::db::NativeDelivery) -> Result<bool> {
+pub(crate) async fn source_current(delivery: &agenthub_core::db::NativeDelivery) -> Result<bool> {
     if delivery.event.turn_id.starts_with("cli-")
         || antigravity::sessions::AntigravityPaths::is_cli_only_session_default(&delivery.thread_id)
     {

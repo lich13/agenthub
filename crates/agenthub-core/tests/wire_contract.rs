@@ -183,64 +183,6 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
 }
 
 #[test]
-fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
-    use agenthub_core::services::codex_desktop::{
-        DesktopActionRequest, DesktopCatalogRequest, DesktopChoice, DesktopThreadRequest,
-        DesktopView,
-    };
-    for action in [
-        json!({"type":"send","messageId":"fixture","text":"request","references":["opaque-reference"]}),
-        json!({"type":"steer","messageId":"fixture","text":"request","references":[],"turnId":"turn-fixture"}),
-        json!({"type":"stop","turnId":"turn-fixture"}),
-        json!({"type":"cancelQueued","messageId":"fixture"}),
-        json!({"type":"dismissUnknown","messageId":"fixture"}),
-        json!({"type":"resumeQueue"}),
-        json!({"type":"settings","model":"model-fixture","reasoningEffort":null,"mode":"plan"}),
-        json!({"type":"decide","requestKey":"request-fixture","allow":false}),
-        json!({"type":"answer","requestKey":"request-fixture","answers":[{"questionId":"question-fixture","answers":["answer"]}]}),
-        json!({"type":"elicitation","requestKey":"request-fixture","accept":false,"content":null}),
-    ] {
-        let wire = json!({"revision":7,"sessionId":"session-fixture","action":action});
-        let request: DesktopActionRequest = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(serde_json::to_value(request).unwrap(), wire);
-        if matches!(wire["action"]["type"].as_str(), Some("send" | "steer")) {
-            let mut with_path = wire;
-            with_path["action"]["path"] = json!("/fixture/unselected");
-            assert!(serde_json::from_value::<DesktopActionRequest>(with_path).is_err());
-        }
-    }
-    let view = json!({
-        "sessionId":"session-fixture","threadId":"thread-fixture","revision":7,
-        "connected":false,"writable":false,"runtime":"idle","activeTurnId":null,
-        "model":null,"reasoningEffort":null,"mode":null,"requests":[],"queue":[],"error":null
-    });
-    let decoded: DesktopView = serde_json::from_value(view.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), view);
-    for confirm in [None, Some(false), Some(true)] {
-        let mut wire = json!({"revision":7,"threadId":"thread-fixture"});
-        if let Some(value) = confirm {
-            wire["confirmOwner"] = json!(value);
-        }
-        let decoded: DesktopThreadRequest = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(decoded.confirm_owner, confirm);
-        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
-    }
-    for force in [None, Some(false), Some(true)] {
-        let mut wire = json!({"revision":7,"sessionId":"session-fixture","projectHandle":null,"kind":"modes","query":"","cursor":null});
-        if let Some(value) = force {
-            wire["forceRefetch"] = json!(value);
-        }
-        let decoded: DesktopCatalogRequest = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(decoded.force_refetch, force);
-        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
-    }
-    assert_eq!(
-        serde_json::to_value(DesktopChoice { item: None }).unwrap(),
-        json!({"item":null})
-    );
-}
-
-#[test]
 fn registry_maps_to_real_types() {
     let f = fixture();
     let registry: Value = serde_json::from_slice(

@@ -7,7 +7,7 @@ use tokio::{
     sync::Mutex,
 };
 
-pub async fn proxy() -> Result<()> {
+pub(crate) async fn proxy() -> Result<()> {
     let stream = UnixStream::connect(SOCKET_PATH)
         .await
         .context("AgentHub 服务不可用，请安装或启动服务")?;
@@ -28,7 +28,7 @@ async fn proxy_stream(stream: UnixStream) -> Result<()> {
     }
     std::process::exit(if result.is_ok() { 0 } else { 1 });
 }
-pub async fn health() -> Result<()> {
+pub(crate) async fn health() -> Result<()> {
     let mut stream = UnixStream::connect(SOCKET_PATH).await?;
     ssh_rpc::write(
         &mut stream,
@@ -46,7 +46,7 @@ pub async fn health() -> Result<()> {
     println!("ok");
     Ok(())
 }
-pub async fn serve(state: AppState) -> Result<()> {
+pub(crate) async fn serve(state: AppState) -> Result<()> {
     serve_at(state, Path::new(SOCKET_PATH)).await
 }
 async fn serve_at(state: AppState, path: &Path) -> Result<()> {

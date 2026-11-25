@@ -1130,4 +1130,151 @@ final class ReaderGeometryScrollAndCleanupTests: XCTestCase {
             XCTAssertGreaterThan(totalInk, 800, "\(scheme) 8-column table stage must render rich non-blank ink")
         }
     }
+
+    @MainActor
+    func testExternalDisclosureRevisionAndNestedClaudeAndTableLinkEdgeCases() throws {
+        let suiteName = "com.lich13.agenthub.tests.disclosureedge.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = RuntimeConnectionStore(transport: .emptyDesktop, defaults: defaults)
+        let sharedDisclosure = ActivityDisclosureStore()
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 840, height: 600))
+        let table = NSTableView(frame: NSRect(x: 0, y: 0, width: 840, height: 600))
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainCol"))
+        col.width = 840
+        table.addTableColumn(col)
+        table.headerView = nil
+        table.rowSizeStyle = .custom
+        table.intercellSpacing = .zero
+        scroll.documentView = table
+
+        let coord = ConversationTableCoordinator(store: store, disclosureStore: sharedDisclosure)
+        coord.scrollView = scroll
+        coord.tableView = table
+        coord.column = col
+        coord.sessionScopeKey = "local:claude:edge-1"
+        table.dataSource = coord
+        table.delegate = coord
+
+        let nestedCmd = ExecutionCommand(
+            id: "cmd-nested-1",
+            sourceIds: ["src-cmd-1"],
+            title: "cargo test --workspace",
+            preview: nil,
+            status: .completed,
+            instructionFile: false,
+            sections: [ExecutionSection(label: "stdout", text: String(repeating: "ok line\n", count: 8))]
+        )
+        let nestedGroup = ExecutionGroup(
+            id: "grp-nested-1",
+            mergedIds: [],
+            commands: [nestedCmd],
+            kind: "command",
+            provider: "claude",
+            running: false,
+            recordedOnly: true,
+            failedCount: 0,
+            turnId: "t-1"
+        )
+        let nestedMeta = ClaudeMetadataGroup(
+            id: "meta-1",
+            sourceIds: ["m-src-1"],
+            label: "会话上下文与元数据",
+            entries: [.group(nestedGroup)]
+        )
+        let claudeProc = ClaudeProcessGroup(
+            id: "cproc-1",
+            stateKey: "claude-process:t-1",
+            turnId: "t-1",
+            sourceIds: ["p-src-1"],
+            entries: [.metadata(nestedMeta)],
+            segmentCount: 1,
+            toolCount: 1,
+            failedCount: 0,
+            running: false,
+            completed: true,
+            recordedOnly: true,
+            needsReply: false,
+            needsPermission: false,
+            hasPermission: false
+        )
+        let agentsMd = """
+        # AGENTS.md instructions for /workspace/demo
+
+        <INSTRUCTIONS>
+        Line 1 rule
+        Line 2 rule
+        Line 3 rule
+        Line 4 rule
+        </INSTRUCTIONS>
+
+        请查看表格结果：
+
+        | 文件 | 说明 |
+        | --- | --- |
+        | [README.md](https://example.invalid/readme) | 含 `inline_code` 与超链接 |
+        """
+        let row0 = ConversationRowItem(
+            id: "row-cproc",
+            timelineId: "row-cproc",
+            kind: .claudeProcessGroup(claudeProc, title: "Demo")
+        )
+        let row1 = ConversationRowItem(
+            id: "row-assistant",
+            timelineId: "row-assistant",
+            kind: .assistant(markdown: agentsMd, foldInstructions: true)
+        )
+        let row2 = ConversationRowItem(
+            id: "row-anchor",
+            timelineId: "row-anchor",
+            kind: .assistant(markdown: "底部锚点正文", foldInstructions: false)
+        )
+        coord.updateRowsPreservingAnchor([row0, row1, row2], forceScrollToBottom: false)
+
+        let closedProcH = table.rect(ofRow: 0).height
+        let closedAssistH = table.rect(ofRow: 1).height
+        XCTAssertEqual(closedProcH, 34, accuracy: 1.0)
+
+        // Mutate row 0 externally on the shared ActivityDisclosureStore (simulating another pane bumping revision),
+        // then toggle row 1's AGENTS.md fold via toggleDisclosurePreservingAnchor: row 0 MUST NOT keep stale height 34!
+        sharedDisclosure.setOpen(scope: coord.sessionScopeKey, stateKey: "claude-process:t-1", isOpen: true)
+        sharedDisclosure.setOpen(scope: coord.sessionScopeKey, stateKey: "meta-1", isOpen: true)
+        sharedDisclosure.setOpen(scope: coord.sessionScopeKey, stateKey: "grp-nested-1", isOpen: true)
+        sharedDisclosure.setOpen(scope: coord.sessionScopeKey, stateKey: "cmd-nested-1", isOpen: true)
+
+        let instrSlices = VisibleMarkdownEngine.instructionSegments(VisibleMarkdownEngine.visibleMarkdown(agentsMd))
+        let instrId = try XCTUnwrap(instrSlices.first(where: { $0.kind == "instructions" })?.id)
+        coord.toggleDisclosurePreservingAnchor(
+            stateKey: "row-assistant:\(instrId)",
+            currentlyOpen: false
+        )
+
+        let openProcH = table.rect(ofRow: 0).height
+        let openAssistH = table.rect(ofRow: 1).height
+        XCTAssertGreaterThan(openProcH, closedProcH + 80, "Externally opened nested Claude process group must re-measure height instead of keeping stale cached 34pt")
+        XCTAssertGreaterThan(openAssistH, closedAssistH + 40, "Toggled AGENTS.md fold in row 1 must expand row height")
+
+        // Verify TableGridDocumentView mounts ReaderSelectableTextView cells with working link callback
+        let row1Cell = try XCTUnwrap(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? ConversationRowCellView)
+        func findTextViews(_ v: NSView) -> [ReaderSelectableTextView] {
+            var out: [ReaderSelectableTextView] = []
+            if let tv = v as? ReaderSelectableTextView { out.append(tv) }
+            for s in v.subviews { out.append(contentsOf: findTextViews(s)) }
+            return out
+        }
+        let textViews = findTextViews(row1Cell)
+        XCTAssertTrue(textViews.contains(where: { $0.onLinkActivated != nil }), "TableGridDocumentView cells must wire onLinkActivated")
+
+        // Verify >4096 char scratch measurement returns positive height and remains repeatable
+        let hugeAttr = NSAttributedString(
+            string: String(repeating: "长文本高度测量基准测试 ", count: 500),
+            attributes: [.font: DesignFonts.nsBodyFont(size: 14)]
+        )
+        let h1 = ReaderSelectableTextView.measureHeight(attributed: hugeAttr, width: 420)
+        let h2 = ReaderSelectableTextView.measureHeight(attributed: NSAttributedString(string: "short"), width: 420)
+        XCTAssertGreaterThan(h1, 200)
+        XCTAssertGreaterThan(h2, 10)
+        XCTAssertLessThan(h2, 40)
+    }
 }

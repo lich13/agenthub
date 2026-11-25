@@ -78,27 +78,20 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
                 ModalPresentationRegistry.shared.unregister(token)
             }
 
-            // WHILE modal is open, underlying ComposerNSTextView or non-modal ReaderSelectableTextView MUST BE BLOCKED from selectAll!
+            // WHILE modal is open, underlying non-modal ReaderSelectableTextView MUST BE BLOCKED from selectAll!
             let modalToken = UUID()
             defer { ModalPresentationRegistry.shared.unregister(modalToken) }
-            let underlyingComposer = ComposerNSTextView(frame: NSRect(x: 10, y: 50, width: 300, height: 60))
-            underlyingComposer.string = "draft behind modal"
-            underlyingComposer.setSelectedRange(NSRange(location: 0, length: 0))
-            testWin.contentView?.addSubview(underlyingComposer)
-            _ = testWin.makeFirstResponder(underlyingComposer)
             ModalPresentationRegistry.shared.register(modalToken)
-            XCTAssertEqual(AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store), .blockedByModalOrOverlay)
-            XCTAssertEqual(underlyingComposer.selectedRange().length, 0, "Underlying ComposerNSTextView must NOT select all while modal is open")
 
             let underlyingReader = ReaderSelectableTextView(frame: NSRect(x: 10, y: 120, width: 300, height: 40))
             underlyingReader.isEditable = false
             underlyingReader.isSelectable = true
             underlyingReader.string = "assistant reply behind modal"
-            underlyingReader.setSelectedRange(NSRange(location: 0, length: 0))
+            underlyingReader.setSelectedRange(NSRange(location: 0, length: 9))
             testWin.contentView?.addSubview(underlyingReader)
             _ = testWin.makeFirstResponder(underlyingReader)
             XCTAssertEqual(AgentHubAppDelegate.routeMenuSelectAll(in: testWin, store: store), .blockedByModalOrOverlay)
-            XCTAssertEqual(underlyingReader.selectedRange().length, 0, "Underlying ReaderSelectableTextView must NOT select all while modal is open")
+            XCTAssertEqual(underlyingReader.selectedRange().length, 9, "Underlying ReaderSelectableTextView must NOT expand selection to all while modal is open")
 
             // WHILE modal is open, an editable NSTextView inside the modal MUST STILL select its own text!
             let modalInput = NSTextView(frame: NSRect(x: 10, y: 10, width: 200, height: 30))
@@ -148,12 +141,11 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
             let rawContract = try Data(contentsOf: contractURL)
             let root = try XCTUnwrap(JSONSerialization.jsonObject(with: rawContract) as? [String: Any])
             let actions = try XCTUnwrap(root["actions"] as? [[String: Any]])
-            // Every action in agenthub-contract.json that has a ffiHandler (excluding dedicated stream attach)
+            // Every action in agenthub-contract.json that has a ffiHandler
             let invokeActions: [String] = actions.compactMap { entry in
                 guard let id = entry["id"] as? String,
                       let handler = entry["ffiHandler"] as? String,
-                      !handler.isEmpty,
-                      id != "codex.desktop.attach"
+                      !handler.isEmpty
                 else { return nil }
                 return id
             }
@@ -177,7 +169,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
                 let forwarded: Bool?
             }
             for (idx, cmd) in invokeActions.enumerated() {
-                let isLocalOnly = cmd == "plans.save" || cmd.hasPrefix("grokbot.") || cmd.hasPrefix("codex.desktop.") || cmd.hasPrefix("remote.")
+                let isLocalOnly = cmd == "plans.save" || cmd.hasPrefix("grokbot.") || cmd.hasPrefix("remote.")
                 let ack: Ack = try await store.rpc(cmd, args: ["probe": idx], localOnly: isLocalOnly)
                 XCTAssertTrue(ack.ok, cmd)
             }
@@ -284,13 +276,27 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
                 XCTAssertEqual(store.revision, 8)
             }
 
-            // 3) Window state sync updates transport atomically
-            store.updateWindowState(visible: false, focused: false)
-            XCTAssertEqual(transport.windowState.visible, false)
-            XCTAssertEqual(transport.windowState.focused, false)
-            store.updateWindowState(visible: true, focused: false)
-            XCTAssertEqual(transport.windowState.visible, true)
-            XCTAssertEqual(transport.windowState.focused, false)
+            // 3) Window state sync updates store state only when visibility actually changes
+            var changeSignals = 0
+            let cancellable = store.objectWillChange.sink { _ in
+                changeSignals += 1
+            }
+            defer { cancellable.cancel() }
+
+            store.updateWindowState(visible: true)
+            XCTAssertEqual(store.isWindowVisible, true)
+            XCTAssertEqual(changeSignals, 0, "Repeated visible=true (e.g. focus changes) must not trigger root store redraw")
+
+            store.updateWindowState(visible: false)
+            XCTAssertEqual(store.isWindowVisible, false)
+            XCTAssertEqual(changeSignals, 1)
+
+            store.updateWindowState(visible: false)
+            XCTAssertEqual(changeSignals, 1, "Repeated visible=false must not emit duplicate objectWillChange")
+
+            store.updateWindowState(visible: true)
+            XCTAssertEqual(store.isWindowVisible, true)
+            XCTAssertEqual(changeSignals, 2)
         }
     }
 

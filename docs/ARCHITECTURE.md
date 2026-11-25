@@ -28,14 +28,14 @@ macOS 原生 Swift 6 桌面宿主（协议面标识保持 `desktop_embedded_taur
 
 | 模块 | 职责 |
 | --- | --- |
-| Codex | 原生 state/index/rollout/log 读取、归档恢复、直接删除，以及本机主线程的原生桌面协作 |
+| Codex | 原生 state/index/rollout/log 读取、改名、归档恢复、账号隔离解除与直接删除 |
 | Claude Code | 递归发现、分支历史、原生进程身份、改名与按文件名定位的直接删除 |
 | Grok Build | 原生目录发现、主回合历史、登记与进程校验、改名及定向删除 |
 | Antigravity | 本机在线 Connect-RPC 与离线 SQLite／pbtxt／transcript 双模会话列表、分页详情、改名、归档恢复与含子代理后代的清理 |
 | DeepSeek Harness | `workspace.json` v2 与明文／多帧 Zstandard 会话读取、`session.lock` 并发保护改名，以及要求退出运行中 DSH 后的归档恢复与永久删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
-| AgentHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
-| `macos/`（Swift 6）+ `agenthub-ffi` | 三栏 SwiftUI 外壳、AppKit 阅读表格与显式 TextKit 1 文本视图、执行分组、搜索、附件、Plan 导出、本机 Codex 协作输入区及无死锁 C ABI 桥接 |
+| AgentHub 数据库与配置 | 自有设置、任务、事件、投递及迁移；不包含原生 Provider 数据迁移 |
+| `macos/`（Swift 6）+ `agenthub-ffi` | 三栏 SwiftUI 外壳、AppKit 阅读表格与显式 TextKit 1 文本视图、执行分组、搜索、附件、Plan 导出及无死锁 C ABI 桥接 |
 | 打包 | macOS ARM64 原生 Swift 6 App/updater（`package-macos-swift-arm64.sh`）与 Linux x86_64 无界面 webd（`package-webd-linux-x86_64.sh`） |
 
 主窗口由 `MainWindowController` 隐藏创建，只在初始化时最大化一次或使用工作区回退，首屏就绪显示；Reopen 只显示、恢复和聚焦，不重新设置几何尺寸。
@@ -49,73 +49,9 @@ API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力
 3. 同步 Swift 6（`macos/Sources/AgentHubCore/`）的模型、领域状态和对应测试，并更新 `contracts/wire-types.json`。
 4. 执行契约、Rust、Swift 6、安装及隐私门禁；准确命令见 [README 开发](../README.md#开发)。
 
-共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`codex.desktop.*`、`grokbot.list/detail` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
+共享动作必须在 registry 中有明确映射；桌面专属 `remote.*`、`plans.save`、`claude.hooks`、`claude.ownershipDiagnostics`、`grokbot.list/detail` 不进入 Linux dispatcher。仅保留现行命令正向注册，未知命令统一拒绝；不保留退役表、空 transport/internal 分类或 retiredActions。新增类型或可选字段必须同步真实序列化结构，不能仅增加同名标记。
 
 `contracts/wire-types.json` 是测试用映射及审阅后的源结构清单：Rust 用已有 syn/quote 开发依赖读取 `agenthub-core`、`agenthub-webd` 与 `agenthub-ffi` 的实际类型、serde 属性、枚举及 `dispatch.rs` 派发分支；Node 契约脚本无第三方依赖直接解析 Swift 6 模型声明与 RPC 调用。自由 JSON 与内联请求必须明确归类；代表性真实序列化测试验证缺省、null 和枚举拼写。仅名称标记不能通过实际类型/注册函数检查，负面 fixture 覆盖缺字段、缺映射和缺适配入口。更新清单必须同时审阅线上 wire shape，不能用重新生成清单代替兼容性判断。
-
-## 本机 Codex 桌面协作
-
-`codex_desktop` 能力仅属于 macOS 桌面端（协议标识 `desktop_embedded_tauri`）。九个 `codex.desktop.*` 桌面命令经类型化 Swift Store 和 `agenthub-ffi` 进入 `codex::desktop`；Linux dispatcher、远程 allowlist、原有 RPC 与 API 协议 2 保持原边界。旧服务没有该可选能力时继续阅读。归档、不可核验、远程来源和子线程不能执行。
-
-IPC 通过私有 Unix socket 连接原生桌面，校验同 UID、文件身份、权限和 peer；逐次发现 owner，跟随精确本机线程。长度前缀帧上限 64MiB，连接及普通请求等待 10 秒，start 为 90 秒、steer 为 30 秒；原生 timeoutMs 与本地期限一致，等待时继续处理状态补丁。状态快照与补丁严格检查修订号、路径和预算，失步暂停写入。每个 App 最多四个会话 worker；只按需释放无队列的空闲 worker。独立的短生命周期 bundled helper 只读取模型/模式/技能/应用/插件目录或创建空线程，不执行 turn、resume 或队列；helper 串行许可最多等待 60 秒，繁忙与原生读取超时分别提示。取得许可后，同一个 helper 完成一个目录的全部分页：应用整体 60 秒，其他目录整体 20 秒；分页不重启进程。应用请求固定 threadId:null，不 resume 原线程，可用性按全局配置评估，线程级门控【未核实】。退出或取消时仅回收自有 helper。
-
-原生执行使用 `desktop/protocol.rs` 中固定的白名单，对照的桌面 build 20586 与 20770 方法表一致：stream=11、queue=2，start=2、steer=1、interrupt=4、settings=2、审批/问答/elicitation=1；initialize=0、owner discovery/follow=1。没有猜测或探测新的写入方法。协议不支持、owner 不可用、修订失步、超时分别返回固定中文提示；协议不兼容只停止对应操作并提供原生处理入口，owner/失步提示打开同一线程或重连，不按 build 号禁止发送，不探测新的协议；历史阅读仍可使用，不启用其他执行器。发送前重验线程存在、未归档、当前 owner 与状态；补充/停止绑定当前回合。AgentHub 自有发送队列独立于原生整表队列，不覆盖原生排队内容。只在已核验空闲状态时发送，并等待返回的确切回合终态才发送下一项；原生界面并发操作仍由原生桌面处理，IPC 不提供跨界面的原子空闲锁。
-
-自有数据库 schema 3 保留加密发送记录；旧版本迁移由 v2.0.10 完成。专属 Keychain 密钥通过 `CredentialAccess` 访问，没有开发密钥回退；缺失密钥时保留已有密文。跨进程私有文件锁限制唯一调度者。认领先落盘，只有原生确认或匹配 client message ID 后清除正文；断线/重启的未发项暂停，正在发送项标记结果不明，不自动重发。普通补充失败保留待取消，不能在恢复队列时改成新回合。新增非空引用区间以已解析引用索引保存，不依赖会过期的界面 handle；新提交同时记录内部 nativeMentions 标记，缺失时读取旧文本与 text_elements 编码，不重写已有密文。没有区间时沿用旧加密正文的逐字节格式，client message ID 仍按原正文判等，格式变化不能绕过幂等检查。停止先暂停本线程未发队列，移除结果不明记录需要明确核对。
-
-单条加密正文最多 1MiB，总密文 32MiB，最多 1,000 个未结项、每线程 50 项，已结束身份保留 1,000 项；限制覆盖保留内容，不代表进程 RSS 上界。目录投影缓存最多八个快照/8MiB、每快照 20,000 项，60 秒失效，每页 100 项；选择授权最多 256 个、30 分钟，绑定连接 revision 与线程。缓存锁不跨越 helper I/O，同来源、线程和目录种类的并发读取合并；失败只共享给当轮等待者，不缓存。models、modes、skills、plugins、apps 独立读取、缓存、失败和重试。可选 forceRefetch 只允许首页使用，绕过对应缓存；仅 skills/plugin/app 已核验方法携带原生刷新参数。模型及 effort 由 model/list 校验，模式由 collaborationMode/list 与当前 default/plan 支持集取交集；core 只限制设置字符串非空、128 字节且无控制字符。模式变化保留合法 effort，不合法则 null 继承并提示；设置失败显示原生 view 的真实值。失效 cursor 不能继续使用，界面重试会从首页开始；前端先发起已安装插件请求，应用与插件分别发布结果和重试；缓存命中不等待另一种目录的 I/O，原生 helper 仍串行。单个来源失败或慢读不丢弃另一个成功来源，每次最多挂载 100 项。
-
-Swift 界面仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段，包含 handle 与用户文本中的 UTF-8 半开区间。输入 `$` / `@` 后可用上下键、Enter/Tab 选取技能或应用/插件，Escape 关闭；输入法组合时不选择或发送。编辑占位文本会撤销相应绑定，删除标签会同时移除其占位文本。Rust 从授权引用推导占位文字，校验身份、名称、字符边界、非重叠和最多 32 个区间，新提交按已核验的原生 composer 序列化为 Markdown 引用链接，同时保留结构化 skill / mention 和 `text_elements: []`；旧队列继续按原 `text_elements[].byteRange` / `placeholder` 构造。技能与应用链接标签为 `$name`，插件为 `@name`；界面仍使用 `$` 搜索技能、`@` 搜索插件和应用。链接由 Rust 授权引用生成并转义，界面不接收路径。插件使用原生 canonical name 插入，友好标题保留为目录说明，避免显示名与原生引用不一致。
-
-原生选择器路径和原生目录引用仅在 Rust 解析；选中文件及队列发送前核验规范路径、dev/inode、大小与修改身份。新选择的图片与不超过 20MiB 的普通文件在授权阶段以 64KiB 流式缓冲记录 SHA-256、uid/gid 和 mode；这些信息仅作为加密 FileIdentity 的可选 content_proof 保存。只有规范路径、dev/inode、大小、mtime、所有者与权限都相同，且重新读取的摘要一致时，才允许单纯 ctime 变化。读取前后重验描述符与路径身份；替换、改写、权限变化、符号链接替换或读取失败仍拒绝。大文件及没有摘要的旧引用保持严格规则，旧读者可忽略新增嵌套字段，不重写已有队列。图片限 20MiB，仍使用 `localImage` 和既有附件字段；Mention 使用 `app://id` 和 `plugin://name@marketplace`，仅展示原生可访问应用与已安装启用插件。普通文件暂保留 `# Files mentioned by the user:` 兼容前缀；旧队列同时有内联引用时统一平移区间。start 的附件元数据放在原生处理器实际读取的 turnStart.context.attachments，不能放入 app-server request。
-
-`codex.desktop.attachments` 只处理本机主窗口的接收区绑定、坐标更新、明确粘贴、草稿引用释放和解绑；请求只含 revision、session/binding、矩形与 handle，不含路径、URL、图片字节或原生方法名。Swift 将原生拖放与剪贴板原始快照交给 Rust `agenthub-ffi`，核对窗口可见/聚焦、区域、当前来源和可写线程后复用文件选择核验，整批超限或含无效文件时整批拒绝。只通过带单调 `seq` 与单次 `closed` 保证的专用 `StreamSink` 返回名称、种类和 handle。发送或选择文件期间暂停接收；失焦、隐藏、切换与解绑后停止被动更新并丢弃迟到导入，重新聚焦重建接收区。前端只在 handle 值变化时更新授权集合；主动粘贴仍保留原有聚焦和身份检查，普通文本粘贴保持原行为。
-
-明确粘贴时优先读取 Finder 的本机文件 URL 列表，再读取系统 PNG/JPEG/TIFF，最后识别完整路径文本；不读取 HTML 或抓取网络图片。文本每行一个绝对路径、`~/` 路径或本机 file URL，允许空格与成对引号；单段最多 32×8192 字节、32 个文件，单路径最多 8192 字节，不解释变量、命令替换或 shell。只在整段均为有效普通文件时去重并整批附加，目录、远程 file URL 和无效项不获得授权；文本识别失败时通过可选 pasteDisposition=text 回退浏览器原文，旧响应缺少该字段仍按原 Channel 处理。
-
-图片单次捕获最多 64MiB，解码前按尺寸预留每像素 16 字节、共 128MiB 工作预算；只接受单图且深度不超过 16 位，输出 PNG 最多 20MiB，不缩放或降低质量。PNG 原样保留，TIFF/JPEG 由系统框架转换；WebKit 未提供 image MIME 时仍可通过明确粘贴读取原生图片。读取、转换和导入后核对 clipboard changeCount，同一接收区的重复粘贴不重复导入；移除附件后允许重新选择。绑定请求合并，恢复焦点后的主动粘贴最多等待接收区五秒；线程、窗口或会话变化丢弃迟到结果。普通文本保持默认编辑路径，异步文本回退使用原生 insertText，光标或草稿已变时不覆盖。导入串行，预算不代表系统剪贴板服务或进程 RSS 的硬上界。
-
-附件命令始终绑定对应的 `StreamSink`：仅 `bind` 通过 `agenthub_ffi_desktop_attachments` 创建并持有流通道，其他操作复用已有接收区。不能在每次 bounds、paste 或 release 调用中重建流通道，以免临时实例释放发送结束帧提前关闭仍在使用的附件通知通道。解绑与切换会话仍关闭原通道，迟到事件不得恢复旧附件。
-
-粘贴图片写入 AgentHub 数据库旁的私有附件目录（目录 0700、文件 0600、随机名、独占创建），写完并同步后捕获原有 `NativeReference::File` 身份，之后不改名或改写。图片为原生 owner 可读取的明文私有文件；归属和生命周期索引使用现有专属 Keychain 密钥加密，索引上限 1MiB，图片总量最多 512MiB/256 项。沿用跨进程 worker 锁，初始化/恢复后台工作取消也不提前释放锁。未提交草稿可显式释放或在 30 分钟后清理；隐藏/重连在授权有效期内保留草稿。发送前先原子持久化并同步保留标记，再交给原有队列，成功、失败、取消或结果不明均不自动删除这些图片，避免破坏原生历史。容量满时拒绝新粘贴，可继续使用文件选择器。启动只清理有完整归属证据的过期草稿，`Released` 标记允许接续草稿删除；密钥缺失、损坏/缺失索引、未知遗留文件或身份变化时保留文件并停止操作，不猜测崩溃后的归属，不新增数据库表或旧队列格式。
-
-审批 key 包含完整原生请求；文件审批另外绑定对应 turn/item 的实际 changes。展示不完整、未知权限/表单约束均不得批准，保留原生处理入口。命令与文件审批在 `supportedDecisions` 可选字段明确声明后，才显示“允许本次会话”；新增可选 `decision` 保留原 `allow` 布尔兼容，只接受已核验的 accept/decline/acceptForSession 及一致布尔值。未知决策为 UnsupportedProtocol，过期 key 为 RequestExpired；权限仍限 turn scope，不创建永久授权。问答只提交当前请求的精确 ID；原生另一侧完成请求后以新的原生状态撤下原请求。
-
-审批的可选 `review` 字段按已有字符串和结构投影命令、工作目录、原因、文件变化与网络/文件系统权限；旧 `body` 后备仍保留。未知字段放入折叠原文，命令用等宽文本、文件 diff 按文件折叠且展开才挂载；每个 diff 最多 32KiB、最多 100 文件、投影文本总量 64KiB，UTF-8 边界安全截断。原有 pretty body 16KiB/compact params 64KiB 审批守卫保持；截断或未完整显示时不能批准。序列化与请求哈希使用有界写入或流式处理，不克隆整份 params/changes，不改变完整请求绑定的哈希。
-
-协作状态直接取当前 `DesktopView`：等待请求优先于执行、发送、排队、结果不明/暂停和空闲；同一行显示待处理数，运行复用 `RunningIndicator`。断连、只读、隐藏或 detach 后不显示旧状态，提交中显示“正在提交到 Codex…”，不添加 IPC 方法或未知进度字段。
-
-FFI `StreamSink` 最多每秒十次投影视图，初值取自同一订阅；Swift 端按单调 `seq`、连接修订与线程身份丢弃乱序、旧连接或旧线程结果。仅当前协作线程通过 350ms 合并事件刷新详情；慢读取不被反复取消，期间的新事件在完成后触发一次尾刷新，包含审批完成和回合终态。原有阅读轮询保持，未添加全局高频轮询。隐藏/离开页面释放界面订阅和待刷新计时器，已提交的本机队列继续归原 worker；原有 monitor 和通知仍独立读取原生证据。
-
-诊断只保存在进程内 50 条环形缓冲中；`codex.desktop.diagnostics` 只供 macOS 本机读取，连接失败也可使用。记录时间、来源、白名单方法/版本、数值 code、固定错误分类及最多 200 字符的安全提示；原生自由文本使用占位，不保留正文、路径、URL、邮箱或凭据。复制操作由用户触发，不落盘、不上传。桌面 build 与 bundled CLI 版本只读获取，失败返回未知；版本仅保留在诊断中，实际方法版本不符才阻断该操作，不尝试其他版本。
-
-诊断请求的可选 copy 字段仅允许 Rust 将有界安全 DTO 写入本机系统剪贴板，不接收任意复制正文；重新核验本机 revision 与主窗口焦点，总文本限 64KiB。界面明确显示复制成功或失败，不依赖 WebKit 异步剪贴板授权。省略字段保留只读响应；诊断版本来自当前本机安装，不代表已验证该 build 的全部行为。
-
-可选 DesktopView.goal 只投影原生 snapshot 的 threadGoal／completedThreadGoal 中目标、状态与截断标记，目标最多 4096 字节，未知状态固定显示待确认。支持已核实的 active、paused、blocked、usageLimited、budgetLimited、complete；随现有快照和补丁同步，断线不显示旧目标。创建、修改、暂停、恢复只提供既有“在 Codex 中打开”入口，不添加 follower Goal 方法，不恢复退役调度器或 Goal RPC。
-
-原生 `request-timeout` 与旧 `timeout` 同属超时，提交结果仍按未知处理且不重发。原生 `request-version-mismatch`、`no-handler-for-request` 与旧名称映射为协议不支持；`no-client-found` 属于 owner 不可用。这些已核验的执行前拒绝可标记未发送。任意 handler 异常不能证明没有执行，start/steer 仍为结果不明，不重发。Settings、Stop、审批、问答和 elicitation 的明确拒绝保留 Rejected 且不断流；身份/传输故障不能伪装成业务拒绝。空线程创建提交后出错或返回身份不完整也保持结果不明，界面不重复创建。
-
-失步先暂停队列，再自动重建一次订阅并获取完整 snapshot；断线按 1、2、4、8、16 秒最多五次尝试，每次重新校验 socket、UID、线程与 owner。同 owner 可恢复协作；owner 变化只恢复阅读，明确点击“连接”确认后才能发送、设置和审批，队列仍需手动继续；只读期间仍显示暂停与结果待核对项，禁用队列操作。只有 snapshot 的精确 client message ID 可核对 unknown。恢复旋转会话代际、重置修订比较；FFI `StreamSink` 在恢复期间保持订阅，旧动作和附件结果被拒绝。可选 confirmOwner 区分明确连接意图与隐藏后重新订阅；旧请求不自动确认已有 worker 的新 owner。点击“在 Codex 中打开”或新建后自动连接，owner 等待总计 20 秒；普通浏览不自动连接。新建后保留已知身份，打开或后续选中失败只能重试打开/连接。线程连接 I/O 使用按线程的准入锁，不持有跨线程 worker 注册锁。
-
-### 证据与未核实项
-
-1.3.4 的隔离文件样本已复现 macOS 扩展属性更新只改变 ctime、内容与其他身份不变时被误拒；摘要复核覆盖此情形，不能据此确认用户截图中那次失败的唯一原因。新增 Finder、路径文本、PNG/TIFF/JPEG 使用专用 pasteboard 测试，不触碰真实剪贴板；修复候选真实粘贴与发送由用户确认，覆盖范围见[1.3.4 验收记录](https://github.com/lich13/agenthub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。
-
-1.3.3 修复前已只读复现：带线程 ID 的临时 helper 返回 -32600/thread not found；threadId:null 的应用冷读约 29–32 秒，同一 helper 第二页约 108ms；model/list 实际包含 max。当时桌面 build 为 20586、bundled CLI 为 0.163.0-alpha.10.2；这些目录探测不是回合或两端功能验收。
-
-1.3.1 的只读核对依据桌面 build 20586 应用源码；`crates/agenthub-core/tests/fixtures/desktop-native-input/source-derived.json` 保存源文件标识、SHA-256 和脱敏合成输入，**不是桌面采集快照**。`conversation-turn-mutations` 确认内联字段为 camelCase `byteRange`；审批面板的 Qr / $r 与 follower 转发实现共同确认命令和文件的 `acceptForSession`。未复制原生源码到运行时代码，也未采集真实用户消息。
-
-1.3.3 对照 build 20586 的 composer dG/uG/getPersistedText，确认已解析技能、应用和插件使用 Markdown 链接；原生 Ej 从 context 读取 attachments。`mention-links-source-derived.json` 仅为脱敏源码派生 fixture，不是 liveCaptured。只读 Goal 依据同一构建的 Jg 投影及目标面板状态枚举；参考项目的独立 Goal 元数据通道未采用。原生应用目录冷读仍可能等待约 30 秒，缓存和独立展示不能等同于降低原生网络耗时。
-
-Goal 仅支持状态显示与原生操作入口，直接创建、修改、暂停和恢复不在当前范围内。build 20770 所带 CLI 0.163.0-alpha.10.2 的实际 schema 包含 `thread/goal/get`、`thread/goal/set`、`thread/goal/clear`，但它们不是已核验的 follower 方法。`origin: user` 用于明确的用户操作；缺失来源不能代表用户授权。[参考项目的 GoalRPC](https://github.com/try2love/codex-mobile-bridge/blob/70a275b0eabea6f3bda333f35ef925741927bd11/bridge/features/sessions/goal.py) 另开元数据 app-server，写入未携带该来源，再经桌面启动消息激活目标，不能据此认定与当前原生操作等价。隔离双进程验证中，owner 先创建 paused Goal 后，第二个进程可读目标，但携带 `origin: user` 的修改和清除返回 -32603（记录用户目标指令失败）；关闭 owner 后同样的修改与清除成功。未触发 turn，未操作真实会话。该结果不支持在保持当前 owner 写入边界时直接复用此通道，也没有证明跨进程写入能同步桌面内存状态；不得省略用户来源、关闭用户 owner、直接写原生数据库或模拟 follower 方法来绕过。
-
-2026-10-18 用户诊断显示桌面已为 build 20770，bundled CLI 版本不变。只读核对其 `src-DsLVGakC.js` 的 SHA-256 与上述 fixture 所记源文件一致，现用连接、订阅与写入方法版本均未漂移。用户在目标线程尚未由桌面打开时点击“连接”得到 Timeout，按先打开同一线程的流程操作后确认连接正常，随后明确确认其余候选验收项目通过，范围见 [1.3.3 验收记录](https://github.com/lich13/agenthub/blob/cfb1be16f2f49200db8db6cfae6eab9ea797597d/docs/progress/MASTER.md#候选与十项用户验收)。该轮没有完成独立只读 socket 探测，不把用户验收写成助手实机测量。兼容检查依据方法版本、状态形状和身份，不以桌面 build 数字拒绝连接；新增未知字段不自动成为可写能力，未知方法版本仍停止对应操作，不能保证未来不兼容协议无需适配。
-
-- **【未核实】** 桌面原生文件引用的完整 wire 形状。1.3.2 未采集 liveCaptured snapshot，N0/N1 按批准范围跳过；因此普通文件兼容前缀和旧加密正文保持，不宣称与原生气泡完全一致。
-- **【未核实】** 文件审批 `cancel`、永久授权、策略修订和其他未列举决策；未暴露按钮或发送这些字符串。
-- **【未核实】** 本轮真实 skill/app/plugin/文件/图片 snapshot 未采集。用户已确认候选两端流程通过，未提供逐项延迟测量或覆盖全部视觉/滚动场景；合成 socket 与 UI 单元测试不替代这些证据。
-- **【未核实】** 仅 IPC pending、rollout 未落盘时的漏通知。当前 monitor 依据原生 rollout，尚无可复现的漏通知证据，N6 不扩展 worker 通知，也不声称已经证明无缺口。
-- **【未核实】** 除上述证据及用户验收覆盖范围外的桌面版本与操作。仅 build 不同只显示提示，具体 IPC 方法版本或状态核验不通过时只读降级，由用户在 Codex 中继续处理。
 
 ## Provider 读取与历史
 
@@ -237,7 +173,7 @@ Swift 界面只向 `agenthub-ffi` 传命令、参数及连接 revision。桌面�
 
 「安装并连接」经 SSH 发送 App 内置固定引导脚本，下载同版本正式服务包，复用可信公钥、签名验证及现有安装器。Ubuntu/Debian x86_64 自动补齐必要依赖；其他 Linux x86_64 需要已有 systemd 和依赖。失败按认证、依赖、下载、签名、安装或健康检查阶段报错，可明确重试；不修改 sudoers。
 
-TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目录、配置和桌面钥匙串迁移由 v2.1.0 完成，本版不再执行。CredentialAccess 独立于 SSH，保留 Codex 发送队列密钥与业务审计。systemd 继续保留隔离及 Provider 数据根的精确 ReadWritePaths，Grok／Claude 配置与凭据使用可选 ReadOnlyPaths。
+TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目录、配置和桌面钥匙串迁移由 v2.1.0 完成，本版不再执行。本机 Codex 桌面连接对话、发送队列与 CredentialAccess 已退役（存量钥匙串条目保留不触碰），业务审计独立保留。systemd 继续保留隔离及 Provider 数据根的精确 ReadWritePaths，Grok／Claude 配置与凭据使用可选 ReadOnlyPaths。
 
 更新任务与 Probe helper 使用内部 `ProcessCommand` 的 program/args 直接启动，不执行配置 shell 字符串。现行默认更新命令映射到固定包装器及参数；自定义 shell、环境赋值、管道、重定向和命令替换返回固定错误。任务名称、状态、输出处理、互斥与审计字段保留；备份清理直接运行固定 Python 参数，保留最近三份。序列化 command 字段仅保留兼容展示，不改变 wire shape；Hook/配置文本的 shell_quote 统一实现并保留既有引用策略。
 
@@ -245,7 +181,7 @@ TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目�
 
 桌面专属 remote.sshDelete 接收 revision 与 alias，返回更新后的 RemoteConnectionView，不接收前端文件路径。用户配置与 Include 按显式别名编辑，保留注释、权限、其他别名与密钥；系统配置不能删除。原子替换失败报告并恢复已替换文件；删除对应 AgentHub 记录，当前连接被删除时回到本机。
 
-Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。rpc-stdio 与 health 使用单线程 Tokio，其余命令保留原运行方式。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，所有后台轮询（包括终态）传 false，展开时读取全文，终态仍刷新相关状态。作业注册表仅持有互斥组；启动、等待或读取失败统一收尾，日志排空与终态处理后释放，无现成运行时时使用单线程 runtime。前端不改写文件名或地址，后端保留凭据脱敏。
+Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。仅常驻 `serve` 与 `probe monitor-errors` 使用双工作线程 Tokio，`rpc-stdio`、`health` 及各短时 CLI／Hook 子命令统一使用单线程 Tokio。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，所有后台轮询（包括终态）传 false，展开时读取全文，终态仍刷新相关状态。作业注册表仅持有互斥组；启动、等待或读取失败统一收尾，日志排空与终态处理后释放，无现成运行时时使用单线程 runtime。前端不改写文件名或地址，后端保留凭据脱敏。
 
 ## 通知与监测
 
@@ -269,7 +205,7 @@ Hook 按 Provider 筛选待发队列，再限量、解密和领取；后台全�
 
 通知首发、重试、Hook、CI 与 monitor 共用配置读取回调；服务端和文件入口复用按 TOML／env 文件身份、修改时间及长度失效的既有缓存。原生扫描入库及 Bark 启用同步在设置保存所用事务内重读配置，避免旧扫描覆盖新启停基线。等待轮询时每两秒检查设置变化，变化后立即进入下轮；未变化时保持原扫描间隔，不增加监控任务。来源检查结束及每段发送前读取当前开关和目标，排队事件保留原目标指纹；身份解析不会将旧事件改投新目标。配置读取失败沿用错误处理。
 
-原生通知待发正文用既有 SecretBox 加密；交接到 Bark 重试队列后清除原生正文副本，终态只留身份、结果和界面短摘要。保留期清理包括 unknown，保护待发、重试和当前游标仍需要的去重身份，Antigravity 游标推进后再淘汰旧身份。会话身份或游标未变时不更新该行；原生待发队列使用 pending／delivering 局部索引；通知结果按实际变化的事件键更新关联 probe_events、原生投递和错误事件，借助 JSON 事件键及 event_id 索引避免历史全表扫描。没有状态变化时不执行结果回写，必要扫描状态照常持久化。三个索引在现有迁移锁内补建，schema 保持 3。
+原生通知待发正文用既有 SecretBox 加密；交接到 Bark 重试队列后清除原生正文副本，终态只留身份、结果和界面短摘要。保留期清理包括 unknown，保护待发、重试和当前游标仍需要的去重身份，Antigravity 游标推进后再淘汰旧身份。会话身份或游标未变时不更新该行；原生待发队列使用 pending／delivering 局部索引；通知结果按实际变化的事件键更新关联 probe_events、原生投递和错误事件，借助 JSON 事件键及 event_id 索引避免历史全表扫描。没有状态变化时不执行结果回写，必要扫描状态照常持久化。原有三项通知关联索引与后续新增的四项增量索引（审计／作业时间、原生投递更新时间及 Claude 会话局部索引，合计 7 项）均在现有迁移锁内幂等补建，schema 保持 3。
 
 Mac 普通启动和保存设置使用非强制 kickstart；仅 helper 内容变化且服务已加载时执行一次 kickstart -k，plist 变化仍沿用 bootout／bootstrap。
 
@@ -307,7 +243,7 @@ Antigravity／DSH 列表在筛选、排序与截取后才请求大小；详情�
 
 | 缓存或工作 | 当前预算 |
 | --- | --- |
-| Codex 正文 / 活动扫描 / session index | 128 / 8 / 16MiB；活动扫描每项至少计 9KiB，至多约 910 个线程驻留，超出按字节预算淘汰 |
+| Codex 正文 / 活动扫描 / session index | 128 / 8 / 16MiB；活动扫描（`SCAN_CACHE`）按结构与嵌套字符串／问答堆容量真实计重，至多 2,000 个线程驻留，超出条目或字节预算按 LRU 淘汰 |
 | Codex 问题 / 子线程生命周期 / 关联 | 4 / 4 / 1MiB |
 | Claude 正文 / 摘要 | 160MiB；摘要 2,000 条、8MiB |
 | Claude 输入文件 / 单条记录 | 512 / 32MiB |
@@ -318,12 +254,12 @@ Antigravity／DSH 列表在筛选、排序与截取后才请求大小；详情�
 | 历史变更记录 | 64 个 revision，合计 4,096 个变化身份；超限要求安全刷新 |
 | 大小缓存 / 队列 / worker | 512 项 / 128 项 / 2 个；TTL 30 秒 |
 | 单次目录统计 | 10,000 项、16 层、250ms |
-| 阻塞读取 / 凭据工作 | 按可用并行度限制为 2–4 个 / 1 个 |
+| 阻塞读取 | 按可用并行度限制为 2–4 个 |
 | Swift 阅读器已挂载行视图缓存 | 最多 128 个已渲染单元格，配合增量行高表与 Lucide 图标光栅缓存 |
 
 Antigravity／DSH 时间线随历史快照生成，按实际分配容量计入现有缓存预算；revision 在快照生成时按实际内容计算，不新增增量变更日志，保留保守旧页重读。Antigravity 在线缓存修订只依据会话 ID 与摘要，终态判断复用来源层结果，身份、解析或提前空页错误明确返回且不进入缓存。分页以首批总数为目标，末页允许因原生追加超出目标，不设 50,000 步硬上限；仅服务不可达或无在线内容时回退离线。
 
-Claude 摘要与 Codex 问答、子线程状态及创建任务名缓存接入既有 5 分钟空闲释放入口，不新增定时器；释放缓存引用后再次读取按原数据重建。
+Claude 摘要与 Codex 活动扫描、`session_index`、问答、子线程状态及创建任务名缓存均接入既有 5 分钟空闲释放入口，不新增定时器；实际发生缓存淘汰时在 Linux glibc 下触发 `malloc_trim(0)` 归还空闲堆页，空轮询不触发；释放缓存引用后再次读取按原数据重建。
 
 DSH／Grok 通知派生条目只在内容变化时计重并维护总量，Grok JSONL 缓存使用共享不可变数组。扩大 DSH 缓存覆盖可能增加驻留内存。上述缓存各自计重，**不是进程内存硬上界**：正在引用的 Arc 快照可能暂时不可淘汰，解析、响应序列化、已渲染的 `NSAttributedString`、AppKit 视图与并发请求有额外内存；App、helper 和远程服务又是独立进程。目录条目按数目而非完整堆内存计重，隐藏扫描预算见管理章节。超大快照可返回但不长期保留；不能以改变成功读取行为的方式把配置预算解释成全局 RSS 限额。
 
@@ -342,9 +278,9 @@ DSH／Grok 通知派生条目只在内容变化时计重并维护总量，Grok J
 | 1.3.6 压缩 rollout／Claude 过程显示 | 旧客户端忽略可选阶段字段；压缩目标继续按旧能力边界拒绝离线回退 | 最低服务保证压缩只读核验、引用复检和可选 Claude 阶段字段 |
 | 2.1.27 codex_account_scope | 不显示「Codex 账号隔离」入口；`probe.hooks.clear_account_scope` 缺省为关闭 | 最低服务保证状态查询与解除命令 |
 
-v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。旧 thread_followups 表和历史数据保留，仅删除无生产调用的旧操作方法；当前加密发送队列保持原行为。
+v2.1.1 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0；早于 schema 3 的数据库须先经过 v2.0.10。协议保持 2、数据库 schema 保持 3。旧 `thread_followups` 与退役 `codex_desktop_submissions` 表在存量升级库中保持不删除，可直接完整回退至 v2.1.30；`v2.1.38+` 全新创建的数据库仍标记 schema 3 但不再创建 `codex_desktop_submissions` 表，将该全新库回退至 v2.1.30 时会话阅读、管理与通知正常可用，旧版本机 Codex 发送队列因缺表不可用。
 
-新库在现有迁移锁和事务内建立最新结构，schema 3 打开时不再运行旧开发密钥重加密、明文正文迁移或抽样解密预检。实际读取密文时仍验证 GCM tag。配置加载保留真实解析错误，缺失或空运行密钥在现有 env 文件中以 0600 原子写入，替换空条目；有效 Base64、Base64URL 与 hex 密钥保留。独立 Keychain 加密的 Codex 发送队列不参与通知密钥处理。
+新库在现有迁移锁和事务内建立最新结构，schema 3 打开时不再运行旧开发密钥重加密、明文正文迁移或抽样解密预检。实际读取密文时仍验证 GCM tag。配置加载保留真实解析错误，缺失或空运行密钥在现有 env 文件中以 0600 原子写入，替换空条目；有效 Base64、Base64URL 与 hex 密钥保留。
 
 Claude reader 一次性升级查询已删除，通知基线仅首次建立或启停变化时写入，重新启用建立新基线。保留当前通知队列、去重、认领、重试次数、成功分段、任务、审计及其他业务数据；不打开或迁移原生会话数据库，也不执行额外空间回收。
 

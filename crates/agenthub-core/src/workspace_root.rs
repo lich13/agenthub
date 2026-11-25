@@ -20,10 +20,15 @@ const MAX_CACHE_ENTRIES: usize = 2_048;
 pub(crate) fn evict_idle_cache(max_idle: Duration) {
     if let Ok(mut guard) = WORKSPACE_ROOT_CACHE.lock() {
         if let Some(map) = guard.as_mut() {
+            let before = map.len();
             let now = Instant::now();
             map.retain(|_, (_, ts)| now.saturating_duration_since(*ts) < max_idle);
+            let evicted = map.len() < before;
             if map.is_empty() {
                 *guard = None;
+            }
+            if evicted {
+                crate::note_cache_eviction();
             }
         }
     }
@@ -32,7 +37,7 @@ pub(crate) fn evict_idle_cache(max_idle: Duration) {
 /// When `cwd` resides inside a Git worktree whose `.git` file points to
 /// `<main_repo>/.git/worktrees/<name>` (or `commondir`), returns `<main_repo>`.
 /// Returns `None` when `cwd` is empty, relative, or already a normal directory/repo root.
-pub fn resolve_workspace_root(cwd: &str) -> Option<String> {
+pub(crate) fn resolve_workspace_root(cwd: &str) -> Option<String> {
     let trimmed = cwd.trim();
     if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
         return None;

@@ -4,32 +4,6 @@ import SwiftUI
 import XCTest
 
 final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
-    @MainActor
-    func testCollaborationMenuHasOneUnclippedChevronAtTrailingInset() throws {
-        guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else { return }
-        for height in [24, 28, 30] {
-            let width = 160
-            let label = CollaborationMenuLabel(title: "A", height: CGFloat(height), fill: .white)
-            let menu = AnchoredMenuButton(entries: [NativeMenuEntry(id: "a", title: "A", selected: true) {}]) { label }
-                .foregroundStyle(.black).frame(width: CGFloat(width), height: CGFloat(height)).background(Color.white)
-            let pixels = try renderOffscreenView(menu, size: NSSize(width: width, height: height), appearance: .aqua)
-            let black = { (x: Int, y: Int) in
-                let offset = 4 * (y * width + x)
-                return pixels[offset ..< offset + 3].allSatisfy { $0 < 195 }
-            }
-            var xs: [Int] = [], ys: [Int] = []
-            for x in 64 ..< width {
-                for y in 0 ..< height where black(x, y) { xs.append(x); ys.append(y) }
-            }
-            let left = try XCTUnwrap(xs.min()), right = try XCTUnwrap(xs.max())
-            let bottom = try XCTUnwrap(ys.min()), top = try XCTUnwrap(ys.max())
-            XCTAssertEqual((left + right) / 2, width - 15, accuracy: 2)
-            XCTAssertTrue((5 ... 11).contains(right - left), "trailing control must contain one full chevron")
-            XCTAssertEqual((bottom + top) / 2, height / 2, accuracy: 2)
-            XCTAssertTrue((2 ... 6).contains(top - bottom))
-        }
-    }
-
     // MARK: - 1. Six-Provider Menu Matrix, Multi-Select Context Menu & Keyboard Guard (§2.3)
 
     func testSixProviderMenuMatricesAndBatchKeyboardRules() {
@@ -383,7 +357,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             }
             let maxRegionalPixelDriftRatio: Double
             let desktopRegions: [Region]
-            let floatingComposerRegions: [Region]
             let sessionRowColors: [String: SessionRowColors]
             let providerExpectedSelectedNavColors: [String: [String: NavAccent]]
         }
@@ -465,7 +438,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             }
         }
 
-        // 3) Offscreen Light & Dark Snapshots for Floating 768pt Composer, Side-Hover Copy Button & Session Row Badges (Item #16)
+        // 3) Offscreen Light & Dark Snapshots for Side-Hover Copy Button & Session Row Badges (Item #16)
         for (schemeKey, scheme, schemeKind, appearance) in [
             ("light", ThemeMode.light, ColorSchemeKind.light, NSAppearance.Name.aqua),
             ("dark", ThemeMode.dark, ColorSchemeKind.dark, NSAppearance.Name.darkAqua),
@@ -473,45 +446,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             store.setTheme(scheme)
             store.activeWorkspace = .codex
             let palette = DesignPalette.resolve(scheme: schemeKind, workspace: .codex)
-
-            // 3a. Floating 768pt 24pt-radius composer over 1000x180 `--bg` stage (left & right margins remain pure `--bg`!)
-            let composerStage = ZStack(alignment: .bottom) {
-                palette.background.color
-                DesktopCollaborationFooterView(
-                    connection: store,
-                    threadId: "th-snap",
-                    availableWidth: 1000,
-                    viewportHeight: 820
-                )
-            }
-            .environment(\.agentHubPalette, palette)
-            let composerPixels = try renderOffscreenView(
-                composerStage,
-                size: NSSize(width: 1000, height: 180),
-                appearance: appearance,
-                pngName: pngOutDir.map { "\($0)/composer-floating-\(schemeKey)-1000x180.png" }
-            )
-            for reg in baseline.floatingComposerRegions {
-                let ratio = regionBackgroundMatchRatio(
-                    pixels: composerPixels,
-                    imageWidth: 1000,
-                    region: (reg.x, reg.y, reg.width, reg.height),
-                    expected: (palette.background.r, palette.background.g, palette.background.b)
-                )
-                XCTAssertGreaterThan(ratio, 0.95, "\(schemeKey) \(reg.name) must remain stage `--bg` outside floating 768pt card")
-            }
-            XCTAssertTrue(
-                regionContainsColor(
-                    pixels: composerPixels,
-                    imageWidth: 1000,
-                    region: (200, 20, 600, 120),
-                    target: (palette.surface.r, palette.surface.g, palette.surface.b),
-                    tolerance: 2
-                ),
-                "\(schemeKey) floating composer card must render `--s` surface in center 768pt column"
-            )
-            let composerRepeat = try renderOffscreenView(composerStage, size: NSSize(width: 1000, height: 180), appearance: appearance, pngName: nil)
-            XCTAssertLessThanOrEqual(pixelDifferenceRatio(composerPixels, composerRepeat), baseline.maxRegionalPixelDriftRatio)
 
             // 3b. Assistant reply with hovered floating side-copy button in right margin (`x = 76 + 768 + 6 = 850`, 0.0pt height overhead)
             let coord = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())

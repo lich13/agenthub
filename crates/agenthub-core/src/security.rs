@@ -1,11 +1,3 @@
-use sha2::{Digest, Sha256};
-
-pub fn hash_token(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
 pub fn is_sensitive_output_line(line: &str) -> bool {
     fn word(byte: u8) -> bool {
         byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')

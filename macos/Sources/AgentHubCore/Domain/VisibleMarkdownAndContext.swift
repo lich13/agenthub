@@ -114,6 +114,77 @@ private enum MarkdownPatterns {
 }
 
 public enum VisibleMarkdownEngine {
+    private static let utf8MemoryMarkers: [[UInt8]] = [
+        Array("oai-mem-citation".utf8),
+        Array("citation_entries".utf8),
+        Array("rollout_ids".utf8),
+        Array("memory_citation".utf8),
+    ]
+    private static let utf8PageMarker: [UInt8] = Array("external_codex_apps_".utf8)
+
+    private static func containsASCIICaseInsensitiveBytes(_ buf: UnsafeBufferPointer<UInt8>, needleLower: [UInt8]) -> Bool {
+        let nLen = needleLower.count
+        guard nLen > 0, buf.count >= nLen else { return false }
+        let firstLower = needleLower[0]
+        let firstUpper = (firstLower >= 0x61 && firstLower <= 0x7A) ? (firstLower - 32) : firstLower
+        let maxStart = buf.count - nLen
+        var i = 0
+        while i <= maxStart {
+            let b = buf[i]
+            if b == firstLower || b == firstUpper {
+                var match = true
+                var k = 1
+                while k < nLen {
+                    let hb = buf[i + k]
+                    let lowerHb = (hb >= 0x41 && hb <= 0x5A) ? (hb + 32) : hb
+                    if lowerHb != needleLower[k] {
+                        match = false
+                        break
+                    }
+                    k += 1
+                }
+                if match { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
+    private static func withUTF8Buffer(_ text: String, _ body: (UnsafeBufferPointer<UInt8>) -> Bool) -> Bool {
+        if let res = text.utf8.withContiguousStorageIfAvailable(body) {
+            return res
+        }
+        var copy = text
+        return copy.withUTF8(body)
+    }
+
+    private static func mightContainMemoryMetadata(_ text: String) -> Bool {
+        withUTF8Buffer(text) { buf in
+            guard buf.count >= 11 else { return false }
+            for marker in utf8MemoryMarkers {
+                if containsASCIICaseInsensitiveBytes(buf, needleLower: marker) {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    private static func mightContainAnyHiddenMetadata(_ text: String) -> Bool {
+        withUTF8Buffer(text) { buf in
+            guard buf.count >= 11 else { return false }
+            if containsASCIICaseInsensitiveBytes(buf, needleLower: utf8PageMarker) {
+                return true
+            }
+            for marker in utf8MemoryMarkers {
+                if containsASCIICaseInsensitiveBytes(buf, needleLower: marker) {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
     public static func literalMarkdownRanges(_ text: String, includeInline: Bool = true, includeQuotes: Bool = true) -> [UTF16Range] {
         let ns = text as NSString
         let total = ns.length
@@ -205,11 +276,11 @@ public enum VisibleMarkdownEngine {
     }
 
     public static func memoryMetadataRanges(_ text: String, protectedRanges: [UTF16Range]? = nil) -> [UTF16Range] {
-        let ns = text as NSString
-        let total = ns.length
-        guard text.matches(MarkdownPatterns.memoryMarker) else {
+        guard mightContainMemoryMetadata(text) else {
             return []
         }
+        let ns = text as NSString
+        let total = ns.length
 
         if let data = text.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -347,6 +418,7 @@ public enum VisibleMarkdownEngine {
     }
 
     public static func visibleMarkdown(_ text: String, protectedRanges: [UTF16Range]? = nil) -> String {
+        guard mightContainAnyHiddenMetadata(text) else { return text }
         let ranges = (memoryMetadataRanges(text, protectedRanges: protectedRanges) + pageMetadataRanges(text, protectedRanges: protectedRanges))
             .sorted { $0.start != $1.start ? $0.start < $1.start : $0.end > $1.end }
         guard !ranges.isEmpty else { return text }

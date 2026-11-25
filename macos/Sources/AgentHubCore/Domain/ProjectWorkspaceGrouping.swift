@@ -126,7 +126,7 @@ extension ProjectWorkspaceEngine {
             idOf: \.workspaceGroupItemId,
             cwdOf: { $0.workspaceSummaryItem.cwd },
             workspaceRootOf: { $0.workspaceSummaryItem.workspaceRoot },
-            updatedAtOf: { $0.workspaceSummaryItem.updatedAt },
+            updatedAtMsOf: { $0.workspaceSummaryItem.updatedAtMs },
             statusOf: { itemPriorityStatus($0.workspaceSummaryItem) }
         )
     }
@@ -208,7 +208,35 @@ public enum ProjectWorkspaceEngine {
     /// Canonicalizes a path string using Unicode NFC, single `/` separators, and no trailing `/`
     /// (except root `/`), while preserving case sensitivity for Linux SSH targets.
     public static func normalizePath(_ raw: String?) -> String {
-        guard let raw else { return "" }
+        guard let raw, !raw.isEmpty else { return "" }
+        // Zero-allocation fast path for canonical pure-ASCII paths (no outer whitespace, no `//`, no trailing `/`).
+        if let firstByte = raw.utf8.first,
+           firstByte > 0x20,
+           let lastByte = raw.utf8.last,
+           lastByte > 0x20,
+           raw.utf8.count == 1 || lastByte != 0x2F
+        {
+            var cleanASCII = true
+            var prevSlash = false
+            for b in raw.utf8 {
+                if b >= 0x80 {
+                    cleanASCII = false
+                    break
+                }
+                if b == 0x2F {
+                    if prevSlash {
+                        cleanASCII = false
+                        break
+                    }
+                    prevSlash = true
+                } else {
+                    prevSlash = false
+                }
+            }
+            if cleanASCII {
+                return raw
+            }
+        }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         let nfc = trimmed.precomposedStringWithCanonicalMapping
@@ -356,12 +384,30 @@ public enum ProjectWorkspaceEngine {
         updatedAtOf: (Item) -> String?,
         statusOf: (Item) -> ProjectWorkspaceAggregateStatus
     ) -> [ProjectWorkspaceGroup<Item>] {
+        buildGroups(
+            items: items,
+            idOf: idOf,
+            cwdOf: cwdOf,
+            workspaceRootOf: workspaceRootOf,
+            updatedAtMsOf: { parseTimestampMs(updatedAtOf($0)) },
+            statusOf: statusOf
+        )
+    }
+
+    public static func buildGroups<Item: Equatable & Sendable>(
+        items: [Item],
+        idOf: (Item) -> String,
+        cwdOf: (Item) -> String,
+        workspaceRootOf: (Item) -> String?,
+        updatedAtMsOf: (Item) -> Int64,
+        statusOf: (Item) -> ProjectWorkspaceAggregateStatus
+    ) -> [ProjectWorkspaceGroup<Item>] {
         var buckets: [ProjectWorkspaceKey: WorkspaceGroupBucket<Item>] = [:]
         for (idx, item) in items.enumerated() {
             let cwd = cwdOf(item)
             let wsRoot = workspaceRootOf(item)
             let (key, coalescedSub) = resolveWorkspace(cwd: cwd, workspaceRoot: wsRoot)
-            let tsMs = parseTimestampMs(updatedAtOf(item))
+            let tsMs = updatedAtMsOf(item)
             let st = statusOf(item)
             let itemId = idOf(item)
 

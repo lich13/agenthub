@@ -1,6 +1,5 @@
 use super::*;
 use std::collections::BTreeSet;
-use std::sync::Mutex;
 
 fn contract_actions() -> Vec<serde_json::Value> {
     let raw = include_str!("../../../contracts/agenthub-contract.json");
@@ -51,60 +50,13 @@ fn ffi_dispatch_handler_matches_contract_registry() {
         })
         .collect();
 
-    assert_eq!(registered_ffi_paths.len(), 73);
+    assert_eq!(registered_ffi_paths.len(), 64);
     assert_eq!(registered_ffi_paths, expected_ffi_paths);
     assert_eq!(registered_action_ids, expected_action_ids);
 }
 
 #[test]
-fn stream_sink_emits_monotonic_sequences_and_closed_exactly_once() {
-    #[derive(Default)]
-    struct Trace {
-        frames: Vec<(u64, String, bool)>,
-    }
-    unsafe extern "C" fn record(
-        seq: u64,
-        ptr: *const c_char,
-        len: usize,
-        closed: bool,
-        ctx: *mut std::ffi::c_void,
-    ) {
-        let trace = unsafe { &*(ctx as *const Mutex<Trace>) };
-        let payload = if len == 0 || ptr.is_null() {
-            String::new()
-        } else {
-            let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
-            String::from_utf8_lossy(bytes).into_owned()
-        };
-        trace.lock().unwrap().frames.push((seq, payload, closed));
-    }
-
-    let trace = Mutex::new(Trace::default());
-    {
-        let sink = StreamSink::new(
-            Some(record),
-            (&trace as *const Mutex<Trace>).cast_mut().cast(),
-        );
-        let clone = sink.clone();
-        assert!(sink.send_json("{\"n\":1}"));
-        assert!(clone.send_json("{\"n\":2}"));
-        sink.close();
-        clone.close();
-        assert!(!sink.send_json("{\"n\":3}"));
-    }
-    let frames = trace.lock().unwrap().frames.clone();
-    assert_eq!(
-        frames,
-        vec![
-            (1, "{\"n\":1}".into(), false),
-            (2, "{\"n\":2}".into(), false),
-            (3, String::new(), true),
-        ]
-    );
-}
-
-#[test]
-fn c_abi_isolated_init_invoke_capabilities_and_shutdown_roundtrip() {
+fn c_abi_isolated_init_invoke_capabilities_rejects_retired_codex_desktop_and_shutdown_roundtrip() {
     let temp = tempfile::tempdir().unwrap();
     let iso_c = CString::new(temp.path().to_str().unwrap()).unwrap();
     let mut rt_ptr: *mut AgentHubRuntime = std::ptr::null_mut();
@@ -175,56 +127,33 @@ fn c_abi_isolated_init_invoke_capabilities_and_shutdown_roundtrip() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["api_version"], 2);
     assert_eq!(json["host_surface"], "desktop_embedded_tauri");
+    assert!(json["capabilities"].get("codex_desktop").is_none());
 
     // Zero-length GFM parse with null pointer must never UB.
     let empty_gfm = unsafe { agenthub_ffi_parse_gfm_markdown(std::ptr::null(), 0) };
     assert!(!empty_gfm.is_null());
     unsafe { agenthub_ffi_string_free(empty_gfm) };
 
-    // Verify dedicated desktop C ABI entrypoints accept {"request": ...} envelope matching dispatch.rs & CodexDesktopStore.
-    let attach_req = CString::new(
-        r#"{"request":{"revision":0,"threadId":"missing-thread-id","confirmOwner":false}}"#,
-    )
-    .unwrap();
+    // Retired codex.desktop.attach command must fail closed as unknown desktop command.
+    let retired_cmd = CString::new("codex.desktop.attach").unwrap();
+    let retired_args =
+        CString::new(r#"{"request":{"revision":0,"threadId":"missing-thread-id"}}"#).unwrap();
     unsafe {
-        agenthub_ffi_desktop_attach(
+        agenthub_ffi_invoke(
             rt_ptr,
-            attach_req.as_ptr(),
+            retired_cmd.as_ptr(),
+            retired_args.as_ptr(),
             43,
             Some(on_rpc),
             &tx as *const _ as *mut std::ffi::c_void,
-            None,
-            std::ptr::null_mut(),
         );
     }
-    let (attach_id, attach_ok, attach_err) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(attach_id, 43);
-    assert!(!attach_ok);
+    let (ret_id, ret_ok, ret_err) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(ret_id, 43);
+    assert!(!ret_ok);
     assert!(
-        !attach_err.contains("invalid attach request"),
-        "Wrapped request envelope must deserialize cleanly, got: {attach_err}"
-    );
-
-    let att_req = CString::new(
-        r#"{"request":{"revision":0,"sessionId":"missing-sess","action":{"type":"unbind","bindingId":"b1"}}}"#,
-    )
-    .unwrap();
-    unsafe {
-        agenthub_ffi_desktop_attachments(
-            rt_ptr,
-            att_req.as_ptr(),
-            44,
-            Some(on_rpc),
-            &tx as *const _ as *mut std::ffi::c_void,
-            None,
-            std::ptr::null_mut(),
-        );
-    }
-    let (att_id, _att_ok, att_body) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(att_id, 44);
-    assert!(
-        !att_body.contains("invalid attachments request"),
-        "Wrapped attachments request envelope must deserialize cleanly, got: {att_body}"
+        ret_err.contains("unsupported desktop command: codex.desktop.attach"),
+        "Expected unknown command rejection, got: {ret_err}"
     );
 
     unsafe { agenthub_ffi_shutdown(rt_ptr) };

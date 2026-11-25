@@ -83,23 +83,25 @@ public enum ConversationViewModel {
         if !block.questions.isEmpty { return false }
         if k == "request_user_input" || k == "requestuserinput" { return false }
         if isToolBlock(block) || isPlanBlock(block) || isApprovalBlock(block) { return false }
-        let trimmedStart = (block.text ?? "").replacingOccurrences(of: "^\\s+", with: "", options: .regularExpression).lowercased()
+        let rawText = block.text ?? ""
+        let trimmedSub = rawText.drop(while: { $0.isWhitespace })
+        let trimmedHead = String(trimmedSub.prefix(64)).lowercased()
         if role == "user" {
-            if trimmedStart.hasPrefix("<user_shell_command>")
-                || trimmedStart.hasPrefix("<turn_aborted>")
-                || trimmedStart.hasPrefix("========= memory_summary begins =========")
+            if trimmedHead.hasPrefix("<user_shell_command>")
+                || trimmedHead.hasPrefix("<turn_aborted>")
+                || trimmedHead.hasPrefix("========= memory_summary begins =========")
             {
                 return false
             }
             let attachments = block.userMessage?.attachments ?? []
             if attachments.isEmpty {
-                let rawBody = block.userMessage?.text ?? block.text ?? ""
+                let rawBody = block.userMessage?.text ?? rawText
                 let proj = UserContextEngine.projectUserMessage(rawBody, contextBlocks: block.userMessage?.contextBlocks)
                 if proj.contextBlocks.isEmpty && UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks).isEmpty {
                     return false
                 }
             }
-        } else if internalPrefixes.contains(where: { trimmedStart.hasPrefix($0) }) {
+        } else if internalPrefixes.contains(where: { trimmedHead.hasPrefix($0) }) {
             return false
         }
         return k != "reasoning" && k != "agent_reasoning" && k != "session_meta"
@@ -439,9 +441,23 @@ public enum ExecutionGroupingEngine {
                 }
             }
         }
-        let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawCleaned = VisibleMarkdownEngine.visibleMarkdown(text)
+        var cleaned = ""
+        cleaned.reserveCapacity(min(rawCleaned.count, 256))
+        var pendingSpace = false
+        for ch in rawCleaned {
+            if ch.isWhitespace {
+                if !cleaned.isEmpty {
+                    pendingSpace = true
+                }
+            } else {
+                if pendingSpace {
+                    cleaned.append(" ")
+                    pendingSpace = false
+                }
+                cleaned.append(ch)
+            }
+        }
         let result: String? = if !cleaned.isEmpty {
             (cleaned as NSString).length > 180 ? "\((cleaned as NSString).substring(to: 180))…" : cleaned
         } else {
@@ -558,21 +574,31 @@ public enum ExecutionGroupingEngine {
         }
 
         var output: [ExecutionRenderItem<T>] = []
+        var pendingGroup: ExecutionGroup?
         for entry in flatEntries {
             switch entry {
             case let .item(item, key, sourceIds):
+                if let g = pendingGroup {
+                    pendingGroup = nil
+                    output.append(.group(g))
+                }
                 output.append(.item(item: item, key: key, sourceIds: sourceIds))
             case let .command(idx, isCommand, newTurn, turnId):
                 let cmd = commandsPool[idx]
-                if !newTurn, case var .group(lastGroup) = output.last {
-                    lastGroup.commands.append(cmd)
-                    if !isCommand { lastGroup.kind = "tool" }
-                    if lastGroup.turnId == nil { lastGroup.turnId = turnId }
-                    lastGroup.running = lastGroup.commands.contains { $0.status == .running }
-                    lastGroup.failedCount = lastGroup.commands.filter { $0.status == .failed }.count
-                    output[output.count - 1] = .group(lastGroup)
+                if !newTurn, var activeGroup = pendingGroup {
+                    pendingGroup = nil
+                    activeGroup.commands.append(cmd)
+                    if !isCommand { activeGroup.kind = "tool" }
+                    if activeGroup.turnId == nil { activeGroup.turnId = turnId }
+                    if cmd.status == .running { activeGroup.running = true }
+                    if cmd.status == .failed { activeGroup.failedCount += 1 }
+                    pendingGroup = activeGroup
                 } else {
-                    let group = ExecutionGroup(
+                    if let g = pendingGroup {
+                        pendingGroup = nil
+                        output.append(.group(g))
+                    }
+                    pendingGroup = ExecutionGroup(
                         id: "group:\(cmd.id)",
                         mergedIds: [],
                         commands: [cmd],
@@ -583,16 +609,20 @@ public enum ExecutionGroupingEngine {
                         failedCount: cmd.status == .failed ? 1 : 0,
                         turnId: turnId
                     )
-                    output.append(.group(group))
                 }
             }
+        }
+        if let g = pendingGroup {
+            pendingGroup = nil
+            output.append(.group(g))
         }
         return output
     }
 
     public static func groupCodexBlocks(_ blocks: [MessageBlock]) -> [ExecutionRenderItem<MessageBlock>] {
         let inputs = blocks.map { block -> ActivityInput<MessageBlock> in
-            let isResult = block.kind.range(of: "output|result", options: [.regularExpression, .caseInsensitive]) != nil
+            let kLower = block.kind.lowercased()
+            let isResult = kLower.contains("output") || kLower.contains("result")
             let isTool = block.subagent == nil
                 && ConversationViewModel.isToolBlock(block)
                 && !ConversationViewModel.isHistoryCollapsedBlock(block)
@@ -1075,14 +1105,15 @@ public enum ClaudeProcessGroupingEngine {
                case var .group(prevGroup) = result.last,
                (prevGroup.turnId == nil || group.turnId == nil || prevGroup.turnId == group.turnId)
             {
+                _ = result.popLast()
                 prevGroup.commands.append(contentsOf: group.commands)
                 prevGroup.mergedIds.append(group.id)
                 prevGroup.mergedIds.append(contentsOf: group.mergedIds)
                 if group.kind == "tool" { prevGroup.kind = "tool" }
                 if prevGroup.turnId == nil { prevGroup.turnId = group.turnId }
-                prevGroup.running = prevGroup.commands.contains { $0.status == .running }
-                prevGroup.failedCount = prevGroup.commands.filter { $0.status == .failed }.count
-                result[result.count - 1] = .group(prevGroup)
+                if group.running { prevGroup.running = true }
+                prevGroup.failedCount += group.failedCount
+                result.append(.group(prevGroup))
                 continue
             }
             flush()

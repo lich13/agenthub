@@ -110,28 +110,7 @@ public struct AppShellView: View {
             } else {
                 UnifiedWorkspaceHubView(
                     store: store,
-                    scheme: effectiveScheme,
-                    codexNewThreadSlot: { onCreated, onErrorChanged in
-                        AnyView(
-                            NewDesktopThreadButton(
-                                connection: store,
-                                onCreated: onCreated,
-                                onErrorChanged: onErrorChanged
-                            )
-                        )
-                    },
-                    codexCollaborationFooterSlot: { threadId, _, availWidth, availHeight, onStreamUpdated in
-                        AnyView(
-                            DesktopCollaborationFooterView(
-                                connection: store,
-                                threadId: threadId,
-                                availableWidth: availWidth,
-                                viewportHeight: availHeight,
-                                onStreamUpdated: onStreamUpdated
-                            )
-                            .id("\(store.revision):\(threadId)")
-                        )
-                    }
+                    scheme: effectiveScheme
                 )
                 .id(WorkspaceId.workspaces)
             }
@@ -147,28 +126,7 @@ public struct AppShellView: View {
                 UnifiedProviderWorkspaceView(
                     store: store,
                     workspace: store.activeWorkspace,
-                    scheme: effectiveScheme,
-                    codexNewThreadSlot: { onCreated, onErrorChanged in
-                        AnyView(
-                            NewDesktopThreadButton(
-                                connection: store,
-                                onCreated: onCreated,
-                                onErrorChanged: onErrorChanged
-                            )
-                        )
-                    },
-                    codexCollaborationFooterSlot: { threadId, _, availWidth, availHeight, onStreamUpdated in
-                        AnyView(
-                            DesktopCollaborationFooterView(
-                                connection: store,
-                                threadId: threadId,
-                                availableWidth: availWidth,
-                                viewportHeight: availHeight,
-                                onStreamUpdated: onStreamUpdated
-                            )
-                            .id("\(store.revision):\(threadId)")
-                        )
-                    }
+                    scheme: effectiveScheme
                 )
                 .id(store.activeWorkspace)
             }

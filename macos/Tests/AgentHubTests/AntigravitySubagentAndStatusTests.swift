@@ -451,24 +451,10 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         let codexH = codexCoord.measureRowHeight(codexRow, width: 720)
         codexCell.frame = NSRect(x: 0, y: 0, width: 720, height: codexH)
         codexCell.configure(item: codexRow, leadingInset: 0, trailingInset: 0, contentWidth: 720, highlighted: false, coordinator: codexCoord)
-        XCTAssertTrue(collectTexts(codexCell).contains("上下文"))
-
-        let approvalReq = DesktopPendingRequest(
-            key: "req-1",
-            kind: "file",
-            title: "审批文件修改",
-            canAccept: true,
-            supportedDecisions: ["acceptForSession"],
-            review: DesktopReview(
-                command: "cargo test --workspace",
-                cwd: "/workspace/demo",
-                reason: "需要更新测试夹具",
-                changes: [
-                    DesktopFileReview(path: "src/lib.rs", kind: "update", diff: "+let clean = true;\n", truncated: false),
-                ],
-                extra: "sandbox=workspace-write"
-            )
-        )
+        let codexStrings = collectTexts(codexCell)
+        XCTAssertTrue(codexStrings.contains("上下文"))
+        XCTAssertFalse(codexStrings.contains("▾"))
+        XCTAssertFalse(codexStrings.contains("▸"))
 
         for (scheme, appearance, tag, bg) in [
             (ColorSchemeKind.light, NSAppearance.Name.aqua, "light", (UInt8(255), UInt8(255), UInt8(255))),
@@ -495,27 +481,6 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
                 appearance: appearance
             )
             XCTAssertGreaterThan(countNonBgPixels(cellPixels, width: 720, height: Int(max(rowH, 64)), bg: bg), 180, "Antigravity user bubble must render non-blank glyph ink in \(tag)")
-
-            let approvalView = DesktopRequestsListView(
-                requests: [approvalReq],
-                busy: false,
-                onAct: { _ in },
-                onOpenCodex: {}
-            )
-            .environment(\.agentHubPalette, DesignPalette.resolve(scheme: scheme, workspace: .codex))
-            let approvalHost = NSHostingView(rootView: approvalView.frame(width: 640, height: 260))
-            approvalHost.appearance = NSAppearance(named: appearance)
-            approvalHost.frame = NSRect(x: 0, y: 0, width: 640, height: 260)
-            approvalHost.layoutSubtreeIfNeeded()
-            let approvalStrings = collectTexts(approvalHost)
-            XCTAssertFalse(approvalStrings.contains("▾"))
-            XCTAssertFalse(approvalStrings.contains("▸"))
-            let approvalPixels = try OffscreenRenderHelper.renderNSView(
-                approvalHost,
-                size: NSSize(width: 640, height: 260),
-                appearance: appearance
-            )
-            XCTAssertGreaterThan(countNonBgPixels(approvalPixels, width: 640, height: 260, bg: bg), 250, "Codex approval card with vector chevrons must render ink in \(tag)")
 
             let remoteView = RemoteConnectionSettingsView(store: store)
                 .environment(\.agentHubPalette, palette)

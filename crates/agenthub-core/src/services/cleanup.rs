@@ -641,7 +641,8 @@ fn execute_grok_empty_scope(
 
 pub type DeletedProbeStreams = Vec<(crate::native_probe::NativeProvider, Vec<String>)>;
 
-pub fn execute_unified_with_capability(
+#[cfg(test)]
+fn execute_unified_with_capability(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,

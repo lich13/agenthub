@@ -61,7 +61,6 @@ impl FromStr for HostSurface {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
-    CodexDesktop,
     AntigravityNotifications,
     DshNotifications,
     GrokbotSessions,
@@ -74,7 +73,6 @@ pub enum Capability {
 impl Capability {
     pub fn all() -> &'static [Self] {
         &[
-            Self::CodexDesktop,
             Self::AntigravityNotifications,
             Self::DshNotifications,
             Self::GrokbotSessions,
@@ -86,7 +84,6 @@ impl Capability {
     }
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::CodexDesktop => "codex_desktop",
             Self::AntigravityNotifications => "antigravity_notifications",
             Self::DshNotifications => "dsh_notifications",
             Self::GrokbotSessions => "grokbot_sessions",
@@ -102,10 +99,9 @@ impl Capability {
             Self::Systemd | Self::LinuxUpdateJob | Self::PruneBackups => {
                 surface == HostSurface::LinuxServerApi
             }
-            Self::CodexDesktop
-            | Self::DshNotifications
-            | Self::GrokbotSessions
-            | Self::GrokbotNotifications => surface == HostSurface::DesktopEmbedded,
+            Self::DshNotifications | Self::GrokbotSessions | Self::GrokbotNotifications => {
+                surface == HostSurface::DesktopEmbedded
+            }
         }
     }
 }
@@ -119,8 +115,6 @@ pub struct SystemCapabilities {
     pub threads: bool,
     #[serde(default)]
     pub thread_subagents: bool,
-    #[serde(default)]
-    pub codex_desktop: bool,
     pub jobs: bool,
     pub probe: bool,
     pub settings: bool,
@@ -172,7 +166,6 @@ pub fn system_capabilities_for_surface(host_surface: HostSurface) -> SystemCapab
         antigravity_subagents: true,
         threads: true,
         thread_subagents: true,
-        codex_desktop: Capability::CodexDesktop.is_supported_on_surface(host_surface),
         jobs: true,
         probe: true,
         settings: true,

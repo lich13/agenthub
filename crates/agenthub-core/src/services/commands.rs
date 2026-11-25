@@ -82,27 +82,13 @@ pub const REMOTE_INSTALL: &str = "remote.install";
 pub const REMOTE_REMOVE: &str = "remote.remove";
 pub const REMOTE_SELECT: &str = "remote.select";
 pub const REMOTE_INVOKE: &str = "remote.invoke";
-pub const CODEX_DESKTOP_ATTACH: &str = "codex.desktop.attach";
-pub const CODEX_DESKTOP_ACTION: &str = "codex.desktop.action";
-pub const CODEX_DESKTOP_DETACH: &str = "codex.desktop.detach";
-pub const CODEX_DESKTOP_OPEN: &str = "codex.desktop.open";
-pub const CODEX_DESKTOP_CATALOG: &str = "codex.desktop.catalog";
-pub const CODEX_DESKTOP_CHOOSE: &str = "codex.desktop.choose";
-pub const CODEX_DESKTOP_CREATE: &str = "codex.desktop.create";
-pub const CODEX_DESKTOP_ATTACHMENTS: &str = "codex.desktop.attachments";
-pub const CODEX_DESKTOP_DIAGNOSTICS: &str = "codex.desktop.diagnostics";
 
 pub fn desktop_command_is_read(command: &str, hook_status: bool) -> bool {
     match remote_access(command) {
         Some(access) => access == RemoteAccess::Read,
         None => match command {
             CLAUDE_HOOKS => hook_status,
-            CLAUDE_OWNERSHIP_DIAGNOSTICS
-            | GROKBOT_LIST
-            | GROKBOT_DETAIL
-            | CODEX_DESKTOP_ATTACH
-            | CODEX_DESKTOP_CATALOG
-            | CODEX_DESKTOP_DIAGNOSTICS => true,
+            CLAUDE_OWNERSHIP_DIAGNOSTICS | GROKBOT_LIST | GROKBOT_DETAIL => true,
             _ => false,
         },
     }

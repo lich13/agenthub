@@ -100,8 +100,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
 
     public func syncWindowState() {
         let visible = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
-        let focused = window.isKeyWindow && NSApp.isActive
-        store.updateWindowState(visible: visible, focused: focused)
+        store.updateWindowState(visible: visible)
     }
 
     public func windowDidBecomeKey(_ notification: Notification) { syncWindowState() }
@@ -112,7 +111,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
 
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
-        store.updateWindowState(visible: false, focused: false)
+        store.updateWindowState(visible: false)
         return false
     }
 }
@@ -245,12 +244,11 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
 
         if let textView = keyWin.firstResponder as? NSTextView {
             if hasModal {
-                // While a modal/overlay is presented, NEVER select text in underlying ComposerNSTextView
-                // or underlying conversation reader views; ONLY editable inputs inside modals (e.g. Search)
-                // or selectable views explicitly inside an active modal container may handle ⌘A!
+                // While a modal/overlay is presented, only editable inputs inside modals (e.g. Search)
+                // or selectable views explicitly inside an active modal container may handle ⌘A.
                 let inChildWin = textView.window !== keyWin
                 let inModalContainer = ModalPresentationRegistry.shared.isInsideActiveModalContainer(textView)
-                if textView.isEditable && !(textView is ComposerNSTextView) {
+                if textView.isEditable {
                     textView.selectAll(sender)
                     return .editableTextSelectedAll
                 }

@@ -272,14 +272,6 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::dry_run_unified_with_capability(self.platform, paths)
     }
 
-    pub fn unified_execute(
-        self,
-        paths: &cleanup::UnifiedCleanupPaths,
-        request: cleanup::UnifiedCleanupExecuteRequest,
-    ) -> Result<cleanup::UnifiedCleanupResult> {
-        cleanup::execute_unified_with_capability(self.platform, paths, request)
-    }
-
     pub fn unified_execute_with_deleted_streams(
         self,
         paths: &cleanup::UnifiedCleanupPaths,

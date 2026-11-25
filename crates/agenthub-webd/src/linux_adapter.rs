@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 use serde_json::json;
 use std::path::Path;
 
-pub fn apply_probe_settings_save_plan(
+pub(crate) fn apply_probe_settings_save_plan(
     state: &AppState,
     auth: &AuditActor,
     config_path: &Path,
@@ -32,7 +32,7 @@ pub fn apply_probe_settings_save_plan(
     Ok(response_config)
 }
 
-pub fn start_probe_action_plan(
+pub(crate) fn start_probe_action_plan(
     state: &AppState,
     auth: &AuditActor,
     plan: probe_service::ProbeActionPlan,
@@ -55,7 +55,7 @@ pub fn start_probe_action_plan(
         .start_exclusive_process_job(&spec.kind, &spec.title, process, group)
 }
 
-pub async fn apply_thread_state_action_plan(
+pub(crate) async fn apply_thread_state_action_plan(
     state: &AppState,
     auth: &AuditActor,
     plan: &job_service::ThreadStateActionPlan,
@@ -95,7 +95,7 @@ pub async fn apply_thread_state_action_plan(
     core_thread_state_action_response(plan)
 }
 
-pub fn start_update_action_plan(
+pub(crate) fn start_update_action_plan(
     state: &AppState,
     auth: &AuditActor,
     plan: update_service::UpdateActionPlan,

@@ -73,13 +73,14 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
                     'idx_probe_error_incidents_event',
                     'idx_audit_log_created_at',
                     'idx_jobs_started_at',
-                    'idx_native_probe_deliveries_updated_at'
+                    'idx_native_probe_deliveries_updated_at',
+                    'idx_native_probe_claude_session'
                 )",
                 [],
                 |r| r.get::<_, usize>(0)
             )
             .unwrap(),
-            6
+            7
         );
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
@@ -298,12 +299,34 @@ fn existing_schema_three_store_missing_performance_indexes_backfills_idempotentl
             "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN (
                 'idx_audit_log_created_at',
                 'idx_jobs_started_at',
-                'idx_native_probe_deliveries_updated_at'
+                'idx_native_probe_deliveries_updated_at',
+                'idx_native_probe_claude_session'
             )",
             [],
             |r| r.get::<_, usize>(0),
         )
         .unwrap(),
-        3
+        4
+    );
+    assert_eq!(
+        conn.pragma_query_value(None, "synchronous", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2,
+        "PanelDb must keep synchronous=FULL (2) to prevent power-loss rollback of Bark delivery state"
+    );
+    assert_eq!(
+        conn.pragma_query_value(None, "cache_size", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        -2048
+    );
+    assert_eq!(
+        conn.pragma_query_value(None, "temp_store", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.pragma_query_value(None, "journal_size_limit", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4_194_304
     );
 }

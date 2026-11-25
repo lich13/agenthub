@@ -1,5 +1,4 @@
 use crate::{
-    codex_desktop::{self, CodexDesktopBridge},
     host::HostBridge,
     overview::DesktopState,
     remote::{self, RemoteConnections},
@@ -21,7 +20,6 @@ use agenthub_core::{
     },
     services::{
         cleanup::UnifiedCleanupExecuteRequest,
-        codex_desktop::*,
         plans::PlanSaveRequest,
         probe::ProbeAction,
         remote::*,
@@ -185,13 +183,11 @@ fn encode<T: Serialize>(result: Result<T, String>) -> Result<String, String> {
 pub struct DispatchContext<'a> {
     pub state: &'a DesktopState,
     pub remote: &'a RemoteConnections,
-    pub bridge: &'a CodexDesktopBridge,
     pub host: &'a HostBridge,
     pub isolated: bool,
 }
 
 use agenthub_core::services::commands as ids;
-mod collaboration;
 mod connections;
 mod conversations;
 mod maintenance;
@@ -276,13 +272,4 @@ desktop_handlers! {
     ids::REMOTE_REMOVE => connections::remote_remove,
     ids::REMOTE_SELECT => connections::remote_select,
     ids::REMOTE_INVOKE => connections::remote_invoke,
-    ids::CODEX_DESKTOP_ATTACH => collaboration::codex_desktop_attach,
-    ids::CODEX_DESKTOP_ACTION => collaboration::codex_desktop_action,
-    ids::CODEX_DESKTOP_DETACH => collaboration::codex_desktop_detach,
-    ids::CODEX_DESKTOP_OPEN => collaboration::codex_desktop_open,
-    ids::CODEX_DESKTOP_CATALOG => collaboration::codex_desktop_catalog,
-    ids::CODEX_DESKTOP_CHOOSE => collaboration::codex_desktop_choose,
-    ids::CODEX_DESKTOP_CREATE => collaboration::codex_desktop_create,
-    ids::CODEX_DESKTOP_ATTACHMENTS => collaboration::codex_desktop_attachments,
-    ids::CODEX_DESKTOP_DIAGNOSTICS => collaboration::codex_desktop_diagnostics,
 }

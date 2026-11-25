@@ -72,7 +72,6 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     @Published public var archivedOpen: Bool = false
     @Published public var selectedCompositeKey: String?
     @Published public var renameRequestSeqByKey: [String: Int] = [:]
-    @Published public var codexCreateError: String?
     @Published public var providerErrors: [String] = []
     @Published public var feedbackMessage: String?
 
@@ -89,13 +88,6 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         self.sourceRevision = store.revision
         codexThreadStore.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
-            .store(in: &observations)
-        NotificationCenter.default.publisher(for: .agentHubCodexDesktopViewChanged)
-            .sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.applyLiveCodexDesktopOverlay()
-                }
-            }
             .store(in: &observations)
     }
 
@@ -261,8 +253,8 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
 
     public static func sortMergedItems(_ items: [CrossProviderSessionItem]) -> [CrossProviderSessionItem] {
         items.enumerated().sorted { lhs, rhs in
-            let lMs = ProjectWorkspaceEngine.parseTimestampMs(lhs.element.item.updatedAt)
-            let rMs = ProjectWorkspaceEngine.parseTimestampMs(rhs.element.item.updatedAt)
+            let lMs = lhs.element.item.updatedAtMs
+            let rMs = rhs.element.item.updatedAtMs
             if lMs != rMs { return lMs > rMs }
             return lhs.offset < rhs.offset
         }.map(\.element)
@@ -365,23 +357,6 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         buckets.sort { $0.0 < $1.0 }
         errors.sort { $0.0 < $1.0 }
         return (buckets.flatMap(\.1), errors.map(\.1))
-    }
-    public func applyLiveCodexDesktopOverlay() {
-        guard store.target == .local, store.revision == sourceRevision else { return }
-        var changed = false
-        for idx in activeItems.indices where activeItems[idx].provider == .codex {
-            let tid = activeItems[idx].item.sessionKey
-            if let live = CodexDesktopStore.liveView(revision: store.revision, threadId: tid), live.connected {
-                let updated = ProviderWorkspaceStore.projectCodexDesktopLiveView(live, onto: activeItems[idx].item)
-                if updated != activeItems[idx].item {
-                    activeItems[idx].item = updated
-                    changed = true
-                }
-            }
-        }
-        if changed {
-            objectWillChange.send()
-        }
     }
 
     public func performRename(entry: CrossProviderSessionItem, newTitle: String) async throws {
@@ -598,35 +573,25 @@ public struct UnifiedWorkspaceHubView: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
     public let scheme: ColorSchemeKind
-    public var codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)?
-    public var codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)?
 
     @StateObject private var hubModel: UnifiedWorkspaceHubStore
 
     public init(
         store: RuntimeConnectionStore,
-        scheme: ColorSchemeKind,
-        codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)? = nil,
-        codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)? = nil
+        scheme: ColorSchemeKind
     ) {
         _hubModel = StateObject(wrappedValue: UnifiedWorkspaceHubStore(store: store))
         self.store = store
         self.scheme = scheme
-        self.codexNewThreadSlot = codexNewThreadSlot
-        self.codexCollaborationFooterSlot = codexCollaborationFooterSlot
     }
 
     public init(
         hubModel: UnifiedWorkspaceHubStore,
-        scheme: ColorSchemeKind,
-        codexNewThreadSlot: (@MainActor (@escaping (String) -> Void, @escaping (String?) -> Void) -> AnyView)? = nil,
-        codexCollaborationFooterSlot: (@MainActor (String, String?, CGFloat, CGFloat, @escaping @MainActor () -> Void) -> AnyView)? = nil
+        scheme: ColorSchemeKind
     ) {
         _hubModel = StateObject(wrappedValue: hubModel)
         self.store = hubModel.store
         self.scheme = scheme
-        self.codexNewThreadSlot = codexNewThreadSlot
-        self.codexCollaborationFooterSlot = codexCollaborationFooterSlot
     }
 
     public var body: some View {
@@ -754,19 +719,6 @@ public struct UnifiedWorkspaceHubView: View {
                         }
                     )
 
-                    if store.target == .local, store.capabilities.codexDesktop,
-                       let slot = codexNewThreadSlot
-                    {
-                        slot({ newId in
-                            hubModel.query = ""
-                            hubModel.workspaceFilter = .all
-                            hubModel.selectedCompositeKey = "\(SessionProvider.codex.rawValue)::\(newId)"
-                            Task { await hubModel.fetchAllSessions() }
-                        }, { createErr in
-                            hubModel.codexCreateError = createErr
-                        })
-                    }
-
                     Button {
                         Task { await hubModel.fetchAllSessions() }
                     } label: {
@@ -777,17 +729,6 @@ public struct UnifiedWorkspaceHubView: View {
                 }
             }
             .padding(.horizontal, 4)
-
-            if let createErr = hubModel.codexCreateError, !createErr.isEmpty {
-                Text(createErr)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.errFg.color)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg.color))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
-            }
 
             WorkspaceSidebarSearchField(placeholder: "搜索标题、ID 或工作目录", query: $hubModel.query)
 
@@ -815,104 +756,46 @@ public struct UnifiedWorkspaceHubView: View {
                         && hubModel.providerErrors.isEmpty
                         && (!hubModel.query.isEmpty || hubModel.workspaceFilter != .all)
                     {
-                        Text("无匹配会话")
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.textMuted.color)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 10)
+                        WorkspaceEmptyMatchPlaceholder()
                     }
-                    ForEach(hubModel.activeWorkspaceGroups) { group in
-                        let expanded = !hubModel.collapsedWorkspaceKeys.contains(group.key)
-                        ProjectWorkspaceGroupHeaderView(
-                            displayName: group.displayName,
-                            fullPath: group.fullPath,
-                            count: group.items.count,
-                            status: group.aggregateStatus,
-                            expanded: expanded,
-                            isFilteredToThisGroup: hubModel.workspaceFilter.selectedKey == group.key,
-                            onToggleExpanded: {
-                                if expanded {
-                                    hubModel.collapsedWorkspaceKeys.insert(group.key)
-                                } else {
-                                    hubModel.collapsedWorkspaceKeys.remove(group.key)
-                                }
-                            },
-                            onFilterOnlyThisGroup: {
-                                if hubModel.workspaceFilter.selectedKey == group.key {
-                                    hubModel.workspaceFilter = .all
-                                } else {
-                                    hubModel.workspaceFilter = .workspace(group.key, includeSubdirectories: false)
-                                }
-                            },
-                            onSelectAllInGroup: {
-                                hubModel.selectAllInWorkspaceGroup(keys: group.items.map(\.compositeKey), partition: .active)
-                            },
-                            onCopyPath: { path in
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(path, forType: .string)
-                                hubModel.feedbackMessage = "已复制工作区路径"
-                            }
+                    WorkspaceGroupedSessionRows(
+                        groups: hubModel.activeWorkspaceGroups,
+                        collapsedKeys: $hubModel.collapsedWorkspaceKeys,
+                        workspaceFilter: $hubModel.workspaceFilter,
+                        isArchived: false,
+                        onSelectAllInGroup: { group in
+                            hubModel.selectAllInWorkspaceGroup(keys: group.items.map(\.compositeKey), partition: .active)
+                        },
+                        onCopyPath: copyWorkspacePath
+                    ) { entry, group in
+                        hubRowView(
+                            entry,
+                            partition: .active,
+                            subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
                         )
-                        if expanded {
-                            ForEach(group.items) { entry in
-                                hubRowView(
-                                    entry,
-                                    partition: .active,
-                                    subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
-                                )
-                            }
-                        }
                     }
 
                     if hubModel.archivedOpen {
-                        VStack(alignment: .leading, spacing: 4) {
-                            WorkspaceArchivedToggleRow(isOpen: $hubModel.archivedOpen, archivedCount: hubModel.filteredArchivedItems.count)
-                            ForEach(hubModel.archivedWorkspaceGroups) { group in
-                                let expanded = !hubModel.collapsedArchivedWorkspaceKeys.contains(group.key)
-                                ProjectWorkspaceGroupHeaderView(
-                                    displayName: group.displayName,
-                                    fullPath: group.fullPath,
-                                    count: group.items.count,
-                                    status: .idle,
-                                    expanded: expanded,
-                                    isFilteredToThisGroup: hubModel.workspaceFilter.selectedKey == group.key,
-                                    onToggleExpanded: {
-                                        if expanded {
-                                            hubModel.collapsedArchivedWorkspaceKeys.insert(group.key)
-                                        } else {
-                                            hubModel.collapsedArchivedWorkspaceKeys.remove(group.key)
-                                        }
-                                    },
-                                    onFilterOnlyThisGroup: {
-                                        if hubModel.workspaceFilter.selectedKey == group.key {
-                                            hubModel.workspaceFilter = .all
-                                        } else {
-                                            hubModel.workspaceFilter = .workspace(group.key, includeSubdirectories: false)
-                                        }
-                                    },
-                                    onSelectAllInGroup: {
-                                        hubModel.selectAllInWorkspaceGroup(keys: group.items.map(\.compositeKey), partition: .archived)
-                                    },
-                                    onCopyPath: { path in
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(path, forType: .string)
-                                        hubModel.feedbackMessage = "已复制工作区路径"
-                                    }
+                        WorkspaceArchivedExpandedSection(
+                            isOpen: $hubModel.archivedOpen,
+                            archivedCount: hubModel.filteredArchivedItems.count
+                        ) {
+                            WorkspaceGroupedSessionRows(
+                                groups: hubModel.archivedWorkspaceGroups,
+                                collapsedKeys: $hubModel.collapsedArchivedWorkspaceKeys,
+                                workspaceFilter: $hubModel.workspaceFilter,
+                                isArchived: true,
+                                onSelectAllInGroup: { group in
+                                    hubModel.selectAllInWorkspaceGroup(keys: group.items.map(\.compositeKey), partition: .archived)
+                                },
+                                onCopyPath: copyWorkspacePath
+                            ) { entry, group in
+                                hubRowView(
+                                    entry,
+                                    partition: .archived,
+                                    subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
                                 )
-                                if expanded {
-                                    ForEach(group.items) { entry in
-                                        hubRowView(
-                                            entry,
-                                            partition: .archived,
-                                            subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
-                                        )
-                                    }
-                                }
                             }
-                        }
-                        .padding(.top, 8)
-                        .overlay(alignment: .top) {
-                            Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
                         }
                     }
                 }
@@ -920,13 +803,10 @@ public struct UnifiedWorkspaceHubView: View {
             .frame(maxHeight: .infinity, alignment: .top)
 
             if !hubModel.archivedOpen {
-                VStack(alignment: .leading, spacing: 0) {
-                    WorkspaceArchivedToggleRow(isOpen: $hubModel.archivedOpen, archivedCount: hubModel.filteredArchivedItems.count)
-                }
-                .padding(.top, 8)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
-                }
+                WorkspaceArchivedClosedFooter(
+                    isOpen: $hubModel.archivedOpen,
+                    archivedCount: hubModel.filteredArchivedItems.count
+                )
             }
 
             SessionBatchBarAndDialogView(
@@ -936,7 +816,6 @@ public struct UnifiedWorkspaceHubView: View {
                 notice: activeSel.notice,
                 prepareError: hubModel.batchPrepareError,
                 executeError: hubModel.batchExecuteError,
-                preview: hubModel.batchPlan?.mergedPreview,
                 result: hubModel.batchResult,
                 onSelectAll: hubModel.selectAllVisible,
                 onClear: {
@@ -945,14 +824,18 @@ public struct UnifiedWorkspaceHubView: View {
                 },
                 onPrepareOperation: { op in
                     Task { await hubModel.prepareBatch(operation: op, compositeKeys: activeSel.keys, partition: activePart) }
-                },
-                onConfirmExecute: { Task { await hubModel.executePreparedBatch() } },
-                onDismissPreview: { hubModel.batchPlan = nil }
+                }
             )
         }
         .padding(.top, 14)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
+    }
+
+    private func copyWorkspacePath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+        hubModel.feedbackMessage = "已复制工作区路径"
     }
 
     private func hubRowView(
@@ -1122,9 +1005,7 @@ public struct UnifiedWorkspaceHubView: View {
                 },
                 onExternalSelectSession: { nextSessionKey in
                     hubModel.handleStageSessionSelected(provider: entry.provider, sessionKey: nextSessionKey)
-                },
-                codexNewThreadSlot: codexNewThreadSlot,
-                codexCollaborationFooterSlot: codexCollaborationFooterSlot
+                }
             )
             .environment(\.agentHubPalette, stagePalette)
             .id("\(store.revision):hub-stage:\(entry.provider.rawValue)")

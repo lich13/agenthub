@@ -178,7 +178,7 @@ impl SearchUseCases {
                 summary.id,
                 summary.cwd.clone().unwrap_or_default()
             ));
-            if metadata.to_lowercase().contains(needle) {
+            if contains_folded(&metadata, needle) {
                 push_metadata(
                     output,
                     &summary.id,
@@ -210,7 +210,7 @@ impl SearchUseCases {
                 if output.len() >= MAX_RESULTS {
                     break;
                 }
-                let corpus = json_corpus(&block)?;
+                let corpus = codex_block_corpus(&block);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     let position = block.id.clone();
                     push_result(
@@ -251,7 +251,7 @@ impl SearchUseCases {
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if metadata.to_lowercase().contains(needle) {
+            if contains_folded(&metadata, needle) {
                 push_metadata(
                     output,
                     &summary.id,
@@ -277,7 +277,7 @@ impl SearchUseCases {
                 if output.len() >= MAX_RESULTS {
                     break;
                 }
-                let corpus = json_corpus(&event)?;
+                let corpus = grok_event_corpus(&event);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     let position = event.call_id.clone().unwrap_or_else(|| {
                         if event.id.is_empty() {
@@ -324,7 +324,7 @@ impl SearchUseCases {
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if metadata.to_lowercase().contains(needle) {
+            if contains_folded(&metadata, needle) {
                 push_metadata(
                     output,
                     &summary.session_key,
@@ -344,7 +344,7 @@ impl SearchUseCases {
                     if output.len() >= MAX_RESULTS {
                         return Ok(false);
                     }
-                    let corpus = json_corpus(event)?;
+                    let corpus = claude_event_corpus(event);
                     if let Some(snippet) = find_snippet(&corpus, needle) {
                         push_result(
                             output,
@@ -454,7 +454,7 @@ impl SearchUseCases {
             }
             let metadata =
                 strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if metadata.to_lowercase().contains(needle) {
+            if contains_folded(&metadata, needle) {
                 push_metadata(
                     output,
                     &summary.session_key,
@@ -534,135 +534,178 @@ fn provider_event_corpus(
             .unwrap_or_default();
         return strip_memory_metadata(text);
     }
-    let mut strings = Vec::new();
+    let mut buf = String::new();
     if let Some(user) = &event.user_message {
-        strings.push(if literal_user {
+        let text = if literal_user {
             crate::user_message::literal_searchable_text(&user.text)
         } else {
             crate::user_message::searchable_text(&user.text)
-        });
+        };
+        buf.push_str(&text);
         for block in &user.context_blocks {
             if block.kind == crate::user_message::UserContextKind::Instructions {
-                strings.push(block.text.clone());
+                push_non_empty(&mut buf, block.text.as_str());
             }
         }
         for attachment in &user.attachments {
-            strings.push(attachment.name.clone());
+            push_non_empty(&mut buf, attachment.name.as_str());
         }
     } else if event.role.as_deref() == Some("user")
         || matches!(event.kind.as_str(), "user_message" | "user_message_chunk")
     {
         let raw = event.text.as_deref().unwrap_or("");
-        strings.push(if literal_user {
+        buf.push_str(&if literal_user {
             crate::user_message::literal_searchable_text(raw)
         } else {
             crate::user_message::searchable_text(raw)
         });
     } else {
-        if matches!(event.kind.as_str(), "tool_call" | "tool_result") {
-            if let Some(tool_name) = event.role.as_deref().filter(|s| !s.trim().is_empty()) {
-                strings.push(tool_name.to_owned());
-            }
+        if matches!(event.kind.as_str(), "tool_call" | "tool_result") && event.role != event.text {
+            push_non_empty(&mut buf, event.role.as_deref());
         }
-        for s in [
-            event.text.as_deref(),
-            event.detail.as_deref(),
-            event.result.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !s.trim().is_empty() {
-                strings.push(s.to_owned());
-            }
-        }
+        push_non_empty(&mut buf, event.text.as_deref());
+        push_non_empty(&mut buf, event.detail.as_deref());
+        push_non_empty(&mut buf, event.result.as_deref());
         if let Some(sub) = &event.subagent {
-            if !sub.name.trim().is_empty() {
-                strings.push(sub.name.clone());
-            }
-            if let Some(role) = sub.role.as_deref().filter(|s| !s.trim().is_empty()) {
-                strings.push(role.to_owned());
-            }
-            if let Some(del) = sub.delegation.as_deref().filter(|s| !s.trim().is_empty()) {
-                strings.push(del.to_owned());
-            }
+            push_subagent_corpus(&mut buf, sub);
         }
     }
-    strip_memory_metadata(&strings.join("\n"))
+    strip_memory_metadata(&buf)
 }
 
-fn json_corpus<T: Serialize>(value: &T) -> Result<String> {
-    let value = serde_json::to_value(value)?;
-    if matches!(
-        value.get("kind").and_then(Value::as_str),
-        Some("compaction" | "branch_summary")
-    ) {
-        let text = value
-            .get("detail")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("text").and_then(Value::as_str))
-            .unwrap_or_default();
-        return Ok(strip_memory_metadata(text));
+fn push_non_empty<'a>(buf: &mut String, s: impl Into<Option<&'a str>>) {
+    if let Some(text) = s.into() {
+        if !text.trim().is_empty() {
+            if !buf.is_empty() {
+                buf.push('\n');
+            }
+            buf.push_str(text);
+        }
     }
-    let mut strings = Vec::new();
-    if let Some(user) = value
-        .get("userMessage")
-        .or_else(|| value.get("user_message"))
-        .filter(|user| user.is_object())
-    {
-        strings.push(crate::user_message::searchable_text(
-            user.get("text").and_then(Value::as_str).unwrap_or(""),
-        ));
-        if let Some(blocks) = user.get("contextBlocks").and_then(Value::as_array) {
-            strings.extend(
-                blocks
-                    .iter()
-                    .filter(|block| {
-                        block.get("kind").and_then(Value::as_str) == Some("instructions")
-                    })
-                    .filter_map(|block| block.get("text").and_then(Value::as_str))
-                    .map(str::to_owned),
-            );
+}
+
+fn push_user_message_corpus(buf: &mut String, user: &crate::user_message::UserMessage) {
+    let text = crate::user_message::searchable_text(&user.text);
+    buf.push_str(&text);
+    for block in &user.context_blocks {
+        if block.kind == crate::user_message::UserContextKind::Instructions {
+            if !buf.is_empty() {
+                buf.push('\n');
+            }
+            buf.push_str(&block.text);
         }
-        if let Some(attachments) = user.get("attachments").and_then(Value::as_array) {
-            strings.extend(
-                attachments
-                    .iter()
-                    .filter_map(|attachment| attachment.get("name").and_then(Value::as_str))
-                    .map(str::to_owned),
-            );
+    }
+    for attachment in &user.attachments {
+        if !buf.is_empty() {
+            buf.push('\n');
         }
-    } else if value.get("role").and_then(Value::as_str) == Some("user")
-        || value
-            .get("kind")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| matches!(kind, "user_message" | "user_message_chunk"))
+        buf.push_str(&attachment.name);
+    }
+}
+
+fn push_subagent_corpus(buf: &mut String, sub: &codex::subagents::SubagentActivity) {
+    push_non_empty(buf, sub.name.as_str());
+    push_non_empty(buf, sub.role.as_deref());
+    push_non_empty(buf, sub.unavailable_reason.as_deref());
+    push_non_empty(buf, sub.delegation.as_deref());
+}
+
+fn codex_block_corpus(block: &codex::MessageBlock) -> String {
+    if matches!(block.kind.as_str(), "compaction" | "branch_summary") {
+        return strip_memory_metadata(block.text.as_deref().unwrap_or_default());
+    }
+    let mut buf = String::new();
+    if let Some(user) = &block.user_message {
+        push_user_message_corpus(&mut buf, user);
+    } else if block.role == "user"
+        || matches!(block.kind.as_str(), "user_message" | "user_message_chunk")
     {
-        strings.push(crate::user_message::searchable_text(
-            value.get("text").and_then(Value::as_str).unwrap_or(""),
+        buf.push_str(&crate::user_message::searchable_text(
+            block.text.as_deref().unwrap_or(""),
         ));
     } else {
-        collect_strings(&value, &mut strings);
+        if let Some(sub) = &block.subagent {
+            push_subagent_corpus(&mut buf, sub);
+        }
+        push_non_empty(&mut buf, block.tool_name.as_deref());
+        push_non_empty(&mut buf, block.text.as_deref());
+        push_non_empty(&mut buf, block.summary.as_deref());
+        push_non_empty(&mut buf, block.input.as_deref());
+        for ans in &block.answers {
+            for a in &ans.answers {
+                push_non_empty(&mut buf, a.as_str());
+            }
+            push_non_empty(&mut buf, ans.note.as_deref());
+        }
+        for q in &block.questions {
+            push_non_empty(&mut buf, q.header.as_deref());
+            push_non_empty(&mut buf, q.question.as_str());
+            for opt in &q.options {
+                push_non_empty(&mut buf, opt.label.as_str());
+                push_non_empty(&mut buf, opt.description.as_deref());
+            }
+        }
     }
-    Ok(strip_memory_metadata(&strings.join("\n")))
+    strip_memory_metadata(&buf)
 }
 
-fn collect_strings(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(text) if !text.trim().is_empty() => output.push(text.clone()),
-        Value::Array(values) => values
-            .iter()
-            .for_each(|value| collect_strings(value, output)),
-        Value::Object(values) => values.iter().for_each(|(key, value)| {
-            if !matches!(
-                key.to_ascii_lowercase().as_str(),
-                "memory_citation" | "citation_entries" | "rollout_ids" | "oai-mem-citation"
-            ) {
-                collect_strings(value, output);
-            }
-        }),
-        _ => {}
+fn claude_event_corpus(event: &claude::ClaudeHistoryEvent) -> String {
+    if matches!(event.kind.as_str(), "compaction" | "branch_summary") {
+        let text = event
+            .detail
+            .as_deref()
+            .or(event.text.as_deref())
+            .unwrap_or_default();
+        return strip_memory_metadata(text);
     }
+    let mut buf = String::new();
+    if let Some(user) = &event.user_message {
+        push_user_message_corpus(&mut buf, user);
+    } else if event.role.as_deref() == Some("user")
+        || matches!(event.kind.as_str(), "user_message" | "user_message_chunk")
+    {
+        buf.push_str(&crate::user_message::searchable_text(
+            event.text.as_deref().unwrap_or(""),
+        ));
+    } else {
+        if matches!(
+            event.kind.as_str(),
+            "tool_call" | "tool_result" | "tool_reference"
+        ) && event.role != event.text
+        {
+            push_non_empty(&mut buf, event.role.as_deref());
+        }
+        push_non_empty(&mut buf, event.text.as_deref());
+        push_non_empty(&mut buf, event.detail.as_deref());
+        push_non_empty(&mut buf, event.result.as_deref());
+    }
+    strip_memory_metadata(&buf)
+}
+
+fn grok_event_corpus(event: &grok::GrokHistoryEvent) -> String {
+    if matches!(event.kind.as_str(), "compaction" | "branch_summary") {
+        let text = event
+            .detail
+            .as_deref()
+            .or(event.text.as_deref())
+            .unwrap_or_default();
+        return strip_memory_metadata(text);
+    }
+    let mut buf = String::new();
+    if let Some(user) = &event.user_message {
+        push_user_message_corpus(&mut buf, user);
+    } else if matches!(event.kind.as_str(), "user_message" | "user_message_chunk") {
+        buf.push_str(&crate::user_message::searchable_text(
+            event.text.as_deref().unwrap_or(""),
+        ));
+    } else {
+        push_non_empty(&mut buf, event.text.as_deref());
+        if event.kind.starts_with("tool_") && event.method.as_deref() != Some("session/update") {
+            push_non_empty(&mut buf, event.method.as_deref());
+        }
+        push_non_empty(&mut buf, event.detail.as_deref());
+    }
+    strip_memory_metadata(&buf)
 }
 
 fn push_warning(warnings: &mut Vec<String>) {
@@ -675,7 +718,46 @@ fn push_warning(warnings: &mut Vec<String>) {
     }
 }
 
+fn contains_ascii_case_insensitive_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    let first_lower = needle[0].to_ascii_lowercase();
+    let first_upper = needle[0].to_ascii_uppercase();
+    let max_start = haystack.len() - needle.len();
+    for i in 0..=max_start {
+        let b = haystack[i];
+        if (b == first_lower || b == first_upper)
+            && haystack[i + 1..i + needle.len()].eq_ignore_ascii_case(&needle[1..])
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_folded(haystack: &str, needle_lower: &str) -> bool {
+    if haystack.is_ascii() && needle_lower.is_ascii() {
+        return contains_ascii_case_insensitive_bytes(haystack.as_bytes(), needle_lower.as_bytes());
+    }
+    haystack.to_lowercase().contains(needle_lower)
+}
+
+fn might_contain_memory_metadata(bytes: &[u8]) -> bool {
+    contains_ascii_case_insensitive_bytes(bytes, b"memory_citation")
+        || contains_ascii_case_insensitive_bytes(bytes, b"oai-mem-citation")
+        || contains_ascii_case_insensitive_bytes(bytes, b"citation_entries")
+        || contains_ascii_case_insensitive_bytes(bytes, b"rollout_ids")
+        || contains_ascii_case_insensitive_bytes(bytes, b"<external_codex_apps_")
+}
+
 pub(crate) fn strip_memory_metadata(input: &str) -> String {
+    if !might_contain_memory_metadata(input.as_bytes()) {
+        return input.to_owned();
+    }
     let mut result = String::with_capacity(input.len());
     let mut fence: Option<(u8, usize)> = None;
     let mut literal_line = false;
@@ -866,6 +948,12 @@ fn match_metadata_tag(input: &str) -> Option<(bool, &'static str, usize)> {
 }
 
 fn find_snippet(text: &str, needle: &str) -> Option<String> {
+    if text.is_ascii()
+        && needle.is_ascii()
+        && !contains_ascii_case_insensitive_bytes(text.as_bytes(), needle.as_bytes())
+    {
+        return None;
+    }
     let lower = text.to_lowercase();
     let folded_needle = needle.to_lowercase();
     let index = lower.find(&folded_needle)?;
@@ -1276,14 +1364,23 @@ mod tests {
 
     #[test]
     fn folded_native_compaction_remains_searchable_without_indexing_runtime_context() {
-        let compact = json!({
-            "kind":"compaction", "text":"压缩摘要", "detail":"Summary fixture text",
-            "userMessage":{"id":"compact", "text":"", "attachments":[], "contextBlocks":[{"kind":"runtime","text":"Summary fixture text"}]}
-        });
-        assert_eq!(json_corpus(&compact).unwrap(), "Summary fixture text");
+        let compact: claude::ClaudeHistoryEvent = serde_json::from_value(json!({
+            "id": "compact-1",
+            "kind": "compaction",
+            "text": "压缩摘要",
+            "detail": "Summary fixture text",
+            "userMessage": {
+                "id": "compact",
+                "text": "",
+                "attachments": [],
+                "contextBlocks": [{"kind": "runtime", "text": "Summary fixture text"}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(claude_event_corpus(&compact), "Summary fixture text");
         let mut automatic = compact;
-        automatic["kind"] = json!("system");
-        assert!(json_corpus(&automatic).unwrap().trim().is_empty());
+        automatic.kind = "system".into();
+        assert!(claude_event_corpus(&automatic).trim().is_empty());
     }
 
     #[test]
@@ -1313,23 +1410,45 @@ mod tests {
             }]
         });
 
-        for key in ["userMessage", "user_message"] {
-            let mut value = json!({
-                "role":"user",
-                "text":text,
-                "duplicatePayload":"OUTER_ONLY_PAYLOAD_TOKEN"
-            });
-            value
-                .as_object_mut()
-                .expect("serialized event is an object")
-                .insert(key.to_owned(), user_message.clone());
+        let codex_block: codex::MessageBlock = serde_json::from_value(json!({
+            "id": "b-user-1",
+            "role": "user",
+            "kind": "user_message",
+            "text": text,
+            "answers": [],
+            "questions": [],
+            "user_message": user_message,
+            "payload": {"duplicatePayload": "OUTER_ONLY_PAYLOAD_TOKEN"}
+        }))
+        .unwrap();
+        let claude_event: claude::ClaudeHistoryEvent = serde_json::from_value(json!({
+            "id": "c-user-1",
+            "kind": "user_message",
+            "role": "user",
+            "text": text,
+            "detail": "OUTER_ONLY_PAYLOAD_TOKEN",
+            "userMessage": user_message
+        }))
+        .unwrap();
+        let grok_event: grok::GrokHistoryEvent = serde_json::from_value(json!({
+            "id": "g-user-1",
+            "kind": "user_message",
+            "text": text,
+            "detail": "OUTER_ONLY_PAYLOAD_TOKEN",
+            "userMessage": user_message
+        }))
+        .unwrap();
 
-            let corpus = json_corpus(&value).unwrap();
+        for (label, corpus) in [
+            ("codex", codex_block_corpus(&codex_block)),
+            ("claude", claude_event_corpus(&claude_event)),
+            ("grok", grok_event_corpus(&grok_event)),
+        ] {
             for token in [body, question, answer] {
                 assert_eq!(
                     corpus.matches(token).count(),
                     1,
-                    "{token} should occur once for {key}"
+                    "{token} should occur once for {label}"
                 );
             }
             assert!(corpus.contains("AGENTS_INSTRUCTIONS_TOKEN"));
@@ -1345,7 +1464,7 @@ mod tests {
             ] {
                 assert!(
                     !corpus.contains(excluded),
-                    "{excluded} must not enter the searchable corpus for {key}"
+                    "{excluded} must not enter the searchable corpus for {label}"
                 );
             }
         }
@@ -1355,38 +1474,67 @@ mod tests {
     fn context_only_environment_user_message_has_an_empty_search_corpus() {
         let environment =
             "<environment_context>ONLY_ENVIRONMENT_CONTEXT_TOKEN</environment_context>";
-        let value = json!({
-            "role":"user",
-            "text":environment,
-            "userMessage": {
-                "id":"fixture-context-only",
-                "text":environment,
-                "contextBlocks":[{"kind":"environment", "text":environment}],
-                "attachments":[]
-            }
+        let user_msg = json!({
+            "id": "fixture-context-only",
+            "text": environment,
+            "contextBlocks": [{"kind": "environment", "text": environment}],
+            "attachments": []
         });
+        let codex_block: codex::MessageBlock = serde_json::from_value(json!({
+            "id": "b-env",
+            "role": "user",
+            "kind": "user_message",
+            "text": environment,
+            "answers": [],
+            "questions": [],
+            "user_message": user_msg
+        }))
+        .unwrap();
+        let claude_event: claude::ClaudeHistoryEvent = serde_json::from_value(json!({
+            "id": "c-env",
+            "kind": "user_message",
+            "role": "user",
+            "text": environment,
+            "userMessage": user_msg
+        }))
+        .unwrap();
 
-        let corpus = json_corpus(&value).unwrap();
-
-        assert!(corpus.trim().is_empty());
+        assert!(codex_block_corpus(&codex_block).trim().is_empty());
+        assert!(claude_event_corpus(&claude_event).trim().is_empty());
     }
 
     #[test]
     fn legacy_user_text_fallback_still_excludes_memory_and_page_metadata() {
-        let value = json!({
-            "role":"user",
-            "text":concat!(
-                "LEGACY_VISIBLE_BODY_TOKEN\n",
-                "<oai-mem-citation>LEGACY_MEMORY_SECRET_TOKEN</oai-mem-citation>\n",
-                "<external_codex_apps_open_page>{\"page_id\":\"fixture-page-secret-token\"}</external_codex_apps_open_page>"
-            )
-        });
+        let legacy_text = concat!(
+            "LEGACY_VISIBLE_BODY_TOKEN\n",
+            "<oai-mem-citation>LEGACY_MEMORY_SECRET_TOKEN</oai-mem-citation>\n",
+            "<external_codex_apps_open_page>{\"page_id\":\"fixture-page-secret-token\"}</external_codex_apps_open_page>"
+        );
+        let codex_block: codex::MessageBlock = serde_json::from_value(json!({
+            "id": "b-legacy",
+            "role": "user",
+            "kind": "message",
+            "text": legacy_text,
+            "answers": [],
+            "questions": []
+        }))
+        .unwrap();
+        let claude_event: claude::ClaudeHistoryEvent = serde_json::from_value(json!({
+            "id": "c-legacy",
+            "kind": "user_message",
+            "role": "user",
+            "text": legacy_text
+        }))
+        .unwrap();
 
-        let corpus = json_corpus(&value).unwrap();
-
-        assert!(corpus.contains("LEGACY_VISIBLE_BODY_TOKEN"));
-        assert!(!corpus.contains("LEGACY_MEMORY_SECRET_TOKEN"));
-        assert!(!corpus.contains("fixture-page-secret-token"));
+        for corpus in [
+            codex_block_corpus(&codex_block),
+            claude_event_corpus(&claude_event),
+        ] {
+            assert!(corpus.contains("LEGACY_VISIBLE_BODY_TOKEN"));
+            assert!(!corpus.contains("LEGACY_MEMORY_SECRET_TOKEN"));
+            assert!(!corpus.contains("fixture-page-secret-token"));
+        }
     }
 
     #[test]
@@ -1399,7 +1547,9 @@ mod tests {
         );
         // 1) Snapshot-only message produces empty visible markdown, empty search corpus, and zero timeline markers
         assert_eq!(super::strip_memory_metadata(snapshot).trim(), "");
-        let only_value = json!({
+        let only_event: claude::ClaudeHistoryEvent = serde_json::from_value(json!({
+            "id": "msg-snap-only",
+            "kind": "user_message",
             "role": "user",
             "text": snapshot,
             "userMessage": {
@@ -1408,8 +1558,9 @@ mod tests {
                 "contextBlocks": [],
                 "attachments": []
             }
-        });
-        assert!(json_corpus(&only_value).unwrap().trim().is_empty());
+        }))
+        .unwrap();
+        assert!(claude_event_corpus(&only_event).trim().is_empty());
         let tl = crate::history_navigation::timeline(std::iter::once((
             "msg-snap-only",
             None,
@@ -1437,5 +1588,534 @@ mod tests {
         let snippet = super::find_snippet(text, "中文搜索").expect("unicode match");
         assert!(snippet.contains("中文搜索"));
         assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn corpus_builders_index_visible_content_and_exclude_internal_identifiers_across_all_providers()
+    {
+        let block = codex::MessageBlock {
+            subagent: Some(codex::subagents::SubagentActivity {
+                event_kind: Some(codex::subagents::SubagentEventKind::Interacted),
+                event_id: Some("INTERNAL_SUB_EVENT_ID".into()),
+                agent_id: Some("INTERNAL_SUB_AGENT_ID".into()),
+                name: "worker-alpha".into(),
+                role: Some("reviewer".into()),
+                status: codex::subagents::SubagentStatus::Interrupted,
+                available: false,
+                unavailable_reason: Some("子智能体尚未就绪".into()),
+                delegation: Some("Audit search corpus".into()),
+            }),
+            user_message: None,
+            phase: Some("INTERNAL_PHASE_TOKEN".into()),
+            id: "INTERNAL_BLOCK_ID".into(),
+            role: "INTERNAL_ROLE_TOKEN".into(),
+            kind: "INTERNAL_KIND_TOKEN".into(),
+            display_kind: Some("INTERNAL_DISPLAY_KIND".into()),
+            status: Some("INTERNAL_STATUS_TOKEN".into()),
+            text: Some("visible reply <oai-mem-citation>secret</oai-mem-citation>".into()),
+            summary: Some("ran check".into()),
+            input: Some("cargo test".into()),
+            truncated: Some(false),
+            resolved: Some(true),
+            answers: vec![codex::UserInputAnswer {
+                question_id: "INTERNAL_ANSWER_QUESTION_ID".into(),
+                answers: vec!["Confirm".into()],
+                note: Some("ship it".into()),
+            }],
+            plan_status: Some("INTERNAL_PLAN_STATUS".into()),
+            group_id: Some("INTERNAL_GROUP_ID".into()),
+            tool_name: Some("exec_command".into()),
+            call_id: Some("INTERNAL_CALL_ID".into()),
+            turn_id: Some("INTERNAL_TURN_ID".into()),
+            item_id: Some("INTERNAL_ITEM_ID".into()),
+            created_at: Some("2099-12-31T23:59:59Z".into()),
+            questions: vec![codex::UserInputQuestion {
+                id: "INTERNAL_QUESTION_ID".into(),
+                header: Some("Mode".into()),
+                question: "Proceed?".into(),
+                options: vec![codex::UserInputOption {
+                    label: "Confirm".into(),
+                    description: Some("Run now".into()),
+                }],
+            }],
+            payload: Some(json!({
+                "turn_id": "INTERNAL_TURN_ID",
+                "call_id": "INTERNAL_CALL_ID",
+                "memory_citation": "hidden-mem"
+            })),
+        };
+        let codex_typed = codex_block_corpus(&block);
+        for visible in [
+            "worker-alpha",
+            "reviewer",
+            "子智能体尚未就绪",
+            "Audit search corpus",
+            "exec_command",
+            "visible reply",
+            "ran check",
+            "cargo test",
+            "Confirm",
+            "ship it",
+            "Mode",
+            "Proceed?",
+            "Run now",
+        ] {
+            assert!(
+                codex_typed.contains(visible),
+                "expected visible token {visible} in codex corpus: {codex_typed}"
+            );
+        }
+        for hidden in [
+            "secret",
+            "hidden-mem",
+            "INTERNAL_SUB_EVENT_ID",
+            "INTERNAL_SUB_AGENT_ID",
+            "interacted",
+            "interrupted",
+            "INTERNAL_PHASE_TOKEN",
+            "INTERNAL_BLOCK_ID",
+            "INTERNAL_ROLE_TOKEN",
+            "INTERNAL_KIND_TOKEN",
+            "INTERNAL_DISPLAY_KIND",
+            "INTERNAL_STATUS_TOKEN",
+            "INTERNAL_ANSWER_QUESTION_ID",
+            "INTERNAL_PLAN_STATUS",
+            "INTERNAL_GROUP_ID",
+            "INTERNAL_CALL_ID",
+            "INTERNAL_TURN_ID",
+            "INTERNAL_ITEM_ID",
+            "2099-12-31T23:59:59Z",
+            "INTERNAL_QUESTION_ID",
+        ] {
+            assert!(
+                !codex_typed.contains(hidden),
+                "internal token {hidden} must not enter codex corpus: {codex_typed}"
+            );
+        }
+
+        let claude_ev = claude::ClaudeHistoryEvent {
+            id: "INTERNAL_CLAUDE_ID".into(),
+            timestamp: Some("2099-12-31T23:59:59Z".into()),
+            kind: "INTERNAL_CLAUDE_KIND".into(),
+            role: Some("INTERNAL_CLAUDE_ROLE".into()),
+            text: Some("cargo clippy".into()),
+            call_id: Some("INTERNAL_CLAUDE_CALL_ID".into()),
+            turn_id: Some("INTERNAL_CLAUDE_TURN_ID".into()),
+            status: Some("INTERNAL_CLAUDE_STATUS".into()),
+            detail: Some("linting workspace".into()),
+            result: Some("0 warnings".into()),
+            user_message: None,
+            assistant_phase: Some(claude::ClaudeAssistantPhase::Intermediate),
+        };
+        let claude_typed = claude_event_corpus(&claude_ev);
+        for visible in ["cargo clippy", "linting workspace", "0 warnings"] {
+            assert!(claude_typed.contains(visible));
+        }
+        for hidden in [
+            "INTERNAL_CLAUDE_ID",
+            "2099-12-31T23:59:59Z",
+            "INTERNAL_CLAUDE_KIND",
+            "INTERNAL_CLAUDE_ROLE",
+            "INTERNAL_CLAUDE_CALL_ID",
+            "INTERNAL_CLAUDE_TURN_ID",
+            "INTERNAL_CLAUDE_STATUS",
+            "intermediate",
+        ] {
+            assert!(
+                !claude_typed.contains(hidden),
+                "internal token {hidden} must not enter claude corpus: {claude_typed}"
+            );
+        }
+
+        let claude_tool = claude::ClaudeHistoryEvent {
+            id: "INTERNAL_CLAUDE_TOOL_ID".into(),
+            timestamp: Some("2099-12-31T23:59:59Z".into()),
+            kind: "tool_call".into(),
+            role: Some("Bash".into()),
+            text: Some("echo ok".into()),
+            call_id: Some("INTERNAL_CLAUDE_TOOL_CALL_ID".into()),
+            turn_id: Some("INTERNAL_CLAUDE_TOOL_TURN_ID".into()),
+            status: Some("in_progress".into()),
+            detail: None,
+            result: None,
+            user_message: None,
+            assistant_phase: None,
+        };
+        let claude_tool_typed = claude_event_corpus(&claude_tool);
+        assert!(claude_tool_typed.contains("Bash"));
+        assert!(claude_tool_typed.contains("echo ok"));
+        assert!(!claude_tool_typed.contains("in_progress"));
+        assert!(!claude_tool_typed.contains("INTERNAL_CLAUDE_TOOL_CALL_ID"));
+
+        let grok_tool_ev = grok::GrokHistoryEvent {
+            id: "INTERNAL_GROK_ID".into(),
+            user_message: None,
+            timestamp: Some("2099-12-31T23:59:59Z".into()),
+            kind: "tool_call".into(),
+            text: Some("tool output".into()),
+            method: Some("Read".into()),
+            call_id: Some("INTERNAL_GROK_CALL_ID".into()),
+            status: Some("INTERNAL_GROK_STATUS".into()),
+            detail: Some("src/lib.rs".into()),
+        };
+        let grok_typed = grok_event_corpus(&grok_tool_ev);
+        for visible in ["tool output", "Read", "src/lib.rs"] {
+            assert!(grok_typed.contains(visible));
+        }
+        for hidden in [
+            "INTERNAL_GROK_ID",
+            "2099-12-31T23:59:59Z",
+            "tool_call",
+            "INTERNAL_GROK_CALL_ID",
+            "INTERNAL_GROK_STATUS",
+        ] {
+            assert!(
+                !grok_typed.contains(hidden),
+                "internal token {hidden} must not enter grok corpus: {grok_typed}"
+            );
+        }
+
+        let grok_msg_ev = grok::GrokHistoryEvent {
+            id: "INTERNAL_GROK_MSG_ID".into(),
+            user_message: None,
+            timestamp: Some("2099-12-31T23:59:59Z".into()),
+            kind: "agent_message_chunk".into(),
+            text: Some("visible grok reply".into()),
+            method: Some("session/update".into()),
+            call_id: None,
+            status: None,
+            detail: None,
+        };
+        let grok_msg_typed = grok_event_corpus(&grok_msg_ev);
+        assert!(grok_msg_typed.contains("visible grok reply"));
+        assert!(
+            !grok_msg_typed.contains("session/update"),
+            "ACP JSON-RPC envelope method must not enter grok corpus: {grok_msg_typed}"
+        );
+
+        let provider_ev = crate::provider_sessions::ProviderHistoryEvent {
+            id: "INTERNAL_PROVIDER_ID".into(),
+            timestamp: Some("2099-12-31T23:59:59Z".into()),
+            kind: "subagent".into(),
+            role: Some("INTERNAL_PROVIDER_ROLE".into()),
+            text: None,
+            call_id: Some("INTERNAL_PROVIDER_CALL_ID".into()),
+            turn_id: Some("INTERNAL_PROVIDER_TURN_ID".into()),
+            status: Some("INTERNAL_PROVIDER_STATUS".into()),
+            detail: None,
+            result: None,
+            user_message: None,
+            subagent: Some(codex::subagents::SubagentActivity {
+                event_kind: Some(codex::subagents::SubagentEventKind::Interacted),
+                event_id: Some("INTERNAL_PROV_SUB_EID".into()),
+                agent_id: Some("INTERNAL_PROV_SUB_AID".into()),
+                name: "sub-beta".into(),
+                role: Some("auditor".into()),
+                status: codex::subagents::SubagentStatus::Running,
+                available: false,
+                unavailable_reason: Some("离线未水合".into()),
+                delegation: Some("Verify corpus".into()),
+            }),
+        };
+        let provider_typed = provider_event_corpus(&provider_ev, false);
+        for visible in ["sub-beta", "auditor", "离线未水合", "Verify corpus"] {
+            assert!(provider_typed.contains(visible));
+        }
+        for hidden in [
+            "INTERNAL_PROVIDER_ID",
+            "INTERNAL_PROVIDER_ROLE",
+            "INTERNAL_PROVIDER_CALL_ID",
+            "INTERNAL_PROVIDER_TURN_ID",
+            "INTERNAL_PROVIDER_STATUS",
+            "INTERNAL_PROV_SUB_EID",
+            "INTERNAL_PROV_SUB_AID",
+            "running",
+        ] {
+            assert!(!provider_typed.contains(hidden));
+        }
+    }
+
+    #[test]
+    fn search_never_false_matches_turn_id_or_call_id_only_across_codex_claude_and_grok() {
+        let root = std::env::temp_dir().join(format!(
+            "agenthub-search-no-internal-ids-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let service = isolated_service(&root);
+
+        // 1. Codex rollout with turn_id/call_id on tool call, elicitation question, and assistant reply
+        std::fs::create_dir_all(service.codex.sessions_dir()).unwrap();
+        let codex_id = "22222222-2222-4222-8222-222222222222";
+        let codex_rollout = service.codex.sessions_dir().join("rollout.jsonl");
+        let codex_rows = [
+            json!({"type":"session_meta","payload":{"id":codex_id,"source":"cli"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"TURN_ONLY_NEEDLE_XYZ"}}),
+            json!({
+                "type":"response_item",
+                "turn_id":"TURN_ONLY_NEEDLE_XYZ",
+                "payload":{
+                    "type":"function_call",
+                    "name":"exec_command",
+                    "call_id":"CALL_ONLY_NEEDLE_XYZ",
+                    "arguments":"{\"cmd\":\"echo VISIBLE_CODEX_STDOUT\"}"
+                }
+            }),
+            json!({
+                "type":"response_item",
+                "turn_id":"TURN_ONLY_NEEDLE_XYZ",
+                "payload":{
+                    "type":"function_call_output",
+                    "call_id":"CALL_ONLY_NEEDLE_XYZ",
+                    "output":"VISIBLE_CODEX_STDOUT"
+                }
+            }),
+            json!({
+                "type":"response_item",
+                "turn_id":"TURN_ONLY_NEEDLE_XYZ",
+                "payload":{
+                    "type":"function_call",
+                    "name":"request_user_input",
+                    "call_id":"CALL_QUESTION_NEEDLE_XYZ",
+                    "arguments":json!({
+                        "questions":[{
+                            "id":"QID_ONLY_NEEDLE_XYZ",
+                            "question":"VISIBLE_QUESTION_TEXT",
+                            "options":[{"label":"Yes"}]
+                        }]
+                    }).to_string()
+                }
+            }),
+        ];
+        std::fs::write(
+            &codex_rollout,
+            codex_rows
+                .iter()
+                .map(|r| format!("{r}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let conn = rusqlite::Connection::open(service.codex.state_db()).unwrap();
+        conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,source TEXT,archived INTEGER,created_at INTEGER,updated_at INTEGER);").unwrap();
+        conn.execute(
+            "INSERT INTO threads VALUES(?1,'Clean Title',?2,'cli',0,1,1)",
+            rusqlite::params![codex_id, codex_rollout.to_str().unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+
+        for internal_query in [
+            "TURN_ONLY_NEEDLE_XYZ",
+            "CALL_ONLY_NEEDLE_XYZ",
+            "CALL_QUESTION_NEEDLE_XYZ",
+            "QID_ONLY_NEEDLE_XYZ",
+        ] {
+            let res = service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Codex,
+                    scope: SearchScope::Thread,
+                    session_key: Some(codex_id.into()),
+                    query: internal_query.into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap();
+            assert!(
+                res.results.is_empty(),
+                "Codex search must not match internal field {internal_query}: {:?}",
+                res.results
+            );
+        }
+        assert_eq!(
+            service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Codex,
+                    scope: SearchScope::Thread,
+                    session_key: Some(codex_id.into()),
+                    query: "VISIBLE_QUESTION_TEXT".into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+
+        // 2. Claude session with uuid (turn_id) and tool_use id (call_id)
+        let claude_proj = service.claude.projects.join("proj");
+        std::fs::create_dir_all(&claude_proj).unwrap();
+        let claude_id = "33333333-3333-4333-8333-333333333333";
+        let claude_rows = [
+            json!({
+                "type":"user",
+                "uuid":"TURN_ONLY_CLAUDE_UUID",
+                "sessionId":claude_id,
+                "version":"2.1.0",
+                "message":{"role":"user","content":"Hello Claude"}
+            }),
+            json!({
+                "type":"assistant",
+                "uuid":"ASST_ONLY_CLAUDE_UUID",
+                "sessionId":claude_id,
+                "version":"2.1.0",
+                "message":{
+                    "role":"assistant",
+                    "stop_reason":"tool_use",
+                    "content":[{
+                        "type":"tool_use",
+                        "id":"CALL_ONLY_CLAUDE_ID",
+                        "name":"Bash",
+                        "input":{"command":"echo VISIBLE_CLAUDE_CMD"}
+                    }]
+                }
+            }),
+        ];
+        std::fs::write(
+            claude_proj.join(format!("{claude_id}.jsonl")),
+            claude_rows
+                .iter()
+                .map(|r| format!("{r}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let claude_key = claude::list_claude_sessions_without_storage(&service.claude, 10, None)
+            .unwrap()
+            .remove(0)
+            .session_key;
+        for internal_query in [
+            "TURN_ONLY_CLAUDE_UUID",
+            "ASST_ONLY_CLAUDE_UUID",
+            "CALL_ONLY_CLAUDE_ID",
+        ] {
+            let res = service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Claude,
+                    scope: SearchScope::Thread,
+                    session_key: Some(claude_key.clone()),
+                    query: internal_query.into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap();
+            assert!(
+                res.results.is_empty(),
+                "Claude search must not match internal field {internal_query}: {:?}",
+                res.results
+            );
+        }
+        assert_eq!(
+            service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Claude,
+                    scope: SearchScope::Thread,
+                    session_key: Some(claude_key),
+                    query: "VISIBLE_CLAUDE_CMD".into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+
+        // 3. Grok sessions: chat_history.jsonl tool_call id + updates.jsonl ACP method="session/update"
+        let grok_id = "44444444-4444-4444-8444-444444444444";
+        let grok_dir = service.grok.sessions().join("ws").join(grok_id);
+        std::fs::create_dir_all(&grok_dir).unwrap();
+        let grok_rows = [
+            json!({"type":"user","content":"Hello Grok"}),
+            json!({"type":"assistant","tool_calls":[{"id":"CALL_ONLY_GROK_ID","name":"Read","arguments":"{\"path\":\"VISIBLE_GROK_PATH\"}"}]}),
+        ];
+        std::fs::write(
+            grok_dir.join("chat_history.jsonl"),
+            grok_rows
+                .iter()
+                .map(|r| format!("{r}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let grok_res = service
+            .search(SessionSearchRequest {
+                provider: SessionProvider::Grok,
+                scope: SearchScope::Thread,
+                session_key: Some(grok_id.into()),
+                query: "CALL_ONLY_GROK_ID".into(),
+                cursor: None,
+                limit: None,
+            })
+            .unwrap();
+        assert!(grok_res.results.is_empty());
+        assert_eq!(
+            service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Grok,
+                    scope: SearchScope::Thread,
+                    session_key: Some(grok_id.into()),
+                    query: "VISIBLE_GROK_PATH".into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+
+        let grok_acp_id = "55555555-5555-4555-8555-555555555555";
+        let grok_acp_dir = service.grok.sessions().join("ws").join(grok_acp_id);
+        std::fs::create_dir_all(&grok_acp_dir).unwrap();
+        std::fs::write(
+            grok_acp_dir.join("summary.json"),
+            json!({"info":{"id":grok_acp_id,"title":"Plain Title","cwd":"/workspace"}}).to_string(),
+        )
+        .unwrap();
+        let grok_updates = [
+            json!({"timestamp":"2026-01-01T00:00:00Z","method":"session/update","params":{"sessionId":grok_acp_id,"update":{"sessionUpdate":"user_message_chunk","messageId":"m1","content":{"type":"text","text":"Ask Grok"}}}}),
+            json!({"timestamp":"2026-01-01T00:00:01Z","method":"session/update","params":{"sessionId":grok_acp_id,"update":{"sessionUpdate":"tool_call","toolCallId":"CALL_ONLY_GROK_ACP_ID","title":"Read","status":"completed","content":[{"type":"content","content":{"type":"text","text":"VISIBLE_ACP_TOOL"}}]}}}),
+            json!({"timestamp":"2026-01-01T00:00:02Z","method":"session/update","params":{"sessionId":grok_acp_id,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"VISIBLE_ACP_REPLY"}}}}),
+        ];
+        std::fs::write(
+            grok_acp_dir.join("updates.jsonl"),
+            grok_updates
+                .iter()
+                .map(|r| format!("{r}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        for internal_query in ["session/update", "CALL_ONLY_GROK_ACP_ID"] {
+            let acp_res = service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Grok,
+                    scope: SearchScope::Thread,
+                    session_key: Some(grok_acp_id.into()),
+                    query: internal_query.into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap();
+            assert!(
+                acp_res.results.is_empty(),
+                "Grok ACP search must not match internal token {internal_query}: {:?}",
+                acp_res.results
+            );
+        }
+        assert_eq!(
+            service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Grok,
+                    scope: SearchScope::Thread,
+                    session_key: Some(grok_acp_id.into()),
+                    query: "VISIBLE_ACP_REPLY".into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

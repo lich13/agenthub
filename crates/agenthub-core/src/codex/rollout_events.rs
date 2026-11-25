@@ -154,33 +154,31 @@ fn update_pending_tool_calls(
     value: &Value,
     pending_tool_turns: &mut HashMap<String, Option<String>>,
     active_turn_id: Option<&str>,
-) {
+) -> bool {
     let Some(payload) = event_payload(value) else {
-        return;
+        return false;
     };
     let payload_type = event_payload_type(value, payload);
     if is_tool_output_kind(payload_type) {
         if let Some(call_id) = payload_call_id(payload) {
-            pending_tool_turns.remove(&call_id);
+            return pending_tool_turns.remove(&call_id).is_some();
         }
-        return;
+        return false;
     }
     if !is_tool_call_kind(payload_type) || is_request_user_input(value) {
-        return;
+        return false;
     }
     let Some(call_id) = payload_call_id(payload) else {
-        return;
+        return false;
     };
     if payload_status(payload)
         .as_deref()
         .is_some_and(is_finished_status)
     {
-        return;
+        return false;
     }
-    pending_tool_turns.insert(
-        call_id,
-        event_turn_id(value).or_else(|| active_turn_id.map(str::to_string)),
-    );
+    let next_turn = event_turn_id(value).or_else(|| active_turn_id.map(str::to_string));
+    pending_tool_turns.insert(call_id, next_turn.clone()) != Some(next_turn)
 }
 
 fn plan_marker_for_event(

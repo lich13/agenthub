@@ -313,6 +313,65 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
             GrokHistoryEvent(id: "g1", kind: "tool_call", text: "bash", callId: "call-1", status: "completed", detail: "ok"),
         ])
         XCTAssertEqual(grokGrouped.count, 1)
+
+        // Consecutive tool merging preserves order, call/result pairing, kind promotion, turn boundaries, and running/failed aggregation
+        var consecutiveBlocks: [MessageBlock] = []
+        for idx in 0 ..< 64 {
+            let isNonCommandTool = (idx == 17)
+            let status: String? = (idx == 9 || idx == 41) ? "failed" : (idx == 63 ? "in_progress" : "completed")
+            consecutiveBlocks.append(MessageBlock(
+                id: "call-\(idx)",
+                role: "tool",
+                kind: isNonCommandTool ? "function_call" : "command_execution",
+                status: status,
+                input: isNonCommandTool ? "{\"q\":\"search\"}" : "echo step-\(idx)",
+                toolName: isNonCommandTool ? "search_web" : "exec_command",
+                callId: "cid-\(idx)",
+                turnId: idx == 0 ? nil : "turn-a"
+            ))
+            if idx != 63 {
+                consecutiveBlocks.append(MessageBlock(
+                    id: "out-\(idx)",
+                    role: "tool",
+                    kind: "function_call_output",
+                    status: status,
+                    text: "result-\(idx)",
+                    callId: "cid-\(idx)",
+                    turnId: "turn-a"
+                ))
+            }
+        }
+        consecutiveBlocks.append(MessageBlock(
+            id: "next-turn-call",
+            role: "tool",
+            kind: "command_execution",
+            status: "completed",
+            input: "ls",
+            toolName: "exec_command",
+            callId: "cid-next",
+            turnId: "turn-b"
+        ))
+        let consecutiveGrouped = ExecutionGroupingEngine.groupCodexBlocks(consecutiveBlocks)
+        XCTAssertEqual(consecutiveGrouped.count, 2, "64 same-turn tools must merge into 1 group, split only at turn-b")
+        if case let .group(firstGroup) = consecutiveGrouped[0] {
+            XCTAssertEqual(firstGroup.commands.count, 64)
+            XCTAssertEqual(firstGroup.kind, "tool", "Mixed command + non-command tool promotes group kind to tool")
+            XCTAssertEqual(firstGroup.turnId, "turn-a", "Nil initial turnId backfills from subsequent command in group")
+            XCTAssertEqual(firstGroup.failedCount, 2)
+            XCTAssertTrue(firstGroup.running)
+            XCTAssertEqual(firstGroup.commands[0].sourceIds, ["call-0", "cid-0", "out-0"])
+            XCTAssertEqual(firstGroup.commands[63].status, .running)
+        } else {
+            XCTFail("Expected merged first group")
+        }
+        if case let .group(secondGroup) = consecutiveGrouped[1] {
+            XCTAssertEqual(secondGroup.commands.count, 1)
+            XCTAssertEqual(secondGroup.kind, "command")
+            XCTAssertEqual(secondGroup.turnId, "turn-b")
+            XCTAssertFalse(secondGroup.running)
+        } else {
+            XCTFail("Expected separate group for new turn")
+        }
     }
 
     // MARK: - 11. processGroups.test.ts (7 cases)
@@ -375,6 +434,28 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
         )
         XCTAssertTrue(emptyThinking.isEmpty)
 
+        // Interleaved automatic file-history-snapshot events merge surrounding tool groups uniquely
+        let interleavedEvents: [ClaudeHistoryEvent] = [
+            ClaudeHistoryEvent(id: "ce-1", kind: "tool_call", role: "Bash", text: "Bash", turnId: nil, callId: "cc-1", status: "completed", result: "ok"),
+            ClaudeHistoryEvent(id: "snap-1", kind: "file-history-snapshot", text: "文件历史快照", turnId: "turn-c"),
+            ClaudeHistoryEvent(id: "ce-2", kind: "tool_call", role: "Edit", text: "Edit a.swift", turnId: "turn-c", callId: "cc-2", status: "failed", result: "err"),
+            ClaudeHistoryEvent(id: "snap-2", kind: "file-history-snapshot", text: "文件历史快照", turnId: "turn-c"),
+            ClaudeHistoryEvent(id: "ce-3", kind: "tool_call", role: "Read", text: "Read b.swift", turnId: "turn-c", callId: "cc-3", status: "running"),
+        ]
+        let foldedAuto = ClaudeProcessGroupingEngine.foldAutomatic(
+            ExecutionGroupingEngine.groupClaudeEvents(interleavedEvents, recordedOnly: false)
+        )
+        if case let .group(mergedClaude)? = foldedAuto.first {
+            XCTAssertEqual(mergedClaude.commands.count, 3)
+            XCTAssertEqual(mergedClaude.mergedIds.count, 2)
+            XCTAssertEqual(mergedClaude.kind, "tool")
+            XCTAssertEqual(mergedClaude.turnId, "turn-c")
+            XCTAssertTrue(mergedClaude.running)
+            XCTAssertEqual(mergedClaude.failedCount, 1)
+        } else {
+            XCTFail("Expected merged Claude ExecutionGroup across automatic snapshots")
+        }
+
         let userRow = ConversationRowBuilder.buildClaudeRows(
             events: [ClaudeHistoryEvent(id: "u1", kind: "user_message", text: "Hello Claude")],
             attachmentsAsNamesOnly: true
@@ -401,69 +482,13 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
 
         let names = Set(actions.compactMap { $0["id"] as? String })
         XCTAssertEqual(names.count, actions.count)
+        XCTAssertFalse(names.contains { $0.hasPrefix("codex.desktop.") })
 
         let ffiHeader = try String(contentsOf: repoRoot.appendingPathComponent("crates/agenthub-ffi/include/agenthub_ffi.h"))
         XCTAssertTrue(ffiHeader.contains("agenthub_ffi_invoke"))
-        XCTAssertTrue(ffiHeader.contains("agenthub_ffi_desktop_attach"))
-        XCTAssertTrue(ffiHeader.contains("agenthub_ffi_desktop_paste"))
+        XCTAssertFalse(ffiHeader.contains("agenthub_ffi_desktop_attach"))
+        XCTAssertFalse(ffiHeader.contains("agenthub_ffi_desktop_paste"))
         XCTAssertTrue(ffiHeader.contains("agenthub_ffi_parse_gfm_markdown"))
-    }
-
-    // MARK: - 14. desktopReferences.test.ts (15 cases)
-
-    func testPorted_desktopReferences() throws {
-        var draft = ReferenceDraft()
-        let skill = DesktopChosenItem(handle: "h-skill", name: "lint", kind: "skill")
-        let app = DesktopChosenItem(handle: "h-app", name: "Linear", kind: "app")
-        let file = DesktopChosenItem(handle: "h-file", name: "spec.md", kind: "file")
-
-        XCTAssertTrue(DesktopReferencesEngine.isInlineKind("skill"))
-        XCTAssertTrue(DesktopReferencesEngine.isInlineKind("app"))
-        XCTAssertTrue(DesktopReferencesEngine.isInlineKind("plugin"))
-        XCTAssertFalse(DesktopReferencesEngine.isInlineKind("file"))
-
-        let qSkill = DesktopReferencesEngine.inlineQuery(text: "Run $lin", start: 8, end: 8)
-        XCTAssertEqual(qSkill?.kind, "skills")
-        XCTAssertEqual(qSkill?.query, "lin")
-
-        let qMention = DesktopReferencesEngine.inlineQuery(text: "Ask @Lin", start: 8, end: 8)
-        XCTAssertEqual(qMention?.kind, "mentions")
-        XCTAssertEqual(qMention?.query, "Lin")
-
-        XCTAssertNil(DesktopReferencesEngine.inlineQuery(text: "user@example.invalid", start: 20, end: 20))
-        XCTAssertNil(DesktopReferencesEngine.inlineQuery(text: "Select $lin", start: 7, end: 11))
-
-        let ins1 = try DesktopReferencesEngine.insert(draft, item: skill, start: 0, end: 0)
-        draft = ins1.draft
-        XCTAssertEqual(draft.spans.count, 1)
-        XCTAssertEqual(draft.references.map(\.handle), ["h-skill"])
-
-        // Prefix edit shifts UTF-16 span offsets cleanly
-        draft = DesktopReferencesEngine.edit(draft, text: "😀 " + draft.text)
-        XCTAssertEqual(draft.spans.count, 1)
-        XCTAssertGreaterThan(draft.spans[0].start, 0)
-
-        // UTF-8 byte span conversion accounts for 4-byte emoji vs 2-unit UTF-16 surrogate pair
-        let utf8Spans = DesktopReferencesEngine.toUTF8ReferenceSpans(draft)
-        XCTAssertEqual(utf8Spans.count, 1)
-        XCTAssertEqual(utf8Spans[0].start, draft.spans[0].start + 2)
-
-        let ins2 = try DesktopReferencesEngine.insert(draft, item: app, start: (draft.text as NSString).length, end: (draft.text as NSString).length)
-        draft = ins2.draft
-        XCTAssertEqual(draft.references.count, 2)
-
-        // Non-inline file attachments reject inline `insert` and attach as top chips in `references`!
-        XCTAssertThrowsError(try DesktopReferencesEngine.insert(draft, item: file, start: 0, end: 0))
-        draft.references.append(file)
-        XCTAssertEqual(draft.references.count, 3)
-
-        draft = DesktopReferencesEngine.remove(draft, handle: "h-skill")
-        XCTAssertFalse(draft.references.contains(where: { $0.handle == "h-skill" }))
-
-        // Corrupting inside inline token drops its span & reference while keeping non-inline file chip!
-        draft = DesktopReferencesEngine.edit(draft, text: "rewritten plain text")
-        XCTAssertTrue(draft.spans.isEmpty)
-        XCTAssertEqual(draft.references.map(\.handle), ["h-file"])
     }
 
     // MARK: - 15. ClaudeProcessView.test.tsx (9 cases)
@@ -916,15 +941,6 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                     collectAllText(expandedCell).contains("第二行隐藏推理细节不该默认撑开。"),
                     "F7/F1b: Jumping to inner commentary must open both outer processGroup and target inner thinking disclosure"
                 )
-            }
-
-            // P3: CodexDesktopStore.act records actionError on pre-validation throw
-            let desktopStore = CodexDesktopStore(connection: store, threadId: "th-err")
-            do {
-                try await desktopStore.act(.send(messageId: "m-1", text: "hello", references: [], referenceSpans: []))
-                XCTFail("Expected disconnected act() to throw")
-            } catch {
-                XCTAssertEqual(desktopStore.actionError, "尚未连接本机 Codex 会话")
             }
 
             // Light & Dark offscreen rasterization + non-blank foreground glyph/icon ink assertions

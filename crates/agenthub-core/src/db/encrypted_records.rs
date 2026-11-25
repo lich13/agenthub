@@ -1,6 +1,4 @@
-use super::{
-    desktop_submissions::submission_body, encrypted_setting_parts, NativeDelivery, PanelDb,
-};
+use super::{encrypted_setting_parts, NativeDelivery, PanelDb};
 use crate::crypto::SecretBox;
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Transaction};
@@ -40,7 +38,6 @@ impl PanelDb {
 pub(super) enum Queue {
     Native,
     Channel,
-    Desktop,
 }
 
 impl Queue {
@@ -56,11 +53,6 @@ impl Queue {
                 "probe_notification_deliveries",
                 "notification",
                 "channel,event_key",
-            ),
-            Self::Desktop => (
-                "codex_desktop_submissions",
-                "desktop_submission",
-                "source_id,thread_id,id",
             ),
         };
         let ids = tx
@@ -97,9 +89,6 @@ impl Queue {
                         delivery.event_key == identity[1],
                         "native notification identity changed"
                     );
-                }
-                Self::Desktop => {
-                    submission_body(&plaintext, identity[1], identity[2], identity[3])?;
                 }
                 Self::Channel => {}
             }
