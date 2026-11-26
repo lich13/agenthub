@@ -1448,5 +1448,21 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
         XCTAssertEqual(provStore.cachedSessionCount, 2)
         XCTAssertTrue(provStore.slot(for: "p1").events.isEmpty)
         XCTAssertFalse(provStore.slot(for: "p3").events.isEmpty)
+
+        // 4. ThreadMessageStore & subagent delegation byte weight also enforce the 16 MiB cap
+        let codexStore = ThreadMessageStore()
+        for k in ["t1", "t2", "t3"] {
+            _ = codexStore.applyDetail(
+                ThreadDetail(
+                    summary: ThreadSummary(id: k, title: k),
+                    blocks: [MessageBlock(id: "b-\(k)", role: "user", kind: "message", userMessage: makeUM(k))],
+                    totalBlocks: 1,
+                    hasMoreBlocks: false
+                )
+            )
+        }
+        XCTAssertEqual(codexStore.cachedSessionCount, 2)
+        XCTAssertTrue(codexStore.slot(for: "t1").blocks.isEmpty)
+        XCTAssertFalse(codexStore.slot(for: "t3").blocks.isEmpty)
     }
 }

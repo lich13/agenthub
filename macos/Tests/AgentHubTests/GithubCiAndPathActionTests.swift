@@ -71,6 +71,7 @@ private final class BackgroundWorkspaceOpener: WorkspaceApplicationOpening, @unc
         attributes: .concurrent
     )
     private let lock = NSLock()
+    var simulatedApp: NSRunningApplication? = .current
     var simulatedError: (any Error)?
     private(set) var openedURLs: [URL] = []
     private(set) var createsNewInstanceFlags: [Bool] = []
@@ -84,13 +85,14 @@ private final class BackgroundWorkspaceOpener: WorkspaceApplicationOpening, @unc
         lock.lock()
         openedURLs.append(applicationURL)
         createsNewInstanceFlags.append(configuration.createsNewApplicationInstance)
+        let app = simulatedApp
         let err = simulatedError
         let done = afterCompletion
         lock.unlock()
 
         callbackQueue.async {
             precondition(!Thread.isMainThread)
-            completionHandler?(nil, err)
+            completionHandler?(app, err)
             done?()
         }
     }
@@ -192,8 +194,9 @@ final class GithubCiAndPathActionTests: XCTestCase {
 
         let appURL = URL(fileURLWithPath: "/Applications/AgentHub.app")
 
-        // 2. Launch failure on background queue hops to MainActor to surface manual-reopen notice without terminating
+        // 2. Launch failure with Error on background queue hops to MainActor to surface manual-reopen notice without terminating
         let failureNotified = expectation(description: "manual restart notice surfaced on MainActor")
+        opener.simulatedApp = nil
         opener.simulatedError = AgentHubFFIError("launch failed")
         opener.afterCompletion = nil
         AppRestartLauncher.launchReplacementAndTerminate(
@@ -212,8 +215,30 @@ final class GithubCiAndPathActionTests: XCTestCase {
         XCTAssertEqual(failureNotices, ["更新已安装，请手动重新打开应用"])
         XCTAssertEqual(terminateCount, 0)
 
-        // 3. Successful launch on background concurrent queue hops back to MainActor and terminates
+        // 3. Ambiguous (nil, nil) callback (no NSRunningApplication launched) must NOT terminate current process
+        let nilAppNotified = expectation(description: "nil running application surfaces manual restart notice")
+        opener.simulatedApp = nil
+        opener.simulatedError = nil
+        AppRestartLauncher.launchReplacementAndTerminate(
+            bundleURL: appURL,
+            workspace: opener,
+            onLaunchFailure: { message in
+                XCTAssertTrue(Thread.isMainThread)
+                failureNotices.append(message)
+                nilAppNotified.fulfill()
+            },
+            terminate: { terminateCount += 1 }
+        )
+        await fulfillment(of: [nilAppNotified], timeout: 3.0)
+        XCTAssertEqual(
+            failureNotices,
+            ["更新已安装，请手动重新打开应用", "更新已安装，请手动重新打开应用"]
+        )
+        XCTAssertEqual(terminateCount, 0)
+
+        // 4. Successful launch on background concurrent queue hops back to MainActor and terminates
         let terminated = expectation(description: "terminated on MainActor after background callback")
+        opener.simulatedApp = .current
         opener.simulatedError = nil
         opener.afterCompletion = nil
         AppRestartLauncher.launchReplacementAndTerminate(
@@ -227,8 +252,42 @@ final class GithubCiAndPathActionTests: XCTestCase {
             }
         )
         await fulfillment(of: [terminated], timeout: 3.0)
-        XCTAssertEqual(failureNotices, ["更新已安装，请手动重新打开应用"])
+        XCTAssertEqual(failureNotices.count, 2)
         XCTAssertEqual(terminateCount, 1)
+
+        // 5. Sheet host window resolution skips borderless utility windows when inactive
+        let borderless = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 40),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let titled = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        borderless.orderFront(nil)
+        titled.orderFront(nil)
+        defer {
+            borderless.orderOut(nil)
+            titled.orderOut(nil)
+        }
+        XCTAssertTrue(
+            AppRestartLauncher.resolveSheetHostWindow(
+                from: [borderless, titled],
+                keyWindow: nil,
+                mainWindow: nil
+            ) === titled
+        )
+        XCTAssertNil(
+            AppRestartLauncher.resolveSheetHostWindow(
+                from: [borderless],
+                keyWindow: borderless,
+                mainWindow: nil
+            )
+        )
     }
 
     func testFinderRevealPathValidationRejectsRelativeAndControlChars() {

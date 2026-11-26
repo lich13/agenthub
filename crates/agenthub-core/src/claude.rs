@@ -333,7 +333,10 @@ impl LocatedSessionsCache {
     }
 
     fn insert(&mut self, key: LocatedSessionKey, path: PathBuf) {
-        let now = std::time::Instant::now();
+        self.insert_at(key, path, std::time::Instant::now());
+    }
+
+    fn insert_at(&mut self, key: LocatedSessionKey, path: PathBuf, now: std::time::Instant) {
         if let Some(&idx) = self.index.get(&key) {
             if let Some(node) = self.nodes[idx].as_mut() {
                 node.path = path;
@@ -376,8 +379,11 @@ impl LocatedSessionsCache {
     }
 
     fn evict_idle(&mut self, max_idle: std::time::Duration) -> bool {
+        self.evict_idle_at(std::time::Instant::now(), max_idle)
+    }
+
+    fn evict_idle_at(&mut self, now: std::time::Instant, max_idle: std::time::Duration) -> bool {
         let before = self.index.len();
-        let now = std::time::Instant::now();
         while let Some(h) = self.head {
             let expired = self.nodes[h]
                 .as_ref()
@@ -414,6 +420,30 @@ impl LocatedSessionsCache {
         } else {
             false
         }
+    }
+
+    #[cfg(test)]
+    fn assert_invariants(&self) {
+        let mut seen = Vec::new();
+        let mut prev = None;
+        let mut cur = self.head;
+        while let Some(idx) = cur {
+            let node = self.nodes[idx].as_ref().expect("linked slot must be Some");
+            assert_eq!(node.prev, prev, "broken prev link at {idx}");
+            assert_eq!(self.index.get(&node.key), Some(&idx), "index mismatch");
+            prev = Some(idx);
+            seen.push(idx);
+            cur = node.next;
+        }
+        assert_eq!(self.tail, prev, "tail mismatch");
+        assert_eq!(seen.len(), self.index.len(), "list length != index length");
+        let live_slots = self.nodes.iter().filter(|n| n.is_some()).count();
+        assert_eq!(live_slots, self.index.len(), "leaked Some slot in arena");
+        assert_eq!(
+            live_slots + self.free.len(),
+            self.nodes.len(),
+            "free list + live slots != arena len"
+        );
     }
 }
 

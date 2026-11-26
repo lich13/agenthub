@@ -219,7 +219,84 @@ fn is_updated_within_fresh_window(updated_at: &Option<String>, now_ms: i64) -> b
 const MAX_LIVE_PROVIDER_CACHE_ENTRIES: usize = 16;
 const LIVE_PROVIDER_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
-type LiveProviderSessionsCacheKey = (Option<std::path::PathBuf>, std::path::PathBuf, usize);
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LiveProviderSessionsCacheKey {
+    sandbox_root: Option<std::path::PathBuf>,
+    codex_home: std::path::PathBuf,
+    claude_projects: std::path::PathBuf,
+    grok_home: std::path::PathBuf,
+    ag_home: std::path::PathBuf,
+    ag_cli_home: Option<std::path::PathBuf>,
+    #[cfg(target_os = "macos")]
+    dsh_home: std::path::PathBuf,
+    per_bucket_limit: usize,
+}
+
+struct ResolvedLiveProviderPaths {
+    sandbox_root: Option<std::path::PathBuf>,
+    claude: crate::claude::ClaudePaths,
+    grok: crate::grok::GrokPaths,
+    ag: crate::antigravity::sessions::AntigravityPaths,
+    #[cfg(target_os = "macos")]
+    dsh: crate::dsh::DshPaths,
+}
+
+impl ResolvedLiveProviderPaths {
+    fn for_config(config: &Config) -> Result<Self> {
+        let sandbox_root = resolve_provider_sandbox_root(config);
+        let claude = match &sandbox_root {
+            Some(root) => crate::claude::ClaudePaths {
+                projects: root.join(".claude/projects"),
+                config: root.join(".claude"),
+            },
+            None => crate::claude::ClaudePaths::default_for_user()?,
+        };
+        let grok = match &sandbox_root {
+            Some(root) => crate::grok::GrokPaths {
+                home: root.join(".grok"),
+            },
+            None => crate::grok::GrokPaths::default_for_user()?,
+        };
+        let ag = match &sandbox_root {
+            Some(root) => crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
+            None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
+        };
+        #[cfg(target_os = "macos")]
+        let dsh = match &sandbox_root {
+            Some(root) => crate::dsh::DshPaths {
+                home: root.join(".dsh"),
+            },
+            None => crate::dsh::DshPaths::default_for_user()?,
+        };
+        Ok(Self {
+            sandbox_root,
+            claude,
+            grok,
+            ag,
+            #[cfg(target_os = "macos")]
+            dsh,
+        })
+    }
+
+    fn cache_key(
+        &self,
+        codex_home: &Path,
+        per_bucket_limit: usize,
+    ) -> LiveProviderSessionsCacheKey {
+        LiveProviderSessionsCacheKey {
+            sandbox_root: self.sandbox_root.clone(),
+            codex_home: codex_home.to_path_buf(),
+            claude_projects: self.claude.projects.clone(),
+            grok_home: self.grok.home.clone(),
+            ag_home: self.ag.home.clone(),
+            ag_cli_home: self.ag.cli_home.clone(),
+            #[cfg(target_os = "macos")]
+            dsh_home: self.dsh.home.clone(),
+            per_bucket_limit,
+        }
+    }
+}
+
 type LiveProviderSessionsCacheEntry = (
     LiveProviderSessionsCacheKey,
     Vec<probe_core::ProbeLiveSession>,
@@ -285,6 +362,27 @@ fn aggregate_active_sessions(
     recoverable_threads: &[ThreadSummary],
     force_refresh: bool,
 ) -> Result<Vec<probe_core::ProbeLiveSession>> {
+    let resolved = ResolvedLiveProviderPaths::for_config(config)?;
+    aggregate_active_sessions_with_paths(
+        config,
+        &resolved,
+        limit,
+        running_threads,
+        reply_needed_threads,
+        recoverable_threads,
+        force_refresh,
+    )
+}
+
+fn aggregate_active_sessions_with_paths(
+    config: &Config,
+    resolved: &ResolvedLiveProviderPaths,
+    limit: usize,
+    running_threads: &[ThreadSummary],
+    reply_needed_threads: &[ThreadSummary],
+    recoverable_threads: &[ThreadSummary],
+    force_refresh: bool,
+) -> Result<Vec<probe_core::ProbeLiveSession>> {
     let mut sessions = Vec::new();
     let per_bucket_limit = limit.clamp(1, 50);
     for (bucket, threads) in [
@@ -305,12 +403,7 @@ fn aggregate_active_sessions(
         }
     }
 
-    let sandbox_root = resolve_provider_sandbox_root(config);
-    let cache_key = (
-        sandbox_root.clone(),
-        config.codex.home.clone(),
-        per_bucket_limit,
-    );
+    let cache_key = resolved.cache_key(&config.codex.home, per_bucket_limit);
     if !force_refresh {
         if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
             if let Some(pos) = guard.iter().position(|(k, _, _)| *k == cache_key) {
@@ -332,16 +425,10 @@ fn aggregate_active_sessions(
     let codex_len = sessions.len();
     let now_ms = Timestamp::now().as_millisecond();
 
-    let claude_paths = match &sandbox_root {
-        Some(root) => crate::claude::ClaudePaths {
-            projects: root.join(".claude/projects"),
-            config: root.join(".claude"),
-        },
-        None => crate::claude::ClaudePaths::default_for_user()?,
-    };
+    let claude_paths = &resolved.claude;
     if claude_paths.available() {
         if let Ok(items) = crate::claude::list_claude_sessions_without_storage(
-            &claude_paths,
+            claude_paths,
             per_bucket_limit,
             None,
         ) {
@@ -355,7 +442,7 @@ fn aggregate_active_sessions(
                 } else if item.read_error.is_some() {
                     Some("recoverable")
                 } else if is_updated_within_fresh_window(&item.updated_at, now_ms) {
-                    crate::claude::probe_snapshot_for_path(&claude_paths, &item.path)
+                    crate::claude::probe_snapshot_for_path(claude_paths, &item.path)
                         .ok()
                         .and_then(|s| native_stream_live_bucket(&s, now_ms))
                 } else {
@@ -376,15 +463,10 @@ fn aggregate_active_sessions(
         }
     }
 
-    let grok_paths = match &sandbox_root {
-        Some(root) => crate::grok::GrokPaths {
-            home: root.join(".grok"),
-        },
-        None => crate::grok::GrokPaths::default_for_user()?,
-    };
+    let grok_paths = &resolved.grok;
     if grok_paths.sessions().is_dir() {
         if let Ok((items, scan)) =
-            crate::grok::probe_sessions(&grok_paths, per_bucket_limit, |item| {
+            crate::grok::probe_sessions(grok_paths, per_bucket_limit, |item| {
                 item.status != "running" && is_updated_within_fresh_window(&item.updated_at, now_ms)
             })
         {
@@ -415,13 +497,10 @@ fn aggregate_active_sessions(
         q: None,
         limit: Some(per_bucket_limit),
     };
-    let ag_paths = match &sandbox_root {
-        Some(root) => crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
-        None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
-    };
+    let ag_paths = &resolved.ag;
     if ag_paths.available() {
         if let Ok(items) =
-            crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
+            crate::antigravity::sessions::list_sessions_without_storage(ag_paths, &list_req)
         {
             let snapshot_candidates: Vec<_> = items
                 .iter()
@@ -436,7 +515,7 @@ fn aggregate_active_sessions(
                 })
                 .collect();
             let batch_snapshots = crate::antigravity::sessions::probe_live_stream_snapshots_batch(
-                &ag_paths,
+                ag_paths,
                 &snapshot_candidates,
                 now_ms,
             );
@@ -474,15 +553,10 @@ fn aggregate_active_sessions(
 
     #[cfg(target_os = "macos")]
     {
-        let dsh_paths = match &sandbox_root {
-            Some(root) => crate::dsh::DshPaths {
-                home: root.join(".dsh"),
-            },
-            None => crate::dsh::DshPaths::default_for_user()?,
-        };
+        let dsh_paths = &resolved.dsh;
         if dsh_paths.home.join("sessions").is_dir() {
             if let Ok((items, scan)) =
-                crate::dsh::sessions::probe_sessions(&dsh_paths, &list_req, |item| {
+                crate::dsh::sessions::probe_sessions(dsh_paths, &list_req, |item| {
                     !matches!(item.status.as_str(), "running" | "waiting")
                         && item.read_error.is_none()
                         && is_updated_within_fresh_window(&item.updated_at, now_ms)
@@ -1530,7 +1604,56 @@ mod tests {
             super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
         assert!(!refreshed_a.iter().any(|s| s.id == grok_id_a));
 
-        //Inserting more than MAX_LIVE_PROVIDER_CACHE_ENTRIES distinct limits stays bounded.
+        // Even when sandbox_root == None (e.g., codex.home = "auto"), distinct resolved provider
+        // roots (CLAUDE_CONFIG_DIR / GROK_HOME / ANTIGRAVITY_HOME / DSH_HOME) produce distinct keys.
+        let mut auto_cfg = Config::current_defaults().unwrap();
+        auto_cfg.codex.home = std::path::PathBuf::from("auto");
+        let mut resolved_one = super::ResolvedLiveProviderPaths::for_config(&auto_cfg).unwrap();
+        resolved_one.sandbox_root = None;
+        resolved_one.grok.home = root_a.join("custom-grok-1");
+        resolved_one.claude.projects = root_a.join("custom-claude/projects");
+        resolved_one.ag =
+            crate::antigravity::sessions::AntigravityPaths::offline(root_a.join("custom-ag"));
+        #[cfg(target_os = "macos")]
+        {
+            resolved_one.dsh.home = root_a.join("custom-dsh");
+        }
+        let mut resolved_two = super::ResolvedLiveProviderPaths::for_config(&auto_cfg).unwrap();
+        resolved_two.sandbox_root = None;
+        resolved_two.grok.home = root_b.join("custom-grok-2");
+        resolved_two.claude.projects = root_b.join("custom-claude/projects");
+        resolved_two.ag =
+            crate::antigravity::sessions::AntigravityPaths::offline(root_b.join("custom-ag"));
+        #[cfg(target_os = "macos")]
+        {
+            resolved_two.dsh.home = root_b.join("custom-dsh");
+        }
+        assert_ne!(
+            resolved_one.cache_key(&auto_cfg.codex.home, 20),
+            resolved_two.cache_key(&auto_cfg.codex.home, 20)
+        );
+        let _ = super::aggregate_active_sessions_with_paths(
+            &auto_cfg,
+            &resolved_one,
+            20,
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
+        let _ = super::aggregate_active_sessions_with_paths(
+            &auto_cfg,
+            &resolved_two,
+            20,
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
+
+        // Inserting more than MAX_LIVE_PROVIDER_CACHE_ENTRIES distinct limits stays bounded.
         for lim in 1..=(super::MAX_LIVE_PROVIDER_CACHE_ENTRIES + 4) {
             let _ = super::aggregate_active_sessions(&cfg_b, lim, &[], &[], &[], true).unwrap();
         }
@@ -1544,7 +1667,7 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .any(|(k, _, _)| k.1 == cfg_a.codex.home || k.1 == cfg_b.codex.home));
+            .any(|(k, _, _)| k.codex_home == cfg_a.codex.home || k.codex_home == cfg_b.codex.home));
 
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);

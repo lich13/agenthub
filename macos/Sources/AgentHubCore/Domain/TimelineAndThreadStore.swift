@@ -262,6 +262,7 @@ final class ThreadMessageStore: ObservableObject {
             total += b.text?.utf8.count ?? 0
             total += b.summary?.utf8.count ?? 0
             total += b.input?.utf8.count ?? 0
+            total += b.subagent?.delegation?.utf8.count ?? 0
             total += estimateUserMessageBytes(b.userMessage)
         }
         return total
@@ -629,6 +630,7 @@ final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObjec
                 total += ev.text?.utf8.count ?? 0
                 total += ev.detail?.utf8.count ?? 0
                 total += ev.result?.utf8.count ?? 0
+                total += ev.subagent?.delegation?.utf8.count ?? 0
                 total += estimateUserMessageBytes(ev.userMessage)
             }
         } else {

@@ -3679,4 +3679,56 @@ fn located_sessions_cache_handles_over_20k_insertions_with_o1_lru_eviction() {
     );
     assert!(large.evict_idle(std::time::Duration::ZERO));
     assert_eq!(large.len(), 0);
+    large.assert_invariants();
+
+    // Partial idle eviction with holes must compact non-empty arena and preserve all invariants
+    // across subsequent get, in-place update, remove, and capacity-evicting insert operations.
+    let t0 = std::time::Instant::now();
+    let t_fresh = t0 + std::time::Duration::from_secs(250);
+    let t_check = t0 + std::time::Duration::from_secs(310);
+    let mut partial = LocatedSessionsCache::new(64);
+    for i in 0..54 {
+        partial.insert_at(
+            (root.clone(), format!("stale-{i}")),
+            PathBuf::from(format!("/workspace/example.invalid/stale-{i}.jsonl")),
+            t0,
+        );
+    }
+    // Create interior hole before fresh entries.
+    assert_eq!(
+        partial.remove(&(root.clone(), "stale-10".into())),
+        Some(PathBuf::from("/workspace/example.invalid/stale-10.jsonl"))
+    );
+    for i in 0..8 {
+        partial.insert_at(
+            (root.clone(), format!("fresh-{i}")),
+            PathBuf::from(format!("/workspace/example.invalid/fresh-{i}.jsonl")),
+            t_fresh,
+        );
+    }
+    partial.assert_invariants();
+    assert!(partial.evict_idle_at(t_check, std::time::Duration::from_secs(300)));
+    assert_eq!(partial.len(), 8);
+    partial.assert_invariants();
+    for i in 0..8 {
+        assert_eq!(
+            partial.get(&(root.clone(), format!("fresh-{i}"))),
+            Some(PathBuf::from(format!(
+                "/workspace/example.invalid/fresh-{i}.jsonl"
+            )))
+        );
+    }
+    // Update middle + tail and overflow post-compaction arena.
+    partial.insert(
+        (root.clone(), "fresh-3".into()),
+        PathBuf::from("/workspace/example.invalid/fresh-3-v2.jsonl"),
+    );
+    for i in 0..64 {
+        partial.insert(
+            (root.clone(), format!("post-{i}")),
+            PathBuf::from(format!("/workspace/example.invalid/post-{i}.jsonl")),
+        );
+    }
+    assert_eq!(partial.len(), 64);
+    partial.assert_invariants();
 }

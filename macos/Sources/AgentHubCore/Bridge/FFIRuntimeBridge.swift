@@ -124,15 +124,35 @@ enum AppRestartLauncher {
     static let manualRestartNoticeMessage = "更新已安装，请手动重新打开应用"
 
     @MainActor
+    static func resolveSheetHostWindow(
+        from windows: [NSWindow],
+        keyWindow: NSWindow?,
+        mainWindow: NSWindow?
+    ) -> NSWindow? {
+        let candidate = keyWindow
+            ?? mainWindow
+            ?? windows.first(where: { $0.isVisible && !$0.isSheet && $0.styleMask.contains(.titled) })
+        guard var host = candidate else { return nil }
+        while let parent = host.sheetParent {
+            host = parent
+        }
+        return host.styleMask.contains(.titled) ? host : nil
+    }
+
+    @MainActor
     static func presentDefaultManualRestartAlert(_ message: String) {
-        guard NSApp != nil else { return }
+        guard let app = NSApp else { return }
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = message
         alert.addButton(withTitle: "好")
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible) {
+        if let window = resolveSheetHostWindow(
+            from: app.windows,
+            keyWindow: app.keyWindow,
+            mainWindow: app.mainWindow
+        ) {
             alert.beginSheetModal(for: window)
-        } else {
+        } else if app.activationPolicy() != .prohibited {
             alert.runModal()
         }
     }
@@ -154,8 +174,8 @@ enum AppRestartLauncher {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
         let notice = Self.manualRestartNoticeMessage
-        let onCompleted: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { _, error in
-            if error != nil {
+        let onCompleted: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { app, error in
+            guard app != nil, error == nil else {
                 Task { @MainActor in
                     onLaunchFailure(notice)
                 }
