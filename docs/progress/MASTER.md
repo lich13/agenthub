@@ -4,6 +4,8 @@
 
 当前源码版本为 **2.1.39**。API 协议 2，数据库 schema 3。完成 Probe 控制台去臃肿与单屏可折叠重设计、全仓 `$de-gpt` 死代码／空壳分层／契约对齐清理，以及服务端 CPU／峰值内存／SQLite 磁盘占用与 macOS Swift 6 前端算法、视觉对比度及异步竞态治理：移除全部 18 张重复 `MetricCard`，顶部仅常驻精简 `通知配置`（`高级设置` 默认收起），其余 `GitHub CI`、`Bark`、`Hooks 与宿主接入`（5 卡合一）、`全平台实时态势`、`最近事件`、`执行记录` 全部收敛为 `48pt` 单行摘要披露卡（`1084×820` 视口健康默认态滚动文档高度由 **`2,396.0 pt` 降至 `662.0 pt`**，单屏完整收纳），支持三面板独立局部草稿保存、保存栅栏隔离乱序旧读取、严格绑定机器 `revision` 与按 `(machineScope, section)` 原子异常集合差集单次触发的新异常自动展开；删除零调用 `contract_dtos.rs`、`codex/name_client.rs`、`codex::hidden_and_archived_thread_ids`、`notification_delivery::codex` 与重复门面测试，拍平 31 字段 Probe 配置合并与 `webd`／`ffi` 重复只读分发胶水，显式区分 Grok 直接删除与统一清理逐项占用复核的执行门禁并补齐 `ClaudeDeleteResult`／`GrokDeleteResult` 契约目录；服务端补齐 Antigravity 离线双源（`.db` 含 `-wal` 与转录）指纹缓存（瞬时锁／读错不入缓存）与单 ID 原子 SQLite 事务删除及主存储缺失后的幂等重试、Codex 15s 监控单连接批量读取双列非空归并任务身份、列表截断后延迟体积统计、`sessions.search` 零克隆访问与 CJK 免全文小写扫描、DSH 多帧 `.zstd` 定长缓冲 `DCtx` 增量流式解码（严检非魔数损坏帧头）、Claude 轻量摘要缓存、空闲轮询只读预检短路、更新作业 SQL 按 `kind` 预筛、`user_version = 3` 局部索引补齐与 WAL `TRUNCATE` 前置写库，并修复 DSH `sha256` 64 位 hex 校验、Codex 提问原子认领与 `NotFound`／瞬时权限精细分类、Bark 队列跨轮回绕游标防饿死（越过 1,000+ 错密钥未读行且原样保留密文）、Grok `kill(pid, 0)` 预筛防超大陈旧 PID 污染 `ps` 快照与 Claude `ps`→`lsof` 短命进程退出竞态；macOS 前端消除 `projectUserMessage` `O(N²)` UTF-16 切片与重复解析（纳入 `contextBlocks` 计重与 `8 MiB` 总预算），补齐侧栏分组缓存、`120Hz` 滚动二分锚点、深色实心危险按钮（`>7.7:1`）与关闭态胶囊开关边框对比度、`1000×680` 窄窗附件折行与搜索框高度、全量（含 `>=64` 下标）缩略图局部刷新签名与跨会话在途任务取消、缺失作业终态解忙、表格协调器解耦及多处切机／分页代次守卫。存量升级库保留遗留 `codex_desktop_submissions` 表与钥匙串项，二进制回退目标保持为 **v2.1.30**。
 
+- **v2.1.39** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.39`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.38 原地更新并启动；单屏可折叠 Probe 控制台（分面板独立保存与新异常单次展开）、`1000×680` 窄窗阅读与 `⌘F` 检索及 Bark／系统通知实收待用户验收。[提交 dff186f](https://github.com/lich13/agenthub/commit/dff186f5970c5944aa9ac2ecfc30f7848e05e6c5) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.39) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45759917895)
+
 - **v2.1.38** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.38`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.37 原地更新并启动；Codex 纯只读会话布局（移除新建线程、悬浮输入协作区与「在 Codex 中打开」）、单层自绘表格、跨平台工作区交互及 Bark／macOS 系统通知实收待用户验收。[提交 cbc0319](https://github.com/lich13/agenthub/commit/cbc0319b0e01cc6b3e59128cd3752b68d402838e) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.38) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45627291894)
 
 - **v2.1.37** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.37`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.36 原地更新并启动；超大 Claude 会话向上滚动与时间线跳转、Codex 表格首行显示与伴侣页快照净化待用户验收。[提交 2ed804c](https://github.com/lich13/agenthub/commit/2ed804c56adeea46287f9225a8d8feb32f289baf) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.37) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45540691647)
@@ -38,7 +40,13 @@
 | Swift 200 条 `24 KiB` 多包装用户消息投影＋分段（冷读 1 遍＋热读 4 遍） | 1,930.88 → 329.57 | 1,930.07 → 329.40 | 冷读 `393.12 → 229.17 ms`（-41.7%），热读 `1,537.77 → 100.40 ms`（-93.5%），合计下降 **82.9%**（**5.86×**） |
 | Swift `ProbeWorkspaceView` 初始布局 ×20（`1084×820`） | 333.71 → 138.18 | 335.93 → 139.76 | 耗时下降 **58.6%**（**2.42×**）；默认健康态文档高 **`2,396.0 pt → 662.0 pt`**（**`< 680pt`** 单屏呈现） |
 
-本机 `package-macos-swift-arm64.sh` 验证通过（`codesign --verify --deep --strict` 与 `--payload` 隐私门禁 0 违规；本机 stripped `agenthub-webd` 为 `13,599,872` 字节、Release WMO stripped `agenthub` 为 `17,661,520` 字节，正式发布资产体积以标签 Release CI 产物为准）。
+下表比较 v2.1.38 与 v2.1.39 对应标签 CI 生成并正式发布的同类资产（未测量线上常驻 RSS 或用户历史会话磁盘回收）：
+
+| 发布资产 | v2.1.38 字节 | v2.1.39 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG（Release CI） | 16,423,927 | 16,845,326 | +421,399（+2.566%） |
+| macOS updater（Release CI） | 15,316,022 | 15,689,495 | +373,473（+2.438%） |
+| Linux x86_64 webd（Release CI） | 7,274,827 | 7,441,239 | +166,412（+2.288%） |
 
 ## v2.1.38 实现与验证
 
