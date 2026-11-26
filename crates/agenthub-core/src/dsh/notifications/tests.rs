@@ -1,5 +1,12 @@
 use super::*;
 use serde_json::json;
+
+static TEST_CACHE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_test_cache() -> std::sync::MutexGuard<'static, ()> {
+    TEST_CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn state() -> State {
     let mut s = State::default();
     s.consume(
@@ -184,6 +191,7 @@ fn lines() -> Vec<Vec<u8>> {
 }
 #[test]
 fn compressed_frames_incrementally_accept_only_complete_records_and_replacement_resets() {
+    let _cache_guard = lock_test_cache();
     let f = FileFixture::new("jsonl.zstd");
     let lines = lines();
     let frames = lines
@@ -220,6 +228,7 @@ fn compressed_frames_incrementally_accept_only_complete_records_and_replacement_
 }
 #[test]
 fn plaintext_partial_tail_and_unknown_required_events_are_not_published() {
+    let _cache_guard = lock_test_cache();
     let f = FileFixture::new("jsonl");
     let l = lines();
     fs::write(
@@ -254,6 +263,7 @@ fn plaintext_partial_tail_and_unknown_required_events_are_not_published() {
 
 #[test]
 fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
+    let _cache_guard = lock_test_cache();
     let root = std::env::temp_dir().join(format!("agenthub-dsh-cache-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&root).unwrap();
     let paths = DshPaths {
@@ -342,6 +352,7 @@ fn assert_cumulative_decoded_frames_match_incremental_and_cold_reads(
     padding_len: usize,
     frame_limit: u64,
 ) {
+    let _cache_guard = lock_test_cache();
     let f = FileFixture::new("jsonl.zstd");
     let rows = lines();
     let padding = "x".repeat(padding_len);

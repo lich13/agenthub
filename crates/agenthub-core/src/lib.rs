@@ -51,7 +51,11 @@ pub fn note_cache_eviction() {
 }
 
 pub fn trim_idle_allocator() {
-    CACHE_EVICTED_SINCE_TRIM.store(false, std::sync::atomic::Ordering::Relaxed);
+    trim_idle_allocator_in(&CACHE_EVICTED_SINCE_TRIM);
+}
+
+fn trim_idle_allocator_in(flag: &std::sync::atomic::AtomicBool) {
+    flag.store(false, std::sync::atomic::Ordering::Relaxed);
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     // SAFETY: `malloc_trim(0)` asks glibc's allocator to release free top-of-heap arenas back to OS.
     unsafe {
@@ -169,9 +173,9 @@ mod fixture_tests {
         assert!(super::take_cache_evicted_since_trim());
         assert_eq!(read.evict_idle(std::time::Duration::ZERO), 1);
         assert!(super::take_cache_evicted_since_trim());
-        super::note_cache_eviction();
-        super::trim_idle_allocator();
-        assert!(!super::take_cache_evicted_since_trim());
+        let local_flag = std::sync::atomic::AtomicBool::new(true);
+        super::trim_idle_allocator_in(&local_flag);
+        assert!(!local_flag.load(std::sync::atomic::Ordering::Relaxed));
 
         // Subsequent empty ticks report 0 evictions.
         assert_eq!(jsonl.evict_idle(std::time::Duration::ZERO), 0);
