@@ -710,8 +710,11 @@ enum ExecutionGroupingEngine {
     static func groupGrokEvents(_ events: [GrokHistoryEvent]) -> [ExecutionRenderItem<GrokHistoryEvent>] {
         let inputs = events.enumerated().map { index, ev -> ActivityInput<GrokHistoryEvent> in
             let isTool = ev.kind.hasPrefix("tool_")
-            let fp = activityFingerprint(isTool ? (ev.text ?? ev.detail ?? "") : "")
-            let key = "grok:\(ev.id ?? ev.userMessage?.id ?? ev.callId ?? "\(ev.timestamp ?? ""):\(ev.kind):\(fp)")"
+            let rawToolBody: String = isTool ? (ev.text ?? ev.detail ?? "") : ""
+            let fp = activityFingerprint(rawToolBody)
+            let fallbackId = "\(ev.timestamp ?? ""):\(ev.kind):\(fp)"
+            let primaryId: String = ev.id ?? ev.userMessage?.id ?? ev.callId ?? fallbackId
+            let key = "grok:\(primaryId)"
             let hasStableId = (ev.id?.isEmpty == false) || (ev.callId?.isEmpty == false)
             let sourceIds = [ev.id, hasStableId ? nil : "event:\(index)", ev.callId].compactMap { $0 }.filter { !$0.isEmpty }
             guard isTool else {

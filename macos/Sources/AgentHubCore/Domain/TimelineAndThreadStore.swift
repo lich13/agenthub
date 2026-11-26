@@ -255,14 +255,20 @@ final class ThreadMessageStore: ObservableObject {
     }
 
     private static func estimateSlotBytes(_ slot: ThreadMessageSlot) -> Int {
-        var total = 256 + (slot.timeline?.count ?? 0) * 96
+        let timelineCount: Int = slot.timeline?.count ?? 0
+        var total: Int = 256 + timelineCount * 96
         for b in slot.blocks {
             total += 128
-            total += (b.text?.utf8.count ?? 0)
-            total += (b.summary?.utf8.count ?? 0)
-            total += (b.input?.utf8.count ?? 0)
+            total += b.text?.utf8.count ?? 0
+            total += b.summary?.utf8.count ?? 0
+            total += b.input?.utf8.count ?? 0
             if let um = b.userMessage {
-                total += um.text.utf8.count + (um.contextBlocks?.reduce(0) { $0 + $1.text.utf8.count } ?? 0)
+                total += um.text.utf8.count
+                if let contextBlocks = um.contextBlocks {
+                    for ctx in contextBlocks {
+                        total += ctx.text.utf8.count
+                    }
+                }
             }
         }
         return total
@@ -588,18 +594,27 @@ final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObjec
     }
 
     private static func estimateSlotBytes(_ slot: PagedEventSlot<Event>) -> Int {
-        var total = 256 + (slot.timeline?.count ?? 0) * 96
+        let timelineCount: Int = slot.timeline?.count ?? 0
+        var total: Int = 256 + timelineCount * 96
         if let claudeEvents = slot.events as? [ClaudeHistoryEvent] {
             for ev in claudeEvents {
-                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0) + (ev.result?.utf8.count ?? 0)
+                total += 128
+                total += ev.text?.utf8.count ?? 0
+                total += ev.detail?.utf8.count ?? 0
+                total += ev.result?.utf8.count ?? 0
             }
         } else if let grokEvents = slot.events as? [GrokHistoryEvent] {
             for ev in grokEvents {
-                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0)
+                total += 128
+                total += ev.text?.utf8.count ?? 0
+                total += ev.detail?.utf8.count ?? 0
             }
         } else if let provEvents = slot.events as? [ProviderHistoryEvent] {
             for ev in provEvents {
-                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0) + (ev.result?.utf8.count ?? 0)
+                total += 128
+                total += ev.text?.utf8.count ?? 0
+                total += ev.detail?.utf8.count ?? 0
+                total += ev.result?.utf8.count ?? 0
             }
         } else {
             total += slot.events.count * 256

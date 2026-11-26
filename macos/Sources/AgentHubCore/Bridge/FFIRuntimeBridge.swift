@@ -98,19 +98,55 @@ private let cDeliverCiNotifications: @convention(c) (UnsafeMutableRawPointer?, U
     }
 }
 
-private let cRequestAppRestart: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
-    Task { @MainActor in
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "app" {
-            let config = NSWorkspace.OpenConfiguration()
-            config.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-                Task { @MainActor in
-                    NSApp.terminate(nil)
-                }
+protocol WorkspaceApplicationOpening: AnyObject, Sendable {
+    func openApplication(
+        at applicationURL: URL,
+        configuration: NSWorkspace.OpenConfiguration,
+        completionHandler: (@Sendable (NSRunningApplication?, (any Error)?) -> Void)?
+    )
+}
+
+private final class SystemWorkspaceApplicationOpener: WorkspaceApplicationOpening {
+    func openApplication(
+        at applicationURL: URL,
+        configuration: NSWorkspace.OpenConfiguration,
+        completionHandler: (@Sendable (NSRunningApplication?, (any Error)?) -> Void)?
+    ) {
+        NSWorkspace.shared.openApplication(
+            at: applicationURL,
+            configuration: configuration,
+            completionHandler: completionHandler
+        )
+    }
+}
+
+enum AppRestartLauncher {
+    // Built in a `nonisolated` scope with an explicit `@Sendable` completion handler so AppKit's
+    // concurrent completion queue never triggers a Swift 6 SE-0423 `@MainActor` trap.
+    static func launchReplacementAndTerminate(
+        bundleURL: URL,
+        workspace: any WorkspaceApplicationOpening = SystemWorkspaceApplicationOpener(),
+        terminate: @escaping @MainActor @Sendable () -> Void = { NSApp.terminate(nil) }
+    ) {
+        guard bundleURL.pathExtension == "app" else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        let onCompleted: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { _, error in
+            guard error == nil else { return }
+            Task { @MainActor in
+                terminate()
             }
         }
+        workspace.openApplication(
+            at: bundleURL,
+            configuration: config,
+            completionHandler: onCompleted
+        )
     }
+}
+
+private let cRequestAppRestart: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
+    AppRestartLauncher.launchReplacementAndTerminate(bundleURL: Bundle.main.bundleURL)
 }
 
 public final class FFIRuntimeBridge: RuntimeTransport, @unchecked Sendable {

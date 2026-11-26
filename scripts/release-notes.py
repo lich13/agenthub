@@ -18,7 +18,7 @@ VERSION_NOTES: dict[str, dict[str, list[str]]] = {
         "fixes": [
             "完成全仓深度减法与统一基础设施收口：清理 Rust 与 Swift 零调用死接口、退役墓碑字段、孤立空壳模块与破损未用正则，收口 6 套重复文件指纹为共享 FileStamp（含 O_NOFOLLOW 安全打开与 StampedCache），合并 Swift 重复 RPC 请求信封并收紧内部符号可见性。",
             "显著降低服务端 CPU、峰值内存、SQLite 开销与产物体积：Antigravity 长转录改为单次打开＋按回合滚动缓冲与末条延迟格式化（消除整文件 Vec<Value> 峰值并提速近一倍），离线 .db 倒序扫末回合，缓存 StoreAuxiliaryIndex 并在单会话／统一清理路径复用内存目录；Codex 列表将工作区根路径解析延后至归档与可见性筛选之后（耗时下降约 66%），单点边表查询改用 EXISTS，详情块免克隆归并并补齐 .jsonl.zst 压缩会话通知／提问扫描；Claude 后台通知改走轻量增量快照免冲刷前端详情缓存（耗时下降约 32%）；GitHub CI 直解强类型 RunsEnvelope、支持 HTTP-date Retry-After 并在 Linux 服务内通过 Notify 即时唤醒；补齐新空库增量自动清理、审计修剪按小时节流、循环 SQL 预编译缓存、超 1 MiB 响应空闲内存归还、附件／会话改名 O_NOFOLLOW + (dev, ino) 校验与保权限原子写回、更新作业互斥及 SSH rpc-stdio 三阶段取消安全；Release 启用全量 LTO（保留 unwind）。",
-            "打磨 macOS 原生阅读器交互细节并引入 O(1) LRU 缓存：新增深浅色高对比用户气泡色板（userBubble）、挂载态连续旋转运行环、激活刻度坐标转换防时间线预览漂移、披露行与刻度键盘焦点环、围栏代码块对称 12pt 内边距＋悬停半透明复制按钮、子智能体抽屉分页加载条／重试／右箭头指引、侧栏拼音安全搜索 150ms 防抖及弹窗关闭焦点恢复；新增 O(1) BoundedLRUCache 统一管理排版／上下文／预览／披露与会话历史槽位（窗口隐藏自动回收离屏池与光栅缓存），修复行单元格复用双键冲突、代码内未闭合 HTML 注释标记跨段污染与多处切机 revision 竞态。",
+            "打磨 macOS 原生阅读器交互细节并引入 O(1) LRU 缓存：新增深浅色高对比用户气泡色板（userBubble）、挂载态连续旋转运行环、激活刻度坐标转换防时间线预览漂移、披露行与刻度键盘焦点环、围栏代码块对称 12pt 内边距＋悬停半透明复制按钮、子智能体抽屉分页加载条／重试／右箭头指引、侧栏拼音安全搜索 150ms 防抖及弹窗关闭焦点恢复；新增 O(1) BoundedLRUCache 统一管理排版／上下文／预览／披露与会话历史槽位（窗口隐藏自动回收离屏池与光栅缓存），修复行单元格复用双键冲突、代码内未闭合 HTML 注释标记跨段污染、多处切机 revision 竞态，以及系统通知中心（UNUserNotificationCenter）与更新重启（NSWorkspace）后台队列回调在 Swift 6 下误继承 @MainActor 断言引发的 EXC_BREAKPOINT 崩溃。",
         ],
         "migration": [
             "API 协议 2、数据库 schema 3。沿用已有配置、凭据、通知游标与会话数据，先升级 Linux 服务再升级 Mac App。新库不再创建 codex_desktop_submissions 表，存量升级库保留历史表与钥匙串项以兼容二进制回退目标 v2.1.30。",

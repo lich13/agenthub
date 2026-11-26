@@ -11,12 +11,46 @@ struct CiNotificationItem: Codable, Equatable, Sendable {
     var htmlUrl: String
 }
 
+protocol UserNotificationCenterScheduling: AnyObject, Sendable {
+    func requestAuthorization(
+        options: UNAuthorizationOptions,
+        completionHandler: @escaping @Sendable (Bool, (any Error)?) -> Void
+    )
+    func add(
+        _ request: UNNotificationRequest,
+        withCompletionHandler completionHandler: (@Sendable ((any Error)?) -> Void)?
+    )
+}
+
+private final class SystemUserNotificationCenter: UserNotificationCenterScheduling {
+    func requestAuthorization(
+        options: UNAuthorizationOptions,
+        completionHandler: @escaping @Sendable (Bool, (any Error)?) -> Void
+    ) {
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: options,
+            completionHandler: completionHandler
+        )
+    }
+
+    func add(
+        _ request: UNNotificationRequest,
+        withCompletionHandler completionHandler: (@Sendable ((any Error)?) -> Void)?
+    ) {
+        UNUserNotificationCenter.current().add(
+            request,
+            withCompletionHandler: completionHandler
+        )
+    }
+}
+
 @MainActor
 final class CiNotificationCenterBridge: NSObject, UNUserNotificationCenterDelegate {
     static let shared = CiNotificationCenterBridge()
     var openUrlHandler: @MainActor (URL) -> Void = { url in
         NSWorkspace.shared.open(url)
     }
+    var notificationCenterOverride: (any UserNotificationCenterScheduling)?
 
     private var installed = false
     private(set) var lastDecodeError: String?
@@ -54,14 +88,30 @@ final class CiNotificationCenterBridge: NSObject, UNUserNotificationCenterDelega
             lastDecodeError = "CI 通知事件解码失败"
             return
         }
-        guard !items.isEmpty,
-              Bundle.main.bundleIdentifier != nil,
-              Bundle.main.bundlePath.hasSuffix(".app")
-        else { return }
+        guard !items.isEmpty else { return }
 
-        installIfAvailable()
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+        let scheduler: any UserNotificationCenterScheduling
+        if let notificationCenterOverride {
+            scheduler = notificationCenterOverride
+        } else {
+            guard Bundle.main.bundleIdentifier != nil,
+                  Bundle.main.bundlePath.hasSuffix(".app")
+            else { return }
+            installIfAvailable()
+            scheduler = SystemUserNotificationCenter()
+        }
+        Self.scheduleAuthorizedNotifications(items, center: scheduler)
+    }
+
+    // Constructed in a `nonisolated` scope with explicit `@Sendable` callbacks so Swift 6 SE-0423
+    // never injects a `@MainActor` runtime assertion when `UNUserNotificationCenter` invokes blocks
+    // on `com.apple.usernotifications.UNUserNotificationServiceConnection.call-out`.
+    nonisolated private static func scheduleAuthorizedNotifications(
+        _ items: [CiNotificationItem],
+        center: any UserNotificationCenterScheduling
+    ) {
+        let onAdded: @Sendable ((any Error)?) -> Void = { _ in }
+        let onAuthorized: @Sendable (Bool, (any Error)?) -> Void = { granted, error in
             guard error == nil, granted else { return }
             for item in items {
                 let content = UNMutableNotificationContent()
@@ -73,9 +123,10 @@ final class CiNotificationCenterBridge: NSObject, UNUserNotificationCenterDelega
                     content: content,
                     trigger: nil
                 )
-                center.add(request) { _ in }
+                center.add(request, withCompletionHandler: onAdded)
             }
         }
+        center.requestAuthorization(options: [.alert, .sound], completionHandler: onAuthorized)
     }
 
     nonisolated func userNotificationCenter(

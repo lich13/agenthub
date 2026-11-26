@@ -1,7 +1,100 @@
 @testable import AgentHubCore
 import AppKit
 import SwiftUI
+@preconcurrency import UserNotifications
 import XCTest
+
+private final class BackgroundCallOutNotificationCenter: UserNotificationCenterScheduling, @unchecked Sendable {
+    private let callOutQueue = DispatchQueue(
+        label: "com.apple.usernotifications.UNUserNotificationServiceConnection.call-out"
+    )
+    private let lock = NSLock()
+    var authorizationGranted = true
+    var authorizationError: (any Error)?
+    private(set) var authCallCount = 0
+    private(set) var requestedOptions: UNAuthorizationOptions = []
+    private(set) var addedRequests: [UNNotificationRequest] = []
+    var onFinished: (@Sendable () -> Void)?
+
+    func reset(granted: Bool = true, error: (any Error)? = nil, onFinished: (@Sendable () -> Void)? = nil) {
+        lock.lock()
+        authorizationGranted = granted
+        authorizationError = error
+        authCallCount = 0
+        requestedOptions = []
+        addedRequests.removeAll()
+        self.onFinished = onFinished
+        lock.unlock()
+    }
+
+    func requestAuthorization(
+        options: UNAuthorizationOptions,
+        completionHandler: @escaping @Sendable (Bool, (any Error)?) -> Void
+    ) {
+        lock.lock()
+        authCallCount += 1
+        requestedOptions = options
+        let granted = authorizationGranted
+        let error = authorizationError
+        let finish = onFinished
+        lock.unlock()
+
+        callOutQueue.async {
+            precondition(!Thread.isMainThread)
+            completionHandler(granted, error)
+            if !granted || error != nil {
+                finish?()
+            }
+        }
+    }
+
+    func add(
+        _ request: UNNotificationRequest,
+        withCompletionHandler completionHandler: (@Sendable ((any Error)?) -> Void)?
+    ) {
+        callOutQueue.async { [weak self] in
+            precondition(!Thread.isMainThread)
+            completionHandler?(nil)
+            guard let self else { return }
+            self.lock.lock()
+            self.addedRequests.append(request)
+            let finish = self.onFinished
+            self.lock.unlock()
+            finish?()
+        }
+    }
+}
+
+private final class BackgroundWorkspaceOpener: WorkspaceApplicationOpening, @unchecked Sendable {
+    private let callbackQueue = DispatchQueue(
+        label: "test.nsworkspace.openApplication",
+        attributes: .concurrent
+    )
+    private let lock = NSLock()
+    var simulatedError: (any Error)?
+    private(set) var openedURLs: [URL] = []
+    private(set) var createsNewInstanceFlags: [Bool] = []
+    var afterCompletion: (@Sendable () -> Void)?
+
+    func openApplication(
+        at applicationURL: URL,
+        configuration: NSWorkspace.OpenConfiguration,
+        completionHandler: (@Sendable (NSRunningApplication?, (any Error)?) -> Void)?
+    ) {
+        lock.lock()
+        openedURLs.append(applicationURL)
+        createsNewInstanceFlags.append(configuration.createsNewApplicationInstance)
+        let err = simulatedError
+        let done = afterCompletion
+        lock.unlock()
+
+        callbackQueue.async {
+            precondition(!Thread.isMainThread)
+            completionHandler?(nil, err)
+            done?()
+        }
+    }
+}
 
 final class GithubCiAndPathActionTests: XCTestCase {
     func testCiNotificationClickIdentifierExtractsHTTPSRunURL() {
@@ -12,6 +105,120 @@ final class GithubCiAndPathActionTests: XCTestCase {
         )
         XCTAssertNil(CiNotificationCenterBridge.extractClickTargetURL(from: "file:///etc/passwd#agenthub-ci:1"))
         XCTAssertNil(CiNotificationCenterBridge.extractClickTargetURL(from: "https://github.com/no-marker"))
+    }
+
+    @MainActor
+    func testCiNotificationDeliverySurvivesBackgroundCallOutQueueAndEdgeCases() async {
+        let bridge = CiNotificationCenterBridge()
+        let center = BackgroundCallOutNotificationCenter()
+        bridge.notificationCenterOverride = center
+
+        // 1. Malformed JSON sets decode error without touching UNUserNotificationCenter
+        bridge.deliverAuthorized(eventsJSON: Data("{invalid".utf8))
+        XCTAssertEqual(bridge.lastDecodeError, "CI 通知事件解码失败")
+        XCTAssertEqual(center.authCallCount, 0)
+
+        // 2. Empty JSON array clears prior decode error and short-circuits before authorization
+        bridge.deliverAuthorized(eventsJSON: Data("[]".utf8))
+        XCTAssertNil(bridge.lastDecodeError)
+        XCTAssertEqual(center.authCallCount, 0)
+
+        let twoEventsJSON = Data(#"""
+        [
+          {"identifier":"https://example.invalid/runs/1#agenthub-ci:1","title":"CI 失败","body":"Backend checks failed","htmlUrl":"https://example.invalid/runs/1"},
+          {"identifier":"https://example.invalid/runs/2#agenthub-ci:2","title":"CI 恢复","body":"macOS checks passed","htmlUrl":"https://example.invalid/runs/2"}
+        ]
+        """#.utf8)
+
+        // 3. Granted authorization invokes both requestAuthorization & add callbacks on background call-out queue
+        let deliveredTwo = expectation(description: "two CI notifications scheduled on background call-out queue")
+        deliveredTwo.expectedFulfillmentCount = 2
+        center.reset(granted: true, error: nil) {
+            deliveredTwo.fulfill()
+        }
+        bridge.deliverAuthorized(eventsJSON: twoEventsJSON)
+        await fulfillment(of: [deliveredTwo], timeout: 3.0)
+
+        XCTAssertNil(bridge.lastDecodeError)
+        XCTAssertEqual(center.authCallCount, 1)
+        XCTAssertEqual(center.requestedOptions, [.alert, .sound])
+        XCTAssertEqual(center.addedRequests.count, 2)
+        XCTAssertEqual(
+            Set(center.addedRequests.map(\.identifier)),
+            [
+                "https://example.invalid/runs/1#agenthub-ci:1",
+                "https://example.invalid/runs/2#agenthub-ci:2"
+            ]
+        )
+        XCTAssertTrue(center.addedRequests.allSatisfy { $0.content.sound == .default })
+
+        // 4. Denied authorization runs callback on background queue and schedules nothing
+        let deniedDone = expectation(description: "denied authorization callback completed")
+        center.reset(granted: false, error: nil) {
+            deniedDone.fulfill()
+        }
+        bridge.deliverAuthorized(eventsJSON: twoEventsJSON)
+        await fulfillment(of: [deniedDone], timeout: 3.0)
+        XCTAssertEqual(center.authCallCount, 1)
+        XCTAssertTrue(center.addedRequests.isEmpty)
+
+        // 5. Authorization error runs callback on background queue and schedules nothing
+        let errorDone = expectation(description: "errored authorization callback completed")
+        center.reset(granted: true, error: AgentHubFFIError("notifications unavailable")) {
+            errorDone.fulfill()
+        }
+        bridge.deliverAuthorized(eventsJSON: twoEventsJSON)
+        await fulfillment(of: [errorDone], timeout: 3.0)
+        XCTAssertEqual(center.authCallCount, 1)
+        XCTAssertTrue(center.addedRequests.isEmpty)
+    }
+
+    @MainActor
+    func testAppRestartLauncherHandlesBackgroundWorkspaceCallbackAndEdgeCases() async {
+        let opener = BackgroundWorkspaceOpener()
+        var terminateCount = 0
+
+        // 1. Non-.app path is ignored
+        AppRestartLauncher.launchReplacementAndTerminate(
+            bundleURL: URL(fileURLWithPath: "/usr/local/bin/agenthub"),
+            workspace: opener,
+            terminate: { terminateCount += 1 }
+        )
+        XCTAssertTrue(opener.openedURLs.isEmpty)
+        XCTAssertEqual(terminateCount, 0)
+
+        let appURL = URL(fileURLWithPath: "/Applications/AgentHub.app")
+
+        // 2. Launch failure on background queue does not terminate current process
+        let failedCallback = expectation(description: "failed launch callback executed")
+        opener.simulatedError = AgentHubFFIError("launch failed")
+        opener.afterCompletion = { failedCallback.fulfill() }
+        AppRestartLauncher.launchReplacementAndTerminate(
+            bundleURL: appURL,
+            workspace: opener,
+            terminate: { terminateCount += 1 }
+        )
+        await fulfillment(of: [failedCallback], timeout: 3.0)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(opener.openedURLs, [appURL])
+        XCTAssertEqual(opener.createsNewInstanceFlags, [true])
+        XCTAssertEqual(terminateCount, 0)
+
+        // 3. Successful launch on background concurrent queue hops back to MainActor and terminates
+        let terminated = expectation(description: "terminated on MainActor after background callback")
+        opener.simulatedError = nil
+        opener.afterCompletion = nil
+        AppRestartLauncher.launchReplacementAndTerminate(
+            bundleURL: appURL,
+            workspace: opener,
+            terminate: {
+                XCTAssertTrue(Thread.isMainThread)
+                terminateCount += 1
+                terminated.fulfill()
+            }
+        )
+        await fulfillment(of: [terminated], timeout: 3.0)
+        XCTAssertEqual(terminateCount, 1)
     }
 
     func testFinderRevealPathValidationRejectsRelativeAndControlChars() {

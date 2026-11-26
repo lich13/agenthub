@@ -101,13 +101,10 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
             }
             drop(response);
             if large_response {
-                agenthub_core::note_cache_eviction();
-                #[cfg(all(target_os = "linux", target_env = "gnu"))]
                 if Arc::strong_count(&writer) <= 2 {
-                    // SAFETY: `malloc_trim(0)` asks glibc's allocator to release free top-of-heap arenas when connection is idle.
-                    unsafe {
-                        let _ = libc::malloc_trim(0);
-                    }
+                    agenthub_core::trim_idle_allocator();
+                } else {
+                    agenthub_core::note_cache_eviction();
                 }
             }
         });
