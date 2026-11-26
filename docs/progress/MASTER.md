@@ -4,6 +4,8 @@
 
 当前源码版本为 **2.1.40**。API 协议 2，数据库 schema 3。完成 GitHub CI 有界内部滚动（`260pt` 限高＋首尾触边及外层飞掠惯性滚轮透传＋自适应滚动条宽度零截断）、Probe 四大核心配置区默认展开（`GitHub CI`、`通知配置`、`Bark`、`Hooks 与宿主接入` 默认展开，已启用平台内联事件细项胶囊开关，`高级设置` 及 `全平台实时态势`、`最近事件`、`执行记录` 默认收起）、全仓 `$de-gpt` P1→P4 深度减法治理（统一 `FileStamp`／`open_regular_nofollow`／`StampedCache`、Swift `RPCRequestEnvelope`、清理死代码／退役字段／重复缓存并收紧内部可见性），以及服务端／六大 Provider CPU·峰值内存·SQLite·产物体积优化与 macOS Swift 6 前端视觉细节、`O(1)` `BoundedLRUCache`、连接 `revision` 竞态及 SSH 三阶段取消安全治理。存量升级库保留遗留 `codex_desktop_submissions` 表与钥匙串项，二进制回退目标保持为 **v2.1.30**。
 
+- **v2.1.40** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.40`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.39 原地更新并启动；GitHub CI `260pt` 有界内部滚动与边界滚轮透传、Probe 核心配置区默认展开与内联事件胶囊、深浅色气泡与紧凑代码块交互及 Bark／macOS 系统通知实收待用户验收。[提交 a4a8339](https://github.com/lich13/agenthub/commit/a4a833942590025788dd846fd81202d60892b8b5) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.40) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45878849794)
+
 - **v2.1.39** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.39`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.38 原地更新并启动；单屏可折叠 Probe 控制台（分面板独立保存与新异常单次展开）、`1000×680` 窄窗阅读与 `⌘F` 检索及 Bark／系统通知实收待用户验收。[提交 dff186f](https://github.com/lich13/agenthub/commit/dff186f5970c5944aa9ac2ecfc30f7848e05e6c5) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.39) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45759917895)
 
 - **v2.1.38** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.38`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.37 原地更新并启动；Codex 纯只读会话布局（移除新建线程、悬浮输入协作区与「在 Codex 中打开」）、单层自绘表格、跨平台工作区交互及 Bark／macOS 系统通知实收待用户验收。[提交 cbc0319](https://github.com/lich13/agenthub/commit/cbc0319b0e01cc6b3e59128cd3752b68d402838e) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.38) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45627291894)
@@ -40,6 +42,14 @@
 | Swift `GithubCiCardView` 20 条运行展开高度（`1020pt` 宽） | 1,432.0 pt | 387.0 pt | `BoundedPassthroughScrollView(maxHeight: 260)` 有界内部滚动，卡片高度压缩 **73.0%**（省 **1,045.0 pt**） |
 | Swift 阅读器 100 条富文本＋表格＋代码构建测量 ×20（每次新建协调器） | 4,322.76 ms（CPU 4,347.19 ms） | 4,291.36 ms（CPU 4,250.03 ms） | 单轮内 `configure` 复用 `heightOfRow` 测量（新建 20 个独立协调器实例；末轮系统负载下为 `5,015.01 ms`） |
 | 本机 Release `agenthub-webd`／Swift WMO stripped `agenthub` | 13,719,520 B / 17,856,728 B | 12,994,432 B / 17,314,104 B | `lto = true` 下 `agenthub-webd` 缩小 **725,088 B（-5.29%）**，Swift WMO stripped 缩小 **542,624 B（-3.04%）** |
+
+下表比较 v2.1.39 与 v2.1.40 对应标签 CI 生成并正式发布的同类资产（未测量线上常驻 RSS 或用户历史会话磁盘回收）：
+
+| 发布资产 | v2.1.39 字节 | v2.1.40 字节 | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG（Release CI） | 16,845,326 | 16,529,505 | -315,821（-1.875%） |
+| macOS updater（Release CI） | 15,689,495 | 15,434,394 | -255,101（-1.626%） |
+| Linux x86_64 webd（Release CI） | 7,441,239 | 7,364,329 | -76,910（-1.034%） |
 
 ## v2.1.39 实现与验证
 
