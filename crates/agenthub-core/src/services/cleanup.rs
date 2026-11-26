@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{archive, codex::CodexPaths, platform::PlatformPaths};
+use crate::{archive, codex::CodexPaths};
 
 pub const UNIFIED_CLEANUP_CONFIRMATION_MESSAGE: &str = "unified thread cleanup must be confirmed";
 
@@ -182,7 +182,6 @@ fn push_candidate(
 }
 
 fn dry_run_single_scope(
-    _platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     kind: CleanupScope,
 ) -> UnifiedCleanupScopePlan {
@@ -285,13 +284,10 @@ fn dry_run_single_scope(
     out
 }
 
-pub fn dry_run_unified_with_capability(
-    platform: &PlatformPaths,
-    paths: &UnifiedCleanupPaths,
-) -> Result<UnifiedCleanupPlan> {
+pub fn dry_run_unified_with_capability(paths: &UnifiedCleanupPaths) -> Result<UnifiedCleanupPlan> {
     let mut plan = UnifiedCleanupPlan::default();
     for scope in ALL_UNIFIED_SCOPES {
-        let item = dry_run_single_scope(platform, paths, *scope);
+        let item = dry_run_single_scope(paths, *scope);
         plan.total_candidates += item.candidate_count;
         plan.total_deletable += item.deletable_count;
         plan.total_estimated_bytes = plan
@@ -645,15 +641,13 @@ pub type DeletedProbeStreams = Vec<(crate::native_probe::NativeProvider, Vec<Str
 
 #[cfg(test)]
 fn execute_unified_with_capability(
-    platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,
 ) -> Result<UnifiedCleanupResult> {
-    execute_unified_with_deleted_streams(platform, paths, request).map(|(res, _)| res)
+    execute_unified_with_deleted_streams(paths, request).map(|(res, _)| res)
 }
 
 pub fn execute_unified_with_deleted_streams(
-    _platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
     request: UnifiedCleanupExecuteRequest,
 ) -> Result<(UnifiedCleanupResult, DeletedProbeStreams)> {
@@ -812,8 +806,6 @@ pub fn execute_unified_with_deleted_streams(
 
 #[cfg(test)]
 mod tests {
-    use crate::platform::PlatformPaths;
-
     #[test]
     fn unified_cleanup_recomputes_targets_preserves_non_empty_and_continues_after_failure() {
         use std::fs;
@@ -893,11 +885,8 @@ mod tests {
             claude,
             grok,
         };
-        let linux = PlatformPaths::linux_server();
-        let macos = PlatformPaths::macos("/fixture/home");
-
         // Both Linux (`agy` CLI) and macOS support Antigravity archived cleanup.
-        let linux_plan = super::dry_run_unified_with_capability(&linux, &paths).unwrap();
+        let linux_plan = super::dry_run_unified_with_capability(&paths).unwrap();
         let ag_linux = linux_plan
             .scopes
             .iter()
@@ -906,7 +895,7 @@ mod tests {
         assert!(ag_linux.supported);
         assert!(ag_linux.scanned);
 
-        let mac_plan = super::dry_run_unified_with_capability(&macos, &paths).unwrap();
+        let mac_plan = super::dry_run_unified_with_capability(&paths).unwrap();
         assert_eq!(mac_plan.total_deletable, 2);
         let preview_targets: Vec<super::UnifiedCleanupTargetSelection> = mac_plan
             .scopes
@@ -929,7 +918,6 @@ mod tests {
 
         // Unconfirmed or targetless execute must fail closed.
         assert!(super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: false,
@@ -939,7 +927,6 @@ mod tests {
         )
         .is_err());
         assert!(super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -951,7 +938,6 @@ mod tests {
 
         // Out-of-bounds / path-traversal target ID must fail closed immediately.
         assert!(super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -984,7 +970,6 @@ mod tests {
             }
         }
         let skipped_res = super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -1004,7 +989,6 @@ mod tests {
             let claude_proj = paths.claude.projects.join("proj");
             fs::set_permissions(&claude_proj, fs::Permissions::from_mode(0o555)).unwrap();
             let stopped = super::execute_unified_with_capability(
-                &macos,
                 &paths,
                 super::UnifiedCleanupExecuteRequest {
                     confirmed: true,
@@ -1050,7 +1034,6 @@ mod tests {
 
         // Normal confirmed execution cleans ONLY previewed targets while preserving late & active sessions.
         let ok = super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -1141,7 +1124,6 @@ mod tests {
 
         // Running target h1 stops execution before h2 is deleted!
         let running_stop = super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -1165,7 +1147,6 @@ mod tests {
         )
         .unwrap();
         let after_stop = super::execute_unified_with_capability(
-            &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: true,
@@ -1297,8 +1278,7 @@ fn linux_unified_cleanup_supports_archived_antigravity_cli_sessions() {
             home: tmp.join("grok"),
         },
     };
-    let linux = crate::platform::PlatformPaths::linux_server();
-    let plan = dry_run_unified_with_capability(&linux, &paths).unwrap();
+    let plan = dry_run_unified_with_capability(&paths).unwrap();
     let ag_scope = plan
         .scopes
         .iter()
@@ -1309,7 +1289,6 @@ fn linux_unified_cleanup_supports_archived_antigravity_cli_sessions() {
     assert_eq!(ag_scope.candidates[0].id, archived_id);
 
     let exec = execute_unified_with_capability(
-        &linux,
         &paths,
         UnifiedCleanupExecuteRequest {
             confirmed: true,
@@ -1435,8 +1414,7 @@ fn antigravity_unified_cleanup_includes_verified_orphan_subagents_and_skips_lock
             home: tmp.join("grok"),
         },
     };
-    let desktop = crate::platform::PlatformPaths::macos(tmp.clone());
-    let plan = dry_run_unified_with_capability(&desktop, &paths).unwrap();
+    let plan = dry_run_unified_with_capability(&paths).unwrap();
     let ag_scope = plan
         .scopes
         .iter()
@@ -1453,7 +1431,6 @@ fn antigravity_unified_cleanup_includes_verified_orphan_subagents_and_skips_lock
     );
 
     let exec = execute_unified_with_capability(
-        &desktop,
         &paths,
         UnifiedCleanupExecuteRequest {
             confirmed: true,

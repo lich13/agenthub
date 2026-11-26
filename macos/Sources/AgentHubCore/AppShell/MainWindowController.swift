@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 @MainActor
-public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
-    public let window: NSWindow
-    public let store: RuntimeConnectionStore
+final class AgentHubWindowManager: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    let store: RuntimeConnectionStore
     private var alignedInitialFrame = false
 
-    public init<Content: View>(store: RuntimeConnectionStore, rootView: Content) {
+    init<Content: View>(store: RuntimeConnectionStore, rootView: Content) {
         self.store = store
         let initialRect = NSRect(
             x: 0,
@@ -31,7 +31,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         win.delegate = self
     }
 
-    public static func maximizedInitialFrame(visibleFrame: NSRect) -> NSRect {
+    static func maximizedInitialFrame(visibleFrame: NSRect) -> NSRect {
         guard visibleFrame.width > 0, visibleFrame.height > 0 else {
             return NSRect(
                 x: 0,
@@ -43,7 +43,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         return visibleFrame
     }
 
-    public static func clampedFrameToVisibleScreen(_ frame: NSRect, visibleFrame: NSRect) -> NSRect {
+    static func clampedFrameToVisibleScreen(_ frame: NSRect, visibleFrame: NSRect) -> NSRect {
         guard visibleFrame.width > 0, visibleFrame.height > 0 else { return frame }
         let w = min(max(frame.width, min(LayoutMetrics.windowMinWidth, visibleFrame.width)), visibleFrame.width)
         let h = min(max(frame.height, min(LayoutMetrics.windowMinHeight, visibleFrame.height)), visibleFrame.height)
@@ -52,7 +52,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
-    public func alignOnceAndReveal(overrideVisibleFrame: NSRect? = nil) {
+    func alignOnceAndReveal(overrideVisibleFrame: NSRect? = nil) {
         if !alignedInitialFrame {
             alignedInitialFrame = true
             if let vf = overrideVisibleFrame ?? (window.screen ?? NSScreen.main)?.visibleFrame,
@@ -67,7 +67,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         revealWithoutResize()
     }
 
-    public func windowDidChangeScreen(_ notification: Notification) {
+    func windowDidChangeScreen(_ notification: Notification) {
         guard alignedInitialFrame, let vf = window.screen?.visibleFrame else { return }
         let clamped = Self.clampedFrameToVisibleScreen(window.frame, visibleFrame: vf)
         if clamped != window.frame {
@@ -75,7 +75,7 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         }
     }
 
-    public func revealWithoutResize() {
+    func revealWithoutResize() {
         if window.isMiniaturized {
             window.deminiaturize(nil)
         }
@@ -84,18 +84,18 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         syncWindowState()
     }
 
-    public func syncWindowState() {
+    func syncWindowState() {
         let visible = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         store.updateWindowState(visible: visible)
     }
 
-    public func windowDidBecomeKey(_ notification: Notification) { syncWindowState() }
-    public func windowDidResignKey(_ notification: Notification) { syncWindowState() }
-    public func windowDidMiniaturize(_ notification: Notification) { syncWindowState() }
-    public func windowDidDeminiaturize(_ notification: Notification) { syncWindowState() }
-    public func windowDidChangeOcclusionState(_ notification: Notification) { syncWindowState() }
+    func windowDidBecomeKey(_ notification: Notification) { syncWindowState() }
+    func windowDidResignKey(_ notification: Notification) { syncWindowState() }
+    func windowDidMiniaturize(_ notification: Notification) { syncWindowState() }
+    func windowDidDeminiaturize(_ notification: Notification) { syncWindowState() }
+    func windowDidChangeOcclusionState(_ notification: Notification) { syncWindowState() }
 
-    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
         store.updateWindowState(visible: false)
         return false
@@ -203,7 +203,7 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    public enum SelectAllRouteOutcome: Equatable, Sendable {
+    enum SelectAllRouteOutcome: Equatable, Sendable {
         case noWindow
         case editableTextSelectedAll
         case selectableTextExpanded
@@ -212,7 +212,7 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    public static func routeMenuSelectAll(
+    static func routeMenuSelectAll(
         in keyWin: NSWindow?,
         store: RuntimeConnectionStore?,
         sender: Any? = nil

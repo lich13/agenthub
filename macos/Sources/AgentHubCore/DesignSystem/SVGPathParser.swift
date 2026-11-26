@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-public enum SVGPathParser {
-    public static func parse(_ d: String) -> CGPath {
+enum SVGPathParser {
+    static func parse(_ d: String) -> CGPath {
         let path = CGMutablePath()
         var index = d.startIndex
         let end = d.endIndex

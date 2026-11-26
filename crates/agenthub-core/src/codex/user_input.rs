@@ -365,9 +365,9 @@ pub fn rollout_pending_async_questions_since(
 }
 
 fn read_question_state<R>(path: &Path, project: impl FnOnce(&QuestionState) -> R) -> Result<R> {
-    QUESTION_CACHE.read(
+    super::rollout_file::read_cached(
+        &QUESTION_CACHE,
         path,
-        |_| Ok(0),
         true,
         |state, line, index, _| {
             if !line.iter().all(u8::is_ascii_whitespace) {

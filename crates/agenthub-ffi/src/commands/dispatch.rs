@@ -3,8 +3,8 @@ use crate::{
     overview::DesktopState,
     remote::{self, RemoteConnections},
     services::{
-        jobs as job_service, probe as probe_service, settings as settings_service,
-        threads as thread_service, updates as update_service,
+        probe as probe_service, settings as settings_service, threads as thread_service,
+        updates as update_service,
     },
 };
 use agenthub_core::{
@@ -20,13 +20,17 @@ use agenthub_core::{
     },
     services::{
         cleanup::UnifiedCleanupExecuteRequest,
+        jobs::ThreadRenameRequest,
         plans::PlanSaveRequest,
         probe::{ProbeAction, ProbeStatusRequest},
         remote::*,
         search::SessionSearchRequest,
         sessions::{SessionBatchExecuteRequest, SessionBatchRequest},
         settings::ProbeSettingsSaveRequest,
-        use_cases::{AgentHubUseCases, JobDetailRequest, LimitU32Request, QueryLimitRequest},
+        use_cases::{
+            AgentHubUseCases, ClaudeRenameRequest, GrokRenameRequest, JobDetailRequest,
+            LimitU32Request, PageWindowOptions, QueryLimitRequest,
+        },
     },
     user_message::SessionAttachmentRequest,
 };
@@ -44,32 +48,17 @@ struct OptionalWrappedRequest<T> {
     request: Option<T>,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ThreadDetailOptions {
-    limit: Option<usize>,
-    before: Option<String>,
-    full: Option<bool>,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadDetailArgs {
     id: String,
-    options: Option<ThreadDetailOptions>,
+    options: Option<PageWindowOptions>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadIdArgs {
     thread_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ThreadRenameArgs {
-    thread_id: String,
-    name: String,
 }
 
 #[derive(Deserialize)]
@@ -94,13 +83,6 @@ struct GrokDetailArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct GrokRenameArgs {
-    id: String,
-    title: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct IdOnlyArgs {
     id: String,
 }
@@ -109,13 +91,6 @@ struct IdOnlyArgs {
 #[serde(rename_all = "camelCase")]
 struct SessionKeyOnlyArgs {
     session_key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeRenameArgs {
-    session_key: String,
-    title: String,
 }
 
 fn parse_args<T: DeserializeOwned>(args_json: &str) -> Result<T, String> {
@@ -128,11 +103,11 @@ fn encode<T: Serialize>(result: Result<T, String>) -> Result<String, String> {
     result.and_then(|val| serde_json::to_string(&val).map_err(|err| err.to_string()))
 }
 
-pub struct DispatchContext<'a> {
-    pub state: &'a DesktopState,
-    pub remote: &'a RemoteConnections,
-    pub host: &'a HostBridge,
-    pub isolated: bool,
+pub(crate) struct DispatchContext<'a> {
+    pub(crate) state: &'a DesktopState,
+    pub(crate) remote: &'a RemoteConnections,
+    pub(crate) host: &'a HostBridge,
+    pub(crate) isolated: bool,
 }
 
 use agenthub_core::services::commands as ids;
@@ -144,10 +119,10 @@ mod providers;
 macro_rules! desktop_handlers {
     ($( $id:path => $domain:ident::$handler:ident, )*) => {
         #[cfg(test)]
-        pub const REGISTERED_COMMAND_ENTRIES: &[(&str, &str)] = &[
+        pub(crate) const REGISTERED_COMMAND_ENTRIES: &[(&str, &str)] = &[
             $(($id, concat!("dispatch::", stringify!($domain), "::", stringify!($handler))),)*
         ];
-        pub async fn dispatch(ctx: DispatchContext<'_>, command: &str, args_json: &str) -> Result<String, String> {
+        pub(crate) async fn dispatch(ctx: DispatchContext<'_>, command: &str, args_json: &str) -> Result<String, String> {
             match command {
                 $($id => $domain::$handler(ctx, args_json).await,)*
                 _ => Err(format!("unsupported desktop command: {command}")),

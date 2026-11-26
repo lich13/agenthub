@@ -1283,16 +1283,20 @@ fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) 
             if digest != proof.digest {
                 return Ok(false);
             }
-            let mut file = match std::fs::File::open(&path) {
-                Ok(file) => file,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(err) => return Err(err.into()),
-            };
-            file.seek(SeekFrom::Start(proof.length))?;
             let mut tail = String::new();
-            file.take(2 * 1024 * 1024 + 1).read_to_string(&mut tail)?;
-            if !tail.is_empty() && !tail.ends_with('\n') && tail.len() <= 2 * 1024 * 1024 {
-                anyhow::bail!("codex tail flush pending");
+            if !codex::is_compressed_rollout_path(&path) {
+                let mut file = match std::fs::File::open(&path) {
+                    Ok(file) => file,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                    Err(err) => return Err(err.into()),
+                };
+                file.seek(SeekFrom::Start(proof.length))?;
+                file.take(2 * 1024 * 1024 + 1).read_to_string(&mut tail)?;
+                if !tail.is_empty() && !tail.ends_with('\n') && tail.len() <= 2 * 1024 * 1024 {
+                    anyhow::bail!("codex tail flush pending");
+                }
+            } else if meta.len() != proof.length {
+                return Ok(false);
             }
             let mut event = (**event).clone();
             event.bark_body = original_body

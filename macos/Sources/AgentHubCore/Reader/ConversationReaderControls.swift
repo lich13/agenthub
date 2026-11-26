@@ -5,23 +5,42 @@ import SwiftUI
 
 @MainActor
 final class HoverSummaryRowView: NSView {
-    var isEnabled: Bool
+    var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
     var onTap: (() -> Void)?
+    var focusRingColor: NSColor
+    var accessibilityExpandedState: Bool?
     private let open: Bool
     private let hoverFill: NSColor
     private let openFill: NSColor
     private var tracking: NSTrackingArea?
 
-    init(open: Bool, isEnabled: Bool, hoverFill: NSColor, openFill: NSColor) {
+    init(
+        open: Bool,
+        isEnabled: Bool,
+        hoverFill: NSColor,
+        openFill: NSColor,
+        focusRingColor: NSColor = .keyboardFocusIndicatorColor,
+        accessibilityExpanded: Bool? = nil,
+        accessibilityLabelText: String? = nil
+    ) {
         self.open = open
         self.isEnabled = isEnabled
         self.hoverFill = hoverFill
         self.openFill = openFill
+        self.focusRingColor = focusRingColor
+        self.accessibilityExpandedState = accessibilityExpanded ?? open
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.backgroundColor = (open ? openFill : NSColor.clear).cgColor
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        if let accessibilityLabelText {
+            setAccessibilityLabel(accessibilityLabelText)
+        }
     }
 
     @available(*, unavailable)
@@ -30,6 +49,41 @@ final class HoverSummaryRowView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { isEnabled }
+    override var canBecomeKeyView: Bool { isEnabled }
+
+    override func isAccessibilityExpanded() -> Bool {
+        accessibilityExpandedState ?? open
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        onTap?()
+        return true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if isEnabled {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { syncFocusRing(focused: true) }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { syncFocusRing(focused: false) }
+        return ok
+    }
+
+    private func syncFocusRing(focused: Bool) {
+        layer?.borderWidth = focused ? 1.5 : 0
+        layer?.borderColor = focused ? focusRingColor.cgColor : nil
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -71,10 +125,10 @@ final class HoverSummaryRowView: NSView {
     }
 }
 
-public final class ActionButton: NSButton {
-    public var onTap: (() -> Void)?
+final class ActionButton: NSButton {
+    var onTap: (() -> Void)?
 
-    override public init(frame frameRect: NSRect) {
+    override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         isBordered = false
         bezelStyle = .regularSquare
@@ -93,9 +147,9 @@ public final class ActionButton: NSButton {
 }
 
 @MainActor
-public final class IconFeedbackActionButton: NSButton {
-    public private(set) var isShowingCopied: Bool = false
-    public var onFeedbackStateChanged: (() -> Void)?
+final class IconFeedbackActionButton: NSButton {
+    private(set) var isShowingCopied: Bool = false
+    var onFeedbackStateChanged: (() -> Void)?
     private let dimension: CGFloat
     private let iconSize: CGFloat
     private let idleIcon: LucideIconName
@@ -107,7 +161,7 @@ public final class IconFeedbackActionButton: NSButton {
     private var resetTask: Task<Void, Never>?
     private var tracking: NSTrackingArea?
 
-    public init(
+    init(
         dimension: CGFloat = 30,
         iconSize: CGFloat = 17,
         idleIcon: LucideIconName = .copy,
@@ -153,16 +207,16 @@ public final class IconFeedbackActionButton: NSButton {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override public var acceptsFirstResponder: Bool { isEnabled }
-    override public var canBecomeKeyView: Bool { isEnabled }
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override var canBecomeKeyView: Bool { isEnabled }
 
-    override public func becomeFirstResponder() -> Bool {
+    override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok { onFeedbackStateChanged?() }
         return ok
     }
 
-    override public func resignFirstResponder() -> Bool {
+    override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         if ok {
             DispatchQueue.main.async { [weak self] in
@@ -172,7 +226,7 @@ public final class IconFeedbackActionButton: NSButton {
         return ok
     }
 
-    override public func updateTrackingAreas() {
+    override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(
@@ -185,15 +239,15 @@ public final class IconFeedbackActionButton: NSButton {
         tracking = area
     }
 
-    override public func mouseEntered(with event: NSEvent) {
+    override func mouseEntered(with event: NSEvent) {
         layer?.backgroundColor = hoverBg.cgColor
     }
 
-    override public func mouseExited(with event: NSEvent) {
+    override func mouseExited(with event: NSEvent) {
         layer?.backgroundColor = baseBg.cgColor
     }
 
-    @objc public func handleClick() {
+    @objc func handleClick() {
         onActivate()
         resetTask?.cancel()
         isShowingCopied = true
@@ -217,10 +271,63 @@ public final class IconFeedbackActionButton: NSButton {
 
 @MainActor
 final class ActionRowContainerView: NSView {
-    var isEnabled: Bool = true
+    var isEnabled: Bool = true {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+    var focusRingColor: NSColor = .keyboardFocusIndicatorColor
+    var accessibilityExpandedState: Bool?
     var onTap: (() -> Void)?
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override var acceptsFirstResponder: Bool { isEnabled }
+    override var canBecomeKeyView: Bool { isEnabled }
+
+    override func isAccessibilityExpanded() -> Bool {
+        accessibilityExpandedState ?? false
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        onTap?()
+        return true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if isEnabled {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok {
+            layer?.borderWidth = 1.5
+            layer?.borderColor = focusRingColor.cgColor
+        }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok {
+            layer?.borderWidth = 0
+            layer?.borderColor = nil
+        }
+        return ok
+    }
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
@@ -243,19 +350,66 @@ final class ActionRowContainerView: NSView {
 @MainActor
 final class AppKitRunningRingView: NSView {
     private let size: CGFloat
-    private let trackColor: NSColor
-    private let accentColor: NSColor
+    private let trackLayer = CAShapeLayer()
+    private let arcLayer = CAShapeLayer()
+    nonisolated(unsafe) private var accessibilityToken: NSObjectProtocol?
+    nonisolated(unsafe) private var occlusionToken: NSObjectProtocol?
+
+    var isAnimatingForTesting: Bool {
+        arcLayer.animation(forKey: "spin") != nil
+    }
 
     init(size: CGFloat = 13, trackColor: NSColor, accentColor: NSColor) {
         self.size = size
-        self.trackColor = trackColor
-        self.accentColor = accentColor
         super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: size),
             heightAnchor.constraint(equalToConstant: size),
         ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.progressIndicator)
+        setAccessibilityLabel("运行中")
+
+        let boundsRect = CGRect(x: 0, y: 0, width: size, height: size)
+        let inset = boundsRect.insetBy(dx: 1.5, dy: 1.5)
+        let ringPath = CGPath(ellipseIn: inset, transform: nil)
+        trackLayer.frame = boundsRect
+        trackLayer.path = ringPath
+        trackLayer.fillColor = nil
+        trackLayer.strokeColor = trackColor.cgColor
+        trackLayer.lineWidth = 2.0
+
+        let arcPath = CGMutablePath()
+        arcPath.addArc(
+            center: CGPoint(x: boundsRect.midX, y: boundsRect.midY),
+            radius: inset.width * 0.5,
+            startAngle: 20 * .pi / 180,
+            endAngle: 120 * .pi / 180,
+            clockwise: false
+        )
+        arcLayer.bounds = boundsRect
+        arcLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        arcLayer.position = CGPoint(x: boundsRect.midX, y: boundsRect.midY)
+        arcLayer.path = arcPath
+        arcLayer.fillColor = nil
+        arcLayer.strokeColor = accentColor.cgColor
+        arcLayer.lineWidth = 2.0
+        arcLayer.lineCap = .round
+
+        layer?.addSublayer(trackLayer)
+        layer?.addSublayer(arcLayer)
+
+        accessibilityToken = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncAnimationState()
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -263,20 +417,67 @@ final class AppKitRunningRingView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let inset = bounds.insetBy(dx: 1.5, dy: 1.5)
-        let ring = NSBezierPath(ovalIn: inset)
-        ring.lineWidth = 2.0
-        trackColor.setStroke()
-        ring.stroke()
+    deinit {
+        if let accessibilityToken {
+            NSWorkspace.shared.notificationCenter.removeObserver(accessibilityToken)
+        }
+        if let occlusionToken {
+            NotificationCenter.default.removeObserver(occlusionToken)
+        }
+    }
 
-        let arc = NSBezierPath()
-        let center = NSPoint(x: bounds.midX, y: bounds.midY)
-        arc.appendArc(withCenter: center, radius: inset.width * 0.5, startAngle: 20, endAngle: 120)
-        arc.lineWidth = 2.0
-        arc.lineCapStyle = .round
-        accentColor.setStroke()
-        arc.stroke()
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let occlusionToken {
+            NotificationCenter.default.removeObserver(occlusionToken)
+            self.occlusionToken = nil
+        }
+        if let win = window {
+            occlusionToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: win,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.syncAnimationState()
+                }
+            }
+        }
+        syncAnimationState()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        syncAnimationState()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        syncAnimationState()
+    }
+
+    func syncAnimationState(reduceMotionOverride: Bool? = nil) {
+        let reduceMotion = reduceMotionOverride ?? AccessibilityMotionObserver.shared.reduceMotion
+        let canSpin: Bool = if let win = window {
+            !isHiddenOrHasHiddenAncestor
+                && !reduceMotion
+                && win.isVisible
+                && win.occlusionState.contains(.visible)
+        } else {
+            false
+        }
+        if canSpin {
+            guard arcLayer.animation(forKey: "spin") == nil else { return }
+            let anim = CABasicAnimation(keyPath: "transform.rotation.z")
+            anim.fromValue = 0.0
+            anim.toValue = -Double.pi * 2.0
+            anim.duration = 0.9
+            anim.repeatCount = .infinity
+            anim.isRemovedOnCompletion = false
+            arcLayer.add(anim, forKey: "spin")
+        } else {
+            arcLayer.removeAnimation(forKey: "spin")
+        }
     }
 }
 
@@ -325,10 +526,10 @@ final class PassthroughInnerScrollView: NSScrollView {
 }
 
 @MainActor
-public final class ReaderOuterScrollView: NSScrollView {
-    public weak var coordinator: ConversationTableCoordinator?
+final class ReaderOuterScrollView: NSScrollView {
+    weak var coordinator: ConversationTableCoordinator?
 
-    override public init(frame frameRect: NSRect) {
+    override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         verticalScrollElasticity = .allowed
         horizontalScrollElasticity = .none
@@ -339,7 +540,7 @@ public final class ReaderOuterScrollView: NSScrollView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override public func scrollWheel(with event: NSEvent) {
+    override func scrollWheel(with event: NSEvent) {
         coordinator?.handleOuterScrollWheel(
             deltaY: event.scrollingDeltaY,
             phase: event.phase,
@@ -348,7 +549,7 @@ public final class ReaderOuterScrollView: NSScrollView {
         super.scrollWheel(with: event)
     }
 
-    override public func keyDown(with event: NSEvent) {
+    override func keyDown(with event: NSEvent) {
         if event.keyCode == 126 || event.keyCode == 116 || event.keyCode == 115 {
             coordinator?.handleOuterUpwardKeyNavigation()
         }

@@ -7,30 +7,53 @@ pub(super) fn spawn(config_path: PathBuf, state: Option<AppState>) {
             return;
         };
         let mut cache = monitor_start::DaemonMonitorCache::default();
+        let mut check_db_request = true;
         loop {
             let result = async {
-                let config = cache.load_config(&config_path)?;
-                let db = match &state {
-                    Some(state) => state.db.clone(),
-                    None => cache.panel_db(&config)?,
-                };
-                let load_config = || cache.load_config(&config_path);
-                let events = monitor.tick(&db, &load_config).await?;
-                deliver_events(&db, events, &load_config).await?;
+                match &state {
+                    Some(state) => {
+                        let load_config = || state.refresh_config();
+                        let events = monitor
+                            .tick_in_process(&state.db, &load_config, check_db_request)
+                            .await?;
+                        deliver_events(&state.db, events, &load_config).await?;
+                    }
+                    None => {
+                        let config = cache.load_config(&config_path)?;
+                        let db = cache.panel_db(&config)?;
+                        let load_config = || cache.load_config(&config_path);
+                        let events = monitor.tick(&db, &load_config).await?;
+                        deliver_events(&db, events, &load_config).await?;
+                    }
+                }
                 Ok::<_, anyhow::Error>(())
             }
             .await;
             if result.is_err() {
                 tracing::warn!("GitHub CI monitor state unavailable");
             }
-            // Wake for the next due repository, while still observing settings promptly.
-            let delay = monitor.wait_duration();
-            time::sleep(if result.is_err() {
-                Duration::from_secs(2)
-            } else {
-                delay
-            })
-            .await;
+            match &state {
+                Some(state) => {
+                    let delay = if result.is_err() {
+                        Duration::from_secs(2)
+                    } else {
+                        monitor.in_process_wait_duration()
+                    };
+                    check_db_request = tokio::select! {
+                        _ = time::sleep(delay) => result.is_err(),
+                        _ = state.ci_wake.notified() => true,
+                    };
+                }
+                None => {
+                    let delay = monitor.wait_duration();
+                    time::sleep(if result.is_err() {
+                        Duration::from_secs(2)
+                    } else {
+                        delay
+                    })
+                    .await;
+                }
+            }
         }
     });
 }

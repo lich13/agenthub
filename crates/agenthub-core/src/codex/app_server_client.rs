@@ -1,9 +1,9 @@
 use super::{thread_rows::read_thread_rows_matching, CodexPaths, ThreadStatus};
+use crate::system::ParsedVersion;
 use anyhow::{anyhow, ensure, Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
-    cmp::Ordering,
     collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
@@ -44,6 +44,7 @@ impl CodexAppServerClient {
         Self::with_optional_candidates(None)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn with_candidates(candidates: Vec<PathBuf>) -> Self {
         Self::with_optional_candidates(Some(candidates))
@@ -256,7 +257,7 @@ async fn probe_codex_version(path: &Path) -> Option<ParsedVersion> {
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_codex_version(&stdout)
+    ParsedVersion::extract_and_parse(&stdout)
 }
 
 fn discover_codex_candidates() -> Vec<PathBuf> {
@@ -297,73 +298,6 @@ fn is_executable_file(path: &Path) -> bool {
     }
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode() & 0o111 != 0
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ParsedVersion {
-    major: u64,
-    minor: u64,
-    patch: u64,
-    stable: bool,
-    suffix: String,
-}
-
-impl ParsedVersion {
-    const fn stable(major: u64, minor: u64, patch: u64) -> Self {
-        Self {
-            major,
-            minor,
-            patch,
-            stable: true,
-            suffix: String::new(),
-        }
-    }
-}
-
-impl Ord for ParsedVersion {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (
-            self.major,
-            self.minor,
-            self.patch,
-            self.stable,
-            self.suffix.as_str(),
-        )
-            .cmp(&(
-                other.major,
-                other.minor,
-                other.patch,
-                other.stable,
-                other.suffix.as_str(),
-            ))
-    }
-}
-
-impl PartialOrd for ParsedVersion {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn parse_codex_version(value: &str) -> Option<ParsedVersion> {
-    value.split_whitespace().find_map(|part| {
-        let part = part.trim_start_matches('v');
-        let (core, suffix) = part.split_once('-').unwrap_or((part, ""));
-        let mut pieces = core.split('.');
-        let major = pieces.next()?.parse().ok()?;
-        let minor = pieces.next()?.parse().ok()?;
-        let patch = pieces.next()?.parse().ok()?;
-        if pieces.next().is_some() {
-            return None;
-        }
-        Some(ParsedVersion {
-            major,
-            minor,
-            patch,
-            stable: suffix.is_empty(),
-            suffix: suffix.to_string(),
-        })
-    })
 }
 
 #[cfg(test)]

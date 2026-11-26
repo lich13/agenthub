@@ -1,5 +1,5 @@
-pub mod dispatch;
-pub mod plans;
+pub(crate) mod dispatch;
+pub(crate) mod plans;
 
 pub(crate) async fn blocking<T: Send + 'static>(
     task: impl FnOnce() -> anyhow::Result<T> + Send + 'static,

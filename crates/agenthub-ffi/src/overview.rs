@@ -86,19 +86,22 @@ mod tests {
     fn fixed_probe_command_uses_platform_daemon_path() {
         let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
         let plan = agenthub_core::services::probe::plan_probe_action(
-            &platform,
             agenthub_core::services::probe::ProbeAction::BarkTest,
-            &platform.config_file,
         )
         .unwrap();
-        let command = plan.job.command;
-
-        assert!(
-            command.contains(
-                "'/Users/example/Library/Application Support/AgentHub/bin/agenthub-webd'"
-            ),
-            "{command}"
+        let process = agenthub_core::services::probe::probe_process_command(
+            &platform,
+            &platform.config_file,
+            plan.action,
         );
-        assert!(!command.contains("/opt/agenthub/bin/agenthub-webd"));
+
+        assert_eq!(
+            process.program.to_str(),
+            Some("/Users/example/Library/Application Support/AgentHub/bin/agenthub-webd")
+        );
+        assert_ne!(
+            process.program.to_str(),
+            Some("/opt/agenthub/bin/agenthub-webd")
+        );
     }
 }

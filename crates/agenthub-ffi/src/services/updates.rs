@@ -21,15 +21,15 @@ const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DesktopUpdateCheckResponse {
-    pub job_id: String,
-    pub status: UpdateStatus,
+pub(crate) struct DesktopUpdateCheckResponse {
+    pub(crate) job_id: String,
+    pub(crate) status: UpdateStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DesktopUpdateInstallResponse {
-    pub job_id: String,
-    pub installed: bool,
+pub(crate) struct DesktopUpdateInstallResponse {
+    pub(crate) job_id: String,
+    pub(crate) installed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,9 +64,31 @@ pub fn desktop_update_status_with_state(
     ))
 }
 
+static MACOS_UPDATE_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+struct UpdateExclusiveGuard;
+
+impl UpdateExclusiveGuard {
+    fn try_acquire() -> std::result::Result<Self, String> {
+        use std::sync::atomic::Ordering;
+        MACOS_UPDATE_RUNNING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self)
+            .map_err(|_| "已有更新作业正在运行，请等待当前更新完成后重试".to_string())
+    }
+}
+
+impl Drop for UpdateExclusiveGuard {
+    fn drop(&mut self) {
+        MACOS_UPDATE_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub(crate) async fn check_update_status(
     state: &DesktopState,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
+    let _exclusive = UpdateExclusiveGuard::try_acquire()?;
     let job = native_update_job_plan_for_action(state.platform(), UpdateAction::Check)
         .map_err(|err| err.to_string())?;
     let job_id = start_update_job(state, &job).map_err(|err| err.to_string())?;
@@ -88,6 +110,7 @@ pub(crate) async fn install_update_and_restart(
     host: &HostBridge,
     isolated: bool,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {
+    let _exclusive = UpdateExclusiveGuard::try_acquire()?;
     let job = native_update_job_plan_for_action(state.platform(), UpdateAction::Install)
         .map_err(|err| err.to_string())?;
     let job_id = start_update_job(state, &job).map_err(|err| err.to_string())?;

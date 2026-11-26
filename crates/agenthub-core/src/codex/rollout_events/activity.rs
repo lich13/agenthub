@@ -410,8 +410,8 @@ fn select_rollout_message(
     turn_id: Option<&str>,
 ) -> Result<Option<RolloutMessageSelection>> {
     let read = || {
-        let file = File::open(path)?;
-        select_rollout_message_inner(std::io::BufReader::new(file), turn_id)
+        let reader = crate::codex::rollout_file::open_reader(path)?;
+        select_rollout_message_inner(std::io::BufReader::new(reader), turn_id)
     };
     read().with_context(|| format!("read rollout {}", path.display()))
 }
@@ -617,18 +617,8 @@ pub fn rollout_completion_last_agent_message(
     turn_id: Option<&str>,
 ) -> Result<Option<String>> {
     Ok(
-        rollout_completion_last_agent_message_with_source(path, turn_id)?
-            .map(|(message, _)| message),
-    )
-}
-
-pub fn rollout_completion_last_agent_message_with_source(
-    path: &Path,
-    turn_id: Option<&str>,
-) -> Result<Option<(String, String)>> {
-    Ok(
         rollout_completion_last_agent_message_selection(path, turn_id)?
-            .map(|selection| (selection.message, selection.source)),
+            .map(|selection| selection.message),
     )
 }
 
@@ -646,62 +636,48 @@ pub struct AssistantFeedback {
     pub completed_at_ms: i64,
 }
 
-/// Only a complete, latest terminal turn can wait for ordinary-language feedback.
-/// Bounded tail reads also make polling large sessions inexpensive.
-pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>> {
-    let mut file = File::open(path)?;
-    let metadata = file.metadata()?;
-    let size = metadata.len();
-    let start = size.saturating_sub(2 * 1024 * 1024);
-    file.seek(SeekFrom::Start(start))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    if !bytes.ends_with(b"\n") {
-        return Ok(None);
-    }
-    if start > 0 {
-        let Some(end) = bytes.iter().position(|b| *b == b'\n') else {
-            return Ok(None);
-        };
-        bytes.drain(..=end);
-    }
-    let mut current_turn = None;
-    let mut final_reply: Option<String> = None;
-    let mut completed = None;
-    let mut pending = HashMap::new();
-    for raw_line in bytes.split(|&b| b == b'\n') {
+#[derive(Default)]
+struct PendingFeedbackScanState {
+    current_turn: Option<String>,
+    final_reply: Option<String>,
+    completed: Option<(String, i64)>,
+    pending: HashMap<String, Option<String>>,
+}
+
+impl PendingFeedbackScanState {
+    fn feed_line(&mut self, raw_line: &[u8]) -> bool {
         let raw_line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
         if raw_line.iter().all(u8::is_ascii_whitespace) {
-            continue;
+            return true;
         }
         let Ok(mut value) = serde_json::from_slice::<Value>(raw_line) else {
-            return Ok(None);
+            return false;
         };
-        let previous_turn = current_turn.clone();
-        normalize_canonical_turn(&mut value, &mut current_turn);
+        let previous_turn = self.current_turn.clone();
+        normalize_canonical_turn(&mut value, &mut self.current_turn);
         let kind = rollout_event_type(&value);
-        if previous_turn != current_turn
+        if previous_turn != self.current_turn
             || matches!(kind, "task_started" | "turn_started" | "turn/started")
         {
-            final_reply = None;
-            completed = None;
-            pending.clear();
+            self.final_reply = None;
+            self.completed = None;
+            self.pending.clear();
         }
         if let Some(message) = parse_message_event(&value) {
             if message.role == "user" {
-                final_reply = None;
-                completed = None;
+                self.final_reply = None;
+                self.completed = None;
             } else if message.role == "assistant" && is_final_assistant_message(&value) {
-                if final_reply.as_deref() != Some(&message.text) {
-                    completed = None;
+                if self.final_reply.as_deref() != Some(&message.text) {
+                    self.completed = None;
                 }
-                final_reply = Some(message.text);
+                self.final_reply = Some(message.text);
             } else if message.role == "assistant" {
-                completed = None;
+                self.completed = None;
             }
         }
         let pending_changed =
-            update_pending_tool_calls(&value, &mut pending, current_turn.as_deref());
+            update_pending_tool_calls(&value, &mut self.pending, self.current_turn.as_deref());
         let interactive_request = kind.contains("request_user_input")
             || kind.contains("elicitation")
             || contains_ascii_case_insensitive(raw_line, b"request_user_input")
@@ -726,11 +702,11 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
                     | "tool_result"
             )
         {
-            completed = None;
+            self.completed = None;
         }
         if matches!(kind, "turn_aborted" | "turn/aborted" | "turn_error") {
-            final_reply = None;
-            completed = None;
+            self.final_reply = None;
+            self.completed = None;
         }
         if matches!(kind, "task_complete" | "turn_completed" | "turn/completed") {
             let payload = value.get("payload").unwrap_or(&value);
@@ -739,7 +715,7 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
             {
-                final_reply = Some(message.to_string());
+                self.final_reply = Some(message.to_string());
             }
             if payload
                 .get("status")
@@ -747,40 +723,153 @@ pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>
                 .and_then(Value::as_str)
                 .is_some_and(|status| !matches!(status, "completed" | "complete" | "success"))
             {
-                final_reply = None;
-                completed = None;
-                continue;
+                self.final_reply = None;
+                self.completed = None;
+                return true;
             }
-            let turn = event_turn_id(&value).or_else(|| current_turn.clone());
+            let turn = event_turn_id(&value).or_else(|| self.current_turn.clone());
             let timestamp = value
                 .get("timestamp")
                 .and_then(Value::as_str)
-                .and_then(|s| (s).parse::<jiff::Timestamp>().ok())
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok())
                 .map(|time| time.as_millisecond());
-            completed = turn.zip(timestamp);
+            self.completed = turn.zip(timestamp);
+        }
+        true
+    }
+
+    fn finish(self) -> Option<AssistantFeedback> {
+        if !self.pending.is_empty() {
+            return None;
+        }
+        let (turn_id, completed_at_ms) = self.completed?;
+        let body = self
+            .final_reply
+            .as_deref()
+            .and_then(super::super::assistant_feedback_request)?;
+        Some(AssistantFeedback {
+            turn_id,
+            body,
+            completed_at_ms,
+        })
+    }
+}
+
+/// Only a complete, latest terminal turn can wait for ordinary-language feedback.
+/// Bounded tail reads also make polling large sessions inexpensive.
+pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>> {
+    if crate::codex::rollout_file::is_compressed(path) {
+        let metadata = fs::metadata(path)?;
+        let mut reader = std::io::BufReader::new(crate::codex::rollout_file::open_reader(path)?);
+        let mut state = PendingFeedbackScanState::default();
+        let mut buf = Vec::new();
+        let mut saw_any = false;
+        loop {
+            buf.clear();
+            let read = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)?;
+            if read == 0 {
+                break;
+            }
+            saw_any = true;
+            let Some(line) = buf.strip_suffix(b"\n") else {
+                return Ok(None);
+            };
+            if !state.feed_line(line) {
+                return Ok(None);
+            }
+        }
+        if !saw_any {
+            return Ok(None);
+        }
+        let after = fs::metadata(path)?;
+        if metadata.len() != after.len() || metadata.modified()? != after.modified()? {
+            return Ok(None);
+        }
+        return Ok(state.finish());
+    }
+
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
+    let size = metadata.len();
+    let start = size.saturating_sub(2 * 1024 * 1024);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if !bytes.ends_with(b"\n") {
+        return Ok(None);
+    }
+    if start > 0 {
+        let Some(end) = bytes.iter().position(|b| *b == b'\n') else {
+            return Ok(None);
+        };
+        bytes.drain(..=end);
+    }
+    let mut state = PendingFeedbackScanState::default();
+    for raw_line in bytes.split(|&b| b == b'\n') {
+        if !state.feed_line(raw_line) {
+            return Ok(None);
         }
     }
     let after = fs::metadata(path)?;
     if metadata.len() != after.len() || metadata.modified()? != after.modified()? {
         return Ok(None);
     }
-    if !pending.is_empty() {
-        return Ok(None);
+    Ok(state.finish())
+}
+
+enum RequestUserInputLineStep {
+    Continue,
+    ReturnAsync,
+    ReturnResolved,
+}
+
+fn step_request_user_input_line(
+    line: &str,
+    turn_id: &str,
+    call_id: &str,
+    found_call: &mut bool,
+    turn_context: &mut Option<String>,
+) -> RequestUserInputLineStep {
+    let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+        return RequestUserInputLineStep::Continue;
+    };
+    normalize_canonical_turn(&mut value, turn_context);
+    if !*found_call {
+        if is_request_user_input(&value)
+            && event_turn_id(&value).as_deref() == Some(turn_id)
+            && event_call_id(&value).as_deref() == Some(call_id)
+        {
+            if super::super::user_input::question_tool(&value)
+                .is_some_and(super::super::is_async_question_tool)
+            {
+                return RequestUserInputLineStep::ReturnAsync;
+            }
+            *found_call = true;
+        }
+        return RequestUserInputLineStep::Continue;
     }
-    let Some((turn_id, completed_at_ms)) = completed else {
-        return Ok(None);
-    };
-    let Some(body) = final_reply
-        .as_deref()
-        .and_then(super::super::assistant_feedback_request)
-    else {
-        return Ok(None);
-    };
-    Ok(Some(AssistantFeedback {
-        turn_id,
-        body,
-        completed_at_ms,
-    }))
+    if request_user_input_resolution_matches(&value, turn_id, call_id) {
+        return RequestUserInputLineStep::ReturnResolved;
+    }
+    RequestUserInputLineStep::Continue
+}
+
+fn resolve_async_question_call_state(
+    path: &Path,
+    turn_id: &str,
+    call_id: &str,
+) -> Result<RolloutRequestUserInputState> {
+    Ok(super::super::rollout_async_questions(path)?
+        .iter()
+        .find(|call| call.turn_id == turn_id && call.call_id == call_id)
+        .map(|call| {
+            if call.pending().is_some() {
+                RolloutRequestUserInputState::Pending
+            } else {
+                RolloutRequestUserInputState::Resolved
+            }
+        })
+        .unwrap_or(RolloutRequestUserInputState::Missing))
 }
 
 pub fn rollout_request_user_input_state(
@@ -794,61 +883,76 @@ pub fn rollout_request_user_input_state(
         return Ok(RolloutRequestUserInputState::Missing);
     }
 
-    let Ok(mut file) = File::open(path) else {
-        return Ok(RolloutRequestUserInputState::Missing);
-    };
-    let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
-        return Ok(RolloutRequestUserInputState::Missing);
-    };
-    let start = size.saturating_sub(REQUEST_USER_INPUT_TAIL_MAX_BYTES);
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return Ok(RolloutRequestUserInputState::Missing);
-    }
-    let mut tail =
-        Vec::with_capacity((size - start).min(REQUEST_USER_INPUT_TAIL_MAX_BYTES) as usize);
-    if file.read_to_end(&mut tail).is_err() {
-        return Ok(RolloutRequestUserInputState::Missing);
-    }
-    if start > 0 {
-        let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') else {
-            return Ok(RolloutRequestUserInputState::Missing);
-        };
-        tail.drain(..=first_newline);
-    }
-
     let mut found_call = false;
     let mut turn_context = None;
-    for line in String::from_utf8_lossy(&tail).lines() {
-        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
-            continue;
+    if crate::codex::rollout_file::is_compressed(path) {
+        let Ok(reader) = crate::codex::rollout_file::open_reader(path) else {
+            return Ok(RolloutRequestUserInputState::Missing);
         };
-        normalize_canonical_turn(&mut value, &mut turn_context);
-        if !found_call {
-            if is_request_user_input(&value)
-                && event_turn_id(&value).as_deref() == Some(turn_id)
-                && event_call_id(&value).as_deref() == Some(call_id)
-            {
-                if super::super::user_input::question_tool(&value)
-                    .is_some_and(super::super::is_async_question_tool)
-                {
-                    return Ok(super::super::rollout_async_questions(path)?
-                        .iter()
-                        .find(|call| call.turn_id == turn_id && call.call_id == call_id)
-                        .map(|call| {
-                            if call.pending().is_some() {
-                                RolloutRequestUserInputState::Pending
-                            } else {
-                                RolloutRequestUserInputState::Resolved
-                            }
-                        })
-                        .unwrap_or(RolloutRequestUserInputState::Missing));
-                }
-                found_call = true;
+        let mut reader = std::io::BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match std::io::BufRead::read_line(&mut reader, &mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => return Ok(RolloutRequestUserInputState::Missing),
             }
-            continue;
+            match step_request_user_input_line(
+                &line,
+                turn_id,
+                call_id,
+                &mut found_call,
+                &mut turn_context,
+            ) {
+                RequestUserInputLineStep::Continue => {}
+                RequestUserInputLineStep::ReturnAsync => {
+                    return resolve_async_question_call_state(path, turn_id, call_id);
+                }
+                RequestUserInputLineStep::ReturnResolved => {
+                    return Ok(RolloutRequestUserInputState::Resolved);
+                }
+            }
         }
-        if request_user_input_resolution_matches(&value, turn_id, call_id) {
-            return Ok(RolloutRequestUserInputState::Resolved);
+    } else {
+        let Ok(mut file) = File::open(path) else {
+            return Ok(RolloutRequestUserInputState::Missing);
+        };
+        let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
+            return Ok(RolloutRequestUserInputState::Missing);
+        };
+        let start = size.saturating_sub(REQUEST_USER_INPUT_TAIL_MAX_BYTES);
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return Ok(RolloutRequestUserInputState::Missing);
+        }
+        let mut tail =
+            Vec::with_capacity((size - start).min(REQUEST_USER_INPUT_TAIL_MAX_BYTES) as usize);
+        if file.read_to_end(&mut tail).is_err() {
+            return Ok(RolloutRequestUserInputState::Missing);
+        }
+        if start > 0 {
+            let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') else {
+                return Ok(RolloutRequestUserInputState::Missing);
+            };
+            tail.drain(..=first_newline);
+        }
+
+        for line in String::from_utf8_lossy(&tail).lines() {
+            match step_request_user_input_line(
+                line,
+                turn_id,
+                call_id,
+                &mut found_call,
+                &mut turn_context,
+            ) {
+                RequestUserInputLineStep::Continue => {}
+                RequestUserInputLineStep::ReturnAsync => {
+                    return resolve_async_question_call_state(path, turn_id, call_id);
+                }
+                RequestUserInputLineStep::ReturnResolved => {
+                    return Ok(RolloutRequestUserInputState::Resolved);
+                }
+            }
         }
     }
 

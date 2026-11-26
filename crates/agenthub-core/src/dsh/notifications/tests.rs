@@ -338,11 +338,13 @@ fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn cumulative_decoded_frames_match_incremental_and_cold_reads() {
+fn assert_cumulative_decoded_frames_match_incremental_and_cold_reads(
+    padding_len: usize,
+    frame_limit: u64,
+) {
     let f = FileFixture::new("jsonl.zstd");
     let rows = lines();
-    let padding = "x".repeat(1024 * 1024);
+    let padding = "x".repeat(padding_len);
     let frame = |first: bool| {
         let mut records = Vec::new();
         if first {
@@ -350,16 +352,26 @@ fn cumulative_decoded_frames_match_incremental_and_cold_reads() {
             records.extend_from_slice(&rows[1]);
         }
         for seq in if first { 1..66 } else { 66..131 } {
-            writeln!(records, "{}", json!({"type":"assistant/attempt","seq":seq,"time":1800000000000_i64,"data":{"diagnostic":padding}})).unwrap();
+            writeln!(
+                records,
+                "{}",
+                json!({"type":"assistant/attempt","seq":seq,"time":1800000000000_i64,"data":{"diagnostic":padding}})
+            )
+            .unwrap();
         }
         if !first {
-            writeln!(records, "{}", json!({"type":"turn/end","seq":131,"time":1800000001000_i64,"data":{"turn":1,"reason":{"kind":"completed"}}})).unwrap();
+            writeln!(
+                records,
+                "{}",
+                json!({"type":"turn/end","seq":131,"time":1800000001000_i64,"data":{"turn":1,"reason":{"kind":"completed"}}})
+            )
+            .unwrap();
         }
         zstd::stream::encode_all(records.as_slice(), 1).unwrap()
     };
-    // Individual frames/records obey their limits; cumulative decoded size is over 128 MiB.
+    // Individual frames/records obey frame_limit; cumulative decoded size exceeds frame_limit.
     fs::write(&f.0, frame(true)).unwrap();
-    assert!(read(&f.0, "fixture", "p/fixture")
+    assert!(read_with_limit(&f.0, "fixture", "p/fixture", frame_limit)
         .unwrap()
         .unwrap()
         .events
@@ -370,9 +382,25 @@ fn cumulative_decoded_frames_match_incremental_and_cold_reads() {
         .unwrap()
         .write_all(&frame(false))
         .unwrap();
-    let incremental = read(&f.0, "fixture", "p/fixture").unwrap().unwrap();
+    let incremental = read_with_limit(&f.0, "fixture", "p/fixture", frame_limit)
+        .unwrap()
+        .unwrap();
     evict_idle_cache(std::time::Duration::ZERO);
-    let cold = read(&f.0, "fixture", "p/fixture").unwrap().unwrap();
+    let cold = read_with_limit(&f.0, "fixture", "p/fixture", frame_limit)
+        .unwrap()
+        .unwrap();
     assert_eq!(incremental.events, cold.events);
     assert_eq!(cold.events.len(), 1);
+}
+
+#[test]
+fn cumulative_decoded_frames_match_incremental_and_cold_reads() {
+    // 65 * ~1 KiB = ~70 KiB per frame; 2 frames = ~140 KiB > 96 KiB frame_limit.
+    assert_cumulative_decoded_frames_match_incremental_and_cold_reads(1024, 96 * 1024);
+}
+
+#[test]
+#[ignore]
+fn cumulative_128_mib_decoded_frames_match_incremental_and_cold_reads() {
+    assert_cumulative_decoded_frames_match_incremental_and_cold_reads(1024 * 1024, FILE_LIMIT);
 }

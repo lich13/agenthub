@@ -3,13 +3,13 @@ import Foundation
 
 // MARK: - Unified Reader Row Item Across All 6 Providers
 
-public enum ConversationRowKind: Equatable, Sendable {
+enum ConversationRowKind: Equatable, Sendable {
     case user(message: UserMessageContent?, rawText: String, attachmentsAsNamesOnly: Bool)
     case assistant(markdown: String, foldInstructions: Bool)
     case executionGroup(ExecutionGroup)
     case processGroup(UnifiedProcessGroup)
-    case claudeProcessGroup(ClaudeProcessGroup, title: String)
-    case claudeMetadataGroup(ClaudeMetadataGroup, title: String)
+    case claudeProcessGroup(ClaudeProcessGroup)
+    case claudeMetadataGroup(ClaudeMetadataGroup)
     case thinking(title: String, text: String, running: Bool)
     case plan(markdown: String, statusText: String, fallbackTitle: String)
     case question(header: String, questions: [UserInputQuestion])
@@ -19,13 +19,13 @@ public enum ConversationRowKind: Equatable, Sendable {
     case systemNotice(label: String, detail: String)
 }
 
-public struct ConversationRowItem: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var timelineId: String
-    public var timelineAliases: [String]
-    public var kind: ConversationRowKind
+struct ConversationRowItem: Equatable, Sendable, Identifiable {
+    var id: String
+    var timelineId: String
+    var timelineAliases: [String]
+    var kind: ConversationRowKind
 
-    public init(
+    init(
         id: String,
         timelineId: String? = nil,
         timelineAliases: [String] = [],
@@ -34,20 +34,41 @@ public struct ConversationRowItem: Equatable, Sendable, Identifiable {
         self.id = id
         self.timelineId = timelineId ?? id
         self.timelineAliases = timelineAliases
-        self.kind = kind
+        switch kind {
+        case let .assistant(markdown, foldInstructions):
+            self.kind = .assistant(
+                markdown: VisibleMarkdownEngine.visibleMarkdown(markdown),
+                foldInstructions: foldInstructions
+            )
+        case let .plan(markdown, statusText, fallbackTitle):
+            let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
+            self.kind = .plan(
+                markdown: cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "暂无计划内容" : cleaned,
+                statusText: statusText,
+                fallbackTitle: fallbackTitle
+            )
+        case let .thinking(title, text, running):
+            self.kind = .thinking(
+                title: title,
+                text: VisibleMarkdownEngine.visibleMarkdown(text),
+                running: running
+            )
+        default:
+            self.kind = kind
+        }
     }
 
-    public func matches(positionKey: String?) -> Bool {
+    func matches(positionKey: String?) -> Bool {
         TimelineViewModel.matchesTimelinePosition(positionKey, id: timelineId, aliases: timelineAliases)
     }
 }
 
-public enum ConversationRowBuilder {
+enum ConversationRowBuilder {
     private static func executionTimelineAliases(_ group: ExecutionGroup) -> [String] {
         ProcessGroupingEngine.uniqueStrings(group.stateAliases + group.commands.flatMap { [$0.id] + $0.sourceIds })
     }
 
-    public static func buildCodexRows(
+    static func buildCodexRows(
         blocks: [MessageBlock],
         showAllHistory: Bool,
         planFallbackTitle: String,
@@ -193,7 +214,7 @@ public enum ConversationRowBuilder {
         return rows
     }
 
-    public static func buildClaudeRows(
+    static func buildClaudeRows(
         events: [ClaudeHistoryEvent],
         recordedOnly: Bool = false,
         attachmentsAsNamesOnly: Bool = false,
@@ -264,7 +285,7 @@ public enum ConversationRowBuilder {
                         id: proc.id,
                         timelineId: proc.id,
                         timelineAliases: ProcessGroupingEngine.uniqueStrings(proc.sourceIds + procIdAliases + innerCmdAliases),
-                        kind: .claudeProcessGroup(proc, title: fallbackTitle)
+                        kind: .claudeProcessGroup(proc)
                     ))
                 case let .metadata(meta):
                     rows.append(ConversationRowItem(
@@ -273,7 +294,7 @@ public enum ConversationRowBuilder {
                         timelineAliases: ProcessGroupingEngine.uniqueStrings(
                             meta.sourceIds + meta.sourceIds.map { "claude-metadata:\($0)" }
                         ),
-                        kind: .claudeMetadataGroup(meta, title: fallbackTitle)
+                        kind: .claudeMetadataGroup(meta)
                     ))
                 case let .group(group):
                     rows.append(ConversationRowItem(
@@ -357,7 +378,7 @@ public enum ConversationRowBuilder {
         }
     }
 
-    public static func buildGrokRows(events: [GrokHistoryEvent], fallbackTitle: String, sessionRunning: Bool = false) -> [ConversationRowItem] {
+    static func buildGrokRows(events: [GrokHistoryEvent], fallbackTitle: String, sessionRunning: Bool = false) -> [ConversationRowItem] {
         let grouped = ExecutionGroupingEngine.groupGrokEvents(events)
         let lastIndex = grouped.count - 1
         let folded = ProcessGroupingEngine.foldProcessSequenceIndexed(prefix: "grok", items: grouped) { idx, entry in
@@ -424,7 +445,7 @@ public enum ConversationRowBuilder {
         return rows
     }
 
-    public static func buildProviderRows(
+    static func buildProviderRows(
         events: [ProviderHistoryEvent],
         providerLabel: String,
         sessionRunning: Bool = false,
@@ -540,30 +561,30 @@ public enum ConversationRowBuilder {
 // MARK: - 96x96pt User Image Thumbnail Viewport Manager (±240pt Load & Eviction)
 
 @MainActor
-public final class AttachmentViewportManager {
-    public static let viewportMargin: CGFloat = 240
+final class AttachmentViewportManager {
+    static let viewportMargin: CGFloat = 240
     private var loadedImages: [String: NSImage] = [:]
     private var inFlightTasks: [String: (token: UInt64, task: Task<Void, Never>)] = [:]
     private var nextTaskToken: UInt64 = 0
     private var activeScopeKey: String = ""
-    public var onImageUpdated: ((String) -> Void)?
+    var onImageUpdated: ((String) -> Void)?
 
-    public init() {}
+    init() {}
 
-    public func image(for key: String) -> NSImage? {
+    func image(for key: String) -> NSImage? {
         loadedImages[key]
     }
 
-    public var loadedCount: Int { loadedImages.count }
-    public var inFlightCount: Int { inFlightTasks.count }
+    var loadedCount: Int { loadedImages.count }
+    var inFlightCount: Int { inFlightTasks.count }
 
-    public func resetScope(_ scopeKey: String) {
+    func resetScope(_ scopeKey: String) {
         guard activeScopeKey != scopeKey else { return }
         activeScopeKey = scopeKey
         cancelAll()
     }
 
-    public func cancelAll() {
+    func cancelAll() {
         for entry in inFlightTasks.values {
             entry.task.cancel()
         }
@@ -571,7 +592,7 @@ public final class AttachmentViewportManager {
         loadedImages.removeAll()
     }
 
-    public func evictOutside(visibleKeys: Set<String>) {
+    func evictOutside(visibleKeys: Set<String>) {
         let keysToDrop = loadedImages.keys.filter { !visibleKeys.contains($0) }
         for k in keysToDrop {
             loadedImages.removeValue(forKey: k)
@@ -582,7 +603,7 @@ public final class AttachmentViewportManager {
         }
     }
 
-    public func ensureLoaded(
+    func ensureLoaded(
         key: String,
         request: SessionAttachmentRequest,
         store: RuntimeConnectionStore
@@ -599,10 +620,9 @@ public final class AttachmentViewportManager {
                     self.inFlightTasks.removeValue(forKey: key)
                 }
             }
-            struct ReqWrap: Encodable { let request: SessionAttachmentRequest }
             guard let resp: SessionAttachmentResponse = try? await store.rpc(
                 "sessions.attachmentRead",
-                args: ReqWrap(request: request), at: sourceRevision
+                args: RPCRequestEnvelope(request: request), at: sourceRevision
             ),
                 !Task.isCancelled,
                 self.inFlightTasks[key]?.token == token,
@@ -617,21 +637,21 @@ public final class AttachmentViewportManager {
         inFlightTasks[key] = (token, task)
     }
 
-    public func injectForTesting(key: String, image: NSImage) {
+    func injectForTesting(key: String, image: NSImage) {
         loadedImages[key] = image
     }
 }
 
 // MARK: - Selectable Read-Only NSTextView for Natural Prose Selection
 
-public final class ReaderSelectableTextView: NSTextView {
-    public var onLinkActivated: ((String) -> Bool)?
-    public var onFocusStateChanged: (() -> Void)?
-    public var quoteBackgroundColor: NSColor?
-    public var quoteAccentColor: NSColor?
+final class ReaderSelectableTextView: NSTextView {
+    var onLinkActivated: ((String) -> Bool)?
+    var onFocusStateChanged: (() -> Void)?
+    var quoteBackgroundColor: NSColor?
+    var quoteAccentColor: NSColor?
     private var ownedTextStorage: NSTextStorage?
 
-    override public init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         if let container {
             self.ownedTextStorage = container.layoutManager?.textStorage
             super.init(frame: frameRect, textContainer: container)
@@ -652,7 +672,7 @@ public final class ReaderSelectableTextView: NSTextView {
         configureReaderTextView()
     }
 
-    override public convenience init(frame frameRect: NSRect) {
+    override convenience init(frame frameRect: NSRect) {
         self.init(frame: frameRect, textContainer: nil)
     }
 
@@ -661,11 +681,11 @@ public final class ReaderSelectableTextView: NSTextView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    public convenience init() {
+    convenience init() {
         self.init(frame: NSRect(x: 0, y: 0, width: 200, height: 24), textContainer: nil)
     }
 
-    public func applyAttributedText(_ attributed: NSAttributedString, width: CGFloat? = nil) {
+    func applyAttributedText(_ attributed: NSAttributedString, width: CGFloat? = nil) {
         if let width, width > 1 {
             textContainer?.containerSize = NSSize(
                 width: max(1, width - textContainerInset.width * 2),
@@ -679,7 +699,7 @@ public final class ReaderSelectableTextView: NSTextView {
         needsDisplay = true
     }
 
-    public func measuredUsedHeight() -> CGFloat {
+    func measuredUsedHeight() -> CGFloat {
         guard let manager = layoutManager, let container = textContainer else { return 22 }
         manager.ensureLayout(for: container)
         return ceil(manager.usedRect(for: container).height)
@@ -706,7 +726,7 @@ public final class ReaderSelectableTextView: NSTextView {
         isHorizontallyResizable = false
     }
 
-    override public func setFrameSize(_ newSize: NSSize) {
+    override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         if newSize.width > 1, let container = textContainer {
             let targetW = max(1, newSize.width - textContainerInset.width * 2)
@@ -720,19 +740,19 @@ public final class ReaderSelectableTextView: NSTextView {
         }
     }
 
-    override public func becomeFirstResponder() -> Bool {
+    override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok { onFocusStateChanged?() }
         return ok
     }
 
-    override public func resignFirstResponder() -> Bool {
+    override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         if ok { onFocusStateChanged?() }
         return ok
     }
 
-    override public func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         let range = selectedRange()
         guard range.length > 0, let storage = textStorage, NSMaxRange(range) <= storage.length else {
             return super.writeSelection(to: pboard, types: types)
@@ -800,7 +820,7 @@ public final class ReaderSelectableTextView: NSTextView {
         return path
     }
 
-    override public func drawBackground(in rect: NSRect) {
+    override func drawBackground(in rect: NSRect) {
         if let storage = textStorage,
            storage.length > 0,
            let manager = layoutManager,
@@ -808,10 +828,22 @@ public final class ReaderSelectableTextView: NSTextView {
         {
             let origin = textContainerOrigin
             let fullRange = NSRange(location: 0, length: storage.length)
+            let dirtyContainerRect = rect.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -8, dy: -12)
+            let visibleGlyphs = manager.glyphRange(forBoundingRect: dirtyContainerRect, in: container)
+            let rawCharRange = manager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+            let visibleCharRange = NSIntersectionRange(fullRange, rawCharRange)
+            guard visibleCharRange.length > 0 else {
+                super.drawBackground(in: rect)
+                return
+            }
 
             // 1) Blockquote card (0 10px 10px 0 radius + 3pt solid --a left bar)
-            storage.enumerateAttribute(.agentHubBlockQuote, in: fullRange, options: []) { value, charRange, _ in
-                guard (value as? Bool) == true, charRange.length > 0 else { return }
+            var visitedQuoteStarts = Set<Int>()
+            storage.enumerateAttribute(.agentHubBlockQuote, in: visibleCharRange, options: []) { value, subRange, _ in
+                guard (value as? Bool) == true, subRange.length > 0 else { return }
+                var charRange = subRange
+                _ = storage.attribute(.agentHubBlockQuote, at: subRange.location, longestEffectiveRange: &charRange, in: fullRange)
+                guard visitedQuoteStarts.insert(charRange.location).inserted else { return }
                 let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
                 let bbox = manager.boundingRect(forGlyphRange: glyphRange, in: container)
                 guard bbox.height > 0 else { return }
@@ -821,6 +853,7 @@ public final class ReaderSelectableTextView: NSTextView {
                     width: max(20, bounds.width - origin.x),
                     height: bbox.height + 6
                 )
+                guard bgRect.intersects(rect) else { return }
                 if let fill = quoteBackgroundColor {
                     fill.setFill()
                     Self.horizontalRoundedRectPath(bgRect, leftRadius: 0, rightRadius: 10).fill()
@@ -835,8 +868,12 @@ public final class ReaderSelectableTextView: NSTextView {
             let unselected = NSRange(location: NSNotFound, length: 0)
             let nsText = storage.string as NSString
             let viewBounds = bounds
-            storage.enumerateAttribute(.agentHubInlineCode, in: fullRange, options: []) { value, charRange, _ in
-                guard let pillColor = value as? NSColor, charRange.length > 0 else { return }
+            var visitedCodeStarts = Set<Int>()
+            storage.enumerateAttribute(.agentHubInlineCode, in: visibleCharRange, options: []) { value, subRange, _ in
+                guard let pillColor = value as? NSColor, subRange.length > 0 else { return }
+                var charRange = subRange
+                _ = storage.attribute(.agentHubInlineCode, at: subRange.location, longestEffectiveRange: &charRange, in: fullRange)
+                guard visitedCodeStarts.insert(charRange.location).inserted else { return }
                 let glyphRange = manager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
                 guard glyphRange.length > 0 else { return }
 
@@ -859,8 +896,11 @@ public final class ReaderSelectableTextView: NSTextView {
                 }
 
                 pillColor.setFill()
-                manager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, lineContainer, lineGlyphRange, _ in
+                let clippedSpanGlyphs = NSIntersectionRange(glyphRange, visibleGlyphs)
+                guard clippedSpanGlyphs.length > 0 else { return }
+                manager.enumerateLineFragments(forGlyphRange: clippedSpanGlyphs) { lineRect, _, lineContainer, lineGlyphRange, _ in
                     guard lineContainer === container else { return }
+                    guard origin.y + lineRect.maxY + 6 >= rect.minY, origin.y + lineRect.minY - 6 <= rect.maxY else { return }
                     var subGlyphRange = NSIntersectionRange(glyphRange, lineGlyphRange)
                     guard subGlyphRange.length > 0 else { return }
 
@@ -958,7 +998,7 @@ public final class ReaderSelectableTextView: NSTextView {
         super.drawBackground(in: rect)
     }
 
-    override public func clicked(onLink link: Any, at charIndex: Int) {
+    override func clicked(onLink link: Any, at charIndex: Int) {
         let href: String = if let url = link as? URL {
             url.absoluteString
         } else if let s = link as? String {
@@ -982,7 +1022,7 @@ public final class ReaderSelectableTextView: NSTextView {
         return (storage, container, manager)
     }()
 
-    public static func measureHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
+    static func measureHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
         guard attributed.length > 0, width > 1 else { return 0 }
         let (storage, container, manager) = scratchMeasureStack
         defer {

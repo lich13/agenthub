@@ -4,12 +4,12 @@ import SwiftUI
 // MARK: - AppKit NSTableView Coordinator with Deterministic 0.0pt Scroll Anchor Lock
 
 @MainActor
-public final class ConversationRowCellView: NSTableCellView {
+final class ConversationRowCellView: NSTableCellView {
     let containerStack = NSStackView()
-    public private(set) var floatingSideCopyButton: IconFeedbackActionButton?
-    public private(set) var questionReplyCopyButtons: [IconFeedbackActionButton] = []
+    private(set) var floatingSideCopyButton: IconFeedbackActionButton?
+    private(set) var questionReplyCopyButtons: [IconFeedbackActionButton] = []
     private var hoverTrackingArea: NSTrackingArea?
-    public private(set) var isRowHovered: Bool = false {
+    private(set) var isRowHovered: Bool = false {
         didSet { updateFloatingCopyVisibility() }
     }
     private var configuredLeadingInset: CGFloat = 0
@@ -30,8 +30,9 @@ public final class ConversationRowCellView: NSTableCellView {
     }
 
     private var lastConfiguredSignature: CellConfigSignature?
+    var cachedRowId: String?
 
-    public init(identifier: NSUserInterfaceItemIdentifier) {
+    init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
         clipsToBounds = false
@@ -52,7 +53,7 @@ public final class ConversationRowCellView: NSTableCellView {
     /// Computes X origin for the 30x30pt floating reply copy button:
     /// `right: -36pt` relative to the `768pt` content column (`leadingInset + contentWidth + 6`),
     /// clamped inside viewport (`cellWidth - 34`) on narrow widths.
-    public static func floatingSideCopyButtonX(
+    static func floatingSideCopyButtonX(
         leadingInset: CGFloat,
         contentWidth: CGFloat,
         cellWidth: CGFloat
@@ -61,7 +62,7 @@ public final class ConversationRowCellView: NSTableCellView {
         return max(8, min(max(8, cellWidth - 34), desired))
     }
 
-    override public func updateTrackingAreas() {
+    override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTrackingArea {
             removeTrackingArea(hoverTrackingArea)
@@ -76,15 +77,15 @@ public final class ConversationRowCellView: NSTableCellView {
         hoverTrackingArea = area
     }
 
-    override public func mouseEntered(with event: NSEvent) {
+    override func mouseEntered(with event: NSEvent) {
         isRowHovered = true
     }
 
-    override public func mouseExited(with event: NSEvent) {
+    override func mouseExited(with event: NSEvent) {
         isRowHovered = false
     }
 
-    override public func layout() {
+    override func layout() {
         super.layout()
         positionFloatingCopyButton()
     }
@@ -103,7 +104,7 @@ public final class ConversationRowCellView: NSTableCellView {
         updateFloatingCopyVisibility()
     }
 
-    public func setSimulatedHoverForTesting(_ hovered: Bool) {
+    func setSimulatedHoverForTesting(_ hovered: Bool) {
         isRowHovered = hovered
     }
 
@@ -122,7 +123,7 @@ public final class ConversationRowCellView: NSTableCellView {
         }
     }
 
-    public func configure(
+    func configure(
         item: ConversationRowItem,
         leadingInset: CGFloat,
         trailingInset: CGFloat,
@@ -176,8 +177,15 @@ public final class ConversationRowCellView: NSTableCellView {
         case let .user(msg, rawText, namesOnly):
             buildUserView(item: item, msg: msg, rawText: rawText, namesOnly: namesOnly, width: contentWidth, coordinator: coordinator)
         case let .assistant(markdown, foldInstructions):
-            buildMarkdownViews(ownerId: item.id, markdown: markdown, foldInstructions: foldInstructions, width: contentWidth, coordinator: coordinator)
-            let cleanedReply = VisibleMarkdownEngine.visibleMarkdown(markdown)
+            buildMarkdownViews(
+                ownerId: item.id,
+                markdown: markdown,
+                foldInstructions: foldInstructions,
+                width: contentWidth,
+                coordinator: coordinator,
+                alreadyCleaned: true
+            )
+            let cleanedReply = markdown
             if !cleanedReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let floatBtn = IconFeedbackActionButton(
                     dimension: 30,
@@ -202,9 +210,9 @@ public final class ConversationRowCellView: NSTableCellView {
             buildExecutionGroupView(group: group, width: contentWidth, coordinator: coordinator)
         case let .processGroup(proc):
             buildProcessGroupView(proc: proc, width: contentWidth, coordinator: coordinator)
-        case let .claudeProcessGroup(proc, _):
+        case let .claudeProcessGroup(proc):
             buildClaudeProcessGroupView(proc: proc, width: contentWidth, coordinator: coordinator)
-        case let .claudeMetadataGroup(meta, _):
+        case let .claudeMetadataGroup(meta):
             buildClaudeMetadataGroupView(meta: meta, width: contentWidth, coordinator: coordinator)
         case let .thinking(title, text, running):
             buildThinkingView(
@@ -432,6 +440,9 @@ public final class ConversationRowCellView: NSTableCellView {
                     let targetInnerW = min(availBubbleTextW, max(computedAnsW, qSingleWidth))
 
                     let qHeaderBox = ActionRowContainerView()
+                    qHeaderBox.focusRingColor = palette.accent.nsColor
+                    qHeaderBox.accessibilityExpandedState = qOpen
+                    qHeaderBox.setAccessibilityLabel(trimmedQ)
                     qHeaderBox.translatesAutoresizingMaskIntoConstraints = false
                     qHeaderBox.onTap = { [weak coordinator] in
                         coordinator?.toggleDisclosurePreservingAnchor(stateKey: qKey, aliases: qAliases, currentlyOpen: qOpen)
@@ -522,7 +533,7 @@ public final class ConversationRowCellView: NSTableCellView {
         bubble.translatesAutoresizingMaskIntoConstraints = false
         bubble.wantsLayer = true
         bubble.layer?.cornerRadius = 20
-        bubble.layer?.backgroundColor = palette.surface.nsColor.cgColor
+        bubble.layer?.backgroundColor = palette.userBubble.nsColor.cgColor
         bubble.layer?.borderWidth = 1
         bubble.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
         return bubble
@@ -546,6 +557,9 @@ public final class ConversationRowCellView: NSTableCellView {
         card.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
 
         let header = ActionRowContainerView()
+        header.focusRingColor = palette.accent.nsColor
+        header.accessibilityExpandedState = open
+        header.setAccessibilityLabel("上下文")
         header.translatesAutoresizingMaskIntoConstraints = false
         header.onTap = { [weak coordinator] in
             coordinator?.toggleDisclosurePreservingAnchor(stateKey: stateKey, aliases: aliases, currentlyOpen: open)
@@ -739,7 +753,7 @@ public final class ConversationRowCellView: NSTableCellView {
         coordinator: ConversationTableCoordinator
     ) {
         let palette = coordinator.palette
-        let cleanedPlan = VisibleMarkdownEngine.visibleMarkdown(markdown)
+        let cleanedPlan = markdown
 
         let planCard = NSView()
         planCard.wantsLayer = true
@@ -799,11 +813,10 @@ public final class ConversationRowCellView: NSTableCellView {
             guard let coordinator else { return }
             let filename = FileLinksAndPlanExport.planFilename(markdown: cleanedPlan, fallbackTitle: fallbackTitle)
             Task { @MainActor in
-                struct Wrap: Encodable { let request: PlanSaveRequest }
                 do {
                     let _: PlanSaveResult = try await coordinator.store.rpc(
                         "plans.save",
-                        args: Wrap(request: PlanSaveRequest(filename: filename, markdown: cleanedPlan)),
+                        args: RPCRequestEnvelope(request: PlanSaveRequest(filename: filename, markdown: cleanedPlan)),
                         localOnly: true
                     )
                     coordinator.onCopyFeedback?("已保存到下载文件夹")
@@ -825,7 +838,8 @@ public final class ConversationRowCellView: NSTableCellView {
             foldInstructions: false,
             scheme: coordinator.scheme,
             workspace: coordinator.workspace,
-            transport: coordinator.store.transport
+            transport: coordinator.store.transport,
+            alreadyCleaned: true
         )
         for seg in segs {
             switch seg {
@@ -1039,7 +1053,7 @@ public final class ConversationRowCellView: NSTableCellView {
         containerStack.addArrangedSubview(card)
     }
 
-    public static func subagentActivityVerb(_ sub: SubagentActivity) -> String {
+    static func subagentActivityVerb(_ sub: SubagentActivity) -> String {
         if let ek = sub.eventKind {
             switch ek {
             case "started": return "开始工作"
@@ -1081,7 +1095,10 @@ public final class ConversationRowCellView: NSTableCellView {
             open: false,
             isEnabled: available,
             hoverFill: palette.hover.nsColor.withAlphaComponent(0.5),
-            openFill: .clear
+            openFill: .clear,
+            focusRingColor: palette.accent.nsColor,
+            accessibilityExpanded: false,
+            accessibilityLabelText: sub.name
         )
         rowBox.clipsToBounds = false
         rowBox.toolTip = reason

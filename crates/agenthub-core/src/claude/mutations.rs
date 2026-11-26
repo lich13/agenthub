@@ -8,16 +8,7 @@ use std::{
 static MUTATIONS: Mutex<()> = Mutex::new(());
 
 fn open_regular(path: &Path) -> Result<fs::File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path)?;
-    ensure!(file.metadata()?.is_file(), "Claude 专属内容不是普通文件");
-    Ok(file)
+    crate::file_stamp::open_regular_nofollow(path)
 }
 fn checked_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
     let root = paths.projects.canonicalize()?;

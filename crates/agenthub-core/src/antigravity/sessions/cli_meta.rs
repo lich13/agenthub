@@ -94,14 +94,7 @@ fn sql_int_or_text_ms(row: &rusqlite::Row<'_>, idx: usize) -> Option<i64> {
 }
 
 pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaRow> {
-    let Ok(mut col_stmt) = conn.prepare("PRAGMA table_info(conversations_fts)") else {
-        return BTreeMap::new();
-    };
-    let cols: BTreeSet<String> = col_stmt
-        .query_map([], |r| r.get::<_, String>(1))
-        .ok()
-        .map(|it| it.flatten().collect())
-        .unwrap_or_default();
+    let cols = crate::db::table_columns(conn, "conversations_fts").unwrap_or_default();
     if !cols.contains("conversation_id") || !cols.contains("chunk_index") {
         return BTreeMap::new();
     }
@@ -176,7 +169,88 @@ pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaR
     out
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct AuxIndexStamp {
+    has_conn: bool,
+    db: Option<SqliteStampPair>,
+    conv_meta: Option<FileStamp>,
+    last_conv: Option<FileStamp>,
+    sidecars: Vec<(PathBuf, FileStamp)>,
+}
+
+fn compute_aux_index_stamp(paths: &AntigravityPaths, has_conn: bool) -> AuxIndexStamp {
+    let db = has_conn
+        .then(|| FileStamp::sqlite_pair(&paths.summaries_db()))
+        .flatten();
+    let conv_meta_path = paths.home.join("cache/conversation_metadata.json");
+    let conv_meta = FileStamp::of_nofollow(&conv_meta_path);
+    let last_conv_path = paths.home.join("cache/last_conversations.json");
+    let last_conv = FileStamp::of_nofollow(&last_conv_path);
+    let mut sidecars = Vec::new();
+    let brain_dir = paths.brain_dir();
+    if brain_dir.is_dir() {
+        if let Ok(parents) = fs::read_dir(&brain_dir) {
+            for p_entry in parents.flatten() {
+                let pid = p_entry.file_name().to_string_lossy().into_owned();
+                if uuid::Uuid::parse_str(&pid).is_err() {
+                    continue;
+                }
+                let sub_dir = p_entry.path().join(".system_generated/subagents");
+                if !sub_dir.is_dir() {
+                    continue;
+                }
+                if let Ok(kids) = fs::read_dir(&sub_dir) {
+                    for k_entry in kids.flatten() {
+                        let k_path = k_entry.path();
+                        if k_path.extension().and_then(|s| s.to_str()) != Some("json") {
+                            continue;
+                        }
+                        if let Some(st) = FileStamp::of_nofollow(&k_path) {
+                            sidecars.push((k_path, st));
+                        }
+                    }
+                }
+            }
+        }
+        sidecars.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    AuxIndexStamp {
+        has_conn,
+        db,
+        conv_meta,
+        last_conv,
+        sidecars,
+    }
+}
+
+fn aux_index_weight(idx: &StoreAuxiliaryIndex) -> u64 {
+    256 + idx.fts_rows.len() as u64 * 160
+        + idx.conv_meta.len() as u64 * 192
+        + idx.last_conv_cwd.len() as u64 * 128
+        + idx.sidecar_children.len() as u64 * 96
+        + idx.sidecar_meta.len() as u64 * 96
+}
+
+static STORE_AUX_INDEX_CACHE: StampedCache<AuxIndexStamp, std::sync::Arc<StoreAuxiliaryIndex>> =
+    StampedCache::new(16, 8 * 1024 * 1024);
+
 pub(crate) fn load_store_auxiliary_index(
+    paths: &AntigravityPaths,
+    conn: Option<&Connection>,
+) -> std::sync::Arc<StoreAuxiliaryIndex> {
+    let stamp = compute_aux_index_stamp(paths, conn.is_some());
+    if let Some(cached) = STORE_AUX_INDEX_CACHE.get(&paths.home, &stamp) {
+        return cached;
+    }
+    let computed = std::sync::Arc::new(load_store_auxiliary_index_uncached(paths, conn));
+    if compute_aux_index_stamp(paths, conn.is_some()) == stamp {
+        let weight = aux_index_weight(&computed);
+        STORE_AUX_INDEX_CACHE.insert(paths.home.clone(), stamp, computed.clone(), weight);
+    }
+    computed
+}
+
+fn load_store_auxiliary_index_uncached(
     paths: &AntigravityPaths,
     conn: Option<&Connection>,
 ) -> StoreAuxiliaryIndex {
@@ -322,51 +396,12 @@ pub(crate) fn load_store_auxiliary_index(
     idx
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AntigravityFileStamp {
-    len: u64,
-    modified: Option<std::time::SystemTime>,
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
-}
+use crate::file_stamp::{FileStamp, StampedCache};
 
-impl AntigravityFileStamp {
-    pub(crate) fn of(path: &Path) -> Option<Self> {
-        let meta = fs::symlink_metadata(path).ok()?;
-        if !meta.is_file() {
-            return None;
-        }
-        #[cfg(unix)]
-        let identity = {
-            use std::os::unix::fs::MetadataExt;
-            (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-        };
-        Some(Self {
-            len: meta.len(),
-            modified: meta.modified().ok(),
-            #[cfg(unix)]
-            identity,
-        })
-    }
+type SqliteStampPair = (FileStamp, Option<FileStamp>);
 
-    pub(crate) fn sqlite_pair(db_path: &Path) -> Option<(Self, Option<Self>)> {
-        let main = Self::of(db_path)?;
-        let mut wal_os = db_path.as_os_str().to_os_string();
-        wal_os.push("-wal");
-        let wal = Self::of(&PathBuf::from(wal_os));
-        Some((main, wal))
-    }
-}
-
-type ConvDbMetaCacheEntry = (
-    (AntigravityFileStamp, Option<AntigravityFileStamp>),
-    Option<ConvDbMetadata>,
-    std::time::Instant,
-);
-
-static CONV_DB_META_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, ConvDbMetaCacheEntry>>,
-> = std::sync::Mutex::new(None);
+static CONV_DB_META_CACHE: StampedCache<SqliteStampPair, Option<ConvDbMetadata>> =
+    StampedCache::new(512, 4 * 1024 * 1024);
 
 #[derive(Clone)]
 struct CachedTranscriptPlanner {
@@ -412,56 +447,16 @@ struct CachedDbStepsTurnSummary {
     terminal_planner: Option<CachedDbPlanner>,
 }
 
-type OfflineTranscriptCacheEntry = (
-    AntigravityFileStamp,
-    Option<CachedTranscriptTurnSummary>,
-    std::time::Instant,
-);
-type OfflineDbStepsCacheEntry = (
-    (AntigravityFileStamp, Option<AntigravityFileStamp>),
-    Option<CachedDbStepsTurnSummary>,
-    std::time::Instant,
-);
-
-static OFFLINE_TRANSCRIPT_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, OfflineTranscriptCacheEntry>>,
-> = std::sync::Mutex::new(None);
-static OFFLINE_DB_STEPS_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, OfflineDbStepsCacheEntry>>,
-> = std::sync::Mutex::new(None);
-
-fn evict_stamped_map<V>(
-    slot: &std::sync::Mutex<Option<std::collections::HashMap<PathBuf, V>>>,
-    is_fresh: impl Fn(&V) -> bool,
-) -> bool {
-    let Ok(mut guard) = slot.lock() else {
-        return false;
-    };
-    let Some(map) = guard.as_mut() else {
-        return false;
-    };
-    let before = map.len();
-    map.retain(|_, v| is_fresh(v));
-    let evicted = map.len() < before;
-    if map.is_empty() {
-        *guard = None;
-    } else if map.capacity() > map.len().saturating_mul(4).max(32) {
-        map.shrink_to_fit();
-    }
-    evicted
-}
+static OFFLINE_TRANSCRIPT_CACHE: StampedCache<FileStamp, Option<CachedTranscriptTurnSummary>> =
+    StampedCache::new(512, 8 * 1024 * 1024);
+static OFFLINE_DB_STEPS_CACHE: StampedCache<SqliteStampPair, Option<CachedDbStepsTurnSummary>> =
+    StampedCache::new(512, 8 * 1024 * 1024);
 
 pub(crate) fn evict_idle_meta_cache(max_idle: std::time::Duration) {
-    let mut evicted = evict_stamped_map(&CONV_DB_META_CACHE, |(_, _, ts)| ts.elapsed() < max_idle);
-    evicted |= evict_stamped_map(&OFFLINE_TRANSCRIPT_CACHE, |(_, _, ts)| {
-        ts.elapsed() < max_idle
-    });
-    evicted |= evict_stamped_map(&OFFLINE_DB_STEPS_CACHE, |(_, _, ts)| {
-        ts.elapsed() < max_idle
-    });
-    if evicted {
-        crate::note_cache_eviction();
-    }
+    STORE_AUX_INDEX_CACHE.evict_idle(max_idle);
+    CONV_DB_META_CACHE.evict_idle(max_idle);
+    OFFLINE_TRANSCRIPT_CACHE.evict_idle(max_idle);
+    OFFLINE_DB_STEPS_CACHE.evict_idle(max_idle);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -493,37 +488,24 @@ pub(crate) fn inspect_conv_db_metadata_checked(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     }
-    let Some(stamp) = AntigravityFileStamp::sqlite_pair(&db_path) else {
+    let Some(stamp) = FileStamp::sqlite_pair(&db_path) else {
         return Ok(None);
     };
-    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
-        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&db_path))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return Ok(cached_val.clone());
-            }
-        }
+    if let Some(cached_val) = CONV_DB_META_CACHE.get(&db_path, &stamp) {
+        return Ok(cached_val);
     }
     let computed = inspect_conv_db_metadata_uncached(&db_path, id)?;
-    if AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&db_path) {
-                if let Some(oldest) = map
+    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        let weight = 192
+            + computed.as_ref().map_or(0, |m| {
+                m.parent_ids
                     .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(
-                db_path,
-                (stamp, computed.clone(), std::time::Instant::now()),
-            );
-        }
+                    .map(|p| 24 + p.len() as u64)
+                    .sum::<u64>()
+                    + m.root_id.as_ref().map_or(0, String::len) as u64
+                    + m.cwd.as_ref().map_or(0, String::len) as u64
+            });
+        CONV_DB_META_CACHE.insert(db_path, stamp, computed.clone(), weight);
     }
     Ok(computed)
 }
@@ -557,19 +539,16 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
     let has_table = |name: &str| -> bool { tables.contains(name) };
 
     if has_table("trajectory_metadata_blob") {
-        let cols: Vec<String> = {
-            let mut s = conn.prepare("PRAGMA table_info(trajectory_metadata_blob)")?;
-            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        let has_id = cols.iter().any(|c| c == "id");
-        let data_cols: Vec<&str> = cols
+        let cols = crate::db::table_columns(&conn, "trajectory_metadata_blob")?;
+        let has_id = cols.contains("id");
+        let mut data_cols: Vec<&str> = cols
             .iter()
             .map(String::as_str)
             .filter(|&c| c != "id")
             .collect();
+        data_cols.sort_unstable();
         let blob: Option<Vec<u8>> = if !data_cols.is_empty() {
-            let expr = if data_cols.contains(&"data") && data_cols.contains(&"blob") {
+            let expr = if cols.contains("data") && cols.contains("blob") {
                 "COALESCE(\"data\", \"blob\")".to_owned()
             } else {
                 format!("\"{}\"", data_cols[0])
@@ -615,13 +594,9 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
     }
 
     if has_table("parent_references") {
-        let cols: Vec<String> = {
-            let mut s = conn.prepare("PRAGMA table_info(parent_references)")?;
-            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
+        let cols = crate::db::table_columns(&conn, "parent_references")?;
         for candidate in ["parent_conversation_id", "parent_id", "conversation_id"] {
-            if cols.iter().any(|c| c == candidate) {
+            if cols.contains(candidate) {
                 let mut stmt =
                     conn.prepare(&format!("SELECT \"{candidate}\" FROM parent_references"))?;
                 let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
@@ -648,20 +623,12 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
     }
 
     if has_table("executor_metadata") {
-        let cols: Vec<String> = {
-            let mut s = conn.prepare("PRAGMA table_info(executor_metadata)")?;
-            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        if let Some(blob_col) = cols
-            .iter()
-            .find(|c| matches!(c.as_str(), "metadata" | "data" | "blob" | "payload"))
+        let cols = crate::db::table_columns(&conn, "executor_metadata")?;
+        if let Some(blob_col) = ["metadata", "data", "blob", "payload"]
+            .into_iter()
+            .find(|c| cols.contains(*c))
         {
-            let order_col = if cols.iter().any(|c| c == "idx") {
-                "idx"
-            } else {
-                "rowid"
-            };
+            let order_col = if cols.contains("idx") { "idx" } else { "rowid" };
             if let Some(raw) = conn
                 .query_row(
                     &format!(
@@ -953,34 +920,30 @@ fn inspect_offline_transcript_cached(
     let Some(chosen) = chosen else {
         return Ok(None);
     };
-    let Some(stamp) = AntigravityFileStamp::of(&chosen) else {
+    let Some(stamp) = FileStamp::of_nofollow(&chosen) else {
         return Ok(None);
     };
-    if let Ok(mut guard) = OFFLINE_TRANSCRIPT_CACHE.lock() {
-        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&chosen))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return Ok(cached_val.clone());
-            }
-        }
+    if let Some(cached_val) = OFFLINE_TRANSCRIPT_CACHE.get(&chosen, &stamp) {
+        return Ok(cached_val);
     }
     let computed = inspect_offline_transcript_uncached(&chosen)?;
-    if AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = OFFLINE_TRANSCRIPT_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&chosen) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(chosen, (stamp, computed.clone(), std::time::Instant::now()));
-        }
+    if FileStamp::of_nofollow(&chosen).as_ref() == Some(&stamp) {
+        let weight = 256
+            + computed.as_ref().map_or(0, |s| {
+                s.first_created_at.as_ref().map_or(0, String::len) as u64
+                    + s.waiting_ask_question
+                        .as_ref()
+                        .map_or(0, |(_, a, b, _)| (a.len() + b.len()) as u64)
+                    + s.failed_target
+                        .as_ref()
+                        .map_or(0, |(_, _, b)| b.len() as u64)
+                    + s.planner_target.as_ref().map_or(0, |p| {
+                        p.safe_reply_body.len() as u64
+                            + p.detected_question.as_ref().map_or(0, String::len) as u64
+                            + p.artifact_feedback.as_ref().map_or(0, String::len) as u64
+                    })
+            });
+        OFFLINE_TRANSCRIPT_CACHE.insert(chosen, stamp, computed.clone(), weight);
     }
     Ok(computed)
 }
@@ -988,18 +951,30 @@ fn inspect_offline_transcript_cached(
 fn inspect_offline_transcript_uncached(
     chosen: &Path,
 ) -> Result<Option<CachedTranscriptTurnSummary>> {
-    let mut head_file = match fs::File::open(chosen) {
+    use std::io::{Seek, SeekFrom};
+    let mut file = match crate::file_stamp::open_regular_nofollow(chosen) {
         Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
+        Err(err)
+            if err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err),
     };
-    if head_file.metadata()?.len() > 128 * 1024 * 1024 {
+    let meta = file.metadata()?;
+    if meta.len() > 128 * 1024 * 1024 {
         return Ok(None);
     }
+    let file_mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .and_then(valid_epoch_ms);
     let mut head_buf = Vec::with_capacity(16 * 1024);
-    (&mut head_file)
-        .take(16 * 1024)
-        .read_to_end(&mut head_buf)?;
+    (&mut file).take(16 * 1024).read_to_end(&mut head_buf)?;
     let has_subagent_reminder = head_buf
         .windows(b"<subagent_reminder>".len())
         .any(|w| w == b"<subagent_reminder>");
@@ -1020,42 +995,41 @@ fn inspect_offline_transcript_uncached(
             planner_target: None,
         }));
     }
-    let file = match fs::File::open(chosen) {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
+    file.seek(SeekFrom::Start(0))?;
     let mut reader = BufReader::new(file);
-    let mut rows = Vec::new();
+    let mut record_count = 0usize;
+    let mut first_created_at = None;
+    let mut turn_start = 0usize;
+    let mut turn_rows = Vec::new();
     super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
-        rows.push(row);
-        if rows.len() >= 200_000 {
+        if record_count == 0 {
+            first_created_at = row["created_at"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+        }
+        let st = row["type"].as_str().unwrap_or("");
+        let src = row["source"].as_str().unwrap_or("");
+        let is_turn_boundary = (super::prompt::is_transcript_user_row(&row)
+            && super::prompt::transcript_row_has_user_payload(&row))
+            || (st == "SYSTEM_MESSAGE" && src == "SYSTEM");
+        if is_turn_boundary {
+            turn_start = record_count;
+            turn_rows.clear();
+        }
+        turn_rows.push(row);
+        record_count += 1;
+        if record_count >= 200_000 {
             std::ops::ControlFlow::Break(())
         } else {
             std::ops::ControlFlow::Continue(())
         }
     })?;
-    if rows.is_empty() {
+    if record_count == 0 {
         return Ok(None);
     }
-    let record_count = rows.len() as u64;
-    let first_created_at = rows
-        .first()
-        .and_then(|r| r["created_at"].as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
-    let file_mtime_ms = file_mtime_ms(chosen).and_then(valid_epoch_ms);
-    let turn_start = rows
-        .iter()
-        .rposition(|row| {
-            let st = row["type"].as_str().unwrap_or("");
-            let src = row["source"].as_str().unwrap_or("");
-            (super::prompt::is_transcript_user_row(row)
-                && super::prompt::transcript_row_has_user_payload(row))
-                || (st == "SYSTEM_MESSAGE" && src == "SYSTEM")
-        })
-        .unwrap_or(0);
-    let turn_rows = &rows[turn_start..];
+    let record_count = record_count as u64;
+    let turn_rows = turn_rows.as_slice();
     let last_substantive = turn_rows.iter().enumerate().rev().find(|(_, row)| {
         let st = row["type"].as_str().unwrap_or("");
         let src = row["source"].as_str().unwrap_or("");
@@ -1172,37 +1146,23 @@ fn inspect_offline_db_steps_cached(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     }
-    let Some(stamp) = AntigravityFileStamp::sqlite_pair(&db_path) else {
+    let Some(stamp) = FileStamp::sqlite_pair(&db_path) else {
         return Ok(None);
     };
-    if let Ok(mut guard) = OFFLINE_DB_STEPS_CACHE.lock() {
-        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&db_path))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return Ok(cached_val.clone());
-            }
-        }
+    if let Some(cached_val) = OFFLINE_DB_STEPS_CACHE.get(&db_path, &stamp) {
+        return Ok(cached_val);
     }
     let computed = inspect_offline_db_steps_uncached(&db_path)?;
-    if AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = OFFLINE_DB_STEPS_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&db_path) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(
-                db_path,
-                (stamp, computed.clone(), std::time::Instant::now()),
-            );
-        }
+    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        let weight = 256
+            + computed.as_ref().map_or(0, |s| {
+                s.failed_body.len() as u64
+                    + s.terminal_planner.as_ref().map_or(0, |p| {
+                        p.safe_reply_body.len() as u64
+                            + p.detected_question.as_ref().map_or(0, String::len) as u64
+                    })
+            });
+        OFFLINE_DB_STEPS_CACHE.insert(db_path, stamp, computed.clone(), weight);
     }
     Ok(computed)
 }
@@ -1221,50 +1181,82 @@ fn inspect_offline_db_steps_uncached(db_path: &Path) -> Result<Option<CachedDbSt
     if !has_steps {
         return Ok(None);
     }
-    let mut stmt = conn.prepare(
-        "SELECT idx, step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM steps ORDER BY idx ASC LIMIT 200000",
+    let total_check: usize = conn.query_row(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM steps LIMIT 200001)",
+        [],
+        |r| r.get(0),
     )?;
-    let db_steps: Vec<(i64, i64, i64, Vec<u8>)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    if db_steps.is_empty() {
+    if total_check == 0 {
         return Ok(None);
     }
-    let record_count = db_steps.len() as u64;
-    let turn_start = db_steps
-        .iter()
-        .rposition(|(_, st, _, blob)| *st == 14 && extract_db_user_input_text(blob).is_some())
-        .or_else(|| db_steps.iter().rposition(|(_, st, _, _)| *st == 14))
-        .unwrap_or(0);
-    let last_status_canceled = db_steps
-        .last()
-        .is_some_and(|(_, _, status, _)| *status == 4);
-    let failed_body = db_steps[turn_start..]
-        .iter()
-        .rev()
-        .find(|(_, st, status, _)| *st == 17 || *status == 7)
-        .and_then(|(_, _, _, blob)| {
-            extract_db_error_text(blob)
+    let total = total_check.min(200_000);
+    let sql = if total_check <= 200_000 {
+        "SELECT step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM steps ORDER BY idx DESC"
+    } else {
+        "SELECT step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM (SELECT idx, step_type, status, step_payload FROM steps ORDER BY idx ASC LIMIT 200000) ORDER BY idx DESC"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query([])?;
+    let mut offset = 0usize;
+    let mut last_status_canceled = false;
+    let mut terminal_db_tail = false;
+    let mut latest_failed: Option<(usize, Option<String>)> = None;
+    let mut latest_planner: Option<(usize, String)> = None;
+    let mut first_rev_st14_offset: Option<usize> = None;
+    let mut turn_start_offset: Option<usize> = None;
+
+    while let Some(row) = rows.next()? {
+        if offset >= total {
+            break;
+        }
+        let st: i64 = row.get(0)?;
+        let status: i64 = row.get(1)?;
+        let blob_ref = row.get_ref(2)?;
+        let blob = blob_ref.as_bytes().unwrap_or(&[]);
+
+        if offset == 0 {
+            last_status_canceled = status == 4;
+            terminal_db_tail = matches!(st, 15 | 16) && status == 3;
+        }
+        if latest_failed.is_none() && (st == 17 || status == 7) {
+            let txt = extract_db_error_text(blob)
                 .filter(|s| !s.trim().is_empty())
-                .map(|s| safe_probe_text(&s))
-        })
+                .map(|s| safe_probe_text(&s));
+            latest_failed = Some((offset, txt));
+        }
+        if terminal_db_tail && latest_planner.is_none() && st == 15 {
+            let reply = extract_db_planner_texts(blob).0.unwrap_or_default();
+            latest_planner = Some((offset, reply));
+        }
+        if st == 14 {
+            if first_rev_st14_offset.is_none() {
+                first_rev_st14_offset = Some(offset);
+            }
+            if extract_db_user_input_text(blob).is_some() {
+                turn_start_offset = Some(offset);
+                break;
+            }
+        }
+        offset += 1;
+    }
+
+    let max_offset = turn_start_offset
+        .or(first_rev_st14_offset)
+        .unwrap_or_else(|| total.saturating_sub(1));
+    let turn_start = total.saturating_sub(1).saturating_sub(max_offset);
+    let failed_body = latest_failed
+        .filter(|(err_off, _)| *err_off <= max_offset)
+        .and_then(|(_, txt)| txt)
         .unwrap_or_else(|| "主回合未能完成，请打开 Antigravity 查看详情。".into());
-    let terminal_db_tail = db_steps
-        .last()
-        .is_some_and(|(_, st, status, _)| matches!(*st, 15 | 16) && *status == 3);
     let terminal_planner = if terminal_db_tail {
-        db_steps[turn_start..]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, (_, st, _, _))| *st == 15)
-            .map(|(rel_idx, (_, _, _, blob))| {
-                let reply = extract_db_planner_texts(blob).0.unwrap_or_default();
+        latest_planner
+            .filter(|(plan_off, _)| *plan_off <= max_offset)
+            .map(|(plan_off, reply)| {
                 let detected_question =
                     crate::codex::assistant_feedback_request(&reply).map(|q| safe_probe_text(&q));
                 let reply_non_empty = !reply.trim().is_empty();
                 CachedDbPlanner {
-                    pos: (turn_start + rel_idx + 1) as u64,
+                    pos: (total - plan_off) as u64,
                     reply_non_empty,
                     safe_reply_body: if reply_non_empty {
                         safe_probe_text(&reply)
@@ -1278,7 +1270,7 @@ fn inspect_offline_db_steps_uncached(db_path: &Path) -> Result<Option<CachedDbSt
         None
     };
     Ok(Some(CachedDbStepsTurnSummary {
-        record_count,
+        record_count: total as u64,
         turn_start,
         last_status_canceled,
         failed_body,
@@ -1901,7 +1893,7 @@ mod tests {
         drop(sum_conn);
 
         writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-        let stamp_locked = AntigravityFileStamp::sqlite_pair(&db_path).unwrap();
+        let stamp_locked = FileStamp::sqlite_pair(&db_path).unwrap();
         let scan_while_locked = scan_offline_store(&store, Some(db_id)).unwrap();
         assert!(scan_while_locked.streams.is_empty());
         assert_eq!(
@@ -1910,7 +1902,7 @@ mod tests {
         );
 
         writer.execute_batch("ROLLBACK;").unwrap();
-        let stamp_unlocked = AntigravityFileStamp::sqlite_pair(&db_path).unwrap();
+        let stamp_unlocked = FileStamp::sqlite_pair(&db_path).unwrap();
         assert_eq!(
             stamp_locked, stamp_unlocked,
             "FileStamp must remain unchanged across ROLLBACK"
@@ -1958,7 +1950,7 @@ mod tests {
             .unwrap();
 
         err_writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-        let err_stamp_locked = AntigravityFileStamp::sqlite_pair(&err_db_path).unwrap();
+        let err_stamp_locked = FileStamp::sqlite_pair(&err_db_path).unwrap();
         let err_scan_locked = scan_offline_store(&store, Some(err_id)).unwrap();
         assert!(err_scan_locked.streams.is_empty());
         assert_eq!(err_scan_locked.errors, 1);
@@ -1966,7 +1958,7 @@ mod tests {
         err_writer.execute_batch("ROLLBACK;").unwrap();
         assert_eq!(
             err_stamp_locked,
-            AntigravityFileStamp::sqlite_pair(&err_db_path).unwrap()
+            FileStamp::sqlite_pair(&err_db_path).unwrap()
         );
         let err_scan_unlocked = scan_offline_store(&store, Some(err_id)).unwrap();
         assert_eq!(err_scan_unlocked.errors, 0);

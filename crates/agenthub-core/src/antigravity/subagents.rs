@@ -7,13 +7,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::{Component, Path, PathBuf},
-    time::SystemTime,
 };
 
 use crate::{
     codex::subagents::{
         SubagentActivity, SubagentCollection, SubagentCounts, SubagentEventKind, SubagentStatus,
     },
+    file_stamp::FileStamp,
     provider_sessions::{
         paginate_provider_detail, ProviderDetailRequest, ProviderHistoryEvent,
         ProviderHistorySnapshot, ProviderSessionDetail, ProviderSessionSummary,
@@ -30,15 +30,6 @@ use super::sessions::{
 };
 
 const MAX_SUBAGENT_DEPTH: usize = 32;
-
-#[derive(Clone, PartialEq, Eq)]
-struct FileStamp {
-    path: PathBuf,
-    len: u64,
-    modified: Option<SystemTime>,
-    #[cfg(unix)]
-    identity: (u64, u64),
-}
 
 fn ensure_no_symlink_under_store(store_home: &Path, target: &Path) -> Result<Option<fs::Metadata>> {
     if store_home.exists() {
@@ -71,10 +62,12 @@ fn ensure_no_symlink_under_store(store_home: &Path, target: &Path) -> Result<Opt
     Ok(last_meta)
 }
 
+type StampedNodePaths = Vec<(PathBuf, FileStamp)>;
+
 fn inspect_node_storage(
     store: &AntigravityPaths,
     id: &str,
-) -> Result<Option<(String, Vec<FileStamp>)>> {
+) -> Result<Option<(String, StampedNodePaths)>> {
     let logs = store.brain_dir().join(id).join(".system_generated/logs");
     let candidates = [
         store.conversations_dir().join(format!("{id}.db")),
@@ -88,20 +81,13 @@ fn inspect_node_storage(
     for path in candidates {
         if let Some(meta) = ensure_no_symlink_under_store(&store.home, &path)? {
             hasher.update(path.as_os_str().as_encoded_bytes());
+            let stamp = FileStamp::from_metadata(&meta);
             #[cfg(unix)]
-            let identity = {
-                use std::os::unix::fs::MetadataExt;
-                hasher.update(meta.dev().to_le_bytes());
-                hasher.update(meta.ino().to_le_bytes());
-                (meta.dev(), meta.ino())
-            };
-            stamps.push(FileStamp {
-                path,
-                len: meta.len(),
-                modified: meta.modified().ok(),
-                #[cfg(unix)]
-                identity,
-            });
+            {
+                hasher.update(stamp.identity.0.to_le_bytes());
+                hasher.update(stamp.identity.1.to_le_bytes());
+            }
+            stamps.push((path, stamp));
         }
     }
     if stamps.is_empty() {
@@ -1034,14 +1020,7 @@ fn enrich_with_graph(
     }
 
     for agent in &collection.agents {
-        match agent.status {
-            SubagentStatus::Creating => collection.counts.creating += 1,
-            SubagentStatus::Running => collection.counts.running += 1,
-            SubagentStatus::Completed => collection.counts.completed += 1,
-            SubagentStatus::Failed => collection.counts.failed += 1,
-            SubagentStatus::Interrupted => collection.counts.interrupted += 1,
-            SubagentStatus::Unknown => collection.counts.unknown += 1,
-        }
+        collection.counts.record(agent.status);
     }
     if !collection.complete {
         collection.warning = Some("部分子智能体记录无法确认，统计可能不完整".into());
@@ -1076,7 +1055,7 @@ struct VerifiedSubagentLoad {
     child_summary: ProviderSessionSummary,
     snapshot: std::sync::Arc<ProviderHistorySnapshot>,
     prefix: String,
-    before_stamps: Option<Vec<FileStamp>>,
+    before_stamps: Option<Vec<(PathBuf, FileStamp)>>,
 }
 
 fn load_verified_subagent(
@@ -1232,24 +1211,23 @@ fn load_verified_subagent(
     })
 }
 
-fn stamps_compatible_after_read(before: &[FileStamp], after: &[FileStamp]) -> bool {
-    before.iter().all(|b| {
-        after.iter().any(|a| {
-            if a.path != b.path {
+fn stamps_compatible_after_read(
+    before: &[(PathBuf, FileStamp)],
+    after: &[(PathBuf, FileStamp)],
+) -> bool {
+    before.iter().all(|(b_path, b_stamp)| {
+        after.iter().any(|(a_path, a_stamp)| {
+            if a_path != b_path || !a_stamp.same_inode(b_stamp) {
                 return false;
             }
-            #[cfg(unix)]
-            if a.identity != b.identity {
-                return false;
-            }
-            let is_dir = a.path.file_name().is_some_and(|n| {
-                a.path
+            let is_dir = a_path.file_name().is_some_and(|n| {
+                a_path
                     .parent()
                     .and_then(|p| p.file_name())
                     .is_some_and(|pn| pn == "brain")
                     && uuid::Uuid::parse_str(&n.to_string_lossy()).is_ok()
             });
-            is_dir || a.len >= b.len
+            is_dir || a_stamp.len >= b_stamp.len
         })
     })
 }
@@ -1289,19 +1267,12 @@ pub(crate) fn subagent_detail(
     let native_cursor = request
         .before
         .as_deref()
-        .map(|cursor| -> Result<String> {
-            let (mode, position) = cursor
-                .split_once(':')
-                .filter(|(kind, _)| matches!(*kind, "j" | "n" | "w" | "p"))
-                .map_or(("", cursor), |(kind, id)| (kind, id));
-            let position = position
-                .strip_prefix(&prefix)
-                .context("子智能体历史来源已变化，请重新打开")?;
-            Ok(if mode.is_empty() {
-                position.into()
-            } else {
-                format!("{mode}:{position}")
-            })
+        .map(|cursor| {
+            crate::history_navigation::strip_subagent_cursor_prefix(
+                cursor,
+                &prefix,
+                "子智能体历史来源已变化，请重新打开",
+            )
         })
         .transpose()?;
 
@@ -1364,23 +1335,12 @@ pub(crate) fn subagent_detail(
         }
     }
     if let Some(hist) = &mut detail.history {
-        hist.epoch = format!("{prefix}{}", hist.epoch);
-        for cid in &mut hist.changed_ids {
-            *cid = format!("{prefix}{cid}");
-        }
-        for ch in &mut hist.changes {
-            for cid in &mut ch.changed_ids {
-                *cid = format!("{prefix}{cid}");
-            }
-        }
+        crate::history_navigation::prefix_history_metadata(hist, &prefix);
     }
     if let Some(bc) = &mut detail.before_cursor {
         *bc = format!("{prefix}{bc}");
     }
-    if let Some(ac) = &mut detail.after_cursor {
-        let rest = ac.strip_prefix("n:").unwrap_or(ac);
-        *ac = format!("n:{prefix}{rest}");
-    }
+    crate::history_navigation::prefix_after_cursor(&mut detail.after_cursor, &prefix);
     detail.agent = Some(loaded.agent_activity.clone());
 
     verify_after_read(&loaded, &request.session_key, agent_id)?;

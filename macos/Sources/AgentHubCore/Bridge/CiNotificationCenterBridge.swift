@@ -4,24 +4,24 @@ import Foundation
 
 // MARK: - Native macOS UNUserNotificationCenter CI Delivery & Click Routing
 
-public struct CiNotificationItem: Codable, Equatable, Sendable {
-    public var identifier: String
-    public var title: String
-    public var body: String
-    public var htmlUrl: String
+struct CiNotificationItem: Codable, Equatable, Sendable {
+    var identifier: String
+    var title: String
+    var body: String
+    var htmlUrl: String
 }
 
 @MainActor
-public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCenterDelegate {
-    public static let shared = CiNotificationCenterBridge()
-    public var openUrlHandler: @MainActor (URL) -> Void = { url in
+final class CiNotificationCenterBridge: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = CiNotificationCenterBridge()
+    var openUrlHandler: @MainActor (URL) -> Void = { url in
         NSWorkspace.shared.open(url)
     }
 
     private var installed = false
-    public private(set) var lastDecodeError: String?
+    private(set) var lastDecodeError: String?
 
-    public func installIfAvailable() {
+    func installIfAvailable() {
         guard !installed else { return }
         // UNUserNotificationCenter.current() requires a valid bundled app context on macOS.
         guard Bundle.main.bundleIdentifier != nil,
@@ -31,7 +31,7 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
         UNUserNotificationCenter.current().delegate = self
     }
 
-    nonisolated public static func extractClickTargetURL(from identifier: String) -> URL? {
+    nonisolated static func extractClickTargetURL(from identifier: String) -> URL? {
         guard let range = identifier.range(of: "#agenthub-ci:", options: .backwards) else {
             return nil
         }
@@ -45,7 +45,7 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
         return url
     }
 
-    public func deliverAuthorized(eventsJSON: Data) {
+    func deliverAuthorized(eventsJSON: Data) {
         let items: [CiNotificationItem]
         do {
             items = try JSONDecoder().decode([CiNotificationItem].self, from: eventsJSON)
@@ -78,7 +78,7 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
         }
     }
 
-    nonisolated public func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -86,7 +86,7 @@ public final class CiNotificationCenterBridge: NSObject, UNUserNotificationCente
         completionHandler([.banner, .list, .sound])
     }
 
-    nonisolated public func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void

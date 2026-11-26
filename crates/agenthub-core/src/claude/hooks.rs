@@ -481,6 +481,10 @@ pub fn manage_file(
         }
     }
     let bytes = serde_json::to_vec_pretty(&root)?;
+    let existing_perms = fs::symlink_metadata(path)
+        .ok()
+        .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
+        .map(|meta| meta.permissions());
     let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent_dir)?;
     let temporary = parent_dir.join(format!(".agenthub-hooks-{}.tmp", uuid::Uuid::new_v4()));
@@ -493,6 +497,9 @@ pub fn manage_file(
             options.mode(0o600);
         }
         let mut file = options.open(&temporary)?;
+        if let Some(perms) = existing_perms {
+            file.set_permissions(perms)?;
+        }
         file.write_all(&bytes)?;
         file.sync_all()?;
         #[cfg(test)]

@@ -136,7 +136,7 @@ final class DesignSystemAndSRGBTests: XCTestCase {
                     appearanceName: appearanceName
                 )
                 XCTAssertTrue(
-                    containsSRGBPixel(chipPixels, matching: expectedBg, tolerance: 2),
+                    OffscreenRenderHelper.containsPixel(chipPixels, matching: expectedBg, tolerance: 2),
                     "Rendered StatusChip(\(tone)) in \(scheme) missing expected CSS background \(bgHex)"
                 )
             }
@@ -157,10 +157,42 @@ final class DesignSystemAndSRGBTests: XCTestCase {
                     appearanceName: appearanceName
                 )
                 let bgRGB = try parseCSSHex(rootMap["--bg"]!)
-                let nonBgCount = countPixelsDifferingFrom(badgePixels, bg: bgRGB, threshold: 12)
+                let nonBgCount = OffscreenRenderHelper.countNonBackgroundPixels(badgePixels, bg: bgRGB, threshold: 12)
                 XCTAssertGreaterThan(nonBgCount, 10, "SessionStorageBadgeView (\(bytes)B, \(fgHex)) rendered blank in \(scheme)")
             }
         }
+    }
+
+    @MainActor
+    func testUserBubbleTokenAndBoundedLRUCacheSemantics() throws {
+        let lightPalette = DesignPalette.resolve(scheme: .light, workspace: .codex)
+        let darkPalette = DesignPalette.resolve(scheme: .dark, workspace: .codex)
+        let lightSample = try sampleSolidColor(lightPalette.userBubble.nsColor, appearanceName: .aqua)
+        let darkSample = try sampleSolidColor(darkPalette.userBubble.nsColor, appearanceName: .darkAqua)
+        let expectedLight = try parseCSSHex("#F3F5F8")
+        let expectedDark = try parseCSSHex("#262D3D")
+        XCTAssertLessThanOrEqual(abs(Int(lightSample.r) - Int(expectedLight.r)), 2)
+        XCTAssertLessThanOrEqual(abs(Int(lightSample.g) - Int(expectedLight.g)), 2)
+        XCTAssertLessThanOrEqual(abs(Int(lightSample.b) - Int(expectedLight.b)), 2)
+        XCTAssertLessThanOrEqual(abs(Int(darkSample.r) - Int(expectedDark.r)), 2)
+        XCTAssertLessThanOrEqual(abs(Int(darkSample.g) - Int(expectedDark.g)), 2)
+        XCTAssertLessThanOrEqual(abs(Int(darkSample.b) - Int(expectedDark.b)), 2)
+
+        var lru = BoundedLRUCache<String, Int>(maxEntries: 3, maxBytes: 100)
+        lru.setValue(1, forKey: "a", cost: 40)
+        lru.setValue(2, forKey: "b", cost: 40)
+        XCTAssertEqual(lru.value(forKey: "a"), 1) // promotes "a" over "b"
+        lru.setValue(3, forKey: "c", cost: 40) // total 120 > 100 -> evicts oldest ("b")
+        XCTAssertNil(lru.peek("b"))
+        XCTAssertEqual(lru.peek("a"), 1)
+        XCTAssertEqual(lru.peek("c"), 3)
+        lru.setValue(99, forKey: "oversized", cost: 250, allowSingleOversized: false)
+        XCTAssertNil(lru.peek("oversized"))
+        XCTAssertEqual(lru.removeValue(forKey: "a"), 1)
+        XCTAssertEqual(lru.count, 1)
+        lru.removeAll()
+        XCTAssertEqual(lru.count, 0)
+        XCTAssertEqual(lru.totalBytes, 0)
     }
 
     private func parseCSSHex(_ raw: String) throws -> (r: UInt8, g: UInt8, b: UInt8) {
@@ -184,35 +216,6 @@ final class DesignSystemAndSRGBTests: XCTestCase {
     @MainActor
     private func renderSwiftUIViewPixels<V: View>(_ view: V, size: NSSize, appearanceName: NSAppearance.Name) throws -> [UInt8] {
         try OffscreenRenderHelper.renderSwiftUIView(view, size: size, appearance: appearanceName)
-    }
-
-    private func containsSRGBPixel(_ pixels: [UInt8], matching target: (r: UInt8, g: UInt8, b: UInt8), tolerance: Int) -> Bool {
-        let count = pixels.count / 4
-        for i in 0 ..< count {
-            let idx = i * 4
-            if abs(Int(pixels[idx]) - Int(target.r)) <= tolerance
-                && abs(Int(pixels[idx + 1]) - Int(target.g)) <= tolerance
-                && abs(Int(pixels[idx + 2]) - Int(target.b)) <= tolerance
-            {
-                return true
-            }
-        }
-        return false
-    }
-
-    private func countPixelsDifferingFrom(_ pixels: [UInt8], bg: (r: UInt8, g: UInt8, b: UInt8), threshold: Int) -> Int {
-        let count = pixels.count / 4
-        var hits = 0
-        for i in 0 ..< count {
-            let idx = i * 4
-            if abs(Int(pixels[idx]) - Int(bg.r)) > threshold
-                || abs(Int(pixels[idx + 1]) - Int(bg.g)) > threshold
-                || abs(Int(pixels[idx + 2]) - Int(bg.b)) > threshold
-            {
-                hits += 1
-            }
-        }
-        return hits
     }
 
     @MainActor

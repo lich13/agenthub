@@ -327,12 +327,8 @@ mod tests {
             std::fs::set_permissions(platform.daemon_binary(), permissions).unwrap();
         }
         assert!(platform.config_file.to_string_lossy().contains(' '));
-        let core_plan = probe_service::plan_probe_action(
-            state.platform(),
-            probe_service::ProbeAction::BarkTest,
-            &state.platform().config_file,
-        )
-        .unwrap();
+        let core_plan =
+            probe_service::plan_probe_action(probe_service::ProbeAction::BarkTest).unwrap();
         let expected_process = probe_service::probe_process_command(
             state.platform(),
             &platform.config_file,

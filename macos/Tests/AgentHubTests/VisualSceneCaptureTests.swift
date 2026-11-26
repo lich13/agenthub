@@ -231,6 +231,112 @@ final class VisualSceneCaptureTests: XCTestCase {
             try captureWindow(panel, host: menuView, to: "\(outDir)/swift-09-codex-context-menu.png")
         }
         AgentHubTaskMenuPresenter.shared.dismiss()
+
+        // Scene 10: GitHub CI 20-Run Bounded Scroll Card (Light & Dark)
+        let runs20Parts: [String] = (1...20).map { (idx: Int) -> String in
+            let runId = 2000 + idx
+            let statusStr = (idx == 1) ? "in_progress" : "completed"
+            let conclusionJson: String
+            if idx == 1 {
+                conclusionJson = "null"
+            } else if idx == 2 {
+                conclusionJson = "\"failure\""
+            } else {
+                conclusionJson = "\"success\""
+            }
+            return "{\"id\":\(runId),\"run_attempt\":1,\"name\":\"Backend & contract checks #\(idx)\",\"head_branch\":\"main\",\"head_sha\":\"c008e00a1234\",\"status\":\"\(statusStr)\",\"conclusion\":\(conclusionJson),\"html_url\":\"https://example.invalid/runs/\(idx)\",\"created_at\":\"2026-11-25T10:00:00Z\",\"updated_at\":\"2026-11-25T10:05:00Z\",\"repository_id\":1,\"repository_name\":\"octocat/AgentHub\",\"is_bot\":false}"
+        }
+        let runs20Json = runs20Parts.joined(separator: ",")
+        let ci20Transport = MockRuntimeTransport { cmd, args in
+            if cmd == "github.ci.status" {
+                return Data("{\"account\":{\"id\":1,\"login\":\"octocat\"},\"enabled\":true,\"refreshing\":false,\"error\":null,\"monitored_repositories\":[\"octocat/AgentHub\"],\"repositories\":[{\"id\":1,\"full_name\":\"octocat/AgentHub\",\"archived\":false},{\"id\":2,\"full_name\":\"octocat/swift-kit\",\"archived\":false}],\"runs\":[\(runs20Json)]}".utf8)
+            }
+            return Self.mockResponse(cmd: cmd, args: args)
+        }
+        let ci20Store = RuntimeConnectionStore(transport: ci20Transport, defaults: defaults)
+        await ci20Store.bootstrap()
+        let ciSize = NSSize(width: 1020, height: 680)
+        let ciCases: [(ColorSchemeKind, NSAppearance.Name, String)] = [
+            (.light, .aqua, "swift-10a-ci-20runs-light.png"),
+            (.dark, .darkAqua, "swift-10b-ci-20runs-dark.png"),
+        ]
+        for (ciScheme, ciAppearance, ciFile) in ciCases {
+            var ciDraft: ProbeSettingsDraft? = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
+            var ciRules = ProbeDisclosureRules(machineScope: ci20Store.machineScope)
+            ciRules.setExpanded(.ci, true)
+            let ciWin = NSWindow(
+                contentRect: NSRect(origin: .zero, size: ciSize),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            ciWin.appearance = NSAppearance(named: ciAppearance)
+            let ciHost = NSHostingView(
+                rootView: GithubCiCardView(
+                    store: ci20Store,
+                    draft: Binding(get: { ciDraft }, set: { ciDraft = $0 }),
+                    disclosureRules: Binding(get: { ciRules }, set: { ciRules = $0 }),
+                    saving: false,
+                    saveMessage: nil,
+                    onSave: {}
+                )
+                .padding(16)
+                .background(DesignPalette.resolve(scheme: ciScheme, workspace: .probe).background.color)
+                .environment(\.agentHubPalette, DesignPalette.resolve(scheme: ciScheme, workspace: .probe))
+                .frame(width: ciSize.width)
+            )
+            ciHost.frame = NSRect(origin: .zero, size: ciSize)
+            ciWin.contentView = ciHost
+            ciWin.orderBack(nil)
+            try await pumpMainRunLoop(ms: 250)
+            try captureWindow(ciWin, host: ciHost, to: "\(outDir)/\(ciFile)")
+            ciWin.orderOut(nil)
+        }
+
+        // Scene 11: Subagent Drawer List (Claude Right-Chevron & Status Chips, Light & Dark)
+        let subCollection = SubagentCollection(
+            agents: [
+                SubagentActivity(agentId: "csub-1", name: "Explore subagent", role: "research", status: "completed", available: true),
+                SubagentActivity(agentId: "csub-2", name: "Layout verifier", role: "worker", status: "running", available: true),
+                SubagentActivity(agentId: "csub-3", name: "Archived child", role: "worker", status: "failed", available: false, unavailableReason: "子会话记录已清理"),
+            ],
+            counts: ["completed": 1, "running": 1, "failed": 1],
+            complete: true
+        )
+        let drawerSize = NSSize(width: 440, height: 520)
+        let drawerCases: [(ColorSchemeKind, NSAppearance.Name, String)] = [
+            (.light, .aqua, "swift-11a-subagent-drawer-light.png"),
+            (.dark, .darkAqua, "swift-11b-subagent-drawer-dark.png"),
+        ]
+        for (drScheme, drAppearance, drFile) in drawerCases {
+            let drPalette = DesignPalette.resolve(scheme: drScheme, workspace: .claude)
+            let drWin = NSWindow(
+                contentRect: NSRect(origin: .zero, size: drawerSize),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            drWin.appearance = NSAppearance(named: drAppearance)
+            let drHost = NSHostingView(
+                rootView: SubagentPanelView(
+                    store: store,
+                    provider: .claudeCode,
+                    rootSessionKey: "claude:cl-visual-1",
+                    collection: subCollection,
+                    scheme: drScheme,
+                    workspace: .claude,
+                    onClose: {}
+                )
+                .environment(\.agentHubPalette, drPalette)
+                .frame(width: drawerSize.width, height: drawerSize.height)
+            )
+            drHost.frame = NSRect(origin: .zero, size: drawerSize)
+            drWin.contentView = drHost
+            drWin.orderBack(nil)
+            try await pumpMainRunLoop(ms: 250)
+            try captureWindow(drWin, host: drHost, to: "\(outDir)/\(drFile)")
+            drWin.orderOut(nil)
+        }
     }
 
     @MainActor

@@ -1,4 +1,3 @@
-use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     codex::{self, CodexPaths, ThreadStatus, ThreadSummary},
     config::Config,
@@ -58,7 +57,7 @@ impl<'a> ProbeUseCases<'a> {
     }
 
     pub fn action(self, action: ProbeAction) -> Result<ProbeActionPlan> {
-        plan_probe_action(self.platform, action, &self.platform.config_file)
+        plan_probe_action(action)
     }
 }
 
@@ -72,12 +71,11 @@ pub enum ProbeAction {
     RemoveHooks,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeFixedJobSpec {
     pub kind: String,
     pub title: String,
     pub args: Vec<String>,
-    pub command: String,
     pub exclusive_group: Option<String>,
 }
 
@@ -138,7 +136,7 @@ pub struct ProbePassiveMarkerWrite {
     pub value: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProbeActionPlan {
     pub action: ProbeAction,
     pub job: ProbeFixedJobSpec,
@@ -164,14 +162,10 @@ pub fn probe_status_snapshot_view(
     value
 }
 
-pub fn plan_probe_action(
-    platform: &PlatformPaths,
-    action: ProbeAction,
-    config_path: impl AsRef<Path>,
-) -> Result<ProbeActionPlan> {
+pub fn plan_probe_action(action: ProbeAction) -> Result<ProbeActionPlan> {
     Ok(ProbeActionPlan {
         action,
-        job: probe_fixed_job_spec(platform, action, config_path.as_ref())?,
+        job: probe_fixed_job_spec(action),
     })
 }
 
@@ -561,6 +555,14 @@ pub fn aggregate_probe_status_with_options(
     config: &Config,
     force_refresh: bool,
 ) -> Result<ProbeStatusAggregation> {
+    aggregate_probe_status_with_db(config, None, force_refresh)
+}
+
+pub fn aggregate_probe_status_with_db(
+    config: &Config,
+    db: Option<&crate::db::PanelDb>,
+    force_refresh: bool,
+) -> Result<ProbeStatusAggregation> {
     let limit = config.probe.recent_limit.clamp(1, 200);
     let (running_threads, reply_needed_threads, recoverable_threads) =
         probe_codex_buckets(config, limit);
@@ -572,9 +574,12 @@ pub fn aggregate_probe_status_with_options(
         &recoverable_threads,
         force_refresh,
     )?;
+    let recent_event_count = match db {
+        Some(db) => db.recent_probe_event_count(limit as u32).unwrap_or(0),
+        None => recent_probe_event_count(&config.paths.db_path, limit as u32).unwrap_or(0),
+    };
     Ok(ProbeStatusAggregation {
-        recent_event_count: recent_probe_event_count(&config.paths.db_path, limit as u32)
-            .unwrap_or(0),
+        recent_event_count,
         running_threads,
         reply_needed_threads,
         recoverable_threads,
@@ -702,7 +707,6 @@ pub fn probe_event_record_write_plan(
         "status": "claimed",
     });
     payload["bark_status"] = json!(bark_status);
-    payload["dedupe_status"] = json!("claimed");
 
     let passive_marker =
         probe_passive_unresolved_action_marker_key(event).map(|key| ProbePassiveMarkerWrite {
@@ -1125,11 +1129,7 @@ fn dedupe_component(value: &str) -> String {
     }
 }
 
-fn probe_fixed_job_spec(
-    platform: &PlatformPaths,
-    action: ProbeAction,
-    config_path: &Path,
-) -> Result<ProbeFixedJobSpec> {
+fn probe_fixed_job_spec(action: ProbeAction) -> ProbeFixedJobSpec {
     let (kind, title, args, exclusive_group) = match action {
         ProbeAction::BarkTest => (
             "probe_bark_test",
@@ -1150,14 +1150,12 @@ fn probe_fixed_job_spec(
             "probe_hooks",
         ),
     };
-    let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
-    Ok(ProbeFixedJobSpec {
+    ProbeFixedJobSpec {
         kind: kind.to_string(),
         title: title.to_string(),
-        command: fixed_probe_shell_command(platform, config_path, &args),
-        args,
+        args: args.into_iter().map(str::to_string).collect(),
         exclusive_group: Some(exclusive_group.to_string()),
-    })
+    }
 }
 
 pub fn probe_process_command(
@@ -1179,24 +1177,6 @@ pub fn probe_process_command(
             subcommand.into(),
         ],
     )
-}
-
-fn fixed_probe_shell_command(
-    platform: &PlatformPaths,
-    config_path: &Path,
-    args: &[String],
-) -> String {
-    let mut parts = vec![
-        platform.daemon_binary().display().to_string(),
-        "--config".to_string(),
-        config_path.display().to_string(),
-    ];
-    parts.extend(args.iter().cloned());
-    parts
-        .iter()
-        .map(|part| shell_quote(part, QuoteStyle::MinimalWithEquals))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> {
@@ -1266,14 +1246,11 @@ mod tests {
     use crate::{
         codex::{ThreadStatus, ThreadSummary},
         config::Config,
-        platform::PlatformPaths,
     };
 
     #[test]
     fn probe_action_plans_are_platform_scoped_and_include_execution_contracts() {
-        let linux = PlatformPaths::linux_server();
-        let bark = plan_probe_action(&linux, ProbeAction::BarkTest, &linux.config_file)
-            .expect("Linux should allow fixed Probe jobs");
+        let bark = plan_probe_action(ProbeAction::BarkTest).expect("fixed Probe jobs");
 
         assert_eq!(bark.job.kind, "probe_bark_test");
     }
@@ -1417,10 +1394,7 @@ mod tests {
             agg.active_sessions
         );
 
-        let platform =
-            PlatformPaths::for_kind_with_home(crate::platform::PlatformKind::Linux, &root);
-        let remove_plan =
-            plan_probe_action(&platform, ProbeAction::RemoveHooks, &platform.config_file).unwrap();
+        let remove_plan = plan_probe_action(ProbeAction::RemoveHooks).unwrap();
         assert_eq!(remove_plan.action, ProbeAction::RemoveHooks);
         assert_eq!(
             Some(remove_plan.job.kind.as_str()),

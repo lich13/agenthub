@@ -305,10 +305,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 return nil
             }
             @MainActor func collectAllText(_ v: NSView) -> String {
-                var out: [String] = []
-                if let tf = v as? NSTextField { out.append(tf.stringValue) }
-                for sub in v.subviews { out.append(collectAllText(sub)) }
-                return out.joined(separator: " ")
+                OffscreenRenderHelper.collectVisibleText(in: v, separator: " ")
             }
 
             let triggerButton = FocusTargetView(frame: NSRect(x: 0, y: 0, width: 100, height: 28))
@@ -413,7 +410,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 ThreadDetail.self,
                 from: Data(#"{"summary":{"id":"th-min","title":"Minimal","status":"Recent","message_count":1},"blocks":[{"id":"b1","role":"user","kind":"userMessage","text":"hi","user_message":{"id":"b1","text":"hi"}}]}"#.utf8)
             )
-            XCTAssertEqual(minimalThreadDetail.messages, [])
             XCTAssertEqual(minimalThreadDetail.rawEventCount, 1)
             XCTAssertEqual(minimalThreadDetail.blocks.first?.questions, [])
             XCTAssertEqual(minimalThreadDetail.blocks.first?.answers, [])
@@ -595,10 +591,9 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             }
             let store = RuntimeConnectionStore(transport: transport, defaults: UserDefaults(suiteName: "com.lich13.agenthub.tests.sq.\(UUID().uuidString)")!)
 
-            struct CodexWrap: Encodable { let request: SubagentDetailRequest }
             let codexDetail: ThreadDetail = try await store.rpc(
                 "threads.subagentDetail",
-                args: CodexWrap(request: SubagentDetailRequest(rootThreadId: "root-1", agentId: "child-1", limit: 120))
+                args: RPCRequestEnvelope(request: SubagentDetailRequest(rootThreadId: "root-1", agentId: "child-1", limit: 120))
             )
             XCTAssertEqual(codexDetail.blocks.first?.text, "Child reply")
 
@@ -811,7 +806,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             {"id":"grok-1","title":"Grok Task","cwd":"/repo","path":"/Users/example/.grok/1.json","messageCount":3,"status":"running","deletionEligibility":{"allowed":false,"reason":"legacy-block"}}
             """.utf8)
             let grokSummary = try JSONDecoder().decode(GrokSessionSummary.self, from: grokSummaryData)
-            XCTAssertEqual(grokSummary.deletionEligibility?.allowed, false)
+            XCTAssertEqual(grokSummary.id, "grok-1")
             let grokActions = ProviderMenuMatrixBuilder.buildActions(
                 provider: .grok, isHeaderMenu: false, isLocalMachine: true,
                 id: grokSummary.id, path: HistoryAndResumeHelpers.grokHandoffPath(grokSummary), cwd: grokSummary.cwd,

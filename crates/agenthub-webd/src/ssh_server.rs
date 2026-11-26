@@ -88,10 +88,27 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
         // An accepted operation finishes independently of the SSH connection.
         tokio::spawn(async move {
             let response = dispatch_raw(state, request).await;
-            let mut writer = writer.lock().await;
-            if ssh_rpc::write(&mut *writer, &response).await.is_err() {
-                use tokio::io::AsyncWriteExt;
-                let _ = writer.shutdown().await;
+            let large_response = response
+                .result
+                .as_ref()
+                .is_some_and(|raw| raw.get().len() > 1024 * 1024);
+            {
+                let mut guard = writer.lock().await;
+                if ssh_rpc::write(&mut *guard, &response).await.is_err() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = guard.shutdown().await;
+                }
+            }
+            drop(response);
+            if large_response {
+                agenthub_core::note_cache_eviction();
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                if Arc::strong_count(&writer) <= 2 {
+                    // SAFETY: `malloc_trim(0)` asks glibc's allocator to release free top-of-heap arenas when connection is idle.
+                    unsafe {
+                        let _ = libc::malloc_trim(0);
+                    }
+                }
             }
         });
     }

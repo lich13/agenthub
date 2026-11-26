@@ -27,7 +27,7 @@ serde.workspace = true
 serde_json.workspace = true
 tar = "0.4"
 tempfile = "3"
-tokio.workspace = true
+tokio = { version = "1.37", default-features = false, features = ["rt-multi-thread", "time", "process", "sync", "io-util"] }
 zeroize.workspace = true
 
 [dev-dependencies]

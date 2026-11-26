@@ -3,17 +3,17 @@ import SwiftUI
 
 // MARK: - .subagent-summary Bar Directly Below Detail Glass Header (DESIGN.md:113, styles.css:790-794)
 
-public struct SubagentSummaryBarView: View {
+struct SubagentSummaryBarView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let provider: SessionProvider
-    public let collection: SubagentCollection?
-    public let isSupported: Bool
-    public let capabilitiesReady: Bool
-    public let onTogglePanel: (NSResponder?) -> Void
+    let provider: SessionProvider
+    let collection: SubagentCollection?
+    let isSupported: Bool
+    let capabilitiesReady: Bool
+    let onTogglePanel: (NSResponder?) -> Void
 
     @State private var triggerAnchorView: NSView?
 
-    public init(
+    init(
         provider: SessionProvider,
         collection: SubagentCollection?,
         isSupported: Bool = true,
@@ -27,7 +27,7 @@ public struct SubagentSummaryBarView: View {
         self.onTogglePanel = onTogglePanel
     }
 
-    public static func shouldDisplay(
+    static func shouldDisplay(
         provider: SessionProvider,
         collection: SubagentCollection?,
         isSupported: Bool,
@@ -48,14 +48,14 @@ public struct SubagentSummaryBarView: View {
         return !collection.agents.isEmpty || !collection.complete
     }
 
-    public static func summaryHeaderTitle(provider: SessionProvider, totalCount: Int) -> String {
+    static func summaryHeaderTitle(provider: SessionProvider, totalCount: Int) -> String {
         _ = totalCount
         return provider == .claudeCode ? "本会话子智能体" : "子智能体"
     }
 
     @State private var isHovered: Bool = false
 
-    public var body: some View {
+    var body: some View {
         if Self.shouldDisplay(
             provider: provider,
             collection: collection,
@@ -141,10 +141,8 @@ public struct SubagentSummaryBarView: View {
 
                         Spacer(minLength: 0)
 
-                        if provider != .claudeCode {
-                            LucideIcon(.chevronRight, size: 14)
-                                .foregroundStyle(baseFg)
-                        }
+                        LucideIcon(.chevronRight, size: 14)
+                            .foregroundStyle(baseFg)
                     }
                     .frame(minHeight: 28)
                     .padding(.vertical, 6)
@@ -200,27 +198,27 @@ private struct SubagentResponderProbeView: NSViewRepresentable {
 
 // MARK: - 420pt Subagent Docked / Overlay Drawer (Codex Nested Stack & Claude FlatrecordedOnly)
 
-public struct SubagentPanelView: View {
+struct SubagentPanelView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public let provider: SessionProvider
-    public let rootSessionKey: String
-    public let collection: SubagentCollection?
-    public let initialAgent: SubagentActivity?
-    public let scheme: ColorSchemeKind
-    public let workspace: WorkspaceId
-    public var isModalOverlay: Bool
-    public var restoreFocusResponder: NSResponder?
-    public let onClose: () -> Void
+    @ObservedObject var store: RuntimeConnectionStore
+    let provider: SessionProvider
+    let rootSessionKey: String
+    let collection: SubagentCollection?
+    let initialAgent: SubagentActivity?
+    let scheme: ColorSchemeKind
+    let workspace: WorkspaceId
+    var isModalOverlay: Bool
+    var restoreFocusResponder: NSResponder?
+    let onClose: () -> Void
 
-    public enum NavigationFrame: Equatable {
+    enum NavigationFrame: Equatable {
         case list(parent: SubagentActivity?, collection: SubagentCollection?)
         case detail(SubagentActivity)
     }
 
     @StateObject private var panelController: SubagentPanelController
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         provider: SessionProvider,
         rootSessionKey: String,
@@ -252,7 +250,7 @@ public struct SubagentPanelView: View {
         self.onClose = onClose
     }
 
-    public var currentAgent: SubagentActivity? {
+    var currentAgent: SubagentActivity? {
         panelController.currentAgent
     }
 
@@ -263,7 +261,7 @@ public struct SubagentPanelView: View {
         return collection
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             // Drawer Header
             HStack(spacing: 8) {
@@ -365,35 +363,63 @@ public struct SubagentPanelView: View {
                         .padding(12)
                 }
                 let coord = panelController.coordinator
-                ZStack(alignment: .leading) {
-                    ConversationReaderTableView(
-                        coordinator: coord,
-                        rows: panelController.rows,
-                        scheme: scheme,
-                        workspace: workspace,
-                        sessionScopeKey: "\(store.machineScope):subagent:\(rootSessionKey):\(current.agentId ?? current.id)",
-                        sessionProvider: provider,
-                        sessionKey: current.agentId ?? rootSessionKey,
-                        rootThreadId: (provider == .codex || provider == .antigravity) ? rootSessionKey : nil,
-                        hasTimelineRail: !panelController.timelineEntries.isEmpty,
-                        isSubagent: true,
-                        canLoadOlder: panelController.hasMoreOlder && panelController.beforeCursor != nil,
-                        isLoadingOlder: panelController.loadingOlder,
-                        isLoadOlderBlockedByError: panelController.errorText != nil
-                    )
-                    if !panelController.timelineEntries.isEmpty {
-                        TimelineRailView(
-                            entries: panelController.timelineEntries,
-                            activeId: panelController.activeTimelineId,
-                            availableWidth: LayoutMetrics.subagentDrawerWidth,
-                            loadOlder: (panelController.hasMoreOlder && panelController.beforeCursor != nil) ? {
-                                panelController.errorText = nil
-                                Task { await panelController.loadOlderSubagentPageIfNeeded() }
-                            } : nil,
-                            loadingOlder: panelController.loadingOlder
-                        ) { entry in
-                            _ = coord.scrollToPositionKey(entry.id)
+                ZStack(alignment: .top) {
+                    ZStack(alignment: .leading) {
+                        ConversationReaderTableView(
+                            coordinator: coord,
+                            rows: panelController.rows,
+                            scheme: scheme,
+                            workspace: workspace,
+                            sessionScopeKey: "\(store.machineScope):subagent:\(rootSessionKey):\(current.agentId ?? current.id)",
+                            sessionProvider: provider,
+                            sessionKey: current.agentId ?? rootSessionKey,
+                            rootThreadId: (provider == .codex || provider == .antigravity) ? rootSessionKey : nil,
+                            hasTimelineRail: !panelController.timelineEntries.isEmpty,
+                            isSubagent: true,
+                            canLoadOlder: panelController.hasMoreOlder && panelController.beforeCursor != nil,
+                            isLoadingOlder: panelController.loadingOlder,
+                            isLoadOlderBlockedByError: panelController.loadOlderError != nil || panelController.errorText != nil
+                        )
+
+                        if panelController.rows.isEmpty && panelController.errorText == nil {
+                            HStack(spacing: 8) {
+                                if panelController.loading {
+                                    RunningIndicator(size: 13)
+                                    Text("正在读取子智能体对话…")
+                                        .font(DesignFonts.body(13))
+                                        .foregroundStyle(palette.textMuted.color)
+                                } else {
+                                    Text("暂无子智能体对话内容")
+                                        .font(DesignFonts.body(13))
+                                        .foregroundStyle(palette.textMuted.color)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .allowsHitTesting(false)
                         }
+
+                        if !panelController.timelineEntries.isEmpty {
+                            TimelineRailView(
+                                entries: panelController.timelineEntries,
+                                activeId: panelController.activeTimelineId,
+                                availableWidth: LayoutMetrics.subagentDrawerWidth,
+                                loadOlder: (panelController.hasMoreOlder && panelController.beforeCursor != nil) ? {
+                                    panelController.loadOlderError = nil
+                                    Task { await panelController.loadOlderSubagentPageIfNeeded() }
+                                } : nil,
+                                loadingOlder: panelController.loadingOlder
+                            ) { entry in
+                                Task { await panelController.jumpToTimelineEntry(entry.id) }
+                            }
+                        }
+                    }
+
+                    HistoryLoadingBarView(
+                        loading: panelController.loadingOlder,
+                        error: panelController.loadOlderError
+                    ) {
+                        panelController.loadOlderError = nil
+                        Task { await panelController.loadOlderSubagentPageIfNeeded() }
                     }
                 }
             } else {
@@ -426,6 +452,10 @@ public struct SubagentPanelView: View {
                                                 RunningIndicator(size: 12)
                                             }
                                             StatusChip(subagentStatusLabel(agent.status), tone: subagentTone(agent.status))
+                                            if agent.available {
+                                                LucideIcon(.chevronRight, size: 14)
+                                                    .foregroundStyle(palette.textMuted.color)
+                                            }
                                         }
                                         if let del = agent.delegation, !del.isEmpty {
                                             Text(VisibleMarkdownEngine.visibleMarkdown(del))
@@ -510,14 +540,14 @@ public struct SubagentPanelView: View {
         }
     }
 
-    public static func pollingIntervalNanoseconds(provider: SessionProvider, status: String) -> UInt64 {
+    static func pollingIntervalNanoseconds(provider: SessionProvider, status: String) -> UInt64 {
         if provider == .claudeCode {
             return 5_000_000_000
         }
         return (status == "running" || status == "creating") ? 2_000_000_000 : 5_000_000_000
     }
 
-    public static func sortByStatusPriority(_ agents: [SubagentActivity]) -> [SubagentActivity] {
+    static func sortByStatusPriority(_ agents: [SubagentActivity]) -> [SubagentActivity] {
         func rank(_ s: String) -> Int {
             switch s {
             case "running": 0
@@ -532,11 +562,11 @@ public struct SubagentPanelView: View {
         return agents.sorted { rank($0.status) < rank($1.status) }
     }
 
-    public func pushAgent(_ agent: SubagentActivity) {
+    func pushAgent(_ agent: SubagentActivity) {
         panelController.pushAgent(agent)
     }
 
-    public static func propagateUpdatedChildToParentList(
+    static func propagateUpdatedChildToParentList(
         popped: NavigationFrame,
         into stack: inout [NavigationFrame]
     ) {
@@ -559,11 +589,11 @@ public struct SubagentPanelView: View {
         stack[stack.count - 1] = .list(parent: parent, collection: col)
     }
 
-    public func popAgent() {
+    func popAgent() {
         panelController.popAgent()
     }
 
-    public func subagentStatusLabel(_ status: String) -> String {
+    func subagentStatusLabel(_ status: String) -> String {
         if provider == .claudeCode && status == "unknown" {
             return "状态未知"
         }
@@ -607,6 +637,7 @@ private final class SubagentPanelController: ObservableObject {
     @Published var beforeCursor: String?
     @Published var hasMoreOlder: Bool = false
     @Published var loadingOlder: Bool = false
+    @Published var loadOlderError: String?
     @Published var delegationExpanded: Bool = false
     @Published var loading: Bool = false
     @Published var errorText: String?
@@ -642,7 +673,7 @@ private final class SubagentPanelController: ObservableObject {
             self.pushAgent(nextSub)
         }
         coord.onLoadOlderRequested = { [weak self] in
-            guard let self else { return }
+            guard let self, self.loadOlderError == nil, self.errorText == nil else { return }
             Task { await self.loadOlderSubagentPageIfNeeded() }
         }
         coord.onActiveTimelineChanged = { [weak self] id in
@@ -684,6 +715,7 @@ private final class SubagentPanelController: ObservableObject {
         beforeCursor = nil
         hasMoreOlder = false
         loadingOlder = false
+        loadOlderError = nil
         loading = false
         errorText = nil
     }
@@ -827,10 +859,9 @@ private final class SubagentPanelController: ObservableObject {
         let scopeKey = "\(store.machineScope):sub:\(capturedRoot):\(agentId)"
         do {
             if provider == .codex {
-                struct ReqWrap: Encodable { let request: SubagentDetailRequest }
                 let resp: SubagentDetailResponse = try await store.rpc(
                     "threads.subagentDetail",
-                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: capturedRoot, agentId: agentId, limit: 120))
+                    args: RPCRequestEnvelope(request: SubagentDetailRequest(rootThreadId: capturedRoot, agentId: agentId, limit: 120))
                 )
                 guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
                 guard resp.rootThreadId == capturedRoot, resp.agent.agentId == agentId else {
@@ -897,10 +928,9 @@ private final class SubagentPanelController: ObservableObject {
                     lastPollSignature = candidateSig
                 }
             } else if provider == .antigravity {
-                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let detail: ProviderSessionDetail = try await store.rpc(
                     "antigravity.detail",
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: capturedRoot, agentId: agentId, limit: 160))
+                    args: RPCRequestEnvelope(request: ProviderDetailRequest(sessionKey: capturedRoot, agentId: agentId, limit: 160))
                 )
                 guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
                 if let latestAgent = detail.agent {
@@ -953,11 +983,42 @@ private final class SubagentPanelController: ObservableObject {
         }
     }
 
+    func jumpToTimelineEntry(_ targetId: String) async {
+        let reduceMotion = AccessibilityMotionObserver.shared.reduceMotion
+        if coordinator.scrollToPositionKey(targetId, reduceMotion: reduceMotion) {
+            return
+        }
+        let capturedGen = navigationGeneration
+        let capturedRev = store.revision
+        let capturedRoot = rootSessionKey
+        guard let agent = currentAgent, let agentId = agent.agentId, !agentId.isEmpty else { return }
+        loadOlderError = nil
+        for _ in 0 ..< 30 {
+            guard !Task.isCancelled,
+                  hasMoreOlder,
+                  beforeCursor != nil,
+                  loadOlderError == nil,
+                  isCurrentSubagent(agentId: agentId, generation: capturedGen, revision: capturedRev, rootKey: capturedRoot)
+            else { break }
+            let advanced = await loadSingleOlderSubagentPage(
+                agentId: agentId,
+                generation: capturedGen,
+                revision: capturedRev,
+                rootKey: capturedRoot,
+                limitOverride: 240
+            )
+            if coordinator.scrollToPositionKey(targetId, reduceMotion: reduceMotion) {
+                return
+            }
+            if !advanced { break }
+        }
+    }
+
     func loadOlderSubagentPageIfNeeded() async {
         let capturedGen = navigationGeneration
         let capturedRev = store.revision
         let capturedRoot = rootSessionKey
-        guard hasMoreOlder, !loadingOlder, errorText == nil else { return }
+        guard hasMoreOlder, !loadingOlder, loadOlderError == nil, errorText == nil else { return }
         coordinator.markUpwardNavigationIntent()
         _ = await ConversationTableCoordinator.runBoundedOlderContinuationLoop(
             coordinator: { [weak self] in self?.coordinator },
@@ -965,7 +1026,7 @@ private final class SubagentPanelController: ObservableObject {
             upgradeLimitOnSparseRows: true
         ) { [weak self] limitOverride in
             guard let self,
-                  self.hasMoreOlder, !self.loadingOlder, self.errorText == nil,
+                  self.hasMoreOlder, !self.loadingOlder, self.loadOlderError == nil, self.errorText == nil,
                   let agent = self.currentAgent, let agentId = agent.agentId, !agentId.isEmpty,
                   self.isCurrentSubagent(agentId: agentId, generation: capturedGen, revision: capturedRev, rootKey: capturedRoot)
             else { return false }
@@ -1000,10 +1061,9 @@ private final class SubagentPanelController: ObservableObject {
         do {
             if provider == .codex {
                 let reqLimit = limitOverride ?? 120
-                struct ReqWrap: Encodable { let request: SubagentDetailRequest }
                 let resp: SubagentDetailResponse = try await store.rpc(
                     "threads.subagentDetail",
-                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
+                    args: RPCRequestEnvelope(request: SubagentDetailRequest(rootThreadId: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
                 guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
                       beforeCursor == cursor
@@ -1052,10 +1112,9 @@ private final class SubagentPanelController: ObservableObject {
                 return !page.events.isEmpty && slot.beforeCursor != cursor
             } else if provider == .antigravity {
                 let reqLimit = limitOverride ?? 160
-                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     "antigravity.detail",
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
+                    args: RPCRequestEnvelope(request: ProviderDetailRequest(sessionKey: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
                 guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
                       beforeCursor == cursor
@@ -1081,12 +1140,13 @@ private final class SubagentPanelController: ObservableObject {
                 applyOlderPageRows(buildAntigravitySubagentRows(events: slot.events, latestAgent: page.agent))
                 return !page.events.isEmpty && slot.beforeCursor != cursor
             }
+            loadOlderError = nil
             return false
         } catch {
             guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
                   beforeCursor == cursor
             else { return false }
-            errorText = error.localizedDescription
+            loadOlderError = error.localizedDescription
             return false
         }
     }
@@ -1095,21 +1155,21 @@ private final class SubagentPanelController: ObservableObject {
 // MARK: - <960pt Overlay Subagent Panel Tab Focus Trap & Trigger Focus Restoration
 
 @MainActor
-public final class SubagentOverlayRootNSView: NSView {}
+final class SubagentOverlayRootNSView: NSView {}
 
 @MainActor
-public final class SubagentKeyTargetNSView: NSView {
-    public var isTargetEnabled: Bool = true
-    public var onActivate: (() -> Void)?
+final class SubagentKeyTargetNSView: NSView {
+    var isTargetEnabled: Bool = true
+    var onActivate: (() -> Void)?
 
-    override public var acceptsFirstResponder: Bool { isTargetEnabled }
-    override public var canBecomeKeyView: Bool { isTargetEnabled }
+    override var acceptsFirstResponder: Bool { isTargetEnabled }
+    override var canBecomeKeyView: Bool { isTargetEnabled }
 
-    override public func hitTest(_ point: NSPoint) -> NSView? {
+    override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
 
-    override public func keyDown(with event: NSEvent) {
+    override func keyDown(with event: NSEvent) {
         if isTargetEnabled && (event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49) {
             onActivate?()
             return
@@ -1136,20 +1196,20 @@ private struct SubagentKeyTargetView: NSViewRepresentable {
 }
 
 /// Dedicated AppKit container for `<960pt` modal SubagentPanelView so Tab focus never leaks into AppShellView.
-public struct SubagentOverlayFocusContainerView<Content: View>: NSViewRepresentable {
-    public let palette: DesignPalette
-    @ViewBuilder public let content: () -> Content
+struct SubagentOverlayFocusContainerView<Content: View>: NSViewRepresentable {
+    let palette: DesignPalette
+    @ViewBuilder let content: () -> Content
 
-    public init(palette: DesignPalette, @ViewBuilder content: @escaping () -> Content) {
+    init(palette: DesignPalette, @ViewBuilder content: @escaping () -> Content) {
         self.palette = palette
         self.content = content
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    public func makeNSView(context: Context) -> SubagentOverlayRootNSView {
+    func makeNSView(context: Context) -> SubagentOverlayRootNSView {
         let root = SubagentOverlayRootNSView(frame: .zero)
         let host = NSHostingView(rootView: AnyView(content().environment(\.agentHubPalette, palette)))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -1165,25 +1225,25 @@ public struct SubagentOverlayFocusContainerView<Content: View>: NSViewRepresenta
         return root
     }
 
-    public func updateNSView(_ nsView: SubagentOverlayRootNSView, context: Context) {
+    func updateNSView(_ nsView: SubagentOverlayRootNSView, context: Context) {
         context.coordinator.hostingView?.rootView = AnyView(content().environment(\.agentHubPalette, palette))
         ModalPresentationRegistry.shared.register(context.coordinator.modalToken, container: nsView)
     }
 
-    public static func dismantleNSView(_ nsView: SubagentOverlayRootNSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: SubagentOverlayRootNSView, coordinator: Coordinator) {
         ModalPresentationRegistry.shared.unregister(coordinator.modalToken)
     }
 
     @MainActor
-    public final class Coordinator {
+    final class Coordinator {
         let modalToken = UUID()
         var hostingView: NSHostingView<AnyView>?
     }
 }
 
 @MainActor
-public enum SubagentFocusTrapEngine {
-    public static func focusableViews(in root: NSView) -> [NSView] {
+enum SubagentFocusTrapEngine {
+    static func focusableViews(in root: NSView) -> [NSView] {
         var result: [NSView] = []
         func walk(_ view: NSView) {
             guard !view.isHidden, view.alphaValue > 0.01 else { return }
@@ -1214,7 +1274,7 @@ public enum SubagentFocusTrapEngine {
         return result
     }
 
-    public static func nextFocusTarget(in root: NSView, current: NSResponder?, backward: Bool) -> NSView? {
+    static func nextFocusTarget(in root: NSView, current: NSResponder?, backward: Bool) -> NSView? {
         let candidates = focusableViews(in: root)
         guard !candidates.isEmpty else { return nil }
         guard let currentView = current as? NSView,

@@ -179,13 +179,7 @@ public struct ClaudeOwnershipDiagnostics: Codable, Equatable, Sendable {
     public var processes: [ClaudeOwnershipProcess]
 }
 
-public struct DeletionEligibility: Codable, Equatable, Sendable {
-    public var allowed: Bool
-    public var reason: String?
-}
-
 public struct GrokSessionSummary: Codable, Equatable, Sendable, Identifiable {
-    public var deletionEligibility: DeletionEligibility?
     public var storageSize: SessionStorageSize?
     public var handoffPath: String?
     public var id: String
@@ -199,13 +193,12 @@ public struct GrokSessionSummary: Codable, Equatable, Sendable, Identifiable {
     public var status: String
 
     enum CodingKeys: String, CodingKey {
-        case deletionEligibility, storageSize, handoffPath
+        case storageSize, handoffPath
         case id, title, cwd, workspaceRoot, path, updatedAt, messageCount, lastMessage, status
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        deletionEligibility = try c.decodeIfPresent(DeletionEligibility.self, forKey: .deletionEligibility)
         storageSize = try c.decodeIfPresent(SessionStorageSize.self, forKey: .storageSize)
         handoffPath = try c.decodeIfPresent(String.self, forKey: .handoffPath)
         id = try c.decode(String.self, forKey: .id)

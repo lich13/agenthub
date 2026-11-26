@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GfmDocument {
-    pub blocks: Vec<GfmBlock>,
+pub(crate) struct GfmDocument {
+    pub(crate) blocks: Vec<GfmBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum GfmBlock {
+pub(crate) enum GfmBlock {
     Paragraph {
         inlines: Vec<GfmInline>,
     },
@@ -39,15 +39,15 @@ pub enum GfmBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GfmListItem {
+pub(crate) struct GfmListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub checked: Option<bool>,
-    pub blocks: Vec<GfmBlock>,
+    pub(crate) checked: Option<bool>,
+    pub(crate) blocks: Vec<GfmBlock>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum GfmAlignment {
+pub(crate) enum GfmAlignment {
     None,
     Left,
     Center,
@@ -56,7 +56,7 @@ pub enum GfmAlignment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum GfmInline {
+pub(crate) enum GfmInline {
     Text {
         text: String,
     },
@@ -128,7 +128,7 @@ enum Frame {
     },
 }
 
-pub fn parse_gfm_markdown(source: &str) -> GfmDocument {
+pub(crate) fn parse_gfm_markdown(source: &str) -> GfmDocument {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);

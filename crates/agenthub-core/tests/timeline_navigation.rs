@@ -527,9 +527,7 @@ impl GrokFixture {
         fs::write(&self.updates, format!("{body}\n")).unwrap();
     }
 
-    fn write_over_64_mib_history(&self) -> String {
-        const TARGET_BYTES: u64 = 65 * 1024 * 1024;
-
+    fn write_history_over_bytes(&self, target_bytes: u64) -> String {
         let mut writer = BufWriter::new(fs::File::create(&self.updates).unwrap());
         let early_user = Self::update("user_message_chunk", "early-user", "早期请求").to_string();
         writeln!(writer, "{early_user}").unwrap();
@@ -545,7 +543,7 @@ impl GrokFixture {
         })
         .to_string();
         let padding_bytes = padding.len() as u64 + 1;
-        while written < TARGET_BYTES {
+        while written < target_bytes {
             writer.write_all(padding.as_bytes()).unwrap();
             writer.write_all(b"\n").unwrap();
             written += padding_bytes;
@@ -599,11 +597,10 @@ fn grok_pages_keep_user_message_markers_and_only_latest_page_has_timeline() {
     assert!(!older.has_more);
 }
 
-#[test]
-fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_64_mib_tail_window() {
+fn assert_grok_latest_page_indexes_and_jumps_over_bytes(min_bytes: u64) {
     let fixture = GrokFixture::new();
-    let early_user_id = fixture.write_over_64_mib_history();
-    assert!(fs::metadata(&fixture.updates).unwrap().len() > 64 * 1024 * 1024);
+    let early_user_id = fixture.write_history_over_bytes(min_bytes + 64 * 1024);
+    assert!(fs::metadata(&fixture.updates).unwrap().len() > min_bytes);
 
     let latest = grok_session_page(&fixture.paths, &fixture.id, None, Some(1), None, None).unwrap();
     assert_eq!(latest.events.len(), 1);
@@ -631,4 +628,15 @@ fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_64_mib_tail_window()
     assert_eq!(jump.events[0].id, early_user_id);
     assert!(jump.events[0].user_message.is_some());
     assert!(jump.timeline.is_none());
+}
+
+#[test]
+fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_tail_window() {
+    assert_grok_latest_page_indexes_and_jumps_over_bytes(512 * 1024);
+}
+
+#[test]
+#[ignore]
+fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_64_mib_tail_window() {
+    assert_grok_latest_page_indexes_and_jumps_over_bytes(64 * 1024 * 1024);
 }

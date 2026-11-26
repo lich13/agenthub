@@ -6,7 +6,6 @@ use crate::{
         ProbeNotificationsConfig, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
         ProbeSettingsPatch,
     },
-    platform::PlatformPaths,
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -42,12 +41,11 @@ pub struct SettingsView {
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsUseCases<'a> {
     config: &'a Config,
-    platform: &'a PlatformPaths,
 }
 
 impl<'a> SettingsUseCases<'a> {
-    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
-        Self { config, platform }
+    pub fn new(config: &'a Config) -> Self {
+        Self { config }
     }
 
     pub fn probe_settings_view(self, bark_device_key: ProbeSecretState) -> Result<SettingsView> {
@@ -58,7 +56,7 @@ impl<'a> SettingsUseCases<'a> {
         self,
         request: ProbeSettingsSaveRequest,
     ) -> Result<ProbeSettingsSavePlan> {
-        plan_probe_settings_save(self.platform, request)
+        plan_probe_settings_save(request)
     }
 }
 
@@ -293,7 +291,6 @@ pub struct ProbeSettingsSavePlan {
 }
 
 pub fn plan_probe_settings_save(
-    _platform: &PlatformPaths,
     request: ProbeSettingsSaveRequest,
 ) -> Result<ProbeSettingsSavePlan> {
     let normalized = normalize_probe_settings_save_request(request)?;
@@ -527,31 +524,26 @@ mod tests {
         plan_probe_settings_save, ProbeNotificationsSavePatch, ProbeSettingsSavePatch,
         ProbeSettingsSaveRequest,
     };
-    use crate::platform::PlatformPaths;
 
     #[test]
     fn probe_settings_save_plan_normalizes_nested_bark_key_and_patch() {
-        let platform = PlatformPaths::linux_server();
-        let plan = plan_probe_settings_save(
-            &platform,
-            ProbeSettingsSaveRequest {
-                probe: Some(ProbeSettingsSavePatch {
-                    poll_seconds: Some(1),
-                    recent_limit: Some(999),
-                    notifications: Some(ProbeNotificationsSavePatch {
-                        device_key: Some("  bark-key  ".to_string()),
-                        config: crate::config::ProbeNotificationsConfigPatch {
-                            server_url: Some(" https://api.day.app ".to_string()),
-                            group: Some("  ".to_string()),
-                            ..Default::default()
-                        },
-                    }),
-                    ..Default::default()
+        let plan = plan_probe_settings_save(ProbeSettingsSaveRequest {
+            probe: Some(ProbeSettingsSavePatch {
+                poll_seconds: Some(1),
+                recent_limit: Some(999),
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some("  bark-key  ".to_string()),
+                    config: crate::config::ProbeNotificationsConfigPatch {
+                        server_url: Some(" https://api.day.app ".to_string()),
+                        group: Some("  ".to_string()),
+                        ..Default::default()
+                    },
                 }),
                 ..Default::default()
-            },
-        )
-        .expect("settings save should be allowed on Linux");
+            }),
+            ..Default::default()
+        })
+        .expect("settings save should be allowed");
 
         assert_eq!(
             Some(plan.secret_write.as_ref().unwrap().secret_value.as_str()),
@@ -573,18 +565,14 @@ mod tests {
 
     #[test]
     fn probe_settings_save_plan_separates_config_write_from_secret_write_audit() {
-        let platform = PlatformPaths::macos("/fixture/home");
-        let plan = plan_probe_settings_save(
-            &platform,
-            ProbeSettingsSaveRequest {
-                notifications: Some(ProbeNotificationsSavePatch {
-                    device_key: Some("  bark-secret  ".to_string()),
-                    ..Default::default()
-                }),
+        let plan = plan_probe_settings_save(ProbeSettingsSaveRequest {
+            notifications: Some(ProbeNotificationsSavePatch {
+                device_key: Some("  bark-secret  ".to_string()),
                 ..Default::default()
-            },
-        )
-        .expect("macOS should allow shared settings planning");
+            }),
+            ..Default::default()
+        })
+        .expect("shared settings planning");
 
         assert!(plan.config_patch.probe.is_none());
         assert!(!super::probe_config_file_patch_has_changes(
@@ -601,7 +589,6 @@ mod tests {
     fn nullable_notification_fields_round_trip_and_remove_only_the_requested_keys() {
         use serde_json::json;
         let original = "[probe.notifications] # kept\nsound = \"bell\"\nurl = \"https://example.invalid/\"\ngroup = \"Fixture\"\n[custom]\nkeep = true\n";
-        let platform = PlatformPaths::macos("/fixture/home");
         for nested in [false, true] {
             for input in [
                 json!({}),
@@ -617,7 +604,7 @@ mod tests {
                 let request: ProbeSettingsSaveRequest = serde_json::from_value(request).unwrap();
                 let request =
                     serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
-                let plan = plan_probe_settings_save(&platform, request).unwrap();
+                let plan = plan_probe_settings_save(request).unwrap();
                 let patch: crate::config::ProbeConfigFilePatch =
                     serde_json::from_value(serde_json::to_value(plan.config_patch).unwrap())
                         .unwrap();

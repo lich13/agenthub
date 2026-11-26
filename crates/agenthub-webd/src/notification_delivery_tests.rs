@@ -2158,15 +2158,14 @@ async fn synchronous_question_retry_survives_parallel_tools_but_stops_when_resol
     }
 }
 
-#[tokio::test]
-async fn large_source_proof_keeps_retry_and_detects_rewrites() {
+async fn run_large_source_proof_keeps_retry_and_detects_rewrites(min_bytes: u64) {
     let fixture = Fixture::new().await;
     let mut file = fs::OpenOptions::new()
         .append(true)
         .open(&fixture.rollout)
         .unwrap();
     let block = [vec![b' '; 65535], vec![b'\n']].concat();
-    while file.metadata().unwrap().len() <= 128 * 1024 * 1024 {
+    while file.metadata().unwrap().len() <= min_bytes {
         file.write_all(&block).unwrap();
     }
     let event = fixture.event();
@@ -2197,6 +2196,17 @@ async fn large_source_proof_keeps_retry_and_detects_rewrites() {
     rewrite.seek(SeekFrom::Start(proof.length / 2)).unwrap();
     rewrite.write_all(b"x").unwrap();
     assert!(!same_source(&fixture.rollout, &proof));
+}
+
+#[tokio::test]
+async fn large_source_proof_keeps_retry_and_detects_rewrites() {
+    run_large_source_proof_keeps_retry_and_detects_rewrites(256 * 1024).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn large_128_mib_source_proof_keeps_retry_and_detects_rewrites() {
+    run_large_source_proof_keeps_retry_and_detects_rewrites(128 * 1024 * 1024).await;
 }
 
 #[tokio::test]

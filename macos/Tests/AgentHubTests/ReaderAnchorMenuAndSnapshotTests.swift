@@ -637,19 +637,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         region: (x: Int, y: Int, w: Int, h: Int),
         bg: (UInt8, UInt8, UInt8)
     ) -> Int {
-        var ink = 0
-        for py in region.y ..< (region.y + region.h) {
-            for px in region.x ..< (region.x + region.w) {
-                let idx = (py * imageWidth + px) * 4
-                if abs(Int(pixels[idx]) - Int(bg.0)) > 18
-                    || abs(Int(pixels[idx + 1]) - Int(bg.1)) > 18
-                    || abs(Int(pixels[idx + 2]) - Int(bg.2)) > 18
-                {
-                    ink += 1
-                }
-            }
-        }
-        return ink
+        OffscreenRenderHelper.countNonBackgroundPixels(pixels, imageWidth: imageWidth, region: region, bg: bg, threshold: 18)
     }
 
     @MainActor
@@ -697,33 +685,11 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
         target: (UInt8, UInt8, UInt8),
         tolerance: Int
     ) -> Bool {
-        for py in region.y ..< (region.y + region.h) {
-            for px in region.x ..< (region.x + region.w) {
-                let idx = (py * imageWidth + px) * 4
-                if abs(Int(pixels[idx]) - Int(target.0)) <= tolerance
-                    && abs(Int(pixels[idx + 1]) - Int(target.1)) <= tolerance
-                    && abs(Int(pixels[idx + 2]) - Int(target.2)) <= tolerance
-                {
-                    return true
-                }
-            }
-        }
-        return false
+        OffscreenRenderHelper.containsPixel(pixels, imageWidth: imageWidth, region: region, matching: target, tolerance: tolerance)
     }
 
     private func countForegroundInkPixels(_ pixels: [UInt8], bg: (UInt8, UInt8, UInt8)) -> Int {
-        let count = pixels.count / 4
-        var ink = 0
-        for p in 0 ..< count {
-            let idx = p * 4
-            if abs(Int(pixels[idx]) - Int(bg.0)) > 24
-                || abs(Int(pixels[idx + 1]) - Int(bg.1)) > 24
-                || abs(Int(pixels[idx + 2]) - Int(bg.2)) > 24
-            {
-                ink += 1
-            }
-        }
-        return ink
+        OffscreenRenderHelper.countNonBackgroundPixels(pixels, bg: bg, threshold: 24)
     }
 
     // MARK: - 5. Populated Thread Detail Glyph-Ink Gate (Prevents TextKit 2->1 Blank-Glyph Regression)

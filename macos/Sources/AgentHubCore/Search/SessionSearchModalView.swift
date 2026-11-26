@@ -3,8 +3,8 @@ import SwiftUI
 
 // MARK: - Session Search Floating Trigger & ⌘F Modal (SessionSearch.tsx)
 
-public enum SessionSearchMatchKind {
-    public static func label(for kind: String) -> String {
+enum SessionSearchMatchKind {
+    static func label(for kind: String) -> String {
         switch kind {
         case "metadata", "session", "thread_info": "线程信息"
         case "user", "user_message": "用户消息"
@@ -19,15 +19,15 @@ public enum SessionSearchMatchKind {
     }
 }
 
-public struct FloatingSearchPillButton: View {
+struct FloatingSearchPillButton: View {
     @Environment(\.agentHubPalette) private var palette
-    public let action: () -> Void
+    let action: () -> Void
 
-    public init(action: @escaping () -> Void) {
+    init(action: @escaping () -> Void) {
         self.action = action
     }
 
-    public var body: some View {
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 LucideIcon(.search, size: 14)
@@ -72,13 +72,13 @@ public struct FloatingSearchPillButton: View {
     }
 }
 
-public struct SessionSearchModalView: View {
+struct SessionSearchModalView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public let provider: SessionProvider
-    public let currentSessionKey: String?
-    public let onSelectResult: (SessionSearchResult) -> Void
-    public let onClose: () -> Void
+    @ObservedObject var store: RuntimeConnectionStore
+    let provider: SessionProvider
+    let currentSessionKey: String?
+    let onSelectResult: (SessionSearchResult) -> Void
+    let onClose: () -> Void
 
     @State private var query: String = ""
     @State private var scope: SearchScope
@@ -91,7 +91,7 @@ public struct SessionSearchModalView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var searchEpoch: UInt64 = 0
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         provider: SessionProvider,
         currentSessionKey: String?,
@@ -106,7 +106,7 @@ public struct SessionSearchModalView: View {
         self._scope = State(initialValue: currentSessionKey != nil ? .thread : .provider)
     }
 
-    public var body: some View {
+    var body: some View {
         GeometryReader { geo in
             let topInset = min(64, max(16, floor(geo.size.height * 0.06)))
             let bottomMargin: CGFloat = 20
@@ -116,7 +116,7 @@ public struct SessionSearchModalView: View {
             ZStack(alignment: .top) {
                 ModalScopePresenceView()
                     .frame(width: 0, height: 0)
-                SearchModalEscapeMonitorView(onEscape: onClose)
+                ModalEscapeAndFocusMonitorView(onEscape: onClose)
                     .frame(width: 0, height: 0)
 
                 Color.black.opacity(0.46)
@@ -384,7 +384,6 @@ public struct SessionSearchModalView: View {
                 loading = false
             }
         }
-        struct ReqWrap: Encodable { let request: SessionSearchRequest }
         let req = SessionSearchRequest(
             provider: provider,
             scope: scope,
@@ -394,7 +393,7 @@ public struct SessionSearchModalView: View {
             limit: min(50, max(1, 200 - (append ? results.count : 0)))
         )
         do {
-            let resp: SessionSearchResponse = try await store.rpc("sessions.search", args: ReqWrap(request: req), at: rev)
+            let resp: SessionSearchResponse = try await store.rpc("sessions.search", args: RPCRequestEnvelope(request: req), at: rev)
             guard !Task.isCancelled,
                   searchEpoch == epoch,
                   store.revision == rev,
@@ -414,67 +413,6 @@ public struct SessionSearchModalView: View {
         } catch {
             guard !Task.isCancelled, searchEpoch == epoch, store.revision == rev else { return }
             errorText = error.localizedDescription
-        }
-    }
-}
-
-private struct SearchModalEscapeMonitorView: NSViewRepresentable {
-    var onEscape: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onEscape: onEscape)
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        context.coordinator.attach(anchor: view)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.onEscape = onEscape
-        context.coordinator.attach(anchor: nsView)
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.detach()
-    }
-
-    @MainActor
-    final class Coordinator {
-        weak var anchorView: NSView?
-        var onEscape: () -> Void
-        private var monitor: Any?
-
-        init(onEscape: @escaping () -> Void) {
-            self.onEscape = onEscape
-        }
-
-        func attach(anchor: NSView) {
-            anchorView = anchor
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self,
-                      let win = self.anchorView?.window,
-                      event.window === win
-                else { return event }
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if event.keyCode == 53 && flags.isEmpty {
-                    guard !AppInputCompositionGuard.responderHasMarkedText(win.firstResponder) else {
-                        return event
-                    }
-                    self.onEscape()
-                    return nil
-                }
-                return event
-            }
-        }
-
-        func detach() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
         }
     }
 }

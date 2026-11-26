@@ -3,24 +3,24 @@ import Foundation
 // MARK: - Runtime Capability Matrix
 
 public struct RuntimeCapabilityMatrix: Equatable, Sendable {
-    public var isReady: Bool
-    public var hostSurface: String
-    public var threadSubagents: Bool
-    public var claudeSubagents: Bool
-    public var antigravitySubagents: Bool
-    public var hiddenCleanupScan: Bool
-    public var codexAccountScope: Bool
-    public var githubCi: Bool
-    public var antigravitySessions: Bool
-    public var dshSessions: Bool
-    public var antigravityNotifications: Bool
-    public var dshNotifications: Bool
-    public var grokbotSessions: Bool
-    public var grokbotNotifications: Bool
-    public var updatePrune: Bool
-    public var updateServiceLabels: Bool
+    var isReady: Bool
+    var hostSurface: String
+    var threadSubagents: Bool
+    var claudeSubagents: Bool
+    var antigravitySubagents: Bool
+    var hiddenCleanupScan: Bool
+    var codexAccountScope: Bool
+    var githubCi: Bool
+    var antigravitySessions: Bool
+    var dshSessions: Bool
+    var antigravityNotifications: Bool
+    var dshNotifications: Bool
+    var grokbotSessions: Bool
+    var grokbotNotifications: Bool
+    var updatePrune: Bool
+    var updateServiceLabels: Bool
 
-    public static let bootstrap = RuntimeCapabilityMatrix(
+    static let bootstrap = RuntimeCapabilityMatrix(
         isReady: false,
         hostSurface: SystemCapabilitiesResponse.desktopSurface,
         threadSubagents: false,
@@ -39,7 +39,7 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         updateServiceLabels: false
     )
 
-    public static func from(_ response: SystemCapabilitiesResponse?) -> RuntimeCapabilityMatrix {
+    static func from(_ response: SystemCapabilitiesResponse?) -> RuntimeCapabilityMatrix {
         guard let response else { return .bootstrap }
         let c = response.capabilities
         let remote = response.hostSurface == "linux_server_api"
@@ -63,7 +63,7 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
         )
     }
 
-    public var visibleWorkspaces: [WorkspaceId] {
+    var visibleWorkspaces: [WorkspaceId] {
         WorkspaceId.allCases.filter { id in
             switch id {
             case .grokbot: return grokbotSessions
@@ -75,14 +75,14 @@ public struct RuntimeCapabilityMatrix: Equatable, Sendable {
 
 // MARK: - Update & Cleanup Presentation Helpers
 
-public enum UnifiedUpdateActionKind: String, Sendable {
+enum UnifiedUpdateActionKind: String, Sendable {
     case check
     case install
     case prune
 }
 
-public enum UpdateVersionFormatter {
-    public static func bareVersion(_ raw: String?) -> String {
+enum UpdateVersionFormatter {
+    static func bareVersion(_ raw: String?) -> String {
         guard let raw else { return "" }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
@@ -95,18 +95,18 @@ public enum UpdateVersionFormatter {
         return trimmed
     }
 
-    public static func displayVersion(_ raw: String?) -> String {
+    static func displayVersion(_ raw: String?) -> String {
         let bare = bareVersion(raw)
         return bare.isEmpty ? "未知" : bare
     }
 
-    public static func isValidSemver(_ raw: String?) -> Bool {
+    static func isValidSemver(_ raw: String?) -> Bool {
         let bare = bareVersion(raw)
         guard !bare.isEmpty else { return false }
         return bare.range(of: #"^\d+\.\d+\.\d+(?:[-+].*)?$"#, options: .regularExpression) != nil
     }
 
-    public static func canStartUpdateInstall(_ status: UpdateStatus?) -> Bool {
+    static func canStartUpdateInstall(_ status: UpdateStatus?) -> Bool {
         guard let status,
               status.updateAvailable == true,
               status.state != "failed",
@@ -117,18 +117,18 @@ public enum UpdateVersionFormatter {
     }
 }
 
-public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
-    public var id: String { action.rawValue }
-    public let action: UnifiedUpdateActionKind
-    public let label: String
-    public let tone: String
-    public let disabled: Bool
+struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
+    var id: String { action.rawValue }
+    let action: UnifiedUpdateActionKind
+    let label: String
+    let tone: String
+    let disabled: Bool
 
-    public static func panelTitle(capabilities: RuntimeCapabilityMatrix) -> String {
+    static func panelTitle(capabilities: RuntimeCapabilityMatrix) -> String {
         capabilities.updateServiceLabels ? "远程服务更新" : "本机 App 更新"
     }
 
-    public static func actions(status: UpdateStatus?, capabilities: RuntimeCapabilityMatrix) -> [UpdateActionViewItem] {
+    static func actions(status: UpdateStatus?, capabilities: RuntimeCapabilityMatrix) -> [UpdateActionViewItem] {
         var out: [UpdateActionViewItem] = [
             UpdateActionViewItem(
                 action: .check,
@@ -161,8 +161,8 @@ public struct UpdateActionViewItem: Equatable, Sendable, Identifiable {
     }
 }
 
-public enum CleanupFormatting {
-    public static func formatBytes(_ bytes: Int64) -> String {
+enum CleanupFormatting {
+    static func formatBytes(_ bytes: Int64) -> String {
         if bytes <= 0 { return "0 B" }
         let units = ["B", "KB", "MB", "GB"]
         var value = Double(bytes)
@@ -177,7 +177,7 @@ public enum CleanupFormatting {
 
 // MARK: - Probe & GitHub CI Presentation Helpers
 
-public enum ProbeFormatting {
+enum ProbeFormatting {
     private static let safeBarkCategories: [String: String] = [
         "dns": "域名解析失败",
         "connection": "连接失败",
@@ -200,7 +200,7 @@ public enum ProbeFormatting {
         "response_decode", "response_read", "delivery_interrupted_outcome_unknown",
     ]
 
-    public static func eventKindLabel(_ raw: String?) -> String {
+    static func eventKindLabel(_ raw: String?) -> String {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return "Probe 事件" }
         return switch trimmed {
@@ -215,7 +215,7 @@ public enum ProbeFormatting {
         }
     }
 
-    public static func barkBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone) {
+    static func barkBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone) {
         let barkObj: [String: JSONValue]? = {
             if case let .object(o)? = event.payload?["bark"] { return o }
             return nil
@@ -266,7 +266,7 @@ public enum ProbeFormatting {
         return (base, .warning)
     }
 
-    public static func dedupeBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone)? {
+    static func dedupeBadge(_ event: ProbeEventItem) -> (label: String, tone: StatusChipTone)? {
         if let payload = event.payload {
             if case let .object(dedupe)? = payload["dedupe"] {
                 if case .bool(true)? = dedupe["duplicate"] { return ("重复事件", .warning) }
@@ -289,15 +289,15 @@ public enum ProbeFormatting {
     }
 }
 
-public struct GithubCiRepoOption: Equatable, Identifiable, Sendable {
-    public var id: String { key }
-    public let key: String
-    public let repoId: String
-    public let fullName: String
+struct GithubCiRepoOption: Equatable, Identifiable, Sendable {
+    var id: String { key }
+    let key: String
+    let repoId: String
+    let fullName: String
 }
 
-public enum GithubCiDomain {
-    public static func runStatus(_ run: GithubCiRun) -> (label: String, tone: StatusChipTone) {
+enum GithubCiDomain {
+    static func runStatus(_ run: GithubCiRun) -> (label: String, tone: StatusChipTone) {
         let state = run.status == "completed" ? (run.conclusion ?? "completed") : run.status
         let label: String = switch state {
         case "success": "成功"
@@ -326,7 +326,7 @@ public enum GithubCiDomain {
         return (label, tone)
     }
 
-    public static func visibleRuns(
+    static func visibleRuns(
         runs: [GithubCiRun],
         repositories: [String],
         filterBots: Bool = false
@@ -351,7 +351,7 @@ public enum GithubCiDomain {
         return Array(sorted.prefix(20))
     }
 
-    public static func formatRunUpdatedAt(_ raw: String) -> String {
+    static func formatRunUpdatedAt(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "—" }
         guard let date = SharedTimestampFormatters.parseISO8601(trimmed) else {
@@ -360,7 +360,7 @@ public enum GithubCiDomain {
         return SharedTimestampFormatters.formatMonthDayTime(date)
     }
 
-    public static func buildCatalog(
+    static func buildCatalog(
         repositories: [GithubCiRepository] = [],
         runs: [GithubCiRun] = [],
         configured: [String] = []
@@ -396,7 +396,7 @@ public enum GithubCiDomain {
         return catalog
     }
 
-    public static func isSelected(_ option: GithubCiRepoOption, configured: [String]) -> Bool {
+    static func isSelected(_ option: GithubCiRepoOption, configured: [String]) -> Bool {
         let lowerName = option.fullName.lowercased()
         let lowerId = option.repoId.lowercased()
         return configured.contains { item in
@@ -405,7 +405,7 @@ public enum GithubCiDomain {
         }
     }
 
-    public static func toggleSelection(_ option: GithubCiRepoOption, configured: [String]) -> [String] {
+    static func toggleSelection(_ option: GithubCiRepoOption, configured: [String]) -> [String] {
         let lowerName = option.fullName.lowercased()
         let lowerId = option.repoId.lowercased()
         if isSelected(option, configured: configured) {
@@ -420,7 +420,7 @@ public enum GithubCiDomain {
         return cleaned + [option.fullName]
     }
 
-    public static func addSelection(
+    static func addSelection(
         query: String,
         catalog: [GithubCiRepoOption],
         configured: [String]
@@ -445,7 +445,7 @@ public enum GithubCiDomain {
     }
 }
 
-public enum ProbeDisclosureSection: String, CaseIterable, Hashable, Sendable {
+enum ProbeDisclosureSection: String, CaseIterable, Hashable, Sendable {
     case ci
     case ciRepos = "ci.repos"
     case advanced
@@ -456,35 +456,39 @@ public enum ProbeDisclosureSection: String, CaseIterable, Hashable, Sendable {
     case jobs
 }
 
-public struct ProbeDisclosureRules: Equatable, Sendable {
+struct ProbeDisclosureRules: Equatable, Sendable {
     private static let tokenSeparator = "\u{001F}"
+    static let defaultExpandedSections: Set<ProbeDisclosureSection> = [.ci, .bark, .hosts]
 
-    public private(set) var machineScope: String
-    public private(set) var openSections: Set<ProbeDisclosureSection>
-    public private(set) var activeIssueTokens: [ProbeDisclosureSection: Set<String>]
+    private(set) var machineScope: String
+    private(set) var openSections: Set<ProbeDisclosureSection>
+    private(set) var activeIssueTokens: [ProbeDisclosureSection: Set<String>]
 
-    public init(machineScope: String = "") {
+    init(
+        machineScope: String = "",
+        openSections: Set<ProbeDisclosureSection> = ProbeDisclosureRules.defaultExpandedSections
+    ) {
         self.machineScope = machineScope
-        self.openSections = []
+        self.openSections = openSections
         self.activeIssueTokens = [:]
     }
 
-    public func isExpanded(_ section: ProbeDisclosureSection) -> Bool {
+    func isExpanded(_ section: ProbeDisclosureSection) -> Bool {
         openSections.contains(section)
     }
 
-    public mutating func reset(machineScope: String) {
+    mutating func reset(machineScope: String) {
         self.machineScope = machineScope
-        self.openSections = []
+        self.openSections = Self.defaultExpandedSections
         self.activeIssueTokens = [:]
     }
 
-    public mutating func resetIfMachineChanged(_ nextScope: String) {
+    mutating func resetIfMachineChanged(_ nextScope: String) {
         guard machineScope != nextScope else { return }
         reset(machineScope: nextScope)
     }
 
-    public mutating func setExpanded(_ section: ProbeDisclosureSection, _ expanded: Bool) {
+    mutating func setExpanded(_ section: ProbeDisclosureSection, _ expanded: Bool) {
         if expanded {
             openSections.insert(section)
         } else {
@@ -493,7 +497,7 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
     }
 
     @discardableResult
-    public mutating func observeIssues(
+    mutating func observeIssues(
         machineScope nextScope: String,
         section: ProbeDisclosureSection,
         tokens: Set<String>
@@ -519,7 +523,7 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
     }
 
     @discardableResult
-    public mutating func observeIssue(
+    mutating func observeIssue(
         machineScope nextScope: String,
         section: ProbeDisclosureSection,
         issueSignature: String?
@@ -537,7 +541,7 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
         return uniqueSorted.isEmpty ? nil : uniqueSorted.joined(separator: tokenSeparator)
     }
 
-    public static func ciIssueSignature(
+    static func ciIssueSignature(
         errorMessage: String?,
         snapshotError: String?,
         visibleRuns: [GithubCiRun]
@@ -555,7 +559,7 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
         return joinTokens(tokens)
     }
 
-    public static func hostsIssueSignature(
+    static func hostsIssueSignature(
         codexHookStatus: String?,
         statusError: String?,
         hookErrors: [String: String]
@@ -574,14 +578,14 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
         return joinTokens(tokens)
     }
 
-    public static func liveIssueSignature(sessions: [ProbeLiveSession]) -> String? {
+    static func liveIssueSignature(sessions: [ProbeLiveSession]) -> String? {
         let tokens = sessions
             .filter { $0.bucket == "reply_needed" || $0.bucket == "recoverable" }
             .map { "live:\($0.uniqueKey):\($0.bucket ?? "")" }
         return joinTokens(tokens)
     }
 
-    public static func eventsIssueSignature(eventsError: String?) -> String? {
+    static func eventsIssueSignature(eventsError: String?) -> String? {
         guard let err = eventsError?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty else {
             return nil
         }
@@ -591,19 +595,19 @@ public struct ProbeDisclosureRules: Equatable, Sendable {
 
 // MARK: - Probe Settings Out-of-Order Read/Save Fencing
 
-public struct ProbeSettingsSyncState: Equatable, Sendable {
-    public var settingsView: ProbeSettingsView?
-    public var settingsError: String?
-    public var loadedDraft: ProbeSettingsDraft?
-    public var draft: ProbeSettingsDraft?
-    public var draftRevision: UInt64
-    public private(set) var settingsFence: UInt64 = 0
+struct ProbeSettingsSyncState: Equatable, Sendable {
+    var settingsView: ProbeSettingsView?
+    var settingsError: String?
+    var loadedDraft: ProbeSettingsDraft?
+    var draft: ProbeSettingsDraft?
+    var draftRevision: UInt64
+    private(set) var settingsFence: UInt64 = 0
 
-    public init(revision: UInt64 = 0) {
+    init(revision: UInt64 = 0) {
         self.draftRevision = revision
     }
 
-    public mutating func reset(revision: UInt64) {
+    mutating func reset(revision: UInt64) {
         settingsFence &+= 1
         settingsView = nil
         settingsError = nil
@@ -612,12 +616,12 @@ public struct ProbeSettingsSyncState: Equatable, Sendable {
         draftRevision = revision
     }
 
-    public func beginSettingsRead() -> UInt64 {
+    func beginSettingsRead() -> UInt64 {
         settingsFence
     }
 
     @discardableResult
-    public mutating func applyLoadedSettings(
+    mutating func applyLoadedSettings(
         _ loaded: ProbeSettingsView,
         readFence: UInt64,
         revision: UInt64
@@ -644,7 +648,7 @@ public struct ProbeSettingsSyncState: Equatable, Sendable {
     }
 
     @discardableResult
-    public mutating func applySettingsReadError(
+    mutating func applySettingsReadError(
         _ message: String,
         readFence: UInt64
     ) -> Bool {
@@ -653,7 +657,7 @@ public struct ProbeSettingsSyncState: Equatable, Sendable {
         return true
     }
 
-    public mutating func applySavedSettings(
+    mutating func applySavedSettings(
         _ saved: ProbeSettingsView,
         submittedDraft: ProbeSettingsDraft,
         scope: ProbeSettingsSaveScope,
@@ -677,11 +681,5 @@ public struct ProbeSettingsSyncState: Equatable, Sendable {
             live.applySubset(from: refreshed, scope: scope)
             draft = live
         }
-    }
-
-    public mutating func applyHookManageFlag(_ installed: Bool) {
-        settingsFence &+= 1
-        draft?.manageStopHook = installed
-        loadedDraft?.manageStopHook = installed
     }
 }

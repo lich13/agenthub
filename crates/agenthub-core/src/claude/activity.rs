@@ -97,7 +97,9 @@ impl Assessment {
 #[derive(Clone)]
 pub(super) struct Snapshot {
     processes: Option<Vec<Process>>,
+    process_canonical_cwds: Vec<Option<PathBuf>>,
     registrations: Vec<Registration>,
+    registration_canonical_cwds: Vec<Option<PathBuf>>,
     registrations_by_pid: HashMap<u32, Vec<usize>>,
     domain: Option<String>,
 }
@@ -115,6 +117,7 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
     TEST_SNAPSHOT.with(|slot| {
         *slot.borrow_mut() = id.map(|id| {
             let domain = pid_domain();
+            let canonical = cwd.canonicalize().ok();
             Snapshot {
                 processes: Some(vec![Process {
                     pid: 42,
@@ -124,6 +127,7 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
                     files: HashSet::new(),
                     role: ProcessRole::Session,
                 }]),
+                process_canonical_cwds: vec![canonical.clone()],
                 registrations: vec![Registration {
                     pid: 42,
                     session_id: id.into(),
@@ -135,6 +139,7 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
                     status_updated_at: None,
                     updated_at: None,
                 }],
+                registration_canonical_cwds: vec![canonical],
                 registrations_by_pid: HashMap::from([(42, vec![0])]),
                 domain,
             }
@@ -293,9 +298,23 @@ impl Snapshot {
         for (idx, reg) in registrations.iter().enumerate() {
             registrations_by_pid.entry(reg.pid).or_default().push(idx);
         }
+        let process_canonical_cwds = processes
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .map(|p| p.cwd.as_ref().and_then(|c| c.canonicalize().ok()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let registration_canonical_cwds = registrations
+            .iter()
+            .map(|r| r.cwd.canonicalize().ok())
+            .collect();
         Self {
             processes,
+            process_canonical_cwds,
             registrations,
+            registration_canonical_cwds,
             registrations_by_pid,
             domain: pid_domain(),
         }
@@ -325,6 +344,55 @@ impl Snapshot {
             result.reason("process_list_unavailable");
             return result;
         };
+        let parsed_canonical_cwds: std::cell::OnceCell<Vec<PathBuf>> = std::cell::OnceCell::new();
+        let matches_session_cwd = |raw: &Path, precomputed_canon: Option<&Path>| -> bool {
+            if raw == Path::new(&parsed.cwd)
+                || parsed
+                    .cwds
+                    .iter()
+                    .any(|seen| seen != &parsed.cwd && raw == Path::new(seen))
+            {
+                return true;
+            }
+            let Some(canon) = precomputed_canon else {
+                return false;
+            };
+            let session_canons = parsed_canonical_cwds.get_or_init(|| {
+                let mut out = Vec::new();
+                if !parsed.cwd.is_empty() {
+                    if let Ok(c) = Path::new(&parsed.cwd).canonicalize() {
+                        out.push(c);
+                    }
+                }
+                for seen in &parsed.cwds {
+                    if seen != &parsed.cwd && !seen.is_empty() {
+                        if let Ok(c) = Path::new(seen).canonicalize() {
+                            if !out.contains(&c) {
+                                out.push(c);
+                            }
+                        }
+                    }
+                }
+                out
+            });
+            session_canons.iter().any(|c| c == canon)
+        };
+        let proc_canon = |p_idx: usize, p: &Process| -> Option<PathBuf> {
+            match self.process_canonical_cwds.get(p_idx) {
+                Some(cached) => cached.clone(),
+                None => p.cwd.as_ref().and_then(|c| c.canonicalize().ok()),
+            }
+        };
+        let reg_canon = |r_idx: usize, r: &Registration| -> Option<PathBuf> {
+            match self.registration_canonical_cwds.get(r_idx) {
+                Some(cached) => cached.clone(),
+                None => r.cwd.canonicalize().ok(),
+            }
+        };
+        let same_with_canon =
+            |left: &Path, left_canon: Option<&Path>, right: &Path, right_canon: Option<&Path>| {
+                left == right || left_canon.zip(right_canon).is_some_and(|(a, b)| a == b)
+            };
         let target_id = |id: &str| id == parsed.id || children.contains(id);
         let domain = &self.domain;
         let domain_matches = |r: &Registration| {
@@ -334,10 +402,12 @@ impl Snapshot {
                 domain.as_deref() == Some(r.pid_domain.as_str())
             }
         };
-        for registration in &self.registrations {
+        for (r_idx, registration) in self.registrations.iter().enumerate() {
+            let r_can = reg_canon(r_idx, registration);
             if !registration.pid_domain.is_empty()
                 && domain.as_deref() != Some(&registration.pid_domain)
-                && (target_id(&registration.session_id) || session_cwd(parsed, &registration.cwd))
+                && (target_id(&registration.session_id)
+                    || matches_session_cwd(&registration.cwd, r_can.as_deref()))
             {
                 result.reason("foreign_domain");
                 result.processes.push(ClaudeOwnershipProcess {
@@ -348,9 +418,13 @@ impl Snapshot {
                 });
             }
         }
-        for p in processes {
+        for (p_idx, p) in processes.iter().enumerate() {
+            let p_can = proc_canon(p_idx, p);
             let open_file = paths.iter().any(|path| p.files.contains(path));
-            let cwd_matches = p.cwd.as_ref().is_some_and(|cwd| session_cwd(parsed, cwd));
+            let cwd_matches = p
+                .cwd
+                .as_ref()
+                .is_some_and(|cwd| matches_session_cwd(cwd, p_can.as_deref()));
             // Only OS-verified leading startup modes are exempt. Child argv
             // after `--` belongs to a separate process, checked independently.
             if matches!(p.role, ProcessRole::Daemon | ProcessRole::PtyHost) && !open_file {
@@ -364,13 +438,19 @@ impl Snapshot {
                 }
                 continue;
             }
-            let registrations: Vec<_> = self
+            let registrations: Vec<(usize, &Registration, Option<PathBuf>)> = self
                 .registrations_by_pid
                 .get(&p.pid)
                 .into_iter()
                 .flatten()
-                .map(|&idx| &self.registrations[idx])
-                .filter(|r| domain_matches(r))
+                .map(|&idx| {
+                    (
+                        idx,
+                        &self.registrations[idx],
+                        reg_canon(idx, &self.registrations[idx]),
+                    )
+                })
+                .filter(|(_, r, _)| domain_matches(r))
                 .collect();
             let proc_start_verified = |r: &Registration| {
                 if r.proc_start.is_empty() {
@@ -381,18 +461,21 @@ impl Snapshot {
                     )
                 }
             };
-            let verified: Vec<_> = registrations
+            let verified: Vec<&(usize, &Registration, Option<PathBuf>)> = registrations
                 .iter()
-                .filter(|r| {
+                .filter(|(_, r, r_can)| {
                     p.role == ProcessRole::Session
                         && proc_start_verified(r)
-                        && p.cwd.as_ref().is_none_or(|cwd| same_path(cwd, &r.cwd))
+                        && p.cwd.as_ref().is_none_or(|cwd| {
+                            same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can.as_deref())
+                        })
                 })
                 .collect();
             let owns = verified.len() == 1
-                && verified.iter().any(|r| {
+                && verified.iter().any(|(_, r, r_can)| {
                     children.contains(&r.session_id)
-                        || (r.session_id == parsed.id && session_cwd(parsed, &r.cwd))
+                        || (r.session_id == parsed.id
+                            && matches_session_cwd(&r.cwd, r_can.as_deref()))
                 });
             let explicit = p.args.windows(2).any(|pair| {
                 matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id")
@@ -407,12 +490,14 @@ impl Snapshot {
                 || cwd_matches
                 || p.cwd.is_none()
                 || explicit
-                || registrations.iter().any(|r| target_id(&r.session_id));
+                || registrations
+                    .iter()
+                    .any(|(_, r, _)| target_id(&r.session_id));
             if !relevant {
                 continue;
             }
             let mut mismatched = BTreeSet::new();
-            for r in &registrations {
+            for (_, r, r_can) in &registrations {
                 if (!r.proc_start.is_empty() && started_ms(&r.proc_start) != p.started_ms)
                     || p.started_ms.is_none()
                 {
@@ -421,16 +506,18 @@ impl Snapshot {
                 if p.started_ms.is_none_or(|start| r.started_at < start) {
                     mismatched.insert("startedAt");
                 }
-                if p.cwd.as_ref().is_some_and(|cwd| !same_path(cwd, &r.cwd)) {
+                if p.cwd.as_ref().is_some_and(|cwd| {
+                    !same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can.as_deref())
+                }) {
                     mismatched.insert("cwd");
                 }
             }
             if registrations.len() > 1 {
                 mismatched.insert("sessionId");
             }
-            let conflicting_cwd = verified
-                .iter()
-                .any(|r| r.session_id == parsed.id && !session_cwd(parsed, &r.cwd));
+            let conflicting_cwd = verified.iter().any(|(_, r, r_can)| {
+                r.session_id == parsed.id && !matches_session_cwd(&r.cwd, r_can.as_deref())
+            });
             let current_ids: Vec<_> = p
                 .args
                 .windows(2)
@@ -443,7 +530,7 @@ impl Snapshot {
                 )
                 .collect();
             let conflicting_id =
-                verified.len() == 1 && current_ids.iter().any(|id| *id != verified[0].session_id);
+                verified.len() == 1 && current_ids.iter().any(|id| *id != verified[0].1.session_id);
             if conflicting_id {
                 mismatched.insert("sessionId");
                 result.reason("evidence_conflict");
@@ -461,9 +548,9 @@ impl Snapshot {
                 mismatched_fields: mismatched.into_iter().map(str::to_owned).collect(),
             });
             if owns {
-                result.native_status = verified[0].status.clone();
+                result.native_status = verified[0].1.status.clone();
                 result.native_status_updated_at =
-                    verified[0].status_updated_at.or(verified[0].updated_at);
+                    verified[0].1.status_updated_at.or(verified[0].1.updated_at);
             }
             if open_file || owns {
                 result.ownership = Ownership::Open;
@@ -507,7 +594,11 @@ impl Snapshot {
             if cwd_matches {
                 result.reason("same_cwd_unregistered");
             }
-            if explicit || registrations.iter().any(|r| target_id(&r.session_id)) {
+            if explicit
+                || registrations
+                    .iter()
+                    .any(|(_, r, _)| target_id(&r.session_id))
+            {
                 result.reason("registry_unverified");
             }
         }
@@ -518,14 +609,6 @@ impl Snapshot {
         }
         result
     }
-}
-/// The session's current directory or any directory it recorded earlier.
-fn session_cwd(parsed: &Parsed, path: &Path) -> bool {
-    same_path(path, Path::new(&parsed.cwd))
-        || parsed
-            .cwds
-            .iter()
-            .any(|seen| seen != &parsed.cwd && same_path(path, Path::new(seen)))
 }
 fn same_path(left: &Path, right: &Path) -> bool {
     left == right
@@ -600,22 +683,7 @@ fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>)
 
 #[cfg(target_os = "macos")]
 fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
-    let mut executable = [0_u8; 4096];
-    // Kernel-provided executable and NUL-separated argv keep a PTY host's
-    // argv[0] label distinct from arguments forwarded to its child.
-    // SAFETY: executable is writable for the supplied buffer length and pid fits the native type.
-    let count = unsafe {
-        libc::proc_pidpath(
-            pid.try_into().ok()?,
-            executable.as_mut_ptr().cast(),
-            executable.len() as u32,
-        )
-    };
-    if count <= 0 {
-        return None;
-    }
-    let end = executable.iter().position(|byte| *byte == 0)?;
-    let executable = PathBuf::from(std::str::from_utf8(&executable[..end]).ok()?);
+    let executable = crate::platform::resolve_kernel_exe(pid)?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid.try_into().ok()?];
     let mut size = 0;
     // SAFETY: The three-element MIB is live; a null output buffer requests the length in size.

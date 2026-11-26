@@ -5,7 +5,7 @@ use crate::{
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
     security::{is_sensitive_output_line, redact_output},
-    services::probe::aggregate_probe_status_with_options,
+    services::probe::{aggregate_probe_status_with_db, enrich_probe_status_from_db},
 };
 use anyhow::Result;
 use jiff::Timestamp;
@@ -126,12 +126,32 @@ impl ProbeRuntime {
 
     pub async fn status_with_options(&self, force_refresh: bool) -> Result<ProbeStatus> {
         let runtime = Self::new(self.config.clone(), self.paths.clone());
-        crate::read_tasks::spawn_blocking(move || runtime.status_blocking(force_refresh)).await?
+        crate::read_tasks::spawn_blocking(move || runtime.status_blocking(None, force_refresh))
+            .await?
     }
 
-    fn status_blocking(&self, force_refresh: bool) -> Result<ProbeStatus> {
+    pub async fn status_with_db(
+        &self,
+        db: &crate::db::PanelDb,
+        force_refresh: bool,
+    ) -> Result<ProbeStatus> {
+        let runtime = Self::new(self.config.clone(), self.paths.clone());
+        let db = db.clone();
+        crate::read_tasks::spawn_blocking(move || {
+            let mut status = runtime.status_blocking(Some(&db), force_refresh)?;
+            let _ = enrich_probe_status_from_db(&mut status, &db);
+            Ok(status)
+        })
+        .await?
+    }
+
+    fn status_blocking(
+        &self,
+        db: Option<&crate::db::PanelDb>,
+        force_refresh: bool,
+    ) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
-        let aggregation = aggregate_probe_status_with_options(&self.config, force_refresh)?;
+        let aggregation = aggregate_probe_status_with_db(&self.config, db, force_refresh)?;
         let hook_status = self.hook_status();
         Ok(ProbeStatus {
             provider_notifications: json!([]),
@@ -367,21 +387,15 @@ impl ProbeRuntime {
             "scan_source": scan_source.clone(),
             "beijing_time": beijing_time.clone(),
             "reason_label": title.clone(),
-            "source": source.clone(),
             "host_label": config.codex.host_label,
             "platform": kind,
             "notify_completion": notify_completion,
-            "auto_reply": false,
-            "hidden_desktop_control": false,
             "event_type": event_type.clone(),
             "bark": {
                 "title": bark.title.clone(),
                 "body_sha256": body_sha256.clone(),
                 "body_length": body_length,
                 "body_source": body_source.clone(),
-                "body_truncated": body_truncated,
-                "dedupe_ttl_seconds": ttl_seconds,
-                "scan_source": scan_source.clone(),
                 "request_count": 0,
                 "status": "pending"
             }
@@ -389,11 +403,6 @@ impl ProbeRuntime {
         if let Some(map) = payload.as_object_mut() {
             for (key, value) in &input.body_selection_diagnostics {
                 map.insert(key.clone(), value.clone());
-            }
-            if let Some(bark) = map.get_mut("bark").and_then(Value::as_object_mut) {
-                for (key, value) in &input.body_selection_diagnostics {
-                    bark.insert(key.clone(), value.clone());
-                }
             }
         }
         ProbeBuiltEvent {
@@ -575,14 +584,117 @@ fn probe_hook_matches_expected(
         && hook.get("async").is_none()
 }
 
+fn tokenize_simple_shell_command(command: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\n' | '\r' | ';' | '&' | '|' | '<' | '>' | '$' | '`' => return None,
+            c if c.is_ascii_whitespace() => {
+                if in_token {
+                    tokens.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            '\'' => {
+                in_token = true;
+                let mut closed = false;
+                for inner in chars.by_ref() {
+                    if inner == '\'' {
+                        closed = true;
+                        break;
+                    }
+                    if matches!(inner, '\n' | '\r') {
+                        return None;
+                    }
+                    current.push(inner);
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            '"' => {
+                in_token = true;
+                let mut closed = false;
+                while let Some(inner) = chars.next() {
+                    match inner {
+                        '"' => {
+                            closed = true;
+                            break;
+                        }
+                        '$' | '`' | '\n' | '\r' => return None,
+                        '\\' => {
+                            let escaped = chars.next()?;
+                            if matches!(escaped, '\n' | '\r') {
+                                return None;
+                            }
+                            if matches!(escaped, '"' | '\\') {
+                                current.push(escaped);
+                            } else {
+                                current.push('\\');
+                                current.push(escaped);
+                            }
+                        }
+                        _ => current.push(inner),
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            '\\' => {
+                let escaped = chars.next()?;
+                if matches!(escaped, '\n' | '\r') {
+                    return None;
+                }
+                in_token = true;
+                current.push(escaped);
+            }
+            _ => {
+                in_token = true;
+                current.push(ch);
+            }
+        }
+    }
+    if in_token {
+        tokens.push(current);
+    }
+    Some(tokens)
+}
+
 pub fn is_agenthub_managed_hook_command(command: &str) -> bool {
-    let lowered = command.to_ascii_lowercase();
-    (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
-        && (lowered.contains("agenthubd")
-            || lowered.contains("agenthub-webd")
-            || lowered.contains("/opt/agenthub")
-            || lowered.contains("application support/agenthub")
-            || lowered.contains("codex-sentinel"))
+    let Some(tokens) = tokenize_simple_shell_command(command) else {
+        return false;
+    };
+    let [exe, rest @ ..] = tokens.as_slice() else {
+        return false;
+    };
+    let Some(name) = Path::new(exe).file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let lowered_name = name.to_ascii_lowercase();
+    let stem = lowered_name.strip_suffix(".exe").unwrap_or(&lowered_name);
+    if !matches!(stem, "agenthub-webd" | "agenthubd" | "codex-sentinel") {
+        return false;
+    }
+    let subcmd = match rest {
+        [flag, cfg, tail @ ..] if flag == "--config" && !cfg.is_empty() => tail,
+        [flag_eq, tail @ ..]
+            if flag_eq.starts_with("--config=") && flag_eq.len() > "--config=".len() =>
+        {
+            tail
+        }
+        tail => tail,
+    };
+    matches!(
+        subcmd,
+        [probe, hook]
+            if probe.eq_ignore_ascii_case("probe")
+                && (hook.eq_ignore_ascii_case("hook-stop")
+                    || hook.eq_ignore_ascii_case("hook-request-user-input"))
+    )
 }
 
 pub fn remove_agenthub_managed_hooks(root: &mut Value) -> bool {
@@ -1033,7 +1145,6 @@ fn is_probe_terminal_stop_error(text: &str) -> bool {
 fn is_probe_stop_hook_system_message(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("Codex Sentinel Lite 检测到")
-        || trimmed.starts_with("AgentHub Probe 检测到")
         || trimmed.starts_with("AgentHub Probe 检测到")
 }
 
@@ -2691,5 +2802,30 @@ Authorization: Bearer secret-token";
         );
         assert!(root["hooks"].get("PreToolUse").is_none());
         assert!(!remove_agenthub_managed_hooks(&mut root));
+    }
+
+    #[test]
+    fn managed_hook_command_matches_strict_binary_and_args_and_rejects_shell_chaining() {
+        assert!(is_agenthub_managed_hook_command(
+            "'/Users/example/Library/Application Support/AgentHub/bin/agenthub-webd' --config '/Users/example/Library/Application Support/AgentHub/config.toml' probe hook-stop"
+        ));
+        assert!(is_agenthub_managed_hook_command(
+            "/opt/agenthub/bin/agenthubd --config=/etc/agenthub/config.toml probe hook-request-user-input"
+        ));
+        assert!(is_agenthub_managed_hook_command(
+            "/usr/local/bin/codex-sentinel probe hook-stop"
+        ));
+        assert!(!is_agenthub_managed_hook_command(
+            "/opt/agenthub/bin/agenthub-webd probe hook-stop && /usr/local/bin/other"
+        ));
+        assert!(!is_agenthub_managed_hook_command(
+            "/opt/agenthub/bin/agenthub-webd probe hook-stop; echo ok"
+        ));
+        assert!(!is_agenthub_managed_hook_command(
+            "/usr/local/bin/custom-wrapper --cmd '/opt/agenthub/bin/agenthub-webd probe hook-stop'"
+        ));
+        assert!(!is_agenthub_managed_hook_command(
+            "/opt/agenthub/bin/agenthub-webd serve"
+        ));
     }
 }

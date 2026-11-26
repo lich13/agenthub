@@ -52,6 +52,25 @@ impl PanelDb {
         local_claude_hooks: bool,
         full_scan: bool,
     ) -> Result<usize> {
+        self.stage_native_notifications_with_precheck(
+            provider,
+            scan,
+            None,
+            load_config,
+            local_claude_hooks,
+            full_scan,
+        )
+    }
+
+    pub fn stage_native_notifications_with_precheck(
+        &self,
+        provider: NativeProvider,
+        scan: &NativeScan,
+        preloaded_config: Option<&Config>,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
+        local_claude_hooks: bool,
+        full_scan: bool,
+    ) -> Result<usize> {
         let instance = if local_claude_hooks {
             Some(self.notification_instance_id()?)
         } else {
@@ -59,8 +78,15 @@ impl PanelDb {
         };
         let mut conn = self.conn.lock().expect("db mutex");
         {
-            let config = load_config()?;
-            if !provider.enabled(&config) {
+            let owned_config;
+            let config = match preloaded_config {
+                Some(cached) => cached,
+                None => {
+                    owned_config = load_config()?;
+                    &owned_config
+                }
+            };
+            if !provider.enabled(config) {
                 let row: Option<(bool, usize, usize)> = conn
                     .prepare_cached(
                         "SELECT enabled, stream_count, error_count FROM native_probe_providers WHERE provider=?1",
@@ -430,11 +456,18 @@ impl PanelDb {
         event: &NativeTurnEvent,
     ) -> Result<bool> {
         let conn = self.conn.lock().expect("db mutex");
-        let active: bool = conn.query_row("SELECT enabled=1 AND activated_ms<=?1 FROM native_probe_providers WHERE provider='claude_code'", [event.timestamp_ms], |r| r.get(0)).optional()?.unwrap_or(false);
+        let active: bool = conn
+            .prepare_cached("SELECT enabled=1 AND activated_ms<=?1 FROM native_probe_providers WHERE provider='claude_code'")?
+            .query_row([event.timestamp_ms], |r| r.get(0))
+            .optional()?
+            .unwrap_or(false);
         if !active {
             return Ok(false);
         }
-        let prior: Option<(String,u64)> = conn.query_row("SELECT identity,cursor FROM native_probe_streams WHERE provider='claude_code' AND session_key=?1", [&stream.session_key], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let prior: Option<(String, u64)> = conn
+            .prepare_cached("SELECT identity,cursor FROM native_probe_streams WHERE provider='claude_code' AND session_key=?1")?
+            .query_row([&stream.session_key], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
         Ok(prior.is_none_or(|(identity, cursor)| {
             identity == stream.identity && event.position > cursor
         }))
@@ -446,7 +479,7 @@ impl PanelDb {
         provider: Option<NativeProvider>,
     ) -> Result<Vec<NativeDelivery>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
+        let mut stmt = conn.prepare_cached("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
         let rows = stmt
             .query_map(
                 params![limit.min(100), provider.map(NativeProvider::as_str)],
@@ -496,7 +529,7 @@ impl PanelDb {
     pub fn recover_interrupted_native_deliveries(&self) -> Result<()> {
         let deliveries = {
             let conn = self.conn.lock().expect("db mutex");
-            let mut stmt=conn.prepare("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
+            let mut stmt = conn.prepare_cached("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
             let rows = stmt
                 .query_map([Self::now() - 120], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -516,7 +549,7 @@ impl PanelDb {
     }
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut counts = conn.prepare("SELECT provider, SUM(status='failed'), SUM(status IN ('pending','delivering','queued')) FROM native_probe_deliveries WHERE status IN ('failed','pending','delivering','queued') GROUP BY provider")?;
+        let mut counts = conn.prepare_cached("SELECT provider, SUM(status='failed'), SUM(status IN ('pending','delivering','queued')) FROM native_probe_deliveries WHERE status IN ('failed','pending','delivering','queued') GROUP BY provider")?;
         let counts = counts
             .query_map([], |row| {
                 Ok((
@@ -525,6 +558,9 @@ impl PanelDb {
                 ))
             })?
             .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
+        let mut provider_stmt = conn.prepare_cached(
+            "SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",
+        )?;
         let mut statuses = Vec::new();
         for provider in [
             NativeProvider::Grok,
@@ -536,7 +572,16 @@ impl PanelDb {
             if provider.local_only() && !cfg!(target_os = "macos") {
                 continue;
             }
-            let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
+            let row = provider_stmt
+                .query_row([provider.as_str()], |r| {
+                    Ok((
+                        r.get::<_, bool>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, u64>(2)?,
+                        r.get::<_, u64>(3)?,
+                    ))
+                })
+                .optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
             let (failed, pending) = counts.get(provider.as_str()).copied().unwrap_or_default();
             statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":true}));
@@ -592,7 +637,7 @@ impl PanelDb {
         self.set_setting("probe_event_retention_last_run", "ok")?;
         let busy = {
             let conn = self.conn.lock().expect("db mutex");
-            let _ = conn.execute_batch("PRAGMA optimize;");
+            let _ = conn.execute_batch("PRAGMA incremental_vacuum(256); PRAGMA optimize;");
             conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
                 r.get::<_, i64>(0)
             })

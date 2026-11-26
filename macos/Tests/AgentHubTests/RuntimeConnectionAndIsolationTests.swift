@@ -200,7 +200,7 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
         catch { XCTAssertEqual(current, "origin-3") }
 
         let confirmation = try CleanupInteractionVectors.load().preview.executionRequest(for: ["claude_empty"])
-        let request = CleanupRequestEnvelope(request: confirmation)
+        let request = RPCRequestEnvelope(request: confirmation)
         XCTAssertFalse(confirmation.targets.isEmpty)
         do {
             let _: Bool = try await store.rpc("cleanup.unifiedExecute", args: request, at: source)
@@ -252,7 +252,7 @@ final class RuntimeConnectionAndIsolationTests: XCTestCase {
         let store = RuntimeConnectionStore(transport: mock, defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let source = store.revision
         let scan = HiddenCleanupScan { request in
-            try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: source)
+            try await store.rpc("cleanup.hiddenDryRun", args: RPCRequestEnvelope(request: request), at: source)
         }
         let token = store.registerBeforeMachineChange {
             let done = scan.stop()

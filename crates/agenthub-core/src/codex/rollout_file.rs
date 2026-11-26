@@ -27,7 +27,7 @@ impl RolloutName {
     }
 }
 
-pub(crate) fn is_compressed(path: &Path) -> bool {
+pub fn is_compressed(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.ends_with(".jsonl.zst"))

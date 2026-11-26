@@ -172,3 +172,44 @@ pub fn after_cursor(end: usize, total: usize, last_id: Option<&str>) -> Option<S
         .then(|| last_id.map(|id| format!("n:{id}")))
         .flatten()
 }
+
+pub(crate) fn strip_subagent_cursor_prefix(
+    cursor: &str,
+    prefix: &str,
+    mismatch_error: &'static str,
+) -> Result<String> {
+    let (mode, position) = cursor
+        .split_once(':')
+        .filter(|(kind, _)| matches!(*kind, "j" | "n" | "w" | "p"))
+        .map_or(("", cursor), |(kind, id)| (kind, id));
+    let position = position
+        .strip_prefix(prefix)
+        .with_context(|| mismatch_error)?;
+    Ok(if mode.is_empty() {
+        position.into()
+    } else {
+        format!("{mode}:{position}")
+    })
+}
+
+pub(crate) fn prefix_history_metadata(
+    history: &mut crate::jsonl_cache::HistoryMetadata,
+    prefix: &str,
+) {
+    history.epoch = format!("{prefix}{}", history.epoch);
+    for id in &mut history.changed_ids {
+        *id = format!("{prefix}{id}");
+    }
+    for change in &mut history.changes {
+        for id in &mut change.changed_ids {
+            *id = format!("{prefix}{id}");
+        }
+    }
+}
+
+pub(crate) fn prefix_after_cursor(after_cursor: &mut Option<String>, prefix: &str) {
+    if let Some(ac) = after_cursor {
+        let rest = ac.strip_prefix("n:").unwrap_or(ac);
+        *ac = format!("n:{prefix}{rest}");
+    }
+}

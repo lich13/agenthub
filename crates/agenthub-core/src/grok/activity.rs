@@ -1,4 +1,8 @@
 use super::{GrokDeletionEligibility, GrokPaths, GrokSessionSummary};
+use crate::{
+    file_stamp::FileStamp,
+    platform::{resolve_kernel_exe, same_canonical_dir},
+};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -260,11 +264,7 @@ impl Snapshot {
 }
 
 fn same_path(left: &str, right: &str) -> bool {
-    left == right
-        || fs::canonicalize(left)
-            .ok()
-            .zip(fs::canonicalize(right).ok())
-            .is_some_and(|(left, right)| left == right)
+    same_canonical_dir(Path::new(left), Path::new(right))
 }
 
 fn read_registrations(path: &Path) -> Option<Vec<Registration>> {
@@ -451,35 +451,6 @@ fn classify_grok_process(pid: u32, args: &[&str], executables: &HashSet<PathBuf>
     }
 }
 
-fn resolve_kernel_exe(pid: u32) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        fs::read_link(format!("/proc/{pid}/exe")).ok()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut buf = [0_u8; 4096];
-        // SAFETY: `buf` is writable for `buf.len()` bytes and `pid` is validated to fit `i32`.
-        let count = unsafe {
-            libc::proc_pidpath(
-                pid.try_into().ok()?,
-                buf.as_mut_ptr().cast(),
-                buf.len() as u32,
-            )
-        };
-        if count <= 0 {
-            return None;
-        }
-        let end = buf.iter().position(|b| *b == 0).unwrap_or(count as usize);
-        std::str::from_utf8(&buf[..end]).ok().map(PathBuf::from)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Empty,
@@ -565,37 +536,10 @@ impl Turns {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    modified: SystemTime,
-    identity: (u64, u64),
-    changed: (i64, i64),
-}
-
-impl Stamp {
-    fn read(file: &File) -> Option<Self> {
-        let metadata = file.metadata().ok()?;
-        if !metadata.is_file() {
-            return None;
-        }
-        use std::os::unix::fs::MetadataExt;
-        Some(Self {
-            len: metadata.len(),
-            modified: metadata.modified().ok()?,
-            identity: (metadata.dev(), metadata.ino()),
-            changed: (metadata.ctime(), metadata.ctime_nsec()),
-        })
-    }
-    fn same_file(&self, other: &Self) -> bool {
-        self.identity == other.identity
-    }
-}
-
 struct Cursor {
     path: PathBuf,
     id: String,
-    stamp: Stamp,
+    stamp: FileStamp,
     offset: u64,
     anchor: Vec<u8>,
     turns: Turns,
@@ -624,8 +568,8 @@ impl TurnCache {
 
     fn read_state(&self, path: &Path, id: &str) -> std::io::Result<(Phase, bool)> {
         let mut file = File::open(path)?;
-        let stamp =
-            Stamp::read(&file).ok_or_else(|| std::io::Error::other("invalid activity file"))?;
+        let stamp = FileStamp::from_open_file(&file)
+            .ok_or_else(|| std::io::Error::other("invalid activity file"))?;
         let old = self.0.lock().ok().and_then(|mut entries| {
             crate::lru::take_first(&mut entries, |entry| entry.path == path && entry.id == id)
         });
@@ -637,7 +581,7 @@ impl TurnCache {
                 return Ok(state);
             }
             Some(cursor)
-                if cursor.stamp.same_file(&stamp)
+                if cursor.stamp.same_inode(&stamp)
                     && (stamp.len > cursor.stamp.len
                         || (cursor.stamp == stamp && !cursor.caught_up))
                     && anchor(&mut file, cursor.offset)? == cursor.anchor =>
@@ -647,7 +591,7 @@ impl TurnCache {
             _ => Cursor {
                 path: path.to_owned(),
                 id: id.to_owned(),
-                stamp: stamp.clone(),
+                stamp,
                 offset: 0,
                 anchor: Vec::new(),
                 turns: Turns::default(),
@@ -688,7 +632,7 @@ impl TurnCache {
         } else {
             Phase::Unknown
         };
-        if Stamp::read(&file).as_ref() != Some(&stamp) {
+        if FileStamp::from_open_file(&file).as_ref() != Some(&stamp) {
             return Ok((Phase::Unknown, false));
         }
         cursor.anchor = anchor(&mut file, cursor.offset)?;

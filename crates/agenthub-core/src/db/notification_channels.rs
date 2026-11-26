@@ -58,38 +58,39 @@ pub fn notification_retry_delay_ms(attempt: usize) -> i64 {
 }
 
 fn publish_outcome(tx: &rusqlite::Transaction<'_>, key: &str, now: i64) -> Result<()> {
-    let (status, outcome): (String, String) = tx.query_row(
-        "SELECT status,outcome_json FROM probe_notification_deliveries WHERE event_key=?1 AND channel='bark'",
-        [key], |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    tx.execute(
+    let (status, outcome): (String, String) = tx
+        .prepare_cached(
+            "SELECT status,outcome_json FROM probe_notification_deliveries WHERE event_key=?1 AND channel='bark'",
+        )?
+        .query_row([key], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    tx.prepare_cached(
         "UPDATE probe_events SET payload_json=json_set(payload_json,
             '$.bark',json(?2),'$.bark_status',json_extract(?2,'$.status'))
          WHERE json_valid(payload_json) AND json_extract(payload_json,'$.notification_event_key')=?1",
-        params![key, outcome],
-    )?;
+    )?
+    .execute(params![key, outcome])?;
     // Initial native delivery owns creation of its visible event. Its completion reads this ledger.
     if let Some(native_key) = key.strip_prefix("native:") {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE native_probe_deliveries SET status=?2,updated_at=?3,ciphertext=NULL,nonce=NULL
              WHERE event_key=?1 AND status!='delivering'",
-            params![
-                native_key,
-                if matches!(status.as_str(), "pending" | "delivering") {
-                    "queued"
-                } else {
-                    &status
-                },
-                now / 1000
-            ],
-        )?;
+        )?
+        .execute(params![
+            native_key,
+            if matches!(status.as_str(), "pending" | "delivering") {
+                "queued"
+            } else {
+                &status
+            },
+            now / 1000
+        ])?;
     }
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE probe_error_incidents SET bark_status=json_extract(?2,'$.status'),updated_at=?3
          WHERE event_id IN (SELECT id FROM probe_events
             WHERE json_valid(payload_json) AND json_extract(payload_json,'$.notification_event_key')=?1)",
-        params![key, outcome, now / 1000],
-    )?;
+    )?
+    .execute(params![key, outcome, now / 1000])?;
     Ok(())
 }
 
@@ -240,16 +241,18 @@ impl PanelDb {
         let now = Timestamp::now().as_millisecond();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for alias in aliases.iter().filter(|alias| alias.as_str() != key) {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel=?1 AND event_key=?2)", params![channel.as_str(),alias], |r| r.get(0))?;
+            let exists: bool = tx
+                .prepare_cached("SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel=?1 AND event_key=?2)")?
+                .query_row(params![channel.as_str(), alias], |r| r.get(0))?;
             if exists {
                 return Ok(false);
             }
             if let Some(native) = alias.strip_prefix("native:") {
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM native_probe_deliveries WHERE event_key=?1)",
-                    [native],
-                    |r| r.get(0),
-                )?;
+                let exists: bool = tx
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM native_probe_deliveries WHERE event_key=?1)",
+                    )?
+                    .query_row([native], |r| r.get(0))?;
                 if exists {
                     return Ok(false);
                 }
@@ -530,10 +533,11 @@ impl PanelDb {
             for (key, channel, attempt, first) in interrupted {
                 let next = now + notification_retry_delay_ms(attempt);
                 let retry = attempt < 3 && next < first + NOTIFICATION_LIFETIME_MS;
-                tx.execute("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
+                tx.prepare_cached("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
                     outcome_json=json_set(?5,'$.request_count',attempts,'$.chunk_count',chunk_count,'$.confirmed_chunks',chunk_index),
                     updated_ms=?7,ciphertext=CASE WHEN ?6 THEN ciphertext ELSE NULL END,nonce=CASE WHEN ?6 THEN nonce ELSE NULL END
-                    WHERE event_key=?1 AND channel=?2",params![key,channel,if retry {"pending"} else {"unknown"},next,
+                    WHERE event_key=?1 AND channel=?2")?
+                    .execute(params![key,channel,if retry {"pending"} else {"unknown"},next,
                     json!({"sent":false,"skipped":false,"status":if retry {"waiting_retry"}else{"unknown"},"reason":"delivery_interrupted_outcome_unknown","error_category":"network","attempts":attempt,"next_retry_ms":if retry {Some(next)}else{None}}).to_string(),retry,now])?;
                 changed_keys.push(key);
             }

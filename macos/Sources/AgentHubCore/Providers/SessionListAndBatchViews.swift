@@ -3,16 +3,16 @@ import SwiftUI
 
 // MARK: - Provider Menu Action Builder (Exact 6-Platform Matrix from §2.3)
 
-public struct SessionMenuAction: Identifiable {
-    public let id: String
-    public let label: String
-    public let icon: LucideIconName
-    public let danger: Bool
-    public let disabled: Bool
-    public let reason: String?
-    public let run: () -> Void
+struct SessionMenuAction: Identifiable {
+    let id: String
+    let label: String
+    let icon: LucideIconName
+    let danger: Bool
+    let disabled: Bool
+    let reason: String?
+    let run: () -> Void
 
-    public init(
+    init(
         id: String,
         label: String,
         icon: LucideIconName,
@@ -31,8 +31,8 @@ public struct SessionMenuAction: Identifiable {
     }
 }
 
-public enum ProviderMenuMatrixBuilder {
-    public static func buildActions(
+enum ProviderMenuMatrixBuilder {
+    static func buildActions(
         provider: SessionProvider,
         isHeaderMenu: Bool,
         isLocalMachine: Bool,
@@ -265,7 +265,7 @@ public enum ProviderMenuMatrixBuilder {
         return list
     }
 
-    public static func buildBatchContextMenuActions(
+    static func buildBatchContextMenuActions(
         selectedCount: Int,
         operations: [SessionOperation],
         busy: Bool,
@@ -301,7 +301,7 @@ public enum ProviderMenuMatrixBuilder {
         return actions
     }
 
-    public static func shouldTriggerBatchDeleteKey(
+    static func shouldTriggerBatchDeleteKey(
         keyCode: UInt16,
         charactersIgnoringModifiers: String?,
         modifierFlags: NSEvent.ModifierFlags
@@ -317,7 +317,7 @@ public enum ProviderMenuMatrixBuilder {
         return false
     }
 
-    public static func shouldTriggerRenameKey(
+    static func shouldTriggerRenameKey(
         keyCode: UInt16,
         charactersIgnoringModifiers: String?,
         modifierFlags: NSEvent.ModifierFlags
@@ -328,13 +328,13 @@ public enum ProviderMenuMatrixBuilder {
     }
 }
 
-public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
-    public var isModalOpen: Bool
-    public var onRenameSelected: () -> Bool
-    public var onEscapeClearSelection: () -> Bool
-    public var onBatchDelete: () -> Bool
+struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
+    var isModalOpen: Bool
+    var onRenameSelected: () -> Bool
+    var onEscapeClearSelection: () -> Bool
+    var onBatchDelete: () -> Bool
 
-    public init(
+    init(
         isModalOpen: Bool,
         onRenameSelected: @escaping () -> Bool,
         onEscapeClearSelection: @escaping () -> Bool,
@@ -346,27 +346,27 @@ public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
         self.onBatchDelete = onBatchDelete
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    public func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         context.coordinator.attach(to: view)
         return view
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.attach(to: nsView)
     }
 
-    public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
         coordinator.detach()
     }
 
     @MainActor
-    public final class Coordinator {
+    final class Coordinator {
         var parent: WorkspaceKeyboardShortcutMonitorView
         private weak var hostView: NSView?
         private var monitor: Any?
@@ -429,15 +429,15 @@ public struct WorkspaceKeyboardShortcutMonitorView: NSViewRepresentable {
 
 // MARK: - Session Storage Badge & Renameable Session Row
 
-public struct SessionStorageBadgeView: View {
+struct SessionStorageBadgeView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let size: SessionStorageSize?
+    let size: SessionStorageSize?
 
-    public init(size: SessionStorageSize?) {
+    init(size: SessionStorageSize?) {
         self.size = size
     }
 
-    public static func resolvedColor(forTone tone: String, palette: DesignPalette) -> RGBAColor {
+    static func resolvedColor(forTone tone: String, palette: DesignPalette) -> RGBAColor {
         switch tone {
         case "danger": return palette.errFg
         case "warning": return palette.warnFg
@@ -446,11 +446,11 @@ public struct SessionStorageBadgeView: View {
         }
     }
 
-    public static func resolvedColor(for size: SessionStorageSize?, palette: DesignPalette) -> RGBAColor {
+    static func resolvedColor(for size: SessionStorageSize?, palette: DesignPalette) -> RGBAColor {
         resolvedColor(forTone: SessionStorageFormatter.format(size).tone, palette: palette)
     }
 
-    public var body: some View {
+    var body: some View {
         let formatted = SessionStorageFormatter.format(size)
         let fg = Self.resolvedColor(forTone: formatted.tone, palette: palette)
         Text(formatted.label)
@@ -464,15 +464,15 @@ public struct SessionStorageBadgeView: View {
     }
 }
 
-public struct DeletePathCodeBlockView: View {
+struct DeletePathCodeBlockView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let path: String
+    let path: String
 
-    public init(_ path: String) {
+    init(_ path: String) {
         self.path = path
     }
 
-    public var body: some View {
+    var body: some View {
         Text(path)
             .font(DesignFonts.mono(12))
             .foregroundStyle(palette.textPrimary.color)
@@ -494,8 +494,8 @@ public struct DeletePathCodeBlockView: View {
 // MARK: - Custom WebUI-Parity TaskMenu Popover (.task-menu-items / .context-task-menu)
 
 @MainActor
-public final class AgentHubTaskMenuPresenter {
-    public static let shared = AgentHubTaskMenuPresenter()
+final class AgentHubTaskMenuPresenter {
+    static let shared = AgentHubTaskMenuPresenter()
 
     private var activePanel: NSPanel?
     private weak var parentWindow: NSWindow?
@@ -512,9 +512,9 @@ public final class AgentHubTaskMenuPresenter {
 
     private init() {}
 
-    public var isPresented: Bool { activePanel != nil }
+    var isPresented: Bool { activePanel != nil }
 
-    public func dismiss(restoreFocus: Bool = false) {
+    func dismiss(restoreFocus: Bool = false) {
         if let m = mouseDownMonitor { NSEvent.removeMonitor(m); mouseDownMonitor = nil }
         if let s = scrollMonitor { NSEvent.removeMonitor(s); scrollMonitor = nil }
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
@@ -537,12 +537,31 @@ public final class AgentHubTaskMenuPresenter {
         returnFocusResponder = nil
     }
 
-    public func presentAtScreenTopLeft(
+    func presentAtScreenTopLeft(
         _ topLeftScreenPoint: NSPoint,
         in hostWindow: NSWindow?,
         returnFocus: NSResponder? = nil,
         actions: [SessionMenuAction],
         palette: DesignPalette
+    ) {
+        guard !actions.isEmpty else { return }
+        presentPrebuilt(
+            topLeftScreenPoint,
+            in: hostWindow,
+            returnFocus: returnFocus,
+            actions: actions,
+            palette: palette,
+            prebuilt: nil
+        )
+    }
+
+    private func presentPrebuilt(
+        _ topLeftScreenPoint: NSPoint,
+        in hostWindow: NSWindow?,
+        returnFocus: NSResponder? = nil,
+        actions: [SessionMenuAction],
+        palette: DesignPalette,
+        prebuilt: (NSView, [TaskMenuItemRowView], NSSize)?
     ) {
         guard !actions.isEmpty else { return }
         dismiss(restoreFocus: false)
@@ -551,7 +570,7 @@ public final class AgentHubTaskMenuPresenter {
         self.parentWindow = targetWin
         self.returnFocusResponder = returnFocus ?? targetWin?.firstResponder
 
-        let (cardView, rows, size) = buildMenuCard(actions: actions, palette: palette)
+        let (cardView, rows, size) = prebuilt ?? buildMenuCard(actions: actions, palette: palette)
         self.itemViews = rows
 
         let screenFrame = (targetWin?.screen ?? NSScreen.main)?.visibleFrame
@@ -610,7 +629,7 @@ public final class AgentHubTaskMenuPresenter {
         installEventMonitors()
     }
 
-    public func presentBelowAnchorView(
+    func presentBelowAnchorView(
         _ anchorView: NSView,
         rightAligned: Bool,
         actions: [SessionMenuAction],
@@ -629,15 +648,16 @@ public final class AgentHubTaskMenuPresenter {
         guard let win = anchorView.window, !actions.isEmpty else { return }
         let rectInWin = anchorView.convert(anchorView.bounds, to: nil)
         let rectOnScreen = win.convertToScreen(rectInWin)
-        let (_, _, size) = buildMenuCard(actions: actions, palette: palette)
-        let topLeftX = rightAligned ? (rectOnScreen.maxX - size.width) : rectOnScreen.minX
+        let built = buildMenuCard(actions: actions, palette: palette)
+        let topLeftX = rightAligned ? (rectOnScreen.maxX - built.2.width) : rectOnScreen.minX
         let topLeftY = rectOnScreen.minY - 4
-        presentAtScreenTopLeft(
+        presentPrebuilt(
             NSPoint(x: topLeftX, y: topLeftY),
             in: win,
             returnFocus: anchorView,
             actions: actions,
-            palette: palette
+            palette: palette,
+            prebuilt: built
         )
         activeAnchorView = anchorView
     }
@@ -869,15 +889,15 @@ private final class TaskMenuItemRowView: NSView {
     }
 }
 
-public struct TaskMenuTriggerButton<Label: View>: View {
+struct TaskMenuTriggerButton<Label: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let rightAligned: Bool
-    public let accessibilityLabel: String
-    public let makeActions: () -> [SessionMenuAction]
-    @ViewBuilder public let label: () -> Label
+    let rightAligned: Bool
+    let accessibilityLabel: String
+    let makeActions: () -> [SessionMenuAction]
+    @ViewBuilder let label: () -> Label
     @State private var anchorView: NSView?
 
-    public init(
+    init(
         rightAligned: Bool = false,
         accessibilityLabel: String,
         makeActions: @escaping () -> [SessionMenuAction],
@@ -889,7 +909,7 @@ public struct TaskMenuTriggerButton<Label: View>: View {
         self.label = label
     }
 
-    public var body: some View {
+    var body: some View {
         Button {
             guard let rawAnchor = anchorView else { return }
             let resolved = MenuAnchorProbeNSView.resolveAnchorView(rawAnchor)
@@ -949,35 +969,35 @@ private final class SessionRowRightClickCaptureNSView: NSView {
     }
 }
 
-public struct RenameableSessionRowView: View {
+struct RenameableSessionRowView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let sessionKey: String
-    public var leadingBrandIcon: AgentBrandId? = nil
-    public let title: String
-    public var idLine: String? = nil
-    public let subtitle: String
-    public var inlinePreview: String = ""
-    public var isCodexCompactRow: Bool = false
-    public let statusText: String
-    public let running: Bool
-    public let storageSize: SessionStorageSize?
-    public let selected: Bool
-    public let selecting: Bool
-    public let multiSelected: Bool
-    public let disabled: Bool
-    public let canRename: Bool
-    public let renameBlockReason: String?
-    public var externalRenameRequestId: Int = 0
-    public var rowMenuActions: [SessionMenuAction] = []
-    public var batchMenuActions: [SessionMenuAction] = []
-    public var hasRowMenu: Bool = true
-    public var batchSelectedCount: Int = 0
-    public var makeRowMenuActions: (() -> [SessionMenuAction])? = nil
-    public var makeBatchMenuActions: (() -> [SessionMenuAction])? = nil
-    public let onRowClick: (SessionClick) -> Void
-    public let onRename: ((String) async throws -> Void)?
+    let sessionKey: String
+    var leadingBrandIcon: AgentBrandId? = nil
+    let title: String
+    var idLine: String? = nil
+    let subtitle: String
+    var inlinePreview: String = ""
+    var isCodexCompactRow: Bool = false
+    let statusText: String
+    let running: Bool
+    let storageSize: SessionStorageSize?
+    let selected: Bool
+    let selecting: Bool
+    let multiSelected: Bool
+    let disabled: Bool
+    let canRename: Bool
+    let renameBlockReason: String?
+    var externalRenameRequestId: Int = 0
+    var rowMenuActions: [SessionMenuAction] = []
+    var batchMenuActions: [SessionMenuAction] = []
+    var hasRowMenu: Bool = true
+    var batchSelectedCount: Int = 0
+    var makeRowMenuActions: (() -> [SessionMenuAction])? = nil
+    var makeBatchMenuActions: (() -> [SessionMenuAction])? = nil
+    let onRowClick: (SessionClick) -> Void
+    let onRename: ((String) async throws -> Void)?
 
-    public init(
+    init(
         sessionKey: String,
         leadingBrandIcon: AgentBrandId? = nil,
         title: String,
@@ -1046,7 +1066,7 @@ public struct RenameableSessionRowView: View {
         makeBatchMenuActions?() ?? batchMenuActions
     }
 
-    public var body: some View {
+    var body: some View {
         let effectiveBatchAvailable = makeBatchMenuActions != nil ? (batchSelectedCount >= 2) : !batchMenuActions.isEmpty
         let useBatchMenu = multiSelected && effectiveBatchAvailable
         let suppressSingleEllipsis = (selecting && !useBatchMenu) || multiSelected
@@ -1247,7 +1267,7 @@ public struct RenameableSessionRowView: View {
         }
     }
 
-    public func beginRename() {
+    func beginRename() {
         guard onRename != nil, !disabled, !selecting, !multiSelected else { return }
         if !canRename {
             errorText = renameBlockReason ?? "当前线程不可改名"
@@ -1292,22 +1312,22 @@ public struct RenameableSessionRowView: View {
 
 // MARK: - Frameless Collapsible Project Workspace Group Header
 
-public struct ProjectWorkspaceGroupHeaderView: View {
+struct ProjectWorkspaceGroupHeaderView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let displayName: String
-    public let fullPath: String?
-    public let count: Int
-    public let status: ProjectWorkspaceAggregateStatus
-    public let expanded: Bool
-    public let isFilteredToThisGroup: Bool
-    public let onToggleExpanded: () -> Void
-    public var onFilterOnlyThisGroup: (() -> Void)? = nil
-    public var onSelectAllInGroup: (() -> Void)? = nil
-    public var onCopyPath: ((String) -> Void)? = nil
+    let displayName: String
+    let fullPath: String?
+    let count: Int
+    let status: ProjectWorkspaceAggregateStatus
+    let expanded: Bool
+    let isFilteredToThisGroup: Bool
+    let onToggleExpanded: () -> Void
+    var onFilterOnlyThisGroup: (() -> Void)? = nil
+    var onSelectAllInGroup: (() -> Void)? = nil
+    var onCopyPath: ((String) -> Void)? = nil
 
     @State private var hovered: Bool = false
 
-    public init(
+    init(
         displayName: String,
         fullPath: String?,
         count: Int,
@@ -1331,7 +1351,7 @@ public struct ProjectWorkspaceGroupHeaderView: View {
         self.onCopyPath = onCopyPath
     }
 
-    public var body: some View {
+    var body: some View {
         Button(action: onToggleExpanded) {
             HStack(spacing: 6) {
                 LucideIcon(expanded ? .chevronDown : .chevronRight, size: 13)
@@ -1436,20 +1456,20 @@ public struct ProjectWorkspaceGroupHeaderView: View {
 
 // MARK: - Bottom .session-batch-controls & Backdrop-Safe ConfirmDialog
 
-public struct SessionBatchBarAndDialogView: View {
+struct SessionBatchBarAndDialogView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let selectedCount: Int
-    public let operations: [SessionOperation]
-    public let busy: Bool
-    public let notice: String?
-    public var prepareError: String? = nil
-    public var executeError: String? = nil
-    public let result: SessionBatchResult?
-    public let onSelectAll: () -> Void
-    public let onClear: () -> Void
-    public let onPrepareOperation: (SessionOperation) -> Void
+    let selectedCount: Int
+    let operations: [SessionOperation]
+    let busy: Bool
+    let notice: String?
+    var prepareError: String? = nil
+    var executeError: String? = nil
+    let result: SessionBatchResult?
+    let onSelectAll: () -> Void
+    let onClear: () -> Void
+    let onPrepareOperation: (SessionOperation) -> Void
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if selectedCount > 0 {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1561,8 +1581,8 @@ public struct SessionBatchBarAndDialogView: View {
 
 // MARK: - Shared Workspace Sidebar Controls & Filter Menu Builder
 
-public enum WorkspaceFilterMenuBuilder {
-    public static func buildActions<Item>(
+enum WorkspaceFilterMenuBuilder {
+    static func buildActions<Item>(
         currentFilter: ProjectWorkspaceFilter,
         groups: [ProjectWorkspaceGroup<Item>],
         idPrefix: String = "ws-filter",
@@ -1605,17 +1625,17 @@ public enum WorkspaceFilterMenuBuilder {
     }
 }
 
-public struct WorkspaceSidebarFilterMenuButton: View {
+struct WorkspaceSidebarFilterMenuButton: View {
     @Environment(\.agentHubPalette) private var palette
-    public let isFiltered: Bool
-    public let makeActions: () -> [SessionMenuAction]
+    let isFiltered: Bool
+    let makeActions: () -> [SessionMenuAction]
 
-    public init(isFiltered: Bool, makeActions: @escaping () -> [SessionMenuAction]) {
+    init(isFiltered: Bool, makeActions: @escaping () -> [SessionMenuAction]) {
         self.isFiltered = isFiltered
         self.makeActions = makeActions
     }
 
-    public var body: some View {
+    var body: some View {
         TaskMenuTriggerButton(
             rightAligned: true,
             accessibilityLabel: "筛选工作区",
@@ -1634,46 +1654,98 @@ public struct WorkspaceSidebarFilterMenuButton: View {
     }
 }
 
-public struct WorkspaceSidebarSearchField: View {
+struct WorkspaceSidebarSearchField: View {
     @Environment(\.agentHubPalette) private var palette
-    public let placeholder: String
-    @Binding public var query: String
+    let placeholder: String
+    @Binding var query: String
+    @State private var draftQuery: String
+    @State private var debounceTask: Task<Void, Never>?
 
-    public init(placeholder: String, query: Binding<String>) {
+    init(placeholder: String, query: Binding<String>) {
         self.placeholder = placeholder
         self._query = query
+        self._draftQuery = State(initialValue: query.wrappedValue)
     }
 
-    public var body: some View {
+    var body: some View {
         HStack(spacing: 8) {
             LucideIcon(.search, size: 15)
                 .foregroundStyle(palette.textMuted.color)
-            TextField(placeholder, text: $query)
-                .textFieldStyle(.plain)
-                .font(DesignFonts.body(13))
-            if !query.isEmpty {
-                Button { query = "" } label: { LucideIcon(.x, size: 13) }
-                    .buttonStyle(IconButtonStyle(dimension: 22))
+            IMEGuardedInlineTextField(
+                text: $draftQuery,
+                maxLength: 500,
+                placeholder: placeholder,
+                autoFocus: false,
+                onSubmit: {
+                    debounceTask?.cancel()
+                    if query != draftQuery {
+                        query = draftQuery
+                    }
+                },
+                onCancel: {
+                    debounceTask?.cancel()
+                    draftQuery = ""
+                    if !query.isEmpty {
+                        query = ""
+                    }
+                }
+            )
+            if !draftQuery.isEmpty {
+                Button {
+                    debounceTask?.cancel()
+                    draftQuery = ""
+                    if !query.isEmpty {
+                        query = ""
+                    }
+                } label: {
+                    LucideIcon(.x, size: 13)
+                }
+                .buttonStyle(IconButtonStyle(dimension: 22))
             }
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
         .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+        .onChange(of: query) { next in
+            if next != draftQuery {
+                debounceTask?.cancel()
+                draftQuery = next
+            }
+        }
+        .onChange(of: draftQuery) { next in
+            debounceTask?.cancel()
+            if next.isEmpty {
+                if !query.isEmpty {
+                    query = ""
+                }
+            } else {
+                debounceTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    if query != next {
+                        query = next
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            debounceTask?.cancel()
+        }
     }
 }
 
-public struct WorkspaceActiveFilterPillBanner: View {
+struct WorkspaceActiveFilterPillBanner: View {
     @Environment(\.agentHubPalette) private var palette
-    public let filter: ProjectWorkspaceFilter
-    public let onClear: () -> Void
+    let filter: ProjectWorkspaceFilter
+    let onClear: () -> Void
 
-    public init(filter: ProjectWorkspaceFilter, onClear: @escaping () -> Void) {
+    init(filter: ProjectWorkspaceFilter, onClear: @escaping () -> Void) {
         self.filter = filter
         self.onClear = onClear
     }
 
-    public var body: some View {
+    var body: some View {
         if case let .workspace(filterKey, includeSub) = filter {
             HStack(spacing: 6) {
                 LucideIcon(.folderGit2, size: 12)
@@ -1701,17 +1773,17 @@ public struct WorkspaceActiveFilterPillBanner: View {
     }
 }
 
-public struct WorkspaceArchivedToggleRow: View {
+struct WorkspaceArchivedToggleRow: View {
     @Environment(\.agentHubPalette) private var palette
-    @Binding public var isOpen: Bool
-    public let archivedCount: Int
+    @Binding var isOpen: Bool
+    let archivedCount: Int
 
-    public init(isOpen: Binding<Bool>, archivedCount: Int) {
+    init(isOpen: Binding<Bool>, archivedCount: Int) {
         self._isOpen = isOpen
         self.archivedCount = archivedCount
     }
 
-    public var body: some View {
+    var body: some View {
         Button {
             isOpen.toggle()
         } label: {
@@ -1740,12 +1812,12 @@ public struct WorkspaceArchivedToggleRow: View {
     }
 }
 
-public struct WorkspaceEmptyMatchPlaceholder: View {
+struct WorkspaceEmptyMatchPlaceholder: View {
     @Environment(\.agentHubPalette) private var palette
 
-    public init() {}
+    init() {}
 
-    public var body: some View {
+    var body: some View {
         Text("无匹配会话")
             .font(DesignFonts.body(12))
             .foregroundStyle(palette.textMuted.color)
@@ -1754,16 +1826,16 @@ public struct WorkspaceEmptyMatchPlaceholder: View {
     }
 }
 
-public struct WorkspaceGroupedSessionRows<Item: Identifiable & Equatable & Sendable, RowContent: View>: View {
-    public let groups: [ProjectWorkspaceGroup<Item>]
-    @Binding public var collapsedKeys: Set<ProjectWorkspaceKey>
-    @Binding public var workspaceFilter: ProjectWorkspaceFilter
-    public let isArchived: Bool
-    public let onSelectAllInGroup: ((ProjectWorkspaceGroup<Item>) -> Void)?
-    public let onCopyPath: (String) -> Void
-    @ViewBuilder public let rowContent: (Item, ProjectWorkspaceGroup<Item>) -> RowContent
+struct WorkspaceGroupedSessionRows<Item: Identifiable & Equatable & Sendable, RowContent: View>: View {
+    let groups: [ProjectWorkspaceGroup<Item>]
+    @Binding var collapsedKeys: Set<ProjectWorkspaceKey>
+    @Binding var workspaceFilter: ProjectWorkspaceFilter
+    let isArchived: Bool
+    let onSelectAllInGroup: ((ProjectWorkspaceGroup<Item>) -> Void)?
+    let onCopyPath: (String) -> Void
+    @ViewBuilder let rowContent: (Item, ProjectWorkspaceGroup<Item>) -> RowContent
 
-    public init(
+    init(
         groups: [ProjectWorkspaceGroup<Item>],
         collapsedKeys: Binding<Set<ProjectWorkspaceKey>>,
         workspaceFilter: Binding<ProjectWorkspaceFilter>,
@@ -1781,7 +1853,7 @@ public struct WorkspaceGroupedSessionRows<Item: Identifiable & Equatable & Senda
         self.rowContent = rowContent
     }
 
-    public var body: some View {
+    var body: some View {
         ForEach(groups) { group in
             let expanded = !collapsedKeys.contains(group.key)
             ProjectWorkspaceGroupHeaderView(
@@ -1819,13 +1891,13 @@ public struct WorkspaceGroupedSessionRows<Item: Identifiable & Equatable & Senda
     }
 }
 
-public struct WorkspaceArchivedExpandedSection<Content: View>: View {
+struct WorkspaceArchivedExpandedSection<Content: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    @Binding public var isOpen: Bool
-    public let archivedCount: Int
-    @ViewBuilder public let content: () -> Content
+    @Binding var isOpen: Bool
+    let archivedCount: Int
+    @ViewBuilder let content: () -> Content
 
-    public init(
+    init(
         isOpen: Binding<Bool>,
         archivedCount: Int,
         @ViewBuilder content: @escaping () -> Content
@@ -1835,7 +1907,7 @@ public struct WorkspaceArchivedExpandedSection<Content: View>: View {
         self.content = content
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             WorkspaceArchivedToggleRow(isOpen: $isOpen, archivedCount: archivedCount)
             content()
@@ -1847,17 +1919,17 @@ public struct WorkspaceArchivedExpandedSection<Content: View>: View {
     }
 }
 
-public struct WorkspaceArchivedClosedFooter: View {
+struct WorkspaceArchivedClosedFooter: View {
     @Environment(\.agentHubPalette) private var palette
-    @Binding public var isOpen: Bool
-    public let archivedCount: Int
+    @Binding var isOpen: Bool
+    let archivedCount: Int
 
-    public init(isOpen: Binding<Bool>, archivedCount: Int) {
+    init(isOpen: Binding<Bool>, archivedCount: Int) {
         self._isOpen = isOpen
         self.archivedCount = archivedCount
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceArchivedToggleRow(isOpen: $isOpen, archivedCount: archivedCount)
         }
@@ -1870,14 +1942,14 @@ public struct WorkspaceArchivedClosedFooter: View {
 
 // MARK: - Itemized Batch Preview & Single-Session Delete Confirm Dialog Content
 
-public struct SessionBatchPreviewDialogContentView: View {
+struct SessionBatchPreviewDialogContentView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let preview: SessionBatchPreview
-    public let busy: Bool
-    public let onCancel: () -> Void
-    public let onConfirm: () -> Void
+    let preview: SessionBatchPreview
+    let busy: Bool
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
 
-    public init(
+    init(
         preview: SessionBatchPreview,
         busy: Bool,
         onCancel: @escaping () -> Void,
@@ -1889,7 +1961,7 @@ public struct SessionBatchPreviewDialogContentView: View {
         self.onConfirm = onConfirm
     }
 
-    public var body: some View {
+    var body: some View {
         let allowed = preview.allowedCount
         let blocked = preview.blockedCount
         let formattedTotalBytes = SessionStorageFormatter.formatThousands(preview.totalBytes)

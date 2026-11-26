@@ -50,6 +50,19 @@ pub struct SubagentCounts {
     pub unknown: usize,
 }
 
+impl SubagentCounts {
+    pub(crate) fn record(&mut self, status: SubagentStatus) {
+        match status {
+            SubagentStatus::Creating => self.creating += 1,
+            SubagentStatus::Running => self.running += 1,
+            SubagentStatus::Completed => self.completed += 1,
+            SubagentStatus::Failed => self.failed += 1,
+            SubagentStatus::Interrupted => self.interrupted += 1,
+            SubagentStatus::Unknown => self.unknown += 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentCollection {
@@ -121,17 +134,10 @@ fn spawn_source(value: &Value) -> &Value {
     value.pointer("/subagent/thread_spawn").unwrap_or(value)
 }
 
-fn columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
-    Ok(conn
-        .prepare(&format!("PRAGMA table_info({table})"))?
-        .query_map([], |row| row.get(1))?
-        .collect::<rusqlite::Result<_>>()?)
-}
-
 fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
     let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("子智能体索引暂时不可用")?;
-    let cols = columns(&conn, "threads")?;
+    let cols = crate::db::table_columns(&conn, "threads")?;
     ensure!(
         cols.contains("id") && cols.contains("rollout_path"),
         "子智能体索引格式不支持"
@@ -211,7 +217,7 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
         "子智能体索引过大，暂时无法验证关联"
     );
     let mut graph: HashMap<_, _> = rows.into_iter().map(|r| (r.id.clone(), r)).collect();
-    let edge_cols = columns(&conn, "thread_spawn_edges")?;
+    let edge_cols = crate::db::table_columns(&conn, "thread_spawn_edges")?;
     if edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id") {
         let mut stmt =
             conn.prepare("SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")?;
@@ -241,8 +247,13 @@ fn validate_key(key: &str) -> Result<()> {
 
 fn validate_rollout(paths: &CodexPaths, record: &AgentRecord) -> Result<PathBuf> {
     let home = fs::canonicalize(&paths.home).context("会话根目录不可用")?;
-    let rollout = super::resolve_existing_rollout_path(paths, &record.rollout, record.archived)
-        .context("子智能体记录已清理或不存在")?;
+    let rollout = super::resolve_existing_rollout_path_with_home(
+        paths,
+        Some(&home),
+        &record.rollout,
+        record.archived,
+    )
+    .context("子智能体记录已清理或不存在")?;
     let path = fs::canonicalize(&rollout).context("子智能体记录已清理或不存在")?;
     ensure!(
         path.starts_with(home.join("sessions")) || path.starts_with(home.join("archived_sessions")),
@@ -517,26 +528,15 @@ fn record_activity(
     let verified = (|| -> Result<SubagentStatus> {
         ensure!(record.parents.len() == 1, "子智能体父线程关联不明确");
         let path = validate_rollout(paths, record)?;
-        let before = fs::metadata(&path)?;
+        let before =
+            crate::file_stamp::FileStamp::of_followed(&path).context("子智能体文件不可读")?;
         let status = native_status(&path)?;
-        let after = fs::metadata(validate_rollout(paths, record)?)?;
+        let after = crate::file_stamp::FileStamp::of_followed(&validate_rollout(paths, record)?)
+            .context("子智能体文件不可读")?;
         ensure!(
-            before.len() == after.len() && before.modified()? == after.modified()?,
-            "子智能体正在更新"
+            before.modified.is_some() && before == after,
+            "子智能体身份或内容已变化"
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            ensure!(
-                (
-                    before.dev(),
-                    before.ino(),
-                    before.ctime(),
-                    before.ctime_nsec()
-                ) == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec()),
-                "子智能体身份已变化"
-            );
-        }
         Ok(status)
     })();
     match verified {
@@ -689,14 +689,7 @@ fn enrich_subagent_blocks_with_graph(
         block.subagent = Some(view);
     }
     for agent in &collection.agents {
-        match agent.status {
-            SubagentStatus::Creating => collection.counts.creating += 1,
-            SubagentStatus::Running => collection.counts.running += 1,
-            SubagentStatus::Completed => collection.counts.completed += 1,
-            SubagentStatus::Failed => collection.counts.failed += 1,
-            SubagentStatus::Interrupted => collection.counts.interrupted += 1,
-            SubagentStatus::Unknown => collection.counts.unknown += 1,
-        }
+        collection.counts.record(agent.status);
     }
     if !collection.complete {
         collection.warning = Some("部分子智能体记录无法确认，统计可能不完整".into());
@@ -720,6 +713,8 @@ fn verified_detail(
     request: &SubagentDetailRequest,
     paged: bool,
 ) -> Result<SubagentDetailResponse> {
+    let state_db = paths.state_db();
+    let graph_stamp_before = crate::file_stamp::FileStamp::sqlite_pair(&state_db);
     let graph = read_graph(paths)?;
     validate_relation(paths, &graph, &request.root_thread_id, &request.agent_id)?;
     let record = graph.get(&request.agent_id).context("子智能体记录不存在")?;
@@ -733,7 +728,8 @@ fn verified_detail(
         .unwrap_or_default();
     let mut current_agent = activity(record, status, None);
     current_agent.name = display_name(names.for_record(record), record);
-    let before = fs::metadata(&path)?;
+    let before =
+        crate::file_stamp::FileStamp::of_followed(&path).context("子智能体记录不可读，请重试")?;
     let summary = ThreadSummary {
         activity_updated_at: None,
         storage_size: None,
@@ -767,37 +763,34 @@ fn verified_detail(
         request.before.as_deref(),
         None,
     )?;
-    let after = fs::metadata(validate_rollout(paths, record)?)?;
+    let after = crate::file_stamp::FileStamp::of_followed(&validate_rollout(paths, record)?)
+        .context("子智能体记录不可读，请重试")?;
     ensure!(
-        before.len() == after.len() && before.modified()? == after.modified()?,
+        before.modified.is_some() && before == after,
         "子智能体记录已变化，请重试"
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
+    let graph_stamp_after = crate::file_stamp::FileStamp::sqlite_pair(&state_db);
+    let reloaded_graph;
+    let current_graph = if graph_stamp_before.is_some() && graph_stamp_before == graph_stamp_after {
+        &graph
+    } else {
+        reloaded_graph = read_graph(paths)?;
+        validate_relation(
+            paths,
+            &reloaded_graph,
+            &request.root_thread_id,
+            &request.agent_id,
+        )?;
+        let current = reloaded_graph
+            .get(&request.agent_id)
+            .context("子智能体关联已变化")?;
         ensure!(
-            before.dev() == after.dev()
-                && before.ino() == after.ino()
-                && before.ctime() == after.ctime()
-                && before.ctime_nsec() == after.ctime_nsec(),
-            "子智能体文件身份已变化，请重试"
+            current.parents == record.parents && validate_rollout(paths, current)? == path,
+            "子智能体关联已变化，请重试"
         );
-    }
-    let current_graph = read_graph(paths)?;
-    validate_relation(
-        paths,
-        &current_graph,
-        &request.root_thread_id,
-        &request.agent_id,
-    )?;
-    let current = current_graph
-        .get(&request.agent_id)
-        .context("子智能体关联已变化")?;
-    ensure!(
-        current.parents == record.parents && validate_rollout(paths, current)? == path,
-        "子智能体关联已变化，请重试"
-    );
-    enrich_subagent_blocks_with_graph(paths, &mut detail, Some(&current_graph));
+        &reloaded_graph
+    };
+    enrich_subagent_blocks_with_graph(paths, &mut detail, Some(current_graph));
     Ok(SubagentDetailResponse {
         root_thread_id: request.root_thread_id.clone(),
         parent_thread_id: record

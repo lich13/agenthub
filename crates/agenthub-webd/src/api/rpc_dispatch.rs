@@ -6,10 +6,9 @@ use super::{
 use super::{
     api_error, archive_thread, get_probe_events, get_probe_settings, get_probe_status,
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
-    hidden_threads_delete_dry_run, job_detail, list_jobs, patch_probe_settings, rename_thread,
-    restore_thread, start_probe_action, start_update_action, system_capabilities,
-    system_update_status, thread_blocks, thread_detail, unified_cleanup_dry_run,
-    unified_cleanup_execute, ApiResponse,
+    hidden_threads_delete_dry_run, patch_probe_settings, rename_thread, restore_thread,
+    start_probe_action, start_update_action, system_capabilities, system_update_status,
+    thread_blocks, thread_detail, unified_cleanup_dry_run, unified_cleanup_execute, ApiResponse,
 };
 use crate::{
     api::payload::{

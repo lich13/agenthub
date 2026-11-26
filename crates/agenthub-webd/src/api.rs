@@ -6,7 +6,6 @@ use serde_json::value::RawValue;
 mod claude;
 mod cleanup;
 mod grok;
-mod jobs;
 mod payload;
 mod probe;
 mod provider_sessions;
@@ -29,7 +28,6 @@ pub(crate) use cleanup::{
 pub(crate) use grok::{
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
 };
-pub(crate) use jobs::{job_detail, list_jobs};
 pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action,

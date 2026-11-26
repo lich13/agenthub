@@ -4,33 +4,33 @@ import SwiftUI
 
 // MARK: - Cross-Provider Workspace Hub Item & Aggregated Store
 
-public struct CrossProviderSessionItem: Equatable, Sendable, Identifiable {
-    public var provider: SessionProvider
-    public var item: UnifiedSessionSummaryItem
+struct CrossProviderSessionItem: Equatable, Sendable, Identifiable {
+    var provider: SessionProvider
+    var item: UnifiedSessionSummaryItem
 
-    public var compositeKey: String {
+    var compositeKey: String {
         "\(provider.rawValue)::\(item.sessionKey)"
     }
 
-    public var id: String { compositeKey }
+    var id: String { compositeKey }
 
-    public init(provider: SessionProvider, item: UnifiedSessionSummaryItem) {
+    init(provider: SessionProvider, item: UnifiedSessionSummaryItem) {
         self.provider = provider
         self.item = item
     }
 }
 
 extension CrossProviderSessionItem: ProjectWorkspaceGroupableItem {
-    public var workspaceGroupItemId: String { compositeKey }
-    public var workspaceSummaryItem: UnifiedSessionSummaryItem { item }
+    var workspaceGroupItemId: String { compositeKey }
+    var workspaceSummaryItem: UnifiedSessionSummaryItem { item }
 }
 
-public struct CrossProviderBatchPlan: Equatable, Sendable {
-    public var operation: SessionOperation
-    public var previewsByProvider: [(provider: SessionProvider, preview: SessionBatchPreview)]
-    public var mergedPreview: SessionBatchPreview
+struct CrossProviderBatchPlan: Equatable, Sendable {
+    var operation: SessionOperation
+    var previewsByProvider: [(provider: SessionProvider, preview: SessionBatchPreview)]
+    var mergedPreview: SessionBatchPreview
 
-    public static func == (lhs: CrossProviderBatchPlan, rhs: CrossProviderBatchPlan) -> Bool {
+    static func == (lhs: CrossProviderBatchPlan, rhs: CrossProviderBatchPlan) -> Bool {
         lhs.operation == rhs.operation
             && lhs.mergedPreview == rhs.mergedPreview
             && lhs.previewsByProvider.count == rhs.previewsByProvider.count
@@ -41,14 +41,14 @@ public struct CrossProviderBatchPlan: Equatable, Sendable {
 }
 
 @MainActor
-public final class UnifiedWorkspaceHubStore: ObservableObject {
-    public static let codingProviders: [SessionProvider] = [
+final class UnifiedWorkspaceHubStore: ObservableObject {
+    static let codingProviders: [SessionProvider] = [
         .codex, .claudeCode, .grok, .antigravity, .dsh,
     ]
 
-    public let store: RuntimeConnectionStore
-    public let sourceRevision: UInt64
-    public let codexThreadStore = ThreadMessageStore()
+    let store: RuntimeConnectionStore
+    let sourceRevision: UInt64
+    let codexThreadStore = ThreadMessageStore()
     private var listFetchSeq: UInt64 = 0
     private var sidebarCacheRevision: UInt64 = 0
 
@@ -64,8 +64,8 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     }
     private var sidebarCache = HubSidebarCache()
 
-    @Published public var query: String = ""
-    @Published public var workspaceFilter: ProjectWorkspaceFilter = .all {
+    @Published var query: String = ""
+    @Published var workspaceFilter: ProjectWorkspaceFilter = .all {
         didSet {
             if oldValue != workspaceFilter {
                 sidebarCacheRevision &+= 1
@@ -73,7 +73,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
             }
         }
     }
-    @Published public var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
+    @Published var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedWorkspaceKeys {
                 sidebarCacheRevision &+= 1
@@ -81,7 +81,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
             }
         }
     }
-    @Published public var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
+    @Published var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedArchivedWorkspaceKeys {
                 sidebarCacheRevision &+= 1
@@ -89,29 +89,29 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
             }
         }
     }
-    @Published public var activeItems: [CrossProviderSessionItem] = [] {
+    @Published var activeItems: [CrossProviderSessionItem] = [] {
         didSet { sidebarCacheRevision &+= 1 }
     }
-    @Published public var archivedItems: [CrossProviderSessionItem] = [] {
+    @Published var archivedItems: [CrossProviderSessionItem] = [] {
         didSet { sidebarCacheRevision &+= 1 }
     }
-    @Published public var archivedOpen: Bool = false {
+    @Published var archivedOpen: Bool = false {
         didSet { sidebarCacheRevision &+= 1 }
     }
-    @Published public var selectedCompositeKey: String?
-    @Published public var renameRequestSeqByKey: [String: Int] = [:]
-    @Published public var providerErrors: [String] = []
-    @Published public var feedbackMessage: String?
+    @Published var selectedCompositeKey: String?
+    @Published var renameRequestSeqByKey: [String: Int] = [:]
+    @Published var providerErrors: [String] = []
+    @Published var feedbackMessage: String?
 
-    @Published public var partitionedSelection = PartitionedSessionSelectionState(activeScope: "hub-init")
-    @Published public var batchTargetPartition: SessionSelectionPartition = .active
-    @Published public var batchBusy: Bool = false
-    @Published public var batchPrepareError: String?
-    @Published public var batchExecuteError: String?
-    @Published public var batchPlan: CrossProviderBatchPlan?
-    @Published public var batchResult: SessionBatchResult?
+    @Published var partitionedSelection = PartitionedSessionSelectionState(activeScope: "hub-init")
+    @Published var batchTargetPartition: SessionSelectionPartition = .active
+    @Published var batchBusy: Bool = false
+    @Published var batchPrepareError: String?
+    @Published var batchExecuteError: String?
+    @Published var batchPlan: CrossProviderBatchPlan?
+    @Published var batchResult: SessionBatchResult?
 
-    public init(store: RuntimeConnectionStore) {
+    init(store: RuntimeConnectionStore) {
         self.store = store
         self.sourceRevision = store.revision
     }
@@ -148,35 +148,35 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         return built
     }
 
-    public var filteredActiveItems: [CrossProviderSessionItem] {
+    var filteredActiveItems: [CrossProviderSessionItem] {
         refreshedSidebarCache().filteredActiveItems
     }
 
-    public var filteredArchivedItems: [CrossProviderSessionItem] {
+    var filteredArchivedItems: [CrossProviderSessionItem] {
         refreshedSidebarCache().filteredArchivedItems
     }
 
-    public var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
+    var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
         refreshedSidebarCache().activeWorkspaceGroups
     }
 
-    public var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
+    var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
         refreshedSidebarCache().archivedWorkspaceGroups
     }
 
-    public var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
+    var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
         refreshedSidebarCache().availableWorkspaceGroups
     }
 
-    public var visualOrderedActiveKeys: [String] {
+    var visualOrderedActiveKeys: [String] {
         refreshedSidebarCache().visualOrderedActiveKeys
     }
 
-    public var visualOrderedArchivedKeys: [String] {
+    var visualOrderedArchivedKeys: [String] {
         refreshedSidebarCache().visualOrderedArchivedKeys
     }
 
-    public var selectedEntry: CrossProviderSessionItem? {
+    var selectedEntry: CrossProviderSessionItem? {
         if let key = selectedCompositeKey {
             if let found = activeItems.first(where: { $0.compositeKey == key })
                 ?? archivedItems.first(where: { $0.compositeKey == key })
@@ -194,9 +194,9 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         return cached.activeWorkspaceGroups.first?.items.first ?? cached.filteredActiveItems.first ?? activeItems.first
     }
 
-    @Published public var searchFallbackEntry: CrossProviderSessionItem?
+    @Published var searchFallbackEntry: CrossProviderSessionItem?
 
-    public func handleStageSessionSelected(provider: SessionProvider, sessionKey: String?) {
+    func handleStageSessionSelected(provider: SessionProvider, sessionKey: String?) {
         guard let sessionKey, !sessionKey.isEmpty else {
             selectedCompositeKey = nil
             searchFallbackEntry = nil
@@ -248,14 +248,14 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         }
     }
 
-    public var activeSelectionPartition: SessionSelectionPartition {
+    var activeSelectionPartition: SessionSelectionPartition {
         if archivedOpen && (partitionedSelection.archived.selecting || !partitionedSelection.archived.keys.isEmpty) {
             return .archived
         }
         return .active
     }
 
-    public func batchOperations(for partition: SessionSelectionPartition) -> [SessionOperation] {
+    func batchOperations(for partition: SessionSelectionPartition) -> [SessionOperation] {
         let selKeys = Set(partitionedSelection.state(for: partition).keys)
         let pool = (partition == .archived) ? filteredArchivedItems : filteredActiveItems
         let selectedProviders = Set(pool.filter { selKeys.contains($0.compositeKey) }.map(\.provider))
@@ -268,7 +268,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         return allSupportArchive ? [.archive, .delete] : [.delete]
     }
 
-    public func syncPartitionedSelection() {
+    func syncPartitionedSelection() {
         let baseScope = "\(store.revision):workspaces:\(query):\(workspaceFilter.scopeToken)"
         let cached = refreshedSidebarCache()
         var next = partitionedSelection
@@ -284,7 +284,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         }
     }
 
-    public func selectAllVisible() {
+    func selectAllVisible() {
         _ = partitionedSelection.selectAll(
             activeVisible: visualOrderedActiveKeys,
             archivedVisible: visualOrderedArchivedKeys,
@@ -294,7 +294,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         clearBatchFeedback()
     }
 
-    public func selectAllInWorkspaceGroup(keys: [String], partition: SessionSelectionPartition) {
+    func selectAllInWorkspaceGroup(keys: [String], partition: SessionSelectionPartition) {
         guard !keys.isEmpty else { return }
         var state = partitionedSelection.state(for: partition)
         state = SessionSelectionEngine.add(state, keys: keys)
@@ -303,14 +303,14 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         clearBatchFeedback()
     }
 
-    public func clearBatchFeedback() {
+    func clearBatchFeedback() {
         batchPlan = nil
         batchResult = nil
         batchPrepareError = nil
         batchExecuteError = nil
     }
 
-    public static func sortMergedItems(_ items: [CrossProviderSessionItem]) -> [CrossProviderSessionItem] {
+    static func sortMergedItems(_ items: [CrossProviderSessionItem]) -> [CrossProviderSessionItem] {
         items.enumerated().sorted { lhs, rhs in
             let lMs = lhs.element.item.updatedAtMs
             let rMs = rhs.element.item.updatedAtMs
@@ -319,7 +319,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         }.map(\.element)
     }
 
-    public func fetchAllSessions() async {
+    func fetchAllSessions() async {
         listFetchSeq &+= 1
         let fetchSeq = listFetchSeq
         let requestedQuery = query
@@ -426,7 +426,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         return (buckets.flatMap(\.1), errors.map(\.1))
     }
 
-    public func performRename(entry: CrossProviderSessionItem, newTitle: String) async throws {
+    func performRename(entry: CrossProviderSessionItem, newTitle: String) async throws {
         guard store.revision == sourceRevision else { throw CancellationError() }
         try await ProviderWorkspaceStore.performRenameStatic(
             store: store,
@@ -435,10 +435,23 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
             newTitle: newTitle,
             threadStore: entry.provider == .codex ? codexThreadStore : nil
         )
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            if let idx = activeItems.firstIndex(where: { $0.compositeKey == entry.compositeKey }) {
+                var updated = activeItems[idx]
+                updated.item.title = trimmed
+                activeItems[idx] = updated
+            }
+            if let idx = archivedItems.firstIndex(where: { $0.compositeKey == entry.compositeKey }) {
+                var updated = archivedItems[idx]
+                updated.item.title = trimmed
+                archivedItems[idx] = updated
+            }
+        }
         await fetchAllSessions()
     }
 
-    public func toggleSingleArchive(_ entry: CrossProviderSessionItem) async {
+    func toggleSingleArchive(_ entry: CrossProviderSessionItem) async {
         guard store.revision == sourceRevision else { return }
         do {
             try await ProviderWorkspaceStore.performToggleArchiveStatic(
@@ -457,7 +470,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         }
     }
 
-    public func prepareBatch(
+    func prepareBatch(
         operation: SessionOperation,
         compositeKeys: [String],
         partition: SessionSelectionPartition
@@ -541,7 +554,7 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         }
     }
 
-    public func executePreparedBatch() async {
+    func executePreparedBatch() async {
         guard store.revision == sourceRevision, let plan = batchPlan, !batchBusy else { return }
         let capturedRevision = store.revision
         let targetPartition = batchTargetPartition
@@ -636,14 +649,14 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
 
 // MARK: - Unified Cross-Provider Workspace Hub View
 
-public struct UnifiedWorkspaceHubView: View {
+struct UnifiedWorkspaceHubView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public let scheme: ColorSchemeKind
+    @ObservedObject var store: RuntimeConnectionStore
+    let scheme: ColorSchemeKind
 
     @StateObject private var hubModel: UnifiedWorkspaceHubStore
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         scheme: ColorSchemeKind
     ) {
@@ -652,7 +665,7 @@ public struct UnifiedWorkspaceHubView: View {
         self.scheme = scheme
     }
 
-    public init(
+    init(
         hubModel: UnifiedWorkspaceHubStore,
         scheme: ColorSchemeKind
     ) {
@@ -661,7 +674,7 @@ public struct UnifiedWorkspaceHubView: View {
         self.scheme = scheme
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
             GeometryReader { geo in
                 HStack(spacing: 0) {

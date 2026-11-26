@@ -4,7 +4,7 @@
 
 AgentHub（底层包标识 `com.lich13.agenthub`，服务端守护进程 `agenthub-webd`）是一款面向 macOS 的原生 Swift 6（SwiftUI + AppKit）多平台 AI Agent 会话阅读、实时通知探针（Probe）与纵深防御清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Grok Bot**、**Antigravity** 与 **DeepSeek Harness（DSH）** 六个 Provider 的本机会话，并通过零暴露端口的系统 SSH `rpc-stdio` 通道无缝管理多台命名远程 Linux 主机。
 
-v2.1.39 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0。早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。开始写入绑定记录身份的新密文后，二进制回退使用 v2.1.30，并保留原密钥。
+v2.1.40 支持新安装及已由 v2.1.0 完成迁移的配置。更早版本先升级至 v2.1.0。早于 schema 3 的数据库须先经过 v2.0.10。API 协议保持 2、数据库 schema 保持 3。开始写入绑定记录身份的新密文后，二进制回退使用 v2.1.30，并保留原密钥。
 
 v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）与 Rust 静态库（`agenthub-ffi`）架构，彻底退役 Tauri、WKWebView、前端 Node／pnpm 依赖与 Rust 中的 `objc2` 胶水；核心对话阅读列采用原生 AppKit 表格与显式 TextKit 1 文本视图渲染，支持增量行高缓存、代码块与宽表格纵向滚轮穿透、距顶 `200pt` 反向分页像素锚点锁定及自绘右键操作菜单，无缝沿用既有配置、数据库、系统钥匙串与更新签名体系。
 
@@ -14,7 +14,7 @@ v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）�
 | --- | --- |
 | **六大平台统一会话中枢** | 原生纳管 Codex、Claude Code、Grok Build、Grok Bot（本机 `.blob`／`.kblob` 近期缓存只读）、Antigravity（桌面端与 `agy` CLI 双目录统一纳管）与 DeepSeek Harness；支持跨平台「工作区」分组总览、`⌘F` 跨会话／单线程检索（上限 200 条）、一键复制线程 ID 与最优交接路径、本机 `在 Finder 中显示`（`⌘⇧R`）及 Codex／Grok Plan Markdown 导出。 |
 | **无框流式排版与有界内存读取** | 保持文本与工具调用原始时序，同一回合连续思考与命令执行自动收敛为单行 `<details>` 披露块；距顶部 `200px` 无感反向分页并严格锁定可见消息像素偏移；共享 32 MiB／64 项历史缓存、300 秒空闲释放与 K／M／G 三级体积徽章（`< 100 MiB` 绿、`100–300 MiB` 琥珀、`>= 300 MiB` 红）。 |
-| **单屏可折叠 Probe 与五平台实时 Hooks** | 顶部常驻精简「通知配置」（双主控开关＋可见平台通知一键开关，高级设置默认收起），其余 GitHub CI、Bark、Hooks 与宿主接入（五平台合一）、全平台实时态势、最近事件与执行记录收敛为 `48pt` 单行摘要披露卡（健康态单屏 `< 680pt` 完整呈现，新异常自动展开一次），支持分面板局部保存，实时回调（`<1 秒`）与 15 秒轮询共享 SQLite 原子幂等去重。 |
+| **可折叠 Probe 控制台与五平台实时 Hooks** | 默认展开 GitHub CI（`260pt` 有界内部滚动＋边界滚轮透传）、常驻「通知配置」（主控与平台总开关＋内联事件细项胶囊，高级设置默认收起）、紧凑 Bark 与 Hooks／宿主接入（五平台合一），其余实时态势、最近事件与执行记录默认收起为 `48pt` 摘要披露卡（新异常自动展开一次），支持分面板独立局部保存，实时回调（`<1 秒`）与 15 秒轮询共享 SQLite 原子幂等去重。 |
 | **GitHub CI 双通道监控与 Bot 过滤** | 自动发现所选机器活跃 `gh` 账号名下公开、私有与 fork 仓库的最新运行；支持**按仓库持久化筛选**与**默认过滤 Bot 提交的工作流运行**（自动识别 `dependabot[bot]`、`renovate[bot]`、`github-actions[bot]` 及对应分支），将成功、失败和超时精准推送至 Bark 与 macOS 系统通知。 |
 | **纵深防御清理与零端口 SSH 远端** | 覆盖五大平台六大清理作用域，执行端独立重算目标集、核验预览指纹交集、检查运行锁与子代理闭包并隔离符号链接；远端 Linux 通过常驻 SSH `rpc-stdio` 直连私有 Unix 套接字，无需开放 HTTP 端口、API Key 或反向代理。 |
 
@@ -27,7 +27,7 @@ v2.1.28 将 macOS 桌面端全面重构为原生 Swift 6（SwiftUI + AppKit）�
 - **无框流式排版与过程折叠**：保持文本与工具调用的原始时序；同一回合内连续的思考、过渡说明与命令／工具执行自动收敛为单行轻量披露块（`<details>`），最终答复独立清晰展示；`AGENTS.md`、环境与自动上下文默认合并为单行“上下文”入口，搜索命中时自动展开对应折叠块并保留用户手动展开状态。
 - **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
 - **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
-- **单屏可折叠 Probe 与五平台 Hooks／Host 接入**：进入 Probe 首屏即完整呈现精简「通知配置」（全局主控与平台通知一键开关，高级设置默认收起）及 6 张 `48pt` 单行摘要披露卡（GitHub CI、Bark、Hooks 与宿主接入［Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连］、全平台实时态势、最近事件、执行记录），支持分面板独立局部保存与新异常单次自动展开，实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
+- **可折叠 Probe 控制台与五平台 Hooks／Host 接入**：Probe 默认展开核心配置面板——GitHub CI（`260pt` 有界内部滚动与首尾滚轮透传）、常驻「通知配置」（全局主控、各平台总开关与内联完成／需回复／需授权／失败胶囊开关，高级设置默认收起）、紧凑 Bark 与「Hooks 与宿主接入」（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/agenthub.json`、Antigravity `~/.gemini/config/hooks.json` 行内安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），并将全平台实时态势、最近事件、执行记录收敛为默认收起的 `48pt` 摘要披露卡；支持分面板独立局部保存与新异常单次自动展开，实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
 - **GitHub CI 监控、仓库筛选与 Bot 过滤**：Probe 顶部展示所选机器当前 `github.com` 活跃 `gh` 账号的 CI；有符合筛选条件的未结束运行时每 5 秒、空闲时每 60 秒读取该仓库首页 10 条，每 10 分钟刷新公开、私有及 fork 仓库目录，筛选后最多展示 20 条。支持持久化筛选指定仓库（`github_ci_repositories`）并默认开启「过滤 Bot」（`github_ci_filter_bots = true`，自动排除 `dependabot[bot]`、`renovate[bot]`、`github-actions[bot]` 等自动化运行，避免刷屏）。Mac 每 5 秒读取当前机器缓存并采用来源机器的筛选设置。监控默认关闭，开启后成功、失败和超时发往已启用的 Bark 与获准的 Mac 系统通知，点击可打开对应 GitHub 运行。首次观察、重新启用、切号及切换过滤条件不补发历史结果；关闭 CI 时仅显示缓存，手动刷新不会查询新结果。
 - **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档与孤立子会话、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
 - **Codex 账号隔离解除**：Codex 0.168 起只向创建账号显示带 `account_scoped` 标记的会话，切换账号后其余会话从 Codex 的历史与 resume 列表消失。「设置 → 更新与维护 → Codex 账号隔离」检查带标记的会话并在一次确认后解除：只把会话文件首行的标记替换为等长空白，内容、创建者身份和文件长度不变，不读取 Codex 凭据，本机与远程机器通用。开启「回合结束后自动解除」后，已安装的 Codex Stop Hook 在回合结束时处理新会话。
@@ -58,7 +58,7 @@ Probe 仅保留控件、状态、错误、事件数据和确认对象；「全�
 
 Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖：`完成`、`需要回复`、`需要授权`、`失败`），正文提炼最多 4 个非空行、300 个 Unicode 字符的纯净摘要，剥离 Markdown、代码块、工具输出与内部元数据。
 
-- **平台通知开关**：Probe 首屏独立控制各 Provider；Grok Bot 默认关闭，开启后在本机按 send-message 文字／附件消息及待回复／待授权请求提醒，沿用消息游标、启用基线和去重。提醒按消息识别，不保证整轮任务彻底结束；会话阅读与原生交互展示保持。Antigravity 与 DSH 通知仅本机生效。
+- **平台通知开关**：Probe 独立控制各 Provider 总开关与事件细项；Grok Bot 默认关闭，开启后在本机按 send-message 文字／附件消息及待回复／待授权请求提醒，沿用消息游标、启用基线和去重。提醒按消息识别，不保证整轮任务彻底结束；会话阅读与原生交互展示保持。Antigravity 通知在本机 macOS（受管 Stop Hook + 15 秒轮询）与远端 Linux（15 秒只读轮询）同步生效；Grok Bot 与 DSH 通知仅本机生效。
 - **四平台实时 Hooks + DSH 原生流**：
   - **Codex**：管理 `~/.codex/hooks.json` 的 Stop Hook，并保留逐问题识别与去重；
   - **Claude Code**：管理 `~/.claude/settings.json` 的 `Stop`、`Notification`、`StopFailure` Hooks；
@@ -90,7 +90,7 @@ bash scripts/deploy-cloud.sh SSH_HOST ./dist/agenthub-webd-linux-x86_64.tar.gz
 
 ## 发布资产
 
-当前源码版本为 **2.1.39**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
+当前源码版本为 **2.1.40**；[查看 GitHub Releases](https://github.com/lich13/agenthub/releases)。每次正式发布包含八项资产：
 
 - `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
 - `agenthub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（macOS 应用内更新归档与 Minisign 签名）；

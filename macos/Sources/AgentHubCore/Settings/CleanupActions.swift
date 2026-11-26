@@ -55,10 +55,6 @@ struct HiddenScanRequest: Encodable {
     let limit = 100
 }
 
-struct CleanupRequestEnvelope<T: Encodable>: Encodable {
-    let request: T
-}
-
 extension RuntimeConnectionStore {
     func saveAutoClearAccountScope(_ enabled: Bool, at revision: UInt64) async throws -> Bool {
         let saved: ProbeSettingsView = try await rpc(
@@ -66,7 +62,7 @@ extension RuntimeConnectionStore {
             args: ["settings": .object(["probe": .object(["hooks": .object(["clear_account_scope": .bool(enabled)])])])],
             at: revision
         )
-        return ProbeSettingsDraft.from(saved).clearAccountScope
+        return saved.probe.hooks.clearAccountScope
     }
 
     func clearAccountScope(at revision: UInt64, progress: (CodexAccountScopeResult) -> Void) async throws {

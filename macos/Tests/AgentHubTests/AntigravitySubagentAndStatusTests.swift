@@ -383,17 +383,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         await store.bootstrap()
 
         @MainActor func collectTexts(_ view: NSView) -> String {
-            var out: [String] = []
-            if let tf = view as? NSTextField { out.append(tf.stringValue) }
-            if let tv = view as? NSTextView { out.append(tv.string) }
-            if let btn = view as? NSButton {
-                out.append(btn.title)
-                out.append(btn.attributedTitle.string)
-            }
-            for sub in view.subviews {
-                out.append(collectTexts(sub))
-            }
-            return out.joined(separator: " ")
+            OffscreenRenderHelper.collectVisibleText(in: view, includeButtons: true, separator: " ")
         }
 
         @MainActor func containsPopUpButton(_ view: NSView) -> Bool {
@@ -542,18 +532,12 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
         yRange: Range<Int>? = nil
     ) -> Int {
         let rows = yRange ?? (0 ..< height)
-        var count = 0
-        for y in rows {
-            for x in 0 ..< width {
-                let idx = (y * width + x) * 4
-                let dr = abs(Int(pixels[idx]) - Int(bg.0))
-                let dg = abs(Int(pixels[idx + 1]) - Int(bg.1))
-                let db = abs(Int(pixels[idx + 2]) - Int(bg.2))
-                if dr > 12 || dg > 12 || db > 12 {
-                    count += 1
-                }
-            }
-        }
-        return count
+        return OffscreenRenderHelper.countNonBackgroundPixels(
+            pixels,
+            imageWidth: width,
+            region: (0, rows.lowerBound, width, rows.count),
+            bg: bg,
+            threshold: 12
+        )
     }
 }

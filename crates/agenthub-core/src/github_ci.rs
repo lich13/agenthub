@@ -93,43 +93,80 @@ fn is_bot_identity(name: &str) -> bool {
     lower.ends_with("[bot]")
         || matches!(lower.as_str(), "dependabot" | "renovate" | "github-actions")
 }
-pub(crate) fn detect_bot_run(raw: &serde_json::Value) -> bool {
-    for actor_key in ["actor", "triggering_actor"] {
-        if let Some(actor) = raw.get(actor_key) {
-            if actor
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("bot"))
-            {
-                return true;
-            }
-            if actor
-                .get("login")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(is_bot_identity)
-            {
+#[derive(Deserialize)]
+struct RawActor {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    login: Option<String>,
+}
+#[derive(Deserialize)]
+struct RawCommitPerson {
+    name: Option<String>,
+}
+#[derive(Deserialize)]
+struct RawHeadCommit {
+    author: Option<RawCommitPerson>,
+    committer: Option<RawCommitPerson>,
+}
+#[derive(Deserialize)]
+struct RawRun {
+    id: u64,
+    #[serde(default = "one")]
+    run_attempt: u64,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    head_branch: Option<String>,
+    head_sha: String,
+    status: String,
+    conclusion: Option<String>,
+    html_url: String,
+    created_at: String,
+    updated_at: String,
+    #[serde(default)]
+    is_bot: bool,
+    actor: Option<RawActor>,
+    triggering_actor: Option<RawActor>,
+    head_commit: Option<RawHeadCommit>,
+}
+#[derive(Deserialize)]
+struct RunsEnvelope {
+    workflow_runs: Vec<RawRun>,
+}
+fn detect_bot_raw_run(raw: &RawRun) -> bool {
+    for actor in [&raw.actor, &raw.triggering_actor].into_iter().flatten() {
+        if actor
+            .kind
+            .as_deref()
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("bot"))
+        {
+            return true;
+        }
+        if actor.login.as_deref().is_some_and(is_bot_identity) {
+            return true;
+        }
+    }
+    if let Some(commit) = &raw.head_commit {
+        for person in [&commit.author, &commit.committer].into_iter().flatten() {
+            if person.name.as_deref().is_some_and(is_bot_identity) {
                 return true;
             }
         }
     }
-    if let Some(commit) = raw.get("head_commit") {
-        for role in ["author", "committer"] {
-            if commit
-                .get(role)
-                .and_then(|person| person.get("name"))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(is_bot_identity)
-            {
-                return true;
-            }
-        }
+    raw.head_branch.as_deref().is_some_and(|branch| {
+        let lower = branch.trim().to_ascii_lowercase();
+        lower.starts_with("dependabot/") || lower.starts_with("renovate/")
+    })
+}
+pub fn parse_retry_after_ms(value: Option<&str>, now_ms: i64) -> Option<i64> {
+    let value = value?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds.saturating_mul(1000).min(i64::MAX as u64) as i64);
     }
-    raw.get("head_branch")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|branch| {
-            let lower = branch.trim().to_ascii_lowercase();
-            lower.starts_with("dependabot/") || lower.starts_with("renovate/")
-        })
+    jiff::fmt::rfc2822::DateTimeParser::new()
+        .parse_timestamp(value)
+        .ok()
+        .map(|date| date.as_millisecond().saturating_sub(now_ms).max(0))
 }
 impl Run {
     pub fn notification_kind(&self) -> Option<&'static str> {
@@ -495,18 +532,42 @@ impl Monitor {
         self.tick_with_token(db, load_config, gh_token()).await
     }
 
+    pub async fn tick_in_process(
+        &mut self,
+        db: &PanelDb,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
+        check_db_request: bool,
+    ) -> Result<Vec<Event>> {
+        self.tick_inner(db, load_config, check_db_request, gh_token())
+            .await
+    }
+
     async fn tick_with_token(
         &mut self,
         db: &PanelDb,
         load_config: &(dyn Fn() -> Result<Config> + Sync),
         token: impl std::future::Future<Output = Result<String>>,
     ) -> Result<Vec<Event>> {
+        self.tick_inner(db, load_config, true, token).await
+    }
+
+    async fn tick_inner(
+        &mut self,
+        db: &PanelDb,
+        load_config: &(dyn Fn() -> Result<Config> + Sync),
+        check_db_request: bool,
+        token: impl std::future::Future<Output = Result<String>>,
+    ) -> Result<Vec<Event>> {
         let active = enabled(&load_config()?);
         if !active && self.active == Some(false) {
             return Ok(Vec::new());
         }
-        let request = request_ms(db)?;
         let time = now();
+        let request = if check_db_request || self.active != Some(active) {
+            request_ms(db)?
+        } else {
+            self.request_ms
+        };
         if self.active == Some(active)
             && request <= self.request_ms
             && (time < self.retry_at || !active || time < self.next_poll_ms)
@@ -655,10 +716,18 @@ impl Monitor {
         Duration::from_millis(due.saturating_sub(now()).clamp(0, 2000) as u64)
     }
 
-    async fn get(
+    pub fn in_process_wait_duration(&self) -> Duration {
+        if self.active != Some(true) {
+            return Duration::from_secs(60);
+        }
+        let due = self.next_poll_ms.max(self.retry_at);
+        Duration::from_millis(due.saturating_sub(now()).clamp(0, 60_000) as u64)
+    }
+
+    async fn get<R: serde::de::DeserializeOwned>(
         &mut self,
         path: &str,
-        parse: impl FnOnce(serde_json::Value) -> Result<CachedValue>,
+        parse: impl FnOnce(R) -> Result<CachedValue>,
     ) -> Result<(CachedValue, Option<String>)> {
         let url = if path.starts_with('/') {
             format!("{}{path}", self.api)
@@ -694,19 +763,21 @@ impl Monitor {
                         .get("x-ratelimit-remaining")
                         .is_some_and(|v| v == "0")))
         {
-            let seconds = response
-                .headers()
-                .get(header::RETRY_AFTER)
-                .and_then(|s| s.to_str().ok())
-                .and_then(|s| s.parse::<i64>().ok());
+            let now_ms = now();
+            let retry_ms = parse_retry_after_ms(
+                response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .and_then(|s| s.to_str().ok()),
+                now_ms,
+            );
             let reset = response
                 .headers()
                 .get("x-ratelimit-reset")
                 .and_then(|s| s.to_str().ok())
                 .and_then(|s| s.parse::<i64>().ok());
-            let now_ms = now();
-            self.retry_at = seconds
-                .map(|s| now_ms.saturating_add(s.max(0).saturating_mul(1000)))
+            self.retry_at = retry_ms
+                .map(|ms| now_ms.saturating_add(ms.max(0)))
                 .or(reset.map(|s| s.max(0).saturating_mul(1000)))
                 .unwrap_or_else(|| now_ms.saturating_add(60000))
                 .max(now_ms.saturating_add(1000));
@@ -734,7 +805,7 @@ impl Monitor {
             .and_then(|v| v.trim().strip_prefix('<'))
             .and_then(|v| v.split_once('>'))
             .map(|(v, _)| v.to_owned());
-        let raw = response
+        let raw: R = response
             .json()
             .await
             .map_err(|_| anyhow::anyhow!("GitHub 响应格式错误"))?;
@@ -768,9 +839,7 @@ impl Monitor {
     }
     async fn account(&mut self) -> Result<Account> {
         let (CachedValue::Account(account), _) = self
-            .get("/user", |raw| {
-                Ok(CachedValue::Account(serde_json::from_value(raw)?))
-            })
+            .get::<Account>("/user", |account| Ok(CachedValue::Account(account)))
             .await?
         else {
             anyhow::bail!("GitHub 响应格式错误")
@@ -801,9 +870,7 @@ impl Monitor {
             let mut repositories = Vec::new();
             while let Some(path) = next {
                 let (CachedValue::Repositories(page), more) = self
-                    .get(&path, |raw| {
-                        Ok(CachedValue::Repositories(serde_json::from_value(raw)?))
-                    })
+                    .get::<Vec<Repository>>(&path, |page| Ok(CachedValue::Repositories(page)))
                     .await?
                 else {
                     anyhow::bail!("GitHub 响应格式错误")
@@ -969,21 +1036,27 @@ impl Monitor {
     }
     async fn repository_runs(&mut self, repo: &Repository) -> Result<Vec<Run>> {
         let (CachedValue::Runs(runs), _) = self
-            .get(
+            .get::<RunsEnvelope>(
                 &format!("/repos/{}/actions/runs?per_page=10", repo.full_name),
-                |mut page| {
-                    let raw_runs = page
-                        .get_mut("workflow_runs")
-                        .and_then(serde_json::Value::as_array_mut)
-                        .context("GitHub 响应格式错误")?;
-                    let mut runs = Vec::with_capacity(raw_runs.len());
-                    for raw in raw_runs.drain(..) {
-                        let is_bot = detect_bot_run(&raw);
-                        let mut run: Run = serde_json::from_value(raw)?;
-                        run.repository_id = repo.id;
-                        run.repository_name = repo.full_name.clone();
-                        run.is_bot |= is_bot;
-                        runs.push(run);
+                |envelope| {
+                    let mut runs = Vec::with_capacity(envelope.workflow_runs.len());
+                    for raw in envelope.workflow_runs {
+                        let is_bot = raw.is_bot || detect_bot_raw_run(&raw);
+                        runs.push(Run {
+                            id: raw.id,
+                            run_attempt: raw.run_attempt,
+                            name: raw.name,
+                            head_branch: raw.head_branch,
+                            head_sha: raw.head_sha,
+                            status: raw.status,
+                            conclusion: raw.conclusion,
+                            html_url: raw.html_url,
+                            created_at: raw.created_at,
+                            updated_at: raw.updated_at,
+                            repository_id: repo.id,
+                            repository_name: repo.full_name.clone(),
+                            is_bot,
+                        });
                     }
                     Ok(CachedValue::Runs(runs))
                 },
@@ -1134,7 +1207,12 @@ fn reconcile_with_config(
     }
 }
 fn retain_summaries(runs: &mut [Run]) {
-    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.id.cmp(&a.id)));
+    runs.sort_by_cached_key(|r| {
+        (
+            std::cmp::Reverse(crate::timestamps::sort_key_nanos(Some(&r.updated_at))),
+            std::cmp::Reverse(r.id),
+        )
+    });
 }
 async fn gh_token() -> Result<String> {
     let program = std::env::var_os("PATH")

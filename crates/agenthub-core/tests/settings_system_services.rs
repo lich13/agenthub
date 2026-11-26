@@ -302,21 +302,17 @@ fn probe_settings_save_request_keeps_nested_bark_key_when_top_level_is_blank() {
 
 #[test]
 fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
-    let platform = PlatformPaths::linux_server();
-    let plan = plan_probe_settings_save(
-        &platform,
-        ProbeSettingsSaveRequest {
-            probe: Some(ProbeSettingsSavePatch {
-                notifications: Some(ProbeNotificationsSavePatch {
-                    device_key: Some("  secret-bark-key  ".to_string()),
-                    ..Default::default()
-                }),
+    let plan = plan_probe_settings_save(ProbeSettingsSaveRequest {
+        probe: Some(ProbeSettingsSavePatch {
+            notifications: Some(ProbeNotificationsSavePatch {
+                device_key: Some("  secret-bark-key  ".to_string()),
                 ..Default::default()
             }),
             ..Default::default()
-        },
-    )
-    .expect("Linux should allow shared Probe settings save");
+        }),
+        ..Default::default()
+    })
+    .expect("shared Probe settings save");
 
     let write = plan.secret_write.as_ref().expect("bark secret write");
     assert_eq!(write.setting_key, PROBE_BARK_DEVICE_KEY_SETTING);

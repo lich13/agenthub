@@ -197,15 +197,34 @@ pub(super) fn write_annotation_overlay(
         output.push('\n');
     }
 
+    let existing_perms = fs::symlink_metadata(&path)
+        .ok()
+        .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
+        .map(|meta| meta.permissions());
     let tmp = paths
         .annotations_dir()
         .join(format!(".agenthub-ann-{}.tmp", uuid::Uuid::new_v4()));
-    {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let write_res = (|| -> Result<()> {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&tmp)?;
+        if let Some(perms) = existing_perms {
+            file.set_permissions(perms)?;
+        }
         file.write_all(output.as_bytes())?;
         file.sync_all()?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    })();
+    if write_res.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    fs::rename(&tmp, &path)?;
+    write_res?;
     Ok(())
 }
 

@@ -1,20 +1,20 @@
 import AppKit
 import SwiftUI
 
-public extension Notification.Name {
+extension Notification.Name {
     static let agentHubSelectAllRequested = Notification.Name("AgentHubSelectAllRequested")
     static let agentHubSearchRequested = Notification.Name("AgentHubSearchRequested")
 }
 
-public struct AppShellView: View {
-    @ObservedObject public var store: RuntimeConnectionStore
+struct AppShellView: View {
+    @ObservedObject var store: RuntimeConnectionStore
     @Environment(\.colorScheme) private var systemColorScheme
 
-    public init(store: RuntimeConnectionStore) {
+    init(store: RuntimeConnectionStore) {
         self.store = store
     }
 
-    public var effectiveScheme: ColorSchemeKind {
+    var effectiveScheme: ColorSchemeKind {
         switch store.themeMode {
         case .dark: .dark
         case .light: .light
@@ -22,11 +22,11 @@ public struct AppShellView: View {
         }
     }
 
-    public var palette: DesignPalette {
+    var palette: DesignPalette {
         DesignPalette.resolve(scheme: effectiveScheme, workspace: store.activeWorkspace)
     }
 
-    public var body: some View {
+    var body: some View {
         desktopLayout(palette: palette)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(palette.background.color)
@@ -119,14 +119,14 @@ public struct AppShellView: View {
     }
 }
 
-public struct SideNavigationRailView: View {
+struct SideNavigationRailView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public var collapsed: Bool
-    public let onToggleCollapse: () -> Void
-    public let onConfigureRemote: () -> Void
+    @ObservedObject var store: RuntimeConnectionStore
+    var collapsed: Bool
+    let onToggleCollapse: () -> Void
+    let onConfigureRemote: () -> Void
 
-    public var body: some View {
+    var body: some View {
         let items = store.capabilities.visibleWorkspaces
         VStack(alignment: collapsed ? .center : .leading, spacing: 6) {
             // Brand Row (.nav-brand: min-height 34px, padding 2px 4px 6px, logo 22x22px)
@@ -251,18 +251,18 @@ private struct SideNavRowButton: View {
     }
 }
 
-public struct UnevenLeadingAccentBar: View {
-    public let color: Color
-    public var width: CGFloat
-    public var cornerRadius: CGFloat
+struct UnevenLeadingAccentBar: View {
+    let color: Color
+    var width: CGFloat
+    var cornerRadius: CGFloat
 
-    public init(color: Color, width: CGFloat = 2.5, cornerRadius: CGFloat = 8) {
+    init(color: Color, width: CGFloat = 2.5, cornerRadius: CGFloat = 8) {
         self.color = color
         self.width = width
         self.cornerRadius = cornerRadius
     }
 
-    public var body: some View {
+    var body: some View {
         HStack(spacing: 0) {
             Rectangle()
                 .fill(color)

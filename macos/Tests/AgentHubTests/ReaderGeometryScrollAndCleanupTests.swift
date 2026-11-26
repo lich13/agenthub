@@ -11,20 +11,13 @@ final class ReaderGeometryScrollAndCleanupTests: XCTestCase {
         bg: RGBAColor,
         minColorDelta: Int = 24
     ) -> Int {
-        var count = 0
-        let totalRows = pixels.count / max(1, imageWidth * 4)
-        for py in max(0, region.y) ..< min(totalRows, region.y + region.h) {
-            for px in max(0, region.x) ..< min(imageWidth, region.x + region.w) {
-                let idx = (py * imageWidth + px) * 4
-                let dr = abs(Int(pixels[idx]) - Int(bg.r))
-                let dg = abs(Int(pixels[idx + 1]) - Int(bg.g))
-                let db = abs(Int(pixels[idx + 2]) - Int(bg.b))
-                if max(dr, max(dg, db)) >= minColorDelta {
-                    count += 1
-                }
-            }
-        }
-        return count
+        OffscreenRenderHelper.countNonBackgroundPixels(
+            pixels,
+            imageWidth: imageWidth,
+            region: region,
+            bg: (bg.r, bg.g, bg.b),
+            threshold: minColorDelta - 1
+        )
     }
 
     private static func countColorMatchPixels(
@@ -741,7 +734,7 @@ final class ReaderGeometryScrollAndCleanupTests: XCTestCase {
             assistantPhase: "final"
         )
         let initialRows = ConversationRowBuilder.buildClaudeRows(events: tailTools + [trailingReply])
-        guard case let .claudeProcessGroup(proc0, _) = initialRows[0].kind else {
+        guard case let .claudeProcessGroup(proc0) = initialRows[0].kind else {
             return XCTFail("Expected ClaudeProcessGroup at Row 0")
         }
         let aliases0 = proc0.sourceIds.map { "claude-process:\(proc0.turnId):\($0)" }
@@ -1218,7 +1211,7 @@ final class ReaderGeometryScrollAndCleanupTests: XCTestCase {
         let row0 = ConversationRowItem(
             id: "row-cproc",
             timelineId: "row-cproc",
-            kind: .claudeProcessGroup(claudeProc, title: "Demo")
+            kind: .claudeProcessGroup(claudeProc)
         )
         let row1 = ConversationRowItem(
             id: "row-assistant",

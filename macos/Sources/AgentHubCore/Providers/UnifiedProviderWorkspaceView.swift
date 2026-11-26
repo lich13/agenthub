@@ -3,38 +3,38 @@ import SwiftUI
 
 // MARK: - Normalized Session Row Adapter Across All 6 Providers
 
-public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
-    public var sessionKey: String
-    public var nativeId: String
-    public var title: String
-    public var cwd: String
-    public var workspaceRoot: String?
-    public var path: String
-    public var updatedAt: String? {
+struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
+    var sessionKey: String
+    var nativeId: String
+    var title: String
+    var cwd: String
+    var workspaceRoot: String?
+    var path: String
+    var updatedAt: String? {
         didSet {
             if oldValue != updatedAt {
                 updatedAtMs = ProjectWorkspaceEngine.parseTimestampMs(updatedAt)
             }
         }
     }
-    public private(set) var updatedAtMs: Int64
-    public var previewText: String
-    public var statusText: String
-    public var statusChipBadge: String?
-    public var statusChipTone: StatusChipTone
-    public var running: Bool
-    public var archived: Bool
-    public var canRename: Bool
-    public var renameBlockReason: String?
-    public var canArchive: Bool
-    public var archiveBlockReason: String?
-    public var canDelete: Bool
-    public var deleteBlockReason: String?
-    public var storageSize: SessionStorageSize?
-    public var readError: String?
-    public var readWarning: String?
+    private(set) var updatedAtMs: Int64
+    var previewText: String
+    var statusText: String
+    var statusChipBadge: String?
+    var statusChipTone: StatusChipTone
+    var running: Bool
+    var archived: Bool
+    var canRename: Bool
+    var renameBlockReason: String?
+    var canArchive: Bool
+    var archiveBlockReason: String?
+    var canDelete: Bool
+    var deleteBlockReason: String?
+    var storageSize: SessionStorageSize?
+    var readError: String?
+    var readWarning: String?
 
-    public init(
+    init(
         sessionKey: String,
         nativeId: String,
         title: String,
@@ -83,20 +83,20 @@ public struct UnifiedSessionSummaryItem: Equatable, Sendable, Identifiable {
         self.readWarning = readWarning
     }
 
-    public var id: String { sessionKey }
+    var id: String { sessionKey }
 }
 
 // MARK: - Unified 6-Provider Workspace View (Codex, Claude, Grok, Antigravity, DSH, GrokBot)
 
-public struct UnifiedProviderWorkspaceView: View {
+struct UnifiedProviderWorkspaceView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public let workspace: WorkspaceId
-    public let scheme: ColorSchemeKind
-    public var hideSidebar: Bool
-    public var externalSeedItem: UnifiedSessionSummaryItem?
-    public var onExternalMutation: (() -> Void)?
-    public var onExternalSelectSession: ((String?) -> Void)?
+    @ObservedObject var store: RuntimeConnectionStore
+    let workspace: WorkspaceId
+    let scheme: ColorSchemeKind
+    var hideSidebar: Bool
+    var externalSeedItem: UnifiedSessionSummaryItem?
+    var onExternalMutation: (() -> Void)?
+    var onExternalSelectSession: ((String?) -> Void)?
 
     @StateObject private var model: ProviderWorkspaceStore
     @StateObject private var timelineTracker = TimelineActiveTracker()
@@ -104,7 +104,7 @@ public struct UnifiedProviderWorkspaceView: View {
     @State private var readWarningExpanded: Bool = false
     @State private var searchModalOpen: Bool = false
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         workspace: WorkspaceId,
         scheme: ColorSchemeKind,
@@ -193,7 +193,7 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
             GeometryReader { geo in
                 if hideSidebar {
@@ -418,6 +418,7 @@ public struct UnifiedProviderWorkspaceView: View {
                         .fill(palette.accentSoft.color)
                         .frame(width: 24, height: 24)
                     AgentBrandIcon(brandId, size: 16)
+                        .foregroundStyle(palette.accent.color)
                 }
 
                 Text(workspace.label)

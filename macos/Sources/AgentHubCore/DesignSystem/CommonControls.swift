@@ -3,10 +3,10 @@ import SwiftUI
 
 // MARK: - Full-Rectangle Hit-Target Button Styles (Never bare .plain)
 
-public struct PrimaryButtonStyle: ButtonStyle {
-    public init() {}
+struct PrimaryButtonStyle: ButtonStyle {
+    init() {}
 
-    public func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         InnerBody(configuration: configuration)
     }
 
@@ -31,10 +31,10 @@ public struct PrimaryButtonStyle: ButtonStyle {
     }
 }
 
-public struct SecondaryButtonStyle: ButtonStyle {
-    public init() {}
+struct SecondaryButtonStyle: ButtonStyle {
+    init() {}
 
-    public func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         InnerBody(configuration: configuration)
     }
 
@@ -63,14 +63,14 @@ public struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
-public struct DangerButtonStyle: ButtonStyle {
-    public var soft: Bool
+struct DangerButtonStyle: ButtonStyle {
+    var soft: Bool
 
-    public init(soft: Bool = false) {
+    init(soft: Bool = false) {
         self.soft = soft
     }
 
-    public func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         InnerBody(configuration: configuration, soft: soft)
     }
 
@@ -103,14 +103,14 @@ public struct DangerButtonStyle: ButtonStyle {
     }
 }
 
-public struct IconButtonStyle: ButtonStyle {
-    public var dimension: CGFloat
+struct IconButtonStyle: ButtonStyle {
+    var dimension: CGFloat
 
-    public init(dimension: CGFloat = 32) {
+    init(dimension: CGFloat = 32) {
         self.dimension = dimension
     }
 
-    public func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         InnerBody(configuration: configuration, dimension: dimension)
     }
 
@@ -134,18 +134,18 @@ public struct IconButtonStyle: ButtonStyle {
     }
 }
 
-public struct FullWidthRowButtonStyle: ButtonStyle {
-    public var selected: Bool
-    public var multiSelected: Bool
-    public var cornerRadius: CGFloat
+struct FullWidthRowButtonStyle: ButtonStyle {
+    var selected: Bool
+    var multiSelected: Bool
+    var cornerRadius: CGFloat
 
-    public init(selected: Bool = false, multiSelected: Bool = false, cornerRadius: CGFloat = 8) {
+    init(selected: Bool = false, multiSelected: Bool = false, cornerRadius: CGFloat = 8) {
         self.selected = selected
         self.multiSelected = multiSelected
         self.cornerRadius = cornerRadius
     }
 
-    public func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         InnerBody(
             configuration: configuration,
             selected: selected,
@@ -201,18 +201,18 @@ public struct FullWidthRowButtonStyle: ButtonStyle {
 
 // MARK: - 38x22pt Capsule Switch
 
-public struct CapsuleSwitch: View {
+struct CapsuleSwitch: View {
     @Environment(\.agentHubPalette) private var palette
     @Environment(\.isEnabled) private var isEnabled
-    @Binding public var isOn: Bool
-    public var accessibilityLabel: String
+    @Binding var isOn: Bool
+    var accessibilityLabel: String
 
-    public init(isOn: Binding<Bool>, label: String = "") {
+    init(isOn: Binding<Bool>, label: String = "") {
         self._isOn = isOn
         self.accessibilityLabel = label
     }
 
-    public var body: some View {
+    var body: some View {
         Button {
             isOn.toggle()
         } label: {
@@ -247,9 +247,9 @@ public struct CapsuleSwitch: View {
     }
 }
 
-public struct PlainHitButtonStyle: ButtonStyle {
-    public init() {}
-    public func makeBody(configuration: Configuration) -> some View {
+struct PlainHitButtonStyle: ButtonStyle {
+    init() {}
+    func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(Rectangle())
     }
@@ -266,17 +266,17 @@ public enum StatusChipTone: String, Sendable {
     case danger
 }
 
-public struct StatusChip: View {
+struct StatusChip: View {
     @Environment(\.agentHubPalette) private var palette
-    public let text: String
-    public var tone: StatusChipTone
+    let text: String
+    var tone: StatusChipTone
 
-    public init(_ text: String, tone: StatusChipTone = .neutral) {
+    init(_ text: String, tone: StatusChipTone = .neutral) {
         self.text = text
         self.tone = tone
     }
 
-    public var body: some View {
+    var body: some View {
         let colors: (fg: RGBAColor, bg: RGBAColor, border: RGBAColor) = switch tone {
         case .success: (palette.okFg, palette.okBg, palette.okBorder)
         case .warning: (palette.warnFg, palette.warnBg, palette.warnBorder)
@@ -295,19 +295,19 @@ public struct StatusChip: View {
     }
 }
 
-public struct MetricCard: View {
+struct MetricCard: View {
     @Environment(\.agentHubPalette) private var palette
-    public let label: String
-    public let value: String
-    public var tone: StatusChipTone?
+    let label: String
+    let value: String
+    var tone: StatusChipTone?
 
-    public init(label: String, value: String, tone: StatusChipTone? = nil) {
+    init(label: String, value: String, tone: StatusChipTone? = nil) {
         self.label = label
         self.value = value
         self.tone = tone
     }
 
-    public var body: some View {
+    var body: some View {
         let valueColor: RGBAColor = switch tone {
         case .success: palette.okFg
         case .warning: palette.warnFg
@@ -340,14 +340,14 @@ public struct MetricCard: View {
     }
 }
 
-public struct PanelCard<HeaderAction: View, Content: View>: View {
+struct PanelCard<HeaderAction: View, Content: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String
-    public var icon: LucideIconName?
-    @ViewBuilder public let headerAction: () -> HeaderAction
-    @ViewBuilder public let content: () -> Content
+    let title: String
+    var icon: LucideIconName?
+    @ViewBuilder let headerAction: () -> HeaderAction
+    @ViewBuilder let content: () -> Content
 
-    public init(
+    init(
         title: String,
         icon: LucideIconName? = nil,
         @ViewBuilder headerAction: @escaping () -> HeaderAction = { EmptyView() },
@@ -359,7 +359,7 @@ public struct PanelCard<HeaderAction: View, Content: View>: View {
         self.content = content
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 if let icon {
@@ -393,16 +393,16 @@ public struct PanelCard<HeaderAction: View, Content: View>: View {
     }
 }
 
-public struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: View>: View {
+struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String
-    public var icon: LucideIconName?
-    @Binding public var isExpanded: Bool
-    @ViewBuilder public let summaryBadges: () -> SummaryBadges
-    @ViewBuilder public let headerTrailing: () -> HeaderTrailing
-    @ViewBuilder public let content: () -> Content
+    let title: String
+    var icon: LucideIconName?
+    @Binding var isExpanded: Bool
+    @ViewBuilder let summaryBadges: () -> SummaryBadges
+    @ViewBuilder let headerTrailing: () -> HeaderTrailing
+    @ViewBuilder let content: () -> Content
 
-    public init(
+    init(
         title: String,
         icon: LucideIconName? = nil,
         isExpanded: Binding<Bool>,
@@ -418,7 +418,7 @@ public struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Co
         self.content = content
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button {
@@ -478,18 +478,23 @@ public struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Co
     }
 }
 
-public struct RunningIndicator: View {
+struct RunningIndicator: View {
     @Environment(\.agentHubPalette) private var palette
+    @ObservedObject private var motionObserver = AccessibilityMotionObserver.shared
     @State private var angle: Double = 0
-    public var size: CGFloat
-    public var reduceMotion: Bool
+    var size: CGFloat
+    var reduceMotionOverride: Bool?
 
-    public init(size: CGFloat = 13, reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
-        self.size = size
-        self.reduceMotion = reduceMotion
+    private var effectiveReduceMotion: Bool {
+        reduceMotionOverride ?? motionObserver.reduceMotion
     }
 
-    public var body: some View {
+    init(size: CGFloat = 13, reduceMotion: Bool? = nil) {
+        self.size = size
+        self.reduceMotionOverride = reduceMotion
+    }
+
+    var body: some View {
         ZStack {
             // 2pt --bs (borderStrong) full ring track underneath (styles.css:329-332)
             Circle()
@@ -500,13 +505,13 @@ public struct RunningIndicator: View {
                     palette.accent.color,
                     style: StrokeStyle(lineWidth: 2, lineCap: .round)
                 )
-                .rotationEffect(.degrees(reduceMotion ? -90 : angle - 90))
+                .rotationEffect(.degrees(effectiveReduceMotion ? -90 : angle - 90))
         }
         .frame(width: size, height: size)
         .onAppear {
             restartAnimationIfNeeded()
         }
-        .onChange(of: reduceMotion) { _ in
+        .onChange(of: effectiveReduceMotion) { _ in
             restartAnimationIfNeeded()
         }
         .accessibilityLabel("运行中")
@@ -518,7 +523,7 @@ public struct RunningIndicator: View {
         withTransaction(reset) {
             angle = 0
         }
-        guard !reduceMotion else { return }
+        guard !effectiveReduceMotion else { return }
         withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
             angle = 360
         }
@@ -533,37 +538,37 @@ private final class WeakNSViewRef {
 }
 
 @MainActor
-public final class ModalPresentationRegistry {
-    public static let shared = ModalPresentationRegistry()
+final class ModalPresentationRegistry {
+    static let shared = ModalPresentationRegistry()
     private var activeTokens: Set<UUID> = []
     private var activeContainers: [UUID: WeakNSViewRef] = [:]
 
-    public init() {}
+    init() {}
 
-    public var hasActiveModal: Bool {
+    var hasActiveModal: Bool {
         !activeTokens.isEmpty
     }
 
-    public func register(_ token: UUID, container: NSView? = nil) {
+    func register(_ token: UUID, container: NSView? = nil) {
         activeTokens.insert(token)
         if let container {
             activeContainers[token] = WeakNSViewRef(container)
         }
     }
 
-    public func updateContainer(_ container: NSView?, for token: UUID) {
+    func updateContainer(_ container: NSView?, for token: UUID) {
         guard activeTokens.contains(token) else { return }
         if let container {
             activeContainers[token] = WeakNSViewRef(container)
         }
     }
 
-    public func unregister(_ token: UUID) {
+    func unregister(_ token: UUID) {
         activeTokens.remove(token)
         activeContainers.removeValue(forKey: token)
     }
 
-    public func isInsideActiveModalContainer(_ responderView: NSView) -> Bool {
+    func isInsideActiveModalContainer(_ responderView: NSView) -> Bool {
         for box in activeContainers.values {
             if let root = box.view, responderView === root || responderView.isDescendant(of: root) {
                 return true
@@ -573,33 +578,33 @@ public final class ModalPresentationRegistry {
     }
 }
 
-public struct ModalScopePresenceView: NSViewRepresentable {
-    public var modalContainer: NSView?
+struct ModalScopePresenceView: NSViewRepresentable {
+    var modalContainer: NSView?
 
-    public init(modalContainer: NSView? = nil) {
+    init(modalContainer: NSView? = nil) {
         self.modalContainer = modalContainer
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    public func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         context.coordinator.activate(container: modalContainer)
         return view
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.activate(container: modalContainer)
     }
 
-    public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
         coordinator.deactivate()
     }
 
     @MainActor
-    public final class Coordinator {
+    final class Coordinator {
         let token = UUID()
         var active = false
 
@@ -616,6 +621,86 @@ public struct ModalScopePresenceView: NSViewRepresentable {
             guard active else { return }
             active = false
             ModalPresentationRegistry.shared.unregister(token)
+        }
+    }
+}
+
+struct ModalEscapeAndFocusMonitorView: NSViewRepresentable {
+    var onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onEscape: onEscape)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(anchor: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onEscape = onEscape
+        context.coordinator.attach(anchor: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var anchorView: NSView?
+        weak var targetWindow: NSWindow?
+        weak var savedFirstResponder: NSResponder?
+        var didCaptureResponder = false
+        var onEscape: () -> Void
+        private var monitor: Any?
+
+        init(onEscape: @escaping () -> Void) {
+            self.onEscape = onEscape
+        }
+
+        func attach(anchor: NSView) {
+            anchorView = anchor
+            if !didCaptureResponder, let win = anchor.window ?? NSApp.keyWindow {
+                didCaptureResponder = true
+                targetWindow = win
+                savedFirstResponder = win.firstResponder
+            }
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      let win = self.anchorView?.window ?? self.targetWindow,
+                      event.window === win
+                else { return event }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if event.keyCode == 53 && flags.isEmpty {
+                    guard !AppInputCompositionGuard.responderHasMarkedText(win.firstResponder) else {
+                        return event
+                    }
+                    self.onEscape()
+                    return nil
+                }
+                return event
+            }
+        }
+
+        func detach() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+            if let win = targetWindow ?? anchorView?.window, let resp = savedFirstResponder {
+                if let respView = resp as? NSView {
+                    if respView.window === win {
+                        win.makeFirstResponder(respView)
+                    }
+                } else if resp === win {
+                    win.makeFirstResponder(win)
+                }
+            }
+            savedFirstResponder = nil
+            targetWindow = nil
         }
     }
 }
@@ -692,12 +777,12 @@ private struct NaturalWrappingRowLayout: Layout {
     }
 }
 
-public struct FlowButtonRow<Content: View>: View {
-    public var spacing: CGFloat
-    public var lineSpacing: CGFloat
-    @ViewBuilder public let content: () -> Content
+struct FlowButtonRow<Content: View>: View {
+    var spacing: CGFloat
+    var lineSpacing: CGFloat
+    @ViewBuilder let content: () -> Content
 
-    public init(
+    init(
         spacing: CGFloat = 8,
         lineSpacing: CGFloat = 8,
         @ViewBuilder content: @escaping () -> Content
@@ -707,7 +792,7 @@ public struct FlowButtonRow<Content: View>: View {
         self.content = content
     }
 
-    public var body: some View {
+    var body: some View {
         if #available(macOS 13.0, *) {
             NaturalWrappingRowLayout(horizontalSpacing: spacing, verticalSpacing: lineSpacing) {
                 content()
@@ -722,14 +807,14 @@ public struct FlowButtonRow<Content: View>: View {
 
 // MARK: - ConfirmDialogOverlay (backdrop click NEVER dismisses; Esc dismisses only when !busy)
 
-public struct ConfirmDialogOverlay<Content: View>: View {
+struct ConfirmDialogOverlay<Content: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String?
-    public var busy: Bool
-    public let onCancel: () -> Void
-    @ViewBuilder public let content: () -> Content
+    let title: String?
+    var busy: Bool
+    let onCancel: () -> Void
+    @ViewBuilder let content: () -> Content
 
-    public init(
+    init(
         title: String? = nil,
         busy: Bool = false,
         onCancel: @escaping () -> Void,
@@ -741,7 +826,7 @@ public struct ConfirmDialogOverlay<Content: View>: View {
         self.content = content
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
             ModalScopePresenceView()
                 .frame(width: 0, height: 0)
@@ -789,26 +874,26 @@ public struct ConfirmDialogOverlay<Content: View>: View {
 }
 
 @MainActor
-public enum AppInputCompositionGuard {
-    public static func responderHasMarkedText(_ responder: NSResponder? = NSApp.keyWindow?.firstResponder) -> Bool {
+enum AppInputCompositionGuard {
+    static func responderHasMarkedText(_ responder: NSResponder? = NSApp.keyWindow?.firstResponder) -> Bool {
         (responder as? NSTextInputClient)?.hasMarkedText() == true
     }
 }
 
 // MARK: - Top Accent Bar (clipped to container cornerRadius, macOS 12+ safe)
 
-public struct UnevenTopAccentBar: View {
-    public let color: Color
-    public var height: CGFloat
-    public var cornerRadius: CGFloat
+struct UnevenTopAccentBar: View {
+    let color: Color
+    var height: CGFloat
+    var cornerRadius: CGFloat
 
-    public init(color: Color, height: CGFloat = 2.5, cornerRadius: CGFloat = 12) {
+    init(color: Color, height: CGFloat = 2.5, cornerRadius: CGFloat = 12) {
         self.color = color
         self.height = height
         self.cornerRadius = cornerRadius
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             Rectangle()
                 .fill(color)
@@ -822,15 +907,15 @@ public struct UnevenTopAccentBar: View {
 
 // MARK: - Custom-Styled Button Popping Up Native NSMenu Without NSPopUpButton '⌄' Chevron Hijack
 
-public struct NativeMenuEntry: Identifiable {
-    public let id: String
-    public let title: String
-    public var disabled: Bool
-    public var isSeparator: Bool
-    public var isSelected: Bool = false
-    public var action: () -> Void
+struct NativeMenuEntry: Identifiable {
+    let id: String
+    let title: String
+    var disabled: Bool
+    var isSeparator: Bool
+    var isSelected: Bool = false
+    var action: () -> Void
 
-    public init(id: String, title: String, disabled: Bool = false, selected: Bool = false, action: @escaping () -> Void) {
+    init(id: String, title: String, disabled: Bool = false, selected: Bool = false, action: @escaping () -> Void) {
         self.id = id
         self.title = title
         self.disabled = disabled
@@ -839,15 +924,7 @@ public struct NativeMenuEntry: Identifiable {
         self.action = action
     }
 
-    public init(title: String, enabled: Bool = true, action: @escaping () -> Void) {
-        self.id = UUID().uuidString
-        self.title = title
-        self.disabled = !enabled
-        self.isSeparator = false
-        self.action = action
-    }
-
-    public static func separator(_ id: String = UUID().uuidString) -> NativeMenuEntry {
+    static func separator(_ id: String = UUID().uuidString) -> NativeMenuEntry {
         NativeMenuEntry(id: id, title: "", disabled: true, isSeparator: true, action: {})
     }
 
@@ -874,14 +951,14 @@ private final class MenuTargetRelay: NSObject {
     }
 }
 
-public struct MenuAnchorProbeNSView: NSViewRepresentable {
-    @Binding public var capturedView: NSView?
+struct MenuAnchorProbeNSView: NSViewRepresentable {
+    @Binding var capturedView: NSView?
 
-    public init(capturedView: Binding<NSView?>) {
+    init(capturedView: Binding<NSView?>) {
         self._capturedView = capturedView
     }
 
-    public static func resolveAnchorView(_ probeView: NSView) -> NSView {
+    static func resolveAnchorView(_ probeView: NSView) -> NSView {
         if probeView.bounds.isEmpty,
            let sup = probeView.superview,
            !sup.bounds.isEmpty,
@@ -893,7 +970,7 @@ public struct MenuAnchorProbeNSView: NSViewRepresentable {
         return probeView
     }
 
-    public func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> NSView {
         let v = NSView(frame: .zero)
         DispatchQueue.main.async {
             if capturedView !== v {
@@ -903,7 +980,7 @@ public struct MenuAnchorProbeNSView: NSViewRepresentable {
         return v
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: NSView, context: Context) {
         if capturedView !== nsView {
             DispatchQueue.main.async {
                 if capturedView !== nsView {
@@ -914,16 +991,16 @@ public struct MenuAnchorProbeNSView: NSViewRepresentable {
     }
 }
 
-public struct AnchoredMenuButton<Label: View>: View {
-    public let entries: [NativeMenuEntry]
-    public var alignRight: Bool
-    public var accessibilityLabel: String?
-    @ViewBuilder public let label: () -> Label
+struct AnchoredMenuButton<Label: View>: View {
+    let entries: [NativeMenuEntry]
+    var alignRight: Bool
+    var accessibilityLabel: String?
+    @ViewBuilder let label: () -> Label
 
     @State private var anchorView: NSView?
     @State private var activeRelay: MenuTargetRelay?
 
-    public init(
+    init(
         entries: [NativeMenuEntry],
         alignRight: Bool = false,
         accessibilityLabel: String? = nil,
@@ -935,7 +1012,7 @@ public struct AnchoredMenuButton<Label: View>: View {
         self.label = label
     }
 
-    public var body: some View {
+    var body: some View {
         Button {
             popMenu()
         } label: {
@@ -973,5 +1050,279 @@ public struct AnchoredMenuButton<Label: View>: View {
         } else {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }
+    }
+}
+
+// MARK: - Bounded Inner Scroll View with Boundary & Flyover Momentum Passthrough (macOS 12+)
+
+@MainActor
+final class BoundedInnerScrollView: NSScrollView {
+    private(set) var trackingInnerGesture = false
+    private(set) var trackingInnerMomentum = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        borderType = .noBorder
+        autohidesScrollers = true
+        hasHorizontalScroller = false
+        horizontalScrollElasticity = .none
+        verticalScrollElasticity = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Returns `true` when the scroll wheel event should be consumed by this inner scroll view,
+    /// or `false` when it should pass through to `nextResponder` (outer page scroll view).
+    @discardableResult
+    func shouldConsumeVerticalScroll(
+        deltaY: CGFloat,
+        deltaX: CGFloat = 0,
+        phase: NSEvent.Phase,
+        momentumPhase: NSEvent.Phase
+    ) -> Bool {
+        let docH = documentView?.frame.height ?? 0
+        let clipH = contentView.bounds.height
+        let maxScroll = max(0, docH - clipH)
+        guard maxScroll > 0.5 else {
+            trackingInnerGesture = false
+            trackingInnerMomentum = false
+            return false
+        }
+        if abs(deltaX) > abs(deltaY) && abs(deltaY) < 0.01 {
+            return false
+        }
+
+        let originY = contentView.bounds.origin.y
+        let atTopGoingUp = deltaY > 0 && originY <= 0.5
+        let atBottomGoingDown = deltaY < 0 && originY >= maxScroll - 0.5
+        let atBoundaryOutward = atTopGoingUp || atBottomGoingDown
+
+        if momentumPhase != [] {
+            if momentumPhase == .began {
+                trackingInnerMomentum = trackingInnerGesture && !atBoundaryOutward
+                trackingInnerGesture = false
+            }
+            guard trackingInnerMomentum, !atBoundaryOutward else {
+                trackingInnerMomentum = false
+                return false
+            }
+            if momentumPhase == .ended || momentumPhase == .cancelled {
+                trackingInnerMomentum = false
+            }
+            return true
+        }
+
+        if phase == .began || phase == .mayBegin {
+            trackingInnerGesture = false
+            trackingInnerMomentum = false
+            if deltaY == 0 {
+                return true
+            }
+        }
+        if phase == .cancelled {
+            trackingInnerGesture = false
+            trackingInnerMomentum = false
+            return false
+        }
+        if atBoundaryOutward {
+            trackingInnerGesture = false
+            return false
+        }
+        if abs(deltaY) > 0.001 {
+            trackingInnerGesture = true
+        }
+        return true
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let consumeInner = shouldConsumeVerticalScroll(
+            deltaY: event.scrollingDeltaY,
+            deltaX: event.scrollingDeltaX,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase
+        )
+        if consumeInner {
+            super.scrollWheel(with: event)
+        } else {
+            nextResponder?.scrollWheel(with: event)
+        }
+    }
+}
+
+@MainActor
+private final class BoundedHostingView<Content: View>: NSHostingView<Content> {
+    var onIntrinsicSizeInvalidated: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onIntrinsicSizeInvalidated?()
+    }
+}
+
+@MainActor
+private final class FlippedBoundedDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+@MainActor
+final class BoundedPassthroughContainerView<Content: View>: NSView {
+    let scrollView = BoundedInnerScrollView(frame: .zero)
+    private let documentContainer = FlippedBoundedDocumentView(frame: .zero)
+    fileprivate let hostingView: BoundedHostingView<Content>
+    private var widthConstraint: NSLayoutConstraint?
+    var maxHeight: CGFloat {
+        didSet {
+            if abs(maxHeight - oldValue) > 0.5 {
+                remeasureAndSync(forceInvalidate: true)
+            }
+        }
+    }
+    private(set) var measuredContentHeight: CGFloat = 1
+    private var clampedHeight: CGFloat = 1
+    private var lastMeasuredWidth: CGFloat = 0
+    private var isMeasuring = false
+
+    override var isFlipped: Bool { true }
+
+    init(rootView: Content, maxHeight: CGFloat) {
+        self.maxHeight = max(1, maxHeight)
+        self.hostingView = BoundedHostingView(rootView: rootView)
+        super.init(frame: .zero)
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentCompressionResistancePriority(.required, for: .vertical)
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        documentContainer.addSubview(hostingView)
+        let wc = hostingView.widthAnchor.constraint(equalToConstant: 480)
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: documentContainer.topAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: documentContainer.leadingAnchor),
+            wc,
+        ])
+        self.widthConstraint = wc
+
+        scrollView.documentView = documentContainer
+        addSubview(scrollView)
+
+        hostingView.onIntrinsicSizeInvalidated = { [weak self] in
+            self?.remeasureAndSync(forceInvalidate: false)
+        }
+        remeasureAndSync(forceInvalidate: true)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: clampedHeight)
+    }
+
+    func update(rootView: Content, maxHeight: CGFloat) {
+        self.maxHeight = max(1, maxHeight)
+        hostingView.rootView = rootView
+        remeasureAndSync(forceInvalidate: false)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        scrollView.frame = bounds
+        scrollView.tile()
+        let clipW = effectiveClipWidth(fallback: newSize.width)
+        if newSize.width > 1 && (abs(newSize.width - lastMeasuredWidth) > 0.5 || abs((widthConstraint?.constant ?? 0) - clipW) > 0.5) {
+            remeasureAndSync(forceInvalidate: false)
+        } else {
+            syncDocumentFrame(for: max(1, clipW))
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        scrollView.tile()
+        let clipW = max(1, effectiveClipWidth(fallback: bounds.width))
+        if let widthConstraint, abs(widthConstraint.constant - clipW) > 0.5 {
+            widthConstraint.constant = clipW
+            hostingView.layoutSubtreeIfNeeded()
+            measuredContentHeight = max(1, ceil(hostingView.fittingSize.height))
+        }
+        syncDocumentFrame(for: clipW)
+    }
+
+    private func effectiveClipWidth(fallback: CGFloat) -> CGFloat {
+        let clipW = scrollView.contentView.bounds.width
+        if scrollView.frame.width > 1 && clipW > 1 {
+            return clipW
+        }
+        return fallback
+    }
+
+    private func syncDocumentFrame(for width: CGFloat) {
+        let docH = max(measuredContentHeight, scrollView.contentView.bounds.height)
+        let target = NSRect(x: 0, y: 0, width: width, height: docH)
+        if abs(documentContainer.frame.width - target.width) > 0.5 || abs(documentContainer.frame.height - target.height) > 0.5 {
+            documentContainer.frame = target
+        }
+    }
+
+    private func remeasureAndSync(forceInvalidate: Bool) {
+        guard !isMeasuring else { return }
+        isMeasuring = true
+        defer { isMeasuring = false }
+
+        let outerWidth = bounds.width > 1 ? bounds.width : (lastMeasuredWidth > 1 ? lastMeasuredWidth : 640)
+        lastMeasuredWidth = outerWidth
+        var targetWidth = effectiveClipWidth(fallback: outerWidth)
+        if let widthConstraint, abs(widthConstraint.constant - targetWidth) > 0.5 {
+            widthConstraint.constant = targetWidth
+        }
+        hostingView.layoutSubtreeIfNeeded()
+        var rawHeight = max(1, ceil(hostingView.fittingSize.height))
+        let needsScroller = rawHeight > maxHeight + 0.5
+        if scrollView.hasVerticalScroller != needsScroller {
+            scrollView.hasVerticalScroller = needsScroller
+        }
+        if bounds.width > 1 {
+            scrollView.tile()
+            let updatedClipWidth = effectiveClipWidth(fallback: outerWidth)
+            if abs(updatedClipWidth - targetWidth) > 0.5 {
+                targetWidth = updatedClipWidth
+                widthConstraint?.constant = targetWidth
+                hostingView.layoutSubtreeIfNeeded()
+                rawHeight = max(1, ceil(hostingView.fittingSize.height))
+            }
+        }
+        measuredContentHeight = rawHeight
+        let nextClamped = min(rawHeight, maxHeight)
+        syncDocumentFrame(for: targetWidth)
+        if forceInvalidate || abs(nextClamped - clampedHeight) > 0.5 {
+            clampedHeight = nextClamped
+            invalidateIntrinsicContentSize()
+        }
+    }
+}
+
+struct BoundedPassthroughScrollView<Content: View>: NSViewRepresentable {
+    var maxHeight: CGFloat
+    let content: Content
+
+    init(maxHeight: CGFloat, @ViewBuilder content: () -> Content) {
+        self.maxHeight = maxHeight
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> BoundedPassthroughContainerView<Content> {
+        BoundedPassthroughContainerView(rootView: content, maxHeight: maxHeight)
+    }
+
+    func updateNSView(_ nsView: BoundedPassthroughContainerView<Content>, context: Context) {
+        nsView.update(rootView: content, maxHeight: maxHeight)
     }
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{path::PathBuf, sync::Arc};
 
-pub(crate) static HISTORY_CACHE: crate::read_cache::ReadCache<Arc<ProviderHistorySnapshot>> =
+pub(crate) static HISTORY_CACHE: crate::read_cache::ReadCache<ProviderHistorySnapshot> =
     crate::read_cache::ReadCache::new(crate::resource_limits::PROVIDER_HISTORY_CACHE_BYTES)
         .with_native_metadata();
 
@@ -16,15 +16,15 @@ pub(crate) struct ProviderHistorySnapshot {
 }
 
 impl ProviderHistorySnapshot {
-    pub fn new(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
+    pub fn new(events: Vec<ProviderHistoryEvent>) -> Self {
         Self::build(events, false)
     }
 
-    pub fn new_literal(events: Vec<ProviderHistoryEvent>) -> Arc<Self> {
+    pub fn new_literal(events: Vec<ProviderHistoryEvent>) -> Self {
         Self::build(events, true)
     }
 
-    fn build(events: Vec<ProviderHistoryEvent>, literal_user: bool) -> Arc<Self> {
+    fn build(events: Vec<ProviderHistoryEvent>, literal_user: bool) -> Self {
         let iter = events
             .iter()
             .filter(|event| event.kind == "user_message")
@@ -43,11 +43,11 @@ impl ProviderHistorySnapshot {
         // Calculate once per parsed snapshot, never on a cache hit or page read.
         let mut digest = DefaultHasher::new();
         events.hash(&mut digest);
-        Arc::new(Self {
+        Self {
             events: Arc::new(events),
             timeline,
             revision: format!("{:016x}", digest.finish()),
-        })
+        }
     }
 
     fn timeline(&self) -> crate::history_navigation::Timeline {
@@ -55,7 +55,7 @@ impl ProviderHistorySnapshot {
     }
 }
 
-pub(crate) fn history_weight(snapshot: &Arc<ProviderHistorySnapshot>, _: u64) -> u64 {
+pub(crate) fn history_weight(snapshot: &ProviderHistorySnapshot, _: u64) -> u64 {
     let events = &snapshot.events;
     std::mem::size_of::<ProviderHistorySnapshot>() as u64
         + (events.capacity() * std::mem::size_of::<ProviderHistoryEvent>()) as u64

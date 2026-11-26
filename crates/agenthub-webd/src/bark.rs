@@ -79,14 +79,7 @@ fn classify(error: &reqwest::Error, reading: bool) -> ProbeBarkOutcome {
 }
 
 fn retry_after(value: Option<&str>, now_ms: i64) -> Option<i64> {
-    let value = value?.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(seconds.saturating_mul(1000).min(i64::MAX as u64) as i64);
-    }
-    jiff::fmt::rfc2822::DateTimeParser::new()
-        .parse_timestamp(value)
-        .ok()
-        .map(|date| date.as_millisecond().saturating_sub(now_ms).max(0))
+    agenthub_core::github_ci::parse_retry_after_ms(value, now_ms)
 }
 
 fn permanent_apns(message: &str) -> bool {

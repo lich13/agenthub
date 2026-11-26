@@ -24,33 +24,15 @@ pub use notification_channels::{
     NOTIFICATION_LIFETIME_MS,
 };
 
-const SCHEMA_THREE_INDEXES: &str = "
-CREATE INDEX IF NOT EXISTS idx_native_probe_unfinished
- ON native_probe_deliveries(status,created_at,event_key)
- WHERE status='pending' OR status='delivering';
-CREATE INDEX IF NOT EXISTS idx_probe_events_notification_key
- ON probe_events(json_extract(payload_json,'$.notification_event_key'))
- WHERE json_valid(payload_json);
-CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_event
- ON probe_error_incidents(event_id) WHERE event_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_audit_log_created_at
- ON audit_log(created_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_started_at
- ON jobs(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at
- ON native_probe_deliveries(status, updated_at);
-CREATE INDEX IF NOT EXISTS idx_native_probe_claude_session
- ON native_probe_deliveries(json_extract(event_json,'$.session_key'))
- WHERE provider='claude_code' AND json_valid(event_json);
-CREATE INDEX IF NOT EXISTS idx_probe_events_dedupe_created
- ON probe_events(dedupe_key, created_at DESC)
- WHERE dedupe_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_pending
- ON probe_error_incidents(created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC)
- WHERE bark_status='pending';
-CREATE INDEX IF NOT EXISTS idx_probe_dedupe_expires_at
- ON probe_dedupe(expires_at);
-";
+pub(crate) fn table_columns(
+    conn: &Connection,
+    table: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+        .map_err(Into::into)
+}
 
 const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
     (
@@ -111,6 +93,7 @@ pub struct PanelDb {
     conn: Arc<Mutex<Connection>>,
     crypto: SecretBox,
     delivery_scan_cursor: Arc<Mutex<Option<(i64, String)>>>,
+    last_audit_prune_at: Arc<std::sync::atomic::AtomicI64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,6 +164,7 @@ impl PanelDb {
             conn: Arc::new(Mutex::new(conn)),
             crypto,
             delivery_scan_cursor: Arc::new(Mutex::new(None)),
+            last_audit_prune_at: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         };
         db.migrate()?;
         {
@@ -255,8 +239,8 @@ impl PanelDb {
             !populated,
             "旧数据库请先使用 v2.0.10 完成升级；原数据已保留"
         );
-        // WAL mode persists; only a new store needs to change it under the migration lock.
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Incremental auto_vacuum and WAL mode persist; only a fresh store sets them before table creation.
+        conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_mode=WAL;")?;
         let tx = conn.transaction()?;
         tx.execute_batch(
             r#"
@@ -367,7 +351,9 @@ impl PanelDb {
             "#,
         )?;
         tx.execute_batch(notification_channels::SCHEMA)?;
-        tx.execute_batch(SCHEMA_THREE_INDEXES)?;
+        for &(_, _, ddl) in SCHEMA_THREE_INDEX_SPECS {
+            tx.execute_batch(ddl)?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(())
@@ -420,9 +406,8 @@ impl PanelDb {
         now_ms: i64,
     ) -> Result<Option<i64>> {
         let previous: Option<String> = tx
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
-                row.get(0)
-            })
+            .prepare_cached("SELECT value FROM settings WHERE key=?1")?
+            .query_row([key], |row| row.get(0))
             .optional()?;
         let previous =
             previous.and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
@@ -439,8 +424,8 @@ impl PanelDb {
         } else {
             now_ms
         };
-        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
-            rusqlite::params![key, serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
+        tx.prepare_cached("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")?
+            .execute(rusqlite::params![key, serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
         Ok(enabled.then_some(since))
     }
 
@@ -467,22 +452,6 @@ impl PanelDb {
             )?;
         }
         Ok(())
-    }
-
-    pub fn claim_feedback_delivery(&self, key: &str) -> Result<bool> {
-        let now = Self::now();
-        let conn = self.conn.lock().expect("db mutex");
-        let inserted = conn.execute(
-            "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES(?1,'delivering',?2)",
-            rusqlite::params![key, now],
-        )? == 1;
-        if !inserted {
-            let _ = conn.execute(
-                "UPDATE settings SET updated_at = ?2 WHERE key = ?1 AND updated_at <= ?3",
-                rusqlite::params![key, now, now - 86_400],
-            );
-        }
-        Ok(inserted)
     }
 
     pub fn touch_setting_if_older_than(&self, key: &str, min_age_seconds: i64) -> Result<bool> {
@@ -584,43 +553,49 @@ impl PanelDb {
         target_id: Option<&str>,
         detail: Value,
     ) -> Result<()> {
+        use std::sync::atomic::Ordering;
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction()?;
         let now = Self::now();
-        Self::prune_audit(&tx, now)?;
-        tx.execute(
+        let last_prune = self.last_audit_prune_at.load(Ordering::Relaxed);
+        let should_prune = last_prune == 0 || now.saturating_sub(last_prune) >= 3600;
+        if should_prune {
+            Self::prune_audit(&tx, now)?;
+        }
+        tx.prepare_cached(
             r#"
             INSERT INTO audit_log(admin_id, action, target_type, target_id, detail_json, created_at)
             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
             "#,
-            params![
-                admin_id,
-                action,
-                target_type,
-                target_id,
-                detail.to_string(),
-                now
-            ],
-        )?;
+        )?
+        .execute(params![
+            admin_id,
+            action,
+            target_type,
+            target_id,
+            detail.to_string(),
+            now
+        ])?;
         tx.commit()?;
+        if should_prune {
+            self.last_audit_prune_at.store(now, Ordering::Relaxed);
+        }
         Ok(())
     }
 
     pub fn create_job(&self, id: &str, kind: &str, title: &str) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        conn.prepare_cached(
             "INSERT INTO jobs(id, kind, status, title, started_at) VALUES(?1, ?2, 'running', ?3, ?4)",
-            params![id, kind, title, Self::now()],
-        )?;
+        )?
+        .execute(params![id, kind, title, Self::now()])?;
         Ok(())
     }
 
     pub fn append_job_output(&self, id: &str, chunk: &str) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "UPDATE jobs SET output = output || ?2 WHERE id=?1",
-            params![id, chunk],
-        )?;
+        conn.prepare_cached("UPDATE jobs SET output = output || ?2 WHERE id=?1")?
+            .execute(params![id, chunk])?;
         Ok(())
     }
 
@@ -632,10 +607,10 @@ impl PanelDb {
         error: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        conn.prepare_cached(
             "UPDATE jobs SET status=?2, finished_at=?3, exit_code=?4, error=?5 WHERE id=?1",
-            params![id, status, Self::now(), exit_code, error],
-        )?;
+        )?
+        .execute(params![id, status, Self::now(), exit_code, error])?;
         Ok(())
     }
 
@@ -727,6 +702,18 @@ impl PanelDb {
         })
     }
 
+    pub fn recent_probe_event_count(&self, limit: u32) -> Result<usize> {
+        let conn = self.conn.lock().expect("db mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT COUNT(*) FROM (
+                SELECT 1 FROM probe_events ORDER BY created_at DESC, rowid DESC LIMIT ?1
+            )",
+        )?;
+        stmt.query_row(params![limit.clamp(1, 500)], |row| row.get::<_, i64>(0))
+            .map(|count| count.max(0) as usize)
+            .map_err(Into::into)
+    }
+
     pub fn list_probe_events(&self, limit: u32) -> Result<Vec<ProbeEvent>> {
         let conn = self.conn.lock().expect("db mutex");
         let mut stmt = conn.prepare_cached(
@@ -750,32 +737,6 @@ impl PanelDb {
         )?;
         stmt.query_row(params![namespace, dedupe_key, now], |r| r.get(0))
             .map_err(Into::into)
-    }
-
-    pub fn claim_probe_dedupe(
-        &self,
-        namespace: &str,
-        dedupe_key: &str,
-        ttl_seconds: i64,
-    ) -> Result<bool> {
-        let conn = self.conn.lock().expect("db mutex");
-        let now = Self::now();
-        let mut stmt = conn.prepare_cached(
-            r#"
-            INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
-            VALUES(?1, ?2, ?3, ?4)
-            ON CONFLICT(namespace, dedupe_key) DO UPDATE
-            SET expires_at = excluded.expires_at, created_at = excluded.created_at
-            WHERE probe_dedupe.expires_at <= excluded.created_at
-            "#,
-        )?;
-        let changed = stmt.execute(params![
-            namespace,
-            dedupe_key,
-            now + ttl_seconds.max(1),
-            now
-        ])?;
-        Ok(changed > 0)
     }
 
     pub fn claim_probe_error_incident(&self, incident: &NewProbeErrorIncident) -> Result<bool> {
@@ -839,7 +800,7 @@ impl PanelDb {
         bark_status: &str,
     ) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        conn.prepare_cached(
             r#"
             UPDATE probe_error_incidents
             SET event_id=COALESCE(?2, event_id),
@@ -848,20 +809,19 @@ impl PanelDb {
                 updated_at=?4
             WHERE incident_key=?1
             "#,
-            params![incident_key, event_id, bark_status, Self::now()],
-        )?;
+        )?
+        .execute(params![incident_key, event_id, bark_status, Self::now()])?;
         Ok(())
     }
 
     pub fn probe_event_id_by_dedupe_key(&self, dedupe_key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
+        let mut stmt = conn.prepare_cached(
             "SELECT id FROM probe_events WHERE dedupe_key=?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            params![dedupe_key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+        )?;
+        stmt.query_row(params![dedupe_key], |row| row.get(0))
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn maintain_probe_events(
@@ -1156,8 +1116,16 @@ mod tests {
             let conn = db.conn.lock().unwrap();
             conn.execute("INSERT INTO probe_dedupe VALUES ('fixture','renew',?1,?1),('fixture','other',?1,?1)", [now-1]).unwrap();
         }
-        assert!(db.claim_probe_dedupe("fixture", "renew", 60).unwrap());
-        assert!(!db.claim_probe_dedupe("fixture", "renew", 60).unwrap());
+        assert!(
+            db.claim_and_stage_codex_delivery(None, "fixture", "renew", 60, None)
+                .unwrap()
+                .1
+        );
+        assert!(
+            !db.claim_and_stage_codex_delivery(None, "fixture", "renew", 60, None)
+                .unwrap()
+                .1
+        );
         assert_eq!(
             db.conn
                 .lock()
@@ -1174,7 +1142,9 @@ mod tests {
             .map(|_| {
                 let db = db.clone();
                 std::thread::spawn(move || {
-                    db.claim_probe_dedupe("fixture", "concurrent", 60).unwrap()
+                    db.claim_and_stage_codex_delivery(None, "fixture", "concurrent", 60, None)
+                        .unwrap()
+                        .1
                 })
             })
             .collect::<Vec<_>>();
@@ -1196,11 +1166,13 @@ mod tests {
         .unwrap();
 
         let first_claim = db
-            .claim_probe_dedupe("reply_needed", "thread-a:turn-1", 60)
-            .unwrap();
+            .claim_and_stage_codex_delivery(None, "reply_needed", "thread-a:turn-1", 60, None)
+            .unwrap()
+            .1;
         let duplicate_claim = db
-            .claim_probe_dedupe("reply_needed", "thread-a:turn-1", 60)
-            .unwrap();
+            .claim_and_stage_codex_delivery(None, "reply_needed", "thread-a:turn-1", 60, None)
+            .unwrap()
+            .1;
         assert!(first_claim);
         assert!(!duplicate_claim);
 

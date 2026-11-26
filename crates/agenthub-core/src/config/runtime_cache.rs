@@ -1,34 +1,14 @@
 use super::Config;
+pub use crate::file_stamp::FileStamp;
 use anyhow::Result;
 use std::path::Path;
-
-#[derive(PartialEq, Eq)]
-pub struct FileStamp {
-    modified: Option<std::time::SystemTime>,
-    len: u64,
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
-}
-
-fn file_stamp(path: &Path) -> Option<FileStamp> {
-    let meta = std::fs::metadata(path).ok()?;
-    Some(FileStamp {
-        modified: meta.modified().ok(),
-        len: meta.len(),
-        #[cfg(unix)]
-        identity: {
-            use std::os::unix::fs::MetadataExt;
-            (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-        },
-    })
-}
 
 pub type ConfigFileStamp = (FileStamp, Option<FileStamp>);
 pub fn config_stamp(path: &Path) -> Option<ConfigFileStamp> {
     Some((
-        file_stamp(path)?,
+        FileStamp::of_followed(path)?,
         path.parent()
-            .and_then(|parent| file_stamp(&parent.join("env"))),
+            .and_then(|parent| FileStamp::of_followed(&parent.join("env"))),
     ))
 }
 

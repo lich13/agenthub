@@ -984,15 +984,21 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 /// Replace the actual configuration file without exposing a truncated TOML document.
 pub fn write_config_atomic(path: &Path, updated: &str) -> Result<()> {
     let permissions = fs::metadata(path)?.permissions();
-    write_atomic(path, updated, Some(permissions))
+    write_atomic(path, updated.as_bytes(), Some(permissions))
+}
+
+/// Atomically replace a file while preserving existing permissions if present.
+pub fn write_bytes_atomic_preserving_permissions(path: &Path, bytes: &[u8]) -> Result<()> {
+    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
+    write_atomic(path, bytes, permissions)
 }
 
 #[cfg(any(target_os = "macos", test))]
 fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
-    write_atomic(path, updated, None)
+    write_atomic(path, updated.as_bytes(), None)
 }
 
-fn write_atomic(path: &Path, updated: &str, permissions: Option<fs::Permissions>) -> Result<()> {
+fn write_atomic(path: &Path, updated: &[u8], permissions: Option<fs::Permissions>) -> Result<()> {
     use std::io::Write;
     let candidate = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
@@ -1007,7 +1013,7 @@ fn write_atomic(path: &Path, updated: &str, permissions: Option<fs::Permissions>
         if let Some(permissions) = permissions {
             file.set_permissions(permissions)?;
         }
-        file.write_all(updated.as_bytes())?;
+        file.write_all(updated)?;
         file.sync_all()?;
         fs::rename(&candidate, path)?;
         Ok(())

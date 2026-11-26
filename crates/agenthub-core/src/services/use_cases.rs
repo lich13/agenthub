@@ -60,10 +60,8 @@ impl<'a> AgentHubUseCases<'a> {
         )
     }
 
-    pub fn threads(self) -> ThreadUseCases<'a> {
-        ThreadUseCases {
-            platform: self.platform,
-        }
+    pub fn threads(self) -> ThreadUseCases {
+        ThreadUseCases
     }
 
     pub fn grok(self) -> Result<GrokUseCases> {
@@ -121,17 +119,12 @@ impl<'a> AgentHubUseCases<'a> {
         crate::services::search::SearchUseCases::new(self.platform, codex)
     }
 
-    pub fn cleanup(self) -> CleanupUseCases<'a> {
-        CleanupUseCases {
-            platform: self.platform,
-        }
+    pub fn cleanup(self) -> CleanupUseCases {
+        CleanupUseCases
     }
 
     pub fn settings(self) -> Result<SettingsUseCases<'a>> {
-        Ok(SettingsUseCases::new(
-            self.config_required()?,
-            self.platform,
-        ))
+        Ok(SettingsUseCases::new(self.config_required()?))
     }
 
     pub fn probe(self) -> ProbeUseCases<'a> {
@@ -185,11 +178,9 @@ impl GrokUseCases {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ThreadUseCases<'a> {
-    platform: &'a PlatformPaths,
-}
+pub struct ThreadUseCases;
 
-impl<'a> ThreadUseCases<'a> {
+impl ThreadUseCases {
     pub fn subagent_detail(
         self,
         paths: &crate::codex::CodexPaths,
@@ -199,11 +190,11 @@ impl<'a> ThreadUseCases<'a> {
     }
 
     pub fn list_read(self, query: ThreadsQuery) -> Result<ThreadListPlan> {
-        threads::plan_threads_list_request(self.platform, query)
+        threads::plan_threads_list_request(query)
     }
 
     pub fn detail_read(self, request: ThreadDetailRequest) -> Result<ThreadDetailPlan> {
-        threads::plan_thread_detail_request(self.platform, request)
+        threads::plan_thread_detail_request(request)
     }
 
     pub fn blocks(
@@ -212,7 +203,7 @@ impl<'a> ThreadUseCases<'a> {
         limit: Option<usize>,
         before: Option<String>,
     ) -> Result<ThreadDetailPlan> {
-        threads::plan_thread_blocks_request(self.platform, thread_id, limit, before)
+        threads::plan_thread_blocks_request(thread_id, limit, before)
     }
 
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
@@ -262,6 +253,28 @@ pub struct JobDetailRequest {
     pub include_output: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageWindowOptions {
+    pub limit: Option<usize>,
+    pub before: Option<String>,
+    pub full: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeRenameRequest {
+    pub session_key: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrokRenameRequest {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct JobUseCases;
 
@@ -301,16 +314,14 @@ impl JobUseCases {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CleanupUseCases<'a> {
-    platform: &'a PlatformPaths,
-}
+pub struct CleanupUseCases;
 
-impl<'a> CleanupUseCases<'a> {
+impl CleanupUseCases {
     pub fn unified_dry_run(
         self,
         paths: &cleanup::UnifiedCleanupPaths,
     ) -> Result<cleanup::UnifiedCleanupPlan> {
-        cleanup::dry_run_unified_with_capability(self.platform, paths)
+        cleanup::dry_run_unified_with_capability(paths)
     }
 
     pub fn unified_execute_with_deleted_streams(
@@ -318,7 +329,7 @@ impl<'a> CleanupUseCases<'a> {
         paths: &cleanup::UnifiedCleanupPaths,
         request: cleanup::UnifiedCleanupExecuteRequest,
     ) -> Result<(cleanup::UnifiedCleanupResult, cleanup::DeletedProbeStreams)> {
-        cleanup::execute_unified_with_deleted_streams(self.platform, paths, request)
+        cleanup::execute_unified_with_deleted_streams(paths, request)
     }
 
     pub async fn scan_hidden(

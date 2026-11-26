@@ -1,14 +1,14 @@
 //! Shared, bounded native JSONL reader. Only complete records enter a snapshot.
+use crate::file_stamp::{open_regular_nofollow, FileStamp};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
-    fs::{self, File},
+    fs::File,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::SystemTime,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,50 +32,11 @@ pub struct HistoryChange {
     pub reset: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Stamp {
-    size: u64,
-    modified: SystemTime,
-    identity: (u64, u64, i64, i64),
-}
-
-impl Stamp {
-    fn read(path: &Path) -> Result<Self> {
-        let meta = fs::symlink_metadata(path)?;
-        ensure!(
-            meta.is_file() && !meta.file_type().is_symlink(),
-            "会话必须是普通文件"
-        );
-        Self::from_metadata(&meta)
-    }
-
-    fn from_metadata(meta: &fs::Metadata) -> Result<Self> {
-        use std::os::unix::fs::MetadataExt;
-        Ok(Self {
-            size: meta.len(),
-            modified: meta.modified()?,
-            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
-        })
-    }
-
-    fn same_file(&self, other: &Self) -> bool {
-        self.identity.0 == other.identity.0 && self.identity.1 == other.identity.1
-    }
-}
-
-fn open(path: &Path) -> Result<File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_NOFOLLOW);
-    Ok(options.open(path)?)
-}
-
 pub(crate) fn open_regular(path: &Path) -> Result<File> {
-    let before = Stamp::read(path)?;
-    let file = open(path)?;
+    let before = FileStamp::read_regular_nofollow(path, "会话必须是普通文件")?;
+    let file = open_regular_nofollow(path)?;
     ensure!(
-        Stamp::from_metadata(&file.metadata()?)? == before,
+        FileStamp::from_open_file(&file) == Some(before),
         "会话文件身份已变化，请重试"
     );
     Ok(file)
@@ -109,7 +70,7 @@ impl ReadInfo<'_> {
 }
 
 struct Snapshot<S> {
-    stamp: Stamp,
+    stamp: FileStamp,
     offset: u64,
     lines: usize,
     epoch: String,
@@ -137,7 +98,7 @@ fn strip_line_ending(mut line: &[u8]) -> &[u8] {
 }
 
 fn derive_epoch(
-    stamp: &Stamp,
+    stamp: &FileStamp,
     scope: &str,
     compressed: bool,
     start_offset: u64,
@@ -320,27 +281,28 @@ impl<S: Default> JsonlCache<S> {
                 .snapshot
                 .lock()
                 .map_err(|_| anyhow::anyhow!("会话缓存不可用"))?;
-            let before = Stamp::read(path).context("无法读取会话文件")?;
+            let before = FileStamp::read_regular_nofollow(path, "会话必须是普通文件")
+                .context("无法读取会话文件")?;
             let changed = cached.as_ref().is_none_or(|value| value.stamp != before);
             if changed {
-                let initial_offset = start(before.size)?.min(before.size);
-                let mut file = open(path)?;
+                let initial_offset = start(before.len)?.min(before.len);
+                let mut file = open_regular_nofollow(path)?;
                 ensure!(
-                    Stamp::from_metadata(&file.metadata()?)? == before,
+                    FileStamp::from_open_file(&file) == Some(before),
                     "会话文件身份已变化，请重试"
                 );
                 let mut separator = 0;
                 let append = cached.as_ref().is_some_and(|value| {
                     !compressed
-                        && before.size > value.stamp.size
-                        && before.same_file(&value.stamp)
+                        && before.len > value.stamp.len
+                        && before.same_inode(&value.stamp)
                         && anchor(&mut file, value.offset).ok() == Some(value.anchor)
                         && (value.terminated || {
                             // A complete JSON value without a final newline is
                             // provisional until its next separator is known.
                             // Extending that same line requires a fresh parse.
                             let mut bytes = [0; 2];
-                            let count = (before.size - value.offset).min(2) as usize;
+                            let count = (before.len - value.offset).min(2) as usize;
                             let read = file
                                 .seek(SeekFrom::Start(value.offset))
                                 .and_then(|_| file.read_exact(&mut bytes[..count]));
@@ -373,7 +335,7 @@ impl<S: Default> JsonlCache<S> {
                 });
                 let prev_cached_gen = cached
                     .as_ref()
-                    .filter(|value| before.same_file(&value.stamp))
+                    .filter(|value| before.same_inode(&value.stamp))
                     .map(|value| value.rewrite_gen);
                 let had_cached = cached.is_some();
                 let mut snapshot = if append {
@@ -381,7 +343,7 @@ impl<S: Default> JsonlCache<S> {
                 } else {
                     let offset = initial_offset;
                     Snapshot {
-                        stamp: before.clone(),
+                        stamp: before,
                         offset,
                         lines: 0,
                         epoch: String::new(),
@@ -401,11 +363,11 @@ impl<S: Default> JsonlCache<S> {
                 {
                     let valid_cold_continuation = !compressed
                         && !had_cached
-                        && before.size >= prev_offset
+                        && before.len >= prev_offset
                         && anchor(&mut file, prev_offset).ok() == Some(prev_anchor)
-                        && (prev_terminated || before.size == prev_offset || {
+                        && (prev_terminated || before.len == prev_offset || {
                             let mut bytes = [0; 2];
-                            let count = (before.size - prev_offset).min(2) as usize;
+                            let count = (before.len - prev_offset).min(2) as usize;
                             file.seek(SeekFrom::Start(prev_offset))
                                 .and_then(|_| file.read_exact(&mut bytes[..count]))
                                 .is_ok()
@@ -413,8 +375,8 @@ impl<S: Default> JsonlCache<S> {
                         });
                     let unchanged_compressed = compressed
                         && !had_cached
-                        && before.size == prev_offset
-                        && anchor(&mut file, before.size).ok() == Some(prev_anchor);
+                        && before.len == prev_offset
+                        && anchor(&mut file, before.len).ok() == Some(prev_anchor);
                     if valid_cold_continuation || unchanged_compressed {
                         prev_gen
                     } else {
@@ -430,7 +392,7 @@ impl<S: Default> JsonlCache<S> {
                     snapshot.terminated = true;
                 }
                 file.seek(SeekFrom::Start(snapshot.offset))?;
-                let input = (&mut file).take(before.size - snapshot.offset);
+                let input = (&mut file).take(before.len - snapshot.offset);
                 let input: Box<dyn Read + '_> = if compressed {
                     Box::new(zstd::stream::read::Decoder::new(input)?)
                 } else {
@@ -479,7 +441,7 @@ impl<S: Default> JsonlCache<S> {
                 }
                 drop(input);
                 if compressed {
-                    let stream_anchor = anchor(&mut file, before.size)?;
+                    let stream_anchor = anchor(&mut file, before.len)?;
                     snapshot.anchor = stream_anchor;
                     snapshot.epoch = derive_epoch(
                         &before,
@@ -488,7 +450,7 @@ impl<S: Default> JsonlCache<S> {
                         effective_start_offset,
                         rewrite_gen,
                         None,
-                        Some((before.size, stream_anchor)),
+                        Some((before.len, stream_anchor)),
                     );
                 } else {
                     snapshot.anchor = anchor(&mut file, snapshot.offset)?;
@@ -504,15 +466,15 @@ impl<S: Default> JsonlCache<S> {
                         );
                     }
                 }
-                let after = Stamp::read(path)?;
+                let after = FileStamp::read_regular_nofollow(path, "会话必须是普通文件")?;
                 ensure!(
                     after == before
-                        || (!compressed && after.same_file(&before) && after.size > before.size),
+                        || (!compressed && after.same_inode(&before) && after.len > before.len),
                     "会话文件已变化，请重试"
                 );
                 if let Ok(mut guard) = self.lineage.lock() {
                     let recorded_offset = if compressed {
-                        before.size
+                        before.len
                     } else {
                         snapshot.offset
                     };
@@ -629,14 +591,15 @@ pub(crate) fn scan_once(
     accept_complete_tail: bool,
     mut consume: impl FnMut(&[u8], usize, u64) -> Result<()>,
 ) -> Result<(u64, bool)> {
-    let before = Stamp::read(path).context("无法读取会话文件")?;
-    ensure!(before.size <= max_bytes, "Claude 会话超出 512 MiB 读取上限");
-    let file = open(path)?;
+    let before =
+        FileStamp::read_regular_nofollow(path, "会话必须是普通文件").context("无法读取会话文件")?;
+    ensure!(before.len <= max_bytes, "Claude 会话超出 512 MiB 读取上限");
+    let file = open_regular_nofollow(path)?;
     ensure!(
-        Stamp::from_metadata(&file.metadata()?)? == before,
+        FileStamp::from_open_file(&file) == Some(before),
         "会话文件身份已变化，请重试"
     );
-    let mut input = BufReader::with_capacity(64 * 1024, file.take(before.size));
+    let mut input = BufReader::with_capacity(64 * 1024, file.take(before.len));
     let mut line = Vec::new();
     let mut offset = 0u64;
     let mut lines = 0usize;
@@ -667,7 +630,10 @@ pub(crate) fn scan_once(
         offset += length as u64;
     }
     ensure!(
-        Stamp::read(path).ok().as_ref() == Some(&before),
+        FileStamp::read_regular_nofollow(path, "会话必须是普通文件")
+            .ok()
+            .as_ref()
+            == Some(&before),
         "会话正在写入，请重试"
     );
     Ok((offset, partial))

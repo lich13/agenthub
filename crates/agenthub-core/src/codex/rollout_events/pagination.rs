@@ -20,6 +20,23 @@ pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
 }
 
+fn json_value_heap_bytes(v: &Value) -> u64 {
+    match v {
+        Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+        Value::String(s) => s.capacity() as u64,
+        Value::Array(items) => {
+            (items.capacity() * std::mem::size_of::<Value>()) as u64
+                + items.iter().map(json_value_heap_bytes).sum::<u64>()
+        }
+        Value::Object(map) => {
+            32 + map
+                .iter()
+                .map(|(k, val)| 24 + k.capacity() as u64 + json_value_heap_bytes(val))
+                .sum::<u64>()
+        }
+    }
+}
+
 fn detail_state_weight(state: &DetailState) -> u64 {
     fn opt_str_cap(s: &Option<String>) -> usize {
         s.as_ref().map_or(0, String::capacity)
@@ -28,6 +45,7 @@ fn detail_state_weight(state: &DetailState) -> u64 {
         (512 + block.id.capacity()
             + block.kind.capacity()
             + block.role.capacity()
+            + opt_str_cap(&block.phase)
             + opt_str_cap(&block.display_kind)
             + opt_str_cap(&block.summary)
             + opt_str_cap(&block.text)
@@ -45,6 +63,27 @@ fn detail_state_weight(state: &DetailState) -> u64 {
                 .iter()
                 .map(crate::codex::UserInputQuestion::heap_bytes)
                 .sum::<u64>()
+            + (block.answers.capacity() * std::mem::size_of::<crate::codex::UserInputAnswer>())
+                as u64
+            + block
+                .answers
+                .iter()
+                .map(|a| {
+                    (a.question_id.capacity()
+                        + opt_str_cap(&a.note)
+                        + a.answers.iter().map(String::capacity).sum::<usize>())
+                        as u64
+                })
+                .sum::<u64>()
+            + block.subagent.as_ref().map_or(0, |s| {
+                (160 + s.name.capacity()
+                    + opt_str_cap(&s.event_id)
+                    + opt_str_cap(&s.agent_id)
+                    + opt_str_cap(&s.role)
+                    + opt_str_cap(&s.unavailable_reason)
+                    + opt_str_cap(&s.delegation)) as u64
+            })
+            + block.payload.as_ref().map_or(0, json_value_heap_bytes)
             + block
                 .user_message
                 .as_ref()
@@ -64,6 +103,7 @@ fn detail_state_weight(state: &DetailState) -> u64 {
                     + opt_str_cap(&m.created_at)) as u64
             })
             .sum::<u64>()
+        + opt_str_cap(&state.turn_context) as u64
         + state.blocks.iter().map(|b| block_weight(b)).sum::<u64>()
         + (state.blocks.capacity() + state.compacted.capacity()) as u64
             * std::mem::size_of::<Arc<MessageBlock>>() as u64
@@ -91,13 +131,13 @@ fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Resul
         },
         |state, info| {
             if info.changed {
-                let blocks = state.builder.clone().finish_uncompacted();
+                let blocks = state.builder.snapshot_uncompacted();
                 let previous: HashMap<_, _> = state
                     .blocks
                     .iter()
                     .map(|block| (&block.id, block))
                     .collect();
-                let compacted = compact_chat_history(blocks.clone(), CHAT_HISTORY_LIMIT);
+                let compacted = compact_chat_history(&blocks, CHAT_HISTORY_LIMIT);
                 let old_markers: HashMap<_, _> = state
                     .compacted
                     .iter()

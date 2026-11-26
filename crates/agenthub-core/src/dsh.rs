@@ -1,6 +1,11 @@
 //! Offline cleanup of the standard DeepSeek Harness file store.
 pub mod notifications;
 pub mod sessions;
+use crate::{
+    archive::HiddenThreadItemResult,
+    file_stamp::{open_regular_nofollow, FileStamp},
+    session_delete::Outcome,
+};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,10 +15,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::Command,
-    time::SystemTime,
 };
-
-use crate::{archive::HiddenThreadItemResult, session_delete::Outcome};
 
 const INDEX_LIMIT: u64 = 16 * 1024 * 1024;
 const HEADER_LIMIT: u64 = 1024 * 1024;
@@ -90,23 +92,10 @@ struct Inventory {
     plan: DshArchiveDeletePlan,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct FileStamp {
-    len: u64,
-    modified: SystemTime,
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
-}
 fn file_stamp(path: &Path) -> Result<FileStamp> {
     let meta = fs::symlink_metadata(path)?;
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
-    Ok(FileStamp {
-        len: meta.len(),
-        modified: meta.modified()?,
-        #[cfg(unix)]
-        identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
-    })
+    let _ = meta.modified()?;
+    Ok(FileStamp::from_metadata(&meta))
 }
 
 fn valid_id(id: &str) -> Result<()> {
@@ -135,16 +124,7 @@ fn directory(path: &Path) -> Result<bool> {
 }
 
 fn regular_file(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).context("无法读取 DSH 文件")?;
-    ensure!(file.metadata()?.is_file(), "DSH 文件不是普通文件");
-    Ok(file)
+    open_regular_nofollow(path).context("无法读取 DSH 文件")
 }
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
@@ -498,18 +478,25 @@ fn dsh_command(command: &str) -> bool {
             }))
 }
 
-fn require_stopped() -> Result<()> {
+pub(super) fn ensure_no_running_dsh_process(
+    check_err: &'static str,
+    running_err: &'static str,
+) -> Result<()> {
     let output = Command::new("/bin/ps")
         .args(["-axo", "command="])
         .output()
-        .context("无法核验 DSH 运行状态")?;
-    ensure!(output.status.success(), "无法核验 DSH 运行状态");
+        .context(check_err)?;
+    ensure!(output.status.success(), "{check_err}");
     let output = String::from_utf8_lossy(&output.stdout);
-    ensure!(
-        !output.lines().any(dsh_command),
-        "请先退出当前机器的 DSH，再清理归档线程"
-    );
+    ensure!(!output.lines().any(dsh_command), "{running_err}");
     Ok(())
+}
+
+fn require_stopped() -> Result<()> {
+    ensure_no_running_dsh_process(
+        "无法核验 DSH 运行状态",
+        "请先退出当前机器的 DSH，再清理归档线程",
+    )
 }
 
 fn unchanged(index: &Registry) -> Result<()> {

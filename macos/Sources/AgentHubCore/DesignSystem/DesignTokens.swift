@@ -139,6 +139,7 @@ public struct DesignPalette: Equatable, Sendable {
     public let glass: RGBAColor            // --g (alpha .88)
     public let hover: RGBAColor            // --h
     public let selected: RGBAColor         // --sl
+    public let userBubble: RGBAColor       // --ub
     public let codeBg: RGBAColor           // --c
     public let textPrimary: RGBAColor      // --fg
     public let textSecondary: RGBAColor    // --fg2
@@ -180,6 +181,7 @@ public struct DesignPalette: Equatable, Sendable {
                 glass: RGBAColor(r: 255, g: 255, b: 255, a: 0.88),
                 hover: RGBAColor(hex: 0xEAEDF2),
                 selected: RGBAColor(hex: 0xE4E8EF),
+                userBubble: RGBAColor(hex: 0xF3F5F8),
                 codeBg: RGBAColor(hex: 0xF6F8FA),
                 textPrimary: RGBAColor(hex: 0x0F172A),
                 textSecondary: RGBAColor(hex: 0x334155),
@@ -215,6 +217,7 @@ public struct DesignPalette: Equatable, Sendable {
                 glass: RGBAColor(r: 22, g: 25, b: 32, a: 0.88),
                 hover: RGBAColor(hex: 0x262C37),
                 selected: RGBAColor(hex: 0x2A313D),
+                userBubble: RGBAColor(hex: 0x262D3D),
                 codeBg: RGBAColor(hex: 0x11141A),
                 textPrimary: RGBAColor(hex: 0xF8FAFC),
                 textSecondary: RGBAColor(hex: 0xCBD5E1),
@@ -294,7 +297,7 @@ public enum LayoutMetrics {
     public static let timelineRailWidth: CGFloat = 22
     public static let timelinePreviewMaxWidth: CGFloat = 288
 
-    public static let fallbackAppVersion: String = "2.1.39"
+    public static let fallbackAppVersion: String = "2.1.40"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,
@@ -406,11 +409,13 @@ public extension EnvironmentValues {
 
 @MainActor
 public final class AccessibilityMotionObserver: ObservableObject {
+    public static let shared = AccessibilityMotionObserver()
     @Published public private(set) var reduceMotion: Bool
+    nonisolated(unsafe) private var observerToken: NSObjectProtocol?
 
     public init() {
         self.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        NSWorkspace.shared.notificationCenter.addObserver(
+        self.observerToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil,
             queue: .main
@@ -418,6 +423,12 @@ public final class AccessibilityMotionObserver: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             }
+        }
+    }
+
+    deinit {
+        if let observerToken {
+            NSWorkspace.shared.notificationCenter.removeObserver(observerToken)
         }
     }
 }

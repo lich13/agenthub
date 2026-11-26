@@ -4,37 +4,37 @@ import SwiftUI
 // MARK: - AppKit NSTableView Coordinator with Deterministic 0.0pt Scroll Anchor Lock
 
 @MainActor
-public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    public weak var scrollView: NSScrollView?
-    public weak var tableView: NSTableView?
-    public weak var column: NSTableColumn?
+final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    weak var scrollView: NSScrollView?
+    weak var tableView: NSTableView?
+    weak var column: NSTableColumn?
 
-    public var store: RuntimeConnectionStore
-    public var disclosureStore: ActivityDisclosureStore
-    public let attachmentViewport = AttachmentViewportManager()
+    var store: RuntimeConnectionStore
+    var disclosureStore: ActivityDisclosureStore
+    let attachmentViewport = AttachmentViewportManager()
 
-    public private(set) var rows: [ConversationRowItem] = []
-    public var scheme: ColorSchemeKind = .light
-    public var workspace: WorkspaceId = .codex
-    public var sessionScopeKey: String = "local::codex"
-    public var sessionProvider: SessionProvider = .codex
-    public var sessionKey: String = ""
-    public var rootThreadId: String?
-    public var cwd: String?
-    public var hasTimelineRail: Bool = true
-    public var isSubagent: Bool = false
+    private(set) var rows: [ConversationRowItem] = []
+    var scheme: ColorSchemeKind = .light
+    var workspace: WorkspaceId = .codex
+    var sessionScopeKey: String = "local::codex"
+    var sessionProvider: SessionProvider = .codex
+    var sessionKey: String = ""
+    var rootThreadId: String?
+    var cwd: String?
+    var hasTimelineRail: Bool = true
+    var isSubagent: Bool = false
 
-    public var onLoadOlderRequested: (() -> Void)?
-    public var onShowAllHistory: (() -> Void)?
-    public var onOpenSubagent: ((SubagentActivity) -> Void)?
-    public var onPreviewImage: ((String, NSImage) -> Void)?
-    public var onCopyFeedback: ((String) -> Void)?
-    public var onActiveTimelineChanged: ((String?) -> Void)?
+    var onLoadOlderRequested: (() -> Void)?
+    var onShowAllHistory: (() -> Void)?
+    var onOpenSubagent: ((SubagentActivity) -> Void)?
+    var onPreviewImage: ((String, NSImage) -> Void)?
+    var onCopyFeedback: ((String) -> Void)?
+    var onActiveTimelineChanged: ((String?) -> Void)?
 
     private var highlightedTimelineId: String?
-    public var isLoadOlderBlockedByError: Bool = false
-    public var canLoadOlder: Bool = true
-    public var isLoadingOlder: Bool = false
+    var isLoadOlderBlockedByError: Bool = false
+    var canLoadOlder: Bool = true
+    var isLoadingOlder: Bool = false
     nonisolated(unsafe) private var highlightClearTask: Task<Void, Never>?
     private var isRestoringScroll = false
     private var lastLaidOutWidth: CGFloat = 0
@@ -44,9 +44,9 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     private var userAnchorRowIndices: [Int] = []
     private var hasAnyUserImageAttachments: Bool = false
 
-    public static var scrollerStyleOverrideForTesting: NSScroller.Style?
+    static var scrollerStyleOverrideForTesting: NSScroller.Style?
 
-    public static var effectiveScrollerStyle: NSScroller.Style {
+    static var effectiveScrollerStyle: NSScroller.Style {
         scrollerStyleOverrideForTesting ?? NSScroller.preferredScrollerStyle
     }
 
@@ -58,21 +58,35 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     private var heightCacheScopeKey: String = ""
     private var heightCacheScrollerStyle: NSScroller.Style = ConversationTableCoordinator.effectiveScrollerStyle
 
-    private static let maxCachedCells = 128
-    private var cellCacheByRowId: [String: ConversationRowCellView] = [:]
-    private var cellCacheOrder: [String] = []
+    static let maxCachedCells = 48
+    private var cellCache = BoundedLRUCache<String, ConversationRowCellView>(maxEntries: maxCachedCells)
     private var cellCacheScopeKey: String = ""
 
-    public struct ScrollAnchorSnapshot: Equatable, Sendable {
-        public let timelineId: String
-        public let deltaY: CGFloat
-        public var deltaMaxY: CGFloat
-        public var savedRowHeight: CGFloat
-        public var wasFirstRow: Bool
-        public var savedScrollTop: CGFloat
-        public var savedContentHeight: CGFloat
+    private struct SegmentWidthKey: Hashable {
+        let contentHash: Int
+        let quantizedWidth: Int
+        let scheme: ColorSchemeKind
+        let workspace: WorkspaceId
+    }
 
-        public init(
+    private var proseHeightCache = BoundedLRUCache<SegmentWidthKey, CGFloat>(maxEntries: 512)
+    private var thoughtLayoutCache = BoundedLRUCache<SegmentWidthKey, (attributed: NSAttributedString, height: CGFloat)>(maxEntries: 256)
+    private var codeLayoutCache = BoundedLRUCache<SegmentWidthKey, (normalized: String, codeHeight: CGFloat, docWidth: CGFloat)>(maxEntries: 256)
+    private var tableLayoutCache = BoundedLRUCache<SegmentWidthKey, (colWidths: [CGFloat], rowHeights: [CGFloat], totalWidth: CGFloat, totalHeight: CGFloat)>(maxEntries: 128)
+
+    var cachedCellCountForTesting: Int { cellCache.count }
+    func cachedCellForTesting(rowId: String) -> ConversationRowCellView? { cellCache.peek(rowId) }
+
+    struct ScrollAnchorSnapshot: Equatable, Sendable {
+        let timelineId: String
+        let deltaY: CGFloat
+        var deltaMaxY: CGFloat
+        var savedRowHeight: CGFloat
+        var wasFirstRow: Bool
+        var savedScrollTop: CGFloat
+        var savedContentHeight: CGFloat
+
+        init(
             timelineId: String,
             deltaY: CGFloat,
             deltaMaxY: CGFloat = 0,
@@ -91,7 +105,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         disclosureStore: ActivityDisclosureStore = .shared
     ) {
@@ -107,19 +121,37 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             name: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(ConversationTableCoordinator.handleWindowDidHide(_:)),
+            name: .agentHubWindowDidHide,
+            object: nil
+        )
     }
 
-    public struct LoadedAttachmentState: Equatable, Sendable {
-        public let lowMask: UInt64
-        public let overflowIndices: [Int]
+    @objc private func handleWindowDidHide(_ notification: Notification) {
+        evictOffscreenCaches()
+    }
 
-        public init(lowMask: UInt64 = 0, overflowIndices: [Int] = []) {
+    func evictOffscreenCaches() {
+        cellCache.removeAll()
+        proseHeightCache.removeAll()
+        thoughtLayoutCache.removeAll()
+        codeLayoutCache.removeAll()
+        tableLayoutCache.removeAll()
+    }
+
+    struct LoadedAttachmentState: Equatable, Sendable {
+        let lowMask: UInt64
+        let overflowIndices: [Int]
+
+        init(lowMask: UInt64 = 0, overflowIndices: [Int] = []) {
             self.lowMask = lowMask
             self.overflowIndices = overflowIndices
         }
     }
 
-    public func loadedAttachmentState(for item: ConversationRowItem) -> LoadedAttachmentState {
+    func loadedAttachmentState(for item: ConversationRowItem) -> LoadedAttachmentState {
         guard case let .user(msg, _, namesOnly) = item.kind,
               !namesOnly,
               let attachments = msg?.attachments
@@ -162,11 +194,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         NotificationCenter.default.removeObserver(self)
     }
 
-    public var palette: DesignPalette {
+    var palette: DesignPalette {
         DesignPalette.resolve(scheme: scheme, workspace: workspace)
     }
 
-    public func contentColumnWidth(for totalWidth: CGFloat) -> CGFloat {
+    func contentColumnWidth(for totalWidth: CGFloat) -> CGFloat {
         let insets = LayoutMetrics.readingHorizontalInsets(
             availableWidth: totalWidth,
             hasTimelineRail: hasTimelineRail,
@@ -177,7 +209,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - 0.0pt Same-Frame Scroll Anchor Capture & Restore
 
-    public func captureScrollAnchor() -> ScrollAnchorSnapshot? {
+    func captureScrollAnchor() -> ScrollAnchorSnapshot? {
         guard let tableView, let clipView = scrollView?.contentView, !rows.isEmpty else {
             return nil
         }
@@ -271,7 +303,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return changedHeightIndexes
     }
 
-    public func isNearBottom(threshold: CGFloat = 96) -> Bool {
+    func isNearBottom(threshold: CGFloat = 96) -> Bool {
         guard let tableView, let clipView = scrollView?.contentView else { return true }
         return ConversationViewModel.shouldAutoFollow(
             scrollTop: clipView.bounds.origin.y,
@@ -282,7 +314,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     }
 
     @discardableResult
-    public static func runBoundedOlderContinuationLoop(
+    static func runBoundedOlderContinuationLoop(
         coordinator: @MainActor () -> ConversationTableCoordinator?,
         currentRowCount: @MainActor () -> Int,
         upgradeLimitOnSparseRows: Bool,
@@ -314,7 +346,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return list.firstIndex(where: { $0.timelineAliases.contains(timelineId) })
     }
 
-    public func updateRowsPreservingAnchor(
+    func updateRowsPreservingAnchor(
         _ nextRows: [ConversationRowItem],
         preferAutoFollowBottom: Bool = false,
         forceScrollToBottom: Bool = false
@@ -338,8 +370,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             if forceScrollToBottom {
                 upwardScrollIntent = false
             }
-            cellCacheByRowId.removeAll()
-            cellCacheOrder.removeAll()
+            evictOffscreenCaches()
             cellCacheScopeKey = sessionScopeKey
         }
         let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && !upwardScrollIntent && (wasEmpty || isNearBottom()))
@@ -389,7 +420,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
-    public func restoreExplicitAnchor(_ anchor: ScrollAnchorSnapshot) {
+    func restoreExplicitAnchor(_ anchor: ScrollAnchorSnapshot) {
         guard let tableView, let clipView = scrollView?.contentView,
               let idx = findAnchorRowIndex(for: anchor.timelineId, in: rows)
         else { return }
@@ -481,13 +512,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 }
             }
             return false
-        case let .claudeProcessGroup(proc, _):
+        case let .claudeProcessGroup(proc):
             if targetKeys.contains(proc.stateKey) { return true }
             for sid in proc.sourceIds where targetKeys.contains("claude-process:\(proc.turnId):\(sid)") {
                 return true
             }
             return claudeEntriesReferenceDisclosure(proc.entries, targetKeys: targetKeys)
-        case let .claudeMetadataGroup(meta, _):
+        case let .claudeMetadataGroup(meta):
             if targetKeys.contains(meta.id) { return true }
             for sid in meta.sourceIds where targetKeys.contains("claude-metadata:\(sid)") {
                 return true
@@ -504,7 +535,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
-    public func toggleDisclosurePreservingAnchor(
+    func toggleDisclosurePreservingAnchor(
         stateKey: String,
         aliases: [String] = [],
         currentlyOpen: Bool
@@ -601,7 +632,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     }
 
     @discardableResult
-    public func scrollToPositionKey(_ positionKey: String, reduceMotion: Bool = false) -> Bool {
+    func scrollToPositionKey(_ positionKey: String, reduceMotion: Bool = false) -> Bool {
         guard let tableView, let clipView = scrollView?.contentView else { return false }
         guard let rowIdx = rows.firstIndex(where: { $0.matches(positionKey: positionKey) }) else {
             return false
@@ -647,7 +678,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 }
             }
             didMutateDisclosure = true
-        case let .claudeProcessGroup(proc, _):
+        case let .claudeProcessGroup(proc):
             let procAliases = proc.sourceIds.map { "claude-process:\(proc.turnId):\($0)" }
             disclosureStore.setOpen(scope: sessionScopeKey, stateKey: proc.stateKey, aliases: procAliases, isOpen: true)
             let wrapThinking = proc.wrapsThinkingDisclosures
@@ -683,7 +714,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 }
             }
             didMutateDisclosure = true
-        case let .claudeMetadataGroup(meta, _):
+        case let .claudeMetadataGroup(meta):
             openClaudeMetadataGroup(meta, matching: positionKey)
             didMutateDisclosure = true
         case .thinking:
@@ -759,8 +790,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             highlightClearTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 1_800_000_000)
                 guard let self, !Task.isCancelled else { return }
+                let expiredId = self.highlightedTimelineId
                 self.highlightedTimelineId = nil
-                self.tableView?.reloadData()
+                if let expiredId, let idx = self.rows.firstIndex(where: { $0.timelineId == expiredId }) {
+                    self.tableView?.reloadData(forRowIndexes: IndexSet(integer: idx), columnIndexes: IndexSet(integer: 0))
+                }
             }
         }
         refreshViewportAttachmentsAndTimeline()
@@ -769,7 +803,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - Scroll Bounds Observation (±240pt Thumbnail Eviction, <=200pt Pagination, Timeline Active Tick)
 
-    @objc public func scrollViewFrameDidChange(_ notification: Notification) {
+    @objc func scrollViewFrameDidChange(_ notification: Notification) {
         guard !isRestoringScroll, let scrollView, let tableView else { return }
         let w = scrollView.bounds.width
         guard w > 1, abs(w - lastLaidOutWidth) > 0.5 else { return }
@@ -804,18 +838,18 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
-    public var renderedContentHeight: CGFloat {
+    var renderedContentHeight: CGFloat {
         guard let tableView, !rows.isEmpty else { return 0 }
         return tableView.rect(ofRow: rows.count - 1).maxY
     }
 
-    public var isViewportUnderfilled: Bool {
+    var isViewportUnderfilled: Bool {
         guard let scrollView, scrollView.bounds.height > 1 else { return false }
         let visibleBudget = scrollView.contentView.bounds.height - scrollView.contentInsets.top - scrollView.contentInsets.bottom
         return visibleBudget > 64 && renderedContentHeight + 1 < visibleBudget
     }
 
-    public var isNearTopForContinuation: Bool {
+    var isNearTopForContinuation: Bool {
         guard let scrollView, scrollView.bounds.height > 1 else { return false }
         return scrollView.contentView.bounds.origin.y <= 200
     }
@@ -825,7 +859,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         onLoadOlderRequested?()
     }
 
-    public func handleOuterScrollWheel(
+    func handleOuterScrollWheel(
         deltaY: CGFloat,
         phase _: NSEvent.Phase = [],
         momentumPhase: NSEvent.Phase = []
@@ -845,7 +879,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
-    public func handleOuterUpwardKeyNavigation() {
+    func handleOuterUpwardKeyNavigation() {
         upwardScrollIntent = true
         let originY = scrollView?.contentView.bounds.origin.y ?? 0
         if originY <= 200 {
@@ -853,16 +887,15 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
     }
 
-    public func markUpwardNavigationIntent() {
+    func markUpwardNavigationIntent() {
         upwardScrollIntent = true
     }
 
-    @objc public func preferredScrollerStyleDidChange(_ notification: Notification) {
+    @objc func preferredScrollerStyleDidChange(_ notification: Notification) {
         guard !isRestoringScroll, let tableView else { return }
         cachedRowHeights = Array<CGFloat?>(repeating: nil, count: rows.count)
         heightCacheScrollerStyle = Self.effectiveScrollerStyle
-        cellCacheByRowId.removeAll()
-        cellCacheOrder.removeAll()
+        evictOffscreenCaches()
         let anchor = captureScrollAnchor()
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { ctx in
@@ -886,7 +919,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         isRestoringScroll = false
     }
 
-    @objc public func clipViewBoundsDidChange(_ notification: Notification) {
+    @objc func clipViewBoundsDidChange(_ notification: Notification) {
         guard !isRestoringScroll, let scrollView else { return }
         let clipView = scrollView.contentView
         let originY = clipView.bounds.origin.y
@@ -911,7 +944,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         refreshViewportAttachmentsAndTimeline()
     }
 
-    public func refreshViewportAttachmentsAndTimeline() {
+    func refreshViewportAttachmentsAndTimeline() {
         guard let tableView, let clipView = scrollView?.contentView else { return }
 
         if hasAnyUserImageAttachments || attachmentViewport.loadedCount > 0 {
@@ -974,11 +1007,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - NSTableViewDataSource & Delegate
 
-    public func numberOfRows(in tableView: NSTableView) -> Int {
+    func numberOfRows(in tableView: NSTableView) -> Int {
         rows.count
     }
 
-    public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         guard row >= 0, row < rows.count else { return 44 }
         let colWidth = contentColumnWidth(for: max(320, scrollView?.bounds.width ?? tableView.bounds.width))
         let widthKey = Int((colWidth * 2).rounded())
@@ -1010,33 +1043,29 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return computed
     }
 
-    public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         false
     }
 
-    public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row >= 0, row < rows.count else { return nil }
         if sessionScopeKey != cellCacheScopeKey {
-            cellCacheByRowId.removeAll()
-            cellCacheOrder.removeAll()
+            cellCache.removeAll()
             cellCacheScopeKey = sessionScopeKey
         }
         let item = rows[row]
         let identifier = NSUserInterfaceItemIdentifier("ConversationRowCell")
         let cell: ConversationRowCellView
-        if let cached = cellCacheByRowId[item.id], cached.superview == nil {
+        if let cached = cellCache.value(forKey: item.id), cached.superview == nil, cached.cachedRowId == item.id {
             cell = cached
         } else {
             let created = (tableView.makeView(withIdentifier: identifier, owner: nil) as? ConversationRowCellView)
                 ?? ConversationRowCellView(identifier: identifier)
-            if cellCacheByRowId[item.id] == nil {
-                if cellCacheOrder.count >= Self.maxCachedCells, let oldest = cellCacheOrder.first {
-                    cellCacheOrder.removeFirst()
-                    cellCacheByRowId.removeValue(forKey: oldest)
-                }
-                cellCacheOrder.append(item.id)
+            if let prevId = created.cachedRowId, prevId != item.id, cellCache.peek(prevId) === created {
+                _ = cellCache.removeValue(forKey: prevId)
             }
-            cellCacheByRowId[item.id] = created
+            created.cachedRowId = item.id
+            cellCache.setValue(created, forKey: item.id)
             cell = created
         }
         let totalWidth = max(320, scrollView?.bounds.width ?? tableView.bounds.width)
@@ -1058,12 +1087,12 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - Deterministic Row Height Calculation
 
-    public struct PositionedUserAttachment {
-        public let attachment: UserAttachment
-        public let size: NSSize
+    struct PositionedUserAttachment {
+        let attachment: UserAttachment
+        let size: NSSize
     }
 
-    public static func measureFileAttachmentCardSize(
+    static func measureFileAttachmentCardSize(
         att: UserAttachment,
         namesOnly: Bool,
         maxWidth: CGFloat
@@ -1095,7 +1124,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return NSSize(width: w, height: h)
     }
 
-    public static func layoutUserAttachmentRows(
+    static func layoutUserAttachmentRows(
         attachments: [UserAttachment],
         namesOnly: Bool,
         maxWidth: CGFloat
@@ -1126,7 +1155,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return rows
     }
 
-    public static func measureUserAttachmentsHeight(
+    static func measureUserAttachmentsHeight(
         attachments: [UserAttachment],
         namesOnly: Bool,
         maxWidth: CGFloat
@@ -1141,7 +1170,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return total
     }
 
-    public func measureRowHeight(_ row: ConversationRowItem, width: CGFloat) -> CGFloat {
+    func measureRowHeight(_ row: ConversationRowItem, width: CGFloat) -> CGFloat {
         switch row.kind {
         case let .user(msg, rawText, namesOnly):
             let body = msg?.text ?? rawText
@@ -1237,7 +1266,8 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                     markdown: markdown,
                     foldInstructions: foldInstructions,
                     width: width,
-                    interItemSpacing: 8
+                    interItemSpacing: 8,
+                    alreadyCleaned: true
                 ) + 16
             )
 
@@ -1275,10 +1305,10 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                             initiallyOpen: false
                         )
                         bodyH += thinkOpen
-                            ? (32 + 6 + measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: text, width: bodyW))
+                            ? (32 + 6 + measureThoughtMarkdownHeight(markdown: text, width: bodyW))
                             : 32
                     } else {
-                        bodyH += measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: text, width: bodyW)
+                        bodyH += measureThoughtMarkdownHeight(markdown: text, width: bodyW)
                     }
                 case let .execution(group, _):
                     bodyH += 4 + measureExecutionCommandsHeight(commands: group.commands, width: max(100, bodyW - 20))
@@ -1289,7 +1319,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             }
             return 34 + bodyH
 
-        case let .claudeProcessGroup(proc, _):
+        case let .claudeProcessGroup(proc):
             let aliases = proc.sourceIds.map { "claude-process:\(proc.turnId):\($0)" }
             let isOpen = disclosureStore.isOpen(
                 scope: sessionScopeKey,
@@ -1305,7 +1335,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 wrapThinkingDisclosures: proc.wrapsThinkingDisclosures
             )
 
-        case let .claudeMetadataGroup(meta, _):
+        case let .claudeMetadataGroup(meta):
             let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
             let isOpen = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
             if !isOpen { return 34 }
@@ -1320,18 +1350,18 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 initiallyOpen: false
             )
             if !open { return 34 }
-            return 34 + 14 + measureThoughtMarkdownHeight(ownerId: row.id, markdown: text, width: max(120, width - 22))
+            return 34 + 14 + measureThoughtMarkdownHeight(markdown: text, width: max(120, width - 22))
 
         case let .plan(markdown, _, _):
-            let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
             let innerWidth = max(120, width - 35)
             let segsH = measureMarkdownSegmentsHeight(
                 ownerId: row.id,
-                markdown: cleaned,
+                markdown: markdown,
                 foldInstructions: false,
                 width: innerWidth,
                 interItemSpacing: 10,
-                allowInstructionsFold: false
+                allowInstructionsFold: false,
+                alreadyCleaned: true
             )
             return segsH > 0 ? (72 + segsH) : 62
 
@@ -1426,11 +1456,11 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                         )
                         appendRenderedHeight(
                             thinkOpen
-                                ? (32 + 6 + measureThoughtMarkdownHeight(ownerId: thinkKey, markdown: markdown, width: width))
+                                ? (32 + 6 + measureThoughtMarkdownHeight(markdown: markdown, width: width))
                                 : 32
                         )
                     } else {
-                        appendRenderedHeight(measureThoughtMarkdownHeight(ownerId: key, markdown: markdown, width: width))
+                        appendRenderedHeight(measureThoughtMarkdownHeight(markdown: markdown, width: width))
                     }
                 } else if let detail = ev.detail, !detail.isEmpty {
                     let status = ExecutionGroupingEngine.executionStatus(ev.status)
@@ -1442,14 +1472,14 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                     )
                     appendRenderedHeight(open ? (30 + 6 + Self.measureMonospaceBoxHeight(text: detail, width: width)) : 30)
                 } else if let text = ev.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    appendRenderedHeight(measureThoughtMarkdownHeight(ownerId: key, markdown: text, width: width))
+                    appendRenderedHeight(measureThoughtMarkdownHeight(markdown: text, width: width))
                 }
             }
         }
         return total
     }
 
-    public static func renderThoughtAttributedString(markdown: String, palette: DesignPalette) -> NSAttributedString {
+    static func renderThoughtAttributedString(markdown: String, palette: DesignPalette) -> NSAttributedString {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
         let para = NSMutableParagraphStyle()
         para.minimumLineHeight = 20.8
@@ -1478,12 +1508,100 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return out
     }
 
-    private func measureThoughtMarkdownHeight(ownerId _: String, markdown: String, width: CGFloat) -> CGFloat {
-        let attr = Self.renderThoughtAttributedString(markdown: markdown, palette: palette)
-        return max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width)) + 4
+    private func measureThoughtMarkdownHeight(markdown: String, width: CGFloat) -> CGFloat {
+        cachedThoughtLayout(markdown: markdown, width: width).height + 4
     }
 
-    public static func measureUserContextBodyHeight(text: String, width: CGFloat) -> CGFloat {
+    func cachedProseHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
+        var hasher = Hasher()
+        hasher.combine(ObjectIdentifier(attributed))
+        hasher.combine(attributed.length)
+        let key = SegmentWidthKey(
+            contentHash: hasher.finalize(),
+            quantizedWidth: Int((width * 2).rounded()),
+            scheme: scheme,
+            workspace: workspace
+        )
+        if let hit = proseHeightCache.value(forKey: key) {
+            return hit
+        }
+        let measured = max(22, ReaderSelectableTextView.measureHeight(attributed: attributed, width: width))
+        proseHeightCache.setValue(measured, forKey: key)
+        return measured
+    }
+
+    func cachedThoughtLayout(markdown: String, width: CGFloat) -> (attributed: NSAttributedString, height: CGFloat) {
+        var hasher = Hasher()
+        hasher.combine(markdown)
+        let key = SegmentWidthKey(
+            contentHash: hasher.finalize(),
+            quantizedWidth: Int((width * 2).rounded()),
+            scheme: scheme,
+            workspace: workspace
+        )
+        if let hit = thoughtLayoutCache.value(forKey: key) {
+            return hit
+        }
+        let attr = Self.renderThoughtAttributedString(markdown: markdown, palette: palette)
+        let h = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width))
+        let pair = (attributed: attr, height: h)
+        thoughtLayoutCache.setValue(pair, forKey: key)
+        return pair
+    }
+
+    func cachedCodeLayout(code: String, innerWidth: CGFloat) -> (normalized: String, codeHeight: CGFloat, docWidth: CGFloat) {
+        var hasher = Hasher()
+        hasher.combine(code)
+        let key = SegmentWidthKey(
+            contentHash: hasher.finalize(),
+            quantizedWidth: Int((innerWidth * 2).rounded()),
+            scheme: scheme,
+            workspace: workspace
+        )
+        if let hit = codeLayoutCache.value(forKey: key) {
+            return hit
+        }
+        let normalized = Self.normalizeCodeBlockText(code)
+        let codeH = Self.measureCodeBlockHeight(code: normalized)
+        let docW = Self.measureCodeDocumentWidth(code: normalized, minWidth: innerWidth)
+        let result = (normalized: normalized, codeHeight: codeH, docWidth: docW)
+        codeLayoutCache.setValue(result, forKey: key)
+        return result
+    }
+
+    func cachedTableLayout(
+        headers: [NSAttributedString],
+        rows: [[NSAttributedString]],
+        maxWidth: CGFloat
+    ) -> (colWidths: [CGFloat], rowHeights: [CGFloat], totalWidth: CGFloat, totalHeight: CGFloat) {
+        var hasher = Hasher()
+        hasher.combine(headers.count)
+        for h in headers {
+            hasher.combine(ObjectIdentifier(h))
+            hasher.combine(h.length)
+        }
+        hasher.combine(rows.count)
+        for r in rows {
+            for c in r {
+                hasher.combine(ObjectIdentifier(c))
+                hasher.combine(c.length)
+            }
+        }
+        let key = SegmentWidthKey(
+            contentHash: hasher.finalize(),
+            quantizedWidth: Int((maxWidth * 2).rounded()),
+            scheme: scheme,
+            workspace: workspace
+        )
+        if let hit = tableLayoutCache.value(forKey: key) {
+            return hit
+        }
+        let computed = Self.measureTableLayout(headers: headers, rows: rows, maxWidth: maxWidth)
+        tableLayoutCache.setValue(computed, forKey: key)
+        return computed
+    }
+
+    static func measureUserContextBodyHeight(text: String, width: CGFloat) -> CGFloat {
         let para = NSMutableParagraphStyle()
         para.minimumLineHeight = 23.8 // 14pt * 1.7
         para.maximumLineHeight = 23.8
@@ -1498,7 +1616,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return min(300, max(32, measured + 20))
     }
 
-    public static func normalizeCodeBlockText(_ code: String) -> String {
+    static func normalizeCodeBlockText(_ code: String) -> String {
         if code.hasSuffix("\r\n") {
             return String(code.dropLast(2))
         }
@@ -1508,13 +1626,13 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return code
     }
 
-    public static func measureCodeBlockHeight(code: String) -> CGFloat {
+    static func measureCodeBlockHeight(code: String) -> CGFloat {
         let normalized = normalizeCodeBlockText(code)
         let lines = max(1, normalized.components(separatedBy: "\n").count)
         return ceil(CGFloat(lines) * 20.8) + 16
     }
 
-    public static func measureCodeDocumentWidth(code: String, minWidth: CGFloat) -> CGFloat {
+    static func measureCodeDocumentWidth(code: String, minWidth: CGFloat) -> CGFloat {
         let normalized = normalizeCodeBlockText(code)
         let attr = NSAttributedString(
             string: normalized.isEmpty ? " " : normalized,
@@ -1523,7 +1641,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return max(minWidth, ceil(attr.size().width) + 24)
     }
 
-    public static func horizontalScrollerExtraHeight(needsHorizontalScroll: Bool) -> CGFloat {
+    static func horizontalScrollerExtraHeight(needsHorizontalScroll: Bool) -> CGFloat {
         guard needsHorizontalScroll, effectiveScrollerStyle == .legacy else {
             return 0
         }
@@ -1704,7 +1822,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return maxW
     }
 
-    public static func measureTableLayout(
+    static func measureTableLayout(
         headers: [NSAttributedString],
         rows: [[NSAttributedString]],
         maxWidth: CGFloat
@@ -1822,7 +1940,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         return max(84, total)
     }
 
-    public static func measureMonospaceBoxHeight(text: String, width: CGFloat) -> CGFloat {
+    static func measureMonospaceBoxHeight(text: String, width: CGFloat) -> CGFloat {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
         let pStyle = NSMutableParagraphStyle()
         pStyle.minimumLineHeight = 19.2 // 12pt * 1.6 (matches makeMonospaceDetailBox)
@@ -1846,14 +1964,16 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         foldInstructions: Bool,
         width: CGFloat,
         interItemSpacing: CGFloat = 8,
-        allowInstructionsFold: Bool = true
+        allowInstructionsFold: Bool = true,
+        alreadyCleaned: Bool = false
     ) -> CGFloat {
         let segs = GfmLayoutCache.shared.getOrRender(
             markdown: markdown,
             foldInstructions: foldInstructions,
             scheme: scheme,
             workspace: workspace,
-            transport: store.transport
+            transport: store.transport,
+            alreadyCleaned: alreadyCleaned
         )
         var total: CGFloat = 0
         var renderedCount = 0
@@ -1861,15 +1981,16 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             let itemHeight: CGFloat
             switch seg {
             case let .prose(attr):
-                itemHeight = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width))
+                itemHeight = cachedProseHeight(attributed: attr, width: width)
             case let .codeBlock(_, code):
                 // Full vertical height of fenced code blocks — NEVER clip at 18 lines!
-                let innerCodeW = max(32, width - 32)
-                let docWidth = Self.measureCodeDocumentWidth(code: code, minWidth: innerCodeW)
-                let scrollerExtra = Self.horizontalScrollerExtraHeight(needsHorizontalScroll: docWidth > innerCodeW + 0.5)
-                itemHeight = Self.measureCodeBlockHeight(code: code) + scrollerExtra + 54
+                // Symmetric 12pt top/bottom/leading/trailing padding (+24pt vertical chrome, saving 30pt vs legacy 38+16pt).
+                let innerCodeW = max(32, width - 24)
+                let codeLayout = cachedCodeLayout(code: code, innerWidth: innerCodeW)
+                let scrollerExtra = Self.horizontalScrollerExtraHeight(needsHorizontalScroll: codeLayout.docWidth > innerCodeW + 0.5)
+                itemHeight = codeLayout.codeHeight + scrollerExtra + 24
             case let .table(_, headers, rows):
-                let layout = Self.measureTableLayout(headers: headers, rows: rows, maxWidth: width)
+                let layout = cachedTableLayout(headers: headers, rows: rows, maxWidth: width)
                 let visibleW = min(width, layout.totalWidth)
                 let scrollerExtra = Self.horizontalScrollerExtraHeight(needsHorizontalScroll: layout.totalWidth > visibleW + 0.5)
                 itemHeight = layout.totalHeight + scrollerExtra
@@ -1885,7 +2006,8 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                         markdown: text,
                         foldInstructions: false,
                         width: max(120, width - 24),
-                        interItemSpacing: 8
+                        interItemSpacing: 8,
+                        alreadyCleaned: true
                     )
                 } else {
                     itemHeight = 38

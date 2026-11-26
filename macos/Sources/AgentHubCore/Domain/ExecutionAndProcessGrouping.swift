@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Conversation Block Classification & 60/3 Compaction (conversationViewModel.ts)
 
-public enum ConversationViewModel {
+enum ConversationViewModel {
     private static let internalPrefixes: [String] = [
         "<environment_context>", "<permissions instructions>", "<app-context>",
         "<collaboration_mode>", "<skills_instructions>", "<plugins_instructions>",
@@ -15,7 +15,7 @@ public enum ConversationViewModel {
         "========= memory_summary begins =========",
     ]
 
-    public static func shouldAutoFollow(
+    static func shouldAutoFollow(
         scrollTop: CGFloat,
         clientHeight: CGFloat,
         scrollHeight: CGFloat,
@@ -24,20 +24,20 @@ public enum ConversationViewModel {
         scrollHeight - scrollTop - clientHeight <= threshold
     }
 
-    public static func isPlanBlock(_ block: MessageBlock) -> Bool {
+    static func isPlanBlock(_ block: MessageBlock) -> Bool {
         if block.role == "user" { return false }
         let k = block.kind.lowercased()
         let dk = block.displayKind?.lowercased() ?? ""
         return dk == "plan" || k.contains("plan") || (block.text?.contains("<proposed_plan>") == true)
     }
 
-    public static func isApprovalBlock(_ block: MessageBlock) -> Bool {
+    static func isApprovalBlock(_ block: MessageBlock) -> Bool {
         let k = block.kind.lowercased()
         let dk = block.displayKind?.lowercased() ?? ""
         return dk == "approval" || k.contains("requestapproval") || k.contains("approval") || k.contains("permissions/request")
     }
 
-    public static func isQuestionBlock(_ block: MessageBlock) -> Bool {
+    static func isQuestionBlock(_ block: MessageBlock) -> Bool {
         let k = block.kind.lowercased()
         let dk = block.displayKind?.lowercased() ?? ""
         return dk == "question"
@@ -46,7 +46,7 @@ public enum ConversationViewModel {
             || !block.questions.isEmpty
     }
 
-    public static func isQuestionResultBlock(_ block: MessageBlock) -> Bool {
+    static func isQuestionResultBlock(_ block: MessageBlock) -> Bool {
         let k = block.kind.lowercased()
         let dk = block.displayKind?.lowercased() ?? ""
         return dk == "question_result"
@@ -54,7 +54,7 @@ public enum ConversationViewModel {
             || !block.answers.isEmpty
     }
 
-    public static func isToolBlock(_ block: MessageBlock) -> Bool {
+    static func isToolBlock(_ block: MessageBlock) -> Bool {
         let k = block.kind.lowercased()
         return block.role == "tool"
             || k.contains("tool")
@@ -63,7 +63,7 @@ public enum ConversationViewModel {
             || k.contains("web_search")
     }
 
-    public static func historyCollapseKind(_ block: MessageBlock) -> String? {
+    static func historyCollapseKind(_ block: MessageBlock) -> String? {
         switch block.kind.lowercased() {
         case "chat_history_collapsed": "chat"
         case "tool_history_collapsed": "tool"
@@ -72,11 +72,11 @@ public enum ConversationViewModel {
         }
     }
 
-    public static func isHistoryCollapsedBlock(_ block: MessageBlock) -> Bool {
+    static func isHistoryCollapsedBlock(_ block: MessageBlock) -> Bool {
         historyCollapseKind(block) != nil
     }
 
-    public static func shouldRenderConversationMessage(_ block: MessageBlock) -> Bool {
+    static func shouldRenderConversationMessage(_ block: MessageBlock) -> Bool {
         let role = block.role
         let k = block.kind.lowercased()
         guard role == "assistant" || role == "user" else { return false }
@@ -107,7 +107,7 @@ public enum ConversationViewModel {
         return k != "reasoning" && k != "agent_reasoning" && k != "session_meta"
     }
 
-    public static func shouldRenderConversationBlock(_ block: MessageBlock) -> Bool {
+    static func shouldRenderConversationBlock(_ block: MessageBlock) -> Bool {
         if isApprovalBlock(block) { return false }
         if block.subagent != nil || isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block) {
             return true
@@ -115,7 +115,7 @@ public enum ConversationViewModel {
         return isToolBlock(block) || shouldRenderConversationMessage(block)
     }
 
-    public static func compactConversationBlocks(
+    static func compactConversationBlocks(
         _ blocks: [MessageBlock],
         showAllHistory: Bool,
         maxChatMessages: Int = 60,
@@ -209,7 +209,7 @@ public enum ConversationViewModel {
         return compacted
     }
 
-    public static func toolBlockDetailText(_ block: MessageBlock) -> String {
+    static func toolBlockDetailText(_ block: MessageBlock) -> String {
         var sections: [String] = []
         if let input = block.input?.trimmingCharacters(in: .whitespacesAndNewlines), !input.isEmpty {
             sections.append("Input\n\(input)")
@@ -224,20 +224,20 @@ public enum ConversationViewModel {
         return sections.isEmpty ? "No output" : sections.joined(separator: "\n\n")
     }
 
-    public static func messageBlockText(_ block: MessageBlock) -> String {
+    static func messageBlockText(_ block: MessageBlock) -> String {
         VisibleMarkdownEngine.visibleMarkdown(block.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 }
 
 // MARK: - Execution & Process Grouping (executionGroups.ts, processGroups.ts, claudeProcessGroups.ts)
 
-public enum ExecutionStatus: String, Equatable, Sendable {
+enum ExecutionStatus: String, Equatable, Sendable {
     case running
     case failed
     case completed
     case unknown
 
-    public var label: String {
+    var label: String {
         switch self {
         case .completed: "已完成"
         case .running: "运行中"
@@ -247,26 +247,26 @@ public enum ExecutionStatus: String, Equatable, Sendable {
     }
 }
 
-public struct ExecutionSection: Equatable, Sendable {
-    public var label: String
-    public var text: String
+struct ExecutionSection: Equatable, Sendable {
+    var label: String
+    var text: String
 
-    public init(label: String, text: String) {
+    init(label: String, text: String) {
         self.label = label
         self.text = text
     }
 }
 
-public struct ExecutionCommand: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var sourceIds: [String]
-    public var title: String
-    public var preview: String?
-    public var status: ExecutionStatus
-    public var instructionFile: Bool
-    public var sections: [ExecutionSection]
+struct ExecutionCommand: Equatable, Sendable, Identifiable {
+    var id: String
+    var sourceIds: [String]
+    var title: String
+    var preview: String?
+    var status: ExecutionStatus
+    var instructionFile: Bool
+    var sections: [ExecutionSection]
 
-    public init(
+    init(
         id: String,
         sourceIds: [String],
         title: String,
@@ -285,22 +285,22 @@ public struct ExecutionCommand: Equatable, Sendable, Identifiable {
     }
 }
 
-public struct ExecutionGroup: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var mergedIds: [String]
-    public var commands: [ExecutionCommand]
-    public var kind: String // "command" | "tool"
-    public var provider: String
-    public var running: Bool
-    public var recordedOnly: Bool
-    public var failedCount: Int
-    public var turnId: String?
+struct ExecutionGroup: Equatable, Sendable, Identifiable {
+    var id: String
+    var mergedIds: [String]
+    var commands: [ExecutionCommand]
+    var kind: String // "command" | "tool"
+    var provider: String
+    var running: Bool
+    var recordedOnly: Bool
+    var failedCount: Int
+    var turnId: String?
 
-    public var initiallyOpen: Bool {
+    var initiallyOpen: Bool {
         !commands.allSatisfy(\.instructionFile) && (running || failedCount > 0)
     }
 
-    public var stateAliases: [String] {
+    var stateAliases: [String] {
         ProcessGroupingEngine.uniqueStrings(
             mergedIds + commands.flatMap { cmd in
                 ["group:\(cmd.id)"] + cmd.sourceIds.map { "group:\($0)" }
@@ -308,7 +308,7 @@ public struct ExecutionGroup: Equatable, Sendable, Identifiable {
         )
     }
 
-    public var summaryHeader: (label: String, icon: LucideIconName) {
+    var summaryHeader: (label: String, icon: LucideIconName) {
         var kinds = Set<String>()
         for cmd in commands {
             let head = cmd.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -349,12 +349,12 @@ public struct ExecutionGroup: Equatable, Sendable, Identifiable {
     }
 }
 
-public enum ExecutionRenderItem<T: Equatable & Sendable>: Equatable, Sendable {
+enum ExecutionRenderItem<T: Equatable & Sendable>: Equatable, Sendable {
     case item(item: T, key: String, sourceIds: [String])
     case group(ExecutionGroup)
 }
 
-public enum ExecutionGroupingEngine {
+enum ExecutionGroupingEngine {
     private static let runningSet: Set<String> = ["pending", "running", "in_progress", "inprogress", "active", "generating"]
     private static let failedSet: Set<String> = ["failed", "error", "cancelled", "canceled", "rejected"]
     private static let commandNames: Set<String> = [
@@ -363,19 +363,19 @@ public enum ExecutionGroupingEngine {
         "execute", "command_execution", "commandexecution",
     ]
 
-    public static func executionStatus(_ raw: String?) -> ExecutionStatus {
+    static func executionStatus(_ raw: String?) -> ExecutionStatus {
         let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if runningSet.contains(s) { return .running }
         if failedSet.contains(s) { return .failed }
         return .completed
     }
 
-    public static func isCommandText(_ raw: String?) -> Bool {
+    static func isCommandText(_ raw: String?) -> Bool {
         let leaf = normalizedCommandLeaf(raw)
         return commandNames.contains(leaf)
     }
 
-    public static func activityFingerprint(_ value: String) -> String {
+    static func activityFingerprint(_ value: String) -> String {
         let ns = value as NSString
         var hash: UInt32 = 2_166_136_261
         for i in 0 ..< ns.length {
@@ -410,10 +410,12 @@ public enum ExecutionGroupingEngine {
         return "命令"
     }
 
-    private static let previewCacheLock = NSLock()
-    nonisolated(unsafe) private static var previewCache: [String: String] = [:]
-    nonisolated(unsafe) private static var previewCacheOrder: [String] = []
     private static let maxPreviewCacheEntries = 512
+    private static let previewCacheLock = NSLock()
+    nonisolated(unsafe) private static var previewCache = BoundedLRUCache<String, String>(
+        maxEntries: maxPreviewCacheEntries,
+        maxBytes: 2 * 1024 * 1024
+    )
 
     private static func singleSourcePreview(_ source: String) -> String? {
         let trimmedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -421,7 +423,7 @@ public enum ExecutionGroupingEngine {
         let cacheable = trimmedSource.utf8.count <= 16_384
         if cacheable {
             previewCacheLock.lock()
-            if let hit = previewCache[trimmedSource] {
+            if let hit = previewCache.value(forKey: trimmedSource) {
                 previewCacheLock.unlock()
                 return hit.isEmpty ? nil : hit
             }
@@ -465,15 +467,10 @@ public enum ExecutionGroupingEngine {
         }
 
         if cacheable {
+            let stored = result ?? ""
+            let cost = trimmedSource.utf8.count + stored.utf8.count + 32
             previewCacheLock.lock()
-            if previewCache[trimmedSource] == nil {
-                if previewCacheOrder.count >= maxPreviewCacheEntries, let oldest = previewCacheOrder.first {
-                    previewCacheOrder.removeFirst()
-                    previewCache.removeValue(forKey: oldest)
-                }
-                previewCacheOrder.append(trimmedSource)
-            }
-            previewCache[trimmedSource] = result ?? ""
+            previewCache.setValue(stored, forKey: trimmedSource, cost: cost)
             previewCacheLock.unlock()
         }
         return result
@@ -619,39 +616,75 @@ public enum ExecutionGroupingEngine {
         return output
     }
 
-    public static func groupCodexBlocks(_ blocks: [MessageBlock]) -> [ExecutionRenderItem<MessageBlock>] {
+    static func groupCodexBlocks(_ blocks: [MessageBlock]) -> [ExecutionRenderItem<MessageBlock>] {
         let inputs = blocks.map { block -> ActivityInput<MessageBlock> in
-            let kLower = block.kind.lowercased()
-            let isResult = kLower.contains("output") || kLower.contains("result")
+            let key = "codex:\(block.turnId ?? ""):\(block.callId ?? block.itemId ?? "event"):\(block.id)"
+            let sourceIds = [block.id, block.callId, block.itemId].compactMap { $0 }.filter { !$0.isEmpty }
             let isTool = block.subagent == nil
                 && ConversationViewModel.isToolBlock(block)
                 && !ConversationViewModel.isHistoryCollapsedBlock(block)
                 && !ConversationViewModel.isPlanBlock(block)
                 && !ConversationViewModel.isQuestionBlock(block)
                 && !ConversationViewModel.isQuestionResultBlock(block)
-            let detail = isTool ? ConversationViewModel.toolBlockDetailText(block) : ""
+            guard isTool else {
+                return ActivityInput(
+                    item: block,
+                    key: key,
+                    sourceIds: sourceIds,
+                    callId: block.callId,
+                    turnId: block.turnId,
+                    tool: false,
+                    command: false,
+                    instructionFile: false,
+                    title: "",
+                    preview: nil,
+                    phase: "call",
+                    status: block.status,
+                    sections: []
+                )
+            }
+            let kLower = block.kind.lowercased()
+            let isResult = kLower.contains("output") || kLower.contains("result")
+            let detail = ConversationViewModel.toolBlockDetailText(block)
             return ActivityInput(
                 item: block,
-                key: "codex:\(block.turnId ?? ""):\(block.callId ?? block.itemId ?? "event"):\(block.id)",
-                sourceIds: [block.id, block.callId, block.itemId].compactMap { $0 }.filter { !$0.isEmpty },
+                key: key,
+                sourceIds: sourceIds,
                 callId: block.callId,
                 turnId: block.turnId,
-                tool: isTool,
-                command: isTool && (isCommandText(block.toolName) || isCommandText(block.kind)),
-                instructionFile: isTool && VisibleMarkdownEngine.isInstructionFileActivity([block.toolName, block.input, block.summary, detail]),
+                tool: true,
+                command: isCommandText(block.toolName) || isCommandText(block.kind),
+                instructionFile: VisibleMarkdownEngine.isInstructionFileActivity([block.toolName, block.input, block.summary, detail]),
                 title: commandTitle([block.toolName, block.kind]),
-                preview: isTool ? activityPreview([block.input]) : nil,
+                preview: activityPreview([block.input]),
                 phase: isResult ? "result" : "call",
                 status: block.status,
-                sections: isTool ? [ExecutionSection(label: isResult ? "结果" : "命令详情", text: detail)] : []
+                sections: [ExecutionSection(label: isResult ? "结果" : "命令详情", text: detail)]
             )
         }
         return groupActivities(inputs, provider: "Codex")
     }
 
-    public static func groupClaudeEvents(_ events: [ClaudeHistoryEvent], recordedOnly: Bool = false) -> [ExecutionRenderItem<ClaudeHistoryEvent>] {
+    static func groupClaudeEvents(_ events: [ClaudeHistoryEvent], recordedOnly: Bool = false) -> [ExecutionRenderItem<ClaudeHistoryEvent>] {
         let inputs = events.map { ev -> ActivityInput<ClaudeHistoryEvent> in
             let isTool = (ev.kind == "tool_call" || ev.kind == "tool_result")
+            guard isTool else {
+                return ActivityInput(
+                    item: ev,
+                    key: "claude:\(ev.id)",
+                    sourceIds: [ev.id],
+                    callId: ev.callId,
+                    turnId: ev.turnId,
+                    tool: false,
+                    command: false,
+                    instructionFile: false,
+                    title: "",
+                    preview: nil,
+                    phase: "call",
+                    status: ev.status,
+                    sections: []
+                )
+            }
             var secs: [ExecutionSection] = []
             if let d = ev.detail, !d.isEmpty { secs.append(ExecutionSection(label: "调用参数", text: d)) }
             if let r = ev.result, !r.isEmpty { secs.append(ExecutionSection(label: "结果", text: r)) }
@@ -661,7 +694,7 @@ public enum ExecutionGroupingEngine {
                 sourceIds: [ev.id],
                 callId: ev.callId,
                 turnId: ev.turnId,
-                tool: isTool,
+                tool: true,
                 command: isCommandText(ev.role) || isCommandText(ev.text),
                 instructionFile: VisibleMarkdownEngine.isInstructionFileActivity([ev.role, ev.text, ev.detail, ev.result]),
                 title: ev.role ?? ev.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "工具活动",
@@ -674,10 +707,31 @@ public enum ExecutionGroupingEngine {
         return groupActivities(inputs, provider: "Claude Code", recordedOnly: recordedOnly)
     }
 
-    public static func groupGrokEvents(_ events: [GrokHistoryEvent]) -> [ExecutionRenderItem<GrokHistoryEvent>] {
+    static func groupGrokEvents(_ events: [GrokHistoryEvent]) -> [ExecutionRenderItem<GrokHistoryEvent>] {
         let inputs = events.enumerated().map { index, ev -> ActivityInput<GrokHistoryEvent> in
             let isTool = ev.kind.hasPrefix("tool_")
-            let cmd = isTool && (isCommandText(ev.method) || isCommandText(ev.text))
+            let fp = activityFingerprint(isTool ? (ev.text ?? ev.detail ?? "") : "")
+            let key = "grok:\(ev.id ?? ev.userMessage?.id ?? ev.callId ?? "\(ev.timestamp ?? ""):\(ev.kind):\(fp)")"
+            let hasStableId = (ev.id?.isEmpty == false) || (ev.callId?.isEmpty == false)
+            let sourceIds = [ev.id, hasStableId ? nil : "event:\(index)", ev.callId].compactMap { $0 }.filter { !$0.isEmpty }
+            guard isTool else {
+                return ActivityInput(
+                    item: ev,
+                    key: key,
+                    sourceIds: sourceIds,
+                    callId: ev.callId,
+                    turnId: nil,
+                    tool: false,
+                    command: false,
+                    instructionFile: false,
+                    title: "",
+                    preview: nil,
+                    phase: "call",
+                    status: ev.status,
+                    sections: []
+                )
+            }
+            let cmd = isCommandText(ev.method) || isCommandText(ev.text)
             let title = cmd ? commandTitle([ev.method, ev.text]) : (ev.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "工具活动")
             var secs: [ExecutionSection] = []
             if cmd, let t = ev.text, !t.isEmpty, t != title {
@@ -686,16 +740,13 @@ public enum ExecutionGroupingEngine {
             if let d = ev.detail, !d.isEmpty {
                 secs.append(ExecutionSection(label: cmd ? "命令详情" : "工具详情", text: d))
             }
-            let fp = activityFingerprint(isTool ? (ev.text ?? ev.detail ?? "") : "")
-            let key = "grok:\(ev.id ?? ev.userMessage?.id ?? ev.callId ?? "\(ev.timestamp ?? ""):\(ev.kind):\(fp)")"
-            let hasStableId = (ev.id?.isEmpty == false) || (ev.callId?.isEmpty == false)
             return ActivityInput(
                 item: ev,
                 key: key,
-                sourceIds: [ev.id, hasStableId ? nil : "event:\(index)", ev.callId].compactMap { $0 }.filter { !$0.isEmpty },
+                sourceIds: sourceIds,
                 callId: ev.callId,
                 turnId: nil,
-                tool: isTool,
+                tool: true,
                 command: cmd,
                 instructionFile: VisibleMarkdownEngine.isInstructionFileActivity([ev.method, ev.text, ev.detail]),
                 title: title.isEmpty ? "工具活动" : title,
@@ -708,7 +759,7 @@ public enum ExecutionGroupingEngine {
         return groupActivities(inputs, provider: "Grok")
     }
 
-    public static func groupProviderEvents(
+    static func groupProviderEvents(
         _ events: [ProviderHistoryEvent],
         provider: String,
         recordedOnly: Bool = false
@@ -716,6 +767,25 @@ public enum ExecutionGroupingEngine {
         let prefix = provider == "Antigravity" ? "antigravity" : (provider == "Grok Bot" ? "grokbot" : "dsh")
         let inputs = events.map { ev -> ActivityInput<ProviderHistoryEvent> in
             let isTool = ev.subagent == nil && (ev.kind == "tool_call" || ev.kind == "tool_result")
+            let key = "\(prefix):\(ev.id)"
+            let sourceIds = [ev.id, ev.callId].compactMap { $0 }.filter { !$0.isEmpty }
+            guard isTool else {
+                return ActivityInput(
+                    item: ev,
+                    key: key,
+                    sourceIds: sourceIds,
+                    callId: ev.callId,
+                    turnId: ev.turnId,
+                    tool: false,
+                    command: false,
+                    instructionFile: false,
+                    title: "",
+                    preview: nil,
+                    phase: "call",
+                    status: ev.status,
+                    sections: []
+                )
+            }
             var secs: [ExecutionSection] = []
             if let d = ev.detail, !d.isEmpty { secs.append(ExecutionSection(label: "调用参数", text: d)) }
             if let r = ev.result, !r.isEmpty { secs.append(ExecutionSection(label: "结果", text: r)) }
@@ -724,11 +794,11 @@ public enum ExecutionGroupingEngine {
                 : (ev.role ?? ev.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "工具活动")
             return ActivityInput(
                 item: ev,
-                key: "\(prefix):\(ev.id)",
-                sourceIds: [ev.id, ev.callId].compactMap { $0 }.filter { !$0.isEmpty },
+                key: key,
+                sourceIds: sourceIds,
                 callId: ev.callId,
                 turnId: ev.turnId,
-                tool: isTool,
+                tool: true,
                 command: isCommandText(ev.role) || isCommandText(ev.text),
                 instructionFile: VisibleMarkdownEngine.isInstructionFileActivity([ev.role, ev.text, ev.detail, ev.result]),
                 title: title.isEmpty ? "工具活动" : title,
@@ -744,12 +814,12 @@ public enum ExecutionGroupingEngine {
 
 // MARK: - Unified Process Folding (processGroups.ts)
 
-public enum ProcessStep: Equatable, Sendable {
+enum ProcessStep: Equatable, Sendable {
     case thinking(id: String, sourceIds: [String], text: String, running: Bool, turnId: String?)
     case execution(group: ExecutionGroup, turnId: String?)
     case detail(id: String, sourceIds: [String], title: String, detail: String, running: Bool, failed: Bool, turnId: String?)
 
-    public var anchorId: String {
+    var anchorId: String {
         switch self {
         case let .thinking(id, _, _, _, _): id
         case let .execution(group, _): group.id
@@ -757,7 +827,7 @@ public enum ProcessStep: Equatable, Sendable {
         }
     }
 
-    public var stepTurnId: String? {
+    var stepTurnId: String? {
         switch self {
         case let .thinking(_, _, _, _, turnId): turnId
         case let .execution(group, turnId): turnId ?? group.turnId
@@ -766,46 +836,46 @@ public enum ProcessStep: Equatable, Sendable {
     }
 }
 
-public struct UnifiedProcessGroup: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var stateKey: String
-    public var stateAliases: [String]
-    public var timelineAliases: [String]
-    public var sourceIds: [String]
-    public var steps: [ProcessStep]
-    public var thoughtCount: Int
-    public var toolCount: Int
-    public var failedCount: Int
-    public var nonInstructionFailedCount: Int
-    public var running: Bool
+struct UnifiedProcessGroup: Equatable, Sendable, Identifiable {
+    var id: String
+    var stateKey: String
+    var stateAliases: [String]
+    var timelineAliases: [String]
+    var sourceIds: [String]
+    var steps: [ProcessStep]
+    var thoughtCount: Int
+    var toolCount: Int
+    var failedCount: Int
+    var nonInstructionFailedCount: Int
+    var running: Bool
 
-    public var initiallyOpen: Bool {
+    var initiallyOpen: Bool {
         nonInstructionFailedCount > 0 && thoughtCount == 0
     }
 
-    public var summaryText: (primary: String, meta: String?) {
+    var summaryText: (primary: String, meta: String?) {
         ProcessGroupingEngine.processGroupSummaryText(self)
     }
 
-    public var iconName: LucideIconName {
+    var iconName: LucideIconName {
         thoughtCount > 0 ? (toolCount > 0 ? .sparkles : .brain) : .terminal
     }
 }
 
-public enum ProcessFoldItem<T: Equatable & Sendable>: Equatable, Sendable {
+enum ProcessFoldItem<T: Equatable & Sendable>: Equatable, Sendable {
     case passthrough(T)
     case execution(ExecutionGroup)
     case process(UnifiedProcessGroup)
 }
 
-public enum ProcessClassifyResult: Equatable, Sendable {
+enum ProcessClassifyResult: Equatable, Sendable {
     case step(ProcessStep)
     case skip
     case passthrough
 }
 
-public enum ProcessGroupingEngine {
-    public static func uniqueStrings(_ values: [String]) -> [String] {
+enum ProcessGroupingEngine {
+    static func uniqueStrings(_ values: [String]) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         for value in values where !value.isEmpty && seen.insert(value).inserted {
@@ -814,7 +884,7 @@ public enum ProcessGroupingEngine {
         return out
     }
 
-    public static func buildUnifiedProcessGroup(prefix: String, steps: [ProcessStep]) -> UnifiedProcessGroup {
+    static func buildUnifiedProcessGroup(prefix: String, steps: [ProcessStep]) -> UnifiedProcessGroup {
         var thoughtCount = 0
         var toolCount = 0
         var failedCount = 0
@@ -885,7 +955,7 @@ public enum ProcessGroupingEngine {
         )
     }
 
-    public static func foldProcessSequence<T: Equatable & Sendable>(
+    static func foldProcessSequence<T: Equatable & Sendable>(
         prefix: String,
         items: [T],
         classify: (T) -> ProcessClassifyResult
@@ -893,7 +963,7 @@ public enum ProcessGroupingEngine {
         foldProcessSequenceIndexed(prefix: prefix, items: items) { _, item in classify(item) }
     }
 
-    public static func foldProcessSequenceIndexed<T: Equatable & Sendable>(
+    static func foldProcessSequenceIndexed<T: Equatable & Sendable>(
         prefix: String,
         items: [T],
         classify: (Int, T) -> ProcessClassifyResult
@@ -935,7 +1005,7 @@ public enum ProcessGroupingEngine {
         return output
     }
 
-    public static func thinkingStepFromText(
+    static func thinkingStepFromText(
         id: String,
         sourceIds: [String],
         rawText: String?,
@@ -953,7 +1023,7 @@ public enum ProcessGroupingEngine {
         ))
     }
 
-    public static func processGroupSummaryText(_ group: UnifiedProcessGroup) -> (primary: String, meta: String?) {
+    static func processGroupSummaryText(_ group: UnifiedProcessGroup) -> (primary: String, meta: String?) {
         if group.running {
             if group.thoughtCount > 0 && group.toolCount > 0 {
                 return ("正在思考与执行", "\(group.toolCount) 项操作")
@@ -975,13 +1045,13 @@ public enum ProcessGroupingEngine {
 
 // MARK: - Claude Turn & Metadata Process Grouping (claudeProcessGroups.ts)
 
-public struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var sourceIds: [String]
-    public var label: String
-    public var entries: [ExecutionRenderItem<ClaudeHistoryEvent>]
+struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
+    var id: String
+    var sourceIds: [String]
+    var label: String
+    var entries: [ExecutionRenderItem<ClaudeHistoryEvent>]
 
-    public var renderItems: [ClaudeEventRenderItem] {
+    var renderItems: [ClaudeEventRenderItem] {
         entries.map { entry in
             switch entry {
             case let .item(it, key, sids): .item(item: it, key: key, sourceIds: sids)
@@ -991,33 +1061,33 @@ public struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
     }
 }
 
-public enum ClaudeEventRenderItem: Equatable, Sendable {
+enum ClaudeEventRenderItem: Equatable, Sendable {
     case item(item: ClaudeHistoryEvent, key: String, sourceIds: [String])
     case group(ExecutionGroup)
     case metadata(ClaudeMetadataGroup)
 }
 
-public struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
-    public var id: String
-    public var stateKey: String
-    public var turnId: String
-    public var sourceIds: [String]
-    public var entries: [ClaudeEventRenderItem]
-    public var segmentCount: Int
-    public var toolCount: Int
-    public var failedCount: Int
-    public var running: Bool
-    public var completed: Bool
-    public var recordedOnly: Bool
-    public var needsReply: Bool
-    public var needsPermission: Bool
-    public var hasPermission: Bool
+struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
+    var id: String
+    var stateKey: String
+    var turnId: String
+    var sourceIds: [String]
+    var entries: [ClaudeEventRenderItem]
+    var segmentCount: Int
+    var toolCount: Int
+    var failedCount: Int
+    var running: Bool
+    var completed: Bool
+    var recordedOnly: Bool
+    var needsReply: Bool
+    var needsPermission: Bool
+    var hasPermission: Bool
 
-    public var iconName: LucideIconName {
+    var iconName: LucideIconName {
         segmentCount > 0 && toolCount > 0 ? .sparkles : .brain
     }
 
-    public var labelText: String {
+    var labelText: String {
         if recordedOnly { return "工作记录" }
         if running {
             if segmentCount > 0 && toolCount > 0 { return "正在思考与执行" }
@@ -1027,13 +1097,13 @@ public struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
         return segmentCount > 0 ? "已思考" : "过程"
     }
 
-    public var metaText: String? {
+    var metaText: String? {
         if toolCount > 0 { return "\(toolCount) 项工具" }
         if segmentCount > 1 { return "\(segmentCount) 段" }
         return nil
     }
 
-    public var wrapsThinkingDisclosures: Bool {
+    var wrapsThinkingDisclosures: Bool {
         if toolCount > 0 { return true }
         var thoughtLikeCount = 0
         for entry in entries {
@@ -1049,14 +1119,14 @@ public struct ClaudeProcessGroup: Equatable, Sendable, Identifiable {
     }
 }
 
-public enum ClaudeRenderItem: Equatable, Sendable {
+enum ClaudeRenderItem: Equatable, Sendable {
     case item(item: ClaudeHistoryEvent, key: String, sourceIds: [String])
     case group(ExecutionGroup)
     case metadata(ClaudeMetadataGroup)
     case process(ClaudeProcessGroup)
 }
 
-public enum ClaudeProcessGroupingEngine {
+enum ClaudeProcessGroupingEngine {
     private static let metadataKinds: Set<String> = [
         "file-history-snapshot", "file-history-delta", "queue-operation",
         "cost-state", "atis-latch", "attachment", "compaction", "branch_summary",
@@ -1072,21 +1142,21 @@ public enum ClaudeProcessGroupingEngine {
         "cost-state", "atis-latch", "attachment",
     ]
 
-    public static func isAutomatic(_ event: ClaudeHistoryEvent) -> Bool {
+    static func isAutomatic(_ event: ClaudeHistoryEvent) -> Bool {
         metadataKinds.contains(event.kind) || (event.kind == "system" && automaticRoles.contains(event.role ?? ""))
     }
 
-    public static func isThoughtOrCommentary(_ event: ClaudeHistoryEvent) -> Bool {
+    static func isThoughtOrCommentary(_ event: ClaudeHistoryEvent) -> Bool {
         event.kind == "thinking" || (event.kind == "assistant_message" && event.assistantPhase == "intermediate")
     }
 
-    public static func isProcess(_ event: ClaudeHistoryEvent) -> Bool {
+    static func isProcess(_ event: ClaudeHistoryEvent) -> Bool {
         processKinds.contains(event.kind)
             || isThoughtOrCommentary(event)
             || (event.kind == "system" && (automaticRoles.contains(event.role ?? "") || event.role == "api_error"))
     }
 
-    public static func foldAutomatic(_ entries: [ExecutionRenderItem<ClaudeHistoryEvent>]) -> [ClaudeEventRenderItem] {
+    static func foldAutomatic(_ entries: [ExecutionRenderItem<ClaudeHistoryEvent>]) -> [ClaudeEventRenderItem] {
         var result: [ClaudeEventRenderItem] = []
         var pending: [(item: ClaudeHistoryEvent, key: String, sourceIds: [String])] = []
 
@@ -1247,7 +1317,7 @@ public enum ClaudeProcessGroupingEngine {
         return output
     }
 
-    public static func groupClaudeProcesses(_ events: [ClaudeHistoryEvent], recordedOnly: Bool = false) -> [ClaudeRenderItem] {
+    static func groupClaudeProcesses(_ events: [ClaudeHistoryEvent], recordedOnly: Bool = false) -> [ClaudeRenderItem] {
         var output: [ClaudeRenderItem] = []
         var turn: String?
         var hasTurn = false
@@ -1284,23 +1354,22 @@ public enum ClaudeProcessGroupingEngine {
 // MARK: - Pure In-Memory FIFO 2000-Key Activity Disclosure Store (Cleared on Relaunch)
 
 @MainActor
-public final class ActivityDisclosureStore: ObservableObject {
-    public static let maxEntries = 2000
-    public static let shared = ActivityDisclosureStore()
+final class ActivityDisclosureStore: ObservableObject {
+    static let maxEntries = 2000
+    static let shared = ActivityDisclosureStore()
 
     private struct Entry {
         var open: Bool
         var seq: UInt64
     }
 
-    private var values: [String: Entry] = [:]
-    private var order: [String] = []
+    private var values = BoundedLRUCache<String, Entry>(maxEntries: maxEntries)
     private var nextSeq: UInt64 = 0
-    @Published public private(set) var revision: UInt64 = 0
+    @Published private(set) var revision: UInt64 = 0
 
-    public init() {}
+    init() {}
 
-    public func isOpen(
+    func isOpen(
         scope: String,
         stateKey: String,
         aliases: [String] = [],
@@ -1310,7 +1379,7 @@ public final class ActivityDisclosureStore: ObservableObject {
         var minSeq: UInt64 = .max
         var hasOpen = false
         for candidate in [stateKey] + aliases where !candidate.isEmpty {
-            guard let entry = values["\(scope)::\(candidate)"] else { continue }
+            guard let entry = values.peek("\(scope)::\(candidate)") else { continue }
             if entry.open { hasOpen = true }
             if entry.seq < minSeq { minSeq = entry.seq }
             if let current = latest {
@@ -1328,7 +1397,7 @@ public final class ActivityDisclosureStore: ObservableObject {
         return latest.open
     }
 
-    public func setOpen(
+    func setOpen(
         scope: String,
         stateKey: String,
         aliases: [String] = [],
@@ -1338,23 +1407,15 @@ public final class ActivityDisclosureStore: ObservableObject {
         let entry = Entry(open: isOpen, seq: nextSeq)
         for candidate in ProcessGroupingEngine.uniqueStrings([stateKey] + aliases) {
             let fullKey = "\(scope)::\(candidate)"
-            if values[fullKey] != nil, let existingIdx = order.firstIndex(of: fullKey) {
-                order.remove(at: existingIdx)
-            } else if values[fullKey] == nil, order.count >= Self.maxEntries, let oldest = order.first {
-                order.removeFirst()
-                values.removeValue(forKey: oldest)
-            }
-            order.append(fullKey)
-            values[fullKey] = entry
+            values.setValue(entry, forKey: fullKey)
         }
         revision &+= 1
     }
 
-    public var count: Int { values.count }
+    var count: Int { values.count }
 
-    public func clearAll() {
+    func clearAll() {
         values.removeAll()
-        order.removeAll()
         nextSeq = 0
         revision &+= 1
     }

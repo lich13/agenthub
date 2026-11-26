@@ -275,12 +275,58 @@ impl MessageBlockBuilder {
 
     #[cfg(test)]
     pub(super) fn finish(self) -> Vec<MessageBlock> {
-        compact_chat_history(self.finish_uncompacted(), CHAT_HISTORY_LIMIT)
+        let blocks = self.finish_uncompacted();
+        compact_chat_history(&blocks, CHAT_HISTORY_LIMIT)
             .into_iter()
             .map(Arc::unwrap_or_clone)
             .collect()
     }
 
+    pub(super) fn snapshot_uncompacted(&self) -> Vec<Arc<MessageBlock>> {
+        let mut blocks = Vec::with_capacity(self.blocks.len() + self.pending_tools.len());
+        for block in &self.blocks {
+            if let Some(call) = self.async_questions.calls.iter().find(|call| {
+                block.call_id.as_deref() == Some(&call.call_id)
+                    && block.turn_id.as_deref() == Some(&call.turn_id)
+            }) {
+                let mut updated = (**block).clone();
+                let pending = call.pending();
+                updated.resolved = Some(pending.is_none());
+                updated.status = Some(
+                    if pending.is_some() {
+                        "pending"
+                    } else {
+                        "completed"
+                    }
+                    .to_string(),
+                );
+                if let Some(pending) = pending {
+                    updated.questions = pending.questions;
+                }
+                blocks.push(Arc::new(updated));
+            } else {
+                blocks.push(Arc::clone(block));
+            }
+        }
+        let mut pending_positions = HashMap::with_capacity(self.pending_tools.len());
+        let mut pending = self.pending_tools.values().cloned().collect::<Vec<_>>();
+        pending.sort_by_key(|call| call.raw_index);
+        for call in pending {
+            pending_positions.insert(call.id.clone(), call.raw_index);
+            blocks.push(Arc::new(call.into_running_block()));
+        }
+        blocks.sort_by_key(|block| {
+            pending_positions
+                .get(&block.id)
+                .copied()
+                .or_else(|| self.block_positions.get(&block.id).copied())
+                .unwrap_or(usize::MAX)
+        });
+        super::super::subagents::merge_creation_events(&mut blocks);
+        blocks
+    }
+
+    #[cfg(test)]
     pub(super) fn finish_uncompacted(mut self) -> Vec<Arc<MessageBlock>> {
         for block in &mut self.blocks {
             if let Some(call) = self.async_questions.calls.iter().find(|call| {
@@ -321,7 +367,7 @@ impl MessageBlockBuilder {
 }
 
 pub(super) fn compact_chat_history(
-    blocks: Vec<Arc<MessageBlock>>,
+    blocks: &[Arc<MessageBlock>],
     max_chat_messages: usize,
 ) -> Vec<Arc<MessageBlock>> {
     let chat_indexes = blocks
@@ -330,7 +376,7 @@ pub(super) fn compact_chat_history(
         .filter_map(|(index, block)| is_chat_history_block(block).then_some(index))
         .collect::<Vec<_>>();
     if chat_indexes.len() <= max_chat_messages {
-        return blocks;
+        return blocks.to_vec();
     }
 
     let hidden = chat_indexes.len().saturating_sub(max_chat_messages);
@@ -373,7 +419,7 @@ pub(super) fn compact_chat_history(
     let mut inserted = false;
     let mut segment: Option<usize> = None;
     let mut segment_count = 0;
-    for (index, block) in blocks.into_iter().enumerate() {
+    for (index, block) in blocks.iter().enumerate() {
         if hide_chat.contains(&index) && !keep_chat.contains(&index) {
             let position = *segment.get_or_insert_with(|| {
                 let mut marker = collapsed.clone();
@@ -393,7 +439,7 @@ pub(super) fn compact_chat_history(
             continue;
         }
         segment = None;
-        compacted.push(block);
+        compacted.push(Arc::clone(block));
     }
     compacted
 }

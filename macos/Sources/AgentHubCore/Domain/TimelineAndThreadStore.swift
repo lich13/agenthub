@@ -2,15 +2,15 @@ import Foundation
 
 // MARK: - History Cursors & Resume Commands (historyCursor.ts, claudeSession.ts, GrokWorkspace.tsx)
 
-public enum HistoryAndResumeHelpers {
-    public static func historyCursorIndex(_ cursor: String?) -> Double {
+enum HistoryAndResumeHelpers {
+    static func historyCursorIndex(_ cursor: String?) -> Double {
         guard let cursor, !cursor.isEmpty else { return .infinity }
         let parts = cursor.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count >= 2, let num = Double(parts[1]), num.isFinite else { return .infinity }
         return num
     }
 
-    public static func stableHistoryCursor(
+    static func stableHistoryCursor(
         history: HistoryMetadata?,
         blocks: [MessageBlock],
         beforeCursor: String?
@@ -23,28 +23,28 @@ public enum HistoryAndResumeHelpers {
         return "b:\(Int(idx)):\(first.id)"
     }
 
-    public static func threadResumeCommand(_ threadId: String?) -> String? {
+    static func threadResumeCommand(_ threadId: String?) -> String? {
         guard let id = threadId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
             return nil
         }
         return "codex resume \(id)"
     }
 
-    public static func shellSingleQuote(_ value: String) -> String {
+    static func shellSingleQuote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
-    public static func claudeResumeCommand(cwd: String, id: String) -> String {
+    static func claudeResumeCommand(cwd: String, id: String) -> String {
         let prefix = cwd.isEmpty ? "" : "cd -- \(shellSingleQuote(cwd)) && "
         return "\(prefix)claude --resume \(shellSingleQuote(id))"
     }
 
-    public static func grokResumeCommand(cwd: String, id: String) -> String {
+    static func grokResumeCommand(cwd: String, id: String) -> String {
         let prefix = cwd.isEmpty ? "" : "cd -- \(shellSingleQuote(cwd)) && "
         return "\(prefix)grok --resume \(shellSingleQuote(id))"
     }
 
-    public static func grokHandoffPath(_ session: GrokSessionSummary) -> String {
+    static func grokHandoffPath(_ session: GrokSessionSummary) -> String {
         if let hp = session.handoffPath?.trimmingCharacters(in: .whitespacesAndNewlines), !hp.isEmpty {
             return hp
         }
@@ -54,14 +54,14 @@ public enum HistoryAndResumeHelpers {
 
 // MARK: - User Timeline Rail ViewModel (timelineViewModel.ts)
 
-public struct TimelineSourceItem: Equatable, Sendable {
-    public var id: String
-    public var role: String?
-    public var kind: String?
-    public var text: String?
-    public var userMessage: UserMessageContent?
+struct TimelineSourceItem: Equatable, Sendable {
+    var id: String
+    var role: String?
+    var kind: String?
+    var text: String?
+    var userMessage: UserMessageContent?
 
-    public init(
+    init(
         id: String,
         role: String? = nil,
         kind: String? = nil,
@@ -76,7 +76,7 @@ public struct TimelineSourceItem: Equatable, Sendable {
     }
 }
 
-public enum TimelineViewModel {
+enum TimelineViewModel {
     private static let disallowedBareStems: Set<String> = [
         "turn", "process", "event", "group", "claude-process", "claude-metadata",
     ]
@@ -90,7 +90,7 @@ public enum TimelineViewModel {
         return base
     }
 
-    public static func matchesTimelinePosition(
+    static func matchesTimelinePosition(
         _ positionKey: String?,
         id: String?,
         aliases: [String] = []
@@ -125,7 +125,7 @@ public enum TimelineViewModel {
         return false
     }
 
-    public static func userTimelineEntries(
+    static func userTimelineEntries(
         provider: SessionProvider,
         sources: [TimelineSourceItem]
     ) -> [TimelineEntry] {
@@ -174,7 +174,7 @@ public enum TimelineViewModel {
         return entries
     }
 
-    public static func activeUserTimelineId(
+    static func activeUserTimelineId(
         anchors: [(id: String, top: CGFloat)],
         viewportTop: CGFloat
     ) -> String? {
@@ -195,24 +195,24 @@ public enum TimelineViewModel {
 
 // MARK: - Thread Message Store & 120s Optimistic Codex Rename Cache (threadMessageStore.ts)
 
-public struct ThreadMessageSlot: Equatable, Sendable {
-    public var timeline: [TimelineEntry]?
-    public var history: HistoryMetadata?
-    public var subagents: SubagentCollection?
-    public var subagentUpdates: [String: SubagentActivity]?
-    public var summary: ThreadSummary?
-    public var blocks: [MessageBlock]
-    public var totalBlocks: Int
-    public var hasMoreBlocks: Bool
-    public var beforeCursor: String?
-    public var visibleUpdateRevision: Int
-    public var bottomFollowRevision: Int
-    public var loadingEarlier: Bool
-    public var loadError: String?
-    public var feedback: String?
-    public var showAllHistory: Bool
+struct ThreadMessageSlot: Equatable, Sendable {
+    var timeline: [TimelineEntry]?
+    var history: HistoryMetadata?
+    var subagents: SubagentCollection?
+    var subagentUpdates: [String: SubagentActivity]?
+    var summary: ThreadSummary?
+    var blocks: [MessageBlock]
+    var totalBlocks: Int
+    var hasMoreBlocks: Bool
+    var beforeCursor: String?
+    var visibleUpdateRevision: Int
+    var bottomFollowRevision: Int
+    var loadingEarlier: Bool
+    var loadError: String?
+    var feedback: String?
+    var showAllHistory: Bool
 
-    public init() {
+    init() {
         self.blocks = []
         self.totalBlocks = 0
         self.hasMoreBlocks = false
@@ -224,34 +224,62 @@ public struct ThreadMessageSlot: Equatable, Sendable {
 }
 
 @MainActor
-public final class ThreadMessageStore: ObservableObject {
-    public static let optimisticRenameTTLSeconds: TimeInterval = 120.0
+final class ThreadMessageStore: ObservableObject {
+    static let optimisticRenameTTLSeconds: TimeInterval = 120.0
+    static let maxCachedSessions = 8
+    static let maxCachedBytes = 16 * 1024 * 1024
 
-    @Published public private(set) var revision: UInt64 = 0
-    private var slots: [String: ThreadMessageSlot] = [:]
+    @Published private(set) var revision: UInt64 = 0
+    private var slots = BoundedLRUCache<String, ThreadMessageSlot>(
+        maxEntries: maxCachedSessions,
+        maxBytes: maxCachedBytes
+    )
     private var optimisticTitles: [String: (title: String, expiresAt: Date)] = [:]
 
-    public init() {}
+    init() {}
 
-    public func slot(for threadId: String) -> ThreadMessageSlot {
-        if let existing = slots[threadId] { return existing }
-        let created = ThreadMessageSlot()
-        slots[threadId] = created
-        return created
+    var cachedSessionCount: Int { slots.count }
+    var cachedBytes: Int { slots.totalBytes }
+
+    func slot(for threadId: String) -> ThreadMessageSlot {
+        slots.peek(threadId) ?? ThreadMessageSlot()
     }
 
-    public func recordOptimisticTitle(threadId: String, title: String, now: Date = Date()) {
+    private func storeSlot(_ slot: ThreadMessageSlot, for threadId: String) {
+        slots.setValue(
+            slot,
+            forKey: threadId,
+            cost: Self.estimateSlotBytes(slot),
+            allowSingleOversized: true
+        )
+    }
+
+    private static func estimateSlotBytes(_ slot: ThreadMessageSlot) -> Int {
+        var total = 256 + (slot.timeline?.count ?? 0) * 96
+        for b in slot.blocks {
+            total += 128
+            total += (b.text?.utf8.count ?? 0)
+            total += (b.summary?.utf8.count ?? 0)
+            total += (b.input?.utf8.count ?? 0)
+            if let um = b.userMessage {
+                total += um.text.utf8.count + (um.contextBlocks?.reduce(0) { $0 + $1.text.utf8.count } ?? 0)
+            }
+        }
+        return total
+    }
+
+    func recordOptimisticTitle(threadId: String, title: String, now: Date = Date()) {
         optimisticTitles[threadId] = (title: title, expiresAt: now.addingTimeInterval(Self.optimisticRenameTTLSeconds))
-        if var s = slots[threadId], var sum = s.summary {
+        if var s = slots.value(forKey: threadId), var sum = s.summary {
             sum.title = title
             s.summary = sum
             s.visibleUpdateRevision += 1
-            slots[threadId] = s
+            storeSlot(s, for: threadId)
         }
         revision &+= 1
     }
 
-    public func effectiveTitle(threadId: String, serverTitle: String, now: Date = Date()) -> String {
+    func effectiveTitle(threadId: String, serverTitle: String, now: Date = Date()) -> String {
         if let entry = optimisticTitles[threadId] {
             if entry.expiresAt <= now || entry.title == serverTitle {
                 optimisticTitles.removeValue(forKey: threadId)
@@ -263,7 +291,7 @@ public final class ThreadMessageStore: ObservableObject {
     }
 
     @discardableResult
-    public func applyDetail(_ detail: ThreadDetail, now: Date = Date()) -> ThreadMessageSlot {
+    func applyDetail(_ detail: ThreadDetail, now: Date = Date()) -> ThreadMessageSlot {
         let threadId = detail.summary.id
         var slot = self.slot(for: threadId)
         let reset: Bool = {
@@ -342,7 +370,7 @@ public final class ThreadMessageStore: ObservableObject {
         if changed { slot.visibleUpdateRevision += 1 }
         if blocksChanged { slot.bottomFollowRevision += 1 }
 
-        slots[threadId] = slot
+        storeSlot(slot, for: threadId)
         if changed {
             revision &+= 1
         }
@@ -350,20 +378,20 @@ public final class ThreadMessageStore: ObservableObject {
     }
 
     @discardableResult
-    public func applyBlockPage(_ page: ThreadBlockPage, expectedCursor: String? = nil) -> ThreadMessageSlot {
+    func applyBlockPage(_ page: ThreadBlockPage, expectedCursor: String? = nil) -> ThreadMessageSlot {
         let threadId = page.threadId
         var slot = self.slot(for: threadId)
         if let sh = slot.history, let ph = page.history, sh.epoch != ph.epoch {
             if slot.loadingEarlier {
                 slot.loadingEarlier = false
-                slots[threadId] = slot
+                storeSlot(slot, for: threadId)
             }
             return slot
         }
         if let expectedCursor, let sb = slot.beforeCursor, sb != expectedCursor {
             if slot.loadingEarlier {
                 slot.loadingEarlier = false
-                slots[threadId] = slot
+                storeSlot(slot, for: threadId)
             }
             return slot
         }
@@ -394,22 +422,28 @@ public final class ThreadMessageStore: ObservableObject {
         slot.loadingEarlier = false
         slot.loadError = nil
         if changed { slot.visibleUpdateRevision += 1 }
-        slots[threadId] = slot
+        storeSlot(slot, for: threadId)
         if changed { revision &+= 1 }
         return slot
     }
 
-    public func setHistoryExpanded(threadId: String, expanded: Bool) {
+    func setHistoryExpanded(threadId: String, expanded: Bool) {
         var slot = self.slot(for: threadId)
         slot.showAllHistory = expanded
         slot.visibleUpdateRevision += 1
-        slots[threadId] = slot
+        storeSlot(slot, for: threadId)
         revision &+= 1
     }
 
-    public func clear(threadId: String) {
-        slots.removeValue(forKey: threadId)
+    func clear(threadId: String) {
+        _ = slots.removeValue(forKey: threadId)
         optimisticTitles.removeValue(forKey: threadId)
+        revision &+= 1
+    }
+
+    func clearAll() {
+        slots.removeAll()
+        optimisticTitles.removeAll()
         revision &+= 1
     }
 
@@ -479,29 +513,38 @@ public final class ThreadMessageStore: ObservableObject {
 
 // MARK: - Universal Paged History Store for Claude, Grok, Antigravity, DSH & GrokBot (usePagedHistory.ts parity)
 
-public struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
-    public var events: [Event]
-    public var history: HistoryMetadata?
-    public var totalEvents: Int?
-    public var beforeCursor: String?
-    public var hasMore: Bool
-    public var timeline: [TimelineEntry]?
-    public var subagents: SubagentCollection?
-    public var subagentUpdates: [String: SubagentActivity]?
+struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
+    var events: [Event]
+    var history: HistoryMetadata?
+    var totalEvents: Int?
+    var beforeCursor: String?
+    var hasMore: Bool
+    var timeline: [TimelineEntry]?
+    var subagents: SubagentCollection?
+    var subagentUpdates: [String: SubagentActivity]?
 
-    public init() {
+    init() {
         self.events = []
         self.hasMore = false
     }
 }
 
 @MainActor
-public final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObject {
-    private var slots: [String: PagedEventSlot<Event>] = [:]
+final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObject {
+    static var maxCachedSessions: Int { 8 }
+    static var maxCachedBytes: Int { 16 * 1024 * 1024 }
+
+    private var slots = BoundedLRUCache<String, PagedEventSlot<Event>>(
+        maxEntries: 8,
+        maxBytes: 16 * 1024 * 1024
+    )
     private let idOf: (Event, Int) -> String
     private let mergeSubagentUpdate: ((Event, [String: SubagentActivity]) -> Event)?
 
-    public init(
+    var cachedSessionCount: Int { slots.count }
+    var cachedBytes: Int { slots.totalBytes }
+
+    init(
         mergeSubagentUpdate: ((Event, [String: SubagentActivity]) -> Event)? = nil,
         idOf: @escaping (Event, Int) -> String
     ) {
@@ -509,7 +552,7 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         self.idOf = idOf
     }
 
-    public static func forProviderEvents() -> PagedEventHistoryStore<ProviderHistoryEvent> {
+    static func forProviderEvents() -> PagedEventHistoryStore<ProviderHistoryEvent> {
         PagedEventHistoryStore<ProviderHistoryEvent>(
             mergeSubagentUpdate: { ev, updates in
                 guard let sub = ev.subagent,
@@ -527,12 +570,41 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         )
     }
 
-    public func slot(for key: String) -> PagedEventSlot<Event> {
-        slots[key] ?? PagedEventSlot()
+    func slot(for key: String) -> PagedEventSlot<Event> {
+        slots.peek(key) ?? PagedEventSlot()
     }
 
-    public func clearAll() {
+    func clearAll() {
         slots.removeAll()
+    }
+
+    private func storeSlot(_ slot: PagedEventSlot<Event>, for key: String) {
+        slots.setValue(
+            slot,
+            forKey: key,
+            cost: Self.estimateSlotBytes(slot),
+            allowSingleOversized: true
+        )
+    }
+
+    private static func estimateSlotBytes(_ slot: PagedEventSlot<Event>) -> Int {
+        var total = 256 + (slot.timeline?.count ?? 0) * 96
+        if let claudeEvents = slot.events as? [ClaudeHistoryEvent] {
+            for ev in claudeEvents {
+                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0) + (ev.result?.utf8.count ?? 0)
+            }
+        } else if let grokEvents = slot.events as? [GrokHistoryEvent] {
+            for ev in grokEvents {
+                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0)
+            }
+        } else if let provEvents = slot.events as? [ProviderHistoryEvent] {
+            for ev in provEvents {
+                total += 128 + (ev.text?.utf8.count ?? 0) + (ev.detail?.utf8.count ?? 0) + (ev.result?.utf8.count ?? 0)
+            }
+        } else {
+            total += slot.events.count * 256
+        }
+        return total
     }
 
     private func applyUpdates(_ events: [Event], updates: [String: SubagentActivity]?) -> [Event] {
@@ -541,7 +613,7 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
     }
 
     @discardableResult
-    public func applyHeadPoll(
+    func applyHeadPoll(
         key: String,
         headEvents: [Event],
         history: HistoryMetadata?,
@@ -591,12 +663,12 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
         current.timeline = timeline ?? (rewritten ? nil : current.timeline)
         current.subagents = subagents ?? (rewritten ? nil : current.subagents)
         current.subagentUpdates = nextUpdates
-        slots[key] = current
+        storeSlot(current, for: key)
         return current
     }
 
     @discardableResult
-    public func applyOlderPage(
+    func applyOlderPage(
         key: String,
         expectedCursor: String,
         olderEvents: [Event],
@@ -628,7 +700,7 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
             current.beforeCursor = beforeCursor
             current.hasMore = hasMore
         }
-        slots[key] = current
+        storeSlot(current, for: key)
         return current
     }
 
@@ -671,17 +743,17 @@ public final class PagedEventHistoryStore<Event: Equatable & Sendable>: Observab
 
 // MARK: - Bounded Timeline Window Jump Controller (j:/w:/n: Cursors, useTimelineWindow.ts)
 
-public struct TimelineWindowPage<Item: Sendable>: Sendable {
-    public var items: [Item]
-    public var before: String?
-    public var after: String?
-    public var hasMore: Bool
-    public var history: HistoryMetadata?
-    public var firstNativeId: String?
-    public var lastNativeId: String?
-    public var nativeIds: Set<String>?
+struct TimelineWindowPage<Item: Sendable>: Sendable {
+    var items: [Item]
+    var before: String?
+    var after: String?
+    var hasMore: Bool
+    var history: HistoryMetadata?
+    var firstNativeId: String?
+    var lastNativeId: String?
+    var nativeIds: Set<String>?
 
-    public init(
+    init(
         items: [Item],
         before: String? = nil,
         after: String? = nil,
@@ -701,7 +773,7 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
         self.nativeIds = nativeIds
     }
 
-    public static func from(threadDetail page: ThreadDetail) -> TimelineWindowPage<MessageBlock> {
+    static func from(threadDetail page: ThreadDetail) -> TimelineWindowPage<MessageBlock> {
         let blocks = page.blocks
         let stableBefore = HistoryAndResumeHelpers.stableHistoryCursor(
             history: page.history,
@@ -720,7 +792,7 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
         )
     }
 
-    public static func from(claudeDetail page: ClaudeSessionDetail) -> TimelineWindowPage<ClaudeHistoryEvent> {
+    static func from(claudeDetail page: ClaudeSessionDetail) -> TimelineWindowPage<ClaudeHistoryEvent> {
         TimelineWindowPage<ClaudeHistoryEvent>(
             items: page.events,
             before: page.beforeCursor,
@@ -733,7 +805,7 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
         )
     }
 
-    public static func from(grokDetail page: GrokSessionDetail) -> TimelineWindowPage<GrokHistoryEvent> {
+    static func from(grokDetail page: GrokSessionDetail) -> TimelineWindowPage<GrokHistoryEvent> {
         let ids = page.events.compactMap { $0.id ?? $0.userMessage?.id }.filter { !$0.isEmpty }
         return TimelineWindowPage<GrokHistoryEvent>(
             items: page.events,
@@ -747,7 +819,7 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
         )
     }
 
-    public static func from(providerDetail page: ProviderSessionDetail) -> TimelineWindowPage<ProviderHistoryEvent> {
+    static func from(providerDetail page: ProviderSessionDetail) -> TimelineWindowPage<ProviderHistoryEvent> {
         TimelineWindowPage<ProviderHistoryEvent>(
             items: page.events,
             before: page.beforeCursor,
@@ -762,35 +834,35 @@ public struct TimelineWindowPage<Item: Sendable>: Sendable {
 }
 
 @MainActor
-public final class TimelineWindowController<Item: Sendable>: ObservableObject {
-    @Published public private(set) var scope: String = ""
-    @Published public private(set) var pages: [TimelineWindowPage<Item>] = []
-    @Published public private(set) var windowHistory: HistoryMetadata?
-    @Published public private(set) var busy: Bool = false
-    @Published public private(set) var error: String?
-    @Published public private(set) var pendingTargetId: String?
-    @Published public private(set) var generation: Int = 0
+final class TimelineWindowController<Item: Sendable>: ObservableObject {
+    @Published private(set) var scope: String = ""
+    @Published private(set) var pages: [TimelineWindowPage<Item>] = []
+    @Published private(set) var windowHistory: HistoryMetadata?
+    @Published private(set) var busy: Bool = false
+    @Published private(set) var error: String?
+    @Published private(set) var pendingTargetId: String?
+    @Published private(set) var generation: Int = 0
 
     private let idOf: (Item) -> String
     private var sequence: Int = 0
 
-    public init(idOf: @escaping (Item) -> String) {
+    init(idOf: @escaping (Item) -> String) {
         self.idOf = idOf
     }
 
-    public var isActive: Bool {
+    var isActive: Bool {
         !pages.isEmpty
     }
 
-    public var beforeCursor: String? {
+    var beforeCursor: String? {
         pages.first?.before
     }
 
-    public var hasMoreOlder: Bool {
+    var hasMoreOlder: Bool {
         pages.first?.hasMore ?? false
     }
 
-    public func hasNewer(latestTailId: String?) -> Bool {
+    func hasNewer(latestTailId: String?) -> Bool {
         guard let lastPage = pages.last else { return false }
         if let after = lastPage.after, !after.isEmpty {
             return true
@@ -807,7 +879,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         return false
     }
 
-    public var items: [Item]? {
+    var items: [Item]? {
         guard isActive else { return nil }
         var indexById: [String: Int] = [:]
         var deduped: [Item] = []
@@ -825,7 +897,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         return deduped
     }
 
-    public func syncScope(_ nextScope: String, currentHistory: HistoryMetadata?) {
+    func syncScope(_ nextScope: String, currentHistory: HistoryMetadata?) {
         let epochMismatch = (windowHistory != nil && currentHistory != nil && windowHistory?.epoch != currentHistory?.epoch)
         if nextScope != scope || epochMismatch {
             sequence += 1
@@ -838,7 +910,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
     }
 
-    public func jump(
+    func jump(
         to targetId: String,
         in expectedScope: String,
         currentHistory: HistoryMetadata?,
@@ -884,15 +956,15 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
     }
 
-    public func clearPendingTarget() {
+    func clearPendingTarget() {
         pendingTargetId = nil
     }
 
-    public func clearError() {
+    func clearError() {
         error = nil
     }
 
-    public func loadNewer(
+    func loadNewer(
         latestTailId: String?,
         read: @Sendable (String) async throws -> TimelineWindowPage<Item>
     ) async {
@@ -942,7 +1014,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
     }
 
-    public func loadOlder(
+    func loadOlder(
         read: @Sendable (String) async throws -> TimelineWindowPage<Item>
     ) async {
         guard isActive, !busy, hasMoreOlder, let cursor = beforeCursor else { return }
@@ -985,7 +1057,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
     }
 
-    public func reconcilePollHistory(
+    func reconcilePollHistory(
         incoming: HistoryMetadata?,
         read: @Sendable (String) async throws -> TimelineWindowPage<Item>
     ) async {
@@ -1059,7 +1131,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
     }
 
-    public func returnToLatest() {
+    func returnToLatest() {
         sequence += 1
         pages = []
         windowHistory = nil

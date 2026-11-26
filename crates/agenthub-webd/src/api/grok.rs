@@ -2,15 +2,10 @@ use super::{ok, ApiResponse};
 use crate::state::AppState;
 use agenthub_core::{
     grok::GrokDeleteRequest,
-    services::use_cases::{AgentHubUseCases, QueryLimitRequest},
+    services::use_cases::{
+        AgentHubUseCases, GrokRenameRequest, PageWindowOptions, QueryLimitRequest,
+    },
 };
-use serde::Deserialize;
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct GrokDetailQuery {
-    pub limit: Option<usize>,
-    pub before: Option<String>,
-}
 
 pub(crate) async fn grok_list(state: AppState, query: QueryLimitRequest) -> ApiResponse {
     let platform = state.platform().clone();
@@ -26,7 +21,7 @@ pub(crate) async fn grok_list(state: AppState, query: QueryLimitRequest) -> ApiR
 pub(crate) async fn grok_detail(
     state: AppState,
     id: String,
-    query: GrokDetailQuery,
+    query: PageWindowOptions,
 ) -> ApiResponse {
     let platform = state.platform().clone();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
@@ -36,12 +31,6 @@ pub(crate) async fn grok_detail(
     })
     .await
     .map_err(anyhow::Error::from)??)
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct GrokRenameRequest {
-    pub id: String,
-    pub title: String,
 }
 
 pub(crate) async fn grok_rename(state: AppState, request: GrokRenameRequest) -> ApiResponse {

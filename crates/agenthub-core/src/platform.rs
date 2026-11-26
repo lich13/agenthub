@@ -98,3 +98,40 @@ impl PlatformPaths {
         self.data_dir.join("bin").join(binary)
     }
 }
+
+pub(crate) fn same_canonical_dir(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left == right
+        || matches!(
+            (std::fs::canonicalize(left), std::fs::canonicalize(right)),
+            (Ok(left), Ok(right)) if left == right
+        )
+}
+
+pub(crate) fn resolve_kernel_exe(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0_u8; 4096];
+        // SAFETY: `buf` is writable for `buf.len()` bytes and `pid` is validated to fit `i32`.
+        let count = unsafe {
+            libc::proc_pidpath(
+                pid.try_into().ok()?,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        if count <= 0 {
+            return None;
+        }
+        let end = buf.iter().position(|b| *b == 0).unwrap_or(count as usize);
+        std::str::from_utf8(&buf[..end]).ok().map(PathBuf::from)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}

@@ -2,13 +2,13 @@ import AppKit
 import Foundation
 
 extension NSAttributedString.Key {
-    public static let agentHubBlockQuote = NSAttributedString.Key("AgentHubBlockQuote")
-    public static let agentHubInlineCode = NSAttributedString.Key("AgentHubInlineCode")
+    static let agentHubBlockQuote = NSAttributedString.Key("AgentHubBlockQuote")
+    static let agentHubInlineCode = NSAttributedString.Key("AgentHubInlineCode")
 }
 
 // MARK: - Rendered GFM Segment & Bounded 256-entry / 2 MiB Cache
 
-public enum GfmRenderedSegment {
+enum GfmRenderedSegment {
     case prose(attributed: NSAttributedString)
     case codeBlock(language: String?, code: String)
     case table(alignments: [GfmAlignment], headers: [NSAttributedString], rows: [[NSAttributedString]])
@@ -17,10 +17,10 @@ public enum GfmRenderedSegment {
 }
 
 @MainActor
-public final class GfmLayoutCache {
-    public static let maxEntries = 256
-    public static let maxBytes = 2 * 1024 * 1024
-    public static let shared = GfmLayoutCache()
+final class GfmLayoutCache {
+    static let maxEntries = 256
+    static let maxBytes = 2 * 1024 * 1024
+    static let shared = GfmLayoutCache()
     private static let gfmDecoder = JSONDecoder()
 
     private struct CacheKey: Hashable {
@@ -31,26 +31,23 @@ public final class GfmLayoutCache {
         let cleaned: String
     }
 
-    private struct Entry {
-        let segments: [GfmRenderedSegment]
-        let estimatedBytes: Int
-        var lastSeq: UInt64
-    }
+    private var entries = BoundedLRUCache<CacheKey, [GfmRenderedSegment]>(
+        maxEntries: maxEntries,
+        maxBytes: maxBytes
+    )
+    var totalBytes: Int { entries.totalBytes }
 
-    private var entries: [CacheKey: Entry] = [:]
-    private var accessSeq: UInt64 = 0
-    public private(set) var totalBytes: Int = 0
+    init() {}
 
-    public init() {}
-
-    public func getOrRender(
+    func getOrRender(
         markdown: String,
         foldInstructions: Bool,
         scheme: ColorSchemeKind,
         workspace: WorkspaceId,
-        transport: any RuntimeTransport
+        transport: any RuntimeTransport,
+        alreadyCleaned: Bool = false
     ) -> [GfmRenderedSegment] {
-        let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
+        let cleaned = alreadyCleaned ? markdown : VisibleMarkdownEngine.visibleMarkdown(markdown)
         let key = CacheKey(
             scheme: scheme,
             workspace: workspace,
@@ -58,11 +55,8 @@ public final class GfmLayoutCache {
             utf8Count: cleaned.utf8.count,
             cleaned: cleaned
         )
-        if var hit = entries[key] {
-            accessSeq &+= 1
-            hit.lastSeq = accessSeq
-            entries[key] = hit
-            return hit.segments
+        if let hit = entries.value(forKey: key) {
+            return hit
         }
 
         let palette = DesignPalette.resolve(scheme: scheme, workspace: workspace)
@@ -74,23 +68,13 @@ public final class GfmLayoutCache {
         )
         let estBytes = max(64, cleaned.utf8.count * 3 + rendered.count * 96)
         if cacheable && estBytes <= Self.maxBytes {
-            while entries.count >= Self.maxEntries || totalBytes + estBytes > Self.maxBytes {
-                guard let oldestKey = entries.min(by: { $0.value.lastSeq < $1.value.lastSeq })?.key else { break }
-                if let removed = entries.removeValue(forKey: oldestKey) {
-                    totalBytes = max(0, totalBytes - removed.estimatedBytes)
-                }
-            }
-            accessSeq &+= 1
-            entries[key] = Entry(segments: rendered, estimatedBytes: estBytes, lastSeq: accessSeq)
-            totalBytes += estBytes
+            entries.setValue(rendered, forKey: key, cost: estBytes)
         }
         return rendered
     }
 
-    public func clear() {
+    func clear() {
         entries.removeAll()
-        accessSeq = 0
-        totalBytes = 0
     }
 
     private static func buildSegments(
@@ -324,7 +308,7 @@ public final class GfmLayoutCache {
         return out
     }
 
-    public static func plainTextFromInlines(_ inlines: [GfmInline]) -> String {
+    static func plainTextFromInlines(_ inlines: [GfmInline]) -> String {
         var out = ""
         for inline in inlines {
             switch inline {
@@ -343,7 +327,7 @@ public final class GfmLayoutCache {
         return out
     }
 
-    public static func safeRenderableHref(_ raw: String) -> String? {
+    static func safeRenderableHref(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if FileLinksAndPlanExport.fileLinkTarget(trimmed) != nil {

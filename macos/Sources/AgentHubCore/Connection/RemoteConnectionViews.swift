@@ -1,16 +1,16 @@
 import AppKit
 import SwiftUI
 
-public struct MachineButtonView: View {
+struct MachineButtonView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public var collapsed: Bool
-    public let onConfigure: () -> Void
+    @ObservedObject var store: RuntimeConnectionStore
+    var collapsed: Bool
+    let onConfigure: () -> Void
 
     @State private var localError: String?
     @State private var hovered: Bool = false
 
-    public init(store: RuntimeConnectionStore, collapsed: Bool = false, onConfigure: @escaping () -> Void) {
+    init(store: RuntimeConnectionStore, collapsed: Bool = false, onConfigure: @escaping () -> Void) {
         self.store = store
         self.collapsed = collapsed
         self.onConfigure = onConfigure
@@ -41,7 +41,7 @@ public struct MachineButtonView: View {
         return entries
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 AnchoredMenuButton(entries: menuEntries, accessibilityLabel: "当前机器") {
@@ -121,12 +121,13 @@ public struct MachineButtonView: View {
     }
 }
 
-public struct RemoteConnectionSettingsView: View {
+struct RemoteConnectionSettingsView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
+    @ObservedObject var store: RuntimeConnectionStore
 
     @State private var hosts: [String] = []
     @State private var sshHost: String = ""
+    @State private var userSelectedHost: Bool = false
     @State private var name: String = ""
     @State private var useSudo: Bool = true
     @State private var editingId: String?
@@ -135,7 +136,7 @@ public struct RemoteConnectionSettingsView: View {
     @State private var installing: Bool = false
     @State private var deletingAlias: String?
 
-    public init(store: RuntimeConnectionStore) {
+    init(store: RuntimeConnectionStore) {
         self.store = store
     }
 
@@ -162,6 +163,7 @@ public struct RemoteConnectionSettingsView: View {
                 selected: sshHost.isEmpty
             ) {
                 sshHost = ""
+                userSelectedHost = true
                 errorMessage = nil
                 noticeMessage = nil
             },
@@ -174,6 +176,7 @@ public struct RemoteConnectionSettingsView: View {
                     selected: sshHost == host
                 ) {
                     sshHost = host
+                    userSelectedHost = true
                     errorMessage = nil
                     noticeMessage = nil
                 }
@@ -182,7 +185,7 @@ public struct RemoteConnectionSettingsView: View {
         return entries
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 16) {
                 if !store.machines.isEmpty {
@@ -369,6 +372,7 @@ public struct RemoteConnectionSettingsView: View {
                             if editingId != nil {
                                 Button("新增连接") {
                                     editingId = nil
+                                    userSelectedHost = false
                                     name = ""
                                 }
                                 .buttonStyle(SecondaryButtonStyle())
@@ -417,6 +421,7 @@ public struct RemoteConnectionSettingsView: View {
                                 _ = try await store.deleteSshHost(alias: alias)
                                 deletingAlias = nil
                                 editingId = nil
+                                userSelectedHost = false
                                 name = ""
                                 sshHost = ""
                                 await reloadHosts()
@@ -443,7 +448,7 @@ public struct RemoteConnectionSettingsView: View {
         do {
             let loaded = try await store.listSshHosts()
             hosts = loaded
-            if !loaded.contains(sshHost) {
+            if editingId == nil, !userSelectedHost, sshHost.isEmpty || !loaded.contains(sshHost) {
                 sshHost = loaded.first ?? ""
             }
             errorMessage = nil

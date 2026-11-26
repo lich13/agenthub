@@ -13,7 +13,12 @@ pub(super) async fn jobs_list(ctx: DispatchContext<'_>, args_json: &str) -> Resu
     let args: LimitU32Request = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
-        crate::commands::blocking(move || job_service::jobs_with_state(&state, args.limit)).await,
+        crate::commands::blocking(move || {
+            AgentHubUseCases::new(state.platform())
+                .jobs()
+                .list_from_db(&state.db, args.limit)
+        })
+        .await,
     )
 }
 
@@ -25,7 +30,9 @@ pub(super) async fn jobs_detail(
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
-            job_service::job_detail_with_state(&state, &args.id, args.include_output)
+            AgentHubUseCases::new(state.platform())
+                .jobs()
+                .detail_from_db(&state.db, &args.id, args.include_output)
         })
         .await,
     )

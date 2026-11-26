@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 
 use super::{
     identity::{classify_codex_task_identity, CodexTaskIdentity},
@@ -32,23 +29,27 @@ fn thread_title_expression(columns: &HashSet<String>) -> String {
     .to_string()
 }
 
-pub(super) fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>> {
-    read_thread_rows_matching(paths, None)
+pub(super) fn read_thread_rows_filtered(
+    paths: &CodexPaths,
+    archived_filter: Option<bool>,
+) -> Result<Vec<LocalThreadRow>> {
+    read_thread_rows_inner(paths, None, archived_filter, true)
+        .map(|rows| rows.into_iter().map(|(r, _)| r).collect())
 }
 
 pub(super) fn read_thread_rows_matching(
     paths: &CodexPaths,
     id: Option<&str>,
 ) -> Result<Vec<LocalThreadRow>> {
-    read_thread_rows_inner(paths, id, true).map(|rows| rows.into_iter().map(|(r, _)| r).collect())
+    read_thread_rows_inner(paths, id, None, true)
+        .map(|rows| rows.into_iter().map(|(r, _)| r).collect())
 }
 
 pub(super) fn read_notification_thread_headers_with_identities(
     paths: &CodexPaths,
 ) -> Result<Vec<(ThreadSummary, CodexTaskIdentity)>> {
-    Ok(read_thread_rows_inner(paths, None, false)?
+    Ok(read_thread_rows_inner(paths, None, Some(false), false)?
         .into_iter()
-        .filter(|(row, _)| !matches!(row.summary.status, ThreadStatus::Archived))
         .map(|(row, identity)| (row.summary, identity))
         .collect())
 }
@@ -56,6 +57,7 @@ pub(super) fn read_notification_thread_headers_with_identities(
 fn read_thread_rows_inner(
     paths: &CodexPaths,
     id: Option<&str>,
+    archived_filter: Option<bool>,
     include_list_extras: bool,
 ) -> Result<Vec<(LocalThreadRow, CodexTaskIdentity)>> {
     let db = paths.state_db();
@@ -119,13 +121,20 @@ fn read_thread_rows_inner(
     } else {
         "NULL"
     };
-    let spawned_children = read_spawn_edge_children(&conn)?;
+    let spawned_children = match id {
+        Some(target_id) => {
+            if is_spawned_child(&conn, target_id)? {
+                return Ok(Vec::new());
+            }
+            HashSet::new()
+        }
+        None => read_spawn_edge_children(&conn)?,
+    };
     let filter = if id.is_some() { " WHERE id = ?1" } else { "" };
     let sql = format!(
         "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {origin_expr}, {source_expr}, {parent_thread_expr}, {strict_parent_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {first_user_message_expr} FROM threads{filter}"
     );
     let tz = jiff::tz::TimeZone::system();
-    let mut workspace_root_memo: HashMap<String, Option<String>> = HashMap::new();
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(id), |row| {
         let id: String = row.get(0)?;
@@ -157,6 +166,19 @@ fn read_thread_rows_inner(
         {
             return Ok(None);
         }
+        let archived_at = archived_raw
+            .as_ref()
+            .and_then(|c| format_cell_time_with_tz(c, &tz));
+        let status = if archived_at.is_some() || archived_flag != 0 {
+            ThreadStatus::Archived
+        } else {
+            ThreadStatus::Recent
+        };
+        if let Some(want_archived) = archived_filter {
+            if matches!(status, ThreadStatus::Archived) != want_archived {
+                return Ok(None);
+            }
+        }
         let identity = classify_codex_task_identity(
             source.as_deref(),
             origin_raw.as_deref(),
@@ -167,26 +189,6 @@ fn read_thread_rows_inner(
                 agent_role.as_deref(),
             ],
         );
-        let archived_at = archived_raw
-            .as_ref()
-            .and_then(|c| format_cell_time_with_tz(c, &tz));
-        let status = if archived_at.is_some() || archived_flag != 0 {
-            ThreadStatus::Archived
-        } else {
-            ThreadStatus::Recent
-        };
-        let workspace_root = if include_list_extras {
-            cwd.as_deref().and_then(|c| {
-                if let Some(cached) = workspace_root_memo.get(c) {
-                    return cached.clone();
-                }
-                let resolved = crate::workspace_root::resolve_workspace_root(c);
-                workspace_root_memo.insert(c.to_owned(), resolved.clone());
-                resolved
-            })
-        } else {
-            None
-        };
         let formatted_updated = updated_raw
             .as_ref()
             .and_then(|c| format_cell_time_with_tz(c, &tz));
@@ -203,7 +205,7 @@ fn read_thread_rows_inner(
                     message_count: 0,
                     latest_message: None,
                     cwd,
-                    workspace_root,
+                    workspace_root: None,
                     model,
                     rollout_path: rollout_path
                         .filter(|p| !p.trim().is_empty())
@@ -312,6 +314,31 @@ pub(crate) fn first_non_empty<'a>(
         .flatten()
         .map(str::trim)
         .find(|value| !value.is_empty())
+}
+
+fn is_spawned_child(conn: &Connection, target_id: &str) -> Result<bool> {
+    let trimmed = target_id.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    let has_table = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='thread_spawn_edges'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !has_table {
+        return Ok(false);
+    }
+    let cols = table_columns(conn, "thread_spawn_edges")?;
+    if !cols.contains("child_thread_id") {
+        return Ok(false);
+    }
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM thread_spawn_edges WHERE TRIM(child_thread_id) = ?1)",
+        [trimmed],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
 }
 
 fn read_spawn_edge_children(conn: &Connection) -> Result<HashSet<String>> {

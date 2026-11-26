@@ -186,4 +186,95 @@ public enum OffscreenRenderHelper {
         }
         return buffer
     }
+
+    @MainActor
+    public static func collectVisibleText(
+        in view: NSView,
+        includeButtons: Bool = false,
+        separator: String = "\n"
+    ) -> String {
+        var out: [String] = []
+        if let tf = view as? NSTextField { out.append(tf.stringValue) }
+        if let tv = view as? NSTextView { out.append(tv.string) }
+        if includeButtons, let btn = view as? NSButton {
+            out.append(btn.title)
+            out.append(btn.attributedTitle.string)
+        }
+        for sub in view.subviews {
+            out.append(collectVisibleText(in: sub, includeButtons: includeButtons, separator: separator))
+        }
+        return out.joined(separator: separator)
+    }
+
+    public static func countNonBackgroundPixels(
+        _ pixels: [UInt8],
+        imageWidth: Int? = nil,
+        region: (x: Int, y: Int, w: Int, h: Int)? = nil,
+        bg: (UInt8, UInt8, UInt8),
+        threshold: Int = 24
+    ) -> Int {
+        guard let imageWidth, let region else {
+            let count = pixels.count / 4
+            var hits = 0
+            for i in 0 ..< count {
+                let idx = i * 4
+                if abs(Int(pixels[idx]) - Int(bg.0)) > threshold
+                    || abs(Int(pixels[idx + 1]) - Int(bg.1)) > threshold
+                    || abs(Int(pixels[idx + 2]) - Int(bg.2)) > threshold
+                {
+                    hits += 1
+                }
+            }
+            return hits
+        }
+        let totalRows = pixels.count / max(1, imageWidth * 4)
+        var hits = 0
+        for py in max(0, region.y) ..< min(totalRows, region.y + region.h) {
+            for px in max(0, region.x) ..< min(imageWidth, region.x + region.w) {
+                let idx = (py * imageWidth + px) * 4
+                if abs(Int(pixels[idx]) - Int(bg.0)) > threshold
+                    || abs(Int(pixels[idx + 1]) - Int(bg.1)) > threshold
+                    || abs(Int(pixels[idx + 2]) - Int(bg.2)) > threshold
+                {
+                    hits += 1
+                }
+            }
+        }
+        return hits
+    }
+
+    public static func containsPixel(
+        _ pixels: [UInt8],
+        imageWidth: Int? = nil,
+        region: (x: Int, y: Int, w: Int, h: Int)? = nil,
+        matching target: (UInt8, UInt8, UInt8),
+        tolerance: Int = 2
+    ) -> Bool {
+        guard let imageWidth, let region else {
+            let count = pixels.count / 4
+            for i in 0 ..< count {
+                let idx = i * 4
+                if abs(Int(pixels[idx]) - Int(target.0)) <= tolerance
+                    && abs(Int(pixels[idx + 1]) - Int(target.1)) <= tolerance
+                    && abs(Int(pixels[idx + 2]) - Int(target.2)) <= tolerance
+                {
+                    return true
+                }
+            }
+            return false
+        }
+        let totalRows = pixels.count / max(1, imageWidth * 4)
+        for py in max(0, region.y) ..< min(totalRows, region.y + region.h) {
+            for px in max(0, region.x) ..< min(imageWidth, region.x + region.w) {
+                let idx = (py * imageWidth + px) * 4
+                if abs(Int(pixels[idx]) - Int(target.0)) <= tolerance
+                    && abs(Int(pixels[idx + 1]) - Int(target.1)) <= tolerance
+                    && abs(Int(pixels[idx + 2]) - Int(target.2)) <= tolerance
+                {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 }

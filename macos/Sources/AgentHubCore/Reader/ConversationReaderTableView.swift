@@ -3,23 +3,23 @@ import SwiftUI
 
 // MARK: - AppKit NSTableView Coordinator with Deterministic 0.0pt Scroll Anchor Lock
 
-public struct ConversationReaderTableView: NSViewRepresentable {
-    public let coordinator: ConversationTableCoordinator
-    public let rows: [ConversationRowItem]
-    public let scheme: ColorSchemeKind
-    public let workspace: WorkspaceId
-    public let sessionScopeKey: String
-    public let sessionProvider: SessionProvider
-    public let sessionKey: String
-    public let rootThreadId: String?
-    public let cwd: String?
-    public let hasTimelineRail: Bool
-    public let isSubagent: Bool
-    public var canLoadOlder: Bool
-    public var isLoadingOlder: Bool
-    public var isLoadOlderBlockedByError: Bool
+struct ConversationReaderTableView: NSViewRepresentable {
+    let coordinator: ConversationTableCoordinator
+    let rows: [ConversationRowItem]
+    let scheme: ColorSchemeKind
+    let workspace: WorkspaceId
+    let sessionScopeKey: String
+    let sessionProvider: SessionProvider
+    let sessionKey: String
+    let rootThreadId: String?
+    let cwd: String?
+    let hasTimelineRail: Bool
+    let isSubagent: Bool
+    var canLoadOlder: Bool
+    var isLoadingOlder: Bool
+    var isLoadOlderBlockedByError: Bool
 
-    public init(
+    init(
         coordinator: ConversationTableCoordinator,
         rows: [ConversationRowItem],
         scheme: ColorSchemeKind,
@@ -51,7 +51,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         self.isLoadOlderBlockedByError = isLoadOlderBlockedByError
     }
 
-    public func makeCoordinator() -> ConversationTableCoordinator {
+    func makeCoordinator() -> ConversationTableCoordinator {
         coordinator
     }
 
@@ -70,7 +70,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         coordinator.isLoadOlderBlockedByError = isLoadOlderBlockedByError
     }
 
-    public func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> NSScrollView {
         syncCoordinatorProperties()
         let scroll = ReaderOuterScrollView(frame: .zero)
         scroll.coordinator = coordinator
@@ -119,7 +119,7 @@ public struct ConversationReaderTableView: NSViewRepresentable {
         return scroll
     }
 
-    public func updateNSView(_ nsView: NSScrollView, context: Context) {
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
         (nsView as? ReaderOuterScrollView)?.coordinator = coordinator
         let sessionChanged = (coordinator.sessionScopeKey != sessionScopeKey)
         let themeOrWorkspaceChanged = (coordinator.scheme != scheme || coordinator.workspace != workspace)

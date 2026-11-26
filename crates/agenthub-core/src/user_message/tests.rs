@@ -126,3 +126,24 @@ fn native_pi_and_grok_image_parts_share_the_model() {
     assert_eq!(m.text, "one\n  two");
     assert!(m.read_attachment(&m.attachments[0].id).is_ok());
 }
+
+#[test]
+fn unclosed_html_comment_marker_inside_code_never_pollutes_later_context() {
+    let raw = "<environment_context>\n  <cwd>/workspace/example.invalid</cwd>\n</environment_context>\n请检查行内 `<!--` 与围栏代码：\n```html\n<!-- unclosed inside fence\n```\n<system-reminder>\ninternal runtime reminder\n</system-reminder>\n继续执行";
+    let msg = parse_user_message("code-comment", &json!([{"type":"text","text":raw}]));
+    assert_eq!(msg.context_blocks.len(), 2);
+    assert!(!msg.text.contains("internal runtime reminder"));
+    assert!(msg.text.contains("`<!--`"));
+    assert!(msg.text.contains("<!-- unclosed inside fence"));
+    assert!(msg.text.contains("继续执行"));
+
+    let closing_tag_after_code =
+        "<user_instructions>\n请保留 `<!--` 字面量\n</user_instructions>\n实际用户问题";
+    let msg2 = parse_user_message(
+        "code-comment-2",
+        &json!([{"type":"text","text":closing_tag_after_code}]),
+    );
+    assert_eq!(msg2.context_blocks.len(), 1);
+    assert_eq!(msg2.text.trim(), "实际用户问题");
+    assert!(msg2.weight() > 64);
+}

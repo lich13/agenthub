@@ -112,9 +112,10 @@ impl Fixture {
 
     fn event(&self, call: &str) -> ProbeBuiltEvent {
         let paths = codex::resolve_codex_paths(&self.config.codex.home).codex_paths();
-        let thread = codex::notification_thread_headers(&paths)
+        let thread = codex::notification_thread_headers_with_identities(&paths)
             .unwrap()
-            .remove(0);
+            .remove(0)
+            .0;
         let calls = codex::rollout_async_questions(&self.path()).unwrap();
         event_for(
             &self.config,

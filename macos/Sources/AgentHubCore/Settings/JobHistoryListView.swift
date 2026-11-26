@@ -1,9 +1,9 @@
 import SwiftUI
 
-public struct JobHistorySectionView: View {
+struct JobHistorySectionView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public var title: String
+    @ObservedObject var store: RuntimeConnectionStore
+    var title: String
     private var externalExpanded: Binding<Bool>?
 
     @State private var internalExpanded: Bool = false
@@ -12,7 +12,7 @@ public struct JobHistorySectionView: View {
     @State private var expandedJobIds: Set<String> = []
     @State private var lastMachineScope: String = ""
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         title: String = "执行记录",
         isExpanded: Binding<Bool>? = nil
@@ -30,7 +30,7 @@ public struct JobHistorySectionView: View {
         expandedBinding.wrappedValue
     }
 
-    public var body: some View {
+    var body: some View {
         CollapsiblePanelCard(
             title: title,
             icon: .terminalSquare,
@@ -116,24 +116,24 @@ public struct JobHistorySectionView: View {
     }
 }
 
-public struct JobRecordRowView: View {
+struct JobRecordRowView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public let job: JobRecord
-    public var expanded: Bool
+    @ObservedObject var store: RuntimeConnectionStore
+    let job: JobRecord
+    var expanded: Bool
     @State private var detail: JobRecord?
     @State private var loading = false
     @State private var outputError: String?
-    public let onToggle: () -> Void
+    let onToggle: () -> Void
 
-    public init(store: RuntimeConnectionStore, job: JobRecord, expanded: Bool, onToggle: @escaping () -> Void) {
+    init(store: RuntimeConnectionStore, job: JobRecord, expanded: Bool, onToggle: @escaping () -> Void) {
         self.store = store
         self.job = job
         self.expanded = expanded
         self.onToggle = onToggle
     }
 
-    public var body: some View {
+    var body: some View {
         let tone: StatusChipTone = switch job.status {
         case "succeeded": .success
         case "failed": .danger
@@ -152,6 +152,8 @@ public struct JobRecordRowView: View {
                     Spacer(minLength: 8)
                     StatusChip(job.status, tone: tone)
                 }
+                .frame(minHeight: 28)
+                .contentShape(Rectangle())
             }
             .buttonStyle(PlainHitButtonStyle())
 
@@ -175,7 +177,7 @@ public struct JobRecordRowView: View {
                         .padding(10)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .task(id: "\(store.machineScope):\(job.id):\(job.status)") { await fetchOutput() }
+                .task(id: "\(store.machineScope):\(job.id):\(job.status):\(store.isWindowVisible)") { await fetchOutput() }
                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.codeBg.color))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
@@ -186,6 +188,7 @@ public struct JobRecordRowView: View {
     }
 
     private func fetchOutput() async {
+        guard store.isWindowVisible || detail == nil else { return }
         let rev = store.revision
         repeat {
             loading = true
@@ -203,8 +206,8 @@ public struct JobRecordRowView: View {
                 outputError = error.localizedDescription
             }
             loading = false
-            guard (detail ?? job).status == "running" else { return }
+            guard (detail ?? job).status == "running", store.isWindowVisible else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-        } while !Task.isCancelled && store.revision == rev
+        } while !Task.isCancelled && store.revision == rev && store.isWindowVisible
     }
 }

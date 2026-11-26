@@ -89,14 +89,10 @@ final class WorkspaceGroupingAndHubTests: XCTestCase {
 
     @MainActor
     func testCodexReplyNeededNotClobberedByActiveTurnAndRemoteCapabilitiesDecoded() async throws {
-        var replyThread = ThreadSummary(
-            id: "th-reply",
-            title: "等待用户确认方案",
-            status: "ReplyNeeded",
-            updatedAt: "2026-11-24T10:00:00Z",
-            cwd: "/workspace/AgentHub"
+        let replyThread = try JSONDecoder().decode(
+            ThreadSummary.self,
+            from: Data(#"{"id":"th-reply","title":"等待用户确认方案","status":"ReplyNeeded","message_count":1,"updated_at":"2026-11-24T10:00:00Z","cwd":"/workspace/AgentHub","active_turn_id":"turn-open-1"}"#.utf8)
         )
-        replyThread.activeTurnId = "turn-open-1"
 
         let transport = MockRuntimeTransport { cmd, _ in
             if cmd == "system.capabilities" { return protocol2CapabilitiesFixture(remote: true) }

@@ -48,21 +48,6 @@ impl UpdateAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UpdateFailureCategory {
-    ReleaseMissing,
-    DownloadSha256Mismatch,
-    SystemdFailure,
-    PermissionDeniedSudo,
-    CodexAuthFailure,
-    SqliteIntegrityFailure,
-    ReadOnlyFileSystem,
-    NetworkTlsEof,
-    CodexLocalStateUnavailable,
-    Unknown,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateStatus {
     pub current_version: String,
@@ -71,7 +56,7 @@ pub struct UpdateStatus {
     pub channel: String,
     pub method: UpdateExecutionMethod,
     pub state: UpdateState,
-    pub failure_category: Option<UpdateFailureCategory>,
+    pub failure_category: Option<JobFailureCategory>,
     pub recommended_action: String,
 }
 
@@ -133,7 +118,7 @@ pub fn update_status(
         .and_then(|latest| update_available_for_versions(&current_version, latest));
     let failure_category = last_error.and_then(|error| {
         analyze_job_failure("agenthub_update", "", Some(error), Some(1))
-            .map(|analysis| analysis.category.into())
+            .map(|analysis| analysis.category)
     });
     let state = if failure_category.is_some() {
         UpdateState::Failed
@@ -326,23 +311,6 @@ fn recommended_action(method: UpdateExecutionMethod, update_available: Option<bo
         }
     }
     .to_string()
-}
-
-impl From<JobFailureCategory> for UpdateFailureCategory {
-    fn from(value: JobFailureCategory) -> Self {
-        match value {
-            JobFailureCategory::ReleaseMissing => Self::ReleaseMissing,
-            JobFailureCategory::DownloadSha256Mismatch => Self::DownloadSha256Mismatch,
-            JobFailureCategory::SystemdFailure => Self::SystemdFailure,
-            JobFailureCategory::PermissionDeniedSudo => Self::PermissionDeniedSudo,
-            JobFailureCategory::CodexAuthFailure => Self::CodexAuthFailure,
-            JobFailureCategory::SqliteIntegrityFailure => Self::SqliteIntegrityFailure,
-            JobFailureCategory::ReadOnlyFileSystem => Self::ReadOnlyFileSystem,
-            JobFailureCategory::NetworkTlsEof => Self::NetworkTlsEof,
-            JobFailureCategory::CodexLocalStateUnavailable => Self::CodexLocalStateUnavailable,
-            JobFailureCategory::Unknown => Self::Unknown,
-        }
-    }
 }
 
 #[cfg(test)]

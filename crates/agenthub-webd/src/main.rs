@@ -275,7 +275,7 @@ async fn run_probe_command(
                 "{}",
                 serde_json::to_string_pretty(
                     &ProbeRuntime::new(config.clone(), platform.clone())
-                        .status()
+                        .status_with_db(&db, false)
                         .await?
                 )?
             );
@@ -495,8 +495,11 @@ async fn remove_probe_hooks(
             )
         })?;
         hooks_backed_up = true;
-        fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
-            .with_context(|| format!("write hooks {}", hooks_path.display()))?;
+        agenthub_core::config::write_bytes_atomic_preserving_permissions(
+            &hooks_path,
+            &serde_json::to_vec_pretty(&root)?,
+        )
+        .with_context(|| format!("write hooks {}", hooks_path.display()))?;
     }
     if codex_config_changed && !dry_run {
         if codex_config_path.exists() {
@@ -509,8 +512,11 @@ async fn remove_probe_hooks(
             })?;
             codex_config_backed_up = true;
         }
-        fs::write(&codex_config_path, codex_config_after)
-            .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
+        agenthub_core::config::write_bytes_atomic_preserving_permissions(
+            &codex_config_path,
+            codex_config_after.as_bytes(),
+        )
+        .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
     }
     let mut probe_config_changed = false;
     if !dry_run {
@@ -635,8 +641,11 @@ async fn install_probe_hooks_with_repair(
             })?;
             hooks_backed_up = true;
         }
-        fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
-            .with_context(|| format!("write hooks {}", hooks_path.display()))?;
+        agenthub_core::config::write_bytes_atomic_preserving_permissions(
+            &hooks_path,
+            &serde_json::to_vec_pretty(&root)?,
+        )
+        .with_context(|| format!("write hooks {}", hooks_path.display()))?;
     }
     if codex_config_changed && !dry_run {
         if let Some(parent) = codex_config_path.parent() {
@@ -653,8 +662,11 @@ async fn install_probe_hooks_with_repair(
             })?;
             codex_config_backed_up = true;
         }
-        fs::write(&codex_config_path, codex_config_after)
-            .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
+        agenthub_core::config::write_bytes_atomic_preserving_permissions(
+            &codex_config_path,
+            codex_config_after.as_bytes(),
+        )
+        .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
     }
     let error_monitor_launch_agent = if dry_run {
         Value::Null
@@ -846,7 +858,7 @@ fn ensure_probe_hook(
                 expected_installed = true;
                 return true;
             }
-            !is_agenthub_managed_hook_command(command)
+            !agenthub_core::probe::is_agenthub_managed_hook_command(command)
         });
         if items.len() != before {
             changed = true;
@@ -885,12 +897,6 @@ fn ensure_probe_hook(
         }
     }
     true
-}
-
-fn is_agenthub_managed_hook_command(command: &str) -> bool {
-    let lowered = command.to_ascii_lowercase();
-    (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
-        && (lowered.contains("agenthub-webd"))
 }
 
 fn refresh_managed_provider_hooks(_config: &Config) -> Result<()> {
@@ -1346,34 +1352,88 @@ async fn run_probe_error_monitor_once(
     let resolved = resolve_codex_paths(&config.codex.home);
     let previous = load_probe_error_cursor(db)?;
     let logs_db = resolved.logs_db.clone();
-    let previous_for_scan = previous.clone();
-    let scan_result = agenthub_core::read_tasks::spawn_blocking(move || {
-        scan_codex_turn_errors(
-            &logs_db,
-            previous_for_scan.as_ref(),
-            PROBE_ERROR_MONITOR_BATCH_LIMIT,
-        )
-    })
-    .await
-    .map_err(|err| anyhow::anyhow!("scan task join failed: {err}"))?;
-    let scan = match scan_result {
-        Ok(scan) => scan,
-        Err(err) => {
-            let safe_error = safe_probe_monitor_error(&err.to_string());
-            store_probe_error_monitor_status(
-                db,
-                ProbeErrorMonitorRuntimeStatus {
-                    status: "error".to_string(),
-                    last_scan_at: PanelDb::now(),
-                    last_error: Some(safe_error),
-                    rows_seen: 0,
-                    new_incidents: 0,
-                    incident_count: db.probe_error_incident_count()?,
-                    cursor: previous,
-                },
-            )?;
-            return Err(err);
+    struct CachedProbeErrorScan {
+        db_path: PathBuf,
+        logs_db_path: PathBuf,
+        source_stamp: agenthub_core::probe_error_monitor::ProbeErrorSourceStamp,
+        cursor: ProbeErrorCursor,
+    }
+    static LAST_CAUGHT_UP_SCAN: std::sync::Mutex<Option<CachedProbeErrorScan>> =
+        std::sync::Mutex::new(None);
+    let stamp_before = agenthub_core::probe_error_monitor::ProbeErrorSourceStamp::read(&logs_db);
+    let unchanged_cursor = stamp_before
+        .exists()
+        .then(|| {
+            LAST_CAUGHT_UP_SCAN.lock().ok().and_then(|guard| {
+                guard.as_ref().and_then(|cached| {
+                    (cached.db_path == db.path()
+                        && cached.logs_db_path == logs_db
+                        && cached.source_stamp == stamp_before
+                        && previous.as_ref() == Some(&cached.cursor))
+                    .then(|| cached.cursor.clone())
+                })
+            })
+        })
+        .flatten();
+    let scan = if let Some(cursor) = unchanged_cursor {
+        agenthub_core::probe_error_monitor::ProbeErrorScan {
+            cursor,
+            baseline_only: false,
+            rows_seen: 0,
+            incidents: Vec::new(),
         }
+    } else {
+        let logs_db_for_scan = logs_db.clone();
+        let previous_for_scan = previous.clone();
+        let scan_result = agenthub_core::read_tasks::spawn_blocking(move || {
+            scan_codex_turn_errors(
+                &logs_db_for_scan,
+                previous_for_scan.as_ref(),
+                PROBE_ERROR_MONITOR_BATCH_LIMIT,
+            )
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("scan task join failed: {err}"))?;
+        let scan = match scan_result {
+            Ok(scan) => scan,
+            Err(err) => {
+                if let Ok(mut guard) = LAST_CAUGHT_UP_SCAN.lock() {
+                    *guard = None;
+                }
+                let safe_error = safe_probe_monitor_error(&err.to_string());
+                store_probe_error_monitor_status(
+                    db,
+                    ProbeErrorMonitorRuntimeStatus {
+                        status: "error".to_string(),
+                        last_scan_at: PanelDb::now(),
+                        last_error: Some(safe_error),
+                        rows_seen: 0,
+                        new_incidents: 0,
+                        incident_count: db.probe_error_incident_count()?,
+                        cursor: previous,
+                    },
+                )?;
+                return Err(err);
+            }
+        };
+        if let Ok(mut guard) = LAST_CAUGHT_UP_SCAN.lock() {
+            if !scan.baseline_only
+                && scan.rows_seen < PROBE_ERROR_MONITOR_BATCH_LIMIT
+                && stamp_before.exists()
+                && agenthub_core::probe_error_monitor::ProbeErrorSourceStamp::read(&logs_db)
+                    == stamp_before
+            {
+                *guard = Some(CachedProbeErrorScan {
+                    db_path: db.path().to_path_buf(),
+                    logs_db_path: logs_db,
+                    source_stamp: stamp_before,
+                    cursor: scan.cursor.clone(),
+                });
+            } else {
+                *guard = None;
+            }
+        }
+        scan
     };
 
     let mut claimed = Vec::new();
@@ -1559,7 +1619,12 @@ fn spawn_probe_thread_scan(state: AppState) {
 async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let _guard = PROBE_THREAD_SCAN_LOCK.lock().await;
     let config = state.refresh_config()?;
-    if !config.probe.enabled || !config.probe.notifications.enabled {
+    if !config.probe.enabled
+        || !config.probe.notifications.enabled
+        || !config.probe.notifications.notify_codex
+        || (!config.probe.notifications.notify_reply_needed
+            && !config.probe.notifications.notify_recoverable)
+    {
         return Ok(0);
     }
     let mut recorded = 0usize;

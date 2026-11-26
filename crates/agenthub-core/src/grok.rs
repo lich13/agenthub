@@ -159,12 +159,12 @@ fn list_grok_sessions_from_dirs(
     let mut result = Vec::new();
     for dirs in by_id.values() {
         for dir in dirs {
-            if let Ok(Some(summary)) =
-                read_summary(dir).or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary(dir))))
+            if is_non_primary_grok_events_dir(dir) {
+                continue;
+            }
+            if let Ok(Some(summary)) = read_summary_without_handoff(dir)
+                .or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary_without_handoff(dir))))
             {
-                if is_non_primary_grok_events_dir(dir) {
-                    continue;
-                }
                 if needle.as_ref().is_some_and(|needle| {
                     !summary.title.to_lowercase().contains(needle)
                         && !summary.id.to_lowercase().contains(needle)
@@ -177,16 +177,14 @@ fn list_grok_sessions_from_dirs(
         }
     }
     result.sort_by_cached_key(|session| {
-        (std::cmp::Reverse(
-            session
-                .updated_at
-                .as_deref()
-                .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
-        ),)
+        (std::cmp::Reverse(crate::timestamps::sort_key_nanos(
+            session.updated_at.as_deref(),
+        )),)
     });
     result.truncate(limit.clamp(1, 500));
     let active = activity::Snapshot::capture_readonly(paths);
     for summary in &mut result {
+        summary.handoff_path = Some(grok_handoff_path(&summary.path));
         active.update_summary(summary);
     }
     Ok(result)
@@ -558,11 +556,14 @@ static GROK_LAST_MESSAGE_CACHE: crate::read_cache::ReadCache<Option<String>> =
     crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES)
         .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
         .with_native_metadata();
+static GROK_NON_PRIMARY_CACHE: crate::file_stamp::StampedCache<crate::file_stamp::FileStamp, bool> =
+    crate::file_stamp::StampedCache::new(2048, 512 * 1024);
 
 pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     GROK_DETAIL_CACHE.evict_idle(max_idle);
     GROK_SUMMARY_CACHE.evict_idle(max_idle);
     GROK_LAST_MESSAGE_CACHE.evict_idle(max_idle);
+    GROK_NON_PRIMARY_CACHE.evict_idle(max_idle);
     activity::evict_idle_cache(max_idle);
     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
         let before = cache.entries.len();
@@ -615,6 +616,7 @@ fn with_session_history<R>(
         },
         |state, info| {
             if info.changed {
+                state.flush_pending_user();
                 #[cfg(test)]
                 HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
                 if !native
@@ -673,6 +675,13 @@ fn with_session_history<R>(
                         .keys()
                         .map(|k| (k.capacity() + 32) as u64)
                         .sum::<u64>()
+                    + state
+                        .events
+                        .seen_user_updates
+                        .iter()
+                        .map(|k| (k.capacity() + 24) as u64)
+                        .sum::<u64>()
+                    + state.last_message_at.as_ref().map_or(0, String::capacity) as u64
                     + crate::history_navigation::weight(&state.timeline);
             }
             project(state, true)
@@ -694,6 +703,19 @@ struct GrokReader {
     journal: crate::jsonl_cache::HistoryJournal,
     weight: u64,
 }
+struct PendingGrokUser {
+    line_start: u64,
+    user_start: u64,
+    native_key: Option<String>,
+    parts: Vec<Value>,
+    first_timestamp: Option<String>,
+    latest_timestamp: Option<String>,
+    method: Option<String>,
+    call_id: Option<String>,
+    status: Option<String>,
+    detail: Option<String>,
+    replaces_last: bool,
+}
 #[derive(Default)]
 struct GrokEvents {
     events: Vec<Arc<GrokHistoryEvent>>,
@@ -701,6 +723,7 @@ struct GrokEvents {
     user_parts: Vec<Value>,
     user_native_key: Option<String>,
     user_start: u64,
+    pending_user: Option<PendingGrokUser>,
     seen_user_updates: HashSet<String>,
     dirty: std::collections::BTreeSet<String>,
 }
@@ -829,6 +852,7 @@ impl GrokReader {
         };
         match kind {
             "user" => {
+                self.flush_pending_user();
                 self.events.user_parts.clear();
                 let content = if let Value::String(text) = content { serde_json::json!({"type":"text","text":text}) } else { content };
                 self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"user_message_chunk","messageId":format!("native:{start}"),"content":content}), start);
@@ -860,212 +884,237 @@ impl GrokReader {
         }
     }
 
+    fn flush_pending_user(&mut self) {
+        let Some(pending) = self.events.pending_user.take() else {
+            return;
+        };
+        let parts_val = Value::Array(pending.parts);
+        let message = crate::user_message::parse_user_message(
+            &format!("grok:{}", pending.user_start),
+            &parts_val,
+        );
+        if let Value::Array(parts) = parts_val {
+            self.events.user_parts = parts;
+        }
+        if !message.text.trim().is_empty() || !message.attachments.is_empty() {
+            self.last_message_at = pending.latest_timestamp;
+        }
+        if pending.replaces_last {
+            let previous = Arc::make_mut(self.events.events.last_mut().unwrap());
+            self.events.dirty.insert(previous.id.clone());
+            previous.text = Some(message.text.clone());
+            previous.user_message = Some(message);
+        } else {
+            self.events.events.push(Arc::new(GrokHistoryEvent {
+                id: format!("grok:{}", pending.line_start),
+                user_message: Some(message.clone()),
+                timestamp: pending.first_timestamp,
+                kind: "user_message_chunk".into(),
+                text: Some(message.text),
+                method: pending.method,
+                call_id: pending.call_id,
+                status: pending.status,
+                detail: pending.detail,
+            }));
+        }
+    }
+
     fn push(&mut self, value: Value, line_start: u64) {
-        let GrokEvents {
-            mut events,
-            mut tool_indices,
-            mut user_parts,
-            mut user_native_key,
-            mut user_start,
-            mut seen_user_updates,
-            mut dirty,
-        } = std::mem::take(&mut self.events);
-        for value in std::iter::once(value) {
-            let params = value.get("params").unwrap_or(&value);
-            let update = params.get("update").unwrap_or(params);
-            let kind = update
-                .get("sessionUpdate")
+        let params = value.get("params").unwrap_or(&value);
+        let update = params.get("update").unwrap_or(params);
+        let kind = update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .unwrap_or("event")
+            .to_string();
+        if kind != "user_message_chunk" {
+            self.flush_pending_user();
+            self.events.user_parts.clear();
+        }
+        if !matches!(
+            kind.as_str(),
+            "user_message_chunk"
+                | "agent_message_chunk"
+                | "thinking"
+                | "tool_call"
+                | "tool_call_update"
+                | "plan"
+        ) {
+            return;
+        }
+        let text = update
+            .get("content")
+            .and_then(|v| v.get("text"))
+            .and_then(Value::as_str)
+            .or_else(|| update.get("text").and_then(Value::as_str))
+            .or_else(|| update.get("title").and_then(Value::as_str))
+            .map(ToString::to_string);
+        let call_id = update
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let status = update
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let detail = update
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|content| {
+                content
+                    .iter()
+                    .filter_map(|item| item.pointer("/content/text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|text| !text.is_empty());
+        if kind == "user_message_chunk" {
+            if let Some(id) = update.get("updateId").and_then(Value::as_str) {
+                if !self.events.seen_user_updates.insert(id.to_owned()) {
+                    return;
+                }
+            }
+            let native_key = update
+                .get("messageId")
+                .or_else(|| update.get("promptId"))
+                .or_else(|| params.get("prompt_id"))
                 .and_then(Value::as_str)
-                .unwrap_or("event")
-                .to_string();
-            if kind != "user_message_chunk" {
-                user_parts.clear();
-            }
-            if !matches!(
-                kind.as_str(),
-                "user_message_chunk"
-                    | "agent_message_chunk"
-                    | "thinking"
-                    | "tool_call"
-                    | "tool_call_update"
-                    | "plan"
-            ) {
-                continue;
-            }
-            let text = update
-                .get("content")
-                .and_then(|v| v.get("text"))
+                .map(str::to_owned);
+            let ts = value
+                .get("timestamp")
                 .and_then(Value::as_str)
-                .or_else(|| update.get("text").and_then(Value::as_str))
-                .or_else(|| update.get("title").and_then(Value::as_str))
-                .map(ToString::to_string);
-            let call_id = update
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let status = update
-                .get("status")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let detail = update
-                .get("content")
-                .and_then(Value::as_array)
-                .map(|content| {
-                    content
-                        .iter()
-                        .filter_map(|item| item.pointer("/content/text").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .filter(|text| !text.is_empty());
-            if kind == "user_message_chunk" {
-                if let Some(id) = update.get("updateId").and_then(Value::as_str) {
-                    if !seen_user_updates.insert(id.to_owned()) {
-                        continue;
+                .map(str::to_owned);
+            let content = update.get("content").cloned().unwrap_or_else(
+                || serde_json::json!({"type":"text", "text":text.clone().unwrap_or_default()}),
+            );
+            if let Some(pending) = self.events.pending_user.as_mut() {
+                if pending.native_key == native_key {
+                    match content {
+                        Value::Array(parts) => pending.parts.extend(parts),
+                        other => pending.parts.push(other),
                     }
-                }
-                let native_key = update
-                    .get("messageId")
-                    .or_else(|| update.get("promptId"))
-                    .or_else(|| params.get("prompt_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let same = !user_parts.is_empty()
-                    && events
-                        .last()
-                        .is_some_and(|event: &Arc<GrokHistoryEvent>| event.kind == kind)
-                    && user_native_key == native_key;
-                if !same {
-                    user_parts.clear();
-                    user_start = line_start;
-                    user_native_key = native_key;
-                }
-                let content = update.get("content").cloned().unwrap_or_else(
-                    || serde_json::json!({"type":"text", "text":text.clone().unwrap_or_default()}),
-                );
-                match content {
-                    Value::Array(parts) => user_parts.extend(parts),
-                    other => user_parts.push(other),
-                }
-                let message = crate::user_message::parse_user_message(
-                    &format!("grok:{user_start}"),
-                    &Value::Array(user_parts.clone()),
-                );
-                if !message.text.trim().is_empty() || !message.attachments.is_empty() {
-                    self.last_message_at = value
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-                if same {
-                    let previous = Arc::make_mut(events.last_mut().unwrap());
-                    dirty.insert(previous.id.clone());
-                    previous.text = Some(message.text.clone());
-                    previous.user_message = Some(message);
-                } else {
-                    events.push(Arc::new(GrokHistoryEvent {
-                        id: format!("grok:{line_start}"),
-                        user_message: Some(message.clone()),
-                        timestamp: value
-                            .get("timestamp")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        kind,
-                        text: Some(message.text),
-                        method: value
-                            .get("method")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        call_id,
-                        status,
-                        detail,
-                    }));
-                }
-                continue;
-            }
-            user_parts.clear();
-            if kind.starts_with("tool_") {
-                if kind == "tool_call" {
-                    for prior in events.iter_mut().rev() {
-                        if matches!(prior.kind.as_str(), "user_message_chunk" | "plan") {
-                            break;
-                        }
-                        if prior.kind == "agent_message_chunk" {
-                            let prior = Arc::make_mut(prior);
-                            dirty.insert(prior.id.clone());
-                            prior.kind = "thinking".into();
-                        }
-                    }
-                }
-                if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
-                    let previous = Arc::make_mut(&mut events[*index]);
-                    dirty.insert(previous.id.clone());
-                    if text.is_some() {
-                        previous.text = text;
-                    }
-                    if status.is_some() {
-                        previous.status = status;
-                    }
-                    if detail.is_some() {
-                        previous.detail = detail;
-                    }
-                    continue;
-                }
-                if let Some(id) = &call_id {
-                    tool_indices.insert(id.clone(), events.len());
+                    pending.latest_timestamp = ts;
+                    return;
                 }
             }
-            if matches!(kind.as_str(), "agent_message_chunk" | "thinking")
-                && text.as_ref().is_some_and(|text| !text.trim().is_empty())
-            {
-                self.last_message_at = value
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+            self.flush_pending_user();
+            let replaces_last = !self.events.user_parts.is_empty()
+                && self
+                    .events
+                    .events
+                    .last()
+                    .is_some_and(|event: &Arc<GrokHistoryEvent>| {
+                        event.kind == "user_message_chunk"
+                    })
+                && self.events.user_native_key == native_key;
+            let mut parts = if replaces_last {
+                std::mem::take(&mut self.events.user_parts)
+            } else {
+                self.events.user_parts.clear();
+                self.events.user_start = line_start;
+                self.events.user_native_key = native_key.clone();
+                Vec::new()
+            };
+            match content {
+                Value::Array(items) => parts.extend(items),
+                other => parts.push(other),
             }
-            if kind.ends_with("message_chunk") && update.get("messageId").is_none() {
-                if let Some(previous) = events
-                    .last_mut()
-                    .filter(|event: &&mut Arc<GrokHistoryEvent>| event.kind == kind)
-                {
-                    let previous = Arc::make_mut(previous);
-                    dirty.insert(previous.id.clone());
-                    previous
-                        .text
-                        .get_or_insert_with(String::new)
-                        .push_str(text.as_deref().unwrap_or_default());
-                    continue;
-                }
-            }
-            events.push(Arc::new(GrokHistoryEvent {
-                id: format!("grok:{line_start}"),
-                user_message: None,
-                timestamp: value.get("timestamp").map(|value| {
-                    value
-                        .as_str()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| value.to_string())
-                }),
-                kind,
-                text,
+            self.events.pending_user = Some(PendingGrokUser {
+                line_start,
+                user_start: self.events.user_start,
+                native_key,
+                parts,
+                first_timestamp: ts.clone(),
+                latest_timestamp: ts,
                 method: value
                     .get("method")
                     .and_then(Value::as_str)
-                    .map(ToString::to_string),
+                    .map(str::to_owned),
                 call_id,
                 status,
                 detail,
-            }));
+                replaces_last,
+            });
+            return;
         }
-        self.events = GrokEvents {
+        let GrokEvents {
             events,
             tool_indices,
-            user_parts,
-            user_native_key,
-            user_start,
-            seen_user_updates,
             dirty,
-        };
+            ..
+        } = &mut self.events;
+        if kind.starts_with("tool_") {
+            if kind == "tool_call" {
+                for prior in events.iter_mut().rev() {
+                    if matches!(prior.kind.as_str(), "user_message_chunk" | "plan") {
+                        break;
+                    }
+                    if prior.kind == "agent_message_chunk" {
+                        let prior = Arc::make_mut(prior);
+                        dirty.insert(prior.id.clone());
+                        prior.kind = "thinking".into();
+                    }
+                }
+            }
+            if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
+                let previous = Arc::make_mut(&mut events[*index]);
+                dirty.insert(previous.id.clone());
+                if text.is_some() {
+                    previous.text = text;
+                }
+                if status.is_some() {
+                    previous.status = status;
+                }
+                if detail.is_some() {
+                    previous.detail = detail;
+                }
+                return;
+            }
+            if let Some(id) = &call_id {
+                tool_indices.insert(id.clone(), events.len());
+            }
+        }
+        if matches!(kind.as_str(), "agent_message_chunk" | "thinking")
+            && text.as_ref().is_some_and(|text| !text.trim().is_empty())
+        {
+            self.last_message_at = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        if kind.ends_with("message_chunk") && update.get("messageId").is_none() {
+            if let Some(previous) = events
+                .last_mut()
+                .filter(|event: &&mut Arc<GrokHistoryEvent>| event.kind == kind)
+            {
+                let previous = Arc::make_mut(previous);
+                dirty.insert(previous.id.clone());
+                previous
+                    .text
+                    .get_or_insert_with(String::new)
+                    .push_str(text.as_deref().unwrap_or_default());
+                return;
+            }
+        }
+        events.push(Arc::new(GrokHistoryEvent {
+            id: format!("grok:{line_start}"),
+            user_message: None,
+            timestamp: value.get("timestamp").map(|value| {
+                value
+                    .as_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            }),
+            kind,
+            text,
+            method: value
+                .get("method")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            call_id,
+            status,
+            detail,
+        }));
     }
 }
 
@@ -1083,6 +1132,7 @@ fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
             Ok(())
         },
         |state, _| {
+            state.flush_pending_user();
             Ok(state
                 .events
                 .events
@@ -1105,11 +1155,13 @@ fn read_last_message_at(directory: &Path) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
-    GROK_LAST_MESSAGE_CACHE.read(
-        &path,
-        |val, _| 64 + val.as_ref().map_or(0, String::len) as u64,
-        || scan_grok_last_message_at(directory, &path, native),
-    )
+    GROK_LAST_MESSAGE_CACHE
+        .read(
+            &path,
+            |val, _| 64 + val.as_ref().map_or(0, String::len) as u64,
+            || scan_grok_last_message_at(directory, &path, native),
+        )
+        .map(|val| (*val).clone())
 }
 
 fn scan_grok_last_message_at(
@@ -1189,10 +1241,24 @@ fn scan_grok_last_message_at(
 
     let mut seen_user_updates: HashSet<String> = HashSet::new();
     let mut user_parts: Vec<Value> = Vec::new();
+    let mut user_latest_ts: Option<String> = None;
     let mut user_native_key: Option<String> = None;
     let mut last_event_was_user = false;
     let mut has_events = false;
     let mut first_event_is_user = false;
+    let flush_user_ts = |parts: &mut Vec<Value>,
+                         latest_ts: &mut Option<String>,
+                         last_message_at: &mut Option<String>| {
+        if parts.is_empty() {
+            return;
+        }
+        let parts_val = Value::Array(std::mem::take(parts));
+        let msg = crate::user_message::parse_user_message("grok:ts", &parts_val);
+        let ts = latest_ts.take();
+        if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+            *last_message_at = ts;
+        }
+    };
     loop {
         line.clear();
         if reader.read_until(b'\n', &mut line)? == 0 {
@@ -1208,7 +1274,7 @@ fn scan_grok_last_message_at(
             .and_then(Value::as_str)
             .unwrap_or("event");
         if kind != "user_message_chunk" {
-            user_parts.clear();
+            flush_user_ts(&mut user_parts, &mut user_latest_ts, &mut last_message_at);
         }
         if !matches!(
             kind,
@@ -1240,7 +1306,7 @@ fn scan_grok_last_message_at(
             let same =
                 !user_parts.is_empty() && last_event_was_user && user_native_key == native_key;
             if !same {
-                user_parts.clear();
+                flush_user_ts(&mut user_parts, &mut user_latest_ts, &mut last_message_at);
                 user_native_key = native_key;
             }
             let fallback_text = update
@@ -1258,16 +1324,10 @@ fn scan_grok_last_message_at(
                 Value::Array(parts) => user_parts.extend(parts),
                 other => user_parts.push(other),
             }
-            let msg = crate::user_message::parse_user_message(
-                "grok:ts",
-                &Value::Array(user_parts.clone()),
-            );
-            if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
-                last_message_at = value
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-            }
+            user_latest_ts = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             last_event_was_user = true;
             continue;
         }
@@ -1288,6 +1348,7 @@ fn scan_grok_last_message_at(
             }
         }
     }
+    flush_user_ts(&mut user_parts, &mut user_latest_ts, &mut last_message_at);
     if has_events && !first_event_is_user && last_message_at.is_none() {
         let chat_path = directory.join("chat_history.jsonl");
         if let Ok(cmeta) = fs::symlink_metadata(&chat_path) {
@@ -1349,6 +1410,14 @@ fn scan_grok_last_message_at(
 }
 
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
+    let mut summary = read_summary_without_handoff(path)?;
+    if let Some(summary) = &mut summary {
+        summary.handoff_path = Some(grok_handoff_path(path));
+    }
+    Ok(summary)
+}
+
+fn read_summary_without_handoff(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let mut summary = read_summary_metadata(path)?;
     if let Some(summary) = &mut summary {
         summary.updated_at = read_last_message_at(path).unwrap_or_default();
@@ -1375,7 +1444,7 @@ impl CachedGrokSummary {
     }
 }
 
-static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Option<Arc<CachedGrokSummary>>> =
+static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Option<CachedGrokSummary>> =
     crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES)
         .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
         .with_native_metadata();
@@ -1383,7 +1452,7 @@ static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Option<Arc<CachedGrokSum
 fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");
     if !file.is_file() {
-        return Ok(Some(fallback_summary(path)));
+        return Ok(Some(fallback_summary_without_handoff(path)));
     }
     ensure!(
         !fs::symlink_metadata(&file)?.file_type().is_symlink(),
@@ -1442,24 +1511,24 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
                 .get("last_turn_summary")
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
-            Ok(Some(Arc::new(CachedGrokSummary {
+            Ok(Some(CachedGrokSummary {
                 id: expected_id.clone(),
                 title,
                 cwd,
                 workspace_root,
                 message_count,
                 last_message,
-            })))
+            }))
         },
     )?;
-    let Some(cached) = cached else {
+    let Some(cached) = cached.as_ref() else {
         return Ok(None);
     };
     ensure!(cached.id == expected_id, "Grok session identity mismatch");
     Ok(Some(GrokSessionSummary {
         deletion_eligibility: None,
         storage_size: None,
-        handoff_path: Some(grok_handoff_path(path)),
+        handoff_path: None,
         id: cached.id.clone(),
         title: cached.title.clone(),
         cwd: cached.cwd.clone(),
@@ -1545,6 +1614,12 @@ pub struct GrokDeleteResult {
 }
 
 fn fallback_summary(path: &Path) -> GrokSessionSummary {
+    let mut summary = fallback_summary_without_handoff(path);
+    summary.handoff_path = Some(grok_handoff_path(path));
+    summary
+}
+
+fn fallback_summary_without_handoff(path: &Path) -> GrokSessionSummary {
     let id = path
         .file_name()
         .unwrap_or_default()
@@ -1555,7 +1630,7 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
         title: id,
         cwd: String::new(),
         workspace_root: None,
-        handoff_path: Some(grok_handoff_path(path)),
+        handoff_path: None,
         path: path.into(),
         updated_at: None,
         message_count: 0,
@@ -1571,19 +1646,20 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
 
 fn is_non_primary_grok_events_dir(dir: &Path) -> bool {
     let events_path = dir.join("events.jsonl");
-    let Ok(meta) = fs::symlink_metadata(&events_path) else {
+    let Some(stamp) = crate::file_stamp::FileStamp::of_nofollow(&events_path) else {
         return false;
     };
-    if !meta.is_file() || meta.file_type().is_symlink() {
-        return false;
+    if let Some(cached) = GROK_NON_PRIMARY_CACHE.get(&events_path, &stamp) {
+        return cached;
     }
     use std::io::{BufRead, BufReader, Read};
-    let Ok(file) = fs::File::open(&events_path) else {
+    let Ok(file) = crate::file_stamp::open_regular_nofollow(&events_path) else {
         return false;
     };
     let mut reader = BufReader::new(file.take(128 * 1024));
     let mut line = String::new();
     let mut saw_non_primary = false;
+    let mut decided_primary = false;
     for _ in 0..32 {
         line.clear();
         let Ok(read) = reader.read_line(&mut line) else {
@@ -1605,12 +1681,17 @@ fn is_non_primary_grok_events_dir(dir: &Path) -> bool {
             .filter(|s| !s.is_empty())
         {
             if rel == "primary" {
-                return false;
+                decided_primary = true;
+                break;
             }
             saw_non_primary = true;
         }
     }
-    saw_non_primary
+    let result = !decided_primary && saw_non_primary;
+    if crate::file_stamp::FileStamp::of_nofollow(&events_path).as_ref() == Some(&stamp) {
+        GROK_NON_PRIMARY_CACHE.insert(events_path, stamp, result, 128);
+    }
+    result
 }
 
 fn session_workspaces(paths: &GrokPaths) -> Result<Vec<PathBuf>> {

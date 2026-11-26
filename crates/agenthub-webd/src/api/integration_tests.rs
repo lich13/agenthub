@@ -1013,13 +1013,7 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
     }));
     fs::write(&rollout, rows.join("\n") + "\n").unwrap();
 
-    let plan = thread_service::plan_thread_blocks_request(
-        &PlatformPaths::linux_server(),
-        "thread-a",
-        Some(2),
-        None,
-    )
-    .unwrap();
+    let plan = thread_service::plan_thread_blocks_request("thread-a", Some(2), None).unwrap();
     let page = thread_service::read_thread_blocks_page(&CodexPaths::new(&home), &plan)
         .unwrap()
         .unwrap();
@@ -1048,13 +1042,9 @@ fn thread_block_page_uses_before_cursor() {
     }));
     fs::write(&rollout, rows.join("\n") + "\n").unwrap();
 
-    let plan = thread_service::plan_thread_blocks_request(
-        &PlatformPaths::linux_server(),
-        "thread-a",
-        Some(2),
-        Some("b:4".to_string()),
-    )
-    .unwrap();
+    let plan =
+        thread_service::plan_thread_blocks_request("thread-a", Some(2), Some("b:4".to_string()))
+            .unwrap();
     let page = thread_service::read_thread_blocks_page(&CodexPaths::new(&home), &plan)
         .unwrap()
         .unwrap();
@@ -1070,16 +1060,12 @@ fn thread_block_page_uses_before_cursor() {
 
 #[test]
 fn thread_list_plan_clamps_requested_page_size() {
-    let platform = PlatformPaths::linux_server();
     for (limit, expected) in [(Some(120), 120), (None, 80), (Some(0), 1), (Some(900), 500)] {
         assert_eq!(
-            thread_service::plan_threads_list_request(
-                &platform,
-                thread_service::ThreadsQuery {
-                    limit,
-                    ..Default::default()
-                }
-            )
+            thread_service::plan_threads_list_request(thread_service::ThreadsQuery {
+                limit,
+                ..Default::default()
+            })
             .unwrap()
             .fetch_limit,
             expected
@@ -1521,12 +1507,8 @@ async fn settings_get_save_and_hook_jobs_use_the_startup_config_path() {
     .await;
     assert_eq!(Config::load(&config_path).unwrap().probe.poll_seconds, 45);
     assert_eq!(fs::read(&other).unwrap(), untouched);
-    let plan = agenthub_core::services::probe::plan_probe_action(
-        state.platform(),
-        ProbeAction::InstallHooks,
-        state.config_path(),
-    )
-    .unwrap();
+    let plan =
+        agenthub_core::services::probe::plan_probe_action(ProbeAction::InstallHooks).unwrap();
     let command = probe_process_command(state.platform(), state.config_path(), plan.action);
     assert!(command
         .args

@@ -23,20 +23,31 @@ pub struct ThreadRenameRequest {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadStateAction {
+    Archive,
+    Restore,
+    Rename { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadStateActionPlan {
-    pub command: String,
     pub thread_id: String,
-    pub name: Option<String>,
+    pub action: ThreadStateAction,
 }
 
 pub fn plan_thread_archive_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
-    plan_thread_archive_state_action(thread_id, true)
+    Ok(ThreadStateActionPlan {
+        thread_id: required_command_thread_id(thread_id)?,
+        action: ThreadStateAction::Archive,
+    })
 }
 
 pub fn plan_thread_restore_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
-    plan_thread_archive_state_action(thread_id, false)
+    Ok(ThreadStateActionPlan {
+        thread_id: required_command_thread_id(thread_id)?,
+        action: ThreadStateAction::Restore,
+    })
 }
 
 pub fn plan_thread_rename_with_capability(
@@ -44,9 +55,8 @@ pub fn plan_thread_rename_with_capability(
 ) -> Result<ThreadStateActionPlan> {
     let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
     Ok(ThreadStateActionPlan {
-        command: commands::THREADS_RENAME.to_string(),
         thread_id: required_command_thread_id(&request.thread_id)?,
-        name: Some(name),
+        action: ThreadStateAction::Rename { name },
     })
 }
 
@@ -68,44 +78,29 @@ pub fn action_ok(
     }
 }
 
-fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
-    let (command, message) = if archived {
-        (
+pub fn thread_state_action_response(plan: &ThreadStateActionPlan) -> ActionResponse {
+    match &plan.action {
+        ThreadStateAction::Archive => action_ok(
             commands::THREADS_ARCHIVE,
             "thread archived in local Codex state",
-        )
-    } else {
-        (
+            Some(plan.thread_id.clone()),
+            None,
+            None,
+        ),
+        ThreadStateAction::Restore => action_ok(
             commands::THREADS_RESTORE,
             "thread restored in local Codex state",
-        )
-    };
-    action_ok(command, message, Some(thread_id), None, None)
-}
-
-fn rename_thread_response(thread_id: String, name: &str) -> Result<ActionResponse> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(anyhow!("name cannot be empty"));
-    }
-    Ok(action_ok(
-        commands::THREADS_RENAME,
-        "thread renamed in local Codex state",
-        Some(thread_id),
-        None,
-        Some(json!({"name": name})),
-    ))
-}
-
-pub fn thread_state_action_response(plan: &ThreadStateActionPlan) -> Result<ActionResponse> {
-    match plan.command.as_str() {
-        commands::THREADS_ARCHIVE => Ok(archive_thread_response(plan.thread_id.clone(), true)),
-        commands::THREADS_RESTORE => Ok(archive_thread_response(plan.thread_id.clone(), false)),
-        commands::THREADS_RENAME => rename_thread_response(
-            plan.thread_id.clone(),
-            plan.name.as_deref().unwrap_or_default(),
+            Some(plan.thread_id.clone()),
+            None,
+            None,
         ),
-        _ => Err(anyhow!("unsupported thread state action: {}", plan.command)),
+        ThreadStateAction::Rename { name } => action_ok(
+            commands::THREADS_RENAME,
+            "thread renamed in local Codex state",
+            Some(plan.thread_id.clone()),
+            None,
+            Some(json!({"name": name})),
+        ),
     }
 }
 
@@ -116,20 +111,4 @@ fn non_empty_owned(value: &str) -> Option<String> {
 
 fn required_command_thread_id(thread_id: &str) -> Result<String> {
     non_empty_owned(thread_id).ok_or_else(|| anyhow!("thread_id is required"))
-}
-
-fn plan_thread_archive_state_action(
-    thread_id: &str,
-    archived: bool,
-) -> Result<ThreadStateActionPlan> {
-    Ok(ThreadStateActionPlan {
-        command: if archived {
-            commands::THREADS_ARCHIVE
-        } else {
-            commands::THREADS_RESTORE
-        }
-        .to_string(),
-        thread_id: required_command_thread_id(thread_id)?,
-        name: None,
-    })
 }

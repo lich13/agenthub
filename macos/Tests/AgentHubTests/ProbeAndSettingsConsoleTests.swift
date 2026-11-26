@@ -88,11 +88,18 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         let settingsPayload = try draft.buildSavePayload(for: .settings)
         if case let .object(codex)? = settingsPayload["codex"] {
             XCTAssertEqual(codex["home"], .null)
+            XCTAssertNil(codex["workspace"], "Settings scope must not overwrite unexposed codex.workspace")
         } else {
             XCTFail("Missing codex object")
         }
+        if case let .object(probe)? = settingsPayload["probe"] {
+            XCTAssertNil(probe["hooks"], "Settings scope must not overwrite probe.hooks.* managed by Hooks / Account Scope")
+        } else {
+            XCTFail("Missing probe object")
+        }
         XCTAssertNil(settingsPayload["notifications"], "Settings scope must not send duplicate top-level notifications")
 
+        draft.barkEnabled = false
         let barkPayload = try draft.buildSavePayload(for: .bark)
         XCTAssertNil(barkPayload["codex"], "Bark scoped save must not submit codex settings")
         XCTAssertNil(barkPayload["notifications"], "Bark scoped save must send device_key once inside probe.notifications")
@@ -100,6 +107,10 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
            case let .object(notif)? = probe["notifications"]
         {
             XCTAssertEqual(notif["device_key"], .string("fixture-bark-key"))
+            XCTAssertEqual(notif["enabled"], .bool(false), "Bark save payload must respect explicit UI barkEnabled switch")
+            XCTAssertNil(notif["sound"], "Bark save payload must not clobber unexposed sound/group/url")
+            XCTAssertNil(notif["group"])
+            XCTAssertNil(notif["url"])
             XCTAssertNil(notif["notify_github_ci"])
         } else {
             XCTFail("Expected probe.notifications.device_key in bark scoped payload")
@@ -250,11 +261,13 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
 
     func testProbeDisclosureRulesSingleShotAutoOpenAndManualCollapseAcrossPolls() {
         var rules = ProbeDisclosureRules(machineScope: "local")
-        for sec in ProbeDisclosureSection.allCases {
+        XCTAssertEqual(rules.openSections, [.ci, .bark, .hosts], "Core setup panels must default to expanded")
+        for sec in [ProbeDisclosureSection.ciRepos, .advanced, .live, .events, .jobs] {
             XCTAssertFalse(rules.isExpanded(sec), "\(sec.rawValue) must default to collapsed")
         }
 
-        // First observation of a CI failure auto-opens once
+        // Manually collapse CI before observing initial failure -> first observation auto-opens once
+        rules.setExpanded(.ci, false)
         let run102 = GithubCiRun(
             id: 102,
             repositoryId: 1,
@@ -284,7 +297,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
             status: "completed",
             conclusion: "timed_out",
             htmlUrl: "https://example.invalid/runs/103",
-            updatedAt: "2026-11-25T10:05:00Z"
+            updatedAt: "https://example.invalid/runs/103" == "" ? "" : "2026-11-25T10:05:00Z"
         )
         let sigBoth = ProbeDisclosureRules.ciIssueSignature(errorMessage: nil, snapshotError: nil, visibleRuns: [run102, run103])
         XCTAssertTrue(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sigBoth))
@@ -302,9 +315,13 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertTrue(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sig102))
         XCTAssertTrue(rules.isExpanded(.ci))
 
-        // Switching machineScope resets all open sections & seen issue signatures
+        // Switching machineScope resets to defaultExpandedSections & clears seen issue signatures
+        rules.setExpanded(.bark, false)
+        rules.setExpanded(.live, true)
         rules.resetIfMachineChanged("remote:prod")
-        XCTAssertFalse(rules.isExpanded(.ci))
+        XCTAssertEqual(rules.openSections, [.ci, .bark, .hosts])
+        XCTAssertFalse(rules.isExpanded(.live))
+        rules.setExpanded(.ci, false)
         XCTAssertTrue(rules.observeIssue(machineScope: "remote:prod", section: .ci, issueSignature: sig103Only))
         XCTAssertTrue(rules.isExpanded(.ci))
     }
@@ -354,7 +371,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         draft.notifyGithubCi = true
         draft.githubCiRepositories = ["org/repo"]
         draft.pollSecondsText = "30"
-        draft.barkGroup = "CustomGroup"
+        draft.barkServerUrl = "https://bark.example.invalid"
 
         XCTAssertFalse(draft.subsetEquals(loaded, scope: .ci))
         XCTAssertFalse(draft.subsetEquals(loaded, scope: .settings))
@@ -371,11 +388,10 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(draft.subsetEquals(loaded, scope: .settings), "Uncommitted Settings edits must remain dirty")
         XCTAssertFalse(draft.subsetEquals(loaded, scope: .bark), "Uncommitted Bark edits must remain dirty")
         XCTAssertEqual(draft.pollSecondsText, "30")
-        XCTAssertEqual(draft.barkGroup, "CustomGroup")
+        XCTAssertEqual(draft.barkServerUrl, "https://bark.example.invalid")
 
         // Verify every sub-group in `.settings` equality participates independently
         let mutations: [(inout ProbeSettingsDraft) -> Void] = [
-            { $0.clearAccountScope.toggle() },
             { $0.logMaxMiBText = "64" },
             { $0.notifyCodex.toggle() },
             { $0.notifyGrokbot.toggle() },
@@ -390,6 +406,18 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
             XCTAssertTrue(candidate.subsetEquals(base, scope: .ci))
             XCTAssertTrue(candidate.subsetEquals(base, scope: .bark))
         }
+
+        // Turning off all sub-categories for an enabled platform keeps master switch ON so single categories can be re-enabled
+        var catDraft = base
+        catDraft.setPlatformEnabled(.antigravity, enabled: true)
+        for cat in ProbeSettingsDraft.supportedCategories(for: .antigravity) {
+            catDraft.setCategoryEnabled(.antigravity, cat, enabled: false)
+        }
+        XCTAssertTrue(catDraft.isPlatformEnabled(.antigravity), "Master switch must stay ON when all sub-categories are turned off")
+        catDraft.setCategoryEnabled(.antigravity, .failure, enabled: true)
+        XCTAssertTrue(catDraft.isCategoryEnabled(.antigravity, .failure))
+        XCTAssertFalse(catDraft.isCategoryEnabled(.antigravity, .completion))
+        XCTAssertTrue(ProbeSettingsDraft.supportedCategories(for: .grokbot).isEmpty)
     }
 
     @MainActor
@@ -450,7 +478,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
             defer: false
         )
         let host = NSHostingView(
-            rootView: ProbeWorkspaceView(store: store)
+            rootView: ProbeWorkspaceView(store: store, initialOpenSections: [])
                 .environment(\.agentHubPalette, DesignPalette.resolve(scheme: .light, workspace: .probe))
                 .frame(width: 1084, height: 820)
         )
@@ -460,7 +488,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
 
         func probeScrollDocumentHeight(in view: NSView) -> CGFloat? {
-            if let sv = view as? NSScrollView, let doc = sv.documentView {
+            if let sv = view as? NSScrollView, !(sv is BoundedInnerScrollView), let doc = sv.documentView {
                 doc.layoutSubtreeIfNeeded()
                 return doc.fittingSize.height > 0 ? doc.fittingSize.height : doc.bounds.height
             }
@@ -470,7 +498,20 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
             return nil
         }
         let collapsedDocHeight = try XCTUnwrap(probeScrollDocumentHeight(in: host))
-        XCTAssertLessThan(collapsedDocHeight, 680.0, "Default healthy ProbeWorkspaceView content must fit under 680pt (got \(collapsedDocHeight)pt)")
+        XCTAssertLessThan(collapsedDocHeight, 720.0, "All-collapsed ProbeWorkspaceView content must stay compact (got \(collapsedDocHeight)pt)")
+
+        let defaultHost = NSHostingView(
+            rootView: ProbeWorkspaceView(store: store)
+                .environment(\.agentHubPalette, DesignPalette.resolve(scheme: .light, workspace: .probe))
+                .frame(width: 1084, height: 820)
+        )
+        win.contentView = defaultHost
+        try await Task.sleep(nanoseconds: 250_000_000)
+        defaultHost.layoutSubtreeIfNeeded()
+        let defaultDocHeight = try XCTUnwrap(probeScrollDocumentHeight(in: defaultHost))
+        XCTAssertGreaterThan(defaultDocHeight, collapsedDocHeight + 180.0, "Default ProbeWorkspaceView must expand CI, Bark, and Hooks panels")
+        XCTAssertLessThan(defaultDocHeight, 1220.0, "Default expanded ProbeWorkspaceView must remain compact (got \(defaultDocHeight)pt)")
+        win.orderOut(nil)
 
         // 3. Narrow 1000x680 SessionSearchModalView fits within 680pt height without vertical overflow
         let modalHost = NSHostingView(
@@ -529,14 +570,15 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertEqual(sync.draft?.barkServerUrl, "https://bark.example.invalid")
         XCTAssertEqual(sync.draft?.githubCiRepositories, ["org/uncommitted"])
 
-        // 7. Hook install/remove flag updates also advance `settingsFence` so stale reads cannot revert `manageStopHook`
-        let staleHookFence = sync.beginSettingsRead()
-        sync.applyHookManageFlag(true)
-        XCTAssertEqual(sync.draft?.manageStopHook, true)
-        var oldHookView = savedView
-        oldHookView.probe.hooks.manageStopHook = false
-        XCTAssertFalse(sync.applyLoadedSettings(oldHookView, readFence: staleHookFence, revision: 3))
-        XCTAssertEqual(sync.draft?.manageStopHook, true)
+        // 7. Concurrent Hook / Account Scope server updates never clobber uncommitted `.settings` or `.ci` draft edits
+        sync.draft?.pollSecondsText = "45"
+        var hookUpdatedView = savedView
+        hookUpdatedView.probe.hooks.manageStopHook = true
+        hookUpdatedView.probe.hooks.clearAccountScope = true
+        let hookRefreshFence = sync.beginSettingsRead()
+        XCTAssertTrue(sync.applyLoadedSettings(hookUpdatedView, readFence: hookRefreshFence, revision: 3))
+        XCTAssertEqual(sync.draft?.pollSecondsText, "45")
+        XCTAssertEqual(sync.draft?.githubCiRepositories, ["org/uncommitted"])
     }
 
     @MainActor

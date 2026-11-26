@@ -31,21 +31,13 @@ public struct ProbeStatus: Codable, Equatable, Sendable {
     public var error: String?
     public var hostLabel: String?
     public var hookStatus: String?
-    public var errorMonitorStatus: String?
     public var errorMonitorIncidentCount: Int?
     public var codexHome: String?
     public var codexHooksPath: String?
     public var dshSessionsPath: String?
     public var actualCommands: [String]?
     public var staleCommandCount: Int?
-    public var emptyGroupCount: Int?
     public var discoveryWarnings: [String]?
-    public var runningCount: Int?
-    public var replyNeededCount: Int?
-    public var recoverableCount: Int?
-    public var runningThreads: [ProbeLiveSession]?
-    public var replyNeededThreads: [ProbeLiveSession]?
-    public var recoverableThreads: [ProbeLiveSession]?
     public var activeSessions: [ProbeLiveSession]?
     public var providerNotifications: [ProviderNotificationRuntimeStats]?
 
@@ -54,21 +46,13 @@ public struct ProbeStatus: Codable, Equatable, Sendable {
         case error
         case hostLabel = "host_label"
         case hookStatus = "hook_status"
-        case errorMonitorStatus = "error_monitor_status"
         case errorMonitorIncidentCount = "error_monitor_incident_count"
         case codexHome = "codex_home"
         case codexHooksPath = "codex_hooks_path"
         case dshSessionsPath = "dsh_sessions_path"
         case actualCommands = "actual_commands"
         case staleCommandCount = "stale_command_count"
-        case emptyGroupCount = "empty_group_count"
         case discoveryWarnings = "discovery_warnings"
-        case runningCount = "running_count"
-        case replyNeededCount = "reply_needed_count"
-        case recoverableCount = "recoverable_count"
-        case runningThreads = "running_threads"
-        case replyNeededThreads = "reply_needed_threads"
-        case recoverableThreads = "recoverable_threads"
         case activeSessions = "active_sessions"
         case providerNotifications = "provider_notifications"
     }
@@ -214,15 +198,28 @@ public enum ProbeSettingsSaveScope: String, CaseIterable, Sendable {
     case bark
 }
 
+public enum ProbeEventCategory: String, CaseIterable, Hashable, Sendable {
+    case completion
+    case replyNeeded
+    case authorization
+    case failure
+
+    public var label: String {
+        switch self {
+        case .completion: "完成"
+        case .replyNeeded: "需回复"
+        case .authorization: "需授权"
+        case .failure: "失败"
+        }
+    }
+}
+
 public struct ProbeSettingsDraft: Equatable, Sendable {
     public var codexHome: String
-    public var codexWorkspace: String
     public var hostLabel: String
 
     public var probeEnabled: Bool
     public var errorMonitorEnabled: Bool
-    public var manageStopHook: Bool
-    public var clearAccountScope: Bool
 
     // Raw string drafts preserve intermediate typing & IME composition.
     public var pollSecondsText: String
@@ -236,9 +233,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
     public var barkServerUrl: String
     public var barkDeviceKey: String
     public var barkDeviceKeyConfigured: Bool
-    public var barkSound: String
-    public var barkGroup: String
-    public var barkUrl: String
 
     public var notifyCompletion: Bool
     public var notifyReplyNeeded: Bool
@@ -271,7 +265,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
     public static func from(_ view: ProbeSettingsView) -> ProbeSettingsDraft {
         let codex = view.codex
         let probe = view.probe
-        let hooks = probe.hooks
         let obs = probe.observability
         let notif = view.notifications
         let logBytes = obs.logMaxBytes
@@ -283,12 +276,9 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
 
         return ProbeSettingsDraft(
             codexHome: codex.configuredCodexHome ?? "",
-            codexWorkspace: codex.workspace,
             hostLabel: codex.hostLabel,
             probeEnabled: probe.enabled,
             errorMonitorEnabled: probe.errorMonitor.enabled,
-            manageStopHook: hooks.manageStopHook,
-            clearAccountScope: hooks.clearAccountScope,
             pollSecondsText: String(probe.pollSeconds),
             recentLimitText: String(probe.recentLimit),
             eventRetentionDaysText: String(obs.eventRetentionDays),
@@ -299,9 +289,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             barkServerUrl: notif.serverUrl,
             barkDeviceKey: "",
             barkDeviceKeyConfigured: notif.deviceKeyConfigured,
-            barkSound: notif.sound ?? "",
-            barkGroup: notif.group,
-            barkUrl: notif.url ?? "",
             notifyCompletion: notif.notifyCompletion,
             notifyReplyNeeded: notif.notifyReplyNeeded,
             notifyRecoverable: notif.notifyRecoverable,
@@ -331,20 +318,27 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         )
     }
 
+    public static func supportedCategories(for platform: SessionProvider) -> [ProbeEventCategory] {
+        switch platform {
+        case .codex, .claudeCode, .grok:
+            [.completion, .replyNeeded, .failure]
+        case .antigravity, .dsh:
+            [.completion, .replyNeeded, .authorization, .failure]
+        case .grokbot:
+            []
+        }
+    }
+
+    /// Returns the raw per-platform master switch so turning off the last sub-category pill
+    /// never hides the inline category bar or prevents turning a single category back on.
     public func isPlatformEnabled(_ platform: SessionProvider) -> Bool {
         switch platform {
-        case .codex:
-            notifyCodex && (notifyCompletion || notifyReplyNeeded || notifyRecoverable)
-        case .claudeCode:
-            notifyClaude && (notifyClaudeCompletion || notifyClaudeFailure || notifyClaudeReplyNeeded)
-        case .grok:
-            notifyGrok && (notifyGrokCompletion || notifyGrokFailure || notifyGrokReplyNeeded)
-        case .grokbot:
-            notifyGrokbot
-        case .antigravity:
-            notifyAntigravity && (notifyAntigravityCompletion || notifyAntigravityFailure || notifyAntigravityReplyNeeded || notifyAntigravityAuthorization)
-        case .dsh:
-            notifyDsh && (notifyDshCompletion || notifyDshFailure || notifyDshReplyNeeded || notifyDshAuthorization)
+        case .codex: notifyCodex
+        case .claudeCode: notifyClaude
+        case .grok: notifyGrok
+        case .grokbot: notifyGrokbot
+        case .antigravity: notifyAntigravity
+        case .dsh: notifyDsh
         }
     }
 
@@ -389,6 +383,56 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
                 notifyDshReplyNeeded = true
                 notifyDshAuthorization = true
             }
+        }
+    }
+
+    public func isCategoryEnabled(_ platform: SessionProvider, _ category: ProbeEventCategory) -> Bool {
+        switch (platform, category) {
+        case (.codex, .completion): notifyCompletion
+        case (.codex, .replyNeeded): notifyReplyNeeded
+        case (.codex, .failure): notifyRecoverable
+        case (.claudeCode, .completion): notifyClaudeCompletion
+        case (.claudeCode, .replyNeeded): notifyClaudeReplyNeeded
+        case (.claudeCode, .failure): notifyClaudeFailure
+        case (.grok, .completion): notifyGrokCompletion
+        case (.grok, .replyNeeded): notifyGrokReplyNeeded
+        case (.grok, .failure): notifyGrokFailure
+        case (.antigravity, .completion): notifyAntigravityCompletion
+        case (.antigravity, .replyNeeded): notifyAntigravityReplyNeeded
+        case (.antigravity, .authorization): notifyAntigravityAuthorization
+        case (.antigravity, .failure): notifyAntigravityFailure
+        case (.dsh, .completion): notifyDshCompletion
+        case (.dsh, .replyNeeded): notifyDshReplyNeeded
+        case (.dsh, .authorization): notifyDshAuthorization
+        case (.dsh, .failure): notifyDshFailure
+        default: false
+        }
+    }
+
+    public mutating func setCategoryEnabled(
+        _ platform: SessionProvider,
+        _ category: ProbeEventCategory,
+        enabled: Bool
+    ) {
+        switch (platform, category) {
+        case (.codex, .completion): notifyCompletion = enabled
+        case (.codex, .replyNeeded): notifyReplyNeeded = enabled
+        case (.codex, .failure): notifyRecoverable = enabled
+        case (.claudeCode, .completion): notifyClaudeCompletion = enabled
+        case (.claudeCode, .replyNeeded): notifyClaudeReplyNeeded = enabled
+        case (.claudeCode, .failure): notifyClaudeFailure = enabled
+        case (.grok, .completion): notifyGrokCompletion = enabled
+        case (.grok, .replyNeeded): notifyGrokReplyNeeded = enabled
+        case (.grok, .failure): notifyGrokFailure = enabled
+        case (.antigravity, .completion): notifyAntigravityCompletion = enabled
+        case (.antigravity, .replyNeeded): notifyAntigravityReplyNeeded = enabled
+        case (.antigravity, .authorization): notifyAntigravityAuthorization = enabled
+        case (.antigravity, .failure): notifyAntigravityFailure = enabled
+        case (.dsh, .completion): notifyDshCompletion = enabled
+        case (.dsh, .replyNeeded): notifyDshReplyNeeded = enabled
+        case (.dsh, .authorization): notifyDshAuthorization = enabled
+        case (.dsh, .failure): notifyDshFailure = enabled
+        default: break
         }
     }
 
@@ -461,14 +505,9 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             ]
         case .bark:
             let key = (submittedDeviceKey ?? barkDeviceKey).trimmingCharacters(in: .whitespacesAndNewlines)
-            let soundTrimmed = barkSound.trimmingCharacters(in: .whitespacesAndNewlines)
-            let urlTrimmed = barkUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             var notifObj: [String: JSONValue] = [
-                "enabled": .bool(barkEnabled || !key.isEmpty),
+                "enabled": .bool(barkEnabled),
                 "server_url": .string(barkServerUrl.trimmingCharacters(in: .whitespacesAndNewlines)),
-                "sound": soundTrimmed.isEmpty ? .null : .string(soundTrimmed),
-                "group": .string(barkGroup.trimmingCharacters(in: .whitespacesAndNewlines)),
-                "url": urlTrimmed.isEmpty ? .null : .string(urlTrimmed),
             ]
             if !key.isEmpty {
                 notifObj["device_key"] = .string(key)
@@ -488,7 +527,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
 
             let trimmedHome = codexHome.trimmingCharacters(in: .whitespacesAndNewlines)
             let homePatch: JSONValue = (trimmedHome.isEmpty || trimmedHome.lowercased() == "auto") ? .null : .string(trimmedHome)
-            let trimmedWs = codexWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
 
             let notifObj: [String: JSONValue] = [
                 "notify_completion": .bool(notifyCompletion),
@@ -519,7 +557,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             return [
                 "codex": .object([
                     "home": homePatch,
-                    "workspace": trimmedWs.isEmpty ? .null : .string(trimmedWs),
                     "host_label": .string(hostLabel.trimmingCharacters(in: .whitespacesAndNewlines)),
                 ]),
                 "probe": .object([
@@ -527,10 +564,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
                     "poll_seconds": .number(Double(pollSeconds)),
                     "recent_limit": .number(Double(recentLimit)),
                     "error_monitor": .object(["enabled": .bool(errorMonitorEnabled)]),
-                    "hooks": .object([
-                        "manage_stop_hook": .bool(manageStopHook),
-                        "clear_account_scope": .bool(clearAccountScope),
-                    ]),
                     "notifications": .object(notifObj),
                     "observability": .object([
                         "event_retention_days": .number(Double(retentionDays)),
@@ -553,19 +586,13 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             return barkEnabled == other.barkEnabled &&
                 barkServerUrl == other.barkServerUrl &&
                 barkDeviceKey == other.barkDeviceKey &&
-                barkDeviceKeyConfigured == other.barkDeviceKeyConfigured &&
-                barkSound == other.barkSound &&
-                barkGroup == other.barkGroup &&
-                barkUrl == other.barkUrl
+                barkDeviceKeyConfigured == other.barkDeviceKeyConfigured
         case .settings:
             let runtimeEqual: Bool =
                 codexHome == other.codexHome &&
-                codexWorkspace == other.codexWorkspace &&
                 hostLabel == other.hostLabel &&
                 probeEnabled == other.probeEnabled &&
-                errorMonitorEnabled == other.errorMonitorEnabled &&
-                manageStopHook == other.manageStopHook &&
-                clearAccountScope == other.clearAccountScope
+                errorMonitorEnabled == other.errorMonitorEnabled
             let limitsEqual: Bool =
                 pollSecondsText == other.pollSecondsText &&
                 recentLimitText == other.recentLimitText &&
@@ -617,17 +644,11 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             barkServerUrl = refreshed.barkServerUrl
             barkDeviceKey = refreshed.barkDeviceKey
             barkDeviceKeyConfigured = refreshed.barkDeviceKeyConfigured
-            barkSound = refreshed.barkSound
-            barkGroup = refreshed.barkGroup
-            barkUrl = refreshed.barkUrl
         case .settings:
             codexHome = refreshed.codexHome
-            codexWorkspace = refreshed.codexWorkspace
             hostLabel = refreshed.hostLabel
             probeEnabled = refreshed.probeEnabled
             errorMonitorEnabled = refreshed.errorMonitorEnabled
-            manageStopHook = refreshed.manageStopHook
-            clearAccountScope = refreshed.clearAccountScope
             pollSecondsText = refreshed.pollSecondsText
             recentLimitText = refreshed.recentLimitText
             eventRetentionDaysText = refreshed.eventRetentionDaysText

@@ -3,22 +3,8 @@ use crate::{linux_adapter, state::AppState};
 use agenthub_core::services::{
     jobs as job_service,
     threads::{self as thread_service, ThreadsQuery},
-    use_cases::AgentHubUseCases,
+    use_cases::{AgentHubUseCases, PageWindowOptions},
 };
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ThreadDetailQuery {
-    limit: Option<usize>,
-    before: Option<String>,
-    full: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ThreadBlocksQuery {
-    limit: Option<usize>,
-    before: Option<String>,
-}
 
 pub(crate) async fn subagent_detail(
     state: AppState,
@@ -84,7 +70,7 @@ pub(crate) async fn list_threads(state: AppState, query: ThreadsQuery) -> ApiRes
 pub(crate) async fn thread_detail(
     state: AppState,
     id: String,
-    query: ThreadDetailQuery,
+    query: PageWindowOptions,
 ) -> ApiResponse {
     let plan = AgentHubUseCases::new(state.platform())
         .threads()
@@ -108,7 +94,7 @@ pub(crate) async fn thread_detail(
 pub(crate) async fn thread_blocks(
     state: AppState,
     id: String,
-    query: ThreadBlocksQuery,
+    query: PageWindowOptions,
 ) -> ApiResponse {
     let plan =
         AgentHubUseCases::new(state.platform())
@@ -141,22 +127,13 @@ pub(crate) async fn restore_thread(state: AppState, id: String) -> ApiResponse {
     ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct RenameThreadRequest {
-    name: String,
-}
-
 pub(crate) async fn rename_thread(
     state: AppState,
-    id: String,
-    payload: RenameThreadRequest,
+    request: job_service::ThreadRenameRequest,
 ) -> ApiResponse {
     let auth = crate::audit::actor();
-    let plan = AgentHubUseCases::new(state.platform()).threads().rename(
-        job_service::ThreadRenameRequest {
-            thread_id: id,
-            name: payload.name,
-        },
-    )?;
+    let plan = AgentHubUseCases::new(state.platform())
+        .threads()
+        .rename(request)?;
     ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }

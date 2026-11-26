@@ -1,15 +1,16 @@
 import AppKit
 import SwiftUI
 
-public struct GithubCiCardView: View {
+struct GithubCiCardView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    @Binding public var draft: ProbeSettingsDraft?
+    @ObservedObject var store: RuntimeConnectionStore
+    @Binding var draft: ProbeSettingsDraft?
     private var externalRules: Binding<ProbeDisclosureRules>?
-    public var saving: Bool
-    public var savingCurrentScope: Bool
-    public var saveMessage: (tone: StatusChipTone, text: String)?
-    public let onSave: () -> Void
+    var isNarrow: Bool
+    var saving: Bool
+    var savingCurrentScope: Bool
+    var saveMessage: (tone: StatusChipTone, text: String)?
+    let onSave: () -> Void
 
     @State private var localRules = ProbeDisclosureRules()
     @State private var snapshot: GithubCiSnapshot?
@@ -19,10 +20,11 @@ public struct GithubCiCardView: View {
     @State private var errorMessage: String?
     @State private var repoQuery: String = ""
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
         draft: Binding<ProbeSettingsDraft?>,
         disclosureRules: Binding<ProbeDisclosureRules>? = nil,
+        isNarrow: Bool = false,
         saving: Bool,
         savingCurrentScope: Bool? = nil,
         saveMessage: (tone: StatusChipTone, text: String)?,
@@ -31,6 +33,7 @@ public struct GithubCiCardView: View {
         self.store = store
         self._draft = draft
         self.externalRules = disclosureRules
+        self.isNarrow = isNarrow
         self.saving = saving
         self.savingCurrentScope = savingCurrentScope ?? saving
         self.saveMessage = saveMessage
@@ -93,60 +96,116 @@ public struct GithubCiCardView: View {
         loading || refreshing || (snapshot?.refreshing == true)
     }
 
-    private var configuredRepos: [String] {
-        (draft?.githubCiRepositories ?? [])
+    private static func computeConfiguredRepos(_ raw: [String]?) -> [String] {
+        (raw ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 
-    private var catalog: [GithubCiRepoOption] {
-        GithubCiDomain.buildCatalog(
-            repositories: snapshot?.repositories ?? [],
-            runs: snapshot?.runs ?? [],
-            configured: configuredRepos
-        )
-    }
-
-    private var filteredCatalog: [GithubCiRepoOption] {
-        let q = repoQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return catalog }
-        return catalog.filter { $0.fullName.lowercased().contains(q) }
-    }
-
-    private var visibleRuns: [GithubCiRun] {
-        let activeTokens = configuredRepos.flatMap { entry -> [String] in
+    private static func computeVisibleRuns(
+        snapshotRuns: [GithubCiRun],
+        catalog: [GithubCiRepoOption],
+        configured: [String],
+        filterBots: Bool
+    ) -> [GithubCiRun] {
+        let activeTokens = configured.flatMap { entry -> [String] in
             if let matched = catalog.first(where: {
-                $0.fullName.lowercased() == entry.lowercased() || $0.repoId.lowercased() == entry.lowercased()
+                $0.fullName.caseInsensitiveCompare(entry) == .orderedSame
+                    || $0.repoId.caseInsensitiveCompare(entry) == .orderedSame
             }) {
                 return [matched.fullName, matched.repoId]
             }
             return [entry]
         }
         return GithubCiDomain.visibleRuns(
-            runs: snapshot?.runs ?? [],
+            runs: snapshotRuns,
             repositories: activeTokens,
-            filterBots: draft?.githubCiFilterBots ?? true
+            filterBots: filterBots
         )
     }
 
-    private var failedRunCount: Int {
-        visibleRuns.filter { run in
-            GithubCiDomain.runStatus(run).tone == .danger
-        }.count
-    }
-
-    private var repoSelectorSummary: String {
-        if configuredRepos.isEmpty {
+    private static func formatRepoSelectorSummary(_ configured: [String]) -> String {
+        if configured.isEmpty {
             return "监控全部仓库"
         }
-        let preview = configuredRepos.prefix(2).joined(separator: "、")
-        if configuredRepos.count > 2 {
-            return "已选 \(configuredRepos.count) 个仓库（\(preview) 等）"
+        let preview = configured.prefix(2).joined(separator: "、")
+        if configured.count > 2 {
+            return "已选 \(configured.count) 个仓库（\(preview) 等）"
         }
-        return "已选 \(configuredRepos.count) 个仓库（\(preview)）"
+        return "已选 \(configured.count) 个仓库（\(preview)）"
     }
 
-    public var body: some View {
+    @ViewBuilder
+    private var ciTogglePair: some View {
+        HStack(spacing: 8) {
+            Text("CI 监控通知")
+                .font(DesignFonts.body(13, weight: .medium))
+                .foregroundStyle(palette.textPrimary.color)
+                .lineLimit(1)
+            CapsuleSwitch(isOn: notifyCiBinding, label: "CI 监控通知")
+                .disabled(draft == nil || saving)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: LayoutMetrics.formControlHeight)
+
+        HStack(spacing: 8) {
+            Text("过滤 Bot")
+                .font(DesignFonts.body(13, weight: .medium))
+                .foregroundStyle(palette.textPrimary.color)
+                .lineLimit(1)
+            CapsuleSwitch(isOn: filterBotsBinding, label: "过滤 Bot")
+                .disabled(draft == nil || saving)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: LayoutMetrics.formControlHeight)
+    }
+
+    @ViewBuilder
+    private func repoSelectorButton(summary: String) -> some View {
+        Button {
+            reposExpandedBinding.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                LucideIcon(.folderGit2, size: 15)
+                    .foregroundStyle(palette.accent.color)
+                Text(summary)
+                    .font(DesignFonts.body(13))
+                    .foregroundStyle(palette.textPrimary.color)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                LucideIcon(reposExpandedBinding.wrappedValue ? .chevronDown : .chevronRight, size: 15)
+                    .foregroundStyle(palette.textMuted.color)
+            }
+            .padding(.horizontal, 10)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight, maxHeight: LayoutMetrics.formControlHeight, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainHitButtonStyle())
+    }
+
+    var body: some View {
+        let configured = Self.computeConfiguredRepos(draft?.githubCiRepositories)
+        let currentCatalog = GithubCiDomain.buildCatalog(
+            repositories: snapshot?.repositories ?? [],
+            runs: snapshot?.runs ?? [],
+            configured: configured
+        )
+        let runs = Self.computeVisibleRuns(
+            snapshotRuns: snapshot?.runs ?? [],
+            catalog: currentCatalog,
+            configured: configured,
+            filterBots: draft?.githubCiFilterBots ?? true
+        )
+        let failedCount = runs.reduce(into: 0) { count, run in
+            if GithubCiDomain.runStatus(run).tone == .danger { count += 1 }
+        }
+        let selectorSummary = Self.formatRepoSelectorSummary(configured)
+
         let accountText: String = if let login = snapshot?.account?.login {
             "@\(login)"
         } else if busy {
@@ -164,11 +223,11 @@ public struct GithubCiCardView: View {
             summaryBadges: {
                 StatusChip(accountText, tone: snapshot?.account != nil ? .info : .neutral)
                     .help(snapshot?.account?.login ?? accountText)
-                StatusChip("\(visibleRuns.count) 次运行", tone: .neutral)
+                StatusChip("\(runs.count) 次运行", tone: .neutral)
                 if let err = errorMessage ?? snapshot?.error, !err.isEmpty {
                     StatusChip("异常", tone: .danger)
-                } else if failedRunCount > 0 {
-                    StatusChip("失败 \(failedRunCount)", tone: .danger)
+                } else if failedCount > 0 {
+                    StatusChip("失败 \(failedCount)", tone: .danger)
                 }
             },
             headerTrailing: {
@@ -196,129 +255,101 @@ public struct GithubCiCardView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                FlowButtonRow(spacing: 16, lineSpacing: 8) {
-                    HStack(spacing: 8) {
-                        Text("CI 监控通知")
-                            .font(DesignFonts.body(13, weight: .medium))
-                            .foregroundStyle(palette.textPrimary.color)
-                        CapsuleSwitch(isOn: notifyCiBinding, label: "CI 监控通知")
-                            .disabled(draft == nil || saving)
+                if isNarrow {
+                    VStack(alignment: .leading, spacing: 8) {
+                        FlowButtonRow(spacing: 14, lineSpacing: 8) {
+                            ciTogglePair
+                        }
+                        repoSelectorButton(summary: selectorSummary)
                     }
-                    .frame(minHeight: LayoutMetrics.formControlHeight)
-
-                    HStack(spacing: 8) {
-                        Text("过滤 Bot")
-                            .font(DesignFonts.body(13, weight: .medium))
-                            .foregroundStyle(palette.textPrimary.color)
-                        CapsuleSwitch(isOn: filterBotsBinding, label: "过滤 Bot")
-                            .disabled(draft == nil || saving)
+                } else {
+                    HStack(spacing: 14) {
+                        ciTogglePair
+                        repoSelectorButton(summary: selectorSummary)
                     }
-                    .frame(minHeight: LayoutMetrics.formControlHeight)
+                    .frame(height: LayoutMetrics.formControlHeight)
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Button {
-                        reposExpandedBinding.wrappedValue.toggle()
-                    } label: {
-                        HStack(spacing: 8) {
-                            LucideIcon(.folderGit2, size: 15)
-                                .foregroundStyle(palette.accent.color)
-                            Text(repoSelectorSummary)
+                if reposExpandedBinding.wrappedValue {
+                    let queryTrimmed = repoQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    let filtered = queryTrimmed.isEmpty
+                        ? currentCatalog
+                        : currentCatalog.filter { $0.fullName.lowercased().contains(queryTrimmed) }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            LucideIcon(.search, size: 14)
+                                .foregroundStyle(palette.textMuted.color)
+                            TextField("搜索或输入 owner/repo", text: $repoQuery)
+                                .textFieldStyle(.plain)
                                 .font(DesignFonts.body(13))
                                 .foregroundStyle(palette.textPrimary.color)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            LucideIcon(reposExpandedBinding.wrappedValue ? .chevronDown : .chevronRight, size: 15)
-                                .foregroundStyle(palette.textMuted.color)
+                                .onSubmit { addQueryRepo(catalog: currentCatalog, configured: configured) }
                         }
                         .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
+                        .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.surface.color))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .strokeBorder(palette.borderStrong.color, lineWidth: 1)
                         )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainHitButtonStyle())
 
-                    if reposExpandedBinding.wrappedValue {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                LucideIcon(.search, size: 14)
-                                    .foregroundStyle(palette.textMuted.color)
-                                TextField("搜索或输入 owner/repo", text: $repoQuery)
-                                    .textFieldStyle(.plain)
-                                    .font(DesignFonts.body(13))
-                                    .foregroundStyle(palette.textPrimary.color)
-                                    .onSubmit { addQueryRepo() }
-                            }
-                            .padding(.horizontal, 10)
-                            .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight)
-                            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.surface.color))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(palette.borderStrong.color, lineWidth: 1)
-                            )
+                        BoundedPassthroughScrollView(maxHeight: 180) {
+                            FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                                let allSelected = configured.isEmpty
+                                Button {
+                                    if var current = draft {
+                                        current.githubCiRepositories = []
+                                        draft = current
+                                    }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        LucideIcon(.check, size: 12)
+                                            .foregroundStyle((allSelected ? palette.accent : palette.textMuted).color)
+                                        Text("全部仓库")
+                                            .font(DesignFonts.body(13, weight: .medium))
+                                            .foregroundStyle((allSelected ? palette.accent : palette.textSecondary).color)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 5)
+                                    .background(Capsule().fill((allSelected ? palette.accentSoft : palette.surface).color))
+                                    .overlay(Capsule().strokeBorder((allSelected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
+                                }
+                                .buttonStyle(PlainHitButtonStyle())
 
-                            ScrollView {
-                                FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                                    let allSelected = configuredRepos.isEmpty
+                                ForEach(filtered) { option in
+                                    let selected = GithubCiDomain.isSelected(option, configured: configured)
                                     Button {
                                         if var current = draft {
-                                            current.githubCiRepositories = []
+                                            current.githubCiRepositories = GithubCiDomain.toggleSelection(option, configured: configured)
                                             draft = current
                                         }
                                     } label: {
                                         HStack(spacing: 5) {
-                                            LucideIcon(.check, size: 12)
-                                                .foregroundStyle((allSelected ? palette.accent : palette.textMuted).color)
-                                            Text("全部仓库")
+                                            LucideIcon(selected ? .check : .plus, size: 12)
+                                                .foregroundStyle((selected ? palette.accent : palette.textMuted).color)
+                                            Text(option.fullName)
                                                 .font(DesignFonts.body(13, weight: .medium))
-                                                .foregroundStyle((allSelected ? palette.accent : palette.textSecondary).color)
+                                                .foregroundStyle((selected ? palette.accent : palette.textPrimary).color)
+                                                .lineLimit(1)
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 5)
-                                        .background(Capsule().fill((allSelected ? palette.accentSoft : palette.surface).color))
-                                        .overlay(Capsule().strokeBorder((allSelected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
+                                        .background(Capsule().fill((selected ? palette.accentSoft : palette.surface).color))
+                                        .overlay(Capsule().strokeBorder((selected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
                                     }
                                     .buttonStyle(PlainHitButtonStyle())
-
-                                    ForEach(filteredCatalog) { option in
-                                        let selected = GithubCiDomain.isSelected(option, configured: configuredRepos)
-                                        Button {
-                                            if var current = draft {
-                                                current.githubCiRepositories = GithubCiDomain.toggleSelection(option, configured: configuredRepos)
-                                                draft = current
-                                            }
-                                        } label: {
-                                            HStack(spacing: 5) {
-                                                LucideIcon(selected ? .check : .plus, size: 12)
-                                                    .foregroundStyle((selected ? palette.accent : palette.textMuted).color)
-                                                Text(option.fullName)
-                                                    .font(DesignFonts.body(13, weight: .medium))
-                                                    .foregroundStyle((selected ? palette.accent : palette.textPrimary).color)
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 5)
-                                            .background(Capsule().fill((selected ? palette.accentSoft : palette.surface).color))
-                                            .overlay(Capsule().strokeBorder((selected ? palette.accentBorder : palette.borderStrong).color, lineWidth: 1))
-                                        }
-                                        .buttonStyle(PlainHitButtonStyle())
-                                    }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .frame(maxHeight: 180)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
-                        )
                     }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+                    )
                 }
 
                 if let err = errorMessage ?? snapshot?.error, !err.isEmpty {
@@ -333,23 +364,27 @@ public struct GithubCiCardView: View {
                         .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
                 }
 
-                if visibleRuns.isEmpty {
+                if runs.isEmpty {
                     Text(busy ? "正在读取 CI" : "暂无工作流运行")
                         .font(DesignFonts.body(13))
                         .foregroundStyle(palette.textMuted.color)
                         .padding(.vertical, 6)
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(visibleRuns.enumerated()), id: \.element.id) { index, run in
-                            if index > 0 {
-                                Rectangle()
-                                    .fill(palette.borderSubtle.color)
-                                    .frame(height: 1)
+                    BoundedPassthroughScrollView(maxHeight: 260) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
+                                if index > 0 {
+                                    Rectangle()
+                                        .fill(palette.borderSubtle.color)
+                                        .frame(height: 1)
+                                }
+                                ciRunRow(run)
                             }
-                            ciRunRow(run)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
@@ -372,7 +407,13 @@ public struct GithubCiCardView: View {
                 let intervalNs: UInt64 = (snapshot?.refreshing == true) ? 2_000_000_000 : 15_000_000_000
                 try? await Task.sleep(nanoseconds: intervalNs)
                 guard !Task.isCancelled else { break }
-                if store.isWindowVisible {
+                let shouldPoll = store.isWindowVisible && (
+                    expandedBinding.wrappedValue
+                        || snapshot == nil
+                        || snapshot?.refreshing == true
+                        || (draft?.notifyGithubCi ?? false)
+                )
+                if shouldPoll {
                     await fetchStatus(forceRefresh: false)
                 }
             }
@@ -389,7 +430,7 @@ public struct GithubCiCardView: View {
         let shortSha = String(run.headSha.prefix(7))
         let formattedTime = GithubCiDomain.formatRunUpdatedAt(run.updatedAt)
 
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 10) {
                 HStack(alignment: .top, spacing: 8) {
                     Circle()
@@ -465,14 +506,15 @@ public struct GithubCiCardView: View {
                 Spacer(minLength: 4)
 
                 Text(formattedTime)
-                    .font(DesignFonts.body(13))
+                    .font(DesignFonts.body(13).monospacedDigit())
                     .foregroundStyle(palette.textMuted.color)
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .help(run.updatedAt)
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.vertical, 7)
     }
 
     private func statusDotColor(for tone: StatusChipTone) -> Color {
@@ -484,10 +526,10 @@ public struct GithubCiCardView: View {
         }
     }
 
-    private func addQueryRepo() {
+    private func addQueryRepo(catalog: [GithubCiRepoOption], configured: [String]) {
         let q = repoQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, var current = draft else { return }
-        current.githubCiRepositories = GithubCiDomain.addSelection(query: q, catalog: catalog, configured: configuredRepos)
+        current.githubCiRepositories = GithubCiDomain.addSelection(query: q, catalog: catalog, configured: configured)
         draft = current
         repoQuery = ""
     }
@@ -522,10 +564,22 @@ public struct GithubCiCardView: View {
     }
 
     private func syncCiIssueSignature(machineScope: String) {
+        let configured = Self.computeConfiguredRepos(draft?.githubCiRepositories)
+        let currentCatalog = GithubCiDomain.buildCatalog(
+            repositories: snapshot?.repositories ?? [],
+            runs: snapshot?.runs ?? [],
+            configured: configured
+        )
+        let runs = Self.computeVisibleRuns(
+            snapshotRuns: snapshot?.runs ?? [],
+            catalog: currentCatalog,
+            configured: configured,
+            filterBots: draft?.githubCiFilterBots ?? true
+        )
         let sig = ProbeDisclosureRules.ciIssueSignature(
             errorMessage: errorMessage,
             snapshotError: snapshot?.error,
-            visibleRuns: visibleRuns
+            visibleRuns: runs
         )
         var updated = rulesBinding.wrappedValue
         updated.observeIssue(machineScope: machineScope, section: .ci, issueSignature: sig)

@@ -11,13 +11,27 @@ use anyhow::Result;
 use std::time::Duration;
 
 pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
+    static LAST_IDLE_EVICT: std::sync::Mutex<Option<std::time::Instant>> =
+        std::sync::Mutex::new(None);
     let config = &load_config()?;
-    let idle_ttl = agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
-    super::antigravity::evict_idle_cache(idle_ttl).await;
-    let _ = agenthub_core::read_tasks::spawn_blocking(move || {
-        agenthub_core::evict_idle_detail_caches(idle_ttl);
-    })
-    .await;
+    let should_evict = LAST_IDLE_EVICT
+        .lock()
+        .ok()
+        .is_some_and(|mut guard| match *guard {
+            Some(last) if last.elapsed() < Duration::from_secs(60) => false,
+            _ => {
+                *guard = Some(std::time::Instant::now());
+                true
+            }
+        });
+    if should_evict {
+        let idle_ttl = agenthub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
+        super::antigravity::evict_idle_cache(idle_ttl).await;
+        let _ = agenthub_core::read_tasks::spawn_blocking(move || {
+            agenthub_core::evict_idle_detail_caches(idle_ttl);
+        })
+        .await;
+    }
     db.recover_interrupted_native_deliveries()?;
 
     for provider in [
@@ -41,9 +55,10 @@ pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<
         } else {
             NativeScan::default()
         };
-        db.stage_native_notifications_from_config(
+        db.stage_native_notifications_with_precheck(
             provider,
             &scan,
+            Some(config),
             load_config,
             provider == NativeProvider::Claude
                 && provider.enabled(config)

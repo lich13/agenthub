@@ -54,7 +54,7 @@ pub(super) async fn grok_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: GrokRenameArgs = parse_args(args_json)?;
+    let args: GrokRenameRequest = parse_args(args_json)?;
     encode(
         AgentHubUseCases::new(ctx.state.platform())
             .grok()
@@ -156,7 +156,7 @@ pub(super) async fn claude_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ClaudeRenameArgs = parse_args(args_json)?;
+    let args: ClaudeRenameRequest = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {

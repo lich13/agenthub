@@ -68,7 +68,7 @@ pub(crate) async fn start_probe_action(
 ) -> ApiResponse {
     let auth = crate::audit::actor();
     let config_path = state.config_path().to_path_buf();
-    let plan = probe_service::plan_probe_action(state.platform(), action, &config_path)?;
+    let plan = probe_service::plan_probe_action(action)?;
     let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)?;
     ok(json!({"job_id": id}))
 }
@@ -121,10 +121,9 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
 
 async fn probe_status_fresh_value(state: AppState, force_refresh: bool) -> Value {
     match async {
-        let mut status = probe_runtime(&state)?
-            .status_with_options(force_refresh)
+        let status = probe_runtime(&state)?
+            .status_with_db(&state.db, force_refresh)
             .await?;
-        let _ = probe_service::enrich_probe_status_from_db(&mut status, &state.db);
         Ok::<_, anyhow::Error>(json!(status))
     }
     .await

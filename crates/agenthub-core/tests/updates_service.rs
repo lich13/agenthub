@@ -4,9 +4,10 @@ use agenthub_core::{
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
         macos_updater_update_available_output, update_job_plan, update_status,
-        update_status_with_recent_check_job, UpdateAction, UpdateExecutionMethod,
-        UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
+        update_status_with_recent_check_job, UpdateAction, UpdateExecutionMethod, UpdateState,
+        MACOS_UPDATER_CHECKING_OUTPUT,
     },
+    update::JobFailureCategory,
 };
 
 #[test]
@@ -53,7 +54,7 @@ fn macos_update_status_uses_app_updater_without_linux_leakage() {
     assert_eq!(status.state, UpdateState::Failed);
     assert_eq!(
         status.failure_category,
-        Some(UpdateFailureCategory::NetworkTlsEof)
+        Some(JobFailureCategory::NetworkTlsEof)
     );
     assert!(status.recommended_action.contains("app updater"));
     assert!(!serialized.contains("systemctl"));

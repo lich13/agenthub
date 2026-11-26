@@ -110,7 +110,7 @@ pub(super) async fn threads_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ThreadRenameArgs = parse_args(args_json)?;
+    let args: ThreadRenameRequest = parse_args(args_json)?;
     encode(
         thread_service::rename_thread_with_state(ctx.state, args.thread_id, args.name)
             .await

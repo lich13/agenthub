@@ -37,14 +37,18 @@ impl Default for AgentHubHostCallbacks {
     }
 }
 
-pub struct RpcSink {
+pub(crate) struct RpcSink {
     request_id: u64,
     callback: AgentHubRpcCallback,
     ctx: usize,
 }
 
 impl RpcSink {
-    pub fn new(request_id: u64, callback: AgentHubRpcCallback, ctx: *mut std::ffi::c_void) -> Self {
+    pub(crate) fn new(
+        request_id: u64,
+        callback: AgentHubRpcCallback,
+        ctx: *mut std::ffi::c_void,
+    ) -> Self {
         Self {
             request_id,
             callback,
@@ -52,7 +56,7 @@ impl RpcSink {
         }
     }
 
-    pub fn respond(mut self, result: Result<String, String>) {
+    pub(crate) fn respond(mut self, result: Result<String, String>) {
         match result {
             Ok(json) => self.send(true, &json),
             Err(error) => self.send(false, &error),
@@ -88,7 +92,7 @@ impl Drop for RpcSink {
     }
 }
 
-pub struct HostBridge {
+pub(crate) struct HostBridge {
     callbacks: AgentHubHostCallbacks,
     closing: AtomicBool,
 }
@@ -103,7 +107,7 @@ impl Drop for HostBridge {
 }
 
 impl HostBridge {
-    pub fn new(callbacks: AgentHubHostCallbacks) -> Arc<Self> {
+    pub(crate) fn new(callbacks: AgentHubHostCallbacks) -> Arc<Self> {
         if let Some(retain) = callbacks.retain_host_ctx {
             // SAFETY: the caller owns a live context throughout initialization.
             unsafe { retain(callbacks.host_ctx) };
@@ -114,15 +118,15 @@ impl HostBridge {
         })
     }
 
-    pub fn is_closing(&self) -> bool {
+    pub(crate) fn is_closing(&self) -> bool {
         self.closing.load(Ordering::Acquire)
     }
 
-    pub fn begin_shutdown(&self) {
+    pub(crate) fn begin_shutdown(&self) {
         self.closing.store(true, Ordering::Release);
     }
 
-    pub fn deliver_ci_notifications(&self, payload_json: &str) {
+    pub(crate) fn deliver_ci_notifications(&self, payload_json: &str) {
         if self.is_closing() {
             return;
         }
@@ -138,7 +142,10 @@ impl HostBridge {
         }
     }
 
-    pub fn request_app_restart(&self) {
+    pub(crate) fn request_app_restart(&self) {
+        if self.is_closing() {
+            return;
+        }
         if let Some(restart) = self.callbacks.request_app_restart {
             // SAFETY: HostBridge retains the context through this call.
             unsafe { restart(self.callbacks.host_ctx) };

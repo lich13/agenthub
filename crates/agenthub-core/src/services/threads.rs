@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    codex::{MessageBlock, ThreadDetail, ThreadSummary},
-    platform::PlatformPaths,
-};
+use crate::codex::{MessageBlock, ThreadDetail, ThreadSummary};
 
 pub const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 pub const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
@@ -65,10 +62,7 @@ pub fn load_thread_read_model_inputs(
     )
 }
 
-pub fn plan_threads_list_request(
-    _platform: &PlatformPaths,
-    mut query: ThreadsQuery,
-) -> anyhow::Result<ThreadListPlan> {
+pub fn plan_threads_list_request(mut query: ThreadsQuery) -> anyhow::Result<ThreadListPlan> {
     query.q = query
         .q
         .as_deref()
@@ -80,7 +74,6 @@ pub fn plan_threads_list_request(
 }
 
 pub fn plan_thread_detail_request(
-    _platform: &PlatformPaths,
     request: ThreadDetailRequest,
 ) -> anyhow::Result<ThreadDetailPlan> {
     let thread_id = required_thread_id(&request.id)?;
@@ -93,20 +86,16 @@ pub fn plan_thread_detail_request(
 }
 
 pub fn plan_thread_blocks_request(
-    platform: &PlatformPaths,
     id: &str,
     limit: Option<usize>,
     before: Option<String>,
 ) -> anyhow::Result<ThreadDetailPlan> {
-    plan_thread_detail_request(
-        platform,
-        ThreadDetailRequest {
-            id: id.to_string(),
-            limit: Some(clamp_block_limit(limit)),
-            full: Some(false),
-            before,
-        },
-    )
+    plan_thread_detail_request(ThreadDetailRequest {
+        id: id.to_string(),
+        limit: Some(clamp_block_limit(limit)),
+        full: Some(false),
+        before,
+    })
 }
 
 pub fn read_window_thread_detail(
@@ -164,12 +153,9 @@ fn required_thread_id(value: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
 
-    use crate::{
-        platform::PlatformPaths,
-        services::threads::{
-            plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
-            requested_thread_limit, ThreadsQuery,
-        },
+    use crate::services::threads::{
+        plan_thread_blocks_request, plan_thread_detail_request, plan_threads_list_request,
+        requested_thread_limit, ThreadsQuery,
     };
 
     #[test]
@@ -180,32 +166,23 @@ mod tests {
 
     #[test]
     fn read_plans_capture_shared_thread_sources_for_linux_and_macos_only() {
-        let linux = PlatformPaths::linux_server();
-        let macos = PlatformPaths::macos("/fixture/home");
-
-        let list = plan_threads_list_request(
-            &linux,
-            ThreadsQuery {
-                archived: Some(true),
-                q: Some("  task  ".to_string()),
-                limit: Some(25),
-            },
-        )
+        let list = plan_threads_list_request(ThreadsQuery {
+            archived: Some(true),
+            q: Some("  task  ".to_string()),
+            limit: Some(25),
+        })
         .unwrap();
 
         assert_eq!(list.query.archived, Some(true));
         assert_eq!(list.query.q.as_deref(), Some("task"));
         assert_eq!(list.fetch_limit, 25);
 
-        let detail = plan_thread_detail_request(
-            &macos,
-            super::ThreadDetailRequest {
-                id: " thread-a ".to_string(),
-                limit: Some(600),
-                full: Some(false),
-                before: None,
-            },
-        )
+        let detail = plan_thread_detail_request(super::ThreadDetailRequest {
+            id: " thread-a ".to_string(),
+            limit: Some(600),
+            full: Some(false),
+            before: None,
+        })
         .unwrap();
         assert_eq!(detail.thread_id, "thread-a");
         assert_eq!(
@@ -213,7 +190,7 @@ mod tests {
             Some(super::THREAD_DETAIL_MAX_BLOCK_LIMIT)
         );
 
-        let blocks = plan_thread_blocks_request(&macos, " thread-a ", Some(0), None).unwrap();
+        let blocks = plan_thread_blocks_request(" thread-a ", Some(0), None).unwrap();
         assert_eq!(blocks.block_limit, Some(1));
     }
 }

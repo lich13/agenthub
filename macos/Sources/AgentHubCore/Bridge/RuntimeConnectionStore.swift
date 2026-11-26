@@ -24,7 +24,6 @@ public final class RuntimeConnectionStore: ObservableObject {
     @Published public private(set) var writes: Int = 0
     @Published public private(set) var changing: Bool = false
     @Published public var connectionError: String?
-    @Published public var connectionNotice: String?
 
     @Published public private(set) var capabilities: RuntimeCapabilityMatrix = .bootstrap
     @Published public var capabilitiesError: String?
@@ -97,6 +96,11 @@ public final class RuntimeConnectionStore: ObservableObject {
     public func updateWindowState(visible: Bool) {
         guard isWindowVisible != visible else { return }
         isWindowVisible = visible
+        if !visible {
+            GfmLayoutCache.shared.clear()
+            LucideVectorCatalog.clearImageCache()
+            NotificationCenter.default.post(name: .agentHubWindowDidHide, object: self)
+        }
     }
 
     public var hasAnyActiveModal: Bool {
@@ -317,11 +321,10 @@ public final class RuntimeConnectionStore: ObservableObject {
                 // A pending scan start must return its ID before the source channel disconnects.
                 await runBeforeMachineChangeCleanups(Array(readCleanups.values))
             }
-            res = try await invokeLocal(command, args: RemoteRequestEnvelope(request: request))
+            res = try await invokeLocal(command, args: RPCRequestEnvelope(request: request))
             if updatesState, let view = res as? RemoteConnectionView {
                 applyConnectionView(view)
                 connectionError = nil
-                connectionNotice = command == "remote.save" ? "已保存" : nil
                 capabilitiesError = nil
                 jobPollingTask?.cancel()
                 jobPollingTask = nil
@@ -431,6 +434,9 @@ public final class RuntimeConnectionStore: ObservableObject {
                         )
                         if let job {
                             self.trackedJobs[id] = job
+                            if job.isTerminal {
+                                self.trackedJobOrder.removeAll { $0 == id }
+                            }
                         } else {
                             self.trackedJobs[id] = Self.missingTrackedJobRecord(
                                 id: id,
@@ -455,7 +461,7 @@ public final class RuntimeConnectionStore: ObservableObject {
     }
 }
 
-private struct RemoteRequestEnvelope<T: Encodable>: Encodable {
+struct RPCRequestEnvelope<T: Encodable>: Encodable {
     let request: T
 }
 
@@ -467,4 +473,8 @@ private struct RemoteInvokeRequest<Args: Encodable>: Encodable {
 
 private struct RemoteInvokeEnvelope<Args: Encodable>: Encodable {
     let request: RemoteInvokeRequest<Args>
+}
+
+extension Notification.Name {
+    static let agentHubWindowDidHide = Notification.Name("agenthub.windowDidHide")
 }

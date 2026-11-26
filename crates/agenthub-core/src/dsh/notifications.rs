@@ -388,9 +388,18 @@ fn anchor(file: &mut File, offset: u64) -> Result<Vec<u8>> {
     Ok(hash.finalize().to_vec())
 }
 fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>> {
+    read_with_limit(path, id, key, FILE_LIMIT)
+}
+
+fn read_with_limit(
+    path: &Path,
+    id: &str,
+    key: &str,
+    file_limit: u64,
+) -> Result<Option<NativeStreamSnapshot>> {
     let before = file_stamp(path)?;
     ensure!(
-        before.len <= FILE_LIMIT,
+        before.len <= file_limit,
         "DSH notification source exceeds size limit"
     );
     let identity = native_probe::file_identity(path)?;
@@ -420,7 +429,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         })
         .unwrap_or_else(|| Cached {
             path: path.into(),
-            stamp: before.clone(),
+            stamp: before,
             identity: identity.clone(),
             offset: 0,
             anchor: vec![],
@@ -430,7 +439,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         });
     file.seek(SeekFrom::Start(current.offset))?;
     let mut bytes = Vec::new();
-    file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+    file.take(file_limit + 1).read_to_end(&mut bytes)?;
     let compressed = path.extension().is_some_and(|x| x == "zstd");
     let mut consumed = 0;
     if compressed {
@@ -456,10 +465,10 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             );
             let mut decoded = Vec::new();
             zstd::stream::read::Decoder::new(&tail[..size])?
-                .take(FILE_LIMIT + 1)
+                .take(file_limit + 1)
                 .read_to_end(&mut decoded)?;
             ensure!(
-                decoded.len() as u64 <= FILE_LIMIT && decoded.ends_with(b"\n"),
+                decoded.len() as u64 <= file_limit && decoded.ends_with(b"\n"),
                 "invalid DSH compressed records"
             );
             consume_lines(&mut current.state, &decoded)?;

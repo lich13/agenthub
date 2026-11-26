@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 zeroize.workspace = true
 libc.workspace = true
@@ -23,7 +26,7 @@ hex.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
-tokio = { version = "1.37", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "process", "sync", "io-util"] }
+tokio = { version = "1.37", default-features = false, features = ["macros", "rt", "time", "process", "sync", "io-util"] }
 toml.workspace = true
 toml_edit.workspace = true
 url.workspace = true

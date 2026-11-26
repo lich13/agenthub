@@ -11,7 +11,7 @@ pub(super) async fn handle_grok_list(state: AppState, args: Value) -> ApiRespons
 
 pub(super) async fn handle_grok_detail(state: AppState, args: Value) -> ApiResponse {
     let id = rpc_required_string(&args, "id")?;
-    let query: crate::api::grok::GrokDetailQuery = rpc_payload(&args)?;
+    let query: agenthub_core::services::use_cases::PageWindowOptions = rpc_payload(&args)?;
     grok_detail(state, id, query).await
 }
 

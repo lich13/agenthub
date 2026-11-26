@@ -61,13 +61,15 @@ use history::{extract_live_step_events, read_offline_transcript_events};
 pub use history::{load_all_events, read_attachment, session_detail};
 
 mod mutations;
+#[cfg(test)]
+pub(crate) use mutations::preview_batch_item;
 pub(crate) use mutations::{
     descendant_ids, is_presence_locked_shared, resolve_target_store_and_endpoint,
 };
 pub use mutations::{
     execute_batch_item, execute_unified_cleanup_targets, live_item_is_actively_executing,
     live_item_is_failed, live_item_is_running, live_item_is_waiting, preview_batch,
-    preview_batch_item, preview_unified_cleanup_candidates, rename_session, set_archived,
+    preview_unified_cleanup_candidates, rename_session, set_archived,
     UnifiedAntigravityStepOutcome,
 };
 
@@ -251,10 +253,6 @@ impl AntigravityPaths {
 
     pub fn presence_dir(&self) -> PathBuf {
         self.home.join("presence")
-    }
-
-    pub fn proto_cache(&self) -> PathBuf {
-        self.home.join("agyhub_summaries_proto.pb")
     }
 
     pub fn canonical_path(&self, id: &str) -> PathBuf {
@@ -488,69 +486,39 @@ fn conv_db_modified_within(
         .any(|ms| now_ms.saturating_sub(ms) <= window_ms && ms <= now_ms + 60_000)
 }
 
-type ConvDbStepsCacheEntry = (
-    (
-        cli_meta::AntigravityFileStamp,
-        Option<cli_meta::AntigravityFileStamp>,
-    ),
-    Option<&'static str>,
-    std::time::Instant,
-);
-type TranscriptTailCacheEntry = (
-    cli_meta::AntigravityFileStamp,
-    std::sync::Arc<Vec<Value>>,
-    std::time::Instant,
-);
-type TranscriptSpawnedCacheEntry = (
-    cli_meta::AntigravityFileStamp,
-    Vec<String>,
-    std::time::Instant,
-);
+use crate::file_stamp::{FileStamp, StampedCache};
+
+type SqliteStampPair = (FileStamp, Option<FileStamp>);
 type TranscriptSummaryValue = (Option<String>, Option<String>, usize, Option<String>);
-type TranscriptSummaryCacheEntry = (
-    cli_meta::AntigravityFileStamp,
-    TranscriptSummaryValue,
-    std::time::Instant,
-);
 
-static CONV_DB_STEPS_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, ConvDbStepsCacheEntry>>,
-> = std::sync::Mutex::new(None);
-static TRANSCRIPT_TAIL_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, TranscriptTailCacheEntry>>,
-> = std::sync::Mutex::new(None);
-static TRANSCRIPT_SPAWNED_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, TranscriptSpawnedCacheEntry>>,
-> = std::sync::Mutex::new(None);
-static TRANSCRIPT_SUMMARY_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<PathBuf, TranscriptSummaryCacheEntry>>,
-> = std::sync::Mutex::new(None);
+static CONV_DB_STEPS_CACHE: StampedCache<SqliteStampPair, Option<&'static str>> =
+    StampedCache::new(512, 2 * 1024 * 1024);
+static TRANSCRIPT_TAIL_CACHE: StampedCache<FileStamp, std::sync::Arc<Vec<Value>>> =
+    StampedCache::new(64, 16 * 1024 * 1024);
+static TRANSCRIPT_SPAWNED_CACHE: StampedCache<FileStamp, Vec<String>> =
+    StampedCache::new(512, 4 * 1024 * 1024);
+static TRANSCRIPT_SUMMARY_CACHE: StampedCache<FileStamp, TranscriptSummaryValue> =
+    StampedCache::new(512, 4 * 1024 * 1024);
 
-fn evict_idle_map<K: Eq + std::hash::Hash, V>(
-    mutex: &std::sync::Mutex<Option<std::collections::HashMap<K, V>>>,
-    max_idle: std::time::Duration,
-    ts_of: impl Fn(&V) -> std::time::Instant,
-) {
-    if let Ok(mut guard) = mutex.lock() {
-        if let Some(map) = guard.as_mut() {
-            let before = map.len();
-            map.retain(|_, v| ts_of(v).elapsed() < max_idle);
-            let evicted = map.len() < before;
-            if map.is_empty() {
-                *guard = None;
-            }
-            if evicted {
-                crate::note_cache_eviction();
-            }
+fn json_value_weight(value: &Value) -> u64 {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => 16,
+        Value::String(s) => 24 + s.capacity() as u64,
+        Value::Array(items) => 24 + items.iter().map(json_value_weight).sum::<u64>(),
+        Value::Object(map) => {
+            32 + map
+                .iter()
+                .map(|(k, v)| 24 + k.capacity() as u64 + json_value_weight(v))
+                .sum::<u64>()
         }
     }
 }
 
 pub(crate) fn evict_idle_file_caches(max_idle: std::time::Duration) {
-    evict_idle_map(&CONV_DB_STEPS_CACHE, max_idle, |(_, _, ts)| *ts);
-    evict_idle_map(&TRANSCRIPT_TAIL_CACHE, max_idle, |(_, _, ts)| *ts);
-    evict_idle_map(&TRANSCRIPT_SPAWNED_CACHE, max_idle, |(_, _, ts)| *ts);
-    evict_idle_map(&TRANSCRIPT_SUMMARY_CACHE, max_idle, |(_, _, ts)| *ts);
+    CONV_DB_STEPS_CACHE.evict_idle(max_idle);
+    TRANSCRIPT_TAIL_CACHE.evict_idle(max_idle);
+    TRANSCRIPT_SPAWNED_CACHE.evict_idle(max_idle);
+    TRANSCRIPT_SUMMARY_CACHE.evict_idle(max_idle);
 }
 
 fn read_transcript_tail_rows(
@@ -568,16 +536,9 @@ fn read_transcript_tail_rows(
     } else {
         return None;
     };
-    let stamp = cli_meta::AntigravityFileStamp::of(&chosen)?;
-    if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
-        if let Some((cached_stamp, ref rows, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&chosen))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return Some((chosen, rows.clone()));
-            }
-        }
+    let stamp = FileStamp::of_nofollow(&chosen)?;
+    if let Some(rows) = TRANSCRIPT_TAIL_CACHE.get(&chosen, &stamp) {
+        return Some((chosen, rows));
     }
     let mut file = fs::File::open(&chosen).ok()?;
     let len = file.metadata().ok()?.len();
@@ -596,24 +557,10 @@ fn read_transcript_tail_rows(
         std::ops::ControlFlow::Continue(())
     })
     .ok()?;
+    let weight = 64 + rows.iter().map(json_value_weight).sum::<u64>();
     let arc_rows = std::sync::Arc::new(rows);
-    if cli_meta::AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 64 && !map.contains_key(&chosen) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(
-                chosen.clone(),
-                (stamp, arc_rows.clone(), std::time::Instant::now()),
-            );
-        }
+    if FileStamp::of_nofollow(&chosen).as_ref() == Some(&stamp) {
+        TRANSCRIPT_TAIL_CACHE.insert(chosen.clone(), stamp, arc_rows.clone(), weight);
     }
     Some((chosen, arc_rows))
 }
@@ -632,18 +579,11 @@ pub(crate) fn extract_transcript_spawned_subagents(
     } else {
         return Vec::new();
     };
-    let Some(stamp) = cli_meta::AntigravityFileStamp::of(&chosen) else {
+    let Some(stamp) = FileStamp::of_nofollow(&chosen) else {
         return Vec::new();
     };
-    if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
-        if let Some((cached_stamp, ref ids, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&chosen))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return ids.clone();
-            }
-        }
+    if let Some(ids) = TRANSCRIPT_SPAWNED_CACHE.get(&chosen, &stamp) {
+        return ids;
     }
     let Ok(file) = fs::File::open(&chosen) else {
         return Vec::new();
@@ -651,12 +591,12 @@ pub(crate) fn extract_transcript_spawned_subagents(
     let mut reader = BufReader::new(file);
     let mut spawned = BTreeSet::new();
     let read_ok = prompt::for_each_bounded_jsonl_line(&mut reader, |line| {
-        if line.windows(14).any(|w| w == b"conversationId")
-            || line.windows(15).any(|w| w == b"conversation_id")
-        {
-            if let Ok(row) = serde_json::from_slice::<Value>(line) {
-                if row["type"].as_str() != Some("SYSTEM_MESSAGE") {
-                    super::collect_spawned_subagent_ids(&row, &mut spawned);
+        if let Ok(line_str) = std::str::from_utf8(line) {
+            if line_str.contains("conversationId") || line_str.contains("conversation_id") {
+                if let Ok(row) = serde_json::from_str::<Value>(line_str) {
+                    if row["type"].as_str() != Some("SYSTEM_MESSAGE") {
+                        super::collect_spawned_subagent_ids(&row, &mut spawned);
+                    }
                 }
             }
         }
@@ -665,52 +605,22 @@ pub(crate) fn extract_transcript_spawned_subagents(
     .is_ok();
     spawned.remove(id);
     let result: Vec<String> = spawned.into_iter().collect();
-    if read_ok && cli_meta::AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&chosen) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(chosen, (stamp, result.clone(), std::time::Instant::now()));
-        }
+    if read_ok && FileStamp::of_nofollow(&chosen).as_ref() == Some(&stamp) {
+        let weight = 64 + result.iter().map(|s| 24 + s.len() as u64).sum::<u64>();
+        TRANSCRIPT_SPAWNED_CACHE.insert(chosen, stamp, result.clone(), weight);
     }
     result
 }
 
 fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'static str> {
     let db_path = paths.conversations_dir().join(format!("{id}.db"));
-    let stamp = cli_meta::AntigravityFileStamp::sqlite_pair(&db_path)?;
-    if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
-        if let Some((cached_stamp, cached_status, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&db_path))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return *cached_status;
-            }
-        }
+    let stamp = FileStamp::sqlite_pair(&db_path)?;
+    if let Some(cached_status) = CONV_DB_STEPS_CACHE.get(&db_path, &stamp) {
+        return cached_status;
     }
     let status = inspect_conv_db_steps_status_uncached(&db_path).ok()?;
-    if cli_meta::AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&db_path) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(db_path, (stamp, status, std::time::Instant::now()));
-        }
+    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        CONV_DB_STEPS_CACHE.insert(db_path, stamp, status, 64);
     }
     status
 }
@@ -733,11 +643,7 @@ fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'stat
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
-    let cols: BTreeSet<String> = {
-        let mut s = conn.prepare("PRAGMA table_info(steps)")?;
-        let rows = s.query_map([], |row| row.get::<_, String>(1))?;
-        rows.collect::<rusqlite::Result<BTreeSet<_>>>()?
-    };
+    let cols = crate::db::table_columns(&conn, "steps")?;
     if !cols.contains("idx") || !cols.contains("step_type") || !cols.contains("status") {
         return Ok(None);
     }
@@ -1377,14 +1283,8 @@ fn summary_from_live_json(
     ))
 }
 
-fn summaries_table_columns(conn: &Connection) -> BTreeSet<String> {
-    let Ok(mut stmt) = conn.prepare("PRAGMA table_info(conversation_summaries)") else {
-        return BTreeSet::new();
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
-        return BTreeSet::new();
-    };
-    rows.flatten().collect()
+fn summaries_table_columns(conn: &Connection) -> std::collections::HashSet<String> {
+    crate::db::table_columns(conn, "conversation_summaries").unwrap_or_default()
 }
 
 pub(crate) fn has_conversation_parents_table(conn: &Connection) -> bool {
@@ -1410,38 +1310,48 @@ fn summarize_unindexed_transcript(
     let Some(path) = chosen else {
         return (None, None, 0, None);
     };
-    let Some(stamp) = cli_meta::AntigravityFileStamp::of(&path) else {
+    let Some(stamp) = FileStamp::of_nofollow(&path) else {
         return (None, None, 0, None);
     };
-    if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
-        if let Some((cached_stamp, ref val, ref mut ts)) =
-            guard.as_mut().and_then(|m| m.get_mut(&path))
-        {
-            if *cached_stamp == stamp {
-                *ts = std::time::Instant::now();
-                return val.clone();
-            }
-        }
+    if let Some(val) = TRANSCRIPT_SUMMARY_CACHE.get(&path, &stamp) {
+        return val;
     }
-    let Ok(file) = fs::File::open(&path) else {
+    let Ok(file) = crate::file_stamp::open_regular_nofollow(&path) else {
         return (None, None, 0, None);
     };
+    #[derive(serde::Deserialize)]
+    struct TranscriptSummaryLine {
+        #[serde(default, rename = "type")]
+        step_type: String,
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        created_at: String,
+        #[serde(default)]
+        content: Option<String>,
+    }
     let mut reader = BufReader::new(file);
     let mut first_title: Option<String> = None;
-    let mut last_preview: Option<String> = None;
-    let mut last_created_at: Option<String> = None;
+    let mut last_raw_preview: Option<String> = None;
+    let mut last_raw_created_at = String::new();
     let mut count = 0usize;
-    let read_ok = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
-        let st = row["type"].as_str().unwrap_or("");
+    let read_ok = prompt::for_each_bounded_jsonl_line(&mut reader, |line| {
+        let Ok(row) = serde_json::from_slice::<TranscriptSummaryLine>(line) else {
+            return std::ops::ControlFlow::Continue(());
+        };
+        let st = row.step_type.as_str();
         if matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
             return std::ops::ControlFlow::Continue(());
         }
         count += 1;
-        if let Some(ts) = row["created_at"].as_str().filter(|s| !s.is_empty()) {
-            last_created_at = index_timestamp(ts);
+        if !row.created_at.is_empty() {
+            last_raw_created_at = row.created_at;
         }
-        if first_title.is_none() && prompt::is_transcript_user_row(&row) {
-            if let Some(raw) = row["content"].as_str().filter(|s| !s.trim().is_empty()) {
+        let is_user = st != "SYSTEM_MESSAGE"
+            && (matches!(st, "USER_INPUT" | "REQUEST")
+                || matches!(row.source.as_str(), "USER_EXPLICIT" | "USER"));
+        if first_title.is_none() && is_user {
+            if let Some(raw) = row.content.as_deref().filter(|s| !s.trim().is_empty()) {
                 let cleaned = prompt::extract_antigravity_user_request(raw);
                 let candidate = cleaned.lines().map(str::trim).find(|l| !l.is_empty());
                 if let Some(line_text) = candidate {
@@ -1449,32 +1359,28 @@ fn summarize_unindexed_transcript(
                 }
             }
         } else if st == "PLANNER_RESPONSE" {
-            if let Some(reply) = row["content"]
-                .as_str()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                last_preview = Some(reply.chars().take(160).collect());
+            if let Some(reply) = row.content.filter(|s| !s.trim().is_empty()) {
+                last_raw_preview = Some(reply);
             }
         }
         std::ops::ControlFlow::Continue(())
     })
     .is_ok();
+    let last_preview = last_raw_preview
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(160).collect());
+    let last_created_at = (!last_raw_created_at.is_empty())
+        .then(|| index_timestamp(&last_raw_created_at))
+        .flatten();
     let result = (first_title, last_preview, count, last_created_at);
-    if read_ok && cli_meta::AntigravityFileStamp::of(&path).as_ref() == Some(&stamp) {
-        if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
-            let map = guard.get_or_insert_with(std::collections::HashMap::new);
-            if map.len() >= 512 && !map.contains_key(&path) {
-                if let Some(oldest) = map
-                    .iter()
-                    .min_by_key(|(_, (_, _, ts))| *ts)
-                    .map(|(k, _)| k.clone())
-                {
-                    map.remove(&oldest);
-                }
-            }
-            map.insert(path, (stamp, result.clone(), std::time::Instant::now()));
-        }
+    if read_ok && FileStamp::of_nofollow(&path).as_ref() == Some(&stamp) {
+        let weight = 128
+            + result.0.as_ref().map_or(0, String::len) as u64
+            + result.1.as_ref().map_or(0, String::len) as u64
+            + result.3.as_ref().map_or(0, String::len) as u64;
+        TRANSCRIPT_SUMMARY_CACHE.insert(path, stamp, result.clone(), weight);
     }
     result
 }
@@ -2249,7 +2155,47 @@ pub(crate) fn list_summaries_from_source(
     list_summaries_from_source_filtered(paths, filter_id, None, payload)
 }
 
-fn list_summaries_from_source_filtered(
+fn collect_store_storage_ids(store: &AntigravityPaths) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if !store.home.is_dir() {
+        return out;
+    }
+    let Ok(canonical_home) = fs::canonicalize(&store.home) else {
+        return out;
+    };
+    if let Ok(entries) = fs::read_dir(store.conversations_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !matches!(ext, "db" | "pb") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if uuid::Uuid::parse_str(id).is_ok()
+                && fs::canonicalize(&path).is_ok_and(|c| c.starts_with(&canonical_home))
+            {
+                out.insert(id.to_owned());
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(store.brain_dir()) {
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if uuid::Uuid::parse_str(&id).is_ok()
+                && fs::canonicalize(entry.path()).is_ok_and(|c| c.starts_with(&canonical_home))
+            {
+                out.insert(id);
+            }
+        }
+    }
+    out
+}
+
+pub(super) fn list_summaries_from_source_filtered(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
     archived_filter: Option<bool>,
@@ -2257,15 +2203,42 @@ fn list_summaries_from_source_filtered(
 ) -> Result<Vec<ProviderSessionSummary>> {
     let primary = paths.primary_store();
     let cli = paths.cli_store();
-    let (cli_offline_items, cli_subagents) = match cli.as_ref() {
+    let (cli_offline_items, cli_subagents, cli_roots) = match cli.as_ref() {
         Some(cli_store) => {
-            let (items, subs, _) =
-                list_offline_summaries_with_subagents(cli_store, filter_id, archived_filter)
-                    .unwrap_or_default();
-            (items, subs)
+            list_offline_summaries_with_subagents(cli_store, filter_id, archived_filter)
+                .unwrap_or_default()
         }
-        None => (Vec::new(), BTreeSet::new()),
+        None => (Vec::new(), BTreeSet::new(), BTreeSet::new()),
     };
+    let cli_storage_ids: Option<BTreeSet<String>> = if filter_id.is_none() {
+        cli.as_ref().map(|cli_store| {
+            let mut ids = collect_store_storage_ids(cli_store);
+            ids.extend(cli_roots.iter().cloned());
+            ids
+        })
+    } else {
+        None
+    };
+    let primary_storage_ids: Option<BTreeSet<String>> = filter_id
+        .is_none()
+        .then(|| collect_store_storage_ids(&primary));
+    let has_cli_storage = |id: &str| -> bool {
+        if cli_roots.contains(id) {
+            return true;
+        }
+        match (&cli_storage_ids, cli.as_ref()) {
+            (Some(set), _) => set.contains(id),
+            (None, Some(cli_store)) => has_primary_session_storage(cli_store, id),
+            (None, None) => false,
+        }
+    };
+    let has_primary_storage = |id: &str| -> bool {
+        match &primary_storage_ids {
+            Some(set) => set.contains(id),
+            None => has_primary_session_storage(&primary, id),
+        }
+    };
+
     let now_ms = now_epoch_ms();
     let mut seen_primary_roots: BTreeSet<String> = BTreeSet::new();
     let (mut items, primary_subagents) = if let Some(payload) = payload {
@@ -2273,10 +2246,7 @@ fn list_summaries_from_source_filtered(
             list_offline_summaries_with_subagents(&primary, filter_id, archived_filter)
                 .unwrap_or_default();
         for id in primary_roots {
-            if paths.cli_store_for_id(&id).is_none()
-                && !cli_subagents.contains(&id)
-                && has_primary_session_storage(&primary, &id)
-            {
+            if !has_cli_storage(&id) && !cli_subagents.contains(&id) && has_primary_storage(&id) {
                 seen_primary_roots.insert(id);
             }
         }
@@ -2287,7 +2257,7 @@ fn list_summaries_from_source_filtered(
             .flatten()
             .filter(|(id, _)| {
                 filter_id.is_none_or(|target| target == id.as_str())
-                    && paths.cli_store_for_id(id).is_none()
+                    && !has_cli_storage(id)
                     && !cli_subagents.contains(id.as_str())
                     && !primary_subs.contains(id.as_str())
             })
@@ -2316,9 +2286,9 @@ fn list_summaries_from_source_filtered(
                 // the service and must not reappear from the index.
                 .filter(|item| {
                     !loaded.contains(item.id.as_str())
-                        && paths.cli_store_for_id(&item.id).is_none()
+                        && !has_cli_storage(&item.id)
                         && !cli_subagents.contains(&item.id)
-                        && has_primary_session_storage(&primary, &item.id)
+                        && has_primary_storage(&item.id)
                 }),
         );
         (items, primary_subs)
@@ -2326,15 +2296,13 @@ fn list_summaries_from_source_filtered(
         let (primary_offline, primary_subs, primary_roots) =
             list_offline_summaries_with_subagents(&primary, filter_id, archived_filter)?;
         for id in primary_roots {
-            if paths.cli_store_for_id(&id).is_none() && !cli_subagents.contains(&id) {
+            if !has_cli_storage(&id) && !cli_subagents.contains(&id) {
                 seen_primary_roots.insert(id);
             }
         }
         let filtered = primary_offline
             .into_iter()
-            .filter(|item| {
-                paths.cli_store_for_id(&item.id).is_none() && !cli_subagents.contains(&item.id)
-            })
+            .filter(|item| !has_cli_storage(&item.id) && !cli_subagents.contains(&item.id))
             .collect();
         (filtered, primary_subs)
     };
@@ -2346,12 +2314,13 @@ fn list_summaries_from_source_filtered(
             !seen_primary_roots.contains(&item.id) && !primary_subagents.contains(&item.id)
         }));
     }
-    items.sort_by(|a, b| {
-        b.updated_at
-            .as_deref()
-            .unwrap_or("")
-            .cmp(a.updated_at.as_deref().unwrap_or(""))
-            .then_with(|| a.id.cmp(&b.id))
+    items.sort_by_cached_key(|item| {
+        (
+            std::cmp::Reverse(crate::timestamps::sort_key_nanos(
+                item.updated_at.as_deref(),
+            )),
+            item.id.clone(),
+        )
     });
     Ok(items)
 }
@@ -2659,7 +2628,7 @@ mod tests {
         // Rename (with non-ASCII UTF-8 octal prototext round-trip)
         let renamed = rename_session(&paths, &id, "ChatGPT 风格新标题").unwrap();
         assert_eq!(renamed.title, "ChatGPT 风格新标题");
-        assert!(!paths.proto_cache().exists());
+        assert!(!paths.home.join("agyhub_summaries_proto.pb").exists());
 
         // Archive & Restore
         let archived_item = set_archived(&paths, &id, true).unwrap();

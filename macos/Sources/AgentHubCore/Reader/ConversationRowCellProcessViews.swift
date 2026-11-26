@@ -340,7 +340,7 @@ extension ConversationRowCellView {
         containerStack.addArrangedSubview(makeLeftRailContainer(content: thoughtView, width: width, palette: palette))
     }
 
-    public static func thoughtPreviewSnippet(_ markdown: String) -> String {
+    static func thoughtPreviewSnippet(_ markdown: String) -> String {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
         for rawLine in cleaned.components(separatedBy: .newlines) {
             let trimmed = rawLine
@@ -381,7 +381,10 @@ extension ConversationRowCellView {
             open: false,
             isEnabled: true,
             hoverFill: palette.hover.nsColor.withAlphaComponent(0.55),
-            openFill: .clear
+            openFill: .clear,
+            focusRingColor: palette.accent.nsColor,
+            accessibilityExpanded: open,
+            accessibilityLabelText: "思考内容"
         )
         header.onTap = { [weak coordinator] in
             coordinator?.toggleDisclosurePreservingAnchor(stateKey: stateKey, aliases: aliases, currentlyOpen: open)
@@ -472,8 +475,9 @@ extension ConversationRowCellView {
         palette: DesignPalette,
         coordinator: ConversationTableCoordinator
     ) -> NSView {
-        let attr = ConversationTableCoordinator.renderThoughtAttributedString(markdown: markdown, palette: palette)
-        let h = max(22, ReaderSelectableTextView.measureHeight(attributed: attr, width: width))
+        let layout = coordinator.cachedThoughtLayout(markdown: markdown, width: width)
+        let attr = layout.attributed
+        let h = layout.height
         let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: width, height: h))
         tv.applyAttributedText(attr, width: width)
         tv.translatesAutoresizingMaskIntoConstraints = false
@@ -506,7 +510,10 @@ extension ConversationRowCellView {
             open: open,
             isEnabled: true,
             hoverFill: palette.surface.nsColor,
-            openFill: palette.surface.nsColor
+            openFill: palette.surface.nsColor,
+            focusRingColor: palette.accent.nsColor,
+            accessibilityExpanded: open,
+            accessibilityLabelText: title
         )
         row.clipsToBounds = false
         row.onTap = action
@@ -718,7 +725,10 @@ extension ConversationRowCellView {
                 open: false,
                 isEnabled: true,
                 hoverFill: palette.hover.nsColor.withAlphaComponent(0.55),
-                openFill: .clear
+                openFill: .clear,
+                focusRingColor: palette.accent.nsColor,
+                accessibilityExpanded: cmdOpen,
+                accessibilityLabelText: cmd.title
             )
             header.onTap = { [weak coordinator] in
                 coordinator?.toggleDisclosurePreservingAnchor(stateKey: cmd.id, aliases: cmd.sourceIds, currentlyOpen: cmdOpen)

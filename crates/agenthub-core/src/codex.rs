@@ -41,8 +41,7 @@ pub(crate) use rollout_events::{
 };
 pub use rollout_events::{
     is_macos_network_volume_path, rollout_completion_last_agent_message,
-    rollout_completion_last_agent_message_selection,
-    rollout_completion_last_agent_message_with_source, rollout_hook_stop_message_selection,
+    rollout_completion_last_agent_message_selection, rollout_hook_stop_message_selection,
     rollout_pending_feedback, rollout_request_user_input_state, thread_detail_page_from_summary,
     AssistantFeedback, RolloutMessageSelection, RolloutRequestUserInputState,
 };
@@ -50,9 +49,10 @@ pub use rollout_events::{
 use rollout_events::{
     is_request_user_input, message_blocks_from_events, parse_message_event, RolloutScan,
 };
+pub use rollout_file::is_compressed as is_compressed_rollout_path;
 use session_index::{read_session_index, SessionIndexEntry};
 pub(crate) use thread_rows::coalesce_non_empty as coalesce_non_empty_columns;
-use thread_rows::read_thread_rows;
+use thread_rows::read_thread_rows_filtered;
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
     ThreadStatus, ThreadSummary, UserInputAnswer, UserInputOption, UserInputQuestion,
@@ -95,8 +95,7 @@ fn list_threads_inner(
     limit: usize,
     include_storage: bool,
 ) -> Result<Vec<ThreadSummary>> {
-    let mut rows = read_thread_rows(paths)?;
-    rows.retain(|row| matches!(row.summary.status, ThreadStatus::Archived) == archived);
+    let rows = read_thread_rows_filtered(paths, Some(archived))?;
     let session_index = read_session_index(paths).unwrap_or_default();
     let canonical_home = (!is_macos_network_volume_path(&paths.home))
         .then(|| fs::canonicalize(&paths.home).ok())
@@ -139,6 +138,18 @@ fn list_threads_inner(
     }
     enriched.sort_by_cached_key(|(row, _)| row.message_time_sort_key());
     enriched.truncate(limit.max(1));
+    let mut workspace_root_memo: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    for (row, _) in &mut enriched {
+        row.workspace_root = row.cwd.as_deref().and_then(|cwd| {
+            if let Some(cached) = workspace_root_memo.get(cwd) {
+                return cached.clone();
+            }
+            let resolved = crate::workspace_root::resolve_workspace_root(cwd);
+            workspace_root_memo.insert(cwd.to_owned(), resolved.clone());
+            resolved
+        });
+    }
     if include_storage {
         use crate::session_storage::{self, SessionStorageSize, StorageScope};
         for (row, storage_valid) in &mut enriched {
@@ -167,27 +178,52 @@ pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<Threa
     Ok(visible.then_some(row.summary))
 }
 
-/// Notification discovery reads headers only; it never scans every historical rollout.
-pub fn notification_thread_headers(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
-    Ok(notification_thread_headers_with_identities(paths)?
-        .into_iter()
-        .map(|(summary, _)| summary)
-        .collect())
+fn resolve_missing_notification_rollout_path(
+    paths: &CodexPaths,
+    canonical_home: &mut Option<Option<PathBuf>>,
+    summary: &mut ThreadSummary,
+) {
+    let Some(raw_path) = summary.rollout_path.as_deref() else {
+        return;
+    };
+    if raw_path.is_file() {
+        return;
+    }
+    let home = canonical_home
+        .get_or_insert_with(|| {
+            (!is_macos_network_volume_path(&paths.home))
+                .then(|| fs::canonicalize(&paths.home).ok())
+                .flatten()
+        })
+        .as_deref();
+    if let Some(resolved) = resolve_existing_rollout_path_with_home(paths, home, raw_path, false) {
+        summary.rollout_path = Some(resolved);
+    }
 }
 
 /// Batch notification header + task identity read on a single SQLite connection.
 pub fn notification_thread_headers_with_identities(
     paths: &CodexPaths,
 ) -> Result<Vec<(ThreadSummary, CodexTaskIdentity)>> {
-    thread_rows::read_notification_thread_headers_with_identities(paths)
+    let mut rows = thread_rows::read_notification_thread_headers_with_identities(paths)?;
+    let mut canonical_home = None;
+    for (summary, _) in &mut rows {
+        resolve_missing_notification_rollout_path(paths, &mut canonical_home, summary);
+    }
+    Ok(rows)
 }
 
 /// Recheck one notification source without loading other threads or history.
 pub fn notification_thread_header(paths: &CodexPaths, id: &str) -> Result<Option<ThreadSummary>> {
+    let mut canonical_home = None;
     Ok(thread_rows::read_thread_rows_matching(paths, Some(id))?
         .into_iter()
         .map(|row| row.summary)
-        .find(|thread| !matches!(thread.status, ThreadStatus::Archived)))
+        .find(|thread| !matches!(thread.status, ThreadStatus::Archived))
+        .map(|mut summary| {
+            resolve_missing_notification_rollout_path(paths, &mut canonical_home, &mut summary);
+            summary
+        }))
 }
 
 fn enrich_local_thread_row(
@@ -203,7 +239,7 @@ fn enrich_local_thread_row(
             .map(|m| !m.file_type().is_symlink())
             .unwrap_or(false)
     });
-    enrich_local_thread_row_with_home(
+    let visible = enrich_local_thread_row_with_home(
         paths,
         canonical_home.as_deref(),
         storage_canonical_home,
@@ -212,7 +248,15 @@ fn enrich_local_thread_row(
         true,
         true,
     )
-    .is_some()
+    .is_some();
+    if visible {
+        row.summary.workspace_root = row
+            .summary
+            .cwd
+            .as_deref()
+            .and_then(crate::workspace_root::resolve_workspace_root);
+    }
+    visible
 }
 
 fn enrich_local_thread_row_with_home(
@@ -269,18 +313,7 @@ fn enrich_local_thread_row_with_home(
     (!is_subagent).then_some(storage_valid)
 }
 
-fn resolve_existing_rollout_path(
-    paths: &CodexPaths,
-    path: &Path,
-    archived: bool,
-) -> Option<PathBuf> {
-    let canonical_home = (!is_macos_network_volume_path(&paths.home))
-        .then(|| fs::canonicalize(&paths.home).ok())
-        .flatten();
-    resolve_existing_rollout_path_with_home(paths, canonical_home.as_deref(), path, archived)
-}
-
-fn resolve_existing_rollout_path_with_home(
+pub(super) fn resolve_existing_rollout_path_with_home(
     paths: &CodexPaths,
     canonical_home: Option<&Path>,
     path: &Path,
@@ -441,8 +474,8 @@ fn codex_rollout_turn_can_be_live(root: Option<&Path>, rollout_path: &Path) -> b
     let Some(root) = root else {
         return true;
     };
-    let is_default_home =
-        dirs::home_dir().is_some_and(|home| same_canonical_dir(root, &home.join(".codex")));
+    let is_default_home = dirs::home_dir()
+        .is_some_and(|home| crate::platform::same_canonical_dir(root, &home.join(".codex")));
     if !is_default_home {
         return true;
     }
@@ -457,15 +490,6 @@ fn codex_rollout_turn_can_be_live(root: Option<&Path>, rollout_path: &Path) -> b
         }
     }
     true
-}
-
-fn same_canonical_dir(left: &Path, right: &Path) -> bool {
-    left == right
-        || left
-            .canonicalize()
-            .ok()
-            .zip(right.canonicalize().ok())
-            .is_some_and(|(a, b)| a == b)
 }
 
 fn has_live_codex_host_process() -> bool {

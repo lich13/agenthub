@@ -2,9 +2,8 @@ use super::{ok, ApiResponse};
 use crate::state::AppState;
 use agenthub_core::{
     claude::ClaudeDeleteRequest,
-    services::use_cases::{AgentHubUseCases, QueryLimitRequest},
+    services::use_cases::{AgentHubUseCases, ClaudeRenameRequest, QueryLimitRequest},
 };
-use serde::Deserialize;
 
 pub(crate) async fn claude_list(state: AppState, query: QueryLimitRequest) -> ApiResponse {
     let platform = state.platform().clone();
@@ -27,13 +26,6 @@ pub(crate) async fn claude_detail(
     })
     .await
     .map_err(anyhow::Error::from)??)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ClaudeRenameRequest {
-    pub session_key: String,
-    pub title: String,
 }
 
 pub(crate) async fn claude_rename(state: AppState, request: ClaudeRenameRequest) -> ApiResponse {

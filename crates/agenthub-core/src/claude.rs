@@ -219,9 +219,22 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
 fn digest(value: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(value.as_ref()))
 }
-type LocatedSessions = HashMap<(PathBuf, String), PathBuf>;
+type LocatedSessions = HashMap<(PathBuf, String), (PathBuf, std::time::Instant)>;
 static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessions>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+pub(super) fn evict_idle_located_sessions(max_idle: std::time::Duration) {
+    if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
+        let before = cache.len();
+        let now = std::time::Instant::now();
+        cache.retain(|_, (_, accessed)| now.saturating_duration_since(*accessed) < max_idle);
+        if cache.len() < before {
+            if cache.capacity() > cache.len().saturating_mul(4).max(16) {
+                cache.shrink_to_fit();
+            }
+            crate::note_cache_eviction();
+        }
+    }
+}
 fn key_for(root: &Path, path: &Path, _id: &str) -> String {
     let id = path.file_stem().unwrap_or_default().to_string_lossy();
     let key = format!(
@@ -232,13 +245,20 @@ fn key_for(root: &Path, path: &Path, _id: &str) -> String {
         ))
     );
     if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
+        let now = std::time::Instant::now();
         let cache_key = (root.to_path_buf(), key.clone());
         if cache.len() >= 20_000 && !cache.contains_key(&cache_key) {
-            cache.clear();
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (_, accessed))| *accessed)
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest);
+            }
         }
         // Keep the path scoped by its project root. The same relative
         // filename can exist in several machines or concurrent fixtures.
-        cache.insert(cache_key, path.into());
+        cache.insert(cache_key, (path.into(), now));
     }
     key
 }
@@ -355,11 +375,14 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .projects
         .canonicalize()
         .unwrap_or_else(|_| paths.projects.clone());
-    if let Some(path) = LOCATED_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned())
-    {
+    if let Some(path) = LOCATED_SESSIONS.lock().ok().and_then(|mut cache| {
+        cache
+            .get_mut(&(root.clone(), key.to_owned()))
+            .map(|(p, accessed)| {
+                *accessed = std::time::Instant::now();
+                p.clone()
+            })
+    }) {
         if main_session_path(&root, &path) {
             delete_file_exists(&path)?;
             return Ok(path);
@@ -398,10 +421,14 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
         .projects
         .canonicalize()
         .context("未发现 Claude 会话")?;
-    let located = LOCATED_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned());
+    let located = LOCATED_SESSIONS.lock().ok().and_then(|mut cache| {
+        cache
+            .get_mut(&(root.clone(), key.to_owned()))
+            .map(|(p, accessed)| {
+                *accessed = std::time::Instant::now();
+                p.clone()
+            })
+    });
     if let Some(path) = located {
         // Revalidate every native identity, including the ancestor chain. The
         // lookup stores only paths discovered by our own bounded directory scan.
@@ -564,12 +591,9 @@ pub(crate) fn list_claude_sessions_without_storage(
         }
     }
     result.sort_by_cached_key(|session| {
-        (std::cmp::Reverse(
-            session
-                .updated_at
-                .as_deref()
-                .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
-        ),)
+        (std::cmp::Reverse(crate::timestamps::sort_key_nanos(
+            session.updated_at.as_deref(),
+        )),)
     });
     result.truncate(limit.clamp(1, 500));
     Ok(result)
@@ -764,13 +788,9 @@ pub(crate) fn notification_snapshots(
         if is_agent_filename(&path) {
             continue;
         }
-        if let Ok(summary_parsed) = reader::summary(&path) {
-            if summary_parsed.saw_sidechain && !summary_parsed.saw_primary {
-                continue;
-            }
-        }
-        match reader::probe_snapshot(&path, &canonical_root) {
-            Ok(snapshot) => scan.streams.push(snapshot),
+        match reader::probe_snapshot_if_primary(&path, &canonical_root) {
+            Ok(Some(snapshot)) => scan.streams.push(snapshot),
+            Ok(None) => {}
             Err(_) => scan.errors += 1,
         }
     }
@@ -925,7 +945,7 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
         );
     }
     let before = reader::stamp(path)?;
-    let parsed = reader::read(path)?;
+    let parsed = reader::read_probe_snapshot(path)?;
     ensure!(
         parsed.issues.is_empty(),
         "Claude notification identity is unavailable"
@@ -944,11 +964,12 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
         before == reader::stamp(path)?,
         "Claude notification source changed during read"
     );
-    let assessment = activity::Snapshot::capture_readonly(paths).assess(&parsed, path);
+    let assessment_parsed = parsed.to_summary_parsed();
+    let assessment = activity::Snapshot::capture_readonly(paths).assess(&assessment_parsed, path);
     let native_busy = assessment
         .native_status()
         .is_some_and(|status| status == "busy")
-        && !is_native_busy_causally_stale(&parsed, &assessment);
+        && !is_native_busy_causally_stale(&assessment_parsed, &assessment);
     Ok(ClaudeNotificationContext {
         stream,
         prompts: parsed.prompts.clone(),

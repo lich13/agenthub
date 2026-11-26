@@ -1,8 +1,8 @@
 import SwiftUI
 
-public struct AgentBrandIcon: View {
-    public let agent: AgentBrandId
-    public var size: CGFloat
+struct AgentBrandIcon: View {
+    let agent: AgentBrandId
+    var size: CGFloat
 
     private static let codexPath =
         "M 22.282 9.821 a 5.985 5.985 0 0 0 -0.516 -4.91 6.046 6.046 0 0 0 -6.51 -2.9 A 6.065 6.065 0 0 0 4.981 4.18 a 5.985 5.985 0 0 0 -3.998 2.9 6.046 6.046 0 0 0 0.743 7.097 5.98 5.98 0 0 0 0.51 4.911 6.051 6.051 0 0 0 6.515 2.9 A 5.985 5.985 0 0 0 13.26 24 a 6.056 6.056 0 0 0 5.772 -4.206 5.99 5.99 0 0 0 3.997 -2.9 6.056 6.056 0 0 0 -0.747 -7.073 z M 13.26 22.43 a 4.476 4.476 0 0 1 -2.876 -1.04 l 0.141 -0.081 4.779 -2.758 a 0.795 0.795 0 0 0 0.392 -0.681 v -6.737 l 2.02 1.168 a 0.071 0.071 0 0 1 0.038 0.052 v 5.583 a 4.504 4.504 0 0 1 -4.494 4.494 z M 3.6 18.304 a 4.47 4.47 0 0 1 -0.535 -3.014 l 0.142 0.085 4.783 2.759 a 0.771 0.771 0 0 0 0.78 0 l 5.843 -3.369 v 2.332 a 0.08 0.08 0 0 1 -0.033 0.062 L 9.74 19.95 a 4.5 4.5 0 0 1 -6.14 -1.646 z M 2.34 7.896 a 4.485 4.485 0 0 1 2.366 -1.973 V 11.6 a 0.766 0.766 0 0 0 0.388 0.676 l 5.815 3.355 -2.02 1.168 a 0.076 0.076 0 0 1 -0.071 0 l -4.83 -2.786 A 4.504 4.504 0 0 1 2.34 7.872 z m 16.597 3.855 l -5.833 -3.387 L 15.119 7.2 a 0.076 0.076 0 0 1 0.071 0 l 4.83 2.791 a 4.494 4.494 0 0 1 -0.676 8.105 v -5.678 a 0.79 0.79 0 0 0 -0.407 -0.667 z m 2.01 -3.023 l -0.141 -0.085 -4.774 -2.782 a 0.776 0.776 0 0 0 -0.785 0 L 9.409 9.23 V 6.897 a 0.066 0.066 0 0 1 0.028 -0.061 l 4.83 -2.787 a 4.5 4.5 0 0 1 6.68 4.66 z m -12.64 4.135 l -2.02 -1.164 a 0.08 0.08 0 0 1 -0.038 -0.057 V 6.075 a 4.5 4.5 0 0 1 7.375 -3.453 l -0.142 0.08 L 8.704 5.46 a 0.795 0.795 0 0 0 -0.393 0.681 z m 1.097 -2.365 l 2.602 -1.5 2.607 1.5 v 2.999 l -2.597 1.5 -2.607 -1.5 z"
@@ -21,12 +21,12 @@ public struct AgentBrandIcon: View {
     private static let parsedDeepseekWhalePath: CGPath = SVGPathParser.parse(deepseekWhalePath)
     private static let parsedAntigravityArchPath: CGPath = SVGPathParser.parse(antigravityArchPath)
 
-    public init(_ agent: AgentBrandId, size: CGFloat = 17) {
+    init(_ agent: AgentBrandId, size: CGFloat = 17) {
         self.agent = agent
         self.size = size
     }
 
-    public var body: some View {
+    var body: some View {
         Canvas { context, canvasSize in
             switch agent {
             case .codex:
@@ -157,15 +157,15 @@ public struct AgentBrandIcon: View {
     }
 }
 
-public struct AgentHubLogoView: View {
-    public var size: CGFloat
+struct AgentHubLogoView: View {
+    var size: CGFloat
     private static let parsedStarPath: CGPath = SVGPathParser.parse("M14 11.5L14.9 13.1L16.5 14L14.9 14.9L14 16.5L13.1 14.9L11.5 14L13.1 13.1Z")
 
-    public init(size: CGFloat = 24) {
+    init(size: CGFloat = 24) {
         self.size = size
     }
 
-    public var body: some View {
+    var body: some View {
         Canvas { context, canvasSize in
             let s = min(canvasSize.width, canvasSize.height) / 28.0
             context.scaleBy(x: s, y: s)

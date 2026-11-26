@@ -58,14 +58,25 @@ pub(crate) fn compare_semver(left: &str, right: &str) -> Option<std::cmp::Orderi
     Some(left.cmp(&right))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct ParsedVersion {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct ParsedVersion {
     core: [u64; 3],
     pre: Vec<VersionIdentifier>,
 }
 
 impl ParsedVersion {
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) const fn stable(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            core: [major, minor, patch],
+            pre: Vec::new(),
+        }
+    }
+
+    pub(crate) fn extract_and_parse(value: &str) -> Option<Self> {
+        extract_semver(value).and_then(|semver| Self::parse(&semver))
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         let (core_text, pre_text) = value
             .trim()
             .trim_start_matches('v')
@@ -106,7 +117,7 @@ impl PartialOrd for ParsedVersion {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum VersionIdentifier {
     Numeric(u64),
     Text(String),

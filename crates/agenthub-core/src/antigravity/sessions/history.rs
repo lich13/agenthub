@@ -594,313 +594,373 @@ pub(super) fn read_offline_transcript_events(
     };
 
     if let Some(path) = chosen {
-        let file = fs::File::open(&path)?;
+        let file = crate::file_stamp::open_regular_nofollow(&path)?;
         let mut reader = BufReader::new(file);
-        let mut rows = Vec::new();
-        super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
-            rows.push(row);
-            std::ops::ControlFlow::Continue(())
-        })?;
+        let mut events: Vec<ProviderHistoryEvent> = Vec::new();
+        let mut turn_seq = 0usize;
+        let mut pending_calls: VecDeque<(String, String, usize)> = VecDeque::new();
+        let mut unsettled_event_indices: Vec<(usize, bool)> = Vec::new();
+        let mut turn_rows: Vec<(usize, Value, bool, bool)> = Vec::new();
+        let mut next_idx = 0usize;
 
-        let row_count = rows.len();
-        let mut has_later_planner = vec![false; row_count];
-        let mut has_later_settled_row = vec![false; row_count];
-        let mut seen_planner_in_turn = false;
-        let mut seen_settled_after = false;
-        for (pos, row) in rows.iter().enumerate().rev() {
-            has_later_settled_row[pos] = seen_settled_after;
+        let is_row_settled = |row: &Value, is_user: bool, has_user_payload: bool| -> bool {
             let st = row["type"].as_str().unwrap_or("");
             let sr = row["status"].as_str().unwrap_or("DONE");
-            let is_user = super::prompt::is_transcript_user_row(row);
-            let has_user_payload = is_user && super::prompt::transcript_row_has_user_payload(row);
-            if !matches!(
+            !matches!(
                 sr,
                 "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
             ) && !matches!(
                 st,
                 "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "SYSTEM_MESSAGE" | ""
             ) && (!is_user || has_user_payload)
-            {
-                seen_settled_after = true;
-            }
-            if is_user {
-                if has_user_payload {
-                    seen_planner_in_turn = false;
-                }
-            } else if st == "PLANNER_RESPONSE" {
-                has_later_planner[pos] = seen_planner_in_turn;
-                seen_planner_in_turn = true;
-            }
-        }
+        };
 
-        let mut events: Vec<ProviderHistoryEvent> = Vec::new();
-        let mut turn_seq = 0usize;
-        let mut pending_calls: VecDeque<(String, String, usize)> = VecDeque::new();
-        for (idx, row) in rows.into_iter().enumerate() {
-            let step_index = row["step_index"]
-                .as_u64()
-                .or_else(|| {
-                    row["step_index"]
-                        .as_str()
-                        .and_then(|s| s.parse::<u64>().ok())
-                })
-                .unwrap_or(idx as u64);
-            let step_type = row["type"].as_str().unwrap_or("");
-            let source = row["source"].as_str().unwrap_or("");
-            let timestamp = row["created_at"].as_str().map(str::to_owned);
-            let status_raw = row["status"].as_str().unwrap_or("DONE");
-            let status = if step_type == "ERROR_MESSAGE" {
-                "failed"
-            } else {
-                match status_raw {
-                    "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
-                        if has_later_settled_row[idx] =>
-                    {
-                        "completed"
+        let mut flush_turn = |turn_rows: &mut Vec<(usize, Value, bool, bool)>,
+                              later_turn_has_settled: bool| {
+            if turn_rows.is_empty() {
+                return;
+            }
+            let n = turn_rows.len();
+            let mut has_later_planner = vec![false; n];
+            let mut has_later_settled_row = vec![false; n];
+            let mut seen_planner_in_turn = false;
+            let mut seen_settled_after = later_turn_has_settled;
+            for (pos, (_, row, is_user, has_user_payload)) in turn_rows.iter().enumerate().rev() {
+                has_later_settled_row[pos] = seen_settled_after;
+                let st = row["type"].as_str().unwrap_or("");
+                if is_row_settled(row, *is_user, *has_user_payload) {
+                    seen_settled_after = true;
+                }
+                if *is_user {
+                    if *has_user_payload {
+                        seen_planner_in_turn = false;
                     }
-                    "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED" => "running",
-                    "ERROR" | "FAILED" | "CANCELED" | "INVALID" | "INTERRUPTED" => "failed",
-                    _ => "completed",
+                } else if st == "PLANNER_RESPONSE" {
+                    has_later_planner[pos] = seen_planner_in_turn;
+                    seen_planner_in_turn = true;
                 }
-            };
-
-            if super::prompt::is_transcript_user_row(&row) {
-                let raw_text = row["content"].as_str().unwrap_or("");
-                let cleaned_text = super::prompt::extract_antigravity_user_request(raw_text);
-                let mut parts = Vec::new();
-                if !cleaned_text.trim().is_empty() {
-                    parts.push(json!({"type": "text", "text": cleaned_text}));
-                }
-                if let Some(media) = row["media"].as_array() {
-                    for item in media {
-                        if let Some(uri) = item["uri"].as_str() {
-                            let decoded = decode_file_uri(uri);
-                            parts.push(
-                                json!({"type": "text", "text": format!("<image path=\"{decoded}\">")}),
-                            );
-                            parts.push(json!({
-                                "type": "image",
-                                "url": decoded,
-                                "mimeType": item["mime_type"].as_str().unwrap_or("image/png")
-                            }));
-                            parts.push(json!({"type": "text", "text": "</image>"}));
+            }
+            if seen_settled_after {
+                for (ev_idx, _) in unsettled_event_indices.drain(..) {
+                    if let Some(ev) = events.get_mut(ev_idx) {
+                        if ev.status.is_none() || ev.status.as_deref() == Some("running") {
+                            ev.status = Some("completed".into());
                         }
                     }
                 }
-                if parts.is_empty() {
-                    continue;
-                }
-                turn_seq = turn_seq.saturating_add(1);
-                for (_, _, call_idx) in pending_calls.drain(..) {
-                    if let Some(ev) = events.get_mut(call_idx) {
-                        ev.status.get_or_insert_with(|| "completed".into());
-                    }
-                }
-                let turn_id = Some(format!("turn-{turn_seq}"));
-                let event_id = format!("transcript-{step_index}-user");
-                let user_msg = crate::user_message::parse_literal_user_message(
-                    &event_id,
-                    &Value::Array(parts),
-                );
-                let mut ev = make_history_event(
-                    event_id,
-                    timestamp,
-                    "user_message",
-                    "user",
-                    Some(user_msg.text.clone()),
-                    turn_id,
-                    Some(status),
-                );
-                ev.user_message = Some(user_msg);
-                events.push(ev);
-            } else if step_type == "PLANNER_RESPONSE" {
-                let turn_id = Some(format!("turn-{turn_seq}"));
-                if let Some(thinking) = row["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
-                    events.push(make_history_event(
-                        format!("transcript-{step_index}-thinking"),
-                        timestamp.clone(),
-                        "thinking",
-                        "assistant",
-                        Some(thinking.to_owned()),
-                        turn_id.clone(),
-                        Some(status),
-                    ));
-                }
-                let is_intermediate = has_later_planner[idx];
-                if is_intermediate {
-                    if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
-                    {
-                        events.push(make_history_event(
-                            format!("transcript-{step_index}-commentary"),
-                            timestamp.clone(),
-                            "thinking",
-                            "assistant",
-                            Some(content.to_owned()),
-                            turn_id.clone(),
-                            Some(status),
-                        ));
-                    }
-                }
-                let has_tool_calls = row["tool_calls"]
-                    .as_array()
-                    .is_some_and(|calls| !calls.is_empty());
-                let has_final_reply = !is_intermediate
-                    && !has_tool_calls
-                    && row["content"]
-                        .as_str()
-                        .is_some_and(|s| !s.trim().is_empty());
-                if let Some(calls) = row["tool_calls"].as_array() {
-                    for (ci, call) in calls.iter().enumerate() {
-                        let name = call["name"]
+            }
+
+            for (pos, (idx, row, _, _)) in turn_rows.drain(..).enumerate() {
+                let step_index = row["step_index"]
+                    .as_u64()
+                    .or_else(|| {
+                        row["step_index"]
                             .as_str()
-                            .or_else(|| call["tool_name"].as_str())
-                            .unwrap_or("tool");
-                        let args = call
-                            .get("arguments")
-                            .or_else(|| call.get("args"))
-                            .map(|v| {
-                                v.as_str()
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| format!("{v:#}"))
-                            })
-                            .filter(|s| !s.trim().is_empty());
-                        let result = call
-                            .get("output")
-                            .or_else(|| call.get("result"))
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.trim().is_empty())
-                            .map(str::to_owned);
-                        let call_id = call["id"]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| format!("transcript-{step_index}-call-{ci}"));
-                        let call_status = if result.is_none()
-                            && !has_later_settled_row[idx]
-                            && !has_final_reply
-                            && status != "failed"
+                            .and_then(|s| s.parse::<u64>().ok())
+                    })
+                    .unwrap_or(idx as u64);
+                let step_type = row["type"].as_str().unwrap_or("");
+                let source = row["source"].as_str().unwrap_or("");
+                let timestamp = row["created_at"].as_str().map(str::to_owned);
+                let status_raw = row["status"].as_str().unwrap_or("DONE");
+                let status = if step_type == "ERROR_MESSAGE" {
+                    "failed"
+                } else {
+                    match status_raw {
+                        "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED"
+                            if has_later_settled_row[pos] =>
                         {
-                            None
-                        } else {
-                            Some(status)
-                        };
-                        let call_idx = events.len();
-                        if result.is_none() {
-                            pending_calls.push_back((call_id.clone(), name.to_owned(), call_idx));
+                            "completed"
                         }
-                        events.push(make_tool_event(
-                            format!("transcript-{step_index}-tool-{ci}"),
-                            timestamp.clone(),
-                            "tool_call",
-                            name,
-                            Some(call_id),
-                            turn_id.clone(),
-                            call_status,
-                            args,
-                            result,
-                        ));
+                        "RUNNING" | "WAITING" | "PENDING" | "GENERATING" | "QUEUED" => "running",
+                        "ERROR" | "FAILED" | "CANCELED" | "INVALID" | "INTERRUPTED" => "failed",
+                        _ => "completed",
                     }
-                }
-                if !is_intermediate {
-                    if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
-                    {
-                        events.push(make_history_event(
-                            format!("transcript-{step_index}-assistant"),
-                            timestamp,
-                            "assistant_message",
-                            "assistant",
-                            Some(content.to_owned()),
-                            turn_id,
-                            Some(status),
-                        ));
+                };
+                let track_unsettled = status == "running" && !has_later_settled_row[pos];
+
+                if super::prompt::is_transcript_user_row(&row) {
+                    let raw_text = row["content"].as_str().unwrap_or("");
+                    let cleaned_text = super::prompt::extract_antigravity_user_request(raw_text);
+                    let mut parts = Vec::new();
+                    if !cleaned_text.trim().is_empty() {
+                        parts.push(json!({"type": "text", "text": cleaned_text}));
                     }
-                }
-            } else if step_type == "FINISH" {
-                for (_, _, call_idx) in pending_calls.drain(..) {
-                    if let Some(ev) = events.get_mut(call_idx) {
-                        ev.status.get_or_insert_with(|| "completed".into());
+                    if let Some(media) = row["media"].as_array() {
+                        for item in media {
+                            if let Some(uri) = item["uri"].as_str() {
+                                let decoded = decode_file_uri(uri);
+                                parts.push(json!({
+                                    "type": "text",
+                                    "text": format!("<image path=\"{decoded}\">")
+                                }));
+                                parts.push(json!({
+                                    "type": "image",
+                                    "url": decoded,
+                                    "mimeType": item["mime_type"].as_str().unwrap_or("image/png")
+                                }));
+                                parts.push(json!({"type": "text", "text": "</image>"}));
+                            }
+                        }
                     }
-                }
-                continue;
-            } else if step_type == "ERROR_MESSAGE" {
-                for (_, _, call_idx) in pending_calls.drain(..) {
-                    if let Some(ev) = events.get_mut(call_idx) {
-                        ev.status.get_or_insert_with(|| "failed".into());
+                    if parts.is_empty() {
+                        continue;
                     }
-                }
-                let err_text = row["content"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
-                    .unwrap_or("执行出错")
-                    .to_owned();
-                events.push(make_tool_event(
-                    format!("transcript-{step_index}-error"),
-                    timestamp,
-                    "tool_call",
-                    "error_message",
-                    None,
-                    Some(format!("turn-{turn_seq}")),
-                    Some("failed"),
-                    None,
-                    Some(err_text),
-                ));
-            } else if step_type == "SYSTEM_MESSAGE" {
-                if source == "SYSTEM" {
+                    turn_seq = turn_seq.saturating_add(1);
                     for (_, _, call_idx) in pending_calls.drain(..) {
                         if let Some(ev) = events.get_mut(call_idx) {
                             ev.status.get_or_insert_with(|| "completed".into());
                         }
                     }
-                }
-                continue;
-            } else if matches!(step_type, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
-                continue;
-            } else {
-                let turn_id = Some(format!("turn-{turn_seq}"));
-                let content = row["content"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
-                    .map(str::to_owned);
-                if let Some((call_id, tool_name, call_idx)) = pending_calls.pop_front() {
-                    if let Some(call_ev) = events.get_mut(call_idx) {
-                        call_ev.status.get_or_insert_with(|| status.to_owned());
-                        if is_subagent_coordination_tool(&tool_name) {
-                            if content.is_some() {
-                                call_ev.result = content;
+                    let turn_id = Some(format!("turn-{turn_seq}"));
+                    let event_id = format!("transcript-{step_index}-user");
+                    let user_msg = crate::user_message::parse_literal_user_message(
+                        &event_id,
+                        &Value::Array(parts),
+                    );
+                    let mut ev = make_history_event(
+                        event_id,
+                        timestamp,
+                        "user_message",
+                        "user",
+                        Some(user_msg.text.clone()),
+                        turn_id,
+                        Some(status),
+                    );
+                    ev.user_message = Some(user_msg);
+                    if track_unsettled {
+                        unsettled_event_indices.push((events.len(), false));
+                    }
+                    events.push(ev);
+                } else if step_type == "PLANNER_RESPONSE" {
+                    let turn_id = Some(format!("turn-{turn_seq}"));
+                    if let Some(thinking) =
+                        row["thinking"].as_str().filter(|s| !s.trim().is_empty())
+                    {
+                        if track_unsettled {
+                            unsettled_event_indices.push((events.len(), false));
+                        }
+                        events.push(make_history_event(
+                            format!("transcript-{step_index}-thinking"),
+                            timestamp.clone(),
+                            "thinking",
+                            "assistant",
+                            Some(thinking.to_owned()),
+                            turn_id.clone(),
+                            Some(status),
+                        ));
+                    }
+                    let is_intermediate = has_later_planner[pos];
+                    if is_intermediate {
+                        if let Some(content) =
+                            row["content"].as_str().filter(|s| !s.trim().is_empty())
+                        {
+                            if track_unsettled {
+                                unsettled_event_indices.push((events.len(), false));
                             }
-                            call_ev.status = Some(status.to_owned());
-                            continue;
+                            events.push(make_history_event(
+                                format!("transcript-{step_index}-commentary"),
+                                timestamp.clone(),
+                                "thinking",
+                                "assistant",
+                                Some(content.to_owned()),
+                                turn_id.clone(),
+                                Some(status),
+                            ));
                         }
                     }
+                    let has_tool_calls = row["tool_calls"]
+                        .as_array()
+                        .is_some_and(|calls| !calls.is_empty());
+                    let has_final_reply = !is_intermediate
+                        && !has_tool_calls
+                        && row["content"]
+                            .as_str()
+                            .is_some_and(|s| !s.trim().is_empty());
+                    if let Some(calls) = row["tool_calls"].as_array() {
+                        for (ci, call) in calls.iter().enumerate() {
+                            let name = call["name"]
+                                .as_str()
+                                .or_else(|| call["tool_name"].as_str())
+                                .unwrap_or("tool");
+                            let args = call
+                                .get("arguments")
+                                .or_else(|| call.get("args"))
+                                .map(|v| {
+                                    v.as_str()
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| format!("{v:#}"))
+                                })
+                                .filter(|s| !s.trim().is_empty());
+                            let result = call
+                                .get("output")
+                                .or_else(|| call.get("result"))
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.trim().is_empty())
+                                .map(str::to_owned);
+                            let call_id = call["id"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("transcript-{step_index}-call-{ci}"));
+                            let call_status = if result.is_none()
+                                && !has_later_settled_row[pos]
+                                && !has_final_reply
+                                && status != "failed"
+                            {
+                                None
+                            } else {
+                                Some(status)
+                            };
+                            let call_idx = events.len();
+                            if result.is_none() {
+                                pending_calls.push_back((
+                                    call_id.clone(),
+                                    name.to_owned(),
+                                    call_idx,
+                                ));
+                            }
+                            if track_unsettled || call_status.is_none() {
+                                unsettled_event_indices.push((call_idx, call_status.is_none()));
+                            }
+                            events.push(make_tool_event(
+                                format!("transcript-{step_index}-tool-{ci}"),
+                                timestamp.clone(),
+                                "tool_call",
+                                name,
+                                Some(call_id),
+                                turn_id.clone(),
+                                call_status,
+                                args,
+                                result,
+                            ));
+                        }
+                    }
+                    if !is_intermediate {
+                        if let Some(content) =
+                            row["content"].as_str().filter(|s| !s.trim().is_empty())
+                        {
+                            if track_unsettled {
+                                unsettled_event_indices.push((events.len(), false));
+                            }
+                            events.push(make_history_event(
+                                format!("transcript-{step_index}-assistant"),
+                                timestamp,
+                                "assistant_message",
+                                "assistant",
+                                Some(content.to_owned()),
+                                turn_id,
+                                Some(status),
+                            ));
+                        }
+                    }
+                } else if step_type == "FINISH" {
+                    for (_, _, call_idx) in pending_calls.drain(..) {
+                        if let Some(ev) = events.get_mut(call_idx) {
+                            ev.status.get_or_insert_with(|| "completed".into());
+                        }
+                    }
+                    continue;
+                } else if step_type == "ERROR_MESSAGE" {
+                    for (_, _, call_idx) in pending_calls.drain(..) {
+                        if let Some(ev) = events.get_mut(call_idx) {
+                            ev.status.get_or_insert_with(|| "failed".into());
+                        }
+                    }
+                    let err_text = row["content"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
+                        .unwrap_or("执行出错")
+                        .to_owned();
                     events.push(make_tool_event(
-                        format!("transcript-{step_index}-toolresult"),
-                        timestamp,
-                        "tool_result",
-                        &tool_name,
-                        Some(call_id),
-                        turn_id,
-                        Some(status),
-                        None,
-                        content,
-                    ));
-                } else if let Some(content) = content {
-                    let name = step_type.to_ascii_lowercase();
-                    events.push(make_tool_event(
-                        format!("transcript-{step_index}-step"),
+                        format!("transcript-{step_index}-error"),
                         timestamp,
                         "tool_call",
-                        &name,
+                        "error_message",
                         None,
-                        turn_id,
-                        Some(status),
+                        Some(format!("turn-{turn_seq}")),
+                        Some("failed"),
                         None,
-                        Some(content),
+                        Some(err_text),
                     ));
+                } else if step_type == "SYSTEM_MESSAGE" {
+                    if source == "SYSTEM" {
+                        for (_, _, call_idx) in pending_calls.drain(..) {
+                            if let Some(ev) = events.get_mut(call_idx) {
+                                ev.status.get_or_insert_with(|| "completed".into());
+                            }
+                        }
+                    }
+                    continue;
+                } else if matches!(step_type, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
+                    continue;
+                } else {
+                    let turn_id = Some(format!("turn-{turn_seq}"));
+                    let content = row["content"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| row["error"].as_str().filter(|s| !s.trim().is_empty()))
+                        .map(str::to_owned);
+                    if let Some((call_id, tool_name, call_idx)) = pending_calls.pop_front() {
+                        if let Some(call_ev) = events.get_mut(call_idx) {
+                            call_ev.status.get_or_insert_with(|| status.to_owned());
+                            if is_subagent_coordination_tool(&tool_name) {
+                                if content.is_some() {
+                                    call_ev.result = content;
+                                }
+                                call_ev.status = Some(status.to_owned());
+                                continue;
+                            }
+                        }
+                        if track_unsettled {
+                            unsettled_event_indices.push((events.len(), false));
+                        }
+                        events.push(make_tool_event(
+                            format!("transcript-{step_index}-toolresult"),
+                            timestamp,
+                            "tool_result",
+                            &tool_name,
+                            Some(call_id),
+                            turn_id,
+                            Some(status),
+                            None,
+                            content,
+                        ));
+                    } else if let Some(content) = content {
+                        let name = step_type.to_ascii_lowercase();
+                        if track_unsettled {
+                            unsettled_event_indices.push((events.len(), false));
+                        }
+                        events.push(make_tool_event(
+                            format!("transcript-{step_index}-step"),
+                            timestamp,
+                            "tool_call",
+                            &name,
+                            None,
+                            turn_id,
+                            Some(status),
+                            None,
+                            Some(content),
+                        ));
+                    }
                 }
             }
-        }
+        };
+
+        super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+            let is_user = super::prompt::is_transcript_user_row(&row);
+            let has_user_payload = is_user && super::prompt::transcript_row_has_user_payload(&row);
+            if has_user_payload && !turn_rows.is_empty() {
+                let row_settled = is_row_settled(&row, is_user, has_user_payload);
+                flush_turn(&mut turn_rows, row_settled);
+            }
+            let idx = next_idx;
+            next_idx += 1;
+            turn_rows.push((idx, row, is_user, has_user_payload));
+            std::ops::ControlFlow::Continue(())
+        })?;
+        flush_turn(&mut turn_rows, false);
         if !events.is_empty() {
             return Ok(events);
         }

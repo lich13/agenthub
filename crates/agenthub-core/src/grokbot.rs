@@ -16,9 +16,6 @@ use std::{
 };
 
 const PREFIX: &str = "sand.client.slice.";
-static SLICES: crate::read_cache::ReadCache<Arc<Value>> =
-    crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES)
-        .with_native_metadata();
 
 #[derive(Debug, Clone)]
 pub struct GrokBotPaths {
@@ -67,7 +64,7 @@ fn slice_path(root: &Path, key: &str) -> PathBuf {
         format!("{}.kblob", base32(&Sha256::digest(key)))
     })
 }
-fn read_slice(root: &Path, key: &str, schema: u64) -> Result<Option<Arc<Value>>> {
+fn read_slice(root: &Path, key: &str, schema: u64) -> Result<Option<Value>> {
     let path = slice_path(root, key);
     match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -77,36 +74,27 @@ fn read_slice(root: &Path, key: &str, schema: u64) -> Result<Option<Arc<Value>>>
             "Grok Bot 缓存不是普通文件"
         ),
     }
-    SLICES
-        .read(
-            &path,
-            |_, size| size.saturating_mul(3),
-            || {
-                let text = fs::read_to_string(&path).context("无法读取 Grok Bot 缓存")?;
-                let body = if path.extension().is_some_and(|s| s == "kblob") {
-                    let (header, body) = text.split_once('\n').context("Grok Bot 缓存格式错误")?;
-                    ensure!(
-                        serde_json::from_str::<String>(header)? == key,
-                        "Grok Bot 缓存身份不匹配"
-                    );
-                    body
-                } else {
-                    &text
-                };
-                let mut envelope: Value =
-                    serde_json::from_str(body).context("Grok Bot 缓存格式错误")?;
-                ensure!(
-                    envelope["schemaVersion"].as_u64() == Some(schema),
-                    "Grok Bot 缓存格式暂不支持"
-                );
-                let value = envelope
-                    .get_mut("value")
-                    .context("Grok Bot 缓存内容缺失")?
-                    .take();
-                Ok(Arc::new(value))
-            },
-        )
-        .map(Some)
+    let text = fs::read_to_string(&path).context("无法读取 Grok Bot 缓存")?;
+    let body = if path.extension().is_some_and(|s| s == "kblob") {
+        let (header, body) = text.split_once('\n').context("Grok Bot 缓存格式错误")?;
+        ensure!(
+            serde_json::from_str::<String>(header)? == key,
+            "Grok Bot 缓存身份不匹配"
+        );
+        body
+    } else {
+        &text
+    };
+    let mut envelope: Value = serde_json::from_str(body).context("Grok Bot 缓存格式错误")?;
+    ensure!(
+        envelope["schemaVersion"].as_u64() == Some(schema),
+        "Grok Bot 缓存格式暂不支持"
+    );
+    let value = envelope
+        .get_mut("value")
+        .context("Grok Bot 缓存内容缺失")?
+        .take();
+    Ok(Some(value))
 }
 fn account(paths: &GrokBotPaths) -> Result<Option<String>> {
     if !paths.persistence.is_dir() {
@@ -129,12 +117,12 @@ fn account(paths: &GrokBotPaths) -> Result<Option<String>> {
 fn key(scope: &str, slice: &str) -> String {
     format!("{PREFIX}account.{scope}.{slice}")
 }
-fn roster(paths: &GrokBotPaths) -> Result<Option<(String, Arc<Value>)>> {
+fn roster(paths: &GrokBotPaths) -> Result<Option<(String, Value)>> {
     let Some(scope) = account(paths)? else {
         return Ok(None);
     };
     let value = read_slice(&paths.persistence, &key(&scope, "roster.last-roster"), 4)?
-        .unwrap_or_else(|| Arc::new(serde_json::json!({"rows":[]})));
+        .unwrap_or_else(|| serde_json::json!({"rows":[]}));
     Ok(Some((scope, value)))
 }
 fn roster_rows(roster: &Value) -> Result<&Vec<Value>> {
@@ -258,7 +246,12 @@ pub fn list(
         .map(|r| summary(paths, &scope, r))
         .collect::<Result<Vec<_>>>()?;
     rows.retain(|r| provider_sessions::matches_query(r, request.q.as_deref()));
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
+    rows.sort_by_cached_key(|r| {
+        (
+            std::cmp::Reverse(crate::timestamps::sort_key_nanos(r.updated_at.as_deref())),
+            r.id.clone(),
+        )
+    });
     rows.truncate(request.limit.unwrap_or(256));
     Ok(rows)
 }
@@ -440,7 +433,7 @@ fn snapshot_for_row(
             ensure!(value["entries"].is_array(), "Grok Bot 线程缓存格式错误");
         }
         Ok(ProviderHistorySnapshot::new(
-            value.as_deref().map(events).unwrap_or_default(),
+            value.as_ref().map(events).unwrap_or_default(),
         ))
     })
 }
@@ -452,7 +445,7 @@ pub fn detail(
     let (scope, row) = locate(paths, &request.session_key)?;
     let mut summary = summary(paths, &scope, &row)?;
     let replica = read_slice(&paths.persistence, &replica_key(&scope, &summary.id), 1)?;
-    summary.status = pending_events(&row, replica.as_deref())
+    summary.status = pending_events(&row, replica.as_ref())
         .first()
         .map(|event| event.kind.as_str())
         .unwrap_or("unknown")
@@ -670,8 +663,8 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
             scan.errors += 1;
             continue;
         }
-        let mut events = pending_events(row, replica.as_deref());
-        let (settled_count, completion) = latest_completion_event(row, replica.as_deref(), &events);
+        let mut events = pending_events(row, replica.as_ref());
+        let (settled_count, completion) = latest_completion_event(row, replica.as_ref(), &events);
         if let Some(comp) = completion {
             events.push(comp);
         }
@@ -695,9 +688,6 @@ pub fn scan_selected(paths: &GrokBotPaths, selected: Option<&str>) -> Result<Nat
         });
     }
     Ok(scan)
-}
-pub fn evict_idle(ttl: std::time::Duration) {
-    let _ = SLICES.evict_idle(ttl);
 }
 #[cfg(test)]
 mod tests;

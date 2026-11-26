@@ -733,11 +733,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
             coord.sessionScopeKey = "local::codex:th-fold"
 
             @MainActor func collectAllText(_ v: NSView) -> String {
-                var out: [String] = []
-                if let tf = v as? NSTextField { out.append(tf.stringValue) }
-                if let tv = v as? NSTextView { out.append(tv.string) }
-                for sub in v.subviews { out.append(collectAllText(sub)) }
-                return out.joined(separator: "\n")
+                OffscreenRenderHelper.collectVisibleText(in: v)
             }
 
             // F8 + F1a + F1b: Codex commentary + failed rg command + final answer
@@ -858,7 +854,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                 ClaudeHistoryEvent(id: "t-fin", kind: "assistant_message", role: "assistant", text: "回合最终答复", turnId: "t1", assistantPhase: "final"),
             ])
             XCTAssertEqual(turnedClaudeRows.count, 2)
-            guard case let .claudeProcessGroup(cProc, _) = turnedClaudeRows[0].kind else {
+            guard case let .claudeProcessGroup(cProc) = turnedClaudeRows[0].kind else {
                 return XCTFail("Expected .claudeProcessGroup for turned Claude events")
             }
             XCTAssertEqual(cProc.segmentCount, 2)
@@ -1002,11 +998,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
             coord.sessionScopeKey = "local::codex:rev-audit"
 
             @MainActor func collectAllText(_ v: NSView) -> String {
-                var out: [String] = []
-                if let tf = v as? NSTextField { out.append(tf.stringValue) }
-                if let tv = v as? NSTextView { out.append(tv.string) }
-                for sub in v.subviews { out.append(collectAllText(sub)) }
-                return out.joined(separator: "\n")
+                OffscreenRenderHelper.collectVisibleText(in: v)
             }
 
             // 1. Outer UnifiedProcessGroup stateAliases never collide with inner .detail rows:
@@ -1072,7 +1064,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                 ClaudeHistoryEvent(id: "th-only", kind: "thinking", text: "首行思考\n次行应直读展示", turnId: "t-snap", status: "completed"),
                 ClaudeHistoryEvent(id: "ans-1", kind: "assistant_message", role: "assistant", text: "结论", turnId: "t-snap", assistantPhase: "final"),
             ])
-            guard case let .claudeProcessGroup(snapProc, _) = snapAndSingleThought[0].kind else {
+            guard case let .claudeProcessGroup(snapProc) = snapAndSingleThought[0].kind else {
                 return XCTFail("Expected .claudeProcessGroup")
             }
             XCTAssertEqual(snapProc.segmentCount, 2)
@@ -1092,7 +1084,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                 ClaudeHistoryEvent(id: "p-tc", kind: "tool_call", role: "Bash", text: "rm /tmp/x", turnId: "t-perm", callId: "pc1", status: "running"),
                 ClaudeHistoryEvent(id: "p-req", kind: "permission_request", role: "permission", text: "请求授权执行命令\n请确认路径安全", turnId: "t-perm", status: "running"),
             ])
-            guard case let .claudeProcessGroup(permProc, _) = permClaudeRows[0].kind else {
+            guard case let .claudeProcessGroup(permProc) = permClaudeRows[0].kind else {
                 return XCTFail("Expected .claudeProcessGroup for permission turn")
             }
             XCTAssertTrue(permProc.wrapsThinkingDisclosures)
@@ -1243,7 +1235,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                 ClaudeHistoryEvent(id: "cm-3", kind: "thinking", text: "Claude 思考三\n次行三", turnId: "t-cm", status: "running"),
                 ClaudeHistoryEvent(id: "cm-fin", kind: "assistant_message", role: "assistant", text: "结论", turnId: "t-cm", assistantPhase: "final"),
             ])
-            guard case let .claudeProcessGroup(cmProc, _) = claudeMultiRows[0].kind else {
+            guard case let .claudeProcessGroup(cmProc) = claudeMultiRows[0].kind else {
                 return XCTFail("Expected multi-segment .claudeProcessGroup")
             }
             disc.setOpen(
@@ -1587,7 +1579,7 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
                 ClaudeHistoryEvent(id: "sv-real", kind: "thinking", text: "唯一可见思考正文\n无需二次点开", turnId: "t-sv", status: "completed"),
                 ClaudeHistoryEvent(id: "sv-fin", kind: "assistant_message", role: "assistant", text: "答复", turnId: "t-sv", assistantPhase: "final"),
             ])
-            guard case let .claudeProcessGroup(svProc, _) = singleVisibleClaudeRows[0].kind else {
+            guard case let .claudeProcessGroup(svProc) = singleVisibleClaudeRows[0].kind else {
                 return XCTFail("Expected .claudeProcessGroup")
             }
             XCTAssertFalse(svProc.wrapsThinkingDisclosures, "Single visible thinking block must open directly without redundant inner disclosure")
@@ -1650,6 +1642,27 @@ final class DomainAndMarkdownParitySuiteTests: XCTestCase {
             let buttonProbe = NSView(frame: .zero)
             buttonHost.addSubview(buttonProbe)
             XCTAssertTrue(MenuAnchorProbeNSView.resolveAnchorView(buttonProbe) === buttonHost)
+
+            // 6f. Unclosed HTML comment marker inside inline/fenced code never pollutes later context blocks or memory stripping
+            let rawCodeComment = """
+            <environment_context>
+              <cwd>/workspace/example.invalid</cwd>
+            </environment_context>
+            请检查行内 `<!--` 与围栏代码：
+            ```html
+            <!-- unclosed inside fence
+            ```
+            <system-reminder>
+            internal runtime reminder
+            </system-reminder>
+            继续执行
+            """
+            let projectedCodeComment = UserContextEngine.projectAndSegmentUserMessage(rawCodeComment).projection
+            XCTAssertEqual(projectedCodeComment.contextBlocks.count, 2)
+            XCTAssertFalse(projectedCodeComment.text.contains("internal runtime reminder"))
+            XCTAssertTrue(projectedCodeComment.text.contains("`<!--`"))
+            XCTAssertTrue(projectedCodeComment.text.contains("<!-- unclosed inside fence"))
+            XCTAssertTrue(projectedCodeComment.text.contains("继续执行"))
         }
     }
 }

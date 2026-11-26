@@ -26,9 +26,9 @@ private struct HostIntegrationEntry: Identifiable, Equatable {
     let kind: HostIntegrationEntryKind
 }
 
-public struct ProbeWorkspaceView: View {
+struct ProbeWorkspaceView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
+    @ObservedObject var store: RuntimeConnectionStore
 
     @State private var disclosureRules = ProbeDisclosureRules()
     @State private var status: ProbeStatus?
@@ -53,15 +53,17 @@ public struct ProbeWorkspaceView: View {
     @State private var hookBusy: Bool = false
     @State private var machineEpoch: UInt64 = 0
     @State private var refreshToken: UInt64 = 0
+    @State private var statusEventsSeq: UInt64 = 0
 
-    public init(
+    init(
         store: RuntimeConnectionStore,
-        initialOpenSections: Set<ProbeDisclosureSection> = []
+        initialOpenSections: Set<ProbeDisclosureSection>? = nil
     ) {
         self.store = store
-        var rules = ProbeDisclosureRules(machineScope: store.machineScope)
-        for sec in initialOpenSections {
-            rules.setExpanded(sec, true)
+        let rules = if let initialOpenSections {
+            ProbeDisclosureRules(machineScope: store.machineScope, openSections: initialOpenSections)
+        } else {
+            ProbeDisclosureRules(machineScope: store.machineScope)
         }
         self._disclosureRules = State(initialValue: rules)
         self._settingsSync = State(initialValue: ProbeSettingsSyncState(revision: store.revision))
@@ -195,7 +197,7 @@ public struct ProbeWorkspaceView: View {
         return items
     }
 
-    public var body: some View {
+    var body: some View {
         GeometryReader { geo in
             let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ZStack {
@@ -225,6 +227,7 @@ public struct ProbeWorkspaceView: View {
                                 store: store,
                                 draft: ciDraftBinding,
                                 disclosureRules: $disclosureRules,
+                                isNarrow: isNarrow,
                                 saving: saving,
                                 savingCurrentScope: saving && saveTarget == .ci,
                                 saveMessage: saveTarget == .ci ? saveMessage : nil,
@@ -236,7 +239,7 @@ public struct ProbeWorkspaceView: View {
 
                         barkPanelBody(draft: draft, isNarrow: isNarrow)
 
-                        hostMatrixSection
+                        hostMatrixSection(isNarrow: isNarrow)
 
                         liveOverviewPanel
 
@@ -321,6 +324,7 @@ public struct ProbeWorkspaceView: View {
         .task(id: store.machineScope) {
             machineEpoch &+= 1
             refreshToken &+= 1
+            statusEventsSeq &+= 1
             loadingStatus = false
             saving = false
             startingJob = false
@@ -454,36 +458,78 @@ public struct ProbeWorkspaceView: View {
                 }
             }
             let platformCols = isNarrow
-                ? [GridItem(.flexible())]
-                : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+                ? [GridItem(.flexible(), alignment: .top)]
+                : [
+                    GridItem(.flexible(), alignment: .top),
+                    GridItem(.flexible(), alignment: .top),
+                    GridItem(.flexible(), alignment: .top),
+                ]
             LazyVGrid(columns: platformCols, spacing: 6) {
                 ForEach(visiblePlatforms) { platform in
                     let streams = status?.providerNotifications?.first(where: { $0.provider == platform.rawValue })?.streams
-                    HStack(spacing: 7) {
-                        AgentBrandIcon(platform.brand, size: 15)
-                            .foregroundStyle(palette.textPrimary.color)
-                        Text(platform.label)
-                            .font(DesignFonts.body(13, weight: .medium))
-                            .foregroundStyle(palette.textPrimary.color)
-                            .lineLimit(1)
-                        if let streams, streams > 0 {
-                            Text("\(streams)")
-                                .font(DesignFonts.body(11))
-                                .foregroundStyle(palette.textMuted.color)
+                    let masterOn = d.isPlatformEnabled(platform)
+                    let categories = ProbeSettingsDraft.supportedCategories(for: platform)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 7) {
+                            AgentBrandIcon(platform.brand, size: 15)
+                                .foregroundStyle(palette.textPrimary.color)
+                            Text(platform.label)
+                                .font(DesignFonts.body(13, weight: .medium))
+                                .foregroundStyle(palette.textPrimary.color)
                                 .lineLimit(1)
+                            if let streams, streams > 0 {
+                                Text("\(streams)")
+                                    .font(DesignFonts.body(11))
+                                    .foregroundStyle(palette.textMuted.color)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 4)
+                            CapsuleSwitch(
+                                isOn: Binding(
+                                    get: { masterOn },
+                                    set: { val in updateDraft { $0.setPlatformEnabled(platform, enabled: val) } }
+                                ),
+                                label: "\(platform.label) 通知"
+                            )
                         }
-                        Spacer(minLength: 4)
-                        CapsuleSwitch(
-                            isOn: Binding(
-                                get: { d.isPlatformEnabled(platform) },
-                                set: { val in updateDraft { $0.setPlatformEnabled(platform, enabled: val) } }
-                            ),
-                            label: "\(platform.label) 通知"
-                        )
+                        .frame(minHeight: 24)
+
+                        if masterOn && !categories.isEmpty {
+                            FlowButtonRow(spacing: 5, lineSpacing: 5) {
+                                ForEach(categories, id: \.self) { category in
+                                    let catOn = d.isCategoryEnabled(platform, category)
+                                    Button {
+                                        updateDraft { $0.setCategoryEnabled(platform, category, enabled: !catOn) }
+                                    } label: {
+                                        HStack(spacing: 3) {
+                                            LucideIcon(catOn ? .check : .plus, size: 10)
+                                                .foregroundStyle((catOn ? palette.accent : palette.textMuted).color)
+                                            Text(category.label)
+                                                .font(DesignFonts.body(11, weight: .medium))
+                                                .foregroundStyle((catOn ? palette.accent : palette.textMuted).color)
+                                                .lineLimit(1)
+                                        }
+                                        .padding(.horizontal, 7)
+                                        .frame(height: 22)
+                                        .background(Capsule().fill((catOn ? palette.accentSoft : palette.surface).color))
+                                        .overlay(
+                                            Capsule().strokeBorder(
+                                                (catOn ? palette.accentBorder : palette.borderStrong).color,
+                                                lineWidth: 1
+                                            )
+                                        )
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(PlainHitButtonStyle())
+                                    .accessibilityLabel("\(platform.label) \(category.label)通知")
+                                    .accessibilityValue(catOn ? "已开启" : "已关闭")
+                                }
+                            }
+                        }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .frame(minHeight: 34)
+                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.borderStrong.color, lineWidth: 1))
                 }
@@ -584,56 +630,72 @@ public struct ProbeWorkspaceView: View {
                 }
             },
             headerTrailing: {
-                Button {
-                    let rev = store.revision
-                    Task { await startProbeJob("probe.barkTest", label: "AgentHub 推送测试", revision: rev) }
-                } label: {
-                    HStack(spacing: 5) {
-                        LucideIcon(.cloud, size: 15)
-                        Text("测试推送")
+                HStack(spacing: 6) {
+                    Button {
+                        let rev = store.revision
+                        Task { await startProbeJob("probe.barkTest", label: "AgentHub 推送测试", revision: rev) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            LucideIcon(.cloud, size: 15)
+                            Text("测试推送")
+                        }
                     }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(!configuredDeviceKey || jobBusy)
+
+                    Button {
+                        Task { await saveSettings(scope: .bark) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            LucideIcon(.check, size: 15)
+                            Text(saving && saveTarget == .bark ? "保存中" : "保存")
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(draft == nil || saving)
                 }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(!configuredDeviceKey || jobBusy)
             }
         ) {
             if let d = draft {
-                VStack(alignment: .leading, spacing: 10) {
-                    compactSwitchTile(
-                        label: "启用 Bark",
-                        isOn: Binding(
-                            get: { d.barkEnabled },
-                            set: { next in updateDraft(scope: .bark) { $0.barkEnabled = next } }
-                        )
+                let barkSwitch = compactSwitchTile(
+                    label: "启用 Bark",
+                    isOn: Binding(
+                        get: { d.barkEnabled },
+                        set: { next in updateDraft(scope: .bark) { $0.barkEnabled = next } }
                     )
-
-                    let fieldCols = isNarrow
-                        ? [GridItem(.flexible())]
-                        : [GridItem(.flexible()), GridItem(.flexible())]
-                    LazyVGrid(columns: fieldCols, spacing: 12) {
-                        labeledField("Bark 服务 URL", placeholder: "https://api.day.app", value: d.barkServerUrl) { v in
-                            updateDraft(scope: .bark) { $0.barkServerUrl = v }
-                        }
-                        ProbeDraftSecureField(
-                            label: "Device Key",
-                            placeholder: configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key",
-                            value: d.barkDeviceKey
-                        ) { v in
-                            updateDraft(scope: .bark) { $0.barkDeviceKey = v }
+                )
+                let urlField = labeledField("Bark 服务 URL", placeholder: "https://api.day.app", value: d.barkServerUrl) { v in
+                    updateDraft(scope: .bark) { $0.barkServerUrl = v }
+                }
+                let keyField = ProbeDraftField(
+                    label: "Device Key",
+                    placeholder: configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key",
+                    value: d.barkDeviceKey,
+                    isSecure: true
+                ) { v in
+                    updateDraft(scope: .bark) {
+                        let wasEmpty = $0.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        $0.barkDeviceKey = v
+                        if wasEmpty && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.barkEnabled {
+                            $0.barkEnabled = true
                         }
                     }
+                }
 
-                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                        Button {
-                            Task { await saveSettings(scope: .bark) }
-                        } label: {
-                            HStack(spacing: 6) {
-                                LucideIcon(.checkCircle2, size: 16)
-                                Text(saving && saveTarget == .bark ? "保存中" : "保存")
-                            }
+                VStack(alignment: .leading, spacing: 8) {
+                    if isNarrow {
+                        barkSwitch
+                        urlField
+                        keyField
+                    } else {
+                        HStack(alignment: .bottom, spacing: 12) {
+                            barkSwitch
+                                .frame(width: 152, height: LayoutMetrics.formControlHeight)
+                            urlField
+                                .frame(maxWidth: .infinity)
+                            keyField
+                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(saving)
                     }
 
                     if activeJobAction == "probe.barkTest", let id = activeJobId {
@@ -667,8 +729,9 @@ public struct ProbeWorkspaceView: View {
             }
         }
     }
+
     @ViewBuilder
-    private var hostMatrixSection: some View {
+    private func hostMatrixSection(isNarrow: Bool) -> some View {
         let entries = visibleHostEntries
         let readyCount = entries.filter(\.isReady).count
         let anyError = entries.contains(where: \.hasError)
@@ -701,7 +764,7 @@ public struct ProbeWorkspaceView: View {
                             .fill(palette.borderSubtle.color)
                             .frame(height: 1)
                     }
-                    hostEntryRow(entry)
+                    hostEntryRow(entry, isNarrow: isNarrow)
                 }
             }
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
@@ -713,109 +776,175 @@ public struct ProbeWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func hostEntryRow(_ entry: HostIntegrationEntry) -> some View {
+    private func hostEntryRow(_ entry: HostIntegrationEntry, isNarrow: Bool) -> some View {
         switch entry.kind {
         case let .codex(hookStatus, actualCount, staleCount, path, unavailable):
             let managed = (hookStatus == "managed")
             let canRemove = managed || actualCount > 0 || staleCount > 0
-            VStack(alignment: .leading, spacing: 8) {
+            let writeTitle = (hookStatus == "stale" || hookStatus == "missing")
+                ? "修复 Hook"
+                : (managed ? "重新写入 Hook" : "写入通知 Hook")
+            let writeBtn = Button(writeTitle) {
+                pendingHookDialog = PendingHookDialog(
+                    provider: "codex",
+                    name: "Codex",
+                    action: "install",
+                    path: status?.codexHooksPath ?? "",
+                    revision: store.revision
+                )
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(jobBusy)
+
+            let removeBtn = Button("移除 Hook") {
+                pendingHookDialog = PendingHookDialog(
+                    provider: "codex",
+                    name: "Codex",
+                    action: "remove",
+                    path: status?.codexHooksPath ?? "",
+                    revision: store.revision
+                )
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(jobBusy || !canRemove)
+
+            if isNarrow {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        AgentBrandIcon(entry.brand, size: 16)
+                        Text(entry.name)
+                            .font(DesignFonts.body(13, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                        StatusChip(
+                            unavailable ? "状态未知" : probeStateLabel(hookStatus),
+                            tone: unavailable ? .danger : (managed ? .success : .warning)
+                        )
+                        StatusChip("\(actualCount) 条命令", tone: .neutral)
+                        Spacer(minLength: 8)
+                        Text(path)
+                            .font(DesignFonts.mono(11))
+                            .foregroundStyle(palette.textMuted.color)
+                            .lineLimit(1)
+                            .help(path)
+                    }
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                        writeBtn
+                        removeBtn
+                    }
+                }
+                .padding(12)
+            } else {
                 HStack(spacing: 8) {
                     AgentBrandIcon(entry.brand, size: 16)
                     Text(entry.name)
                         .font(DesignFonts.body(13, weight: .semibold))
                         .foregroundStyle(palette.textPrimary.color)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     StatusChip(
                         unavailable ? "状态未知" : probeStateLabel(hookStatus),
                         tone: unavailable ? .danger : (managed ? .success : .warning)
                     )
                     StatusChip("\(actualCount) 条命令", tone: .neutral)
-                    Spacer(minLength: 8)
                     Text(path)
                         .font(DesignFonts.mono(11))
                         .foregroundStyle(palette.textMuted.color)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                         .help(path)
-                }
-                FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                    Button(hookStatus == "stale" || hookStatus == "missing" ? "修复 Hook" : managed ? "重新写入 Hook" : "写入通知 Hook") {
-                        pendingHookDialog = PendingHookDialog(
-                            provider: "codex",
-                            name: "Codex",
-                            action: "install",
-                            path: status?.codexHooksPath ?? "",
-                            revision: store.revision
-                        )
+                    HStack(spacing: 6) {
+                        writeBtn
+                        removeBtn
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(jobBusy)
-
-                    Button("移除 Hook") {
-                        pendingHookDialog = PendingHookDialog(
-                            provider: "codex",
-                            name: "Codex",
-                            action: "remove",
-                            path: status?.codexHooksPath ?? "",
-                            revision: store.revision
-                        )
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(jobBusy || !canRemove)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             }
-            .padding(12)
 
         case let .localProvider(provider, installed, count, path, hookErr):
-            VStack(alignment: .leading, spacing: 8) {
+            let writeBtn = Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
+                pendingHookDialog = PendingHookDialog(
+                    provider: provider,
+                    name: entry.name,
+                    action: "install",
+                    path: hookStatuses[provider]?.configPath ?? "",
+                    revision: store.revision
+                )
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(hookBusy)
+
+            let removeBtn = Button("移除 Hook") {
+                pendingHookDialog = PendingHookDialog(
+                    provider: provider,
+                    name: entry.name,
+                    action: "remove",
+                    path: hookStatuses[provider]?.configPath ?? "",
+                    revision: store.revision
+                )
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(hookBusy || (!installed && count == 0))
+
+            if isNarrow || (hookErr?.isEmpty == false) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        AgentBrandIcon(entry.brand, size: 16)
+                        Text(entry.name)
+                            .font(DesignFonts.body(13, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                        if hookErr != nil {
+                            StatusChip("读取失败", tone: .danger)
+                        } else {
+                            StatusChip(installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
+                        }
+                        StatusChip("\(count) 条托管", tone: .neutral)
+                        Spacer(minLength: 8)
+                        Text(path)
+                            .font(DesignFonts.mono(11))
+                            .foregroundStyle(palette.textMuted.color)
+                            .lineLimit(1)
+                            .help(path)
+                    }
+                    if let hookErr, !hookErr.isEmpty {
+                        Text(hookErr)
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle(palette.errFg.color)
+                    }
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                        writeBtn
+                        removeBtn
+                    }
+                }
+                .padding(12)
+            } else {
                 HStack(spacing: 8) {
                     AgentBrandIcon(entry.brand, size: 16)
                     Text(entry.name)
                         .font(DesignFonts.body(13, weight: .semibold))
                         .foregroundStyle(palette.textPrimary.color)
-                    if hookErr != nil {
-                        StatusChip("读取失败", tone: .danger)
-                    } else {
-                        StatusChip(installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
-                    }
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    StatusChip(installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
                     StatusChip("\(count) 条托管", tone: .neutral)
-                    Spacer(minLength: 8)
                     Text(path)
                         .font(DesignFonts.mono(11))
                         .foregroundStyle(palette.textMuted.color)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                         .help(path)
-                }
-                if let hookErr, !hookErr.isEmpty {
-                    Text(hookErr)
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.errFg.color)
-                }
-                FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                    Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
-                        pendingHookDialog = PendingHookDialog(
-                            provider: provider,
-                            name: entry.name,
-                            action: "install",
-                            path: hookStatuses[provider]?.configPath ?? "",
-                            revision: store.revision
-                        )
+                    HStack(spacing: 6) {
+                        writeBtn
+                        removeBtn
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(hookBusy)
-
-                    Button("移除 Hook") {
-                        pendingHookDialog = PendingHookDialog(
-                            provider: provider,
-                            name: entry.name,
-                            action: "remove",
-                            path: hookStatuses[provider]?.configPath ?? "",
-                            revision: store.revision
-                        )
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(hookBusy || (!installed && count == 0))
+                    .fixedSize(horizontal: true, vertical: false)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             }
-            .padding(12)
 
         case .remoteReadOnly:
             HStack(spacing: 8) {
@@ -830,7 +959,8 @@ public struct ProbeWorkspaceView: View {
                     .font(DesignFonts.mono(11))
                     .foregroundStyle(palette.textMuted.color)
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
 
         case let .dshDirect(path):
             HStack(spacing: 8) {
@@ -847,7 +977,8 @@ public struct ProbeWorkspaceView: View {
                     .lineLimit(1)
                     .help(path)
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
         }
     }
 
@@ -1001,7 +1132,7 @@ public struct ProbeWorkspaceView: View {
     }
 
     private func labeledField(_ label: String, placeholder: String, value: String, onChange: @escaping @MainActor (String) -> Void) -> some View {
-        ProbeDraftTextField(label: label, placeholder: placeholder, value: value, onChange: onChange)
+        ProbeDraftField(label: label, placeholder: placeholder, value: value, isSecure: false, onChange: onChange)
     }
 
     private func updateDraft(scope: ProbeSettingsSaveScope = .settings, _ mutate: (inout ProbeSettingsDraft) -> Void) {
@@ -1049,51 +1180,84 @@ public struct ProbeWorkspaceView: View {
         )
     }
 
+    private func fetchSettingsResult(at rev: UInt64) async -> Result<ProbeSettingsView, Error> {
+        do {
+            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get", at: rev)
+            return .success(loaded)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func fetchSingleHookResult(provider: String, at rev: UInt64) async -> Result<ClaudeHooksStatus, Error> {
+        do {
+            let st: ClaudeHooksStatus = try await store.rpc(
+                "claude.hooks",
+                args: [
+                    "request": .object(["action": .string("status"), "confirmed": .bool(false)]),
+                    "provider": .string(provider),
+                ],
+                localOnly: true,
+                at: rev
+            )
+            return .success(st)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func fetchLocalHookStatuses(at rev: UInt64) async -> [String: Result<ClaudeHooksStatus, Error>] {
+        // Unconditionally fetch all 3 local-capable hook providers so startup capability races
+        // never transiently render Antigravity as "未安装".
+        async let claude = fetchSingleHookResult(provider: "claude", at: rev)
+        async let grok = fetchSingleHookResult(provider: "grok", at: rev)
+        async let antigravity = fetchSingleHookResult(provider: "antigravity", at: rev)
+        return [
+            "claude": await claude,
+            "grok": await grok,
+            "antigravity": await antigravity,
+        ]
+    }
+
     private func refreshAll(force: Bool) async {
         let rev = store.revision
         let scope = store.machineScope
+        let isLocal = (store.target == .local)
         refreshToken &+= 1
         let token = refreshToken
+        let readFence = settingsSync.beginSettingsRead()
         loadingStatus = true
         defer {
             if refreshToken == token {
                 loadingStatus = false
             }
         }
-        await refreshStatusAndEvents(force: force, boundRevision: rev, boundScope: scope)
+
+        async let statusAndEvents: Void = refreshStatusAndEvents(force: force, boundRevision: rev, boundScope: scope)
+        async let settingsOutcome = fetchSettingsResult(at: rev)
+        async let hooksOutcome: [String: Result<ClaudeHooksStatus, Error>] = isLocal
+            ? fetchLocalHookStatuses(at: rev)
+            : [:]
+
+        _ = await statusAndEvents
+        let resolvedSettings = await settingsOutcome
+        let resolvedHooks = await hooksOutcome
         guard store.revision == rev, refreshToken == token else { return }
 
-        let readFence = settingsSync.beginSettingsRead()
-        do {
-            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get", at: rev)
-            guard store.revision == rev, refreshToken == token else { return }
+        switch resolvedSettings {
+        case let .success(loaded):
             settingsSync.applyLoadedSettings(loaded, readFence: readFence, revision: rev)
-        } catch {
-            guard store.revision == rev, refreshToken == token else { return }
+        case let .failure(error):
             settingsSync.applySettingsReadError(error.localizedDescription, readFence: readFence)
         }
 
-        if store.target == .local {
-            var providers = ["claude", "grok"]
-            if store.capabilities.antigravityNotifications {
-                providers.append("antigravity")
-            }
-            for provider in providers {
-                do {
-                    let st: ClaudeHooksStatus = try await store.rpc(
-                        "claude.hooks",
-                        args: [
-                            "request": .object(["action": .string("status"), "confirmed": .bool(false)]),
-                            "provider": .string(provider),
-                        ],
-                        localOnly: true,
-                        at: rev
-                    )
-                    guard store.revision == rev, refreshToken == token else { return }
+        if isLocal {
+            for (provider, result) in resolvedHooks {
+                switch result {
+                case let .success(st):
                     hookStatuses[provider] = st
                     hookErrors.removeValue(forKey: provider)
-                } catch {
-                    guard store.revision == rev, refreshToken == token else { return }
+                case let .failure(error):
                     hookStatuses.removeValue(forKey: provider)
                     hookErrors[provider] = error.localizedDescription
                 }
@@ -1112,13 +1276,40 @@ public struct ProbeWorkspaceView: View {
     ) async {
         let rev = boundRevision ?? store.revision
         let scope = boundScope ?? store.machineScope
-        do {
-            let st: ProbeStatus = try await store.rpc(
-                "probe.status",
-                args: force ? ["refresh": .bool(true)] : [:],
-                at: rev
-            )
-            guard store.revision == rev else { return }
+        statusEventsSeq &+= 1
+        let seq = statusEventsSeq
+
+        async let statusResult: Result<ProbeStatus, Error> = {
+            do {
+                let st: ProbeStatus = try await store.rpc(
+                    "probe.status",
+                    args: force ? ["refresh": .bool(true)] : [:],
+                    at: rev
+                )
+                return .success(st)
+            } catch {
+                return .failure(error)
+            }
+        }()
+        async let eventsResult: Result<ProbeEventsResponse, Error> = {
+            do {
+                let ev: ProbeEventsResponse = try await store.rpc(
+                    "probe.events",
+                    args: ["limit": .number(10)],
+                    at: rev
+                )
+                return .success(ev)
+            } catch {
+                return .failure(error)
+            }
+        }()
+
+        let resolvedStatus = await statusResult
+        let resolvedEvents = await eventsResult
+        guard store.revision == rev, statusEventsSeq == seq else { return }
+
+        switch resolvedStatus {
+        case let .success(st):
             if st.available == false {
                 status = nil
                 statusError = st.error ?? "Probe 状态不可用"
@@ -1126,23 +1317,16 @@ public struct ProbeWorkspaceView: View {
                 status = st
                 statusError = nil
             }
-        } catch {
-            guard store.revision == rev else { return }
+        case let .failure(error):
             statusError = error.localizedDescription
         }
 
-        do {
-            let ev: ProbeEventsResponse = try await store.rpc(
-                "probe.events",
-                args: ["limit": .number(10)],
-                at: rev
-            )
-            guard store.revision == rev else { return }
+        switch resolvedEvents {
+        case let .success(ev):
             eventsLoaded = true
             eventsError = nil
             events = ev.events
-        } catch {
-            guard store.revision == rev else { return }
+        case let .failure(error):
             eventsError = error.localizedDescription
         }
         syncAutoOpenIssues(machineScope: scope)
@@ -1215,9 +1399,6 @@ public struct ProbeWorkspaceView: View {
             guard store.revision == revision, machineEpoch == epoch else { return }
             activeJobId = res.jobId
             store.trackStartedJob(res.jobId)
-            if command == "probe.installHooks" || command == "probe.removeHooks" {
-                settingsSync.applyHookManageFlag(command == "probe.installHooks")
-            }
             if command != "probe.barkTest" {
                 actionMessage = (.success, "\(label) 已开始")
             }
@@ -1266,18 +1447,26 @@ public struct ProbeWorkspaceView: View {
     }
 }
 
-private struct ProbeDraftTextField: View {
+private struct ProbeDraftField: View {
     @Environment(\.agentHubPalette) private var palette
     let label: String
     let placeholder: String
     let value: String
+    let isSecure: Bool
     let onChange: @MainActor (String) -> Void
     @State private var localText: String
 
-    init(label: String, placeholder: String, value: String, onChange: @escaping @MainActor (String) -> Void) {
+    init(
+        label: String,
+        placeholder: String,
+        value: String,
+        isSecure: Bool = false,
+        onChange: @escaping @MainActor (String) -> Void
+    ) {
         self.label = label
         self.placeholder = placeholder
         self.value = value
+        self.isSecure = isSecure
         self.onChange = onChange
         self._localText = State(initialValue: value)
     }
@@ -1287,55 +1476,22 @@ private struct ProbeDraftTextField: View {
             Text(label)
                 .font(DesignFonts.body(12))
                 .foregroundStyle(palette.textMuted.color)
-            TextField(placeholder, text: $localText)
-                .textFieldStyle(.plain)
-                .font(DesignFonts.body(13))
-                .foregroundStyle(palette.textPrimary.color)
-                .padding(.horizontal, 10)
-                .frame(height: LayoutMetrics.formControlHeight)
-                .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+            Group {
+                if isSecure {
+                    SecureField(placeholder, text: $localText)
+                } else {
+                    TextField(placeholder, text: $localText)
+                }
+            }
+            .textFieldStyle(.plain)
+            .font(DesignFonts.body(13))
+            .foregroundStyle(palette.textPrimary.color)
+            .padding(.horizontal, 10)
+            .frame(height: LayoutMetrics.formControlHeight)
+            .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
         }
-        .onChange(of: value) { next in
-            if localText != next { localText = next }
-        }
-        .onChange(of: localText) { next in
-            if next != value { onChange(next) }
-        }
-    }
-}
-
-private struct ProbeDraftSecureField: View {
-    @Environment(\.agentHubPalette) private var palette
-    let label: String
-    let placeholder: String
-    let value: String
-    let onChange: @MainActor (String) -> Void
-    @State private var localText: String
-
-    init(label: String, placeholder: String, value: String, onChange: @escaping @MainActor (String) -> Void) {
-        self.label = label
-        self.placeholder = placeholder
-        self.value = value
-        self.onChange = onChange
-        self._localText = State(initialValue: value)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(DesignFonts.body(12))
-                .foregroundStyle(palette.textMuted.color)
-            SecureField(placeholder, text: $localText)
-                .textFieldStyle(.plain)
-                .font(DesignFonts.body(13))
-                .foregroundStyle(palette.textPrimary.color)
-                .padding(.horizontal, 10)
-                .frame(height: LayoutMetrics.formControlHeight)
-                .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
-        }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: value) { next in
             if localText != next { localText = next }
         }

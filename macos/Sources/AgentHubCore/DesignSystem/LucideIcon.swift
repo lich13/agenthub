@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-public enum LucideIconName: String, CaseIterable, Sendable {
+enum LucideIconName: String, CaseIterable, Sendable {
     case activity = "Activity"
     case archive = "Archive"
     case archiveRestore = "ArchiveRestore"
@@ -57,7 +57,7 @@ public enum LucideIconName: String, CaseIterable, Sendable {
     case x = "X"
 }
 
-public enum LucideVectorShape: Sendable, Equatable {
+enum LucideVectorShape: Sendable, Equatable {
     case path(String)
     case circle(cx: CGFloat, cy: CGFloat, r: CGFloat)
     case ellipse(cx: CGFloat, cy: CGFloat, rx: CGFloat, ry: CGFloat)
@@ -65,8 +65,8 @@ public enum LucideVectorShape: Sendable, Equatable {
     case line(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat)
 }
 
-public enum LucideVectorCatalog {
-    public static func shapes(for icon: LucideIconName) -> [LucideVectorShape] {
+enum LucideVectorCatalog {
+    static func shapes(for icon: LucideIconName) -> [LucideVectorShape] {
         switch icon {
         case .activity:
             return [.path("M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2")]
@@ -185,7 +185,7 @@ public enum LucideVectorCatalog {
         return c
     }()
 
-    public static func cachedCGPaths(for icon: LucideIconName) -> [CGPath] {
+    static func cachedCGPaths(for icon: LucideIconName) -> [CGPath] {
         pathCacheLock.lock()
         if let existing = pathCache[icon] {
             pathCacheLock.unlock()
@@ -218,7 +218,7 @@ public enum LucideVectorCatalog {
         return built
     }
 
-    public static func nsImage(
+    static func nsImage(
         for icon: LucideIconName,
         size: CGFloat,
         color: NSColor,
@@ -261,20 +261,24 @@ public enum LucideVectorCatalog {
         imageCache.setObject(img, forKey: key)
         return img
     }
+
+    static func clearImageCache() {
+        imageCache.removeAllObjects()
+    }
 }
 
-public struct LucideIcon: View {
-    public let name: LucideIconName
-    public var size: CGFloat
-    public var strokeWidth: CGFloat
+struct LucideIcon: View {
+    let name: LucideIconName
+    var size: CGFloat
+    var strokeWidth: CGFloat
 
-    public init(_ name: LucideIconName, size: CGFloat = 16, strokeWidth: CGFloat = 2) {
+    init(_ name: LucideIconName, size: CGFloat = 16, strokeWidth: CGFloat = 2) {
         self.name = name
         self.size = size
         self.strokeWidth = strokeWidth
     }
 
-    public var body: some View {
+    var body: some View {
         Canvas { context, canvasSize in
             let scale = min(canvasSize.width, canvasSize.height) / 24.0
             var transform = CGAffineTransform(scaleX: scale, y: scale)

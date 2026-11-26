@@ -185,19 +185,12 @@ pub(super) fn detail(
     let native_cursor = request
         .before
         .as_deref()
-        .map(|cursor| -> Result<String> {
-            let (mode, position) = cursor
-                .split_once(':')
-                .filter(|(kind, _)| matches!(*kind, "j" | "n" | "w" | "p"))
-                .map_or(("", cursor), |(kind, id)| (kind, id));
-            let position = position
-                .strip_prefix(&prefix)
-                .context("子智能体历史来源已变化，请重新打开")?;
-            Ok(if mode.is_empty() {
-                position.into()
-            } else {
-                format!("{mode}:{position}")
-            })
+        .map(|cursor| {
+            crate::history_navigation::strip_subagent_cursor_prefix(
+                cursor,
+                &prefix,
+                "子智能体历史来源已变化，请重新打开",
+            )
         })
         .transpose()?;
     let limit = request.limit.unwrap_or(160).clamp(1, 500);
@@ -234,15 +227,7 @@ pub(super) fn detail(
         })
         .collect();
     let mut history = parsed.history.metadata(None);
-    history.epoch = format!("{prefix}{}", history.epoch);
-    for id in &mut history.changed_ids {
-        *id = format!("{prefix}{id}");
-    }
-    for change in &mut history.changes {
-        for id in &mut change.changed_ids {
-            *id = format!("{prefix}{id}");
-        }
-    }
+    crate::history_navigation::prefix_history_metadata(&mut history, &prefix);
     let timeline = request.before.is_none().then(|| parsed.timeline.clone());
     let summary = summary(
         paths,
@@ -260,6 +245,15 @@ pub(super) fn detail(
         parent_stamp == reader::stamp(&parent)? && before == reader::stamp(&path)?,
         "子智能体来源已变化，请重试"
     );
+    let mut after_cursor = crate::history_navigation::after_cursor(
+        end,
+        parsed.events.len(),
+        parsed
+            .events
+            .get(end.saturating_sub(1))
+            .map(|e| e.id.as_str()),
+    );
+    crate::history_navigation::prefix_after_cursor(&mut after_cursor, &prefix);
     Ok(ClaudeSessionDetail {
         summary,
         agent: Some(activity(id, &parent_parsed)),
@@ -270,19 +264,6 @@ pub(super) fn detail(
         total_events: parsed.events.len(),
         has_more: start > 0,
         before_cursor: (start > 0).then(|| format!("{prefix}{}", parsed.events[start].id)),
-        after_cursor: crate::history_navigation::after_cursor(
-            end,
-            parsed.events.len(),
-            parsed
-                .events
-                .get(end.saturating_sub(1))
-                .map(|e| e.id.as_str()),
-        )
-        .map(|cursor| {
-            format!(
-                "n:{prefix}{}",
-                cursor.strip_prefix("n:").expect("next cursor")
-            )
-        }),
+        after_cursor,
     })
 }

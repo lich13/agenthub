@@ -11,11 +11,11 @@ use tokio::task::AbortHandle;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CiNotificationPayload {
-    pub identifier: String,
-    pub title: String,
-    pub body: String,
-    pub html_url: String,
+pub(crate) struct CiNotificationPayload {
+    pub(crate) identifier: String,
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) html_url: String,
 }
 
 #[derive(Default)]

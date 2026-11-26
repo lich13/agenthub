@@ -1,13 +1,13 @@
-pub mod ci_notifications;
-pub mod commands;
-pub mod gfm_markdown;
-pub mod host;
-pub mod isolation;
-pub mod overview;
-pub mod remote;
+mod ci_notifications;
+mod commands;
+mod gfm_markdown;
+mod host;
+mod isolation;
+mod overview;
+mod remote;
 #[path = "resources_inner.rs"]
-pub mod resources;
-pub mod services;
+mod resources;
+mod services;
 
 pub use host::{AgentHubHostCallbacks, AgentHubRpcCallback};
 pub use overview::DesktopState;
@@ -61,7 +61,7 @@ pub struct AgentHubRuntime {
 }
 
 impl AgentHubRuntime {
-    pub fn build(
+    pub(crate) fn build(
         resource_dir: Option<&Path>,
         isolated_root: Option<&Path>,
         callbacks: AgentHubHostCallbacks,
@@ -111,7 +111,7 @@ impl AgentHubRuntime {
         })
     }
 
-    pub fn shutdown_gracefully(self) {
+    pub(crate) fn shutdown_gracefully(self) {
         self.host.begin_shutdown();
         self.ci_task.abort();
         self.remote.disconnect();

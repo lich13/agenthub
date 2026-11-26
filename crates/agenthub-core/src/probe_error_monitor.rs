@@ -95,6 +95,27 @@ pub struct CodexTurnErrorIncident {
     pub incident_key: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeErrorSourceStamp {
+    db: Option<crate::file_stamp::FileStamp>,
+    wal: Option<crate::file_stamp::FileStamp>,
+}
+
+impl ProbeErrorSourceStamp {
+    pub fn read(logs_db_path: &Path) -> Self {
+        let mut wal_os = logs_db_path.as_os_str().to_os_string();
+        wal_os.push("-wal");
+        Self {
+            db: crate::file_stamp::FileStamp::of_followed(logs_db_path),
+            wal: crate::file_stamp::FileStamp::of_followed(Path::new(&wal_os)),
+        }
+    }
+
+    pub fn exists(&self) -> bool {
+        self.db.is_some()
+    }
+}
+
 pub fn scan_codex_turn_errors(
     logs_db_path: &Path,
     previous: Option<&ProbeErrorCursor>,
@@ -107,14 +128,13 @@ pub fn scan_codex_turn_errors(
     )
     .with_context(|| format!("open Codex logs DB {}", logs_db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_millis(500))?;
-    let latest = latest_cursor_tuple(&conn)?;
     let establish_baseline = match previous {
         None => true,
         Some(cursor) if cursor.database_identity != database_identity => true,
         Some(cursor) => !cursor_tuple_exists(&conn, cursor)?,
     };
     if establish_baseline {
-        let (ts, ts_nanos, id) = latest.unwrap_or((0, 0, 0));
+        let (ts, ts_nanos, id) = latest_cursor_tuple(&conn)?.unwrap_or((0, 0, 0));
         return Ok(ProbeErrorScan {
             cursor: ProbeErrorCursor {
                 database_identity,
@@ -553,12 +573,6 @@ pub fn ensure_probe_error_monitor_launch_agent_at(
 }
 
 fn launch_agent_domain() -> Result<String> {
-    let output = Command::new("/usr/bin/id")
-        .arg("-u")
-        .output()
-        .context("resolve uid for Probe error monitor LaunchAgent")?;
-    anyhow::ensure!(output.status.success(), "id -u failed");
-    let uid = String::from_utf8(output.stdout)?.trim().to_string();
-    anyhow::ensure!(!uid.is_empty(), "id -u returned empty uid");
-    Ok(format!("gui/{uid}"))
+    // SAFETY: `libc::getuid` has no preconditions and always returns the calling process's real UID.
+    Ok(format!("gui/{}", unsafe { libc::getuid() }))
 }

@@ -2,23 +2,23 @@ import Foundation
 
 // MARK: - Project Workspace Path Normalization, Worktree Coalescing & Grouping Engine
 
-public enum ProjectWorkspaceGroupingMode: String, Codable, Equatable, Sendable {
+enum ProjectWorkspaceGroupingMode: String, Codable, Equatable, Sendable {
     case flat
     case byWorkspace
 }
 
-public enum ProjectWorkspaceKey: Hashable, Codable, Sendable {
+enum ProjectWorkspaceKey: Hashable, Codable, Sendable {
     case directory(String)
     case unassigned
 
-    public var path: String? {
+    var path: String? {
         switch self {
         case let .directory(path): path
         case .unassigned: nil
         }
     }
 
-    public var scopeToken: String {
+    var scopeToken: String {
         switch self {
         case let .directory(path): "dir:\(path)"
         case .unassigned: "unassigned"
@@ -26,11 +26,11 @@ public enum ProjectWorkspaceKey: Hashable, Codable, Sendable {
     }
 }
 
-public enum ProjectWorkspaceFilter: Equatable, Sendable {
+enum ProjectWorkspaceFilter: Equatable, Sendable {
     case all
     case workspace(ProjectWorkspaceKey, includeSubdirectories: Bool)
 
-    public var scopeToken: String {
+    var scopeToken: String {
         switch self {
         case .all:
             return "all"
@@ -39,14 +39,14 @@ public enum ProjectWorkspaceFilter: Equatable, Sendable {
         }
     }
 
-    public var selectedKey: ProjectWorkspaceKey? {
+    var selectedKey: ProjectWorkspaceKey? {
         switch self {
         case .all: nil
         case let .workspace(key, _): key
         }
     }
 
-    public var includeSubdirectories: Bool {
+    var includeSubdirectories: Bool {
         switch self {
         case .all: false
         case let .workspace(_, includeSub): includeSub
@@ -54,29 +54,29 @@ public enum ProjectWorkspaceFilter: Equatable, Sendable {
     }
 }
 
-public enum ProjectWorkspaceAggregateStatus: Int, Comparable, Equatable, Sendable {
+enum ProjectWorkspaceAggregateStatus: Int, Comparable, Equatable, Sendable {
     case idle = 0
     case failed = 1
     case running = 2
     case attention = 3
 
-    public static func < (lhs: ProjectWorkspaceAggregateStatus, rhs: ProjectWorkspaceAggregateStatus) -> Bool {
+    static func < (lhs: ProjectWorkspaceAggregateStatus, rhs: ProjectWorkspaceAggregateStatus) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
 }
 
-public struct ProjectWorkspaceGroup<Item: Sendable>: Identifiable, Equatable, Sendable where Item: Equatable {
-    public var key: ProjectWorkspaceKey
-    public var displayName: String
-    public var fullPath: String?
-    public var items: [Item]
-    public var subtitlesByItemId: [String: String]
-    public var aggregateStatus: ProjectWorkspaceAggregateStatus
-    public var latestUpdatedMs: Int64
+struct ProjectWorkspaceGroup<Item: Sendable>: Identifiable, Equatable, Sendable where Item: Equatable {
+    var key: ProjectWorkspaceKey
+    var displayName: String
+    var fullPath: String?
+    var items: [Item]
+    var subtitlesByItemId: [String: String]
+    var aggregateStatus: ProjectWorkspaceAggregateStatus
+    var latestUpdatedMs: Int64
 
-    public var id: String { key.scopeToken }
+    var id: String { key.scopeToken }
 
-    public init(
+    init(
         key: ProjectWorkspaceKey,
         displayName: String,
         fullPath: String?,
@@ -95,18 +95,18 @@ public struct ProjectWorkspaceGroup<Item: Sendable>: Identifiable, Equatable, Se
     }
 }
 
-public protocol ProjectWorkspaceGroupableItem: Equatable, Sendable {
+protocol ProjectWorkspaceGroupableItem: Equatable, Sendable {
     var workspaceGroupItemId: String { get }
     var workspaceSummaryItem: UnifiedSessionSummaryItem { get }
 }
 
 extension UnifiedSessionSummaryItem: ProjectWorkspaceGroupableItem {
-    public var workspaceGroupItemId: String { sessionKey }
-    public var workspaceSummaryItem: UnifiedSessionSummaryItem { self }
+    var workspaceGroupItemId: String { sessionKey }
+    var workspaceSummaryItem: UnifiedSessionSummaryItem { self }
 }
 
 extension ProjectWorkspaceEngine {
-    public static func filterItems<Item: ProjectWorkspaceGroupableItem>(
+    static func filterItems<Item: ProjectWorkspaceGroupableItem>(
         _ items: [Item],
         by filter: ProjectWorkspaceFilter,
         enabled: Bool = true
@@ -118,7 +118,7 @@ extension ProjectWorkspaceEngine {
         }
     }
 
-    public static func buildGroups<Item: ProjectWorkspaceGroupableItem>(
+    static func buildGroups<Item: ProjectWorkspaceGroupableItem>(
         items: [Item]
     ) -> [ProjectWorkspaceGroup<Item>] {
         buildGroups(
@@ -131,7 +131,7 @@ extension ProjectWorkspaceEngine {
         )
     }
 
-    public static func visualOrderedKeys<Item: ProjectWorkspaceGroupableItem>(
+    static func visualOrderedKeys<Item: ProjectWorkspaceGroupableItem>(
         groups: [ProjectWorkspaceGroup<Item>],
         collapsedKeys: Set<ProjectWorkspaceKey>
     ) -> [String] {
@@ -143,7 +143,7 @@ extension ProjectWorkspaceEngine {
     }
 }
 
-public enum SharedTimestampFormatters {
+enum SharedTimestampFormatters {
     private static let lock = NSLock()
     nonisolated(unsafe) private static let isoFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -177,37 +177,37 @@ public enum SharedTimestampFormatters {
         return df
     }()
 
-    public static func parseISO8601(_ raw: String?) -> Date? {
+    static func parseISO8601(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
         lock.lock()
         defer { lock.unlock() }
         return isoFractional.date(from: raw) ?? isoBasic.date(from: raw)
     }
 
-    public static func formatTimeOfDay(_ date: Date) -> String {
+    static func formatTimeOfDay(_ date: Date) -> String {
         lock.lock()
         defer { lock.unlock() }
         return timeOfDayFormatter.string(from: date)
     }
 
-    public static func formatMonthDayTime(_ date: Date) -> String {
+    static func formatMonthDayTime(_ date: Date) -> String {
         lock.lock()
         defer { lock.unlock() }
         return monthDayTimeFormatter.string(from: date)
     }
 
-    public static func formatSessionStatusTimestamp(_ date: Date) -> String {
+    static func formatSessionStatusTimestamp(_ date: Date) -> String {
         lock.lock()
         defer { lock.unlock() }
         return sessionStatusFormatter.string(from: date)
     }
 }
 
-public enum ProjectWorkspaceEngine {
+enum ProjectWorkspaceEngine {
 
     /// Canonicalizes a path string using Unicode NFC, single `/` separators, and no trailing `/`
     /// (except root `/`), while preserving case sensitivity for Linux SSH targets.
-    public static func normalizePath(_ raw: String?) -> String {
+    static func normalizePath(_ raw: String?) -> String {
         guard let raw, !raw.isEmpty else { return "" }
         // Zero-allocation fast path for canonical pure-ASCII paths (no outer whitespace, no `//`, no trailing `/`).
         if let firstByte = raw.utf8.first,
@@ -261,7 +261,7 @@ public enum ProjectWorkspaceEngine {
     }
 
     /// Resolves canonical workspace key and optional worktree/subpath label when coalesced.
-    public static func resolveWorkspace(
+    static func resolveWorkspace(
         cwd: String,
         workspaceRoot: String?
     ) -> (key: ProjectWorkspaceKey, coalescedSubtitle: String?) {
@@ -287,7 +287,7 @@ public enum ProjectWorkspaceEngine {
     }
 
     /// Compact Orca-style two-segment directory label (`parent/repo`), preserving full path for tooltips/copy.
-    public static func compactDisplayName(for key: ProjectWorkspaceKey) -> String {
+    static func compactDisplayName(for key: ProjectWorkspaceKey) -> String {
         switch key {
         case .unassigned:
             return "未记录工作目录"
@@ -305,7 +305,7 @@ public enum ProjectWorkspaceEngine {
         }
     }
 
-    public static func matchesFilter(
+    static func matchesFilter(
         _ filter: ProjectWorkspaceFilter,
         cwd: String,
         workspaceRoot: String?
@@ -336,19 +336,19 @@ public enum ProjectWorkspaceEngine {
         }
     }
 
-    public static func isStrictDescendantPath(_ candidate: String, under base: String) -> Bool {
+    static func isStrictDescendantPath(_ candidate: String, under base: String) -> Bool {
         guard !candidate.isEmpty, !base.isEmpty else { return false }
         if candidate == base { return true }
         if base == "/" { return candidate.hasPrefix("/") }
         return candidate.hasPrefix(base + "/")
     }
 
-    public static func parseTimestampMs(_ iso: String?) -> Int64 {
+    static func parseTimestampMs(_ iso: String?) -> Int64 {
         guard let date = SharedTimestampFormatters.parseISO8601(iso) else { return Int64.min }
         return Int64((date.timeIntervalSince1970 * 1000.0).rounded())
     }
 
-    public static func itemPriorityStatus(_ item: UnifiedSessionSummaryItem) -> ProjectWorkspaceAggregateStatus {
+    static func itemPriorityStatus(_ item: UnifiedSessionSummaryItem) -> ProjectWorkspaceAggregateStatus {
         if item.archived { return .idle }
         if item.statusChipBadge == "等待处理"
             || item.statusChipBadge == "待回复"
@@ -376,7 +376,7 @@ public enum ProjectWorkspaceEngine {
         var latestMs: Int64
     }
 
-    public static func buildGroups<Item: Equatable & Sendable>(
+    static func buildGroups<Item: Equatable & Sendable>(
         items: [Item],
         idOf: (Item) -> String,
         cwdOf: (Item) -> String,
@@ -394,7 +394,7 @@ public enum ProjectWorkspaceEngine {
         )
     }
 
-    public static func buildGroups<Item: Equatable & Sendable>(
+    static func buildGroups<Item: Equatable & Sendable>(
         items: [Item],
         idOf: (Item) -> String,
         cwdOf: (Item) -> String,
@@ -469,7 +469,7 @@ public enum ProjectWorkspaceEngine {
         }
     }
 
-    public static func visualOrderedKeys<Item: Equatable & Sendable>(
+    static func visualOrderedKeys<Item: Equatable & Sendable>(
         groups: [ProjectWorkspaceGroup<Item>],
         collapsedKeys: Set<ProjectWorkspaceKey>,
         idOf: (Item) -> String

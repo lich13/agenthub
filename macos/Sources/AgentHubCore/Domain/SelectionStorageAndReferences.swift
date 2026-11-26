@@ -2,19 +2,19 @@ import Foundation
 
 // MARK: - Session Storage Formatting (sessionStorage.ts)
 
-public struct FormattedSessionStorage: Codable, Equatable, Sendable {
-    public var label: String
-    public var tone: String // "success" | "warning" | "danger" | "muted"
-    public var title: String
+struct FormattedSessionStorage: Codable, Equatable, Sendable {
+    var label: String
+    var tone: String // "success" | "warning" | "danger" | "muted"
+    var title: String
 
-    public init(label: String, tone: String, title: String) {
+    init(label: String, tone: String, title: String) {
         self.label = label
         self.tone = tone
         self.title = title
     }
 }
 
-public enum SessionStorageFormatter {
+enum SessionStorageFormatter {
     private static let maxExactDoubleBytes: Int64 = (1 << 53) - 1
     private static let thousandsLock = NSLock()
     private static let thousandsFormatter: NumberFormatter = {
@@ -27,7 +27,7 @@ public enum SessionStorageFormatter {
         return formatter
     }()
 
-    public static func format(_ size: SessionStorageSize?) -> FormattedSessionStorage {
+    static func format(_ size: SessionStorageSize?) -> FormattedSessionStorage {
         let scope = (size?.scope == "directory") ? "会话目录" : "会话文件"
         let unknown = FormattedSessionStorage(label: "—", tone: "muted", title: "会话大小暂不可用")
         if size?.status == "pending" {
@@ -88,7 +88,7 @@ public enum SessionStorageFormatter {
         return FormattedSessionStorage(label: label, tone: tone, title: title)
     }
 
-    public static func formatThousands(_ value: Int64) -> String {
+    static func formatThousands(_ value: Int64) -> String {
         thousandsLock.lock()
         defer { thousandsLock.unlock() }
         return thousandsFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
@@ -97,14 +97,14 @@ public enum SessionStorageFormatter {
 
 // MARK: - Multi-Select Session Selection State Machine (sessionSelection.ts)
 
-public struct SessionSelectionState: Codable, Equatable, Sendable {
-    public var scope: String
-    public var selecting: Bool
-    public var keys: [String]
-    public var anchor: String?
-    public var notice: String?
+struct SessionSelectionState: Codable, Equatable, Sendable {
+    var scope: String
+    var selecting: Bool
+    var keys: [String]
+    var anchor: String?
+    var notice: String?
 
-    public init(
+    init(
         scope: String,
         selecting: Bool = false,
         keys: [String] = [],
@@ -119,13 +119,13 @@ public struct SessionSelectionState: Codable, Equatable, Sendable {
     }
 }
 
-public struct SessionClick: Codable, Equatable, Sendable {
-    public var detail: Int
-    public var metaKey: Bool
-    public var shiftKey: Bool
-    public var ctrlKey: Bool
+struct SessionClick: Codable, Equatable, Sendable {
+    var detail: Int
+    var metaKey: Bool
+    var shiftKey: Bool
+    var ctrlKey: Bool
 
-    public init(detail: Int = 1, metaKey: Bool = false, shiftKey: Bool = false, ctrlKey: Bool = false) {
+    init(detail: Int = 1, metaKey: Bool = false, shiftKey: Bool = false, ctrlKey: Bool = false) {
         self.detail = detail
         self.metaKey = metaKey
         self.shiftKey = shiftKey
@@ -133,12 +133,12 @@ public struct SessionClick: Codable, Equatable, Sendable {
     }
 }
 
-public enum SessionSelectionEngine {
-    public static func empty(scope: String) -> SessionSelectionState {
+enum SessionSelectionEngine {
+    static func empty(scope: String) -> SessionSelectionState {
         SessionSelectionState(scope: scope, selecting: false, keys: [], anchor: nil, notice: nil)
     }
 
-    public static func isToggleSelectionClick(_ click: SessionClick, macPlatform: Bool = true) -> Bool {
+    static func isToggleSelectionClick(_ click: SessionClick, macPlatform: Bool = true) -> Bool {
         if click.detail == 0 { return false }
         if macPlatform {
             return click.metaKey && !click.ctrlKey
@@ -146,7 +146,7 @@ public enum SessionSelectionEngine {
         return click.metaKey || click.ctrlKey
     }
 
-    public static func sync(
+    static func sync(
         _ state: SessionSelectionState,
         scope: String,
         visible: [String]
@@ -170,7 +170,7 @@ public enum SessionSelectionEngine {
         )
     }
 
-    public static func add(_ state: SessionSelectionState, keys newKeys: [String]) -> SessionSelectionState {
+    static func add(_ state: SessionSelectionState, keys newKeys: [String]) -> SessionSelectionState {
         var seen = Set<String>()
         var combined: [String] = []
         for k in state.keys + newKeys where !seen.contains(k) {
@@ -186,7 +186,7 @@ public enum SessionSelectionEngine {
         )
     }
 
-    public static func click(
+    static func click(
         _ state: SessionSelectionState,
         visible: [String],
         key: String,
@@ -256,7 +256,7 @@ public enum SessionSelectionEngine {
         )
     }
 
-    public static func applyBatchSucceeded(
+    static func applyBatchSucceeded(
         _ state: SessionSelectionState,
         succeededKeys: Set<String>
     ) -> SessionSelectionState {
@@ -274,17 +274,17 @@ public enum SessionSelectionEngine {
 
 // MARK: - Strictly Exclusive Active vs Archived Partitioned Selection & Chunked Batch Engine
 
-public enum SessionSelectionPartition: String, Codable, Equatable, Sendable {
+enum SessionSelectionPartition: String, Codable, Equatable, Sendable {
     case active
     case archived
 }
 
-public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
-    public var active: SessionSelectionState
-    public var archived: SessionSelectionState
-    public var focusPartition: SessionSelectionPartition
+struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
+    var active: SessionSelectionState
+    var archived: SessionSelectionState
+    var focusPartition: SessionSelectionPartition
 
-    public init(
+    init(
         activeScope: String,
         archivedScope: String? = nil,
         focusPartition: SessionSelectionPartition = .active
@@ -294,7 +294,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         self.focusPartition = focusPartition
     }
 
-    public init(
+    init(
         active: SessionSelectionState,
         archived: SessionSelectionState,
         focusPartition: SessionSelectionPartition = .active
@@ -304,14 +304,14 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         self.focusPartition = focusPartition
     }
 
-    public func state(for partition: SessionSelectionPartition) -> SessionSelectionState {
+    func state(for partition: SessionSelectionPartition) -> SessionSelectionState {
         switch partition {
         case .active: active
         case .archived: archived
         }
     }
 
-    public mutating func setState(_ state: SessionSelectionState, for partition: SessionSelectionPartition) {
+    mutating func setState(_ state: SessionSelectionState, for partition: SessionSelectionPartition) {
         switch partition {
         case .active:
             active = state
@@ -328,7 +328,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func sync(
+    mutating func sync(
         activeScope: String,
         activeVisible: [String],
         archivedScope: String,
@@ -346,7 +346,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func setArchivedOpen(_ isOpen: Bool) {
+    mutating func setArchivedOpen(_ isOpen: Bool) {
         if !isOpen {
             archived = SessionSelectionEngine.empty(scope: archived.scope)
             focusPartition = .active
@@ -356,7 +356,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
     /// Handles row click inside `partition`, enforcing strict exclusivity between Active and Archived
     /// and never allowing Shift range selection to cross partitions.
     @discardableResult
-    public mutating func click(
+    mutating func click(
         partition: SessionSelectionPartition,
         visible: [String],
         key: String,
@@ -397,7 +397,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
     }
 
     @discardableResult
-    public mutating func selectAll(
+    mutating func selectAll(
         activeVisible: [String],
         archivedVisible: [String],
         supportsArchive: Bool,
@@ -433,7 +433,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func clear(partition: SessionSelectionPartition) {
+    mutating func clear(partition: SessionSelectionPartition) {
         switch partition {
         case .active:
             active = SessionSelectionEngine.empty(scope: active.scope)
@@ -442,7 +442,7 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func applyBatchResult(_ result: SessionBatchResult, partition: SessionSelectionPartition) {
+    mutating func applyBatchResult(_ result: SessionBatchResult, partition: SessionSelectionPartition) {
         let succeeded = Set(SessionBatchChunkExecutor.confirmedSucceededKeys(from: result))
         switch partition {
         case .active:
@@ -453,12 +453,12 @@ public struct PartitionedSessionSelectionState: Codable, Equatable, Sendable {
     }
 }
 
-public struct SessionBatchExecutionOutcome: Sendable {
-    public var result: SessionBatchResult?
-    public var confirmedSucceededKeys: [String]
-    public var errorMessage: String?
+struct SessionBatchExecutionOutcome: Sendable {
+    var result: SessionBatchResult?
+    var confirmedSucceededKeys: [String]
+    var errorMessage: String?
 
-    public init(
+    init(
         result: SessionBatchResult?,
         confirmedSucceededKeys: [String],
         errorMessage: String?
@@ -469,14 +469,14 @@ public struct SessionBatchExecutionOutcome: Sendable {
     }
 }
 
-public enum SessionBatchChunkExecutor {
-    public static let archiveRestoreChunkSize = 100
+enum SessionBatchChunkExecutor {
+    static let archiveRestoreChunkSize = 100
 
-    public static func hasSubagentTree(provider: SessionProvider, operation: SessionOperation) -> Bool {
+    static func hasSubagentTree(provider: SessionProvider, operation: SessionOperation) -> Bool {
         (provider == .codex || provider == .antigravity || provider == .dsh) && operation == .delete
     }
 
-    public static func confirmedSucceededKeys(from result: SessionBatchResult) -> [String] {
+    static func confirmedSucceededKeys(from result: SessionBatchResult) -> [String] {
         var seen = Set<String>()
         var ordered: [String] = []
         for item in result.items {
@@ -490,7 +490,7 @@ public enum SessionBatchChunkExecutor {
         return ordered
     }
 
-    public static func preview(
+    static func preview(
         provider: SessionProvider,
         operation: SessionOperation,
         sessionKeys: [String],
@@ -515,7 +515,7 @@ public enum SessionBatchChunkExecutor {
         return SessionBatchPreview(provider: provider, operation: operation, items: collected)
     }
 
-    public static func execute(
+    static func execute(
         preview: SessionBatchPreview,
         sendChunk: @Sendable (SessionBatchExecuteRequest) async throws -> SessionBatchResult
     ) async -> SessionBatchExecutionOutcome {
@@ -576,5 +576,147 @@ public enum SessionBatchChunkExecutor {
                 errorMessage: errText
             )
         }
+    }
+}
+
+// MARK: - Contiguous O(1) Bounded LRU Cache (Count + Byte Weight)
+
+struct BoundedLRUCache<Key: Hashable, Value> {
+    private struct Node {
+        var key: Key?
+        var value: Value?
+        var cost: Int
+        var prev: Int
+        var next: Int
+    }
+
+    let maxEntries: Int
+    let maxBytes: Int
+    private(set) var totalBytes: Int = 0
+
+    private var nodes: [Node] = []
+    private var freeIndices: [Int] = []
+    private var indexByKey: [Key: Int] = [:]
+    private var head: Int = -1
+    private var tail: Int = -1
+
+    init(maxEntries: Int, maxBytes: Int = .max) {
+        self.maxEntries = max(0, maxEntries)
+        self.maxBytes = max(0, maxBytes)
+    }
+
+    var count: Int { indexByKey.count }
+
+    func peek(_ key: Key) -> Value? {
+        guard let idx = indexByKey[key] else { return nil }
+        return nodes[idx].value
+    }
+
+    mutating func value(forKey key: Key) -> Value? {
+        guard let idx = indexByKey[key] else { return nil }
+        moveToTail(idx)
+        return nodes[idx].value
+    }
+
+    mutating func setValue(
+        _ value: Value,
+        forKey key: Key,
+        cost rawCost: Int = 1,
+        allowSingleOversized: Bool = false
+    ) {
+        let cost = max(0, rawCost)
+        guard maxEntries > 0 else { return }
+        if cost > maxBytes && !allowSingleOversized {
+            _ = removeValue(forKey: key)
+            return
+        }
+
+        if let existingIdx = indexByKey[key] {
+            totalBytes = max(0, totalBytes - nodes[existingIdx].cost) + cost
+            nodes[existingIdx].value = value
+            nodes[existingIdx].cost = cost
+            moveToTail(existingIdx)
+            while head != -1 && head != existingIdx && (indexByKey.count > maxEntries || totalBytes > maxBytes) {
+                evictHead()
+            }
+            return
+        }
+
+        while head != -1 && (indexByKey.count >= maxEntries || totalBytes + cost > maxBytes) {
+            evictHead()
+        }
+
+        let idx: Int
+        if let reused = freeIndices.popLast() {
+            idx = reused
+            nodes[idx] = Node(key: key, value: value, cost: cost, prev: -1, next: -1)
+        } else {
+            idx = nodes.count
+            nodes.append(Node(key: key, value: value, cost: cost, prev: -1, next: -1))
+        }
+        indexByKey[key] = idx
+        totalBytes += cost
+        attachAtTail(idx)
+    }
+
+    @discardableResult
+    mutating func removeValue(forKey key: Key) -> Value? {
+        guard let idx = indexByKey.removeValue(forKey: key) else { return nil }
+        let removed = nodes[idx].value
+        totalBytes = max(0, totalBytes - nodes[idx].cost)
+        detach(idx)
+        nodes[idx].key = nil
+        nodes[idx].value = nil
+        nodes[idx].cost = 0
+        freeIndices.append(idx)
+        return removed
+    }
+
+    mutating func removeAll() {
+        nodes.removeAll(keepingCapacity: false)
+        freeIndices.removeAll(keepingCapacity: false)
+        indexByKey.removeAll(keepingCapacity: false)
+        head = -1
+        tail = -1
+        totalBytes = 0
+    }
+
+    private mutating func evictHead() {
+        guard head != -1, let key = nodes[head].key else { return }
+        _ = removeValue(forKey: key)
+    }
+
+    private mutating func moveToTail(_ idx: Int) {
+        guard idx != tail else { return }
+        detach(idx)
+        attachAtTail(idx)
+    }
+
+    private mutating func detach(_ idx: Int) {
+        let p = nodes[idx].prev
+        let n = nodes[idx].next
+        if p != -1 {
+            nodes[p].next = n
+        } else {
+            head = n
+        }
+        if n != -1 {
+            nodes[n].prev = p
+        } else {
+            tail = p
+        }
+        nodes[idx].prev = -1
+        nodes[idx].next = -1
+    }
+
+    private mutating func attachAtTail(_ idx: Int) {
+        nodes[idx].prev = tail
+        nodes[idx].next = -1
+        if tail != -1 {
+            nodes[tail].next = idx
+        } else {
+            head = idx
+        }
+        tail = idx
     }
 }

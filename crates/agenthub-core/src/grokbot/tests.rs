@@ -582,7 +582,7 @@ fn restored_notifications_keep_the_suspended_message_baseline() {
     std::sync::Arc::make_mut(&mut suspended.streams[0].events).clear();
     assert_eq!(stage_cfg(&db, &suspended), 0);
     drop(db);
-    evict_idle(std::time::Duration::ZERO);
+    crate::provider_sessions::HISTORY_CACHE.evict_idle(std::time::Duration::ZERO);
     let db = open();
     assert_eq!(
         stage_cfg(&db, &scan(&f.paths).unwrap()),

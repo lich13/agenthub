@@ -1,14 +1,14 @@
 import SwiftUI
 
-public struct SettingsWorkspaceView: View {
+struct SettingsWorkspaceView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
+    @ObservedObject var store: RuntimeConnectionStore
 
-    public init(store: RuntimeConnectionStore) {
+    init(store: RuntimeConnectionStore) {
         self.store = store
     }
 
-    public var body: some View {
+    var body: some View {
         GeometryReader { geo in
             let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ScrollView {
@@ -68,22 +68,20 @@ public struct SettingsWorkspaceView: View {
     }
 }
 
-public struct MaintenanceOpsView: View {
+struct MaintenanceOpsView: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public var isNarrow: Bool
+    @ObservedObject var store: RuntimeConnectionStore
+    var isNarrow: Bool
 
     @State private var updateStatus: UpdateStatus?
-    private let sourceRevision: UInt64
     @State private var startingUpdate = false
     @State private var updateLoading: Bool = false
     @State private var updateError: String?
     @State private var lastUpdateAction: UnifiedUpdateActionKind?
     @State private var activeUpdateJobId: String?
 
-    public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
+    init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
-        self.sourceRevision = store.revision
         self.isNarrow = isNarrow
     }
 
@@ -98,7 +96,7 @@ public struct MaintenanceOpsView: View {
         return store.isTrackedJobActive(id)
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // .ops-header ("设置与维护" + Refresh, OpsWorkspace.tsx:67-85)
             HStack(spacing: 10) {
@@ -308,21 +306,33 @@ public struct MaintenanceOpsView: View {
     }
 
     private func fetchUpdateStatus() async {
+        let rev = store.revision
         updateLoading = true
-        defer { updateLoading = false }
+        defer {
+            if store.revision == rev {
+                updateLoading = false
+            }
+        }
         do {
-            let status: UpdateStatus = try await store.rpc("updates.status")
+            let status: UpdateStatus = try await store.rpc("updates.status", at: rev)
+            guard !Task.isCancelled, store.revision == rev else { return }
             updateStatus = status
             updateError = nil
         } catch {
+            guard !Task.isCancelled, store.revision == rev else { return }
             updateError = error.localizedDescription
         }
     }
 
     private func triggerUpdateAction(_ action: UnifiedUpdateActionKind) async {
         guard !updateBusy else { return }
+        let rev = store.revision
         startingUpdate = true
-        defer { startingUpdate = false }
+        defer {
+            if store.revision == rev {
+                startingUpdate = false
+            }
+        }
         updateError = nil
         lastUpdateAction = action
         let command: String = switch action {
@@ -331,11 +341,13 @@ public struct MaintenanceOpsView: View {
         case .prune: "updates.prune"
         }
         do {
-            let res: StartedJobResponse = try await store.rpc(command, at: sourceRevision)
+            let res: StartedJobResponse = try await store.rpc(command, at: rev)
+            guard store.revision == rev else { return }
             activeUpdateJobId = res.jobId
             store.trackStartedJob(res.jobId)
             await fetchUpdateStatus()
         } catch {
+            guard store.revision == rev else { return }
             updateError = error.localizedDescription
         }
     }
@@ -343,12 +355,12 @@ public struct MaintenanceOpsView: View {
 
 // MARK: - Unified 6-Scope Cleanup + Hidden Scan (100-row pagination)
 
-public struct UnifiedThreadCleanupSection: View {
+struct UnifiedThreadCleanupSection: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
-    public var isNarrow: Bool
+    @ObservedObject var store: RuntimeConnectionStore
+    var isNarrow: Bool
 
-    public static let scopesMeta: [(scope: String, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
+    static let scopesMeta: [(scope: String, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
         ("codex_archived", "Codex", "已归档线程", "Codex 已归档线程", .codex, .codex),
         ("codex_hidden", "Codex", "隐藏线程", "Codex 隐藏线程", .codex, .codex),
         ("antigravity_archived", "Antigravity", "已归档与孤立子会话", "Antigravity 已归档与孤立子会话", .antigravity, .antigravity),
@@ -374,7 +386,7 @@ public struct UnifiedThreadCleanupSection: View {
     @State private var errorMessage: String?
     @State private var hiddenError: String?
 
-    public init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
+    init(store: RuntimeConnectionStore, isNarrow: Bool = false) {
         self.store = store
         self.isNarrow = isNarrow
     }
@@ -406,7 +418,7 @@ public struct UnifiedThreadCleanupSection: View {
             .reduce(0) { $0 + $1.estimatedBytes }
     }
 
-    public var body: some View {
+    var body: some View {
         PanelCard(
             title: "全平台线程清理",
             icon: .sparkles,
@@ -786,7 +798,7 @@ public struct UnifiedThreadCleanupSection: View {
         }
         guard store.capabilities.isReady, store.capabilities.hiddenCleanupScan else { return }
         let runner = HiddenCleanupScan { request in
-            try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: revision)
+            try await store.rpc("cleanup.hiddenDryRun", args: RPCRequestEnvelope(request: request), at: revision)
         }
         hiddenRunner = runner
         let cleanupToken = store.registerBeforeMachineChange {
@@ -836,7 +848,7 @@ public struct UnifiedThreadCleanupSection: View {
         defer { executing = false }
         do {
             let outcome: UnifiedCleanupResult = try await store.rpc(
-                "cleanup.unifiedExecute", args: CleanupRequestEnvelope(request: pending.request), at: pending.revision
+                "cleanup.unifiedExecute", args: RPCRequestEnvelope(request: pending.request), at: pending.revision
             )
             result = outcome
             plan?.apply(outcome)
@@ -852,11 +864,10 @@ public struct UnifiedThreadCleanupSection: View {
 
 // MARK: - Codex Account Scope Section (with 20s iterative progress loop)
 
-public struct CodexAccountScopeSection: View {
+struct CodexAccountScopeSection: View {
     @Environment(\.agentHubPalette) private var palette
-    @ObservedObject public var store: RuntimeConnectionStore
+    @ObservedObject var store: RuntimeConnectionStore
 
-    private let sourceRevision: UInt64
     @State private var scopedThreads: Int?
     @State private var result: CodexAccountScopeResult?
     @State private var autoEnabled: Bool = false
@@ -868,14 +879,13 @@ public struct CodexAccountScopeSection: View {
     @State private var page: Int = 0
     @State private var errorMessage: String?
 
-    public init(store: RuntimeConnectionStore) {
+    init(store: RuntimeConnectionStore) {
         self.store = store
-        self.sourceRevision = store.revision
     }
 
     private var busy: Bool { checking || clearing }
 
-    public var body: some View {
+    var body: some View {
         let stage: (label: String, tone: StatusChipTone) = if clearing {
             ("解除中", .warning)
         } else if checking {
@@ -985,8 +995,9 @@ public struct CodexAccountScopeSection: View {
                         .disabled(busy || (scopedThreads ?? 0) == 0)
                     } else {
                         Button {
+                            let fixedRev = store.revision
                             armed = false
-                            Task { await runIterativeClear() }
+                            Task { await runIterativeClear(at: fixedRev) }
                         } label: {
                             HStack(spacing: 6) {
                                 LucideIcon(.lockKeyholeOpen, size: 16)
@@ -1009,6 +1020,8 @@ public struct CodexAccountScopeSection: View {
             result = nil
             hookInstalled = nil
             armed = false
+            checking = false
+            clearing = false
             page = 0
             errorMessage = nil
             await loadHookAndAutoState()
@@ -1016,8 +1029,10 @@ public struct CodexAccountScopeSection: View {
     }
 
     private func loadHookAndAutoState() async {
+        let rev = store.revision
         do {
-            let st: ProbeStatus = try await store.rpc("probe.status")
+            let st: ProbeStatus = try await store.rpc("probe.status", at: rev)
+            guard !Task.isCancelled, store.revision == rev else { return }
             if st.available == false {
                 hookInstalled = nil
                 errorMessage = st.error ?? "Probe 状态不可用"
@@ -1025,14 +1040,16 @@ public struct CodexAccountScopeSection: View {
                 hookInstalled = (st.hookStatus == "managed")
             }
         } catch {
+            guard !Task.isCancelled, store.revision == rev else { return }
             hookInstalled = nil
             errorMessage = error.localizedDescription
         }
         do {
-            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get")
-            let d = ProbeSettingsDraft.from(loaded)
-            autoEnabled = d.clearAccountScope
+            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get", at: rev)
+            guard !Task.isCancelled, store.revision == rev else { return }
+            autoEnabled = loaded.probe.hooks.clearAccountScope
         } catch {
+            guard !Task.isCancelled, store.revision == rev else { return }
             if errorMessage == nil {
                 errorMessage = error.localizedDescription
             }
@@ -1041,41 +1058,67 @@ public struct CodexAccountScopeSection: View {
 
     private func setAutoClear(_ next: Bool) async {
         guard !savingAuto else { return }
+        let rev = store.revision
         savingAuto = true
-        defer { savingAuto = false }
+        defer {
+            if store.revision == rev {
+                savingAuto = false
+            }
+        }
         errorMessage = nil
         do {
-            autoEnabled = try await store.saveAutoClearAccountScope(next, at: sourceRevision)
+            let saved = try await store.saveAutoClearAccountScope(next, at: rev)
+            guard store.revision == rev else { return }
+            autoEnabled = saved
         } catch {
+            guard store.revision == rev else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func runCheck() async {
+        let rev = store.revision
         armed = false
         page = 0
         result = nil
         errorMessage = nil
         checking = true
-        defer { checking = false }
+        defer {
+            if store.revision == rev {
+                checking = false
+            }
+        }
         do {
-            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus")
+            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus", at: rev)
+            guard !Task.isCancelled, store.revision == rev else { return }
             scopedThreads = status.scopedThreads
         } catch {
+            guard !Task.isCancelled, store.revision == rev else { return }
             errorMessage = error.localizedDescription
         }
     }
 
-    private func runIterativeClear() async {
+    private func runIterativeClear(at fixedRev: UInt64) async {
+        guard store.revision == fixedRev else { return }
         clearing = true
         errorMessage = nil
         page = 0
-        defer { clearing = false }
+        defer {
+            if store.revision == fixedRev {
+                clearing = false
+            }
+        }
         do {
-            try await store.clearAccountScope(at: sourceRevision) { result = $0 }
-            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus", at: sourceRevision)
+            try await store.clearAccountScope(at: fixedRev) { batch in
+                guard store.revision == fixedRev else { return }
+                result = batch
+            }
+            guard store.revision == fixedRev else { return }
+            let status: CodexAccountScopeStatus = try await store.rpc("threads.accountScopeStatus", at: fixedRev)
+            guard store.revision == fixedRev else { return }
             scopedThreads = status.scopedThreads
         } catch {
+            guard store.revision == fixedRev else { return }
             errorMessage = error.localizedDescription
         }
     }

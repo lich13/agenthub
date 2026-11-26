@@ -115,6 +115,7 @@ async fn run_process_command(
 ) -> Result<&'static str> {
     let mut child = Command::new(&command.program)
         .args(&command.args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

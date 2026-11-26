@@ -13,9 +13,9 @@ use std::{
 };
 
 use super::{
-    directory, dsh_command, file_stamp, read_bounded, registry, regular_file, remove_cache,
-    remove_dsh_cache_strict, remove_dsh_session_strict, remove_references, save_registry,
-    standard_layout, valid_id, DshPaths, HEADER_LIMIT,
+    directory, ensure_no_running_dsh_process, file_stamp, read_bounded, registry, regular_file,
+    remove_cache, remove_dsh_cache_strict, remove_dsh_session_strict, remove_references,
+    save_registry, standard_layout, valid_id, DshPaths, HEADER_LIMIT,
 };
 use crate::{
     provider_sessions::{
@@ -58,26 +58,13 @@ impl DiscoveredSession {
 
 fn check_host_dsh_stopped_for(paths: &DshPaths) -> Result<()> {
     let default_home = DshPaths::default_for_user()?.home;
-    let same_as_default = paths.home == default_home
-        || (paths.home.canonicalize().ok().is_some()
-            && paths.home.canonicalize().ok() == default_home.canonicalize().ok());
-    if !same_as_default {
+    if !crate::platform::same_canonical_dir(&paths.home, &default_home) {
         return Ok(());
     }
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "command="])
-        .output()
-        .context("无法核验 DeepSeek Harness 运行状态")?;
-    ensure!(
-        output.status.success(),
-        "无法核验 DeepSeek Harness 运行状态"
-    );
-    let text = String::from_utf8_lossy(&output.stdout);
-    ensure!(
-        !text.lines().any(dsh_command),
-        "DeepSeek Harness 正在运行，请先退出后再执行归档、恢复或删除操作"
-    );
-    Ok(())
+    ensure_no_running_dsh_process(
+        "无法核验 DeepSeek Harness 运行状态",
+        "DeepSeek Harness 正在运行，请先退出后再执行归档、恢复或删除操作",
+    )
 }
 
 struct ExclusiveSessionLease {
@@ -544,7 +531,7 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
     })
 }
 
-fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
+fn fold_log_metadata(session: &DiscoveredSession) -> Result<std::sync::Arc<FoldedMetadata>> {
     DSH_FOLD_CACHE.read(
         &session.log_path,
         |meta, _| {
@@ -721,10 +708,11 @@ fn build_summary(
     archived_set: &BTreeSet<String>,
 ) -> ProviderSessionSummary {
     let locked = is_session_locked_readonly(&session.dir);
-    let folded = if locked {
+    let folded: std::sync::Arc<FoldedMetadata> = if locked {
         fold_log_metadata(session).unwrap_or_default()
     } else {
         try_read_projcache(paths, session)
+            .map(std::sync::Arc::new)
             .or_else(|| fold_log_metadata(session).ok())
             .unwrap_or_default()
     };
@@ -732,6 +720,7 @@ fn build_summary(
     let running = !archived && locked && folded.open_turn;
     let title = folded
         .title
+        .clone()
         .or_else(|| {
             folded
                 .first_prompt
@@ -743,6 +732,7 @@ fn build_summary(
         .unwrap_or_else(|| "未命名会话".into());
     let cwd = folded
         .cwd
+        .clone()
         .or_else(|| session.header["cwd"].as_str().map(str::to_owned))
         .unwrap_or_default();
     let updated_at = folded
@@ -786,7 +776,7 @@ fn build_summary(
         archived,
         updated_at,
         message_count: folded.message_count,
-        last_message: folded.last_message,
+        last_message: folded.last_message.clone(),
         status: status.into(),
         format_version: format!("dsh-v{}", session.version),
         can_rename,
@@ -841,12 +831,13 @@ fn list_discovered(
         .filter(|item| matches_query(item, request.q.as_deref()))
         .collect();
 
-    items.sort_by(|a, b| {
-        b.updated_at
-            .as_deref()
-            .unwrap_or("")
-            .cmp(a.updated_at.as_deref().unwrap_or(""))
-            .then_with(|| a.id.cmp(&b.id))
+    items.sort_by_cached_key(|item| {
+        (
+            std::cmp::Reverse(crate::timestamps::sort_key_nanos(
+                item.updated_at.as_deref(),
+            )),
+            item.id.clone(),
+        )
     });
     let limit = request.limit.unwrap_or(200).clamp(1, 1000);
     items.truncate(limit);
@@ -1434,6 +1425,10 @@ pub fn rename_session(
     };
 
     // Re-read log under exclusive lease to obtain exact next monotonic seq
+    let before_stamp = crate::file_stamp::FileStamp::read_regular_nofollow(
+        &session.log_path,
+        "DSH 会话日志必须是普通文件",
+    )?;
     let mut expected_next_seq = 0u64;
     let mut saw_header = false;
     let needs_newline =
@@ -1491,10 +1486,22 @@ pub fn rename_session(
         event_line
     };
 
-    let mut log_file = OpenOptions::new()
-        .append(true)
+    let mut open_opts = OpenOptions::new();
+    open_opts.append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut log_file = open_opts
         .open(&session.log_path)
         .context("无法写入 DSH 会话日志")?;
+    let opened_meta = log_file.metadata().context("无法核验 DSH 会话日志状态")?;
+    ensure!(
+        opened_meta.is_file()
+            && crate::file_stamp::FileStamp::from_metadata(&opened_meta) == before_stamp,
+        "DSH 会话日志已变化，请刷新后重试"
+    );
     log_file.write_all(&payload_to_append)?;
     log_file.sync_all()?;
     drop(log_file);
@@ -1639,14 +1646,26 @@ pub fn set_archived_checked(
             }
         });
         let tmp = storages.join(format!(".agenthub-index-{}", uuid::Uuid::new_v4()));
-        {
-            let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let write_res = (|| -> Result<()> {
+            let mut opts = OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&tmp)?;
             serde_json::to_writer(&mut file, &initial)?;
             file.write_all(b"\n")?;
             file.sync_all()?;
+            check_stopped()?;
+            fs::rename(&tmp, &ws_path)?;
+            Ok(())
+        })();
+        if write_res.is_err() {
+            let _ = fs::remove_file(&tmp);
         }
-        check_stopped()?;
-        fs::rename(&tmp, &ws_path)?;
+        write_res?;
     }
 
     if archived {

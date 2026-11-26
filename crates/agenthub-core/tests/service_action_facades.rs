@@ -8,7 +8,7 @@ use agenthub_core::{
             plan_thread_archive_with_capability, plan_thread_rename_with_capability,
             plan_thread_restore_with_capability, thread_state_action_response, ThreadRenameRequest,
         },
-        probe::{plan_probe_action, ProbeAction, ProbeUseCases},
+        probe::{plan_probe_action, probe_process_command, ProbeAction, ProbeUseCases},
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
             ProbeSettingsSaveRequest, SettingsUseCases,
@@ -46,7 +46,7 @@ fn probe_and_update_actions_expose_shared_rpc_names() {
 
 #[test]
 fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
-    let platform = PlatformPaths::linux_server();
+    let _platform = PlatformPaths::linux_server();
 
     assert_eq!(
         "barkTest".parse::<ProbeAction>().unwrap(),
@@ -66,7 +66,7 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
     );
     assert!("unknown".parse::<ProbeAction>().is_err());
 
-    let bark = plan_probe_action(&platform, ProbeAction::BarkTest, &platform.config_file).unwrap();
+    let bark = plan_probe_action(ProbeAction::BarkTest).unwrap();
     assert_eq!(bark.action, ProbeAction::BarkTest);
     assert_eq!(bark.job.kind, "probe_bark_test");
     assert_eq!(
@@ -83,29 +83,41 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
 fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
     let platform = PlatformPaths::linux_server();
 
-    let default_plan =
-        plan_probe_action(&platform, ProbeAction::BarkTest, &platform.config_file).unwrap();
-    let default_command = &default_plan.job.command;
+    let default_plan = plan_probe_action(ProbeAction::BarkTest).unwrap();
+    let default_process =
+        probe_process_command(&platform, &platform.config_file, default_plan.action);
     assert_eq!(
-        default_command,
-        "/usr/local/bin/agenthub-webd --config /etc/agenthub-webd/config.toml probe bark-test"
+        default_process.program,
+        std::ffi::OsString::from("/usr/local/bin/agenthub-webd")
+    );
+    assert_eq!(
+        default_process.args,
+        vec![
+            std::ffi::OsString::from("--config"),
+            std::ffi::OsString::from("/etc/agenthub-webd/config.toml"),
+            std::ffi::OsString::from("probe"),
+            std::ffi::OsString::from("bark-test"),
+        ]
     );
 
     let custom_config = std::path::Path::new("/tmp/agenthub custom/config.toml");
-    let override_plan = plan_probe_action(&platform, ProbeAction::BarkTest, custom_config).unwrap();
+    let override_plan = plan_probe_action(ProbeAction::BarkTest).unwrap();
     let override_job = override_plan.job;
+    let override_process = probe_process_command(&platform, custom_config, override_plan.action);
 
     assert_eq!(
-        override_job.command,
-        "/usr/local/bin/agenthub-webd --config '/tmp/agenthub custom/config.toml' probe bark-test"
+        override_process.args,
+        vec![
+            std::ffi::OsString::from("--config"),
+            std::ffi::OsString::from("/tmp/agenthub custom/config.toml"),
+            std::ffi::OsString::from("probe"),
+            std::ffi::OsString::from("bark-test"),
+        ]
     );
     assert_eq!(
         override_job.args,
         vec!["probe".to_string(), "bark-test".to_string()]
     );
-    assert!(!override_job
-        .command
-        .contains("/etc/agenthub-webd/config.toml"));
 }
 
 #[test]
@@ -153,7 +165,7 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
     let bark = probe.action(ProbeAction::BarkTest).unwrap();
     assert_eq!(bark.job.kind, "probe_bark_test");
 
-    let settings = SettingsUseCases::new(&linux_config, &linux);
+    let settings = SettingsUseCases::new(&linux_config);
     let view = settings
         .probe_settings_view(ProbeSecretState::Configured)
         .unwrap();
@@ -215,50 +227,37 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
 
 #[test]
 fn thread_detail_facades_normalize_inputs() {
-    let linux = PlatformPaths::linux_server();
-
-    let detail = plan_thread_detail_request(
-        &linux,
-        ThreadDetailRequest {
-            id: " thread-a ".to_string(),
-            limit: Some(999),
-            full: Some(false),
-            before: Some("b:120".to_string()),
-        },
-    )
+    let detail = plan_thread_detail_request(ThreadDetailRequest {
+        id: " thread-a ".to_string(),
+        limit: Some(999),
+        full: Some(false),
+        before: Some("b:120".to_string()),
+    })
     .unwrap();
     assert_eq!(detail.thread_id, "thread-a");
     assert_eq!(detail.block_limit, Some(500));
     assert_eq!(detail.before.as_deref(), Some("b:120"));
 
-    let full = plan_thread_detail_request(
-        &linux,
-        ThreadDetailRequest {
-            id: "thread-a".to_string(),
-            limit: Some(1),
-            full: Some(true),
-            before: None,
-        },
-    )
+    let full = plan_thread_detail_request(ThreadDetailRequest {
+        id: "thread-a".to_string(),
+        limit: Some(1),
+        full: Some(true),
+        before: None,
+    })
     .unwrap();
     assert_eq!(full.block_limit, None);
 
-    let blocks = plan_thread_blocks_request(&linux, "thread-a", Some(0), None).unwrap();
+    let blocks = plan_thread_blocks_request("thread-a", Some(0), None).unwrap();
     assert_eq!(blocks.block_limit, Some(1));
 }
 
 #[test]
 fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
-    let linux = PlatformPaths::linux_server();
-
-    let list = plan_threads_list_request(
-        &linux,
-        ThreadsQuery {
-            archived: Some(false),
-            q: Some("  work  ".to_string()),
-            limit: Some(25),
-        },
-    )
+    let list = plan_threads_list_request(ThreadsQuery {
+        archived: Some(false),
+        q: Some("  work  ".to_string()),
+        limit: Some(25),
+    })
     .unwrap();
     assert_eq!(list.fetch_limit, 25);
     assert_eq!(list.query.q.as_deref(), Some("work"));
@@ -299,7 +298,7 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
     )
     .unwrap();
 
-    let blocks = plan_thread_blocks_request(&linux, " thread-a ", Some(1), None).unwrap();
+    let blocks = plan_thread_blocks_request(" thread-a ", Some(1), None).unwrap();
     let page = read_thread_blocks_page(&CodexPaths::new(&home), &blocks)
         .unwrap()
         .unwrap();
@@ -312,17 +311,13 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
 
 #[test]
 fn thread_limit_helpers_are_shared_core_contracts() {
-    let linux = PlatformPaths::linux_server();
     let plan = |limit, full| {
-        plan_thread_detail_request(
-            &linux,
-            ThreadDetailRequest {
-                id: "thread-a".to_string(),
-                limit,
-                full: Some(full),
-                before: None,
-            },
-        )
+        plan_thread_detail_request(ThreadDetailRequest {
+            id: "thread-a".to_string(),
+            limit,
+            full: Some(full),
+            before: None,
+        })
         .unwrap()
         .block_limit
     };
@@ -332,19 +327,19 @@ fn thread_limit_helpers_are_shared_core_contracts() {
     assert_eq!(plan(Some(25), true), None);
 
     assert_eq!(
-        plan_thread_blocks_request(&linux, "thread-a", None, None)
+        plan_thread_blocks_request("thread-a", None, None)
             .unwrap()
             .block_limit,
         Some(120)
     );
     assert_eq!(
-        plan_thread_blocks_request(&linux, "thread-a", Some(0), None)
+        plan_thread_blocks_request("thread-a", Some(0), None)
             .unwrap()
             .block_limit,
         Some(1)
     );
     assert_eq!(
-        plan_thread_blocks_request(&linux, "thread-a", Some(999), None)
+        plan_thread_blocks_request("thread-a", Some(999), None)
             .unwrap()
             .block_limit,
         Some(500)
@@ -355,13 +350,13 @@ fn thread_limit_helpers_are_shared_core_contracts() {
 fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
     let archive_plan = plan_thread_archive_with_capability("thread-a").unwrap();
     assert_eq!(
-        thread_state_action_response(&archive_plan).unwrap().command,
+        thread_state_action_response(&archive_plan).command,
         commands::THREADS_ARCHIVE
     );
 
     let restore_plan = plan_thread_restore_with_capability("thread-a").unwrap();
     assert_eq!(
-        thread_state_action_response(&restore_plan).unwrap().command,
+        thread_state_action_response(&restore_plan).command,
         commands::THREADS_RESTORE
     );
 
@@ -370,7 +365,7 @@ fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
         name: " new name ".to_string(),
     })
     .unwrap();
-    let renamed = thread_state_action_response(&rename_plan).unwrap();
+    let renamed = thread_state_action_response(&rename_plan);
     assert_eq!(renamed.command, commands::THREADS_RENAME);
     assert_eq!(renamed.data, Some(serde_json::json!({"name": "new name"})));
 }

@@ -6,6 +6,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod dsh;
+pub(crate) mod file_stamp;
 pub mod grok;
 pub mod grokbot;
 pub mod history_navigation;
@@ -58,13 +59,13 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     codex::evict_idle_detail_cache(max_idle);
     claude::evict_idle_detail_cache(max_idle);
     grok::evict_idle_detail_cache(max_idle);
-    grokbot::evict_idle(max_idle);
     native_probe::evict_idle_cache(max_idle);
     dsh::notifications::evict_idle_cache(max_idle);
     dsh::sessions::evict_idle_fold_cache(max_idle);
     provider_sessions::HISTORY_CACHE.evict_idle(max_idle);
     services::probe::evict_idle_live_provider_sessions_cache(max_idle);
     antigravity::sessions::evict_idle_endpoint_cache(max_idle);
+    session_storage::evict_idle_cache(max_idle);
     workspace_root::evict_idle_cache(max_idle);
     if CACHE_EVICTED_SINCE_TRIM.swap(false, std::sync::atomic::Ordering::Relaxed) {
         #[cfg(all(target_os = "linux", target_env = "gnu"))]

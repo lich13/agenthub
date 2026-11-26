@@ -281,8 +281,8 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     );
     assert_eq!(hook.ttl_seconds, 300);
     assert_eq!(hook.payload["notify_completion"], false);
-    assert_eq!(hook.payload["auto_reply"], false);
-    assert_eq!(hook.payload["hidden_desktop_control"], false);
+    assert!(hook.payload.get("auto_reply").is_none());
+    assert!(hook.payload.get("hidden_desktop_control").is_none());
 
     let duplicate_hook = ProbeRuntime::build_event_for(
         &config,
@@ -302,7 +302,7 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
         .starts_with("completion:thread-a:turn-1:completion:"));
     assert!(completion.payload["bark"].get("body").is_none());
     assert_eq!(completion.payload["notify_completion"], true);
-    assert_eq!(completion.payload["auto_reply"], false);
+    assert!(completion.payload.get("auto_reply").is_none());
 
     let recorded = ProbeEventOutcome::from_claim(&completion, true);
     assert!(recorded.recorded);

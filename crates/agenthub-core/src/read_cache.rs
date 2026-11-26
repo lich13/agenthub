@@ -1,21 +1,17 @@
+use crate::file_stamp::{open_regular_nofollow, FileStamp};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
-    fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::SystemTime,
 };
 
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
-    size: u64,
-    modified: SystemTime,
+    file: FileStamp,
     edge_hash: [u8; 32],
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
 }
 
 impl Stamp {
@@ -23,54 +19,30 @@ impl Stamp {
         // Coarse filesystem clocks can give a same-sized rewrite the same stamp.
         // Read bounded edges so an appended/replaced native record cannot reuse
         // a snapshot merely because its metadata timestamps share one clock tick.
-        let (metadata, edge_hash) = if hash_edges {
-            let sym_meta = fs::symlink_metadata(path).ok()?;
-            if !sym_meta.is_file() || sym_meta.file_type().is_symlink() {
-                return None;
-            }
-            let mut options = fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW);
-            }
-            let mut file = options.open(path).ok()?;
-            let metadata = file.metadata().ok()?;
-            if !metadata.is_file() {
-                return None;
-            }
+        if hash_edges {
+            let mut f = open_regular_nofollow(path).ok()?;
+            let stamp = FileStamp::from_open_file(&f)?;
             let mut digest = Sha256::new();
             let mut edge = [0_u8; 4096];
-            let head = file.read(&mut edge).ok()?;
+            let head = f.read(&mut edge).ok()?;
             digest.update(&edge[..head]);
-            if metadata.len() > edge.len() as u64 {
-                file.seek(SeekFrom::End(-(edge.len() as i64))).ok()?;
-                let tail = file.read(&mut edge).ok()?;
+            if stamp.len > edge.len() as u64 {
+                f.seek(SeekFrom::End(-(edge.len() as i64))).ok()?;
+                let tail = f.read(&mut edge).ok()?;
                 digest.update(&edge[..tail]);
             }
-            (metadata, digest.finalize().into())
+            Some(Self {
+                file: stamp,
+                edge_hash: digest.finalize().into(),
+            })
         } else {
-            let metadata = fs::symlink_metadata(path).ok()?;
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return None;
-            }
-            (metadata, [0; 32])
-        };
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-        Some(Self {
-            size: metadata.len(),
-            modified: metadata.modified().ok()?,
-            edge_hash,
-            #[cfg(unix)]
-            identity: (
-                metadata.dev(),
-                metadata.ino(),
-                metadata.ctime(),
-                metadata.ctime_nsec(),
-            ),
-        })
+            let stamp = FileStamp::of_nofollow(path)?;
+            stamp.modified?;
+            Some(Self {
+                file: stamp,
+                edge_hash: [0; 32],
+            })
+        }
     }
 }
 
@@ -91,7 +63,7 @@ enum SourceStamp {
 impl SourceStamp {
     fn size(&self) -> u64 {
         match self {
-            Self::Files(files) => files.iter().flatten().map(|stamp| stamp.size).sum(),
+            Self::Files(files) => files.iter().flatten().map(|stamp| stamp.file.len).sum(),
             Self::Revision(_) => 0,
         }
     }
@@ -107,7 +79,7 @@ pub(crate) struct ReadCache<T> {
     hash_edges: bool,
 }
 
-impl<T: Clone> ReadCache<T> {
+impl<T> ReadCache<T> {
     pub(crate) const fn new(max_bytes: u64) -> Self {
         Self {
             entries: Mutex::new(VecDeque::new()),
@@ -137,7 +109,7 @@ impl<T: Clone> ReadCache<T> {
         path: &Path,
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<Arc<T>> {
         self.read_stamped(
             path,
             || {
@@ -155,7 +127,7 @@ impl<T: Clone> ReadCache<T> {
         sources: &[PathBuf],
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<Arc<T>> {
         self.read_stamped(
             key,
             || {
@@ -181,7 +153,7 @@ impl<T: Clone> ReadCache<T> {
         revision: Option<Vec<u8>>,
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<Arc<T>> {
         self.read_stamped(
             key,
             || revision.clone().map(SourceStamp::Revision),
@@ -196,7 +168,7 @@ impl<T: Clone> ReadCache<T> {
         stamp: impl Fn() -> Option<SourceStamp>,
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<Arc<T>> {
         let before = stamp();
         if let Ok(mut entries) = self.entries.lock() {
             if let Some(mut entry) =
@@ -207,7 +179,7 @@ impl<T: Clone> ReadCache<T> {
                     let value = entry.value.clone();
                     entries.push_back(entry);
                     drop(entries);
-                    return Ok((*value).clone());
+                    return Ok(value);
                 }
             }
         }
@@ -260,7 +232,7 @@ impl<T: Clone> ReadCache<T> {
                     let value = entry.value.clone();
                     entries.push_back(entry);
                     drop(entries);
-                    return Ok((*value).clone());
+                    return Ok(value);
                 }
             }
         }
@@ -290,7 +262,7 @@ impl<T: Clone> ReadCache<T> {
                 }
             }
         }
-        Ok(Arc::unwrap_or_clone(value))
+        Ok(value)
     }
 
     #[cfg(test)]
@@ -326,7 +298,7 @@ impl<T: Clone> ReadCache<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::{cell::Cell, fs};
 
     #[test]
     fn rollout_read_cache_reuses_only_unchanged_files_and_is_bounded() {
@@ -346,17 +318,17 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(read(), "one");
-        assert_eq!(read(), "one");
+        assert_eq!(read().as_str(), "one");
+        assert_eq!(read().as_str(), "one");
         assert_eq!(reads.get(), 1);
         cache.evict_idle(std::time::Duration::from_secs(900));
-        assert_eq!(read(), "one");
+        assert_eq!(read().as_str(), "one");
         assert_eq!(reads.get(), 1);
         cache.evict_idle(std::time::Duration::ZERO);
-        assert_eq!(read(), "one");
+        assert_eq!(read().as_str(), "one");
         assert_eq!(reads.get(), 2);
         fs::write(&path, "two").unwrap();
-        assert_eq!(read(), "two");
+        assert_eq!(read().as_str(), "two");
         assert_eq!(reads.get(), 3);
         fs::write(&path, "too large").unwrap();
         read();

@@ -27,6 +27,7 @@ pub(crate) struct AppState {
     pub(crate) jobs: JobRunner,
     pub(crate) app_server_client: CodexAppServerClient,
     pub(crate) probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
+    pub(crate) ci_wake: Arc<tokio::sync::Notify>,
     #[cfg(test)]
     test_sandbox: Option<Arc<TestSandboxDir>>,
 }
@@ -42,9 +43,14 @@ impl AppState {
             jobs,
             app_server_client: CodexAppServerClient::new(),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
+            ci_wake: Arc::new(tokio::sync::Notify::new()),
             #[cfg(test)]
             test_sandbox: None,
         }
+    }
+
+    pub(crate) fn notify_github_ci(&self) {
+        self.ci_wake.notify_one();
     }
 
     #[cfg(test)]

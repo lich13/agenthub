@@ -1469,7 +1469,7 @@ fn rollout_completion_does_not_fallback_to_old_turn_when_current_turn_has_no_bod
     .unwrap();
 
     let message =
-        super::rollout_completion_last_agent_message_with_source(&path, Some("turn-live")).unwrap();
+        super::rollout_completion_last_agent_message_selection(&path, Some("turn-live")).unwrap();
 
     assert!(
         message.is_none(),
@@ -1503,14 +1503,14 @@ fn rollout_completion_associates_unscoped_final_answer_with_current_turn_context
     )
     .unwrap();
 
-    let (message, source) =
-        super::rollout_completion_last_agent_message_with_source(&path, Some("turn-live"))
+    let selection =
+        super::rollout_completion_last_agent_message_selection(&path, Some("turn-live"))
             .unwrap()
             .unwrap();
 
-    assert_eq!(source, "task_complete.last_agent_message");
-    assert_eq!(message, final_answer);
-    assert!(!message.contains("上一轮完成正文"));
+    assert_eq!(selection.source, "task_complete.last_agent_message");
+    assert_eq!(selection.message, final_answer);
+    assert!(!selection.message.contains("上一轮完成正文"));
     let _ = fs::remove_file(path);
 }
 
@@ -3848,6 +3848,101 @@ fn notification_thread_headers_with_identities_supports_legacy_archived_at_schem
     assert!(pairs
         .iter()
         .all(|(s, _)| s.id != "archived-1" && s.id != "sub-1"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn compressed_rollout_supports_questions_completion_feedback_and_header_fallback() {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root = env::temp_dir().join(format!(
+        "agenthub-codex-zst-parity-{}-{counter}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("sessions")).unwrap();
+    let plain_path = root
+        .join("sessions/rollout-2026-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl");
+    let zst_path = root.join(
+        "sessions/rollout-2026-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl.zst",
+    );
+
+    let lines = [
+        r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/workspace/example.invalid"}}"#,
+        r#"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-q"}}"#,
+        r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"call-async-1","turn_id":"turn-q","arguments":"{\"questions\":[{\"id\":\"q1\",\"question\":\"是否继续部署？\",\"options\":[{\"label\":\"继续\"}]}]}"}}"#,
+        r#"{"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-sync-1","turn_id":"turn-q","arguments":"{\"questions\":[{\"id\":\"q2\",\"question\":\"选择目标环境\",\"options\":[{\"label\":\"prod\"}]}]}"}}"#,
+        r#"{"timestamp":"2026-01-01T00:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-sync-1","output":"{\"answers\":{\"q2\":{\"answers\":[\"prod\"]}}}"}}"#,
+        r#"{"timestamp":"2026-01-01T00:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-q","last_agent_message":"已就绪，请确认是否现在执行升级？"}}"#,
+    ]
+    .join("\n")
+        + "\n";
+    fs::write(
+        &zst_path,
+        zstd::stream::encode_all(lines.as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+
+    // 1. Async questions read via rollout_file::read_cached
+    let async_qs = super::rollout_async_questions(&zst_path).unwrap();
+    assert_eq!(async_qs.len(), 1);
+    assert!(async_qs[0].pending().is_some());
+
+    // 2. Sync & async request_user_input_state on .jsonl.zst
+    assert_eq!(
+        rollout_request_user_input_state(&zst_path, "turn-q", "call-sync-1").unwrap(),
+        super::RolloutRequestUserInputState::Resolved
+    );
+    assert_eq!(
+        rollout_request_user_input_state(&zst_path, "turn-q", "call-async-1").unwrap(),
+        super::RolloutRequestUserInputState::Pending
+    );
+
+    // 3. Completion selection on .jsonl.zst
+    let sel = super::rollout_completion_last_agent_message_selection(&zst_path, Some("turn-q"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(sel.strategy, "unresolved_async_question");
+
+    // 4. Plain-feedback turn on .jsonl.zst (no interactive tools in turn-fb)
+    let fb_lines = [
+        r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/workspace/example.invalid"}}"#,
+        r#"{"timestamp":"2026-01-01T00:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-fb"}}"#,
+        r#"{"timestamp":"2026-01-01T00:01:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"准备升级"}]}}"#,
+        r#"{"timestamp":"2026-01-01T00:01:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-fb","last_agent_message":"是否需要我继续执行部署？"}}"#,
+    ]
+    .join("\n")
+        + "\n";
+    let zst_fb = root.join(
+        "sessions/rollout-2026-01-01T00-01-00-22222222-2222-4222-8222-222222222222.jsonl.zst",
+    );
+    fs::write(
+        &zst_fb,
+        zstd::stream::encode_all(fb_lines.as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+    let fb = super::rollout_pending_feedback(&zst_fb).unwrap().unwrap();
+    assert_eq!(fb.turn_id, "turn-fb");
+
+    // 5. notification_thread_header resolves stale .jsonl DB path to existing .jsonl.zst
+    let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived INTEGER, rollout_path TEXT, cwd TEXT, source TEXT, thread_source TEXT);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES ('11111111-1111-4111-8111-111111111111', '压缩线程', 1732500000, 0, ?1, '/workspace/example.invalid', 'cli', 'user')",
+        [plain_path.display().to_string()],
+    )
+    .unwrap();
+    drop(conn);
+    let paths = CodexPaths::new(&root);
+    let header = super::notification_thread_header(&paths, "11111111-1111-4111-8111-111111111111")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        header.rollout_path.unwrap().file_name().unwrap(),
+        zst_path.file_name().unwrap()
+    );
 
     let _ = fs::remove_dir_all(root);
 }

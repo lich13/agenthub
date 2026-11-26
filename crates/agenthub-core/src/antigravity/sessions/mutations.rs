@@ -50,15 +50,7 @@ fn upsert_fts_summary_row(
     new_title: Option<&str>,
     new_archived: Option<bool>,
 ) -> Result<()> {
-    let cols: BTreeSet<String> = conn
-        .prepare("PRAGMA table_info(conversations_fts)")
-        .ok()
-        .and_then(|mut s| {
-            s.query_map([], |r| r.get::<_, String>(1))
-                .ok()
-                .map(|it| it.flatten().collect())
-        })
-        .unwrap_or_default();
+    let cols = crate::db::table_columns(conn, "conversations_fts").unwrap_or_default();
     if !cols.contains("conversation_id") || !cols.contains("chunk_index") {
         return Ok(());
     }
@@ -489,14 +481,14 @@ pub(crate) fn read_children_map(
         open_conn = Some(conn);
     }
     let aux = super::load_store_auxiliary_index(paths, open_conn.as_ref());
-    for (pid, kids) in aux.sidecar_children {
+    for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
-            insert_edge(pid.clone(), cid);
+            insert_edge(pid.clone(), cid.clone());
         }
     }
-    for (cid, entry) in aux.conv_meta {
-        if let Some(pid) = entry.parent_id.or(entry.root_id) {
-            insert_edge(pid, cid);
+    for (cid, entry) in &aux.conv_meta {
+        if let Some(pid) = entry.parent_id.as_ref().or(entry.root_id.as_ref()) {
+            insert_edge(pid.clone(), cid.clone());
         }
     }
     if paths.conversations_dir().is_dir() {
@@ -632,7 +624,8 @@ fn record_remaining_antigravity_residuals(
     }
 }
 
-pub fn preview_batch_item(
+#[cfg(test)]
+pub(crate) fn preview_batch_item(
     paths: &AntigravityPaths,
     key: &str,
     operation: SessionOperation,
@@ -652,6 +645,7 @@ fn clean_store_shared_files(
         outcome.attempt(&history_path, || {
             session_delete::filter_jsonl(&history_path, |row| {
                 row.get("conversationId")
+                    .or_else(|| row.get("conversation_id"))
                     .and_then(Value::as_str)
                     .is_some_and(|cid| deleted_set.contains(cid))
             })
@@ -973,16 +967,62 @@ fn store_has_residual_session_data(store: &AntigravityPaths, id: &str) -> bool {
 }
 
 fn store_has_shared_session_entry(store: &AntigravityPaths, id: &str) -> bool {
-    for shared in [
-        store.home.join("history.jsonl"),
-        store.home.join("cache/conversation_metadata.json"),
-        store.home.join("cache/last_conversations.json"),
-    ] {
-        if fs::read_to_string(&shared)
-            .ok()
-            .is_some_and(|text| text.contains(id))
-        {
-            return true;
+    let history_path = store.home.join("history.jsonl");
+    if session_delete::within(&store.home, &history_path) && history_path.is_file() {
+        if let Ok(file) = fs::File::open(&history_path) {
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            while let Ok(read) = std::io::BufRead::read_line(&mut reader, &mut line) {
+                if read == 0 {
+                    break;
+                }
+                if line.contains(id) {
+                    if let Ok(row) = serde_json::from_str::<Value>(&line) {
+                        if row
+                            .get("conversationId")
+                            .or_else(|| row.get("conversation_id"))
+                            .and_then(Value::as_str)
+                            == Some(id)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                line.clear();
+            }
+        }
+    }
+
+    let metadata_path = store.home.join("cache/conversation_metadata.json");
+    if session_delete::within(&store.home, &metadata_path) && metadata_path.is_file() {
+        if let Ok(text) = fs::read_to_string(&metadata_path) {
+            if text.contains(id) {
+                if let Ok(doc) = serde_json::from_str::<Value>(&text) {
+                    if doc
+                        .get("conversations")
+                        .and_then(Value::as_object)
+                        .is_some_and(|convs| convs.contains_key(id))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    let last_conv_path = store.home.join("cache/last_conversations.json");
+    if session_delete::within(&store.home, &last_conv_path) && last_conv_path.is_file() {
+        if let Ok(text) = fs::read_to_string(&last_conv_path) {
+            if text.contains(id) {
+                if let Ok(doc) = serde_json::from_str::<Value>(&text) {
+                    if doc
+                        .as_object()
+                        .is_some_and(|map| map.values().any(|val| val.as_str() == Some(id)))
+                    {
+                        return true;
+                    }
+                }
+            }
         }
     }
     false
@@ -1297,14 +1337,19 @@ pub fn execute_batch_item(
             })
         }
         SessionOperation::Delete => {
-            let maybe_summary = list_summaries_filtered(paths, Some(key))?
-                .into_iter()
-                .next();
             let (store, endpoint) = resolve_delete_store_and_endpoint(paths, key)?;
             let (live_rpc, all_live) = match endpoint {
                 Some((rpc, live)) => (Some(rpc), Some(live)),
                 None => (None, None),
             };
+            let maybe_summary = super::list_summaries_from_source_filtered(
+                paths,
+                Some(key),
+                None,
+                all_live.as_ref(),
+            )?
+            .into_iter()
+            .next();
             if maybe_summary.is_none() && paths.collect_all_known_subagents().contains(key) {
                 bail!("未找到 Antigravity 会话：{key}");
             }
@@ -1585,31 +1630,47 @@ fn scan_store_orphan_subagents(
     }
 
     let aux = super::load_store_auxiliary_index(store, open_conn.as_ref());
-    for (pid, kids) in aux.sidecar_children {
+    for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
-            parent_sets.entry(cid).or_default().insert(pid.clone());
+            parent_sets
+                .entry(cid.clone())
+                .or_default()
+                .insert(pid.clone());
         }
     }
-    for (cid, s_meta) in aux.sidecar_meta {
-        if let Some(t) = s_meta.title {
-            titles.entry(cid).or_insert(t);
+    for (cid, s_meta) in &aux.sidecar_meta {
+        if let Some(t) = &s_meta.title {
+            titles.entry(cid.clone()).or_insert_with(|| t.clone());
         }
     }
-    for (cid, c_meta) in aux.conv_meta {
-        if let Some(rid) = c_meta.root_id.filter(|r| uuid::Uuid::parse_str(r).is_ok()) {
-            root_ids.entry(cid.clone()).or_insert(rid.clone());
+    for (cid, c_meta) in &aux.conv_meta {
+        if let Some(rid) = c_meta
+            .root_id
+            .as_deref()
+            .filter(|r| uuid::Uuid::parse_str(r).is_ok())
+        {
+            root_ids
+                .entry(cid.clone())
+                .or_insert_with(|| rid.to_owned());
             if c_meta.parent_id.is_none() {
-                parent_sets.entry(cid.clone()).or_default().insert(rid);
+                parent_sets
+                    .entry(cid.clone())
+                    .or_default()
+                    .insert(rid.to_owned());
             }
         }
         if let Some(pid) = c_meta
             .parent_id
+            .as_deref()
             .filter(|p| uuid::Uuid::parse_str(p).is_ok())
         {
-            parent_sets.entry(cid.clone()).or_default().insert(pid);
+            parent_sets
+                .entry(cid.clone())
+                .or_default()
+                .insert(pid.to_owned());
         }
-        if let Some(t) = c_meta.title {
-            titles.entry(cid).or_insert(t);
+        if let Some(t) = &c_meta.title {
+            titles.entry(cid.clone()).or_insert_with(|| t.clone());
         }
     }
     if store.conversations_dir().is_dir() {
@@ -1776,10 +1837,7 @@ pub fn preview_unified_cleanup_candidates(
     let now_ms = super::now_epoch_ms();
     let live = connect_endpoint(&primary)?.map(|(_, payload)| payload);
     let archived_summaries: Vec<ProviderSessionSummary> =
-        list_summaries_from_source(paths, None, live.as_ref())?
-            .into_iter()
-            .filter(|s| s.archived)
-            .collect();
+        super::list_summaries_from_source_filtered(paths, None, Some(true), live.as_ref())?;
     let mut primary_children = read_children_map(&primary, live.as_ref())?;
     let archived_ids: Vec<String> = archived_summaries.iter().map(|s| s.id.clone()).collect();
     expand_transcript_children_for_roots(&primary, &mut primary_children, &archived_ids);
@@ -1893,9 +1951,8 @@ pub fn execute_unified_cleanup_targets(
         None => (None, None),
     };
     let archived_map: BTreeMap<String, ProviderSessionSummary> =
-        list_summaries_from_source(paths, None, live_payload.as_ref())?
+        super::list_summaries_from_source_filtered(paths, None, Some(true), live_payload.as_ref())?
             .into_iter()
-            .filter(|s| s.archived)
             .map(|s| (s.id.clone(), s))
             .collect();
     let mut primary_children = read_children_map(&primary, live_payload.as_ref())?;

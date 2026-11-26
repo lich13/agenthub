@@ -2,11 +2,11 @@ import Foundation
 
 // MARK: - UTF-16 Range & String Slicing Helpers (100% Parity with JS String Indexing)
 
-public struct UTF16Range: Equatable, Sendable {
-    public var start: Int
-    public var end: Int
+struct UTF16Range: Equatable, Sendable {
+    var start: Int
+    var end: Int
 
-    public init(start: Int, end: Int) {
+    init(start: Int, end: Int) {
         self.start = start
         self.end = end
     }
@@ -23,14 +23,14 @@ extension String {
 
 // MARK: - VisibleMarkdown & Instruction Segments (visibleMarkdown.ts)
 
-public struct InstructionSegment: Codable, Equatable, Sendable, Identifiable {
-    public var kind: String // "markdown" | "instructions"
-    public var id: String
-    public var text: String
-    public var lines: Int
-    public var bytes: Int
+struct InstructionSegment: Codable, Equatable, Sendable, Identifiable {
+    var kind: String // "markdown" | "instructions"
+    var id: String
+    var text: String
+    var lines: Int
+    var bytes: Int
 
-    public init(kind: String, id: String, text: String, lines: Int, bytes: Int) {
+    init(kind: String, id: String, text: String, lines: Int, bytes: Int) {
         self.kind = kind
         self.id = id
         self.text = text
@@ -50,7 +50,6 @@ private extension String {
 }
 
 private enum MarkdownPatterns {
-    static let memoryMarker = try! NSRegularExpression(pattern: "oai-mem-citation|citation_entries|rollout_ids|memory_citation", options: [.caseInsensitive])
     static let headingPrefix = try! NSRegularExpression(pattern: "^#{1,6}\\s+")
     static let closingHashes = try! NSRegularExpression(pattern: "\\s+#+$")
     static let labelPunctuation = try! NSRegularExpression(pattern: "^[`*]+|[`*:]+$")
@@ -59,7 +58,6 @@ private enum MarkdownPatterns {
     static let leadingHashes = try! NSRegularExpression(pattern: "^#+\\s*")
     static let codeDelimiters = try! NSRegularExpression(pattern: "^`|`$")
     static let urlScheme = try! NSRegularExpression(pattern: "^[a-z][a-z0-9+.-]*:", options: [.caseInsensitive])
-    static let explicitRelativePath = try! NSRegularExpression(pattern: "^(?:/|\\.{1,2}/|~/ )")
     static let fileName = try! NSRegularExpression(pattern: "^[^?#]+(?:/|\\.[\\p{L}\\d_-]+(?:[:#]|$))")
     static let lineFragment = try! NSRegularExpression(pattern: "#L\\d+(?:C\\d+)?(?:-L?C?\\d+(?:C\\d+)?)?$", options: [.caseInsensitive])
     static let lineSuffix = try! NSRegularExpression(pattern: ":\\d+(?::\\d+)?$")
@@ -81,7 +79,6 @@ private enum MarkdownPatterns {
     static let indented = try! NSRegularExpression(pattern: "^( {4}| *\\t)")
     static let lines = try! NSRegularExpression(pattern: "[^\\n]*\\n|[^\\n]+$")
     static let fence = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)")
-    static let comment = try! NSRegularExpression(pattern: "<!--[\\s\\S]*?(?:-->|$)")
     static let memoryTag = try! NSRegularExpression(
         pattern: "(?:<|&lt;)(\\/?)(oai-mem-citation|citation_entries|rollout_ids)(?:\\s+[^<>]*?)?\\s*(?:>|&gt;)",
         options: [.caseInsensitive]
@@ -114,7 +111,7 @@ private enum MarkdownPatterns {
     static let fileLinkSpan = try! NSRegularExpression(pattern: "(?:\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\))|(?:<(file:[^>\\s]+)>)")
 }
 
-public enum VisibleMarkdownEngine {
+enum VisibleMarkdownEngine {
     private static let utf8MemoryMarkers: [[UInt8]] = [
         Array("oai-mem-citation".utf8),
         Array("citation_entries".utf8),
@@ -186,7 +183,7 @@ public enum VisibleMarkdownEngine {
         }
     }
 
-    public static func literalMarkdownRanges(_ text: String, includeInline: Bool = true, includeQuotes: Bool = true) -> [UTF16Range] {
+    static func literalMarkdownRanges(_ text: String, includeInline: Bool = true, includeQuotes: Bool = true) -> [UTF16Range] {
         let ns = text as NSString
         let total = ns.length
         if total == 0 { return [] }
@@ -268,15 +265,43 @@ public enum VisibleMarkdownEngine {
             ranges.append(contentsOf: inlineRanges)
         }
 
-        let commentRegex = MarkdownPatterns.comment
-        for match in commentRegex.matches(in: text, range: NSRange(location: 0, length: total)) {
-            ranges.append(UTF16Range(start: match.range.location, end: match.range.location + match.range.length))
+        let codeAndQuote = mergeRanges(ranges)
+        var comments: [UTF16Range] = []
+        var commentCursor = 0
+        while commentCursor < total {
+            let openRange = ns.range(
+                of: "<!--",
+                options: [],
+                range: NSRange(location: commentCursor, length: total - commentCursor)
+            )
+            if openRange.location == NSNotFound {
+                break
+            }
+            if let prot = protectedRange(codeAndQuote, at: openRange.location) {
+                commentCursor = prot.end
+                continue
+            }
+            let searchStart = openRange.location + openRange.length
+            let closeRange = ns.range(
+                of: "-->",
+                options: [],
+                range: NSRange(location: searchStart, length: total - searchStart)
+            )
+            let end = closeRange.location != NSNotFound
+                ? closeRange.location + closeRange.length
+                : total
+            comments.append(UTF16Range(start: openRange.location, end: end))
+            commentCursor = end
         }
-
-        return mergeRanges(ranges)
+        if comments.isEmpty {
+            return codeAndQuote
+        }
+        var combined = codeAndQuote
+        combined.append(contentsOf: comments)
+        return mergeRanges(combined)
     }
 
-    public static func memoryMetadataRanges(_ text: String, protectedRanges: [UTF16Range]? = nil) -> [UTF16Range] {
+    static func memoryMetadataRanges(_ text: String, protectedRanges: [UTF16Range]? = nil) -> [UTF16Range] {
         guard mightContainMemoryMetadata(text) else {
             return []
         }
@@ -418,7 +443,7 @@ public enum VisibleMarkdownEngine {
         return ranges
     }
 
-    public static func visibleMarkdown(_ text: String, protectedRanges: [UTF16Range]? = nil) -> String {
+    static func visibleMarkdown(_ text: String, protectedRanges: [UTF16Range]? = nil) -> String {
         guard mightContainAnyHiddenMetadata(text) else { return text }
         let ranges = (memoryMetadataRanges(text, protectedRanges: protectedRanges) + pageMetadataRanges(text, protectedRanges: protectedRanges))
             .sorted { $0.start != $1.start ? $0.start < $1.start : $0.end > $1.end }
@@ -438,11 +463,11 @@ public enum VisibleMarkdownEngine {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    public static func isInstructionFileActivity(_ values: String?...) -> Bool {
+    static func isInstructionFileActivity(_ values: String?...) -> Bool {
         isInstructionFileActivity(values)
     }
 
-    public static func isInstructionFileActivity(_ values: [String?]) -> Bool {
+    static func isInstructionFileActivity(_ values: [String?]) -> Bool {
         let regex = MarkdownPatterns.instructionFile
         return values.contains { value in
             guard let value, !value.isEmpty else { return false }
@@ -462,7 +487,7 @@ public enum VisibleMarkdownEngine {
         }
     }
 
-    public static func instructionSegments(_ text: String) -> [InstructionSegment] {
+    static func instructionSegments(_ text: String) -> [InstructionSegment] {
         let ns = text as NSString
         let total = ns.length
         if text.range(of: "agents.md", options: .caseInsensitive) == nil {
@@ -593,21 +618,21 @@ public enum VisibleMarkdownEngine {
 
 // MARK: - UserContext Projection & UserMessageSegments (userContext.ts & userMessageViewModel.ts)
 
-public struct UserMessageProjection: Codable, Equatable, Sendable {
-    public var text: String
-    public var contextBlocks: [UserContextBlock]
+struct UserMessageProjection: Codable, Equatable, Sendable {
+    var text: String
+    var contextBlocks: [UserContextBlock]
 
-    public init(text: String, contextBlocks: [UserContextBlock] = []) {
+    init(text: String, contextBlocks: [UserContextBlock] = []) {
         self.text = text
         self.contextBlocks = contextBlocks
     }
 }
 
-public enum UserMessageSegment: Equatable, Sendable, Identifiable {
+enum UserMessageSegment: Equatable, Sendable, Identifiable {
     case text(id: String, text: String)
     case reply(id: String, question: String, answer: String)
 
-    public var id: String {
+    var id: String {
         switch self {
         case let .text(id, _): id
         case let .reply(id, _, _): id
@@ -615,7 +640,7 @@ public enum UserMessageSegment: Equatable, Sendable, Identifiable {
     }
 }
 
-public enum UserContextEngine {
+enum UserContextEngine {
     private static let knownTags: [(name: String, kind: String)] = [
         ("local-command-stdout", "runtime"),
         ("local-command-stderr", "runtime"),
@@ -649,17 +674,16 @@ public enum UserContextEngine {
     private struct ParsedUserMessageCacheEntry {
         let projection: UserMessageProjection
         let segments: [UserMessageSegment]
-        let byteWeight: Int
-        var seq: UInt64
     }
 
-    private static let cacheLock = NSLock()
-    nonisolated(unsafe) private static var parsedCache: [ParsedUserMessageCacheKey: ParsedUserMessageCacheEntry] = [:]
-    nonisolated(unsafe) private static var parsedCacheTotalBytes: Int = 0
-    nonisolated(unsafe) private static var parsedCacheSeq: UInt64 = 0
     private static let maxParsedCacheEntries = 256
     private static let maxParsedCacheEntryBytes = 262_144
     private static let maxParsedCacheTotalBytes = 8 * 1_048_576
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var parsedCache = BoundedLRUCache<ParsedUserMessageCacheKey, ParsedUserMessageCacheEntry>(
+        maxEntries: maxParsedCacheEntries,
+        maxBytes: maxParsedCacheTotalBytes
+    )
     private static let fileHeaderPrefix = "# Files mentioned by the user:"
     private static let fileHeaderPrefixLength = (fileHeaderPrefix as NSString).length
 
@@ -685,26 +709,24 @@ public enum UserContextEngine {
         return total
     }
 
-    public static func _parsedCacheStatsForTesting() -> (count: Int, totalBytes: Int) {
+    static func _parsedCacheStatsForTesting() -> (count: Int, totalBytes: Int) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        return (parsedCache.count, parsedCacheTotalBytes)
+        return (parsedCache.count, parsedCache.totalBytes)
     }
 
-    public static func _resetParsedCacheForTesting() {
+    static func _resetParsedCacheForTesting() {
         cacheLock.lock()
         parsedCache.removeAll()
-        parsedCacheTotalBytes = 0
-        parsedCacheSeq = 0
         cacheLock.unlock()
     }
 
-    public static func visibleContextText(_ text: String) -> String {
+    static func visibleContextText(_ text: String) -> String {
         let ranges = VisibleMarkdownEngine.literalMarkdownRanges(text, includeInline: true, includeQuotes: true)
         return VisibleMarkdownEngine.visibleMarkdown(text, protectedRanges: ranges)
     }
 
-    public static func projectAndSegmentUserMessage(
+    static func projectAndSegmentUserMessage(
         _ text: String,
         contextBlocks: [UserContextBlock]? = nil
     ) -> (projection: UserMessageProjection, segments: [UserMessageSegment]) {
@@ -713,10 +735,7 @@ public enum UserContextEngine {
         let key = ParsedUserMessageCacheKey(utf8Count: text.utf8.count, text: text, contextBlocks: contextBlocks)
         if inputBytes <= maxParsedCacheEntryBytes {
             cacheLock.lock()
-            if var hit = parsedCache[key] {
-                parsedCacheSeq &+= 1
-                hit.seq = parsedCacheSeq
-                parsedCache[key] = hit
+            if let hit = parsedCache.value(forKey: key) {
                 cacheLock.unlock()
                 return (hit.projection, hit.segments)
             }
@@ -735,32 +754,17 @@ public enum UserContextEngine {
             && entryBytes <= maxParsedCacheTotalBytes
         {
             cacheLock.lock()
-            if let existing = parsedCache.removeValue(forKey: key) {
-                parsedCacheTotalBytes = max(0, parsedCacheTotalBytes - existing.byteWeight)
-            }
-            while !parsedCache.isEmpty
-                && (parsedCache.count >= maxParsedCacheEntries
-                    || parsedCacheTotalBytes + entryBytes > maxParsedCacheTotalBytes),
-                let oldestKey = parsedCache.min(by: { $0.value.seq < $1.value.seq })?.key
-            {
-                if let removed = parsedCache.removeValue(forKey: oldestKey) {
-                    parsedCacheTotalBytes = max(0, parsedCacheTotalBytes - removed.byteWeight)
-                }
-            }
-            parsedCacheSeq &+= 1
-            parsedCache[key] = ParsedUserMessageCacheEntry(
-                projection: proj,
-                segments: segs,
-                byteWeight: entryBytes,
-                seq: parsedCacheSeq
+            parsedCache.setValue(
+                ParsedUserMessageCacheEntry(projection: proj, segments: segs),
+                forKey: key,
+                cost: entryBytes
             )
-            parsedCacheTotalBytes += entryBytes
             cacheLock.unlock()
         }
         return (proj, segs)
     }
 
-    public static func projectUserMessage(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> UserMessageProjection {
+    static func projectUserMessage(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> UserMessageProjection {
         projectAndSegmentUserMessage(text, contextBlocks: contextBlocks).projection
     }
 
@@ -906,7 +910,7 @@ public enum UserContextEngine {
         return UserMessageProjection(text: bodyParts.joined(), contextBlocks: blocks)
     }
 
-    public static func userMessageSegments(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> [UserMessageSegment] {
+    static func userMessageSegments(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> [UserMessageSegment] {
         projectAndSegmentUserMessage(text, contextBlocks: contextBlocks).segments
     }
 
@@ -1116,18 +1120,18 @@ public enum UserContextEngine {
 
 // MARK: - FilePath Links & Plan Export Filename (fileLinks.ts & planExport.ts)
 
-public struct FileLinkTarget: Equatable, Sendable {
-    public var path: String
-    public var resolved: Bool
+struct FileLinkTarget: Equatable, Sendable {
+    var path: String
+    var resolved: Bool
 
-    public init(path: String, resolved: Bool) {
+    init(path: String, resolved: Bool) {
         self.path = path
         self.resolved = resolved
     }
 }
 
-public enum FileLinksAndPlanExport {
-    public static func normalizePath(_ raw: String) -> String {
+enum FileLinksAndPlanExport {
+    static func normalizePath(_ raw: String) -> String {
         var parts: [String] = []
         for part in raw.split(separator: "/", omittingEmptySubsequences: true) {
             if part == "." { continue }
@@ -1140,7 +1144,7 @@ public enum FileLinksAndPlanExport {
         return "/" + parts.joined(separator: "/")
     }
 
-    public static func fileLinkTarget(_ href: String, cwd: String? = nil) -> FileLinkTarget? {
+    static func fileLinkTarget(_ href: String, cwd: String? = nil) -> FileLinkTarget? {
         var source = href.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !source.isEmpty,
               !containsControlCharacters(source),
@@ -1156,8 +1160,10 @@ public enum FileLinksAndPlanExport {
         } else if source.matches(MarkdownPatterns.urlScheme) {
             return nil
         } else {
-            let explicitRel = source.matches(MarkdownPatterns.explicitRelativePath)
-                || source.hasPrefix("/") || source.hasPrefix("./") || source.hasPrefix("../") || source.hasPrefix("~/")
+            let explicitRel = source.hasPrefix("/")
+                || source.hasPrefix("./")
+                || source.hasPrefix("../")
+                || source.hasPrefix("~/")
             let looksLikeFile = source.matches(MarkdownPatterns.fileName)
             if !explicitRel && !looksLikeFile { return nil }
         }
@@ -1177,7 +1183,7 @@ public enum FileLinksAndPlanExport {
         return FileLinkTarget(path: source, resolved: false)
     }
 
-    public static func planFilename(markdown rawMarkdown: String, fallbackTitle rawFallback: String) -> String {
+    static func planFilename(markdown rawMarkdown: String, fallbackTitle rawFallback: String) -> String {
         let markdown = VisibleMarkdownEngine.visibleMarkdown(rawMarkdown)
         let fallback = VisibleMarkdownEngine.visibleMarkdown(rawFallback)
 
@@ -1217,13 +1223,13 @@ public enum FileLinksAndPlanExport {
         return "\(reserved ? "_\(stem)" : stem).md"
     }
 
-    public struct FileLinkSpan: Equatable, Sendable {
-        public var nsRange: NSRange
-        public var href: String
-        public var label: String
+    struct FileLinkSpan: Equatable, Sendable {
+        var nsRange: NSRange
+        var href: String
+        var label: String
     }
 
-    public static func fileLinkSpans(_ text: String) -> [FileLinkSpan] {
+    static func fileLinkSpans(_ text: String) -> [FileLinkSpan] {
         guard text.contains("[") || text.contains("<") else { return [] }
         let ns = text as NSString
         var out: [FileLinkSpan] = []

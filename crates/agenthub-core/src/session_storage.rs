@@ -1,11 +1,12 @@
 //! Read-only, metadata-only session sizes. Callers establish native ownership first.
+use crate::file_stamp::FileStamp;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashSet, VecDeque},
     fs::{self, Metadata},
     path::{Component, Path, PathBuf},
     sync::{mpsc, Arc, Mutex, OnceLock},
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,30 +40,6 @@ impl SessionStorageSize {
             scope,
             status: StorageStatus::Unavailable,
         }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    modified: Option<SystemTime>,
-    identity: (u64, u64, i64, i64),
-}
-impl Stamp {
-    fn new(meta: &Metadata) -> Self {
-        use std::os::unix::fs::MetadataExt;
-        Self {
-            len: meta.len(),
-            modified: meta.modified().ok(),
-            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
-        }
-    }
-    fn same_file(&self, other: &Self) -> bool {
-        (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1)
-    }
-    /// An append keeps the file and never shrinks it.
-    fn grew_into(&self, next: &Self) -> bool {
-        self.same_file(next) && next.len >= self.len
     }
 }
 
@@ -137,27 +114,28 @@ pub(crate) fn file_size_with_canonical_root(
 struct Source {
     root: PathBuf,
     directory: PathBuf,
-    directory_stamp: Stamp,
-    primary: Option<(PathBuf, Stamp)>,
+    directory_stamp: FileStamp,
+    primary: Option<(PathBuf, FileStamp)>,
     owner: String,
 }
 impl Source {
     /// Re-reads both stamps under the reuse rule of `can_reuse_size`: the same
     /// directory and primary file, where the primary may only have grown.
     fn current(&self) -> bool {
-        metadata(&self.root, &self.directory)
-            .is_some_and(|(_, meta)| self.directory_stamp.same_file(&Stamp::new(&meta)))
-            && self.primary.as_ref().is_none_or(|(path, stamp)| {
-                metadata(&self.root, path)
-                    .is_some_and(|(_, meta)| stamp.grew_into(&Stamp::new(&meta)))
-            })
+        metadata(&self.root, &self.directory).is_some_and(|(_, meta)| {
+            self.directory_stamp
+                .same_inode(&FileStamp::from_metadata(&meta))
+        }) && self.primary.as_ref().is_none_or(|(path, stamp)| {
+            metadata(&self.root, path)
+                .is_some_and(|(_, meta)| stamp.grew_into(&FileStamp::from_metadata(&meta)))
+        })
     }
     fn same_slot(&self, other: &Self) -> bool {
         self.root == other.root && self.directory == other.directory && self.owner == other.owner
     }
     fn can_reuse_size(&self, next: &Self) -> bool {
         self.same_slot(next)
-            && self.directory_stamp.same_file(&next.directory_stamp)
+            && self.directory_stamp.same_inode(&next.directory_stamp)
             && match (&self.primary, &next.primary) {
                 (None, None) => true,
                 (Some((path, stamp)), Some((next_path, next_stamp))) => {
@@ -171,12 +149,14 @@ struct Entry {
     source: Source,
     value: SessionStorageSize,
     checked: Instant,
+    last_accessed: Instant,
     queued: bool,
 }
 struct Cache {
     entries: Arc<Mutex<VecDeque<Entry>>>,
     queue: mpsc::SyncSender<Source>,
 }
+static CACHE: OnceLock<Cache> = OnceLock::new();
 use crate::resource_limits::{
     STORAGE_CACHE_ENTRIES as CACHE_ENTRIES, STORAGE_CACHE_TTL as TTL,
     STORAGE_SCAN_DEPTH as SCAN_DEPTH, STORAGE_SCAN_ENTRIES as SCAN_ENTRIES,
@@ -231,15 +211,18 @@ impl Cache {
         Self { entries, queue }
     }
     fn get(&self, source: Source) -> SessionStorageSize {
+        let now = Instant::now();
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut entry =
             crate::lru::take_first(&mut entries, |entry| entry.source.same_slot(&source))
                 .unwrap_or_else(|| Entry {
                     source: source.clone(),
                     value: pending_size(),
-                    checked: Instant::now(),
+                    checked: now,
+                    last_accessed: now,
                     queued: false,
                 });
+        entry.last_accessed = now;
         if entry.source != source {
             // Ordinary appends use the bounded TTL. Resetting on every mtime
             // change would leave an actively written session permanently pending.
@@ -277,6 +260,29 @@ impl Cache {
         entries.push_back(entry);
         value
     }
+
+    fn evict_idle(&self, max_idle: std::time::Duration) -> usize {
+        let Ok(mut entries) = self.entries.lock() else {
+            return 0;
+        };
+        let before = entries.len();
+        let now = Instant::now();
+        entries.retain(|entry| {
+            entry.queued || now.saturating_duration_since(entry.last_accessed) < max_idle
+        });
+        let evicted = before - entries.len();
+        if evicted > 0 {
+            if entries.capacity() > entries.len().saturating_mul(4).max(16) {
+                entries.shrink_to_fit();
+            }
+            crate::note_cache_eviction();
+        }
+        evicted
+    }
+}
+
+pub fn evict_idle_cache(max_idle: std::time::Duration) -> usize {
+    CACHE.get().map_or(0, |cache| cache.evict_idle(max_idle))
 }
 
 fn pending_size() -> SessionStorageSize {
@@ -301,7 +307,7 @@ pub fn directory_size(
     };
     let primary = match primary {
         Some(file) => match metadata(root, file).filter(|(_, meta)| meta.is_file()) {
-            Some((path, meta)) => Some((path, Stamp::new(&meta))),
+            Some((path, meta)) => Some((path, FileStamp::from_metadata(&meta))),
             None => return unavailable(),
         },
         None => None,
@@ -312,11 +318,10 @@ pub fn directory_size(
     let source = Source {
         root,
         directory,
-        directory_stamp: Stamp::new(&meta),
+        directory_stamp: FileStamp::from_metadata(&meta),
         primary,
         owner: owner.to_owned(),
     };
-    static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(Cache::new).get(source)
 }
 
@@ -396,8 +401,8 @@ mod tests {
         Source {
             root: root.canonicalize().unwrap(),
             directory,
-            directory_stamp: Stamp::new(&directory_meta),
-            primary: Some((primary, Stamp::new(&primary_meta))),
+            directory_stamp: FileStamp::from_metadata(&directory_meta),
+            primary: Some((primary, FileStamp::from_metadata(&primary_meta))),
             owner: "fixture-owner".into(),
         }
     }

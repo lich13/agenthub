@@ -319,45 +319,6 @@ public struct UserInputAnswer: Codable, Equatable, Sendable {
     }
 }
 
-public struct PendingElicitation: Codable, Equatable, Sendable {
-    public var turnId: String?
-    public var itemId: String?
-    public var questions: [UserInputQuestion]
-
-    enum CodingKeys: String, CodingKey {
-        case turnId = "turn_id"
-        case itemId = "item_id"
-        case questions
-    }
-
-    public init(turnId: String? = nil, itemId: String? = nil, questions: [UserInputQuestion] = []) {
-        self.turnId = turnId
-        self.itemId = itemId
-        self.questions = questions
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
-        itemId = try c.decodeIfPresent(String.self, forKey: .itemId)
-        questions = try c.decodeIfPresent([UserInputQuestion].self, forKey: .questions) ?? []
-    }
-}
-
-public struct CodexMessage: Codable, Equatable, Sendable {
-    public var role: String
-    public var kind: String
-    public var text: String
-    public var createdAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case role
-        case kind
-        case text
-        case createdAt = "created_at"
-    }
-}
-
 public struct MessageBlock: Codable, Equatable, Sendable, Identifiable {
     public var subagent: SubagentActivity?
     public var userMessage: UserMessageContent?
@@ -493,10 +454,6 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
     public var workspaceRoot: String?
     public var model: String?
     public var rolloutPath: String?
-    public var activeTurnId: String?
-    public var activeJobId: String?
-    public var pendingElicitation: PendingElicitation?
-    public var lastEventKind: String?
 
     enum CodingKeys: String, CodingKey {
         case storageSize
@@ -507,10 +464,6 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
         case messageCount = "message_count"
         case latestMessage = "latest_message"
         case rolloutPath = "rollout_path"
-        case activeTurnId = "active_turn_id"
-        case activeJobId = "active_job_id"
-        case pendingElicitation = "pending_elicitation"
-        case lastEventKind = "last_event_kind"
     }
 
     public init(
@@ -553,10 +506,6 @@ public struct ThreadSummary: Codable, Equatable, Sendable, Identifiable {
         workspaceRoot = try c.decodeIfPresent(String.self, forKey: .workspaceRoot)
         model = try c.decodeIfPresent(String.self, forKey: .model)
         rolloutPath = try c.decodeIfPresent(String.self, forKey: .rolloutPath)
-        activeTurnId = try c.decodeIfPresent(String.self, forKey: .activeTurnId)
-        activeJobId = try c.decodeIfPresent(String.self, forKey: .activeJobId)
-        pendingElicitation = try c.decodeIfPresent(PendingElicitation.self, forKey: .pendingElicitation)
-        lastEventKind = try c.decodeIfPresent(String.self, forKey: .lastEventKind)
     }
 }
 
@@ -567,7 +516,6 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
     public var subagents: SubagentCollection?
     public var subagentUpdates: [String: SubagentActivity]?
     public var summary: ThreadSummary
-    public var messages: [CodexMessage]
     public var blocks: [MessageBlock]
     public var rawEventCount: Int
     public var totalBlocks: Int?
@@ -575,7 +523,7 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
     public var beforeCursor: String?
 
     enum CodingKeys: String, CodingKey {
-        case timeline, history, subagents, summary, messages, blocks
+        case timeline, history, subagents, summary, blocks
         case afterCursor = "after_cursor"
         case subagentUpdates = "subagent_updates"
         case rawEventCount = "raw_event_count"
@@ -596,7 +544,6 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
         beforeCursor: String? = nil
     ) {
         self.summary = summary
-        self.messages = []
         self.blocks = blocks
         self.timeline = timeline
         self.history = history
@@ -616,7 +563,6 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
         subagents = try c.decodeIfPresent(SubagentCollection.self, forKey: .subagents)
         subagentUpdates = try c.decodeIfPresent([String: SubagentActivity].self, forKey: .subagentUpdates)
         summary = try c.decode(ThreadSummary.self, forKey: .summary)
-        messages = try c.decodeIfPresent([CodexMessage].self, forKey: .messages) ?? []
         let decodedBlocks = try c.decode([MessageBlock].self, forKey: .blocks)
         blocks = decodedBlocks
         let decodedTotalBlocks = try c.decodeIfPresent(Int.self, forKey: .totalBlocks)

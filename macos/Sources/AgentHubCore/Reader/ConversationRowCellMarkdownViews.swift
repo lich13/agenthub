@@ -79,6 +79,60 @@ final class TableGridDocumentView: FlippedDocumentView {
     }
 }
 
+@MainActor
+private final class CodeBlockContainerView: NSView {
+    let copyButton: IconFeedbackActionButton
+    private var tracking: NSTrackingArea?
+    private var isHovered = false {
+        didSet { updateCopyVisibility() }
+    }
+
+    init(copyButton: IconFeedbackActionButton) {
+        self.copyButton = copyButton
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func layout() {
+        super.layout()
+        updateCopyVisibility()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
+    func updateCopyVisibility() {
+        let narrow = bounds.width > 0 && bounds.width <= LayoutMetrics.narrowBreakpoint
+        let focusedInside = (window?.firstResponder as? NSView).map { $0 === self || $0.isDescendant(of: self) } ?? false
+        let visible = isHovered || focusedInside || copyButton.isShowingCopied || narrow
+        copyButton.alphaValue = visible ? 1.0 : 0.0
+    }
+}
+
 extension ConversationRowCellView {
     func buildMarkdownViews(
         ownerId: String,
@@ -86,7 +140,8 @@ extension ConversationRowCellView {
         foldInstructions: Bool,
         width: CGFloat,
         coordinator: ConversationTableCoordinator,
-        into targetStack: NSStackView? = nil
+        into targetStack: NSStackView? = nil,
+        alreadyCleaned: Bool = false
     ) {
         let destStack = targetStack ?? containerStack
         let palette = coordinator.palette
@@ -95,7 +150,8 @@ extension ConversationRowCellView {
             foldInstructions: foldInstructions,
             scheme: coordinator.scheme,
             workspace: coordinator.workspace,
-            transport: coordinator.store.transport
+            transport: coordinator.store.transport,
+            alreadyCleaned: alreadyCleaned
         )
 
         for seg in segs {
@@ -159,6 +215,9 @@ extension ConversationRowCellView {
         card.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
 
         let header = ActionRowContainerView()
+        header.focusRingColor = palette.accent.nsColor
+        header.accessibilityExpandedState = open
+        header.setAccessibilityLabel(title)
         header.translatesAutoresizingMaskIntoConstraints = false
         header.onTap = { [weak coordinator] in
             coordinator?.toggleDisclosurePreservingAnchor(stateKey: scopedKey, currentlyOpen: open)
@@ -284,11 +343,11 @@ extension ConversationRowCellView {
         coordinator: ConversationTableCoordinator
     ) -> ReaderSelectableTextView {
         let palette = coordinator.palette
-        let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: width, height: 24))
+        let h = coordinator.cachedProseHeight(attributed: attr, width: width)
+        let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: width, height: h))
         tv.quoteBackgroundColor = palette.surface.nsColor
         tv.quoteAccentColor = palette.accent.nsColor
         tv.applyAttributedText(attr, width: width)
-        let h = max(22, tv.measuredUsedHeight())
         tv.setFrameSize(NSSize(width: width, height: h))
         tv.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -312,22 +371,19 @@ extension ConversationRowCellView {
         coordinator: ConversationTableCoordinator
     ) -> NSView {
         let palette = coordinator.palette
-        let normalizedCode = ConversationTableCoordinator.normalizeCodeBlockText(code)
-        let box = NSView()
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 12
-        box.layer?.backgroundColor = palette.codeBg.nsColor.cgColor
-        box.layer?.borderWidth = 1
-        box.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
+        let innerCodeW = max(32, width - 24)
+        let codeLayout = coordinator.cachedCodeLayout(code: code, innerWidth: innerCodeW)
+        let normalizedCode = codeLayout.normalized
+        let codeHeight = codeLayout.codeHeight
+        let docWidth = codeLayout.docWidth
 
         let copyBtn = IconFeedbackActionButton(
-            dimension: 32,
+            dimension: 28,
             iconSize: 15,
             idleIcon: .copy,
             palette: palette,
-            borderedSurface: palette.elevated.nsColor,
-            borderColor: palette.borderStrong.nsColor,
+            borderedSurface: palette.elevated.nsColor.withAlphaComponent(0.86),
+            borderColor: palette.borderStrong.nsColor.withAlphaComponent(0.82),
             toolTipText: "复制代码"
         ) { [weak coordinator] in
             NSPasteboard.general.clearContents()
@@ -335,9 +391,15 @@ extension ConversationRowCellView {
             coordinator?.onCopyFeedback?("已复制代码")
         }
 
-        let innerCodeW = max(32, width - 32)
-        let codeHeight = ConversationTableCoordinator.measureCodeBlockHeight(code: normalizedCode)
-        let docWidth = ConversationTableCoordinator.measureCodeDocumentWidth(code: normalizedCode, minWidth: innerCodeW)
+        let box = CodeBlockContainerView(copyButton: copyBtn)
+        box.layer?.cornerRadius = 12
+        box.layer?.backgroundColor = palette.codeBg.nsColor.cgColor
+        box.layer?.borderWidth = 1
+        box.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
+        copyBtn.onFeedbackStateChanged = { [weak box] in
+            box?.updateCopyVisibility()
+        }
+
         let needsHScroll = docWidth > innerCodeW + 0.5
         let scrollerExtra = ConversationTableCoordinator.horizontalScrollerExtraHeight(needsHorizontalScroll: needsHScroll)
 
@@ -372,21 +434,25 @@ extension ConversationRowCellView {
         if let manager = codeTv.layoutManager, let container = codeTv.textContainer {
             manager.ensureLayout(for: container)
         }
+        codeTv.onFocusStateChanged = { [weak box] in
+            box?.updateCopyVisibility()
+        }
         scroll.documentView = codeTv
 
         box.addSubview(scroll)
         box.addSubview(copyBtn)
+        box.updateCopyVisibility()
 
         NSLayoutConstraint.activate([
             box.widthAnchor.constraint(equalToConstant: width),
             copyBtn.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
             copyBtn.topAnchor.constraint(equalTo: box.topAnchor, constant: 8),
-            copyBtn.widthAnchor.constraint(equalToConstant: 32),
-            copyBtn.heightAnchor.constraint(equalToConstant: 32),
-            scroll.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 16),
-            scroll.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -16),
-            scroll.topAnchor.constraint(equalTo: box.topAnchor, constant: 38),
-            scroll.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -16),
+            copyBtn.widthAnchor.constraint(equalToConstant: 28),
+            copyBtn.heightAnchor.constraint(equalToConstant: 28),
+            scroll.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: box.topAnchor, constant: 12),
+            scroll.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -12),
             scroll.heightAnchor.constraint(equalToConstant: codeHeight + scrollerExtra),
         ])
         return box
@@ -399,7 +465,7 @@ extension ConversationRowCellView {
         palette: DesignPalette,
         coordinator: ConversationTableCoordinator
     ) -> NSView {
-        let layout = ConversationTableCoordinator.measureTableLayout(headers: headers, rows: rows, maxWidth: width)
+        let layout = coordinator.cachedTableLayout(headers: headers, rows: rows, maxWidth: width)
         let visibleW = min(width, layout.totalWidth)
         let needsHScroll = layout.totalWidth > visibleW + 0.5
         let scrollerExtra = ConversationTableCoordinator.horizontalScrollerExtraHeight(needsHorizontalScroll: needsHScroll)

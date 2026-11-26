@@ -50,13 +50,13 @@ struct ConnectionState {
 }
 
 #[derive(Clone)]
-pub struct RemoteConnections {
+pub(crate) struct RemoteConnections {
     state: Arc<Mutex<ConnectionState>>,
     path: PathBuf,
 }
 
 impl RemoteConnections {
-    pub fn load(data_dir: &Path) -> Result<Self, String> {
+    pub(crate) fn load(data_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(data_dir).map_err(|_| "无法创建连接配置目录")?;
         let path = data_dir.join("remote-connection.json");
         let prefs = match fs::read(&path) {
@@ -327,7 +327,7 @@ impl Drop for WriteGuard {
     }
 }
 
-pub async fn remoteGet(state: &RemoteConnections) -> Result<RemoteConnectionView, String> {
+pub(crate) async fn remoteGet(state: &RemoteConnections) -> Result<RemoteConnectionView, String> {
     let view = state.view();
     if view.target == MachineTarget::Remote {
         let state = state.clone();
@@ -339,13 +339,13 @@ pub async fn remoteGet(state: &RemoteConnections) -> Result<RemoteConnectionView
     Ok(view)
 }
 
-pub async fn remoteSshHosts() -> Result<SshHostList, String> {
+pub(crate) async fn remoteSshHosts() -> Result<SshHostList, String> {
     agenthub_core::read_tasks::spawn_blocking(ssh_config::list)
         .await
         .map_err(|_| "SSH 配置读取失败")?
 }
 
-pub async fn remoteSshDelete(
+pub(crate) async fn remoteSshDelete(
     state: &RemoteConnections,
     request: SshDeleteRequest,
 ) -> Result<RemoteConnectionView, String> {
@@ -371,7 +371,7 @@ pub async fn remoteSshDelete(
     .map_err(|_| "SSH 配置删除失败")?
 }
 
-pub async fn remoteVerify(
+pub(crate) async fn remoteVerify(
     state: &RemoteConnections,
     request: RemoteConnectionCredentials,
 ) -> Result<SystemCapabilitiesResponse, String> {
@@ -380,7 +380,7 @@ pub async fn remoteVerify(
     Ok(RemoteConnections::connect(&machine).await?.1)
 }
 
-pub async fn remoteSave(
+pub(crate) async fn remoteSave(
     state: &RemoteConnections,
     request: RemoteConnectionCredentials,
 ) -> Result<RemoteConnectionView, String> {
@@ -403,7 +403,7 @@ fn save(
     state.commit(prefs, Some(client))
 }
 
-pub async fn remoteInstall(
+pub(crate) async fn remoteInstall(
     state: &RemoteConnections,
     request: RemoteConnectionCredentials,
 ) -> Result<RemoteConnectionView, String> {
@@ -414,7 +414,7 @@ pub async fn remoteInstall(
     save(state, machine, client)
 }
 
-pub fn remoteRemove(
+pub(crate) fn remoteRemove(
     state: &RemoteConnections,
     request: RemoteRevisionRequest,
 ) -> Result<RemoteConnectionView, String> {
@@ -436,7 +436,7 @@ pub fn remoteRemove(
     state.commit(prefs, client)
 }
 
-pub async fn remoteSelect(
+pub(crate) async fn remoteSelect(
     state: &RemoteConnections,
     request: RemoteSelectionRequest,
 ) -> Result<RemoteConnectionView, String> {
@@ -455,7 +455,7 @@ pub async fn remoteSelect(
     state.commit(prefs, client)
 }
 
-pub async fn remoteInvoke(
+pub(crate) async fn remoteInvoke(
     state: &RemoteConnections,
     request: RemoteInvokeRequest,
 ) -> Result<Value, String> {

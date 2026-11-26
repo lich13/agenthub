@@ -208,6 +208,32 @@ impl Client {
         args: Value,
         timeout: Duration,
     ) -> Result<Value, CallError> {
+        #[derive(Clone, Copy)]
+        enum CallPhase {
+            Queued,
+            WritingFrame,
+            WaitingReply,
+            Completed,
+        }
+        struct CallCancelGuard<'a> {
+            client: &'a Client,
+            id: u64,
+            phase: CallPhase,
+        }
+        impl Drop for CallCancelGuard<'_> {
+            fn drop(&mut self) {
+                self.client
+                    .pending
+                    .lock()
+                    .expect("SSH replies")
+                    .remove(&self.id);
+                if matches!(self.phase, CallPhase::WritingFrame) {
+                    // Mid-write cancellation may leave a partial JSON frame on stdin.
+                    self.client.close();
+                }
+            }
+        }
+
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (send, receive) = oneshot::channel();
         {
@@ -217,9 +243,16 @@ impl Client {
             }
             pending.insert(id, send);
         }
+        let mut guard = CallCancelGuard {
+            client: self,
+            id,
+            phase: CallPhase::Queued,
+        };
         let result = tokio::time::timeout(timeout, async {
+            let mut input = self.input.lock().await;
+            guard.phase = CallPhase::WritingFrame;
             ssh_rpc::write(
-                &mut *self.input.lock().await,
+                &mut *input,
                 &Request {
                     id,
                     command: command.into(),
@@ -228,14 +261,17 @@ impl Client {
             )
             .await
             .map_err(|_| CallError::Disconnected)?;
-            receive.await.map_err(|_| CallError::Disconnected)?
+            guard.phase = CallPhase::WaitingReply;
+            drop(input);
+            let value = receive.await.map_err(|_| CallError::Disconnected)?;
+            guard.phase = CallPhase::Completed;
+            value
         })
         .await
         .unwrap_or(Err(CallError::TimedOut));
         if result.as_ref().is_err_and(|error| error.is_transport()) {
             self.close();
         }
-        self.pending.lock().expect("SSH replies").remove(&id);
         result
     }
 }
@@ -416,5 +452,20 @@ mod tests {
                 "missing SSH setting {line}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiting_reply_cleans_pending_without_breaking_channel() {
+        let client = fixture("reverse");
+        {
+            let mut fut = Box::pin(client.call("first", serde_json::json!({})));
+            // Poll once so the frame is written and the call enters WaitingReply, then drop!
+            let _ = tokio::time::timeout(Duration::from_millis(15), &mut fut).await;
+        }
+        assert!(client.pending.lock().unwrap().is_empty());
+        assert!(client.is_connected());
+        // Second call unblocks "reverse" fixture and receives its own reply cleanly.
+        let second = client.call("second", serde_json::json!({})).await.unwrap();
+        assert_eq!(second, "second");
     }
 }

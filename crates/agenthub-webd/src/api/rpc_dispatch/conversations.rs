@@ -51,12 +51,7 @@ pub(super) async fn handle_threads_restore(state: AppState, args: Value) -> ApiR
 }
 
 pub(super) async fn handle_threads_rename(state: AppState, args: Value) -> ApiResponse {
-    rename_thread(
-        state,
-        rpc_required_string(&args, "threadId")?,
-        rpc_payload(&args)?,
-    )
-    .await
+    rename_thread(state, rpc_payload(&args)?).await
 }
 
 pub(super) async fn handle_threads_account_scope_status(

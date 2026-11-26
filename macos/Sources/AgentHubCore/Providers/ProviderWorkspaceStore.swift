@@ -16,9 +16,9 @@ final class ProviderWorkspaceStore: ObservableObject {
         var revision: UInt64 = .max
         var filteredActiveItems: [UnifiedSessionSummaryItem] = []
         var filteredArchivedItems: [UnifiedSessionSummaryItem] = []
-        var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
-        var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
-        var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
+        var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]?
+        var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]?
+        var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]?
         var visualOrderedActiveKeys: [String] = []
         var visualOrderedArchivedKeys: [String] = []
     }
@@ -32,7 +32,7 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
     let providerHistoryStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
     let timelineWindow = TimelineWindowController<ConversationRowItem>(idOf: \.timelineId)
-    let motionObserver = AccessibilityMotionObserver()
+    let motionObserver = AccessibilityMotionObserver.shared
 
     @Published var query: String = ""
     @Published var groupingMode: ProjectWorkspaceGroupingMode = .flat {
@@ -168,17 +168,23 @@ final class ProviderWorkspaceStore: ObservableObject {
         let supportsGrp = supportsWorkspaceGrouping
         let filtActive = ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter, enabled: supportsGrp)
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsGrp)
-        let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
-        let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
-        let allScopeItems: [UnifiedSessionSummaryItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
-        let availGrps = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
-        let orderedActive: [String] = if supportsGrp && groupingMode == .byWorkspace {
+        let needsGroupingNow = supportsGrp && groupingMode == .byWorkspace
+        let activeGrps: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]? = needsGroupingNow
+            ? ProjectWorkspaceEngine.buildGroups(items: filtActive)
+            : nil
+        let archGrps: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]? = (needsGroupingNow && archivedOpen)
+            ? ProjectWorkspaceEngine.buildGroups(items: filtArch)
+            : nil
+        let orderedActive: [String] = if let activeGrps {
             ProjectWorkspaceEngine.visualOrderedKeys(groups: activeGrps, collapsedKeys: collapsedWorkspaceKeys)
         } else {
             filtActive.map(\.sessionKey)
         }
-        let orderedArch: [String] = if supportsGrp && groupingMode == .byWorkspace {
-            ProjectWorkspaceEngine.visualOrderedKeys(groups: archGrps, collapsedKeys: collapsedArchivedWorkspaceKeys)
+        let orderedArch: [String] = if needsGroupingNow {
+            ProjectWorkspaceEngine.visualOrderedKeys(
+                groups: archGrps ?? ProjectWorkspaceEngine.buildGroups(items: filtArch),
+                collapsedKeys: collapsedArchivedWorkspaceKeys
+            )
         } else {
             filtArch.map(\.sessionKey)
         }
@@ -188,7 +194,7 @@ final class ProviderWorkspaceStore: ObservableObject {
             filteredArchivedItems: filtArch,
             activeWorkspaceGroups: activeGrps,
             archivedWorkspaceGroups: archGrps,
-            availableWorkspaceGroups: availGrps,
+            availableWorkspaceGroups: nil,
             visualOrderedActiveKeys: orderedActive,
             visualOrderedArchivedKeys: orderedArch
         )
@@ -240,15 +246,31 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        refreshedSidebarCache().activeWorkspaceGroups
+        var cur = refreshedSidebarCache()
+        if let existing = cur.activeWorkspaceGroups { return existing }
+        let built = ProjectWorkspaceEngine.buildGroups(items: cur.filteredActiveItems)
+        cur.activeWorkspaceGroups = built
+        sidebarCache = cur
+        return built
     }
 
     var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        refreshedSidebarCache().archivedWorkspaceGroups
+        var cur = refreshedSidebarCache()
+        if let existing = cur.archivedWorkspaceGroups { return existing }
+        let built = ProjectWorkspaceEngine.buildGroups(items: cur.filteredArchivedItems)
+        cur.archivedWorkspaceGroups = built
+        sidebarCache = cur
+        return built
     }
 
     var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        refreshedSidebarCache().availableWorkspaceGroups
+        var cur = refreshedSidebarCache()
+        if let existing = cur.availableWorkspaceGroups { return existing }
+        let allScopeItems: [UnifiedSessionSummaryItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
+        let built = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
+        cur.availableWorkspaceGroups = built
+        sidebarCache = cur
+        return built
     }
 
     var visualOrderedActiveKeys: [String] {
@@ -389,13 +411,10 @@ final class ProviderWorkspaceStore: ObservableObject {
                     if !activeItems.isEmpty { activeItems = [] }
                     return
                 }
-                struct GBWrap: Encodable {
-                    struct Inner: Encodable { let q: String?; let limit: Int }
-                    let request: Inner
-                }
+                struct GrokBotListArgs: Encodable { let q: String?; let limit: Int }
                 let list: [ProviderSessionSummary] = try await store.rpc(
                     "grokbot.list",
-                    args: GBWrap(request: .init(q: query.isEmpty ? nil : query, limit: 100)),
+                    args: RPCRequestEnvelope(request: GrokBotListArgs(q: query.isEmpty ? nil : query, limit: 100)),
                     localOnly: true
                 )
                 guard isCurrent() else { return }
@@ -465,13 +484,10 @@ final class ProviderWorkspaceStore: ObservableObject {
             return rows.map(mapGrokSummaryStatic)
         case .antigravity, .dsh:
             let prefix = (provider == .antigravity) ? "antigravity" : "dsh"
-            struct ProvListWrap: Encodable {
-                struct Inner: Encodable { let q: String?; let archived: Bool; let limit: Int }
-                let request: Inner
-            }
+            struct ProviderListArgs: Encodable { let q: String?; let archived: Bool; let limit: Int }
             let rows: [ProviderSessionSummary] = try await store.rpc(
                 "\(prefix).list",
-                args: ProvListWrap(request: .init(q: qArg, archived: archived, limit: limit))
+                args: RPCRequestEnvelope(request: ProviderListArgs(q: qArg, archived: archived, limit: limit))
             )
             return rows.map(mapProviderSummaryStatic)
         case .grokbot:
@@ -484,8 +500,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         request: SessionBatchRequest,
         at revision: UInt64
     ) async throws -> SessionBatchPreview {
-        struct Wrap: Encodable { let request: SessionBatchRequest }
-        return try await store.rpc("sessions.bulkPreview", args: Wrap(request: request), at: revision)
+        try await store.rpc("sessions.bulkPreview", args: RPCRequestEnvelope(request: request), at: revision)
     }
 
     static func sendBulkExecute(
@@ -493,8 +508,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         request: SessionBatchExecuteRequest,
         at revision: UInt64
     ) async throws -> SessionBatchResult {
-        struct Wrap: Encodable { let request: SessionBatchExecuteRequest }
-        return try await store.rpc("sessions.bulkExecute", args: Wrap(request: request), at: revision)
+        try await store.rpc("sessions.bulkExecute", args: RPCRequestEnvelope(request: request), at: revision)
     }
 
     func resetDetailStateForSelectionChange() {
@@ -737,10 +751,9 @@ final class ProviderWorkspaceStore: ObservableObject {
 
             case .antigravity, .dsh, .grokbot:
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let detail: ProviderSessionDetail = try await store.rpc(
                     cmd,
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160)),
+                    args: RPCRequestEnvelope(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: 160)),
                     localOnly: provider == .grokbot
                 )
                 guard isCurrentDetail(item, generation: generation) else { return }
@@ -1021,10 +1034,9 @@ final class ProviderWorkspaceStore: ObservableObject {
             case .antigravity, .dsh, .grokbot:
                 let reqLimit = limitOverride ?? 160
                 let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-                struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     cmd,
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
+                    args: RPCRequestEnvelope(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
                     localOnly: provider == .grokbot
                 )
                 guard isCurrentDetail(item, generation: generation), beforeCursor == cursor else { return false }
@@ -1098,11 +1110,8 @@ final class ProviderWorkspaceStore: ObservableObject {
             let _: GrokSessionSummary = try await store.rpc("grok.rename", args: Args(id: sessionKey, title: newTitle))
         case .antigravity, .dsh:
             let cmd = provider == .antigravity ? "antigravity.rename" : "dsh.rename"
-            struct Wrap: Encodable {
-                struct Inner: Encodable { let sessionKey: String; let title: String }
-                let request: Inner
-            }
-            let _: ProviderSessionSummary = try await store.rpc(cmd, args: Wrap(request: .init(sessionKey: sessionKey, title: newTitle)))
+            struct ProviderRenameArgs: Encodable { let sessionKey: String; let title: String }
+            let _: ProviderSessionSummary = try await store.rpc(cmd, args: RPCRequestEnvelope(request: ProviderRenameArgs(sessionKey: sessionKey, title: newTitle)))
         case .grokbot:
             break
         }
@@ -1121,11 +1130,8 @@ final class ProviderWorkspaceStore: ObservableObject {
         } else {
             let prefix = provider == .antigravity ? "antigravity" : "dsh"
             let action = currentlyArchived ? "restore" : "archive"
-            struct Wrap: Encodable {
-                struct Inner: Encodable { let sessionKey: String }
-                let request: Inner
-            }
-            let _: ProviderSessionSummary = try await store.rpc("\(prefix).\(action)", args: Wrap(request: .init(sessionKey: sessionKey)))
+            struct ProviderArchiveArgs: Encodable { let sessionKey: String }
+            let _: ProviderSessionSummary = try await store.rpc("\(prefix).\(action)", args: RPCRequestEnvelope(request: ProviderArchiveArgs(sessionKey: sessionKey)))
         }
     }
 
@@ -1421,10 +1427,9 @@ final class ProviderWorkspaceStore: ObservableObject {
         case .antigravity, .dsh, .grokbot:
             let reqLimit = limitOverride ?? 160
             let cmd = provider == .antigravity ? "antigravity.detail" : (provider == .dsh ? "dsh.detail" : "grokbot.detail")
-            struct Wrap: Encodable { let request: ProviderDetailRequest }
             let page: ProviderSessionDetail = try await store.rpc(
                 cmd,
-                args: Wrap(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
+                args: RPCRequestEnvelope(request: ProviderDetailRequest(sessionKey: item.sessionKey, limit: reqLimit, before: cursor)),
                 localOnly: provider == .grokbot
             )
             let rawPage = TimelineWindowPage<ProviderHistoryEvent>.from(providerDetail: page)

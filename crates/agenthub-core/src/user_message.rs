@@ -596,19 +596,37 @@ impl UserMessage {
     }
 
     pub fn weight(&self) -> u64 {
-        (self.text.len()
+        (std::mem::size_of::<Self>()
+            + self.id.capacity()
+            + self.text.capacity()
+            + self.attachments.capacity() * std::mem::size_of::<UserAttachment>()
+            + self
+                .attachments
+                .iter()
+                .map(|a| {
+                    a.id.capacity()
+                        + a.name.capacity()
+                        + a.kind.capacity()
+                        + a.path.as_ref().map_or(0, String::capacity)
+                        + a.reason.as_ref().map_or(0, String::capacity)
+                })
+                .sum::<usize>()
+            + self.context_blocks.capacity() * std::mem::size_of::<UserContextBlock>()
             + self
                 .context_blocks
                 .iter()
-                .map(|block| block.text.len() + 32)
+                .map(|block| block.text.capacity())
                 .sum::<usize>()
+            + self.sources.capacity() * std::mem::size_of::<AttachmentSource>()
             + self
                 .sources
                 .iter()
                 .map(|s| match s {
-                    AttachmentSource::Embedded(data) => data.len(),
-                    AttachmentSource::File { path, .. } => path.len() + 256,
-                    AttachmentSource::Unavailable => 256,
+                    AttachmentSource::Embedded(data) => data.capacity(),
+                    AttachmentSource::File { path, fingerprint } => {
+                        path.capacity() + fingerprint.capacity()
+                    }
+                    AttachmentSource::Unavailable => 0,
                 })
                 .sum::<usize>()) as u64
     }
@@ -637,11 +655,13 @@ impl UserMessage {
                     .map_err(|_| anyhow::anyhow!("图片内容损坏"))?
             }
             Some(AttachmentSource::File { path, fingerprint }) => {
+                let target_path = Path::new(path);
                 ensure!(
-                    file_fingerprint(Path::new(path))? == *fingerprint,
+                    file_fingerprint(target_path)? == *fingerprint,
                     "附件文件已变化，请刷新会话"
                 );
-                let file = fs::File::open(path).map_err(|_| anyhow::anyhow!("无法读取附件"))?;
+                let file = crate::file_stamp::open_regular_nofollow(target_path)
+                    .map_err(|_| anyhow::anyhow!("无法读取附件"))?;
                 ensure!(
                     metadata_fingerprint(&file.metadata()?) == *fingerprint,
                     "附件文件已变化"
@@ -650,7 +670,7 @@ impl UserMessage {
                 file.take(MAX_ATTACHMENT_BYTES as u64 + 1)
                     .read_to_end(&mut bytes)?;
                 ensure!(
-                    file_fingerprint(Path::new(path))? == *fingerprint,
+                    file_fingerprint(target_path)? == *fingerprint,
                     "附件文件已变化"
                 );
                 bytes

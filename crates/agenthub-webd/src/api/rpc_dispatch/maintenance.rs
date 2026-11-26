@@ -2,13 +2,15 @@ use super::*;
 
 pub(super) async fn handle_github_ci_status(state: AppState, args: Value) -> ApiResponse {
     let config = state.config();
-    crate::api::ok(
-        agenthub_core::services::use_cases::AgentHubUseCases::with_config(
-            &config,
-            state.platform(),
-        )
-        .github_ci(&state.db, rpc_payload(&args)?)?,
+    let snapshot = agenthub_core::services::use_cases::AgentHubUseCases::with_config(
+        &config,
+        state.platform(),
     )
+    .github_ci(&state.db, rpc_payload(&args)?)?;
+    if snapshot.refreshing {
+        state.notify_github_ci();
+    }
+    crate::api::ok(snapshot)
 }
 
 pub(super) async fn handle_probe_status(state: AppState, args: Value) -> ApiResponse {
@@ -92,11 +94,20 @@ pub(super) async fn handle_jobs_list(state: AppState, args: Value) -> ApiRespons
     } else {
         rpc_payload(&args)?
     };
-    list_jobs(state, query).await
+    crate::api::ok(
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+            .jobs()
+            .list_from_db(&state.db, query.limit)?,
+    )
 }
 
 pub(super) async fn handle_jobs_detail(state: AppState, args: Value) -> ApiResponse {
-    let mut req: JobDetailRequest = rpc_payload(&args)?;
-    req.id = agenthub_core::services::use_cases::required_job_id(&req.id)?;
-    job_detail(state, req).await
+    let req: JobDetailRequest = rpc_payload(&args)?;
+    match agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+        .jobs()
+        .detail_from_db(&state.db, &req.id, req.include_output)?
+    {
+        Some(job) => crate::api::ok(job),
+        None => Err(api_error("job not found")),
+    }
 }

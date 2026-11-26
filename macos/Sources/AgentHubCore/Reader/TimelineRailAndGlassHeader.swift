@@ -4,21 +4,22 @@ import SwiftUI
 
 // MARK: - Left 22pt Timeline Rail with Virtualized 12pt Ticks & min(288pt, 60vw) Hover/Focus Preview
 
-public struct TimelineRailView: View {
+struct TimelineRailView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let entries: [TimelineEntry]
-    public let activeId: String?
-    public let availableWidth: CGFloat
-    public var loadOlder: (() -> Void)?
-    public var loadingOlder: Bool = false
-    public let onSelectEntry: (TimelineEntry) -> Void
+    let entries: [TimelineEntry]
+    let activeId: String?
+    let availableWidth: CGFloat
+    var loadOlder: (() -> Void)?
+    var loadingOlder: Bool = false
+    let onSelectEntry: (TimelineEntry) -> Void
 
     @State private var hoveredIndex: Int?
     @State private var focusedIndex: Int?
+    @State private var activeTickScrollY: CGFloat?
     @State private var windowStart: Int = 0
     @State private var railHeightState: CGFloat = 600
 
-    public init(
+    init(
         entries: [TimelineEntry],
         activeId: String?,
         availableWidth: CGFloat,
@@ -34,7 +35,7 @@ public struct TimelineRailView: View {
         self.onSelectEntry = onSelectEntry
     }
 
-    public var body: some View {
+    var body: some View {
         let olderOffset: CGFloat = (loadOlder != nil) ? 18 : 0
         let topPadding: CGFloat = 20 + olderOffset
         let usableHeight = max(24, railHeightState - topPadding - 20)
@@ -53,8 +54,7 @@ public struct TimelineRailView: View {
             ZStack(alignment: .topLeading) {
                 if let loadOlder {
                     Button(action: loadOlder) {
-                        Text("↑")
-                            .font(DesignFonts.body(11, weight: .semibold))
+                        LucideIcon(.arrowUp, size: 12)
                             .foregroundStyle(palette.textMuted.color)
                             .frame(width: LayoutMetrics.timelineRailWidth, height: 18)
                             .contentShape(Rectangle())
@@ -90,18 +90,28 @@ public struct TimelineRailView: View {
                                     isFocused: focusedIndex == globalIndex,
                                     activeColor: palette.accent,
                                     inactiveColor: palette.trackOff,
-                                    onHoverChanged: { hovering in
+                                    onHoverChanged: { hovering, scrollMidY in
                                         if hovering {
                                             hoveredIndex = globalIndex
+                                            activeTickScrollY = scrollMidY
                                         } else if hoveredIndex == globalIndex {
                                             hoveredIndex = nil
+                                            if focusedIndex == nil {
+                                                activeTickScrollY = nil
+                                            }
                                         }
                                     },
-                                    onFocusChanged: { focused in
+                                    onFocusChanged: { focused, scrollMidY in
                                         if focused {
                                             focusedIndex = globalIndex
+                                            if hoveredIndex == nil {
+                                                activeTickScrollY = scrollMidY
+                                            }
                                         } else if focusedIndex == globalIndex {
                                             focusedIndex = nil
+                                            if hoveredIndex == nil {
+                                                activeTickScrollY = nil
+                                            }
                                         }
                                     },
                                     onNavigateKey: { keyCode in
@@ -175,12 +185,16 @@ public struct TimelineRailView: View {
             if let hovered = previewEntry, let idx = previewIdx {
                 let previewMax: CGFloat = Self.previewMaxWidth(for: availableWidth)
                 let visibleOffset: Int = max(0, idx - first)
-                let centerY: CGFloat = Self.previewTopY(
-                    forTickIndex: visibleOffset,
-                    topPadding: topPadding,
-                    tickHeight: 12,
-                    railHeight: railHeightState
-                )
+                let centerY: CGFloat = if let convertedScrollY = activeTickScrollY {
+                    max(12, min(max(12, railHeightState - 12), topPadding + convertedScrollY))
+                } else {
+                    Self.previewTopY(
+                        forTickIndex: visibleOffset,
+                        topPadding: topPadding,
+                        tickHeight: 12,
+                        railHeight: railHeightState
+                    )
+                }
                 let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
                 let cardHeight: CGFloat = estimatedHalfHeight * 2
                 let maxCardTopY: CGFloat = max(6, railHeightState - cardHeight - 6)
@@ -199,6 +213,7 @@ public struct TimelineRailView: View {
         .onChange(of: entries) { _ in
             hoveredIndex = nil
             focusedIndex = nil
+            activeTickScrollY = nil
             windowStart = 0
         }
     }
@@ -209,17 +224,17 @@ public struct TimelineRailView: View {
         return max(0, min(maxStart, centered))
     }
 
-    public static func previewMaxWidth(for availableWidth: CGFloat) -> CGFloat {
+    static func previewMaxWidth(for availableWidth: CGFloat) -> CGFloat {
         min(LayoutMetrics.timelinePreviewMaxWidth, max(160, availableWidth * 0.60))
     }
 
-    public static func virtualWindowCapacity(usableHeight: CGFloat) -> Int {
+    static func virtualWindowCapacity(usableHeight: CGFloat) -> Int {
         let clampedHeight: CGFloat = max(24, usableHeight)
         let visibleTicks: Int = Int(ceil(clampedHeight / 12.0))
         return max(100, visibleTicks + 20)
     }
 
-    public static func previewTopY(
+    static func previewTopY(
         forTickIndex index: Int,
         topPadding: CGFloat = 20,
         tickHeight: CGFloat = 12,
@@ -232,7 +247,7 @@ public struct TimelineRailView: View {
     }
 
     /// Maps macOS keyCode (`126` Up, `125` Down, `115` Home, `119` End) to next tick index.
-    public static func nextKeyboardFocusIndex(currentIndex: Int, count: Int, keyCode: UInt16) -> Int? {
+    static func nextKeyboardFocusIndex(currentIndex: Int, count: Int, keyCode: UInt16) -> Int? {
         guard count > 0 else { return nil }
         switch keyCode {
         case 126: // ArrowUp
@@ -249,17 +264,17 @@ public struct TimelineRailView: View {
     }
 }
 
-public struct TimelinePreviewCardView: View {
+struct TimelinePreviewCardView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let entry: TimelineEntry
-    public let maxWidth: CGFloat
+    let entry: TimelineEntry
+    let maxWidth: CGFloat
 
-    public init(entry: TimelineEntry, maxWidth: CGFloat) {
+    init(entry: TimelineEntry, maxWidth: CGFloat) {
         self.entry = entry
         self.maxWidth = maxWidth
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(entry.title)
                 .font(DesignFonts.body(12, weight: .semibold))
@@ -304,8 +319,8 @@ private struct TimelineRailTickRow: NSViewRepresentable {
     let isFocused: Bool
     let activeColor: RGBAColor
     let inactiveColor: RGBAColor
-    let onHoverChanged: (Bool) -> Void
-    let onFocusChanged: (Bool) -> Void
+    let onHoverChanged: (Bool, CGFloat?) -> Void
+    let onFocusChanged: (Bool, CGFloat?) -> Void
     let onNavigateKey: (UInt16) -> Bool
     let onActivate: () -> Void
 
@@ -325,8 +340,20 @@ private final class TimelineTickNSButton: NSView {
     private var tracking: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
     override var intrinsicContentSize: NSSize {
         NSSize(width: LayoutMetrics.timelineRailWidth, height: 12)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    private func convertedScrollViewMidY() -> CGFloat? {
+        guard let scrollView = enclosingScrollView else { return nil }
+        let pt = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: scrollView)
+        return scrollView.isFlipped ? pt.y : (scrollView.bounds.height - pt.y)
     }
 
     func apply(_ next: TimelineRailTickRow) {
@@ -336,10 +363,13 @@ private final class TimelineTickNSButton: NSView {
         setAccessibilityRole(.button)
         setAccessibilityLabel("时间线：\(next.title)")
         needsDisplay = true
-        if becameFocused, let win = window, win.firstResponder !== self {
-            DispatchQueue.main.async { [weak self, weak win] in
-                guard let self, let win, self.window === win else { return }
-                win.makeFirstResponder(self)
+        if becameFocused {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let win = self.window else { return }
+                if win.firstResponder !== self {
+                    win.makeFirstResponder(self)
+                }
+                self.spec?.onFocusChanged(true, self.convertedScrollViewMidY())
             }
         }
     }
@@ -358,11 +388,11 @@ private final class TimelineTickNSButton: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        spec?.onHoverChanged(true)
+        spec?.onHoverChanged(true, convertedScrollViewMidY())
     }
 
     override func mouseExited(with event: NSEvent) {
-        spec?.onHoverChanged(false)
+        spec?.onHoverChanged(false, nil)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -371,14 +401,14 @@ private final class TimelineTickNSButton: NSView {
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok { spec?.onFocusChanged(true) }
+        if ok { spec?.onFocusChanged(true, convertedScrollViewMidY()) }
         needsDisplay = true
         return ok
     }
 
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
-        if ok { spec?.onFocusChanged(false) }
+        if ok { spec?.onFocusChanged(false, nil) }
         needsDisplay = true
         return ok
     }
@@ -398,26 +428,34 @@ private final class TimelineTickNSButton: NSView {
         guard let spec else { return }
         let barW: CGFloat = spec.isActive ? 14 : (spec.isHighlighted ? 12 : 8)
         let barH: CGFloat = spec.isActive ? 3 : 2
-        let rect = NSRect(x: 0, y: floor((bounds.height - barH) * 0.5), width: barW, height: barH)
+        let rect = NSRect(x: 2, y: floor((bounds.height - barH) * 0.5), width: barW, height: barH)
         let path = NSBezierPath(roundedRect: rect, xRadius: barH * 0.5, yRadius: barH * 0.5)
         (spec.isActive ? spec.activeColor.nsColor : spec.inactiveColor.nsColor).setFill()
         path.fill()
+
+        if spec.isFocused || window?.firstResponder === self {
+            let focusRect = bounds.insetBy(dx: 0.75, dy: 0.75)
+            let focusPath = NSBezierPath(roundedRect: focusRect, xRadius: 4, yRadius: 4)
+            focusPath.lineWidth = 1.5
+            spec.activeColor.nsColor.setStroke()
+            focusPath.stroke()
+        }
     }
 }
 
-public struct HistoryLoadingBarView: View {
+struct HistoryLoadingBarView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let loading: Bool
-    public let error: String?
-    public let onRetry: () -> Void
+    let loading: Bool
+    let error: String?
+    let onRetry: () -> Void
 
-    public init(loading: Bool, error: String?, onRetry: @escaping () -> Void) {
+    init(loading: Bool, error: String?, onRetry: @escaping () -> Void) {
         self.loading = loading
         self.error = error
         self.onRetry = onRetry
     }
 
-    public var body: some View {
+    var body: some View {
         if let error, !error.isEmpty {
             HStack(spacing: 4) {
                 Spacer(minLength: 0)
@@ -454,16 +492,16 @@ public struct HistoryLoadingBarView: View {
     }
 }
 
-public struct TimelineHistoryStatusView: View {
+struct TimelineHistoryStatusView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let active: Bool
-    public let busy: Bool
-    public let error: String?
-    public let hasNewer: Bool
-    public let onLoadNewer: () -> Void
-    public let onReturnLatest: () -> Void
+    let active: Bool
+    let busy: Bool
+    let error: String?
+    let hasNewer: Bool
+    let onLoadNewer: () -> Void
+    let onReturnLatest: () -> Void
 
-    public init(
+    init(
         active: Bool,
         busy: Bool,
         error: String?,
@@ -479,7 +517,7 @@ public struct TimelineHistoryStatusView: View {
         self.onReturnLatest = onReturnLatest
     }
 
-    public var body: some View {
+    var body: some View {
         if busy || (error?.isEmpty == false) || active {
             VStack(spacing: 6) {
                 if busy {
@@ -532,14 +570,14 @@ public struct TimelineHistoryStatusView: View {
 
 // MARK: - Exact --g 88% + CIGaussianBlur(radius: 10) Stage Header & .inline-rename Bar
 
-public struct BackdropGaussianBlurView: NSViewRepresentable {
-    public var radius: Double
+struct BackdropGaussianBlurView: NSViewRepresentable {
+    var radius: Double
 
-    public init(radius: Double = 10) {
+    init(radius: Double = 10) {
         self.radius = radius
     }
 
-    public func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
         view.layer?.masksToBounds = true
@@ -551,28 +589,28 @@ public struct BackdropGaussianBlurView: NSViewRepresentable {
         return view
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
+struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String
-    public let subtitle: String?
-    public let statusBadge: String?
-    public let statusTone: StatusChipTone
-    public let availableWidth: CGFloat
-    public let inlineRenameActive: Bool
-    public let initialRenameText: String
-    public let onCommitInlineRename: ((String) async throws -> Void)?
-    public let onCancelInlineRename: (() -> Void)?
-    @ViewBuilder public let trailing: () -> TrailingContent
+    let title: String
+    let subtitle: String?
+    let statusBadge: String?
+    let statusTone: StatusChipTone
+    let availableWidth: CGFloat
+    let inlineRenameActive: Bool
+    let initialRenameText: String
+    let onCommitInlineRename: ((String) async throws -> Void)?
+    let onCancelInlineRename: (() -> Void)?
+    @ViewBuilder let trailing: () -> TrailingContent
 
     @State private var renameDraft: String = ""
     @State private var renameSaving: Bool = false
     @State private var renameError: String?
     @State private var didSeedCurrentRenameSession: Bool = false
 
-    public init(
+    init(
         title: String,
         subtitle: String? = nil,
         statusBadge: String? = nil,
@@ -596,7 +634,7 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
         self.trailing = trailing
     }
 
-    public var body: some View {
+    var body: some View {
         let isNarrowHeader = availableWidth <= 520
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
@@ -728,10 +766,10 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
 
 // MARK: - AppKit NSTextField + Custom Field Editor Capturing Pre-keyDown IME Marked-Text State
 
-public final class IMEFieldEditorTextView: NSTextView {
-    public private(set) var wasComposingBeforeKeyDown: Bool = false
+final class IMEFieldEditorTextView: NSTextView {
+    private(set) var wasComposingBeforeKeyDown: Bool = false
 
-    override public func keyDown(with event: NSEvent) {
+    override func keyDown(with event: NSEvent) {
         let pre = hasMarkedText()
         wasComposingBeforeKeyDown = pre
         defer { wasComposingBeforeKeyDown = false }
@@ -754,16 +792,16 @@ private final class IMEGuardedTextFieldCell: NSTextFieldCell {
     }
 }
 
-public final class IMEGuardedNSTextField: NSTextField {
-    override public class var cellClass: AnyClass? {
+final class IMEGuardedNSTextField: NSTextField {
+    override class var cellClass: AnyClass? {
         get { IMEGuardedTextFieldCell.self }
         set {}
     }
 
-    public var autoFocusOnWindowAttach: Bool = false
+    var autoFocusOnWindowAttach: Bool = false
     private var didAutoFocus: Bool = false
 
-    override public func viewDidMoveToWindow() {
+    override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if autoFocusOnWindowAttach, !didAutoFocus, let window {
             didAutoFocus = true
@@ -775,18 +813,18 @@ public final class IMEGuardedNSTextField: NSTextField {
     }
 }
 
-public struct IMEGuardedInlineTextField: NSViewRepresentable {
-    @Binding public var text: String
-    public var maxLength: Int
-    public var placeholder: String
-    public var autoFocus: Bool
-    public var onSubmit: () -> Void
-    public var onCancel: () -> Void
-    public var onBlur: (() -> Void)?
-    public var onMoveUp: (() -> Void)?
-    public var onMoveDown: (() -> Void)?
+struct IMEGuardedInlineTextField: NSViewRepresentable {
+    @Binding var text: String
+    var maxLength: Int
+    var placeholder: String
+    var autoFocus: Bool
+    var onSubmit: () -> Void
+    var onCancel: () -> Void
+    var onBlur: (() -> Void)?
+    var onMoveUp: (() -> Void)?
+    var onMoveDown: (() -> Void)?
 
-    public init(
+    init(
         text: Binding<String>,
         maxLength: Int = 200,
         placeholder: String = "",
@@ -808,11 +846,11 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
         self.onMoveDown = onMoveDown
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    public func makeNSView(context: Context) -> IMEGuardedNSTextField {
+    func makeNSView(context: Context) -> IMEGuardedNSTextField {
         let tf = IMEGuardedNSTextField()
         tf.cell = IMEGuardedTextFieldCell(textCell: "")
         tf.isEditable = true
@@ -828,7 +866,7 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
         return tf
     }
 
-    public func updateNSView(_ nsView: IMEGuardedNSTextField, context: Context) {
+    func updateNSView(_ nsView: IMEGuardedNSTextField, context: Context) {
         context.coordinator.parent = self
         if (nsView.currentEditor() as? NSTextView)?.hasMarkedText() != true && nsView.stringValue != text {
             nsView.stringValue = text
@@ -836,14 +874,14 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
     }
 
     @MainActor
-    public final class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: IMEGuardedInlineTextField
 
         init(parent: IMEGuardedInlineTextField) {
             self.parent = parent
         }
 
-        public func controlTextDidChange(_ obj: Notification) {
+        func controlTextDidChange(_ obj: Notification) {
             guard let tf = obj.object as? NSTextField else { return }
             if (tf.currentEditor() as? NSTextView)?.hasMarkedText() == true { return }
             var val = tf.stringValue
@@ -855,11 +893,11 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
             parent.text = val
         }
 
-        public func controlTextDidEndEditing(_ obj: Notification) {
+        func controlTextDidEndEditing(_ obj: Notification) {
             parent.onBlur?()
         }
 
-        public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             let wasComposing = (textView as? IMEFieldEditorTextView)?.wasComposingBeforeKeyDown == true
             if wasComposing || textView.hasMarkedText() {
                 return false
@@ -887,21 +925,23 @@ public struct IMEGuardedInlineTextField: NSViewRepresentable {
 
 // MARK: - Modal Attachment Image Preview Overlay (Supports Backdrop Click & Escape Close)
 
-public struct ImagePreviewModalView: View {
+struct ImagePreviewModalView: View {
     @Environment(\.agentHubPalette) private var palette
-    public let title: String
-    public let image: NSImage
-    public let onClose: () -> Void
+    let title: String
+    let image: NSImage
+    let onClose: () -> Void
 
-    public init(title: String, image: NSImage, onClose: @escaping () -> Void) {
+    init(title: String, image: NSImage, onClose: @escaping () -> Void) {
         self.title = title
         self.image = image
         self.onClose = onClose
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
             ModalScopePresenceView()
+                .frame(width: 0, height: 0)
+            ModalEscapeAndFocusMonitorView(onEscape: onClose)
                 .frame(width: 0, height: 0)
 
             Color.black.opacity(0.55)
@@ -919,7 +959,6 @@ public struct ImagePreviewModalView: View {
                         LucideIcon(.x, size: 18)
                     }
                     .buttonStyle(IconButtonStyle(dimension: 32))
-                    .keyboardShortcut(.cancelAction)
                     .accessibilityLabel("关闭图片预览")
                 }
                 Image(nsImage: image)

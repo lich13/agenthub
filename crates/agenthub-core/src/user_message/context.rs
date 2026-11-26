@@ -297,20 +297,44 @@ pub(super) fn literal_ranges(text: &str) -> Vec<Range<usize>> {
         }
     }
     blocks.extend(inline);
+    blocks.sort_unstable_by_key(|range| range.start);
+    let mut code_and_quote: Vec<Range<usize>> = Vec::new();
+    for range in blocks {
+        if let Some(last) = code_and_quote
+            .last_mut()
+            .filter(|last| last.end >= range.start)
+        {
+            last.end = last.end.max(range.end);
+        } else {
+            code_and_quote.push(range);
+        }
+    }
+    let mut comments = Vec::new();
     let mut comment_cursor = 0;
-    while let Some(start) = text[comment_cursor..]
-        .find("<!--")
-        .map(|start| comment_cursor + start)
-    {
+    while comment_cursor < text.len() {
+        let Some(start) = text[comment_cursor..]
+            .find("<!--")
+            .map(|start| comment_cursor + start)
+        else {
+            break;
+        };
+        if let Some(range) = protected(&code_and_quote, start) {
+            comment_cursor = range.end;
+            continue;
+        }
         let end = text[start + 4..]
             .find("-->")
             .map_or(text.len(), |end| start + 4 + end + 3);
-        blocks.push(start..end);
+        comments.push(start..end);
         comment_cursor = end;
     }
-    blocks.sort_unstable_by_key(|range| range.start);
+    if comments.is_empty() {
+        return code_and_quote;
+    }
+    code_and_quote.extend(comments);
+    code_and_quote.sort_unstable_by_key(|range| range.start);
     let mut merged: Vec<Range<usize>> = Vec::new();
-    for range in blocks {
+    for range in code_and_quote {
         if let Some(last) = merged.last_mut().filter(|last| last.end >= range.start) {
             last.end = last.end.max(range.end);
         } else {

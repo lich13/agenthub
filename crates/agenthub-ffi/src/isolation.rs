@@ -4,14 +4,14 @@ use anyhow::{anyhow, Context, Result};
 use std::{fs, io::Write, path::Path};
 use zeroize::{Zeroize, Zeroizing};
 
-pub fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> {
+pub(crate) fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> {
     match isolated_root {
         Some(root) => build_isolated_desktop_state(root),
         None => DesktopState::current(),
     }
 }
 
-pub fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState> {
+pub(crate) fn build_isolated_desktop_state(isolated_root: &Path) -> Result<DesktopState> {
     create_dir_0700(isolated_root)?;
     let log_dir = isolated_root.join("logs");
     create_dir_0700(&log_dir)?;
