@@ -1359,4 +1359,94 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
         }
         XCTAssertGreaterThan(cache.totalBytes, 0, "Recovered parse must populate GfmLayoutCache")
     }
+
+    @MainActor
+    func testPagedEventHistoryStoreCountsUserMessageAndContextBlocksForByteLRUEviction() {
+        let sixMiB = String(repeating: "A", count: 6 * 1024 * 1024)
+        let makeUM = { (id: String) in
+            UserMessageContent(
+                id: id,
+                text: "request-\(id)",
+                attachments: [
+                    UserAttachment(
+                        id: "att-\(id)",
+                        name: "diagram.png",
+                        kind: "image",
+                        path: "/workspace/example.invalid/diagram.png"
+                    ),
+                ],
+                contextBlocks: [
+                    UserContextBlock(kind: "instructions", text: sixMiB),
+                ]
+            )
+        }
+
+        // 1. ClaudeHistoryEvent: text/detail/result are nil; 3 × ~6 MiB > 16 MiB must evict oldest session s1
+        let claudeStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
+        _ = claudeStore.applyHeadPoll(
+            key: "s1",
+            headEvents: [ClaudeHistoryEvent(id: "e1", kind: "user", userMessage: makeUM("1"))],
+            history: nil,
+            totalEvents: 1,
+            beforeCursor: nil,
+            hasMore: false
+        )
+        _ = claudeStore.applyHeadPoll(
+            key: "s2",
+            headEvents: [ClaudeHistoryEvent(id: "e2", kind: "user", userMessage: makeUM("2"))],
+            history: nil,
+            totalEvents: 1,
+            beforeCursor: nil,
+            hasMore: false
+        )
+        XCTAssertEqual(claudeStore.cachedSessionCount, 2)
+        XCTAssertGreaterThan(claudeStore.cachedBytes, 12 * 1024 * 1024)
+        XCTAssertFalse(claudeStore.slot(for: "s1").events.isEmpty)
+
+        _ = claudeStore.applyHeadPoll(
+            key: "s3",
+            headEvents: [ClaudeHistoryEvent(id: "e3", kind: "user", userMessage: makeUM("3"))],
+            history: nil,
+            totalEvents: 1,
+            beforeCursor: nil,
+            hasMore: false
+        )
+        XCTAssertEqual(claudeStore.cachedSessionCount, 2, "3 × 6 MiB contextBlocks must evict LRU session before 8-session cap")
+        XCTAssertLessThanOrEqual(claudeStore.cachedBytes, PagedEventHistoryStore<ClaudeHistoryEvent>.maxCachedBytes)
+        XCTAssertTrue(claudeStore.slot(for: "s1").events.isEmpty, "Oldest Claude session s1 must be evicted")
+        XCTAssertFalse(claudeStore.slot(for: "s2").events.isEmpty)
+        XCTAssertFalse(claudeStore.slot(for: "s3").events.isEmpty)
+
+        // 2. GrokHistoryEvent: 3 × ~6 MiB > 16 MiB must also evict oldest session g1
+        let grokStore = PagedEventHistoryStore<GrokHistoryEvent> { ev, idx in ev.id ?? "g-\(idx)" }
+        for k in ["g1", "g2", "g3"] {
+            _ = grokStore.applyHeadPoll(
+                key: k,
+                headEvents: [GrokHistoryEvent(id: k, kind: "user", userMessage: makeUM(k))],
+                history: nil,
+                totalEvents: 1,
+                beforeCursor: nil,
+                hasMore: false
+            )
+        }
+        XCTAssertEqual(grokStore.cachedSessionCount, 2)
+        XCTAssertTrue(grokStore.slot(for: "g1").events.isEmpty)
+        XCTAssertFalse(grokStore.slot(for: "g3").events.isEmpty)
+
+        // 3. ProviderHistoryEvent: 3 × ~6 MiB > 16 MiB must also evict oldest session p1
+        let provStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
+        for k in ["p1", "p2", "p3"] {
+            _ = provStore.applyHeadPoll(
+                key: k,
+                headEvents: [ProviderHistoryEvent(id: k, kind: "user", userMessage: makeUM(k))],
+                history: nil,
+                totalEvents: 1,
+                beforeCursor: nil,
+                hasMore: false
+            )
+        }
+        XCTAssertEqual(provStore.cachedSessionCount, 2)
+        XCTAssertTrue(provStore.slot(for: "p1").events.isEmpty)
+        XCTAssertFalse(provStore.slot(for: "p3").events.isEmpty)
+    }
 }

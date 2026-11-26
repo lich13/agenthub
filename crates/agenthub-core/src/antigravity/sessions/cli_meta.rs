@@ -93,10 +93,10 @@ fn sql_int_or_text_ms(row: &rusqlite::Row<'_>, idx: usize) -> Option<i64> {
     }
 }
 
-pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaRow> {
-    let cols = crate::db::table_columns(conn, "conversations_fts").unwrap_or_default();
+pub(crate) fn load_fts_meta_rows(conn: &Connection) -> Result<BTreeMap<String, FtsMetaRow>> {
+    let cols = crate::db::table_columns(conn, "conversations_fts")?;
     if !cols.contains("conversation_id") || !cols.contains("chunk_index") {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
     let arch_expr = if cols.contains("archived") {
         "archived"
@@ -124,14 +124,11 @@ pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaR
         "NULL"
     };
     let sql = format!(
-        "SELECT conversation_id, {arch_expr}, {title_expr}, {ws_expr}, {sc_expr}, {lm_expr} \
+        "SELECT COALESCE(CAST(conversation_id AS TEXT), ''), {arch_expr}, {title_expr}, {ws_expr}, {sc_expr}, {lm_expr} \
          FROM conversations_fts WHERE chunk_index = -1"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return BTreeMap::new();
-    };
-    let mut out = BTreeMap::new();
-    if let Ok(rows) = stmt.query_map([], |row| {
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
         let cid = row.get::<_, String>(0)?;
         let archived = row.get::<_, ValueOrString>(1).ok().map(|v| v.0);
         let title = row
@@ -159,14 +156,15 @@ pub(crate) fn load_fts_meta_rows(conn: &Connection) -> BTreeMap<String, FtsMetaR
                 last_modified_ms,
             },
         ))
-    }) {
-        for (cid, meta) in rows.flatten() {
-            if uuid::Uuid::parse_str(&cid).is_ok() {
-                out.insert(cid, meta);
-            }
+    })?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (cid, meta) = row?;
+        if uuid::Uuid::parse_str(&cid).is_ok() {
+            out.insert(cid, meta);
         }
     }
-    out
+    Ok(out)
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -178,49 +176,75 @@ struct AuxIndexStamp {
     sidecars: Vec<(PathBuf, FileStamp)>,
 }
 
-fn compute_aux_index_stamp(paths: &AntigravityPaths, has_conn: bool) -> AuxIndexStamp {
-    let db = has_conn
-        .then(|| FileStamp::sqlite_pair(&paths.summaries_db()))
-        .flatten();
+fn optional_regular_stamp(path: &Path) -> Option<Option<FileStamp>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            Some(Some(FileStamp::from_metadata(&meta)))
+        }
+        Ok(_) => Some(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    }
+}
+
+fn compute_aux_index_stamp(paths: &AntigravityPaths, has_conn: bool) -> Option<AuxIndexStamp> {
+    let db_path = paths.summaries_db();
+    let db = if has_conn {
+        Some(FileStamp::sqlite_pair(&db_path)?)
+    } else {
+        if optional_regular_stamp(&db_path)?.is_some() {
+            return None;
+        }
+        None
+    };
     let conv_meta_path = paths.home.join("cache/conversation_metadata.json");
-    let conv_meta = FileStamp::of_nofollow(&conv_meta_path);
+    let conv_meta = optional_regular_stamp(&conv_meta_path)?;
     let last_conv_path = paths.home.join("cache/last_conversations.json");
-    let last_conv = FileStamp::of_nofollow(&last_conv_path);
+    let last_conv = optional_regular_stamp(&last_conv_path)?;
     let mut sidecars = Vec::new();
     let brain_dir = paths.brain_dir();
-    if brain_dir.is_dir() {
-        if let Ok(parents) = fs::read_dir(&brain_dir) {
-            for p_entry in parents.flatten() {
+    match fs::symlink_metadata(&brain_dir) {
+        Ok(meta) if meta.is_dir() => {
+            let parents = fs::read_dir(&brain_dir).ok()?;
+            for p_res in parents {
+                let p_entry = p_res.ok()?;
                 let pid = p_entry.file_name().to_string_lossy().into_owned();
                 if uuid::Uuid::parse_str(&pid).is_err() {
                     continue;
                 }
                 let sub_dir = p_entry.path().join(".system_generated/subagents");
-                if !sub_dir.is_dir() {
-                    continue;
-                }
-                if let Ok(kids) = fs::read_dir(&sub_dir) {
-                    for k_entry in kids.flatten() {
-                        let k_path = k_entry.path();
-                        if k_path.extension().and_then(|s| s.to_str()) != Some("json") {
-                            continue;
-                        }
-                        if let Some(st) = FileStamp::of_nofollow(&k_path) {
-                            sidecars.push((k_path, st));
+                match fs::symlink_metadata(&sub_dir) {
+                    Ok(sm) if sm.is_dir() => {
+                        let kids = fs::read_dir(&sub_dir).ok()?;
+                        for k_res in kids {
+                            let k_entry = k_res.ok()?;
+                            let k_path = k_entry.path();
+                            if k_path.extension().and_then(|s| s.to_str()) != Some("json") {
+                                continue;
+                            }
+                            if let Some(st) = optional_regular_stamp(&k_path)? {
+                                sidecars.push((k_path, st));
+                            }
                         }
                     }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return None,
                 }
             }
+            sidecars.sort_by(|a, b| a.0.cmp(&b.0));
         }
-        sidecars.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
     }
-    AuxIndexStamp {
+    Some(AuxIndexStamp {
         has_conn,
         db,
         conv_meta,
         last_conv,
         sidecars,
-    }
+    })
 }
 
 fn aux_index_weight(idx: &StoreAuxiliaryIndex) -> u64 {
@@ -239,13 +263,20 @@ pub(crate) fn load_store_auxiliary_index(
     conn: Option<&Connection>,
 ) -> std::sync::Arc<StoreAuxiliaryIndex> {
     let stamp = compute_aux_index_stamp(paths, conn.is_some());
-    if let Some(cached) = STORE_AUX_INDEX_CACHE.get(&paths.home, &stamp) {
-        return cached;
+    if let Some(ref stamp) = stamp {
+        if let Some(cached) = STORE_AUX_INDEX_CACHE.get(&paths.home, stamp) {
+            return cached;
+        }
     }
-    let computed = std::sync::Arc::new(load_store_auxiliary_index_uncached(paths, conn));
-    if compute_aux_index_stamp(paths, conn.is_some()) == stamp {
-        let weight = aux_index_weight(&computed);
-        STORE_AUX_INDEX_CACHE.insert(paths.home.clone(), stamp, computed.clone(), weight);
+    let (raw, complete) = load_store_auxiliary_index_uncached(paths, conn);
+    let computed = std::sync::Arc::new(raw);
+    if complete {
+        if let Some(stamp) = stamp {
+            if compute_aux_index_stamp(paths, conn.is_some()).as_ref() == Some(&stamp) {
+                let weight = aux_index_weight(&computed);
+                STORE_AUX_INDEX_CACHE.insert(paths.home.clone(), stamp, computed.clone(), weight);
+            }
+        }
     }
     computed
 }
@@ -253,147 +284,211 @@ pub(crate) fn load_store_auxiliary_index(
 fn load_store_auxiliary_index_uncached(
     paths: &AntigravityPaths,
     conn: Option<&Connection>,
-) -> StoreAuxiliaryIndex {
+) -> (StoreAuxiliaryIndex, bool) {
     let mut idx = StoreAuxiliaryIndex::default();
+    let mut complete = true;
     if let Some(conn) = conn {
-        idx.fts_rows = load_fts_meta_rows(conn);
+        match load_fts_meta_rows(conn) {
+            Ok(rows) => idx.fts_rows = rows,
+            Err(_) => complete = false,
+        }
     }
 
     let conv_meta_path = paths.home.join("cache/conversation_metadata.json");
-    if conv_meta_path.is_file() && session_delete::within(&paths.home, &conv_meta_path) {
-        if let Ok(bytes) = fs::read(&conv_meta_path) {
-            if let Ok(doc) = serde_json::from_slice::<Value>(&bytes) {
-                if let Some(convs) = doc["conversations"].as_object() {
-                    for (cid, val) in convs {
-                        if uuid::Uuid::parse_str(cid).is_err() {
-                            continue;
+    match fs::symlink_metadata(&conv_meta_path) {
+        Ok(meta)
+            if meta.is_file()
+                && !meta.file_type().is_symlink()
+                && session_delete::within(&paths.home, &conv_meta_path) =>
+        {
+            match fs::read(&conv_meta_path) {
+                Ok(bytes) => {
+                    if let Ok(doc) = serde_json::from_slice::<Value>(&bytes) {
+                        if let Some(convs) = doc["conversations"].as_object() {
+                            for (cid, val) in convs {
+                                if uuid::Uuid::parse_str(cid).is_err() {
+                                    continue;
+                                }
+                                let mut entry = ConvMetaEntry {
+                                    is_internal: val["is_internal"].as_bool() == Some(true)
+                                        || val["isInternal"].as_bool() == Some(true)
+                                        || val["summary"]["Internal"].as_bool() == Some(true)
+                                        || val["summary"]["internal"].as_bool() == Some(true),
+                                    title: None,
+                                    cwd: None,
+                                    parent_id: val["parent_conversation_id"]
+                                        .as_str()
+                                        .or_else(|| val["parentConversationId"].as_str())
+                                        .or_else(|| val["summary"]["ParentConversationID"].as_str())
+                                        .filter(|s| !s.is_empty() && *s != cid)
+                                        .map(str::to_owned),
+                                    root_id: val["root_conversation_id"]
+                                        .as_str()
+                                        .or_else(|| val["rootConversationId"].as_str())
+                                        .or_else(|| val["summary"]["RootConversationID"].as_str())
+                                        .filter(|s| !s.is_empty() && *s != cid)
+                                        .map(str::to_owned),
+                                };
+                                if let Some(raw_title) = val["summary"]
+                                    .as_str()
+                                    .or_else(|| val["summary"]["Title"].as_str())
+                                    .or_else(|| val["summary"]["title"].as_str())
+                                    .or_else(|| val["title"].as_str())
+                                {
+                                    entry.title = if entry.is_internal
+                                        || entry.parent_id.is_some()
+                                        || entry.root_id.is_some()
+                                    {
+                                        super::prompt::clean_antigravity_subagent_title(raw_title)
+                                    } else {
+                                        super::prompt::clean_antigravity_auto_title(raw_title)
+                                    };
+                                }
+                                if let Some(uri) = val["summary"]["WorkspaceURIs"]
+                                    .as_array()
+                                    .or_else(|| val["summary"]["workspaceUris"].as_array())
+                                    .or_else(|| val["workspace_uris"].as_array())
+                                    .and_then(|a| a.first())
+                                    .and_then(Value::as_str)
+                                    .or_else(|| val["workspace"].as_str())
+                                    .map(decode_file_uri)
+                                    .filter(|s| !s.is_empty())
+                                {
+                                    entry.cwd = Some(uri);
+                                }
+                                idx.conv_meta.insert(cid.clone(), entry);
+                            }
                         }
-                        let mut entry = ConvMetaEntry {
-                            is_internal: val["is_internal"].as_bool() == Some(true)
-                                || val["isInternal"].as_bool() == Some(true)
-                                || val["summary"]["Internal"].as_bool() == Some(true)
-                                || val["summary"]["internal"].as_bool() == Some(true),
-                            title: None,
-                            cwd: None,
-                            parent_id: val["parent_conversation_id"]
-                                .as_str()
-                                .or_else(|| val["parentConversationId"].as_str())
-                                .or_else(|| val["summary"]["ParentConversationID"].as_str())
-                                .filter(|s| !s.is_empty() && *s != cid)
-                                .map(str::to_owned),
-                            root_id: val["root_conversation_id"]
-                                .as_str()
-                                .or_else(|| val["rootConversationId"].as_str())
-                                .or_else(|| val["summary"]["RootConversationID"].as_str())
-                                .filter(|s| !s.is_empty() && *s != cid)
-                                .map(str::to_owned),
-                        };
-                        if let Some(raw_title) = val["summary"]
-                            .as_str()
-                            .or_else(|| val["summary"]["Title"].as_str())
-                            .or_else(|| val["summary"]["title"].as_str())
-                            .or_else(|| val["title"].as_str())
-                        {
-                            entry.title = if entry.is_internal
-                                || entry.parent_id.is_some()
-                                || entry.root_id.is_some()
-                            {
-                                super::prompt::clean_antigravity_subagent_title(raw_title)
-                            } else {
-                                super::prompt::clean_antigravity_auto_title(raw_title)
-                            };
-                        }
-                        if let Some(uri) = val["summary"]["WorkspaceURIs"]
-                            .as_array()
-                            .or_else(|| val["summary"]["workspaceUris"].as_array())
-                            .or_else(|| val["workspace_uris"].as_array())
-                            .and_then(|a| a.first())
-                            .and_then(Value::as_str)
-                            .or_else(|| val["workspace"].as_str())
-                            .map(decode_file_uri)
-                            .filter(|s| !s.is_empty())
-                        {
-                            entry.cwd = Some(uri);
-                        }
-                        idx.conv_meta.insert(cid.clone(), entry);
+                    } else {
+                        complete = false;
                     }
                 }
+                Err(_) => complete = false,
             }
         }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => complete = false,
     }
 
     let last_conv_path = paths.home.join("cache/last_conversations.json");
-    if last_conv_path.is_file() && session_delete::within(&paths.home, &last_conv_path) {
-        if let Ok(bytes) = fs::read(&last_conv_path) {
-            if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes) {
-                for (ws, val) in map {
-                    if let Some(cid) = val.as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()) {
-                        let decoded = decode_file_uri(&ws);
-                        if !decoded.is_empty() {
-                            idx.last_conv_cwd.entry(cid.to_owned()).or_insert(decoded);
+    match fs::symlink_metadata(&last_conv_path) {
+        Ok(meta)
+            if meta.is_file()
+                && !meta.file_type().is_symlink()
+                && session_delete::within(&paths.home, &last_conv_path) =>
+        {
+            match fs::read(&last_conv_path) {
+                Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                    Ok(Value::Object(map)) => {
+                        for (ws, val) in map {
+                            if let Some(cid) =
+                                val.as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok())
+                            {
+                                let decoded = decode_file_uri(&ws);
+                                if !decoded.is_empty() {
+                                    idx.last_conv_cwd.entry(cid.to_owned()).or_insert(decoded);
+                                }
+                            }
                         }
                     }
-                }
+                    Ok(_) => {}
+                    Err(_) => complete = false,
+                },
+                Err(_) => complete = false,
             }
         }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => complete = false,
     }
 
-    if paths.brain_dir().is_dir() {
-        if let Ok(parents) = fs::read_dir(paths.brain_dir()) {
-            for p_entry in parents.flatten() {
-                let pid = p_entry.file_name().to_string_lossy().into_owned();
-                if uuid::Uuid::parse_str(&pid).is_err() {
-                    continue;
-                }
-                let sub_dir = p_entry.path().join(".system_generated/subagents");
-                if !sub_dir.is_dir() || !session_delete::within(&paths.home, &sub_dir) {
-                    continue;
-                }
-                let Ok(kids) = fs::read_dir(&sub_dir) else {
-                    continue;
-                };
-                for k_entry in kids.flatten() {
-                    let k_path = k_entry.path();
-                    if k_path.extension().and_then(|s| s.to_str()) != Some("json") {
-                        continue;
-                    }
-                    let Some(cid) = k_path.file_stem().and_then(|s| s.to_str()) else {
+    let brain_dir = paths.brain_dir();
+    match fs::symlink_metadata(&brain_dir) {
+        Ok(meta) if meta.is_dir() => match fs::read_dir(&brain_dir) {
+            Ok(parents) => {
+                for p_res in parents {
+                    let Ok(p_entry) = p_res else {
+                        complete = false;
                         continue;
                     };
-                    if uuid::Uuid::parse_str(cid).is_err() || cid == pid {
+                    let pid = p_entry.file_name().to_string_lossy().into_owned();
+                    if uuid::Uuid::parse_str(&pid).is_err() {
                         continue;
                     }
-                    let list = idx.sidecar_children.entry(pid.clone()).or_default();
-                    if !list.contains(&cid.to_owned()) {
-                        list.push(cid.to_owned());
-                    }
-                    if let Ok(raw) = fs::read(&k_path) {
-                        if let Ok(doc) = serde_json::from_slice::<Value>(&raw) {
-                            let state = doc["state"]
-                                .as_str()
-                                .or_else(|| doc["status"].as_str())
-                                .unwrap_or("");
-                            let killed = state.contains("KILLED") || state.contains("CANCELED");
-                            let title = doc["subagentDescriptor"]["role"]
-                                .as_str()
-                                .or_else(|| doc["subagentDescriptor"]["typeName"].as_str())
-                                .or_else(|| doc["title"].as_str())
-                                .or_else(|| doc["name"].as_str())
-                                .or_else(|| doc["type_name"].as_str())
-                                .or_else(|| doc["typeName"].as_str())
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_owned);
-                            idx.sidecar_meta
-                                .insert(cid.to_owned(), SubagentSidecarMeta { killed, title });
+                    let sub_dir = p_entry.path().join(".system_generated/subagents");
+                    match fs::symlink_metadata(&sub_dir) {
+                        Ok(sm) if sm.is_dir() && session_delete::within(&paths.home, &sub_dir) => {
+                            let Ok(kids) = fs::read_dir(&sub_dir) else {
+                                complete = false;
+                                continue;
+                            };
+                            for k_res in kids {
+                                let Ok(k_entry) = k_res else {
+                                    complete = false;
+                                    continue;
+                                };
+                                let k_path = k_entry.path();
+                                if k_path.extension().and_then(|s| s.to_str()) != Some("json") {
+                                    continue;
+                                }
+                                let Some(cid) = k_path.file_stem().and_then(|s| s.to_str()) else {
+                                    continue;
+                                };
+                                if uuid::Uuid::parse_str(cid).is_err() || cid == pid {
+                                    continue;
+                                }
+                                let list = idx.sidecar_children.entry(pid.clone()).or_default();
+                                if !list.contains(&cid.to_owned()) {
+                                    list.push(cid.to_owned());
+                                }
+                                match fs::read(&k_path) {
+                                    Ok(raw) => {
+                                        if let Ok(doc) = serde_json::from_slice::<Value>(&raw) {
+                                            let state = doc["state"]
+                                                .as_str()
+                                                .or_else(|| doc["status"].as_str())
+                                                .unwrap_or("");
+                                            let killed = state.contains("KILLED")
+                                                || state.contains("CANCELED");
+                                            let title = doc["subagentDescriptor"]["role"]
+                                                .as_str()
+                                                .or_else(|| {
+                                                    doc["subagentDescriptor"]["typeName"].as_str()
+                                                })
+                                                .or_else(|| doc["title"].as_str())
+                                                .or_else(|| doc["name"].as_str())
+                                                .or_else(|| doc["type_name"].as_str())
+                                                .or_else(|| doc["typeName"].as_str())
+                                                .map(str::trim)
+                                                .filter(|s| !s.is_empty())
+                                                .map(str::to_owned);
+                                            idx.sidecar_meta.insert(
+                                                cid.to_owned(),
+                                                SubagentSidecarMeta { killed, title },
+                                            );
+                                        } else {
+                                            complete = false;
+                                        }
+                                    }
+                                    Err(_) => complete = false,
+                                }
+                            }
                         }
+                        Ok(_) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => complete = false,
                     }
                 }
             }
-        }
+            Err(_) => complete = false,
+        },
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => complete = false,
     }
 
-    idx
+    (idx, complete)
 }
 
 use crate::file_stamp::{FileStamp, StampedCache};
@@ -1970,6 +2065,136 @@ mod tests {
             .contains("锁释放后可见的执行失败"));
 
         drop(err_writer);
+        drop(writer);
+        evict_idle_meta_cache(std::time::Duration::ZERO);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn store_aux_index_cache_skips_caching_on_transient_lock_and_recovers_fts_archived_state() {
+        let empty_root =
+            std::env::temp_dir().join(format!("agenthub-ag-aux-empty-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&empty_root).unwrap();
+        let empty_store = AntigravityPaths::offline(empty_root.clone());
+        let empty_db = Connection::open(empty_store.summaries_db()).unwrap();
+        empty_db
+            .execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY);",
+            )
+            .unwrap();
+        assert!(load_fts_meta_rows(&empty_db).unwrap().is_empty());
+        let empty_first = load_store_auxiliary_index(&empty_store, Some(&empty_db));
+        let empty_second = load_store_auxiliary_index(&empty_store, Some(&empty_db));
+        assert!(
+            std::sync::Arc::ptr_eq(&empty_first, &empty_second),
+            "genuinely empty FTS schema must still be cached"
+        );
+        drop(empty_db);
+        let _ = fs::remove_dir_all(&empty_root);
+
+        let root =
+            std::env::temp_dir().join(format!("agenthub-ag-aux-lock-{}", uuid::Uuid::new_v4()));
+        let conv_dir = root.join("conversations");
+        let cache_dir = root.join("cache");
+        fs::create_dir_all(&conv_dir).unwrap();
+        fs::create_dir_all(&cache_dir).unwrap();
+        let store = AntigravityPaths::offline(root.clone());
+
+        let cid = "44444444-5555-4666-8777-888888888888";
+        fs::write(conv_dir.join(format!("{cid}.pb")), b"primary-session-bytes").unwrap();
+
+        let writer = Connection::open(store.summaries_db()).unwrap();
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE conversation_summaries (
+                     conversation_id TEXT PRIMARY KEY,
+                     title TEXT,
+                     preview TEXT,
+                     step_count INTEGER,
+                     last_modified_time TEXT,
+                     workspace_uris TEXT,
+                     parent_conversation_id TEXT,
+                     nesting_depth INTEGER
+                 );
+                 CREATE VIRTUAL TABLE conversations_fts USING fts5(
+                     conversation_id UNINDEXED,
+                     chunk_index UNINDEXED,
+                     archived UNINDEXED,
+                     title,
+                     workspace UNINDEXED,
+                     step_count UNINDEXED,
+                     last_modified_time UNINDEXED
+                 );",
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'FTS Archived CLI', 'p', 1, '2026-11-26T02:00:00Z', '[\"file:///workspace/example.invalid\"]', '', 0)",
+                params![cid],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO conversations_fts (conversation_id, chunk_index, archived, title, workspace, step_count, last_modified_time) \
+                 VALUES (?1, -1, 1, 'FTS Archived CLI', 'file:///workspace/example.invalid', 1, 1795658400000000000)",
+                params![cid],
+            )
+            .unwrap();
+
+        let reader = Connection::open_with_flags(
+            store.summaries_db(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+
+        writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let stamp_locked = FileStamp::sqlite_pair(&store.summaries_db()).unwrap();
+        assert!(
+            load_fts_meta_rows(&reader).is_err(),
+            "transient SQLITE_BUSY must surface Err rather than empty BTreeMap"
+        );
+        let aux_while_locked = load_store_auxiliary_index(&store, Some(&reader));
+        assert!(aux_while_locked.fts_rows.is_empty());
+
+        writer.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(
+            stamp_locked,
+            FileStamp::sqlite_pair(&store.summaries_db()).unwrap(),
+            "ROLLBACK in DELETE journal mode preserves identical SqliteStampPair"
+        );
+
+        let aux_after_unlock = load_store_auxiliary_index(&store, Some(&reader));
+        assert_eq!(
+            aux_after_unlock.fts_rows.get(cid).and_then(|r| r.archived),
+            Some(true),
+            "STORE_AUX_INDEX_CACHE must not retain poisoned unarchived state after lock release"
+        );
+        let aux_cached = load_store_auxiliary_index(&store, Some(&reader));
+        assert!(std::sync::Arc::ptr_eq(&aux_after_unlock, &aux_cached));
+
+        let active_rows =
+            list_summaries_from_source_filtered(&store, None, Some(false), None).unwrap();
+        assert!(
+            active_rows.iter().all(|s| s.id != cid),
+            "FTS-archived session must not appear in unarchived list after unlock"
+        );
+        let archived_rows =
+            list_summaries_from_source_filtered(&store, None, Some(true), None).unwrap();
+        assert_eq!(archived_rows.len(), 1);
+        assert_eq!(archived_rows[0].id, cid);
+        assert!(archived_rows[0].archived);
+
+        // Partial/corrupt conversation_metadata.json must not be cached either.
+        let conv_meta_file = cache_dir.join("conversation_metadata.json");
+        fs::write(&conv_meta_file, b"{\"conversations\":").unwrap();
+        let partial_a = load_store_auxiliary_index(&store, Some(&reader));
+        let partial_b = load_store_auxiliary_index(&store, Some(&reader));
+        assert!(!std::sync::Arc::ptr_eq(&partial_a, &partial_b));
+
+        drop(reader);
         drop(writer);
         evict_idle_meta_cache(std::time::Duration::ZERO);
         let _ = fs::remove_dir_all(root);

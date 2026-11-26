@@ -177,31 +177,39 @@ final class GithubCiAndPathActionTests: XCTestCase {
     func testAppRestartLauncherHandlesBackgroundWorkspaceCallbackAndEdgeCases() async {
         let opener = BackgroundWorkspaceOpener()
         var terminateCount = 0
+        var failureNotices: [String] = []
 
         // 1. Non-.app path is ignored
         AppRestartLauncher.launchReplacementAndTerminate(
             bundleURL: URL(fileURLWithPath: "/usr/local/bin/agenthub"),
             workspace: opener,
+            onLaunchFailure: { failureNotices.append($0) },
             terminate: { terminateCount += 1 }
         )
         XCTAssertTrue(opener.openedURLs.isEmpty)
+        XCTAssertTrue(failureNotices.isEmpty)
         XCTAssertEqual(terminateCount, 0)
 
         let appURL = URL(fileURLWithPath: "/Applications/AgentHub.app")
 
-        // 2. Launch failure on background queue does not terminate current process
-        let failedCallback = expectation(description: "failed launch callback executed")
+        // 2. Launch failure on background queue hops to MainActor to surface manual-reopen notice without terminating
+        let failureNotified = expectation(description: "manual restart notice surfaced on MainActor")
         opener.simulatedError = AgentHubFFIError("launch failed")
-        opener.afterCompletion = { failedCallback.fulfill() }
+        opener.afterCompletion = nil
         AppRestartLauncher.launchReplacementAndTerminate(
             bundleURL: appURL,
             workspace: opener,
+            onLaunchFailure: { message in
+                XCTAssertTrue(Thread.isMainThread)
+                failureNotices.append(message)
+                failureNotified.fulfill()
+            },
             terminate: { terminateCount += 1 }
         )
-        await fulfillment(of: [failedCallback], timeout: 3.0)
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await fulfillment(of: [failureNotified], timeout: 3.0)
         XCTAssertEqual(opener.openedURLs, [appURL])
         XCTAssertEqual(opener.createsNewInstanceFlags, [true])
+        XCTAssertEqual(failureNotices, ["更新已安装，请手动重新打开应用"])
         XCTAssertEqual(terminateCount, 0)
 
         // 3. Successful launch on background concurrent queue hops back to MainActor and terminates
@@ -211,6 +219,7 @@ final class GithubCiAndPathActionTests: XCTestCase {
         AppRestartLauncher.launchReplacementAndTerminate(
             bundleURL: appURL,
             workspace: opener,
+            onLaunchFailure: { failureNotices.append($0) },
             terminate: {
                 XCTAssertTrue(Thread.isMainThread)
                 terminateCount += 1
@@ -218,6 +227,7 @@ final class GithubCiAndPathActionTests: XCTestCase {
             }
         )
         await fulfillment(of: [terminated], timeout: 3.0)
+        XCTAssertEqual(failureNotices, ["更新已安装，请手动重新打开应用"])
         XCTAssertEqual(terminateCount, 1)
     }
 

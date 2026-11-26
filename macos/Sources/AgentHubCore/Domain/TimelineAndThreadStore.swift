@@ -262,14 +262,7 @@ final class ThreadMessageStore: ObservableObject {
             total += b.text?.utf8.count ?? 0
             total += b.summary?.utf8.count ?? 0
             total += b.input?.utf8.count ?? 0
-            if let um = b.userMessage {
-                total += um.text.utf8.count
-                if let contextBlocks = um.contextBlocks {
-                    for ctx in contextBlocks {
-                        total += ctx.text.utf8.count
-                    }
-                }
-            }
+            total += estimateUserMessageBytes(b.userMessage)
         }
         return total
     }
@@ -517,6 +510,25 @@ final class ThreadMessageStore: ObservableObject {
     }
 }
 
+private func estimateUserMessageBytes(_ um: UserMessageContent?) -> Int {
+    guard let um else { return 0 }
+    var total: Int = 64 + um.id.utf8.count + um.text.utf8.count
+    for att in um.attachments {
+        total += 64
+        total += att.id.utf8.count
+        total += att.name.utf8.count
+        total += att.kind.utf8.count
+        total += att.path?.utf8.count ?? 0
+        total += att.reason?.utf8.count ?? 0
+    }
+    if let contextBlocks = um.contextBlocks {
+        for ctx in contextBlocks {
+            total += 32 + ctx.kind.utf8.count + ctx.text.utf8.count
+        }
+    }
+    return total
+}
+
 // MARK: - Universal Paged History Store for Claude, Grok, Antigravity, DSH & GrokBot (usePagedHistory.ts parity)
 
 struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
@@ -602,12 +614,14 @@ final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObjec
                 total += ev.text?.utf8.count ?? 0
                 total += ev.detail?.utf8.count ?? 0
                 total += ev.result?.utf8.count ?? 0
+                total += estimateUserMessageBytes(ev.userMessage)
             }
         } else if let grokEvents = slot.events as? [GrokHistoryEvent] {
             for ev in grokEvents {
                 total += 128
                 total += ev.text?.utf8.count ?? 0
                 total += ev.detail?.utf8.count ?? 0
+                total += estimateUserMessageBytes(ev.userMessage)
             }
         } else if let provEvents = slot.events as? [ProviderHistoryEvent] {
             for ev in provEvents {
@@ -615,6 +629,7 @@ final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObjec
                 total += ev.text?.utf8.count ?? 0
                 total += ev.detail?.utf8.count ?? 0
                 total += ev.result?.utf8.count ?? 0
+                total += estimateUserMessageBytes(ev.userMessage)
             }
         } else {
             total += slot.events.count * 256

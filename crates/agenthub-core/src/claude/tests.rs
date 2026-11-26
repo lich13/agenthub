@@ -3625,3 +3625,58 @@ fn massive_progress_telemetry_and_file_snapshots_preserve_cursor_and_compact_det
     let ctx = notification_context(&f.paths, &f.file).unwrap();
     assert_eq!(ctx.stream.record_count, 205_005);
 }
+
+#[test]
+fn located_sessions_cache_handles_over_20k_insertions_with_o1_lru_eviction() {
+    let root = PathBuf::from("/workspace/example.invalid");
+    let mut small = LocatedSessionsCache::new(3);
+    small.insert((root.clone(), "k1".into()), PathBuf::from("/a/1.jsonl"));
+    small.insert((root.clone(), "k2".into()), PathBuf::from("/a/2.jsonl"));
+    small.insert((root.clone(), "k3".into()), PathBuf::from("/a/3.jsonl"));
+    // Touch k1 so k2 becomes the LRU head.
+    assert_eq!(
+        small.get(&(root.clone(), "k1".into())),
+        Some(PathBuf::from("/a/1.jsonl"))
+    );
+    small.insert((root.clone(), "k4".into()), PathBuf::from("/a/4.jsonl"));
+    assert_eq!(small.len(), 3);
+    assert!(small.get(&(root.clone(), "k2".into())).is_none());
+    assert_eq!(
+        small.get(&(root.clone(), "k1".into())),
+        Some(PathBuf::from("/a/1.jsonl"))
+    );
+    assert_eq!(
+        small.get(&(root.clone(), "k3".into())),
+        Some(PathBuf::from("/a/3.jsonl"))
+    );
+    assert_eq!(
+        small.get(&(root.clone(), "k4".into())),
+        Some(PathBuf::from("/a/4.jsonl"))
+    );
+
+    let mut large = LocatedSessionsCache::new(MAX_LOCATED_SESSIONS);
+    let total = 25_000usize;
+    for i in 0..total {
+        large.insert(
+            (root.clone(), format!("claude:{i:064x}")),
+            PathBuf::from(format!("/workspace/example.invalid/{i}.jsonl")),
+        );
+    }
+    assert_eq!(large.len(), MAX_LOCATED_SESSIONS);
+    assert!(large
+        .get(&(root.clone(), format!("claude:{:064x}", 0)))
+        .is_none());
+    assert!(large
+        .get(&(root.clone(), format!("claude:{:064x}", 4_999)))
+        .is_none());
+    assert_eq!(
+        large.get(&(root.clone(), format!("claude:{:064x}", 5_000))),
+        Some(PathBuf::from("/workspace/example.invalid/5000.jsonl"))
+    );
+    assert_eq!(
+        large.get(&(root.clone(), format!("claude:{:064x}", 24_999))),
+        Some(PathBuf::from("/workspace/example.invalid/24999.jsonl"))
+    );
+    assert!(large.evict_idle(std::time::Duration::ZERO));
+    assert_eq!(large.len(), 0);
+}

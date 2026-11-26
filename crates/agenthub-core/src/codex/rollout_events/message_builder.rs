@@ -275,7 +275,7 @@ impl MessageBlockBuilder {
 
     #[cfg(test)]
     pub(super) fn finish(self) -> Vec<MessageBlock> {
-        let blocks = self.finish_uncompacted();
+        let blocks = self.snapshot_uncompacted();
         compact_chat_history(&blocks, CHAT_HISTORY_LIMIT)
             .into_iter()
             .map(Arc::unwrap_or_clone)
@@ -324,45 +324,6 @@ impl MessageBlockBuilder {
         });
         super::super::subagents::merge_creation_events(&mut blocks);
         blocks
-    }
-
-    #[cfg(test)]
-    pub(super) fn finish_uncompacted(mut self) -> Vec<Arc<MessageBlock>> {
-        for block in &mut self.blocks {
-            if let Some(call) = self.async_questions.calls.iter().find(|call| {
-                block.call_id.as_deref() == Some(&call.call_id)
-                    && block.turn_id.as_deref() == Some(&call.turn_id)
-            }) {
-                let block = Arc::make_mut(block);
-                let pending = call.pending();
-                block.resolved = Some(pending.is_none());
-                block.status = Some(
-                    if pending.is_some() {
-                        "pending"
-                    } else {
-                        "completed"
-                    }
-                    .to_string(),
-                );
-                if let Some(pending) = pending {
-                    block.questions = pending.questions;
-                }
-            }
-        }
-        let mut pending = self.pending_tools.into_values().collect::<Vec<_>>();
-        pending.sort_by_key(|call| call.raw_index);
-        for call in pending {
-            self.block_positions.insert(call.id.clone(), call.raw_index);
-            self.blocks.push(Arc::new(call.into_running_block()));
-        }
-        self.blocks.sort_by_key(|block| {
-            self.block_positions
-                .get(&block.id)
-                .copied()
-                .unwrap_or(usize::MAX)
-        });
-        super::super::subagents::merge_creation_events(&mut self.blocks);
-        self.blocks
     }
 }
 

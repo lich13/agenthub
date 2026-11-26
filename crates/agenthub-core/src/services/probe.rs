@@ -216,6 +216,9 @@ fn is_updated_within_fresh_window(updated_at: &Option<String>, now_ms: i64) -> b
     now_ms.saturating_sub(ts) <= fresh_ms
 }
 
+const MAX_LIVE_PROVIDER_CACHE_ENTRIES: usize = 16;
+const LIVE_PROVIDER_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
 type LiveProviderSessionsCacheKey = (Option<std::path::PathBuf>, std::path::PathBuf, usize);
 type LiveProviderSessionsCacheEntry = (
     LiveProviderSessionsCacheKey,
@@ -223,16 +226,18 @@ type LiveProviderSessionsCacheEntry = (
     std::time::Instant,
 );
 
-static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<Option<LiveProviderSessionsCacheEntry>> =
-    std::sync::Mutex::new(None);
+static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<
+    std::collections::VecDeque<LiveProviderSessionsCacheEntry>,
+> = std::sync::Mutex::new(std::collections::VecDeque::new());
 
 pub(crate) fn evict_idle_live_provider_sessions_cache(max_idle: std::time::Duration) {
     if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-        if guard
-            .as_ref()
-            .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
-        {
-            *guard = None;
+        let before = guard.len();
+        guard.retain(|(_, _, ts)| ts.elapsed() < max_idle);
+        if guard.len() < before {
+            if guard.is_empty() {
+                guard.shrink_to_fit();
+            }
             crate::note_cache_eviction();
         }
     }
@@ -307,12 +312,19 @@ fn aggregate_active_sessions(
         per_bucket_limit,
     );
     if !force_refresh {
-        if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-            if let Some((ref cached_key, ref cached_items, ts)) = *guard {
-                if *cached_key == cache_key && ts.elapsed() < std::time::Duration::from_secs(3) {
-                    sessions.extend(cached_items.iter().cloned());
+        if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+            if let Some(pos) = guard.iter().position(|(k, _, _)| *k == cache_key) {
+                if guard[pos].2.elapsed() < LIVE_PROVIDER_CACHE_TTL {
+                    let cached_items = guard[pos].1.clone();
+                    if pos + 1 < guard.len() {
+                        if let Some(entry) = guard.remove(pos) {
+                            guard.push_back(entry);
+                        }
+                    }
+                    sessions.extend(cached_items);
                     return Ok(sessions);
                 }
+                guard.remove(pos);
             }
         }
     }
@@ -509,7 +521,11 @@ fn aggregate_active_sessions(
     }
 
     if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
-        *guard = Some((
+        guard.retain(|(k, _, ts)| *k != cache_key && ts.elapsed() < LIVE_PROVIDER_CACHE_TTL);
+        while guard.len() >= MAX_LIVE_PROVIDER_CACHE_ENTRIES {
+            guard.pop_front();
+        }
+        guard.push_back((
             cache_key,
             sessions[codex_len..].to_vec(),
             std::time::Instant::now(),
@@ -1406,7 +1422,6 @@ mod tests {
 
     #[test]
     fn live_provider_sessions_cache_is_keyed_by_sandbox_root_and_codex_home_and_evicts_on_idle() {
-        super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
         let root_a = std::env::temp_dir().join(format!(
             "agenthub-probe-cache-a-{}-{}",
             std::process::id(),
@@ -1499,25 +1514,37 @@ mod tests {
             super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
         assert!(sessions_a.iter().any(|s| s.id == grok_id_a));
 
-        // Querying with cfg_b must NOT hit cfg_a's cached sessions
+        // Delete session on disk BEFORE querying cfg_b: querying cfg_b must NOT hit cfg_a's cached
+        // sessions AND must NOT clobber cfg_a's cached entry in the multi-entry bounded cache.
+        std::fs::remove_dir_all(&grok_dir_a).unwrap();
         let sessions_b =
             super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[], false).unwrap();
         assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
 
-        // Re-seed cfg_a cache, delete session on disk, and verify force_refresh=true bypasses 3s TTL
-        let _ = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
-        std::fs::remove_dir_all(&grok_dir_a).unwrap();
         let cached_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
-        assert!(cached_a.iter().any(|s| s.id == grok_id_a));
+        assert!(
+            cached_a.iter().any(|s| s.id == grok_id_a),
+            "querying distinct cfg_b must not clobber cfg_a's cached live sessions"
+        );
         let refreshed_a =
             super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
         assert!(!refreshed_a.iter().any(|s| s.id == grok_id_a));
 
+        //Inserting more than MAX_LIVE_PROVIDER_CACHE_ENTRIES distinct limits stays bounded.
+        for lim in 1..=(super::MAX_LIVE_PROVIDER_CACHE_ENTRIES + 4) {
+            let _ = super::aggregate_active_sessions(&cfg_b, lim, &[], &[], &[], true).unwrap();
+        }
+        assert!(
+            super::LIVE_PROVIDER_SESSIONS_CACHE.lock().unwrap().len()
+                <= super::MAX_LIVE_PROVIDER_CACHE_ENTRIES
+        );
+
         super::evict_idle_live_provider_sessions_cache(std::time::Duration::ZERO);
-        assert!(super::LIVE_PROVIDER_SESSIONS_CACHE
+        assert!(!super::LIVE_PROVIDER_SESSIONS_CACHE
             .lock()
             .unwrap()
-            .is_none());
+            .iter()
+            .any(|(k, _, _)| k.1 == cfg_a.codex.home || k.1 == cfg_b.codex.home));
 
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);

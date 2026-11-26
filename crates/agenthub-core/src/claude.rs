@@ -219,18 +219,211 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
 fn digest(value: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(value.as_ref()))
 }
-type LocatedSessions = HashMap<(PathBuf, String), (PathBuf, std::time::Instant)>;
-static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessions>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+const MAX_LOCATED_SESSIONS: usize = 20_000;
+type LocatedSessionKey = (PathBuf, String);
+
+struct LocatedNode {
+    key: LocatedSessionKey,
+    path: PathBuf,
+    accessed: std::time::Instant,
+    prev: Option<usize>,
+    next: Option<usize>,
+}
+
+struct LocatedSessionsCache {
+    max_entries: usize,
+    index: HashMap<LocatedSessionKey, usize>,
+    nodes: Vec<Option<LocatedNode>>,
+    free: Vec<usize>,
+    head: Option<usize>,
+    tail: Option<usize>,
+}
+
+impl LocatedSessionsCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            max_entries,
+            index: HashMap::new(),
+            nodes: Vec::new(),
+            free: Vec::new(),
+            head: None,
+            tail: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.index.len()
+    }
+
+    fn detach(&mut self, idx: usize) {
+        let (prev, next) = {
+            let Some(node) = self.nodes[idx].as_ref() else {
+                return;
+            };
+            (node.prev, node.next)
+        };
+        if let Some(p) = prev {
+            if let Some(pn) = self.nodes[p].as_mut() {
+                pn.next = next;
+            }
+        } else {
+            self.head = next;
+        }
+        if let Some(n) = next {
+            if let Some(nn) = self.nodes[n].as_mut() {
+                nn.prev = prev;
+            }
+        } else {
+            self.tail = prev;
+        }
+        if let Some(node) = self.nodes[idx].as_mut() {
+            node.prev = None;
+            node.next = None;
+        }
+    }
+
+    fn attach_tail(&mut self, idx: usize) {
+        let old_tail = self.tail;
+        if let Some(node) = self.nodes[idx].as_mut() {
+            node.prev = old_tail;
+            node.next = None;
+        }
+        if let Some(t) = old_tail {
+            if let Some(tn) = self.nodes[t].as_mut() {
+                tn.next = Some(idx);
+            }
+        } else {
+            self.head = Some(idx);
+        }
+        self.tail = Some(idx);
+    }
+
+    fn pop_head(&mut self) -> Option<LocatedNode> {
+        let h = self.head?;
+        self.detach(h);
+        let removed = self.nodes[h].take()?;
+        self.index.remove(&removed.key);
+        self.free.push(h);
+        Some(removed)
+    }
+
+    #[cfg(test)]
+    fn remove(&mut self, key: &LocatedSessionKey) -> Option<PathBuf> {
+        let idx = self.index.remove(key)?;
+        self.detach(idx);
+        let removed = self.nodes[idx].take()?;
+        self.free.push(idx);
+        Some(removed.path)
+    }
+
+    fn get(&mut self, key: &LocatedSessionKey) -> Option<PathBuf> {
+        let &idx = self.index.get(key)?;
+        let now = std::time::Instant::now();
+        let path = {
+            let node = self.nodes[idx].as_mut()?;
+            node.accessed = now;
+            node.path.clone()
+        };
+        if self.tail != Some(idx) {
+            self.detach(idx);
+            self.attach_tail(idx);
+        }
+        Some(path)
+    }
+
+    fn insert(&mut self, key: LocatedSessionKey, path: PathBuf) {
+        let now = std::time::Instant::now();
+        if let Some(&idx) = self.index.get(&key) {
+            if let Some(node) = self.nodes[idx].as_mut() {
+                node.path = path;
+                node.accessed = now;
+            }
+            if self.tail != Some(idx) {
+                self.detach(idx);
+                self.attach_tail(idx);
+            }
+            return;
+        }
+        if self.max_entries == 0 {
+            return;
+        }
+        if self.index.len() >= self.max_entries {
+            let _ = self.pop_head();
+        }
+        let idx = if let Some(slot) = self.free.pop() {
+            self.nodes[slot] = Some(LocatedNode {
+                key: key.clone(),
+                path,
+                accessed: now,
+                prev: None,
+                next: None,
+            });
+            slot
+        } else {
+            let slot = self.nodes.len();
+            self.nodes.push(Some(LocatedNode {
+                key: key.clone(),
+                path,
+                accessed: now,
+                prev: None,
+                next: None,
+            }));
+            slot
+        };
+        self.index.insert(key, idx);
+        self.attach_tail(idx);
+    }
+
+    fn evict_idle(&mut self, max_idle: std::time::Duration) -> bool {
+        let before = self.index.len();
+        let now = std::time::Instant::now();
+        while let Some(h) = self.head {
+            let expired = self.nodes[h]
+                .as_ref()
+                .is_some_and(|n| now.saturating_duration_since(n.accessed) >= max_idle);
+            if expired {
+                let _ = self.pop_head();
+            } else {
+                break;
+            }
+        }
+        if self.index.len() < before {
+            if self.nodes.capacity() > self.index.len().saturating_mul(4).max(16) {
+                let mut compacted = Vec::with_capacity(self.index.len());
+                self.index.clear();
+                self.free.clear();
+                let mut cur = self.head;
+                while let Some(idx) = cur {
+                    let mut node = self.nodes[idx].take().expect("active located node");
+                    cur = node.next;
+                    let new_idx = compacted.len();
+                    node.prev = new_idx.checked_sub(1);
+                    node.next = cur.map(|_| new_idx + 1);
+                    self.index.insert(node.key.clone(), new_idx);
+                    compacted.push(Some(node));
+                }
+                self.head = (!compacted.is_empty()).then_some(0);
+                self.tail = compacted.len().checked_sub(1);
+                self.nodes = compacted;
+                self.nodes.shrink_to_fit();
+                self.free.shrink_to_fit();
+                self.index.shrink_to_fit();
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessionsCache>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(LocatedSessionsCache::new(MAX_LOCATED_SESSIONS))
+    });
 pub(super) fn evict_idle_located_sessions(max_idle: std::time::Duration) {
     if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
-        let before = cache.len();
-        let now = std::time::Instant::now();
-        cache.retain(|_, (_, accessed)| now.saturating_duration_since(*accessed) < max_idle);
-        if cache.len() < before {
-            if cache.capacity() > cache.len().saturating_mul(4).max(16) {
-                cache.shrink_to_fit();
-            }
+        if cache.evict_idle(max_idle) {
             crate::note_cache_eviction();
         }
     }
@@ -245,20 +438,9 @@ fn key_for(root: &Path, path: &Path, _id: &str) -> String {
         ))
     );
     if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
-        let now = std::time::Instant::now();
-        let cache_key = (root.to_path_buf(), key.clone());
-        if cache.len() >= 20_000 && !cache.contains_key(&cache_key) {
-            if let Some(oldest) = cache
-                .iter()
-                .min_by_key(|(_, (_, accessed))| *accessed)
-                .map(|(k, _)| k.clone())
-            {
-                cache.remove(&oldest);
-            }
-        }
         // Keep the path scoped by its project root. The same relative
         // filename can exist in several machines or concurrent fixtures.
-        cache.insert(cache_key, (path.into(), now));
+        cache.insert((root.to_path_buf(), key.clone()), path.into());
     }
     key
 }
@@ -375,14 +557,11 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .projects
         .canonicalize()
         .unwrap_or_else(|_| paths.projects.clone());
-    if let Some(path) = LOCATED_SESSIONS.lock().ok().and_then(|mut cache| {
-        cache
-            .get_mut(&(root.clone(), key.to_owned()))
-            .map(|(p, accessed)| {
-                *accessed = std::time::Instant::now();
-                p.clone()
-            })
-    }) {
+    if let Some(path) = LOCATED_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|mut cache| cache.get(&(root.clone(), key.to_owned())))
+    {
         if main_session_path(&root, &path) {
             delete_file_exists(&path)?;
             return Ok(path);
@@ -421,14 +600,10 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
         .projects
         .canonicalize()
         .context("未发现 Claude 会话")?;
-    let located = LOCATED_SESSIONS.lock().ok().and_then(|mut cache| {
-        cache
-            .get_mut(&(root.clone(), key.to_owned()))
-            .map(|(p, accessed)| {
-                *accessed = std::time::Instant::now();
-                p.clone()
-            })
-    });
+    let located = LOCATED_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|mut cache| cache.get(&(root.clone(), key.to_owned())));
     if let Some(path) = located {
         // Revalidate every native identity, including the ancestor chain. The
         // lookup stores only paths discovered by our own bounded directory scan.

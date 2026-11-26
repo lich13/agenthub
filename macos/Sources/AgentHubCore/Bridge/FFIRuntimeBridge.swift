@@ -121,18 +121,46 @@ private final class SystemWorkspaceApplicationOpener: WorkspaceApplicationOpenin
 }
 
 enum AppRestartLauncher {
+    static let manualRestartNoticeMessage = "更新已安装，请手动重新打开应用"
+
+    @MainActor
+    static func presentDefaultManualRestartAlert(_ message: String) {
+        guard NSApp != nil else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = message
+        alert.addButton(withTitle: "好")
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible) {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     // Built in a `nonisolated` scope with an explicit `@Sendable` completion handler so AppKit's
     // concurrent completion queue never triggers a Swift 6 SE-0423 `@MainActor` trap.
     static func launchReplacementAndTerminate(
         bundleURL: URL,
         workspace: any WorkspaceApplicationOpening = SystemWorkspaceApplicationOpener(),
-        terminate: @escaping @MainActor @Sendable () -> Void = { NSApp.terminate(nil) }
+        onLaunchFailure: @escaping @MainActor @Sendable (String) -> Void = { message in
+            presentDefaultManualRestartAlert(message)
+        },
+        terminate: @escaping @MainActor @Sendable () -> Void = {
+            guard NSApp != nil else { return }
+            NSApp.terminate(nil)
+        }
     ) {
         guard bundleURL.pathExtension == "app" else { return }
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
+        let notice = Self.manualRestartNoticeMessage
         let onCompleted: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { _, error in
-            guard error == nil else { return }
+            if error != nil {
+                Task { @MainActor in
+                    onLaunchFailure(notice)
+                }
+                return
+            }
             Task { @MainActor in
                 terminate()
             }
