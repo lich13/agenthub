@@ -743,7 +743,9 @@ public final class AgentHubTaskMenuPresenter {
         let cardWidth = min(280, max(200, maxTextW + 58))
         let itemWidth = cardWidth - 12
         let rowHeight: CGFloat = 34
-        let cardHeight = CGFloat(actions.count) * rowHeight + CGFloat(max(0, actions.count - 1)) * 2 + 12
+        let rowsHeight: CGFloat = CGFloat(actions.count) * rowHeight
+        let rowGapsHeight: CGFloat = CGFloat(max(0, actions.count - 1)) * 2
+        let cardHeight: CGFloat = rowsHeight + rowGapsHeight + 12
 
         let card = NSView(frame: NSRect(x: 0, y: 0, width: cardWidth, height: cardHeight))
         card.wantsLayer = true
@@ -974,6 +976,60 @@ public struct RenameableSessionRowView: View {
     public var makeBatchMenuActions: (() -> [SessionMenuAction])? = nil
     public let onRowClick: (SessionClick) -> Void
     public let onRename: ((String) async throws -> Void)?
+
+    public init(
+        sessionKey: String,
+        leadingBrandIcon: AgentBrandId? = nil,
+        title: String,
+        idLine: String? = nil,
+        subtitle: String,
+        inlinePreview: String = "",
+        isCodexCompactRow: Bool = false,
+        statusText: String,
+        running: Bool,
+        storageSize: SessionStorageSize?,
+        selected: Bool,
+        selecting: Bool,
+        multiSelected: Bool,
+        disabled: Bool,
+        canRename: Bool,
+        renameBlockReason: String?,
+        externalRenameRequestId: Int = 0,
+        rowMenuActions: [SessionMenuAction] = [],
+        batchMenuActions: [SessionMenuAction] = [],
+        hasRowMenu: Bool = true,
+        batchSelectedCount: Int = 0,
+        makeRowMenuActions: (() -> [SessionMenuAction])? = nil,
+        makeBatchMenuActions: (() -> [SessionMenuAction])? = nil,
+        onRowClick: @escaping (SessionClick) -> Void,
+        onRename: ((String) async throws -> Void)?
+    ) {
+        self.sessionKey = sessionKey
+        self.leadingBrandIcon = leadingBrandIcon
+        self.title = title
+        self.idLine = idLine
+        self.subtitle = subtitle
+        self.inlinePreview = inlinePreview
+        self.isCodexCompactRow = isCodexCompactRow
+        self.statusText = statusText
+        self.running = running
+        self.storageSize = storageSize
+        self.selected = selected
+        self.selecting = selecting
+        self.multiSelected = multiSelected
+        self.disabled = disabled
+        self.canRename = canRename
+        self.renameBlockReason = renameBlockReason
+        self.externalRenameRequestId = externalRenameRequestId
+        self.rowMenuActions = rowMenuActions
+        self.batchMenuActions = batchMenuActions
+        self.hasRowMenu = hasRowMenu
+        self.batchSelectedCount = batchSelectedCount
+        self.makeRowMenuActions = makeRowMenuActions
+        self.makeBatchMenuActions = makeBatchMenuActions
+        self.onRowClick = onRowClick
+        self.onRename = onRename
+    }
 
     @State private var editing: Bool = false
     @State private var draft: String = ""
@@ -1622,7 +1678,9 @@ public struct WorkspaceActiveFilterPillBanner: View {
             HStack(spacing: 6) {
                 LucideIcon(.folderGit2, size: 12)
                     .foregroundStyle(palette.accent.color)
-                Text(ProjectWorkspaceEngine.compactDisplayName(for: filterKey) + (includeSub ? "（含子目录）" : ""))
+                let baseName: String = ProjectWorkspaceEngine.compactDisplayName(for: filterKey)
+                let filterLabel: String = includeSub ? "\(baseName)（含子目录）" : baseName
+                Text(filterLabel)
                     .font(DesignFonts.body(11, weight: .medium))
                     .foregroundStyle(palette.textSecondary.color)
                     .lineLimit(1)
@@ -1835,22 +1893,23 @@ public struct SessionBatchPreviewDialogContentView: View {
         let allowed = preview.allowedCount
         let blocked = preview.blockedCount
         let formattedTotalBytes = SessionStorageFormatter.formatThousands(preview.totalBytes)
+        let descendantPart: String = preview.descendantCount > 0
+            ? "，含 \(preview.descendantCount) 个后代线程"
+            : ""
+        let actionNote: String = preview.operation == .delete
+            ? "仅删除下列会话数据，工作目录和配置保留。"
+            : "确认后更新所选线程的归档状态。"
+        let summaryText: String =
+            "已定位 \(allowed) 项，定位失败 \(blocked) 项\(descendantPart)，共 \(preview.fileCount) 个文件 · \(formattedTotalBytes) 字节。\(actionNote)"
 
         VStack(alignment: .leading, spacing: 12) {
             Text("\(preview.operation.label)所选线程")
                 .font(DesignFonts.body(16, weight: .semibold))
                 .foregroundStyle(palette.textPrimary.color)
 
-            Text(
-                "已定位 \(allowed) 项，定位失败 \(blocked) 项"
-                    + (preview.descendantCount > 0 ? "，含 \(preview.descendantCount) 个后代线程" : "")
-                    + "，共 \(preview.fileCount) 个文件 · \(formattedTotalBytes) 字节。"
-                    + (preview.operation == .delete
-                        ? "仅删除下列会话数据，工作目录和配置保留。"
-                        : "确认后更新所选线程的归档状态。")
-            )
-            .font(DesignFonts.body(13))
-            .foregroundStyle(palette.textSecondary.color)
+            Text(summaryText)
+                .font(DesignFonts.body(13))
+                .foregroundStyle(palette.textSecondary.color)
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 10) {

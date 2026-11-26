@@ -959,12 +959,14 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             XCTAssertGreaterThan(hMulti.fittingSize.height, 40)
 
             // Verify storage badge resolves plain text color (not capsule bg) across 4 tones
-            for (_, bytes, expectedColor) in [
-                ("tone-muted", nil as Int64?, palette.textMuted),
-                ("tone-success", Int64(10 * 1024 * 1024), palette.okFg),
-                ("tone-warning", Int64(150 * 1024 * 1024), palette.warnFg),
-                ("tone-danger", Int64(350 * 1024 * 1024), palette.errFg),
-            ] {
+            let mib: Int64 = 1024 * 1024
+            let toneCases: [(Int64?, RGBAColor)] = [
+                (nil, palette.textMuted),
+                (10 * mib, palette.okFg),
+                (150 * mib, palette.warnFg),
+                (350 * mib, palette.errFg),
+            ]
+            for (bytes, expectedColor) in toneCases {
                 let sz = bytes.map { SessionStorageSize(bytes: $0, scope: "file", status: "complete") }
                 XCTAssertEqual(SessionStorageBadgeView.resolvedColor(for: sz, palette: palette), expectedColor)
             }

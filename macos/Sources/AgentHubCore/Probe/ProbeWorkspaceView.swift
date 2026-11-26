@@ -660,7 +660,8 @@ public struct ProbeWorkspaceView: View {
                     }
                 }
             } else {
-                Text(settingsError ?? (loadingStatus ? "正在读取设置" : "设置不可用"))
+                let fallbackMessage: String = settingsError ?? (loadingStatus ? "正在读取设置" : "设置不可用")
+                Text(fallbackMessage)
                     .font(DesignFonts.body(12))
                     .foregroundStyle((settingsError == nil ? palette.textMuted : palette.errFg).color)
             }
@@ -856,11 +857,16 @@ public struct ProbeWorkspaceView: View {
         let replyNeeded = sessions.filter { $0.bucket == "reply_needed" }
         let recoverable = sessions.filter { $0.bucket == "recoverable" }
         let running = sessions.filter { $0.bucket == "running" }
-        let combined: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] =
-            replyNeeded.map { ($0, "待回复", .warning) } +
-            recoverable.map { ($0, "异常", .danger) } +
-            running.map { ($0, "运行中", .info) }
+        let combined: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] = {
+            var list: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] = []
+            list.reserveCapacity(replyNeeded.count + recoverable.count + running.count)
+            for item in replyNeeded { list.append((session: item, badge: "待回复", tone: .warning)) }
+            for item in recoverable { list.append((session: item, badge: "异常", tone: .danger)) }
+            for item in running { list.append((session: item, badge: "运行中", tone: .info)) }
+            return list
+        }()
         let top12 = Array(combined.prefix(12))
+        let resolvedHostLabel: String = status?.hostLabel ?? (draft?.hostLabel ?? "本机")
 
         CollapsiblePanelCard(
             title: "全平台实时态势",
@@ -873,7 +879,7 @@ public struct ProbeWorkspaceView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(status?.hostLabel ?? draft?.hostLabel ?? "本机")
+                Text(resolvedHostLabel)
                     .font(DesignFonts.body(12))
                     .foregroundStyle(palette.textMuted.color)
 
@@ -948,10 +954,11 @@ public struct ProbeWorkspaceView: View {
                         let dedupe = ProbeFormatting.dedupeBadge(ev)
                         let kindLabel = ProbeFormatting.eventKindLabel(ev.kind)
                         let headline = (ev.title?.isEmpty == false ? ev.title! : kindLabel)
+                        let displayHeadline: String = (headline == kindLabel) ? headline : "\(kindLabel) · \(headline)"
 
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .top, spacing: 8) {
-                                Text(headline == kindLabel ? headline : "\(kindLabel) · \(headline)")
+                                Text(displayHeadline)
                                     .font(DesignFonts.body(13, weight: .semibold))
                                     .foregroundStyle(palette.textPrimary.color)
                                 Spacer(minLength: 8)

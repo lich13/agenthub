@@ -281,7 +281,12 @@ public struct SubagentPanelView: View {
                 LucideIcon(.bot, size: 16)
                     .foregroundStyle(palette.accent.color)
 
-                Text(currentAgent?.name ?? (provider == .claudeCode ? "本会话子智能体 (\(activeListCollection?.agents.count ?? 0))" : "直属子智能体 (\(activeListCollection?.agents.count ?? 0))"))
+                let agentCount: Int = activeListCollection?.agents.count ?? 0
+                let listTitle: String = provider == .claudeCode
+                    ? "本会话子智能体 (\(agentCount))"
+                    : "直属子智能体 (\(agentCount))"
+                let headerTitle: String = currentAgent?.name ?? listTitle
+                Text(headerTitle)
                     .font(DesignFonts.body(13, weight: .semibold))
                     .foregroundStyle(palette.textPrimary.color)
                     .lineLimit(1)
@@ -793,7 +798,8 @@ private final class SubagentPanelController: ObservableObject {
         events: [ProviderHistoryEvent],
         latestAgent: SubagentActivity?
     ) -> [ConversationRowItem] {
-        let subRunning = (latestAgent?.status ?? currentAgent?.status) == "running"
+        let resolvedStatus: String? = latestAgent?.status ?? currentAgent?.status
+        let subRunning: Bool = (resolvedStatus == "running")
         return ConversationRowBuilder.buildProviderRows(
             events: events,
             providerLabel: "Antigravity",
@@ -1216,9 +1222,10 @@ public enum SubagentFocusTrapEngine {
         else {
             return backward ? candidates.last : candidates.first
         }
-        let nextIdx = backward
-            ? (idx - 1 + candidates.count) % candidates.count
-            : (idx + 1) % candidates.count
+        let count: Int = candidates.count
+        let backwardIdx: Int = (idx - 1 + count) % count
+        let forwardIdx: Int = (idx + 1) % count
+        let nextIdx: Int = backward ? backwardIdx : forwardIdx
         return candidates[nextIdx]
     }
 }

@@ -202,14 +202,15 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
     }
 
     private func isHeightCacheValid(forWidthKey widthKey: Int, disclosureRevision: UInt64) -> Bool {
-        widthKey > 0
+        let dimensionsMatch: Bool = widthKey > 0
             && widthKey == heightCacheWidthKey
             && disclosureRevision == heightCacheDisclosureRev
-            && scheme == heightCacheScheme
+            && cachedRowHeights.count == rows.count
+        let contextMatch: Bool = scheme == heightCacheScheme
             && workspace == heightCacheWorkspace
             && sessionScopeKey == heightCacheScopeKey
             && Self.effectiveScrollerStyle == heightCacheScrollerStyle
-            && cachedRowHeights.count == rows.count
+        return dimensionsMatch && contextMatch
     }
 
     private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) -> IndexSet {
@@ -1067,7 +1068,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         namesOnly: Bool,
         maxWidth: CGFloat
     ) -> NSSize {
-        let nameW = ceil(NSAttributedString(
+        let nameW: CGFloat = ceil(NSAttributedString(
             string: att.name,
             attributes: [.font: DesignFonts.nsBodyFont(size: 14)]
         ).size().width)
@@ -1080,9 +1081,16 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             0
         }
         let hasCopy = !namesOnly && (att.path?.isEmpty == false)
-        let naturalW = 12 + 18 + 8 + max(nameW, reasonW) + (hasCopy ? (8 + 28) : 0) + 10 + 6
-        let clampedMax = max(120, min(maxWidth, 340))
-        let w = min(maxWidth, max(min(120, maxWidth), min(clampedMax, naturalW)))
+        let leadingChromeW: CGFloat = 12 + 18 + 8
+        let trailingChromeW: CGFloat = 10 + 6
+        let copyButtonWithSpacingW: CGFloat = 8 + 28
+        let copyActionW: CGFloat = hasCopy ? copyButtonWithSpacingW : 0
+        let textW: CGFloat = max(nameW, reasonW)
+        let naturalW: CGFloat = leadingChromeW + textW + copyActionW + trailingChromeW
+        let clampedMax: CGFloat = max(120, min(maxWidth, 340))
+        let minAllowedW: CGFloat = min(120, maxWidth)
+        let clampedNaturalW: CGFloat = min(clampedMax, naturalW)
+        let w: CGFloat = min(maxWidth, max(minAllowedW, clampedNaturalW))
         let h: CGFloat = (att.reason?.isEmpty == false) ? 52 : 40
         return NSSize(width: w, height: h)
     }
@@ -1174,14 +1182,17 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 switch seg {
                 case let .text(_, t):
                     let attr = NSAttributedString(string: t, attributes: attrs)
-                    let textW = min(maxCardW - bubbleHPad * 2, max(36, ceil(attr.size().width) + 4))
-                    let textH = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: textW))
+                    let singleLineW: CGFloat = max(36, ceil(attr.size().width) + 4)
+                    let maxTextW: CGFloat = maxCardW - (bubbleHPad * 2)
+                    let textW: CGFloat = min(maxTextW, singleLineW)
+                    let textH: CGFloat = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: textW))
                     h += textH + 24
                 case let .reply(segId, q, a):
                     let trimmedQ = q.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let availW = max(80, maxCardW - bubbleHPad * 2 - 38)
+                    let availW: CGFloat = max(80, maxCardW - (bubbleHPad * 2) - 38)
                     let aAttr = NSAttributedString(string: a, attributes: attrs)
-                    var computedAnsW = min(availW, max(64, ceil(aAttr.size().width) + 4))
+                    let singleAnsW: CGFloat = max(64, ceil(aAttr.size().width) + 4)
+                    var computedAnsW: CGFloat = min(availW, singleAnsW)
                     var qExtra: CGFloat = 0
                     if !trimmedQ.isEmpty {
                         let qKey = "\(msg?.id ?? row.timelineId):\(segId):question"
@@ -1191,23 +1202,24 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                             aliases: ["\(row.timelineId):\(segId):question"],
                             initiallyOpen: false
                         )
-                        let qSingleWidth = ceil(NSAttributedString(
+                        let qSingleWidth: CGFloat = ceil(NSAttributedString(
                             string: trimmedQ,
                             attributes: [.font: DesignFonts.nsBodyFont(size: 13)]
                         ).size().width) + 26
-                        let targetInnerW = min(availW, max(computedAnsW, qSingleWidth))
+                        let targetInnerW: CGFloat = min(availW, max(computedAnsW, qSingleWidth))
                         computedAnsW = max(computedAnsW, targetInnerW)
                         if qOpen {
                             let qAttr = NSAttributedString(
                                 string: trimmedQ,
                                 attributes: [.font: DesignFonts.nsBodyFont(size: 13)]
                             )
-                            qExtra = 28 + max(20, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: targetInnerW)) + 6
+                            let measuredQH: CGFloat = max(20, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: targetInnerW))
+                            qExtra = 28 + measuredQH + 6
                         } else {
                             qExtra = 28
                         }
                     }
-                    let aH = max(24, ReaderSelectableTextView.measureHeight(attributed: aAttr, width: computedAnsW))
+                    let aH: CGFloat = max(24, ReaderSelectableTextView.measureHeight(attributed: aAttr, width: computedAnsW))
                     h += max(30, qExtra + aH + 24)
                 }
             }
@@ -1800,7 +1812,9 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         }
         if let answers {
             if !answers.isEmpty {
-                total += CGFloat(answers.count) * 44 + CGFloat(max(0, answers.count - 1)) * 8 + 6
+                let rowsH: CGFloat = CGFloat(answers.count) * 44
+                let gapsH: CGFloat = CGFloat(max(0, answers.count - 1)) * 8
+                total += rowsH + gapsH + 6
             } else {
                 total += 26
             }

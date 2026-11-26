@@ -361,8 +361,10 @@ public final class ConversationRowCellView: NSTableCellView {
             case let .text(_, t):
                 let bubble = makeUserBubbleContainer(palette: palette)
                 let attr = NSAttributedString(string: t, attributes: attrs)
-                let textW = min(maxBubbleW - hPad * 2, max(36, ceil(attr.size().width) + 4))
-                let textH = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: textW))
+                let singleLineW: CGFloat = max(36, ceil(attr.size().width) + 4)
+                let maxTextW: CGFloat = maxBubbleW - (hPad * 2)
+                let textW: CGFloat = min(maxTextW, singleLineW)
+                let textH: CGFloat = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: textW))
                 let tv = ReaderSelectableTextView(frame: NSRect(x: 0, y: 0, width: textW, height: textH))
                 tv.applyAttributedText(attr, width: textW)
                 tv.translatesAutoresizingMaskIntoConstraints = false

@@ -170,7 +170,8 @@ final class ProviderWorkspaceStore: ObservableObject {
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsGrp)
         let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
         let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
-        let availGrps = ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        let allScopeItems: [UnifiedSessionSummaryItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
+        let availGrps = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
         let orderedActive: [String] = if supportsGrp && groupingMode == .byWorkspace {
             ProjectWorkspaceEngine.visualOrderedKeys(groups: activeGrps, collapsedKeys: collapsedWorkspaceKeys)
         } else {
@@ -260,7 +261,7 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     var allVisibleItems: [UnifiedSessionSummaryItem] {
         let cached = refreshedSidebarCache()
-        return cached.filteredActiveItems + (archivedOpen ? cached.filteredArchivedItems : [])
+        return archivedOpen ? (cached.filteredActiveItems + cached.filteredArchivedItems) : cached.filteredActiveItems
     }
 
     var isRemoteProviderUnsupported: Bool {

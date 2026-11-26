@@ -111,7 +111,11 @@ public struct TimelineRailView: View {
                                             keyCode: keyCode
                                         ) {
                                             if next < first || next >= last {
-                                                windowStart = max(0, min(max(0, entries.count - windowCapacity), next - windowCapacity / 2))
+                                                windowStart = Self.clampedWindowStart(
+                                                    targetIndex: next,
+                                                    count: entries.count,
+                                                    capacity: windowCapacity
+                                                )
                                             }
                                             focusedIndex = next
                                             if entries.indices.contains(next) {
@@ -143,7 +147,11 @@ public struct TimelineRailView: View {
                               let activeIdx = entries.firstIndex(where: { $0.id == nextActiveId })
                         else { return }
                         if activeIdx < first || activeIdx >= last {
-                            windowStart = max(0, min(max(0, entries.count - windowCapacity), activeIdx - windowCapacity / 2))
+                            windowStart = Self.clampedWindowStart(
+                                targetIndex: activeIdx,
+                                count: entries.count,
+                                capacity: windowCapacity
+                            )
                         }
                         scrollProxy.scrollTo(nextActiveId, anchor: .center)
                     }
@@ -165,16 +173,19 @@ public struct TimelineRailView: View {
         // Render hover/focus preview OUTSIDE the 34pt GeometryReader so width sizes naturally up to min(288pt, 60vw)!
         .overlay(alignment: .topLeading) {
             if let hovered = previewEntry, let idx = previewIdx {
-                let previewMax = Self.previewMaxWidth(for: availableWidth)
-                let visibleOffset = max(0, idx - first)
-                let centerY = Self.previewTopY(
+                let previewMax: CGFloat = Self.previewMaxWidth(for: availableWidth)
+                let visibleOffset: Int = max(0, idx - first)
+                let centerY: CGFloat = Self.previewTopY(
                     forTickIndex: visibleOffset,
                     topPadding: topPadding,
                     tickHeight: 12,
                     railHeight: railHeightState
                 )
                 let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
-                let cardTopY = max(6, min(max(6, railHeightState - estimatedHalfHeight * 2 - 6), centerY - estimatedHalfHeight))
+                let cardHeight: CGFloat = estimatedHalfHeight * 2
+                let maxCardTopY: CGFloat = max(6, railHeightState - cardHeight - 6)
+                let desiredTopY: CGFloat = centerY - estimatedHalfHeight
+                let cardTopY: CGFloat = max(6, min(maxCardTopY, desiredTopY))
 
                 Color.clear
                     .frame(width: previewMax, height: max(48, railHeightState), alignment: .topLeading)
@@ -192,12 +203,20 @@ public struct TimelineRailView: View {
         }
     }
 
+    private static func clampedWindowStart(targetIndex: Int, count: Int, capacity: Int) -> Int {
+        let maxStart: Int = max(0, count - capacity)
+        let centered: Int = targetIndex - (capacity / 2)
+        return max(0, min(maxStart, centered))
+    }
+
     public static func previewMaxWidth(for availableWidth: CGFloat) -> CGFloat {
         min(LayoutMetrics.timelinePreviewMaxWidth, max(160, availableWidth * 0.60))
     }
 
     public static func virtualWindowCapacity(usableHeight: CGFloat) -> Int {
-        max(100, Int(ceil(max(24, usableHeight) / 12.0)) + 20)
+        let clampedHeight: CGFloat = max(24, usableHeight)
+        let visibleTicks: Int = Int(ceil(clampedHeight / 12.0))
+        return max(100, visibleTicks + 20)
     }
 
     public static func previewTopY(
@@ -206,8 +225,10 @@ public struct TimelineRailView: View {
         tickHeight: CGFloat = 12,
         railHeight: CGFloat
     ) -> CGFloat {
-        let rawCenter = topPadding + CGFloat(max(0, index)) * tickHeight + tickHeight * 0.5
-        return max(12, min(max(12, railHeight - 12), rawCenter))
+        let tickOffset: CGFloat = CGFloat(max(0, index)) * tickHeight
+        let rawCenter: CGFloat = topPadding + tickOffset + (tickHeight * 0.5)
+        let maxCenterY: CGFloat = max(12, railHeight - 12)
+        return max(12, min(maxCenterY, rawCenter))
     }
 
     /// Maps macOS keyCode (`126` Up, `125` Down, `115` Home, `119` End) to next tick index.

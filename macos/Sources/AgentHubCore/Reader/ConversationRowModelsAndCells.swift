@@ -308,7 +308,11 @@ public enum ConversationRowBuilder {
         into rows: inout [ConversationRowItem]
     ) {
         if ev.kind == "user_message" {
-            let aliases = [key] + sourceIds + (ev.userMessage.map { [$0.id] } ?? [])
+            var aliases: [String] = [key]
+            aliases.append(contentsOf: sourceIds)
+            if let msgId = ev.userMessage?.id {
+                aliases.append(msgId)
+            }
             rows.append(ConversationRowItem(
                 id: key,
                 timelineId: ev.id.isEmpty ? key : ev.id,

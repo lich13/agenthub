@@ -1191,16 +1191,17 @@ public enum FileLinksAndPlanExport {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
-        let rawTitle = (heading ?? firstLine ?? (fallback.isEmpty ? nil : fallback) ?? "计划")
-            .replacing(MarkdownPatterns.headingPrefix, with: "")
+        let fallbackTitle: String? = fallback.isEmpty ? nil : fallback
+        let selectedTitle: String = heading ?? (firstLine ?? (fallbackTitle ?? "计划"))
+        let rawTitle: String = selectedTitle.replacing(MarkdownPatterns.headingPrefix, with: "")
 
-        var title = rawTitle
-            .replacing(MarkdownPatterns.markdownLink, with: "$1")
-            .replacing(MarkdownPatterns.htmlTag, with: "")
-            .replacing(MarkdownPatterns.emphasis, with: "")
-            .replacing(MarkdownPatterns.illegalFileCharacters, with: " ")
-            .replacing(MarkdownPatterns.whitespace, with: " ")
-            .replacing(MarkdownPatterns.fileNameEdges, with: "")
+        var title: String = rawTitle
+        title = title.replacing(MarkdownPatterns.markdownLink, with: "$1")
+        title = title.replacing(MarkdownPatterns.htmlTag, with: "")
+        title = title.replacing(MarkdownPatterns.emphasis, with: "")
+        title = title.replacing(MarkdownPatterns.illegalFileCharacters, with: " ")
+        title = title.replacing(MarkdownPatterns.whitespace, with: " ")
+        title = title.replacing(MarkdownPatterns.fileNameEdges, with: "")
         title = title.replacing(MarkdownPatterns.markdownExtension, with: "")
 
         var stem = ""

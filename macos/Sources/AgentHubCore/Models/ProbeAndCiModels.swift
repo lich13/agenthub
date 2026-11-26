@@ -275,8 +275,9 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         let obs = probe.observability
         let notif = view.notifications
         let logBytes = obs.logMaxBytes
-        let logMiB = Double(logBytes) / (1024.0 * 1024.0)
-        let formattedMiB = logMiB.truncatingRemainder(dividingBy: 1) == 0
+        let logMiB: Double = Double(logBytes) / (1024.0 * 1024.0)
+        let isWholeMiB: Bool = logMiB.truncatingRemainder(dividingBy: 1) == 0
+        let formattedMiB: String = isWholeMiB
             ? String(Int(logMiB))
             : String(format: "%.6g", logMiB)
 
@@ -545,54 +546,63 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
     public func subsetEquals(_ other: ProbeSettingsDraft, scope: ProbeSettingsSaveScope) -> Bool {
         switch scope {
         case .ci:
-            notifyGithubCi == other.notifyGithubCi &&
-            githubCiRepositories == other.githubCiRepositories &&
-            githubCiFilterBots == other.githubCiFilterBots
+            return notifyGithubCi == other.notifyGithubCi &&
+                githubCiRepositories == other.githubCiRepositories &&
+                githubCiFilterBots == other.githubCiFilterBots
         case .bark:
-            barkEnabled == other.barkEnabled &&
-            barkServerUrl == other.barkServerUrl &&
-            barkDeviceKey == other.barkDeviceKey &&
-            barkDeviceKeyConfigured == other.barkDeviceKeyConfigured &&
-            barkSound == other.barkSound &&
-            barkGroup == other.barkGroup &&
-            barkUrl == other.barkUrl
+            return barkEnabled == other.barkEnabled &&
+                barkServerUrl == other.barkServerUrl &&
+                barkDeviceKey == other.barkDeviceKey &&
+                barkDeviceKeyConfigured == other.barkDeviceKeyConfigured &&
+                barkSound == other.barkSound &&
+                barkGroup == other.barkGroup &&
+                barkUrl == other.barkUrl
         case .settings:
-            codexHome == other.codexHome &&
-            codexWorkspace == other.codexWorkspace &&
-            hostLabel == other.hostLabel &&
-            probeEnabled == other.probeEnabled &&
-            errorMonitorEnabled == other.errorMonitorEnabled &&
-            manageStopHook == other.manageStopHook &&
-            clearAccountScope == other.clearAccountScope &&
-            pollSecondsText == other.pollSecondsText &&
-            recentLimitText == other.recentLimitText &&
-            eventRetentionDaysText == other.eventRetentionDaysText &&
-            hookEventMaxLinesText == other.hookEventMaxLinesText &&
-            hookCooldownMaxLinesText == other.hookCooldownMaxLinesText &&
-            logMaxMiBText == other.logMaxMiBText &&
-            notifyCompletion == other.notifyCompletion &&
-            notifyReplyNeeded == other.notifyReplyNeeded &&
-            notifyRecoverable == other.notifyRecoverable &&
-            notifyCodex == other.notifyCodex &&
-            notifyGrok == other.notifyGrok &&
-            notifyGrokCompletion == other.notifyGrokCompletion &&
-            notifyGrokFailure == other.notifyGrokFailure &&
-            notifyGrokReplyNeeded == other.notifyGrokReplyNeeded &&
-            notifyGrokbot == other.notifyGrokbot &&
-            notifyClaude == other.notifyClaude &&
-            notifyClaudeCompletion == other.notifyClaudeCompletion &&
-            notifyClaudeFailure == other.notifyClaudeFailure &&
-            notifyClaudeReplyNeeded == other.notifyClaudeReplyNeeded &&
-            notifyAntigravity == other.notifyAntigravity &&
-            notifyAntigravityCompletion == other.notifyAntigravityCompletion &&
-            notifyAntigravityFailure == other.notifyAntigravityFailure &&
-            notifyAntigravityReplyNeeded == other.notifyAntigravityReplyNeeded &&
-            notifyAntigravityAuthorization == other.notifyAntigravityAuthorization &&
-            notifyDsh == other.notifyDsh &&
-            notifyDshCompletion == other.notifyDshCompletion &&
-            notifyDshFailure == other.notifyDshFailure &&
-            notifyDshReplyNeeded == other.notifyDshReplyNeeded &&
-            notifyDshAuthorization == other.notifyDshAuthorization
+            let runtimeEqual: Bool =
+                codexHome == other.codexHome &&
+                codexWorkspace == other.codexWorkspace &&
+                hostLabel == other.hostLabel &&
+                probeEnabled == other.probeEnabled &&
+                errorMonitorEnabled == other.errorMonitorEnabled &&
+                manageStopHook == other.manageStopHook &&
+                clearAccountScope == other.clearAccountScope
+            let limitsEqual: Bool =
+                pollSecondsText == other.pollSecondsText &&
+                recentLimitText == other.recentLimitText &&
+                eventRetentionDaysText == other.eventRetentionDaysText &&
+                hookEventMaxLinesText == other.hookEventMaxLinesText &&
+                hookCooldownMaxLinesText == other.hookCooldownMaxLinesText &&
+                logMaxMiBText == other.logMaxMiBText
+            let codexEqual: Bool =
+                notifyCompletion == other.notifyCompletion &&
+                notifyReplyNeeded == other.notifyReplyNeeded &&
+                notifyRecoverable == other.notifyRecoverable &&
+                notifyCodex == other.notifyCodex
+            let grokEqual: Bool =
+                notifyGrok == other.notifyGrok &&
+                notifyGrokCompletion == other.notifyGrokCompletion &&
+                notifyGrokFailure == other.notifyGrokFailure &&
+                notifyGrokReplyNeeded == other.notifyGrokReplyNeeded &&
+                notifyGrokbot == other.notifyGrokbot
+            let claudeEqual: Bool =
+                notifyClaude == other.notifyClaude &&
+                notifyClaudeCompletion == other.notifyClaudeCompletion &&
+                notifyClaudeFailure == other.notifyClaudeFailure &&
+                notifyClaudeReplyNeeded == other.notifyClaudeReplyNeeded
+            let antigravityEqual: Bool =
+                notifyAntigravity == other.notifyAntigravity &&
+                notifyAntigravityCompletion == other.notifyAntigravityCompletion &&
+                notifyAntigravityFailure == other.notifyAntigravityFailure &&
+                notifyAntigravityReplyNeeded == other.notifyAntigravityReplyNeeded &&
+                notifyAntigravityAuthorization == other.notifyAntigravityAuthorization
+            let dshEqual: Bool =
+                notifyDsh == other.notifyDsh &&
+                notifyDshCompletion == other.notifyDshCompletion &&
+                notifyDshFailure == other.notifyDshFailure &&
+                notifyDshReplyNeeded == other.notifyDshReplyNeeded &&
+                notifyDshAuthorization == other.notifyDshAuthorization
+            let providersEqual: Bool = codexEqual && grokEqual && claudeEqual && antigravityEqual && dshEqual
+            return runtimeEqual && limitsEqual && providersEqual
         }
     }
 

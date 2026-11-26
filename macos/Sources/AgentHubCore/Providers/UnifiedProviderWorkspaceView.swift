@@ -852,7 +852,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                             .foregroundStyle(palette.errFg.color)
                                     }
                                     if let diag = model.claudeOwnershipData {
-                                        let summaryText = switch diag.ownership {
+                                        let summaryText: String = switch diag.ownership {
                                         case "inactive": "未发现关联的活跃会话进程"
                                         case "open": "存在活跃会话或文件占用"
                                         default: "归属尚未确认"
@@ -861,17 +861,19 @@ public struct UnifiedProviderWorkspaceView: View {
                                             .font(DesignFonts.body(12, weight: .medium))
                                             .foregroundStyle(palette.textPrimary.color)
                                         ForEach(Array(diag.processes.enumerated()), id: \.offset) { _, proc in
-                                            let roleLabel = switch proc.role {
+                                            let roleLabel: String = switch proc.role {
                                             case "session": "会话"
                                             case "daemon": "后台服务"
                                             case "pty_host": "终端宿主"
                                             case "unknown": "未核验进程"
                                             default: proc.role
                                             }
-                                            let mismatch = proc.mismatchedFields.isEmpty
+                                            let mismatch: String = proc.mismatchedFields.isEmpty
                                                 ? ""
                                                 : " · 不匹配字段：\(proc.mismatchedFields.joined(separator: "、"))"
-                                            Text("PID \(proc.pid) · \(roleLabel) · \(proc.registrationVerified ? "登记已核验" : "登记未核验")\(mismatch)")
+                                            let regLabel: String = proc.registrationVerified ? "登记已核验" : "登记未核验"
+                                            let procSummary: String = "PID \(proc.pid) · \(roleLabel) · \(regLabel)\(mismatch)"
+                                            Text(procSummary)
                                                 .font(DesignFonts.mono(11))
                                                 .foregroundStyle(palette.textSecondary.color)
                                         }

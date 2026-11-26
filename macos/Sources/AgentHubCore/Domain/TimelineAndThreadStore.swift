@@ -97,7 +97,12 @@ public enum TimelineViewModel {
     ) -> Bool {
         guard let positionKey, !positionKey.isEmpty else { return false }
         if id == positionKey || aliases.contains(positionKey) { return true }
-        for candidate in ([id].compactMap { $0 } + aliases) {
+        var candidates: [String] = []
+        if let id {
+            candidates.append(id)
+        }
+        candidates.append(contentsOf: aliases)
+        for candidate in candidates {
             if candidate.hasPrefix("group:")
                 || candidate.hasPrefix("process:")
                 || candidate.hasPrefix("event:")

@@ -124,7 +124,8 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
         let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
         let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
-        let availGrps = ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        let allScopeItems: [CrossProviderSessionItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
+        let availGrps = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
         let orderedActive = ProjectWorkspaceEngine.visualOrderedKeys(
             groups: activeGrps,
             collapsedKeys: collapsedWorkspaceKeys

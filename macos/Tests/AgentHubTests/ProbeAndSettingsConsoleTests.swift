@@ -30,17 +30,20 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
             GithubCiRepository(id: 1, fullName: "org/active", archived: false),
             GithubCiRepository(id: 2, fullName: "org/archived", archived: true),
         ]
-        let runs: [GithubCiRun] = (1...25).map { idx in
-            GithubCiRun(
+        let runs: [GithubCiRun] = (1...25).map { (idx: Int) -> GithubCiRun in
+            let conclusion: String = (idx == 2) ? "failure" : "success"
+            let runUrl: String = "https://github.com/org/active/actions/runs/\(idx)"
+            let isBotRun: Bool = (idx == 1)
+            return GithubCiRun(
                 id: UInt64(idx),
                 repositoryId: 1,
                 repositoryName: "org/active",
                 name: "CI",
                 status: "completed",
-                conclusion: idx == 2 ? "failure" : "success",
-                htmlUrl: "https://github.com/org/active/actions/runs/\(idx)",
+                conclusion: conclusion,
+                htmlUrl: runUrl,
                 updatedAt: "2026-11-19T00:00:00Z",
-                isBot: idx == 1
+                isBot: isBotRun
             )
         }
 
@@ -369,6 +372,24 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(draft.subsetEquals(loaded, scope: .bark), "Uncommitted Bark edits must remain dirty")
         XCTAssertEqual(draft.pollSecondsText, "30")
         XCTAssertEqual(draft.barkGroup, "CustomGroup")
+
+        // Verify every sub-group in `.settings` equality participates independently
+        let mutations: [(inout ProbeSettingsDraft) -> Void] = [
+            { $0.clearAccountScope.toggle() },
+            { $0.logMaxMiBText = "64" },
+            { $0.notifyCodex.toggle() },
+            { $0.notifyGrokbot.toggle() },
+            { $0.notifyClaudeReplyNeeded.toggle() },
+            { $0.notifyAntigravityAuthorization.toggle() },
+            { $0.notifyDshAuthorization.toggle() },
+        ]
+        for mutate in mutations {
+            var candidate = base
+            mutate(&candidate)
+            XCTAssertFalse(candidate.subsetEquals(base, scope: .settings))
+            XCTAssertTrue(candidate.subsetEquals(base, scope: .ci))
+            XCTAssertTrue(candidate.subsetEquals(base, scope: .bark))
+        }
     }
 
     @MainActor
@@ -602,7 +623,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         coordinator.sessionScopeKey = "local::codex::s64"
         coordinator.attachmentViewport.resetScope("local::codex::s64")
 
-        let attachments = (0..<70).map { idx in
+        let attachments: [UserAttachment] = (0..<70).map { (idx: Int) -> UserAttachment in
             UserAttachment(
                 id: "att-\(idx)",
                 name: "img-\(idx).png",
@@ -674,6 +695,59 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(
             cell.containerStack.arrangedSubviews.first === previousFirstArranged,
             "CellConfigSignature change at attachment index 65 must rebuild cell subviews"
+        )
+    }
+
+    @MainActor
+    func testMeasureFileAttachmentCardSizeChromeCopyAndClampingBoundaries() {
+        let withPath = UserAttachment(id: "f1", name: "spec.md", kind: "file", path: "/workspace/spec.md")
+        let emptyPath = UserAttachment(id: "f2", name: "spec.md", kind: "file", path: "")
+        let withReason = UserAttachment(
+            id: "f3",
+            name: "a.txt",
+            kind: "file",
+            path: "/workspace/a.txt",
+            reason: "附件体积超过上限，已跳过内联预览"
+        )
+
+        let copyable = ConversationTableCoordinator.measureFileAttachmentCardSize(
+            att: withPath,
+            namesOnly: false,
+            maxWidth: 500
+        )
+        let namesOnly = ConversationTableCoordinator.measureFileAttachmentCardSize(
+            att: withPath,
+            namesOnly: true,
+            maxWidth: 500
+        )
+        let blankPath = ConversationTableCoordinator.measureFileAttachmentCardSize(
+            att: emptyPath,
+            namesOnly: false,
+            maxWidth: 500
+        )
+        XCTAssertEqual(copyable.height, 40)
+        XCTAssertEqual(namesOnly.width, blankPath.width, accuracy: 0.001)
+        if namesOnly.width > 120 && copyable.width < 340 {
+            XCTAssertEqual(copyable.width - namesOnly.width, 36, accuracy: 0.001, "Copy action adds 8pt spacing + 28pt button")
+        }
+
+        let reasoned = ConversationTableCoordinator.measureFileAttachmentCardSize(
+            att: withReason,
+            namesOnly: false,
+            maxWidth: 500
+        )
+        XCTAssertEqual(reasoned.height, 52)
+        XCTAssertGreaterThan(reasoned.width, copyable.width)
+        XCTAssertLessThanOrEqual(reasoned.width, 340)
+
+        let narrow = ConversationTableCoordinator.measureFileAttachmentCardSize(
+            att: withReason,
+            namesOnly: false,
+            maxWidth: 88
+        )
+        XCTAssertEqual(narrow.width, 88, accuracy: 0.001, "Card width must never exceed narrow maxWidth < 120")
+        XCTAssertTrue(
+            ConversationTableCoordinator.layoutUserAttachmentRows(attachments: [], namesOnly: false, maxWidth: 400).isEmpty
         )
     }
 

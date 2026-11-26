@@ -1207,8 +1207,9 @@ public enum ClaudeProcessGroupingEngine {
             let needsPermission = processEvents.contains { $0.kind == "permission_request" && pendingEvent($0) }
             let firstSid = sourceIds.first ?? "0"
             let stateKey = "claude-process:\(turnId):\(firstSid)"
-            let failedCount = commands.filter { $0.status == .failed }.count
-                + processEvents.filter { ExecutionGroupingEngine.executionStatus($0.status) == .failed }.count
+            let failedCommands: Int = commands.filter { $0.status == .failed }.count
+            let failedProcessEvents: Int = processEvents.filter { ExecutionGroupingEngine.executionStatus($0.status) == .failed }.count
+            let failedCount: Int = failedCommands + failedProcessEvents
             let isRunning = !closed && !needsReply && !needsPermission
                 && (commands.contains { $0.status == .running } || processEvents.contains(where: pendingEvent))
             output.append(.process(ClaudeProcessGroup(

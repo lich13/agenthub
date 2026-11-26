@@ -325,7 +325,7 @@ public struct MaintenanceOpsView: View {
         defer { startingUpdate = false }
         updateError = nil
         lastUpdateAction = action
-        let command = switch action {
+        let command: String = switch action {
         case .check: "updates.check"
         case .install: "updates.install"
         case .prune: "updates.prune"
@@ -438,14 +438,18 @@ public struct UnifiedThreadCleanupSection: View {
                 LazyVGrid(columns: scopeCols, spacing: 10) {
                     ForEach(Self.scopesMeta, id: \.scope) { meta in
                         let sp = lookupScopePlan(meta)
-                        let resolvedKey = sp?.scope ?? meta.scope
+                        let resolvedKey: String = sp?.scope ?? meta.scope
                         let scopePalette = DesignPalette.resolve(scheme: palette.scheme, workspace: meta.workspace)
-                        let canSelect = (sp?.supported == true && sp?.scanned == true && (sp?.deletableCount ?? 0) > 0)
-                        let isSelected = activeSelectedScopes.contains(resolvedKey)
-                        let totalEst = max(Int64(1), plan?.totalEstimatedBytes ?? 0)
-                        let ratioPct: CGFloat = (sp?.scanned == true && (sp?.deletableCount ?? 0) > 0 && (plan?.totalEstimatedBytes ?? 0) > 0)
-                            ? max(0.06, min(1.0, CGFloat(sp?.estimatedBytes ?? 0) / CGFloat(totalEst)))
-                            : 0
+                        let deletableCount: Int = sp?.deletableCount ?? 0
+                        let planTotalBytes: Int64 = plan?.totalEstimatedBytes ?? 0
+                        let scopeEstBytes: Int64 = sp?.estimatedBytes ?? 0
+                        let isScanned: Bool = (sp?.scanned == true)
+                        let canSelect: Bool = (sp?.supported == true) && isScanned && (deletableCount > 0)
+                        let isSelected: Bool = activeSelectedScopes.contains(resolvedKey)
+                        let totalEst: Int64 = max(Int64(1), planTotalBytes)
+                        let rawRatio: CGFloat = CGFloat(scopeEstBytes) / CGFloat(totalEst)
+                        let clampedRatio: CGFloat = max(CGFloat(0.06), min(CGFloat(1.0), rawRatio))
+                        let ratioPct: CGFloat = (isScanned && deletableCount > 0 && planTotalBytes > 0) ? clampedRatio : 0
 
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(alignment: .top, spacing: 10) {
@@ -926,7 +930,9 @@ public struct CodexAccountScopeSection: View {
                         let end = min(result.items.count, start + 100)
                         if start < end {
                             ForEach(result.items[start..<end]) { item in
-                                Text("\(item.threadId)：\(item.reasonLabel)\(item.detail.map { "（\($0)）" } ?? "")")
+                                let detailSuffix: String = item.detail.map { "（\($0)）" } ?? ""
+                                let itemLine: String = "\(item.threadId)：\(item.reasonLabel)\(detailSuffix)"
+                                Text(itemLine)
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textSecondary.color)
                             }
